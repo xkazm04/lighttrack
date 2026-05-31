@@ -35,6 +35,22 @@ const SCORE_COLS: &str = "id, project_id, event_id, rubric, value, \"max\", pass
 const PRICE_COLS: &str = "provider, model, input_per_mtok, output_per_mtok, \
     cached_input_per_mtok, effective_date, source_url";
 
+const BENCH_COLS: &str = "id, project_id, name, rubric, judge_model, target, dataset_ref, \
+    dataset, rubric_id, baseline_score, created_at";
+
+const RUN_COLS: &str = "id, benchmark_id, started_at, finished_at, n_cases, mean_score, \
+    pass_rate, cost_usd, status, p50_latency_ms, p95_latency_ms, total_tokens, report";
+
+const RUBRIC_COLS: &str = "id, project_id, name, dimensions, threshold, created_at";
+
+const JOB_COLS: &str = "id, type, payload, status, attempts, max_attempts, progress, error, \
+    result, claimed_at, created_at, updated_at";
+
+const DATASET_COLS: &str = "id, project_id, name, version, frozen, source, created_at";
+
+const ITEM_COLS: &str = "id, dataset_id, input, output, expected, context, tags, \
+    source_event_id, anonymization";
+
 fn fmt_ts(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
@@ -58,12 +74,6 @@ fn parse_enum<T: DeserializeOwned + Default>(s: &str) -> T {
 
 fn pgerr(e: sqlx::Error) -> StoreError {
     StoreError::Other(format!("postgres: {e}"))
-}
-
-fn todo_pg(method: &str) -> StoreError {
-    StoreError::Other(format!(
-        "postgres backend: `{method}` not yet implemented (Phase 5a part 2)"
-    ))
 }
 
 /// Postgres-backed [`Store`].
@@ -480,66 +490,380 @@ impl Store for PgStore {
         rows.iter().map(price_from_row).collect()
     }
 
-    // ---- Phase 5a part 2: not yet ported to Postgres -----------------------
-    fn create_benchmark(&self, _b: &Benchmark) -> Result<()> {
-        Err(todo_pg("create_benchmark"))
+    // ---- benchmarks --------------------------------------------------------
+    fn create_benchmark(&self, b: &Benchmark) -> Result<()> {
+        let target = json_or_null(&b.target)?;
+        let dataset = serde_json::to_string(&b.dataset)?;
+        self.rt
+            .block_on(async {
+                sqlx::query(
+                    "INSERT INTO benchmarks (id, project_id, name, rubric, judge_model, target, \
+                     dataset_ref, dataset, rubric_id, baseline_score, created_at) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+                )
+                .bind(b.id.clone())
+                .bind(b.project_id.clone())
+                .bind(b.name.clone())
+                .bind(b.rubric.clone())
+                .bind(b.judge_model.clone())
+                .bind(target)
+                .bind(b.dataset_ref.clone())
+                .bind(dataset)
+                .bind(b.rubric_id.clone())
+                .bind(b.baseline_score)
+                .bind(fmt_ts(b.created_at))
+                .execute(&self.pool)
+                .await
+            })
+            .map_err(pgerr)?;
+        Ok(())
     }
-    fn get_benchmark(&self, _id: &str) -> Result<Option<Benchmark>> {
-        Err(todo_pg("get_benchmark"))
+
+    fn get_benchmark(&self, id: &str) -> Result<Option<Benchmark>> {
+        let row = self
+            .rt
+            .block_on(async {
+                sqlx::query(&format!("SELECT {BENCH_COLS} FROM benchmarks WHERE id = $1"))
+                    .bind(id.to_string())
+                    .fetch_optional(&self.pool)
+                    .await
+            })
+            .map_err(pgerr)?;
+        row.as_ref().map(bench_from_row).transpose()
     }
-    fn list_benchmarks(&self, _project: &str) -> Result<Vec<Benchmark>> {
-        Err(todo_pg("list_benchmarks"))
+
+    fn list_benchmarks(&self, project: &str) -> Result<Vec<Benchmark>> {
+        let rows = self
+            .rt
+            .block_on(async {
+                sqlx::query(&format!(
+                    "SELECT {BENCH_COLS} FROM benchmarks WHERE project_id = $1 ORDER BY created_at DESC"
+                ))
+                .bind(project.to_string())
+                .fetch_all(&self.pool)
+                .await
+            })
+            .map_err(pgerr)?;
+        rows.iter().map(bench_from_row).collect()
     }
-    fn create_benchmark_run(&self, _r: &BenchmarkRun) -> Result<()> {
-        Err(todo_pg("create_benchmark_run"))
+
+    fn create_benchmark_run(&self, r: &BenchmarkRun) -> Result<()> {
+        let report = json_or_null(&r.report)?;
+        self.rt
+            .block_on(async {
+                sqlx::query(
+                    "INSERT INTO benchmark_runs (id, benchmark_id, started_at, finished_at, n_cases, \
+                     mean_score, pass_rate, cost_usd, status, p50_latency_ms, p95_latency_ms, \
+                     total_tokens, report) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+                )
+                .bind(r.id.clone())
+                .bind(r.benchmark_id.clone())
+                .bind(fmt_ts(r.started_at))
+                .bind(r.finished_at.map(fmt_ts))
+                .bind(r.n_cases as i64)
+                .bind(r.mean_score)
+                .bind(r.pass_rate)
+                .bind(r.cost_usd)
+                .bind(r.status.clone())
+                .bind(r.p50_latency_ms.map(|v| v as i64))
+                .bind(r.p95_latency_ms.map(|v| v as i64))
+                .bind(r.total_tokens.map(|v| v as i64))
+                .bind(report)
+                .execute(&self.pool)
+                .await
+            })
+            .map_err(pgerr)?;
+        Ok(())
     }
-    fn list_benchmark_runs(&self, _benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
-        Err(todo_pg("list_benchmark_runs"))
+
+    fn list_benchmark_runs(&self, benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
+        let rows = self
+            .rt
+            .block_on(async {
+                sqlx::query(&format!(
+                    "SELECT {RUN_COLS} FROM benchmark_runs WHERE benchmark_id = $1 ORDER BY started_at DESC"
+                ))
+                .bind(benchmark_id.to_string())
+                .fetch_all(&self.pool)
+                .await
+            })
+            .map_err(pgerr)?;
+        rows.iter().map(run_from_row).collect()
     }
-    fn create_dataset(&self, _d: &Dataset) -> Result<()> {
-        Err(todo_pg("create_dataset"))
+
+    // ---- datasets ----------------------------------------------------------
+    fn create_dataset(&self, d: &Dataset) -> Result<()> {
+        self.rt
+            .block_on(async {
+                sqlx::query(
+                    "INSERT INTO datasets (id, project_id, name, version, frozen, source, created_at) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7)",
+                )
+                .bind(d.id.clone())
+                .bind(d.project_id.clone())
+                .bind(d.name.clone())
+                .bind(d.version as i64)
+                .bind(d.frozen as i64)
+                .bind(d.source.clone())
+                .bind(fmt_ts(d.created_at))
+                .execute(&self.pool)
+                .await
+            })
+            .map_err(pgerr)?;
+        Ok(())
     }
-    fn get_dataset(&self, _id: &str) -> Result<Option<Dataset>> {
-        Err(todo_pg("get_dataset"))
+
+    fn get_dataset(&self, id: &str) -> Result<Option<Dataset>> {
+        let row = self
+            .rt
+            .block_on(async {
+                sqlx::query(&format!("SELECT {DATASET_COLS} FROM datasets WHERE id = $1"))
+                    .bind(id.to_string())
+                    .fetch_optional(&self.pool)
+                    .await
+            })
+            .map_err(pgerr)?;
+        row.as_ref().map(dataset_from_row).transpose()
     }
-    fn list_datasets(&self, _project: &str) -> Result<Vec<Dataset>> {
-        Err(todo_pg("list_datasets"))
+
+    fn list_datasets(&self, project: &str) -> Result<Vec<Dataset>> {
+        let rows = self
+            .rt
+            .block_on(async {
+                sqlx::query(&format!(
+                    "SELECT {DATASET_COLS} FROM datasets WHERE project_id = $1 ORDER BY created_at DESC"
+                ))
+                .bind(project.to_string())
+                .fetch_all(&self.pool)
+                .await
+            })
+            .map_err(pgerr)?;
+        rows.iter().map(dataset_from_row).collect()
     }
-    fn set_dataset_frozen(&self, _id: &str, _frozen: bool) -> Result<()> {
-        Err(todo_pg("set_dataset_frozen"))
+
+    fn set_dataset_frozen(&self, id: &str, frozen: bool) -> Result<()> {
+        self.rt
+            .block_on(async {
+                sqlx::query("UPDATE datasets SET frozen = $2 WHERE id = $1")
+                    .bind(id.to_string())
+                    .bind(frozen as i64)
+                    .execute(&self.pool)
+                    .await
+            })
+            .map_err(pgerr)?;
+        Ok(())
     }
-    fn create_dataset_item(&self, _item: &DatasetItem) -> Result<()> {
-        Err(todo_pg("create_dataset_item"))
+
+    fn create_dataset_item(&self, item: &DatasetItem) -> Result<()> {
+        let tags = serde_json::to_string(&item.tags)?;
+        let anon = json_or_null(&item.anonymization)?;
+        self.rt
+            .block_on(async {
+                sqlx::query(
+                    "INSERT INTO dataset_items (id, dataset_id, input, output, expected, context, \
+                     tags, source_event_id, anonymization) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+                )
+                .bind(item.id.clone())
+                .bind(item.dataset_id.clone())
+                .bind(item.input.clone())
+                .bind(item.output.clone())
+                .bind(item.expected.clone())
+                .bind(item.context.clone())
+                .bind(tags)
+                .bind(item.source_event_id.clone())
+                .bind(anon)
+                .execute(&self.pool)
+                .await
+            })
+            .map_err(pgerr)?;
+        Ok(())
     }
-    fn list_dataset_items(&self, _dataset_id: &str) -> Result<Vec<DatasetItem>> {
-        Err(todo_pg("list_dataset_items"))
+
+    fn list_dataset_items(&self, dataset_id: &str) -> Result<Vec<DatasetItem>> {
+        let rows = self
+            .rt
+            .block_on(async {
+                sqlx::query(&format!("SELECT {ITEM_COLS} FROM dataset_items WHERE dataset_id = $1"))
+                    .bind(dataset_id.to_string())
+                    .fetch_all(&self.pool)
+                    .await
+            })
+            .map_err(pgerr)?;
+        rows.iter().map(item_from_row).collect()
     }
-    fn create_rubric(&self, _r: &Rubric) -> Result<()> {
-        Err(todo_pg("create_rubric"))
+
+    // ---- rubrics -----------------------------------------------------------
+    fn create_rubric(&self, r: &Rubric) -> Result<()> {
+        let dims = serde_json::to_string(&r.dimensions)?;
+        self.rt
+            .block_on(async {
+                sqlx::query(
+                    "INSERT INTO rubrics (id, project_id, name, dimensions, threshold, created_at) \
+                     VALUES ($1,$2,$3,$4,$5,$6)",
+                )
+                .bind(r.id.clone())
+                .bind(r.project_id.clone())
+                .bind(r.name.clone())
+                .bind(dims)
+                .bind(r.threshold)
+                .bind(fmt_ts(r.created_at))
+                .execute(&self.pool)
+                .await
+            })
+            .map_err(pgerr)?;
+        Ok(())
     }
-    fn get_rubric(&self, _id: &str) -> Result<Option<Rubric>> {
-        Err(todo_pg("get_rubric"))
+
+    fn get_rubric(&self, id: &str) -> Result<Option<Rubric>> {
+        let row = self
+            .rt
+            .block_on(async {
+                sqlx::query(&format!("SELECT {RUBRIC_COLS} FROM rubrics WHERE id = $1"))
+                    .bind(id.to_string())
+                    .fetch_optional(&self.pool)
+                    .await
+            })
+            .map_err(pgerr)?;
+        row.as_ref().map(rubric_from_row).transpose()
     }
-    fn list_rubrics(&self, _project: &str) -> Result<Vec<Rubric>> {
-        Err(todo_pg("list_rubrics"))
+
+    fn list_rubrics(&self, project: &str) -> Result<Vec<Rubric>> {
+        let rows = self
+            .rt
+            .block_on(async {
+                sqlx::query(&format!(
+                    "SELECT {RUBRIC_COLS} FROM rubrics WHERE project_id = $1 ORDER BY created_at DESC"
+                ))
+                .bind(project.to_string())
+                .fetch_all(&self.pool)
+                .await
+            })
+            .map_err(pgerr)?;
+        rows.iter().map(rubric_from_row).collect()
     }
-    fn create_job(&self, _j: &Job) -> Result<()> {
-        Err(todo_pg("create_job"))
+
+    // ---- job queue ---------------------------------------------------------
+    fn create_job(&self, j: &Job) -> Result<()> {
+        let payload = json_or_null(&j.payload)?;
+        let result = json_or_null(&j.result)?;
+        self.rt
+            .block_on(async {
+                sqlx::query(
+                    "INSERT INTO jobs (id, type, payload, status, attempts, max_attempts, progress, \
+                     error, result, claimed_at, created_at, updated_at) \
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+                )
+                .bind(j.id.clone())
+                .bind(j.job_type.clone())
+                .bind(payload)
+                .bind(j.status.clone())
+                .bind(j.attempts as i64)
+                .bind(j.max_attempts as i64)
+                .bind(j.progress.clone())
+                .bind(j.error.clone())
+                .bind(result)
+                .bind(j.claimed_at.map(fmt_ts))
+                .bind(fmt_ts(j.created_at))
+                .bind(fmt_ts(j.updated_at))
+                .execute(&self.pool)
+                .await
+            })
+            .map_err(pgerr)?;
+        Ok(())
     }
-    fn claim_job(&self, _stale_before: DateTime<Utc>) -> Result<Option<Job>> {
-        Err(todo_pg("claim_job"))
+
+    fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
+        let now = fmt_ts(Utc::now());
+        let stale = fmt_ts(stale_before);
+        // Atomic + concurrency-safe: FOR UPDATE SKIP LOCKED so parallel workers don't grab the same job.
+        let sql = format!(
+            "UPDATE jobs SET status='running', claimed_at=$1, updated_at=$1, attempts=attempts+1 \
+             WHERE id = (SELECT id FROM jobs \
+                         WHERE status='queued' OR (status='running' AND claimed_at < $2) \
+                         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) \
+             RETURNING {JOB_COLS}"
+        );
+        let row = self
+            .rt
+            .block_on(async {
+                sqlx::query(&sql)
+                    .bind(now)
+                    .bind(stale)
+                    .fetch_optional(&self.pool)
+                    .await
+            })
+            .map_err(pgerr)?;
+        row.as_ref().map(job_from_row).transpose()
     }
-    fn update_job_progress(&self, _id: &str, _progress: &str) -> Result<()> {
-        Err(todo_pg("update_job_progress"))
+
+    fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
+        self.rt
+            .block_on(async {
+                sqlx::query("UPDATE jobs SET progress = $2, updated_at = $3 WHERE id = $1")
+                    .bind(id.to_string())
+                    .bind(progress.to_string())
+                    .bind(fmt_ts(Utc::now()))
+                    .execute(&self.pool)
+                    .await
+            })
+            .map_err(pgerr)?;
+        Ok(())
     }
-    fn finish_job(&self, _id: &str, _status: &str, _result: &Value, _error: Option<&str>) -> Result<()> {
-        Err(todo_pg("finish_job"))
+
+    fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()> {
+        let result_s = json_or_null(result)?;
+        self.rt
+            .block_on(async {
+                sqlx::query("UPDATE jobs SET status = $2, result = $3, error = $4, updated_at = $5 WHERE id = $1")
+                    .bind(id.to_string())
+                    .bind(status.to_string())
+                    .bind(result_s)
+                    .bind(error.map(str::to_string))
+                    .bind(fmt_ts(Utc::now()))
+                    .execute(&self.pool)
+                    .await
+            })
+            .map_err(pgerr)?;
+        Ok(())
     }
-    fn get_job(&self, _id: &str) -> Result<Option<Job>> {
-        Err(todo_pg("get_job"))
+
+    fn get_job(&self, id: &str) -> Result<Option<Job>> {
+        let row = self
+            .rt
+            .block_on(async {
+                sqlx::query(&format!("SELECT {JOB_COLS} FROM jobs WHERE id = $1"))
+                    .bind(id.to_string())
+                    .fetch_optional(&self.pool)
+                    .await
+            })
+            .map_err(pgerr)?;
+        row.as_ref().map(job_from_row).transpose()
     }
-    fn list_jobs(&self, _status: Option<&str>, _limit: usize) -> Result<Vec<Job>> {
-        Err(todo_pg("list_jobs"))
+
+    fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
+        let rows = self
+            .rt
+            .block_on(async {
+                match status {
+                    Some(s) => {
+                        sqlx::query(&format!(
+                            "SELECT {JOB_COLS} FROM jobs WHERE status = $1 ORDER BY created_at DESC LIMIT $2"
+                        ))
+                        .bind(s.to_string())
+                        .bind(limit as i64)
+                        .fetch_all(&self.pool)
+                        .await
+                    }
+                    None => {
+                        sqlx::query(&format!("SELECT {JOB_COLS} FROM jobs ORDER BY created_at DESC LIMIT $1"))
+                            .bind(limit as i64)
+                            .fetch_all(&self.pool)
+                            .await
+                    }
+                }
+            })
+            .map_err(pgerr)?;
+        rows.iter().map(job_from_row).collect()
     }
 }
 
@@ -667,5 +991,136 @@ fn price_from_row(row: &PgRow) -> Result<ModelPriceRow> {
         cached_input_per_mtok: row.try_get(4).map_err(pgerr)?,
         effective_date: parse_ts(&effective_date)?,
         source_url: row.try_get(6).map_err(pgerr)?,
+    })
+}
+
+fn json_or_null(v: &Value) -> Result<Option<String>> {
+    if v.is_null() {
+        Ok(None)
+    } else {
+        Ok(Some(serde_json::to_string(v)?))
+    }
+}
+
+fn val_or_null(s: Option<String>) -> Result<Value> {
+    match s {
+        Some(x) => Ok(serde_json::from_str(&x)?),
+        None => Ok(Value::Null),
+    }
+}
+
+fn bench_from_row(row: &PgRow) -> Result<Benchmark> {
+    let target: Option<String> = row.try_get(5).map_err(pgerr)?;
+    let dataset: Option<String> = row.try_get(7).map_err(pgerr)?;
+    let created_at: String = row.try_get(10).map_err(pgerr)?;
+    Ok(Benchmark {
+        id: row.try_get(0).map_err(pgerr)?,
+        project_id: row.try_get(1).map_err(pgerr)?,
+        name: row.try_get(2).map_err(pgerr)?,
+        rubric: row.try_get(3).map_err(pgerr)?,
+        judge_model: row.try_get(4).map_err(pgerr)?,
+        target: val_or_null(target)?,
+        dataset_ref: row.try_get(6).map_err(pgerr)?,
+        dataset: match dataset {
+            Some(s) => serde_json::from_str(&s)?,
+            None => Vec::new(),
+        },
+        rubric_id: row.try_get(8).map_err(pgerr)?,
+        baseline_score: row.try_get(9).map_err(pgerr)?,
+        created_at: parse_ts(&created_at)?,
+    })
+}
+
+fn run_from_row(row: &PgRow) -> Result<BenchmarkRun> {
+    let started_at: String = row.try_get(2).map_err(pgerr)?;
+    let finished_at: Option<String> = row.try_get(3).map_err(pgerr)?;
+    let report: Option<String> = row.try_get(12).map_err(pgerr)?;
+    Ok(BenchmarkRun {
+        id: row.try_get(0).map_err(pgerr)?,
+        benchmark_id: row.try_get(1).map_err(pgerr)?,
+        started_at: parse_ts(&started_at)?,
+        finished_at: match finished_at {
+            Some(s) => Some(parse_ts(&s)?),
+            None => None,
+        },
+        n_cases: row.try_get::<i64, _>(4).map_err(pgerr)? as u32,
+        mean_score: row.try_get(5).map_err(pgerr)?,
+        pass_rate: row.try_get(6).map_err(pgerr)?,
+        cost_usd: row.try_get(7).map_err(pgerr)?,
+        status: row.try_get(8).map_err(pgerr)?,
+        p50_latency_ms: row.try_get::<Option<i64>, _>(9).map_err(pgerr)?.map(|v| v as u64),
+        p95_latency_ms: row.try_get::<Option<i64>, _>(10).map_err(pgerr)?.map(|v| v as u64),
+        total_tokens: row.try_get::<Option<i64>, _>(11).map_err(pgerr)?.map(|v| v as u64),
+        report: val_or_null(report)?,
+    })
+}
+
+fn dataset_from_row(row: &PgRow) -> Result<Dataset> {
+    let created_at: String = row.try_get(6).map_err(pgerr)?;
+    Ok(Dataset {
+        id: row.try_get(0).map_err(pgerr)?,
+        project_id: row.try_get(1).map_err(pgerr)?,
+        name: row.try_get(2).map_err(pgerr)?,
+        version: row.try_get::<i64, _>(3).map_err(pgerr)? as u32,
+        frozen: row.try_get::<i64, _>(4).map_err(pgerr)? != 0,
+        source: row.try_get(5).map_err(pgerr)?,
+        created_at: parse_ts(&created_at)?,
+    })
+}
+
+fn item_from_row(row: &PgRow) -> Result<DatasetItem> {
+    let tags: Option<String> = row.try_get(6).map_err(pgerr)?;
+    let anon: Option<String> = row.try_get(8).map_err(pgerr)?;
+    Ok(DatasetItem {
+        id: row.try_get(0).map_err(pgerr)?,
+        dataset_id: row.try_get(1).map_err(pgerr)?,
+        input: row.try_get(2).map_err(pgerr)?,
+        output: row.try_get(3).map_err(pgerr)?,
+        expected: row.try_get(4).map_err(pgerr)?,
+        context: row.try_get(5).map_err(pgerr)?,
+        tags: match tags {
+            Some(s) => serde_json::from_str(&s)?,
+            None => Vec::new(),
+        },
+        source_event_id: row.try_get(7).map_err(pgerr)?,
+        anonymization: val_or_null(anon)?,
+    })
+}
+
+fn rubric_from_row(row: &PgRow) -> Result<Rubric> {
+    let dims: String = row.try_get(3).map_err(pgerr)?;
+    let created_at: String = row.try_get(5).map_err(pgerr)?;
+    Ok(Rubric {
+        id: row.try_get(0).map_err(pgerr)?,
+        project_id: row.try_get(1).map_err(pgerr)?,
+        name: row.try_get(2).map_err(pgerr)?,
+        dimensions: serde_json::from_str(&dims)?,
+        threshold: row.try_get(4).map_err(pgerr)?,
+        created_at: parse_ts(&created_at)?,
+    })
+}
+
+fn job_from_row(row: &PgRow) -> Result<Job> {
+    let payload: Option<String> = row.try_get(2).map_err(pgerr)?;
+    let result: Option<String> = row.try_get(8).map_err(pgerr)?;
+    let claimed_at: Option<String> = row.try_get(9).map_err(pgerr)?;
+    let created_at: String = row.try_get(10).map_err(pgerr)?;
+    let updated_at: String = row.try_get(11).map_err(pgerr)?;
+    Ok(Job {
+        id: row.try_get(0).map_err(pgerr)?,
+        job_type: row.try_get(1).map_err(pgerr)?,
+        payload: val_or_null(payload)?,
+        status: row.try_get(3).map_err(pgerr)?,
+        attempts: row.try_get::<i64, _>(4).map_err(pgerr)? as u32,
+        max_attempts: row.try_get::<i64, _>(5).map_err(pgerr)? as u32,
+        progress: row.try_get(6).map_err(pgerr)?,
+        error: row.try_get(7).map_err(pgerr)?,
+        result: val_or_null(result)?,
+        claimed_at: match claimed_at {
+            Some(s) => Some(parse_ts(&s)?),
+            None => None,
+        },
+        created_at: parse_ts(&created_at)?,
+        updated_at: parse_ts(&updated_at)?,
     })
 }
