@@ -39,7 +39,9 @@ jobs:
         with:
           context: .
           file: deploy/docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          # amd64 for the initial publish (reliable + fast). Add linux/arm64 later via a native
+          # arm runner (ubuntu-24.04-arm) — QEMU-emulated arm64 Rust builds are too slow in CI.
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
