@@ -1,0 +1,15 @@
+[package]
+name = "lighttrack-store-firestore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightTrack Firestore backend (REST over reqwest) implementing the Store trait. GCP-native."
+
+[dependencies]
+lighttrack-core.workspace = true
+lighttrack-store = { path = "../store" }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+# REST over the proven blocking reqwest (native-tls => SChannel on Windows). No gRPC/ring.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "native-tls"] }

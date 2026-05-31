@@ -61,10 +61,10 @@ async fn main() -> anyhow::Result<()> {
     let database_url = std::env::var("LIGHTTRACK_DATABASE_URL")
         .ok()
         .filter(|s| !s.is_empty());
-    let backend = if database_url.as_deref().is_some_and(|u| u.starts_with("postgres")) {
-        "postgres"
-    } else {
-        "sqlite"
+    let backend = match database_url.as_deref() {
+        Some(u) if u.starts_with("postgres") => "postgres",
+        Some(u) if u.starts_with("firestore") => "firestore",
+        _ => "sqlite",
     };
 
     // The Postgres store calls `block_on` internally, which panics if run on the async main thread.
@@ -74,6 +74,9 @@ async fn main() -> anyhow::Result<()> {
             let store: Arc<dyn Store + Send + Sync> = match &database_url {
                 Some(url) if url.starts_with("postgres") => {
                     Arc::new(lighttrack_store_pg::PgStore::connect(url)?)
+                }
+                Some(url) if url.starts_with("firestore") => {
+                    Arc::new(lighttrack_store_firestore::FirestoreStore::connect(url)?)
                 }
                 _ => Arc::new(SqliteStore::open(&db)?),
             };

@@ -9,6 +9,7 @@ description = "LightTrack ingest + query REST service (axum). Local box → Clou
 lighttrack-core.workspace = true
 lighttrack-store = { path = "../store" }
 lighttrack-store-pg = { path = "../store-pg" }
+lighttrack-store-firestore = { path = "../store-firestore" }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
