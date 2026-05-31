@@ -25,7 +25,8 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Cmd {
-    /// Score recent events (those with both input and output) for a project.
+    /// Score recent events (those with both input and output) for a project. Skips events that
+    /// already have a score, so it's safe to re-run; `--interval` turns it into an online loop.
     Score {
         #[arg(long)]
         rubric: String,
@@ -33,6 +34,9 @@ pub(crate) enum Cmd {
         project: Option<String>,
         #[arg(long, default_value_t = 10)]
         limit: usize,
+        /// Run continuously, scoring newly-arrived (unscored) events every N seconds. 0 = one-shot.
+        #[arg(long, default_value_t = 0)]
+        interval: u64,
     },
     /// Score an ad-hoc input/output pair (not tied to a stored event).
     ScoreText {

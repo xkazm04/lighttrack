@@ -40,7 +40,8 @@ fn main() -> Result<()> {
             rubric,
             project,
             limit,
-        } => score::score_recent(&cli, &http, &engine, rubric, project.as_deref(), *limit),
+            interval,
+        } => score::score_recent(&cli, &http, &engine, rubric, project.as_deref(), *limit, *interval),
         Cmd::ScoreText {
             rubric,
             input,
