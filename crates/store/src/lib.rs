@@ -7,6 +7,7 @@
 //!
 //! Methods are synchronous (SQLite is blocking). Async callers wrap them in `spawn_blocking`.
 
+pub mod conformance;
 pub mod sqlite;
 
 use chrono::{DateTime, Utc};
