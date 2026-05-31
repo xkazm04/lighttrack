@@ -38,6 +38,24 @@ keys, limits, redaction policy, and scorecards. Target load (≤1k calls/hr) is 
 Rust end-to-end to match the user's existing Rust app and keep Cloud Run / e2-micro footprints small.
 Cargo workspace: `core` (logic) + `api` / `runner` / `mcp` / `cli` (services). Evolve functionally over days.
 
+## D9 — Scoring engine specifics + cost finding (2026-05-31)
+The `engine` crate invokes `claude -p --output-format json --model haiku --json-schema <JudgeVerdict>`
+with stdin redirected to null; it reads the verdict from `structured_output` (fallback: extract a JSON
+object from the `result` text) and `total_cost_usd` from the envelope.
+
+**FINDING:** plain `claude -p` auto-loads ~40k tokens of context (CLAUDE.md / skills / MCP / system prompt)
+and bills the prompt-cache creation, so each judge call costs ~$0.02–0.10 regardless of how small the
+judging payload is (measured live: a one-word reply cost $0.051; a real judgement $0.023–0.102).
+*Mitigation:* `--bare` skips that auto-loading (cost drops to fractions of a cent), but it bypasses
+subscription OAuth and so needs `ANTHROPIC_API_KEY` — exposed as the runner's `--bare` flag for when an
+API key is available. This sharpens the [[lighttrack-project]] post-2026-06-15 credit math: budget ≈
+included-Agent-SDK-credit ÷ ~$0.05 (non-bare) or much more with `--bare`.
+
+**Windows gotcha:** the npm install provides `claude.cmd`/`claude.ps1` shims (no PATH `claude.exe`); a child
+process can't invoke `.cmd` with our quote-heavy `--json-schema` arg (Rust rejects unsafe batch args). The
+shim wraps a real `bin/claude.exe`, so the runner auto-resolves that on Windows (override via
+`--claude-bin` / `LIGHTTRACK_CLAUDE_BIN`). The judge remains **unbudgeted** (see D4).
+
 ## D0 — Billing reality: Claude Code 2026-06-15 (background, drives D4)
 From **2026-06-15**, headless `claude -p` / Agent SDK stop drawing on normal subscription limits and meter
 against a separate monthly **Agent SDK credit** at API rates (Pro $20 / Max 5x $100 / **Max 20x $200**, no

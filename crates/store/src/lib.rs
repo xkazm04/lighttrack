@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use thiserror::Error;
 
-use lighttrack_core::{ApiKey, LimitRule, LlmEvent, Project};
+use lighttrack_core::{ApiKey, LimitRule, LlmEvent, Project, Score};
 
 pub use sqlite::SqliteStore;
 
@@ -82,4 +82,9 @@ pub trait Store: Send + Sync {
     // --- limit rules ---
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()>;
     fn list_limit_rules(&self, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>>;
+
+    // --- single event lookup + scores (Phase 3) ---
+    fn get_event(&self, id: &str) -> Result<Option<LlmEvent>>;
+    fn insert_score(&self, s: &Score) -> Result<()>;
+    fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>>;
 }

@@ -23,10 +23,16 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
 - [x] `lt` CLI (projects/keys/limits/costs/events) — verified against the enforced server
 - [~] Inline breach alerts: server-side `[ALERT]` log done; webhook/ntfy/Pub/Sub delivery deferred to Phase 5 (cloud)
 
-## Phase 3 — Scoring & benchmarks
-- [ ] `runner`: job queue (in-proc channel locally), `claude -p --json-schema` judge, parse verdict + cost
-- [ ] Online sampling → scores; `cli`/MCP to trigger
-- [ ] `BenchmarkDefinition` + run + scorecard + regression baseline
+## Phase 3 — Scoring engine ✅ (benchmarks pending)
+- [x] `engine` crate: `claude -p --output-format json --model <m> --json-schema <JudgeVerdict>`
+      (stdin=null; structured_output with result-text JSON fallback); parses verdict + `total_cost_usd`
+- [x] `runner` (`lt-runner`): `score` (judge recent events) + `score-text` (ad-hoc); posts to `/v1/scores`;
+      Windows `claude.exe` auto-resolution; `--bare` option for cheap judging
+- [x] `api`: `POST/GET /v1/scores`, `GET /v1/events/:id`
+- [x] Verified live: Haiku judge scored a correct answer 1.0/pass and a wrong answer 0.0/fail,
+      scores persisted with judge cost
+- [ ] `BenchmarkDefinition` + run + scorecard + regression baseline  → Phase 3.5
+- [ ] Scheduled online sampling + MCP trigger  → Phase 3.5 / Phase 4
 
 ## Phase 4 — MCP
 - [ ] `mcp`: `query_traces`, `get_cost_summary`, `list_projects`, `get_limit_status`, `run_benchmark`

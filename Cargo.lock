@@ -796,6 +796,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lighttrack-engine"
+version = "0.0.1"
+dependencies = [
+ "lighttrack-core",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "lighttrack-mcp"
 version = "0.0.1"
 dependencies = [
@@ -806,7 +815,13 @@ dependencies = [
 name = "lighttrack-runner"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
+ "clap",
  "lighttrack-core",
+ "lighttrack-engine",
+ "reqwest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

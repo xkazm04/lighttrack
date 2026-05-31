@@ -3,8 +3,17 @@ name = "lighttrack-runner"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "LightTrack scoring/benchmark engine — drives `claude -p`. The judge (unbudgeted)."
+description = "LightTrack scoring runner (`lt-runner`) — judges events via `claude -p` and posts scores."
+
+[[bin]]
+name = "lt-runner"
+path = "src/main.rs"
 
 [dependencies]
 lighttrack-core.workspace = true
-# Added in Phase 3: tokio, serde_json, anyhow (spawns `claude -p --output-format json --json-schema`)
+lighttrack-engine = { path = "../engine" }
+serde.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking"] }
+anyhow = "1"

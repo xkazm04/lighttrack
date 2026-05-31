@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use lighttrack_core::{
     ApiKey, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation, Project,
-    Provider, Redaction, Status, TokenUsage,
+    Provider, Redaction, Score, Status, TokenUsage,
 };
 
 use crate::{CostRow, Result, Store, StoreError, Usage};
@@ -21,6 +21,9 @@ const SCHEMA: &str = include_str!("../../../schema/sqlite/001_init.sql");
 const EVENT_COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
     operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
     latency_ms, status, error, input, output, tags, source, metadata";
+
+const SCORE_COLS: &str = "id, project_id, event_id, rubric, value, max, pass, reasoning, \
+    scored_by, cost_usd, created_at";
 
 /// Fixed-width, UTC, nanosecond RFC3339 (e.g. `2026-05-31T00:07:14.110948400Z`).
 /// Fixed width => lexicographic ordering matches chronological ordering, so `ts` range
@@ -309,6 +312,61 @@ impl Store for SqliteStore {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
+
+    fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!("SELECT {EVENT_COLS} FROM events WHERE id = ?1");
+        let mut stmt = conn.prepare(&sql)?;
+        let raw = stmt.query_row(params![id], map_raw_event).optional()?;
+        raw.map(raw_to_event).transpose()
+    }
+
+    fn insert_score(&self, s: &Score) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO scores \
+             (id, project_id, event_id, rubric, value, max, pass, reasoning, scored_by, cost_usd, created_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                s.id,
+                s.project_id,
+                s.event_id,
+                s.rubric,
+                s.value,
+                s.max,
+                s.pass.map(|b| b as i64),
+                s.reasoning,
+                s.scored_by,
+                s.cost_usd,
+                fmt_ts(s.created_at),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
+        let conn = self.conn.lock().unwrap();
+        let raws: Vec<ScoreRaw> = if let Some(p) = project {
+            let sql = format!(
+                "SELECT {SCORE_COLS} FROM scores WHERE project_id = ?1 \
+                 ORDER BY created_at DESC LIMIT ?2"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(params![p, limit as i64], map_score_raw)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        } else {
+            let sql =
+                format!("SELECT {SCORE_COLS} FROM scores ORDER BY created_at DESC LIMIT ?1");
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(params![limit as i64], map_score_raw)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        raws.into_iter().map(score_from_raw).collect()
+    }
 }
 
 // --- row mappers / converters for the Phase 2 tables ---
@@ -378,6 +436,52 @@ fn map_limit_rule(row: &Row) -> rusqlite::Result<LimitRule> {
         threshold: row.get(4)?,
         action: parse_enum::<LimitAction>(&row.get::<_, String>(5)?),
         enabled: row.get::<_, i64>(6)? != 0,
+    })
+}
+
+type ScoreRaw = (
+    String,
+    String,
+    Option<String>,
+    String,
+    f64,
+    f64,
+    Option<i64>,
+    Option<String>,
+    String,
+    Option<f64>,
+    String,
+);
+
+fn map_score_raw(row: &Row) -> rusqlite::Result<ScoreRaw> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
+    ))
+}
+
+fn score_from_raw(r: ScoreRaw) -> Result<Score> {
+    Ok(Score {
+        id: r.0,
+        project_id: r.1,
+        event_id: r.2,
+        rubric: r.3,
+        value: r.4,
+        max: r.5,
+        pass: r.6.map(|v| v != 0),
+        reasoning: r.7,
+        scored_by: r.8,
+        cost_usd: r.9,
+        created_at: parse_ts(&r.10)?,
     })
 }
 

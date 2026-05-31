@@ -37,7 +37,10 @@ pub fn judge_verdict_schema() -> Value {
 /// A stored judge result, optionally tied to the event it scored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Score {
+    #[serde(default = "crate::new_id")]
     pub id: String,
+    /// Defaulted so a keyed poster can omit it (the API derives it from the API key).
+    #[serde(default)]
     pub project_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_id: Option<String>,
@@ -54,6 +57,7 @@ pub struct Score {
     /// Cost of the judge call. Recorded for visibility (Agent SDK credit burn); never throttled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    #[serde(default = "Utc::now")]
     pub created_at: DateTime<Utc>,
 }
 

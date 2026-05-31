@@ -1,0 +1,11 @@
+[package]
+name = "lighttrack-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightTrack scoring engine — drives `claude -p` as an LLM-as-judge (unbudgeted)."
+
+[dependencies]
+lighttrack-core.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

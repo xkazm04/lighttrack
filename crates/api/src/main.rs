@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use auth::{AuthMode, Principal};
 use lighttrack_core::{
     new_id, ApiKey, LimitAction, LimitMetric, LimitRule, LimitStatus, LimitWindow, LlmEvent,
-    PriceBook, Project, Redaction,
+    PriceBook, Project, Redaction, Score,
 };
 use lighttrack_store::{CostRow, SqliteStore, Store, StoreError, Usage};
 
@@ -84,7 +84,9 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/events", post(post_event).get(get_events))
+        .route("/v1/events/:id", get(get_event_by_id))
         .route("/v1/costs", get(get_costs))
+        .route("/v1/scores", post(post_score).get(get_scores))
         .route("/v1/projects", post(create_project).get(list_projects))
         .route("/v1/projects/:id/keys", post(create_key))
         .route("/v1/projects/:id/limits", post(create_limit).get(list_limits))
@@ -324,6 +326,61 @@ async fn get_costs(
     let store = st.store.clone();
     let rows = spawn_db(move || store.cost_summary(project.as_deref())).await?;
     Ok(Json(rows))
+}
+
+async fn get_event_by_id(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<LlmEvent>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    let store = st.store.clone();
+    let id2 = id.clone();
+    let ev = spawn_db(move || store.get_event(&id2))
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("event '{id}' not found")))?;
+    if let Principal::Project(pid) = &p {
+        if &ev.project_id != pid {
+            return Err(ApiError::forbidden("key not authorized for that event's project"));
+        }
+    }
+    Ok(Json(ev))
+}
+
+// ----------------------------------------------------------------------------
+// Scores (Phase 3) — the runner posts judge verdicts here; clients read them back
+// ----------------------------------------------------------------------------
+
+async fn post_score(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(mut s): Json<Score>,
+) -> Result<Json<Score>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    s.project_id = resolve_ingest_project(&p, &s.project_id)?;
+    let store = st.store.clone();
+    let s2 = s.clone();
+    spawn_db(move || store.insert_score(&s2)).await?;
+    Ok(Json(s))
+}
+
+#[derive(Deserialize)]
+struct ScoresParams {
+    project: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn get_scores(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ScoresParams>,
+) -> Result<Json<Vec<Score>>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    let project = resolve_read_project(&p, q.project.as_deref())?;
+    let store = st.store.clone();
+    let limit = q.limit.unwrap_or(50).min(1000);
+    let scores = spawn_db(move || store.list_scores(project.as_deref(), limit)).await?;
+    Ok(Json(scores))
 }
 
 // ----------------------------------------------------------------------------
