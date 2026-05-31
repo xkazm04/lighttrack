@@ -63,7 +63,7 @@ impl Rest {
         json_ok(self.req(Method::PATCH, url).json(&body).send().map_err(re)?).map(|_| ())
     }
 
-    /// `runQuery`: AND of `(field, op, value)` filters; optional `(orderBy, desc)`; optional limit.
+    /// `runQuery` returning decoded field maps.
     pub(crate) fn query(
         &self,
         collection: &str,
@@ -71,43 +71,101 @@ impl Rest {
         order: Option<(&str, bool)>,
         limit: Option<usize>,
     ) -> Result<Vec<Fields>> {
-        let mut sq = json!({ "from": [ { "collectionId": collection } ] });
-        if !filters.is_empty() {
-            let fs: Vec<Value> = filters
-                .iter()
-                .map(|(f, op, v)| {
-                    json!({ "fieldFilter": { "field": {"fieldPath": f}, "op": op, "value": encode_value(v) } })
-                })
-                .collect();
-            sq["where"] = if fs.len() == 1 {
-                fs.into_iter().next().unwrap()
-            } else {
-                json!({ "compositeFilter": { "op": "AND", "filters": fs } })
-            };
-        }
-        if let Some((f, desc)) = order {
-            sq["orderBy"] = json!([ {
-                "field": { "fieldPath": f },
-                "direction": if desc { "DESCENDING" } else { "ASCENDING" }
-            } ]);
-        }
-        if let Some(n) = limit {
-            sq["limit"] = json!(n as i64);
-        }
+        Ok(self
+            .query_raw(collection, filters, order, limit)?
+            .iter()
+            .map(decode_doc)
+            .collect())
+    }
 
+    /// `runQuery` returning raw documents (with `name` + `updateTime`) — used by `claim_job`.
+    pub(crate) fn query_raw(
+        &self,
+        collection: &str,
+        filters: &[(&str, &str, Value)],
+        order: Option<(&str, bool)>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Value>> {
         let url = format!("{}:runQuery", self.base);
-        let body = json!({ "structuredQuery": sq });
+        let body = json!({ "structuredQuery": build_sq(collection, filters, order, limit) });
         let arr = json_ok(self.req(Method::POST, url).json(&body).send().map_err(re)?)?;
         let mut out = Vec::new();
         if let Some(items) = arr.as_array() {
             for it in items {
                 if let Some(doc) = it.get("document") {
-                    out.push(decode_doc(doc));
+                    out.push(doc.clone());
                 }
             }
         }
         Ok(out)
     }
+
+    /// Non-transactional commit of one field update, optionally guarded by an `updateTime`
+    /// precondition (optimistic concurrency). Returns `false` when the precondition fails (another
+    /// writer changed the doc first) — the basis for a concurrency-safe `claim_job`.
+    pub(crate) fn commit_update(
+        &self,
+        doc_name: &str,
+        fields: &Fields,
+        mask: &[&str],
+        precond_update_time: Option<&str>,
+    ) -> Result<bool> {
+        let mut write = json!({
+            "update": { "name": doc_name, "fields": encode_fields(fields) },
+            "updateMask": { "fieldPaths": mask },
+        });
+        if let Some(ut) = precond_update_time {
+            write["currentDocument"] = json!({ "updateTime": ut });
+        }
+        let url = format!("{}:commit", self.base);
+        let resp = self
+            .req(Method::POST, url)
+            .json(&json!({ "writes": [write] }))
+            .send()
+            .map_err(re)?;
+        let status = resp.status();
+        let text = resp.text().map_err(re)?;
+        if status.is_success() {
+            return Ok(true);
+        }
+        if status.as_u16() == 409 || text.contains("FAILED_PRECONDITION") || text.contains("ABORTED") {
+            return Ok(false);
+        }
+        Err(other(format!("firestore commit HTTP {}: {text}", status.as_u16())))
+    }
+}
+
+/// Build a `structuredQuery`: AND of `(field, op, value)` filters; optional `(orderBy, desc)`; limit.
+fn build_sq(
+    collection: &str,
+    filters: &[(&str, &str, Value)],
+    order: Option<(&str, bool)>,
+    limit: Option<usize>,
+) -> Value {
+    let mut sq = json!({ "from": [ { "collectionId": collection } ] });
+    if !filters.is_empty() {
+        let fs: Vec<Value> = filters
+            .iter()
+            .map(|(f, op, v)| {
+                json!({ "fieldFilter": { "field": {"fieldPath": f}, "op": op, "value": encode_value(v) } })
+            })
+            .collect();
+        sq["where"] = if fs.len() == 1 {
+            fs.into_iter().next().unwrap()
+        } else {
+            json!({ "compositeFilter": { "op": "AND", "filters": fs } })
+        };
+    }
+    if let Some((f, desc)) = order {
+        sq["orderBy"] = json!([ {
+            "field": { "fieldPath": f },
+            "direction": if desc { "DESCENDING" } else { "ASCENDING" }
+        } ]);
+    }
+    if let Some(n) = limit {
+        sq["limit"] = json!(n as i64);
+    }
+    sq
 }
 
 fn re(e: reqwest::Error) -> StoreError {

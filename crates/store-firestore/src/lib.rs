@@ -7,12 +7,16 @@
 //! Part 1 (this module): the core data plane — events (incl. client-side cost/usage aggregation),
 //! projects, api_keys, scores, prices, limits. Benchmark/dataset/rubric/job methods are part 2.
 
+mod benchmarks;
 mod codec;
+mod datasets;
 mod events;
+mod jobs;
 mod limits;
 mod prices;
 mod projects;
 mod rest;
+mod rubrics;
 mod scores;
 
 use chrono::{DateTime, Utc};
@@ -56,12 +60,6 @@ impl FirestoreStore {
             rest: Rest::new(base, token),
         })
     }
-}
-
-fn nyi(method: &str) -> StoreError {
-    StoreError::Other(format!(
-        "firestore backend: `{method}` not yet implemented (Phase 5 / Firestore part 2)"
-    ))
 }
 
 impl Store for FirestoreStore {
@@ -126,65 +124,65 @@ impl Store for FirestoreStore {
         prices::list_prices(&self.rest)
     }
 
-    // ---- part 2 (benchmarks / datasets / rubrics / jobs) -------------------
-    fn create_benchmark(&self, _b: &Benchmark) -> Result<()> {
-        Err(nyi("create_benchmark"))
+    // ---- benchmarks / datasets / rubrics / jobs (part 2) -------------------
+    fn create_benchmark(&self, b: &Benchmark) -> Result<()> {
+        benchmarks::create_benchmark(&self.rest, b)
     }
-    fn get_benchmark(&self, _id: &str) -> Result<Option<Benchmark>> {
-        Err(nyi("get_benchmark"))
+    fn get_benchmark(&self, id: &str) -> Result<Option<Benchmark>> {
+        benchmarks::get_benchmark(&self.rest, id)
     }
-    fn list_benchmarks(&self, _project: &str) -> Result<Vec<Benchmark>> {
-        Err(nyi("list_benchmarks"))
+    fn list_benchmarks(&self, project: &str) -> Result<Vec<Benchmark>> {
+        benchmarks::list_benchmarks(&self.rest, project)
     }
-    fn create_benchmark_run(&self, _r: &BenchmarkRun) -> Result<()> {
-        Err(nyi("create_benchmark_run"))
+    fn create_benchmark_run(&self, r: &BenchmarkRun) -> Result<()> {
+        benchmarks::create_benchmark_run(&self.rest, r)
     }
-    fn list_benchmark_runs(&self, _benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
-        Err(nyi("list_benchmark_runs"))
+    fn list_benchmark_runs(&self, benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
+        benchmarks::list_benchmark_runs(&self.rest, benchmark_id)
     }
-    fn create_dataset(&self, _d: &Dataset) -> Result<()> {
-        Err(nyi("create_dataset"))
+    fn create_dataset(&self, d: &Dataset) -> Result<()> {
+        datasets::create_dataset(&self.rest, d)
     }
-    fn get_dataset(&self, _id: &str) -> Result<Option<Dataset>> {
-        Err(nyi("get_dataset"))
+    fn get_dataset(&self, id: &str) -> Result<Option<Dataset>> {
+        datasets::get_dataset(&self.rest, id)
     }
-    fn list_datasets(&self, _project: &str) -> Result<Vec<Dataset>> {
-        Err(nyi("list_datasets"))
+    fn list_datasets(&self, project: &str) -> Result<Vec<Dataset>> {
+        datasets::list_datasets(&self.rest, project)
     }
-    fn set_dataset_frozen(&self, _id: &str, _frozen: bool) -> Result<()> {
-        Err(nyi("set_dataset_frozen"))
+    fn set_dataset_frozen(&self, id: &str, frozen: bool) -> Result<()> {
+        datasets::set_dataset_frozen(&self.rest, id, frozen)
     }
-    fn create_dataset_item(&self, _item: &DatasetItem) -> Result<()> {
-        Err(nyi("create_dataset_item"))
+    fn create_dataset_item(&self, item: &DatasetItem) -> Result<()> {
+        datasets::create_dataset_item(&self.rest, item)
     }
-    fn list_dataset_items(&self, _dataset_id: &str) -> Result<Vec<DatasetItem>> {
-        Err(nyi("list_dataset_items"))
+    fn list_dataset_items(&self, dataset_id: &str) -> Result<Vec<DatasetItem>> {
+        datasets::list_dataset_items(&self.rest, dataset_id)
     }
-    fn create_rubric(&self, _r: &Rubric) -> Result<()> {
-        Err(nyi("create_rubric"))
+    fn create_rubric(&self, r: &Rubric) -> Result<()> {
+        rubrics::create_rubric(&self.rest, r)
     }
-    fn get_rubric(&self, _id: &str) -> Result<Option<Rubric>> {
-        Err(nyi("get_rubric"))
+    fn get_rubric(&self, id: &str) -> Result<Option<Rubric>> {
+        rubrics::get_rubric(&self.rest, id)
     }
-    fn list_rubrics(&self, _project: &str) -> Result<Vec<Rubric>> {
-        Err(nyi("list_rubrics"))
+    fn list_rubrics(&self, project: &str) -> Result<Vec<Rubric>> {
+        rubrics::list_rubrics(&self.rest, project)
     }
-    fn create_job(&self, _j: &Job) -> Result<()> {
-        Err(nyi("create_job"))
+    fn create_job(&self, j: &Job) -> Result<()> {
+        jobs::create_job(&self.rest, j)
     }
-    fn claim_job(&self, _stale_before: DateTime<Utc>) -> Result<Option<Job>> {
-        Err(nyi("claim_job"))
+    fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
+        jobs::claim_job(&self.rest, stale_before)
     }
-    fn update_job_progress(&self, _id: &str, _progress: &str) -> Result<()> {
-        Err(nyi("update_job_progress"))
+    fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
+        jobs::update_job_progress(&self.rest, id, progress)
     }
-    fn finish_job(&self, _id: &str, _status: &str, _result: &Value, _error: Option<&str>) -> Result<()> {
-        Err(nyi("finish_job"))
+    fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()> {
+        jobs::finish_job(&self.rest, id, status, result, error)
     }
-    fn get_job(&self, _id: &str) -> Result<Option<Job>> {
-        Err(nyi("get_job"))
+    fn get_job(&self, id: &str) -> Result<Option<Job>> {
+        jobs::get_job(&self.rest, id)
     }
-    fn list_jobs(&self, _status: Option<&str>, _limit: usize) -> Result<Vec<Job>> {
-        Err(nyi("list_jobs"))
+    fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
+        jobs::list_jobs(&self.rest, status, limit)
     }
 }
