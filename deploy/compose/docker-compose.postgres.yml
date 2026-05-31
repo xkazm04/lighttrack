@@ -1,0 +1,55 @@
+# Full local stack on Postgres + Grafana. Run from this directory:
+#   docker compose -f docker-compose.postgres.yml up --build
+# Grafana: http://localhost:3000 (anonymous viewer; admin/admin) — dashboard "LightTrack" auto-loads.
+# API: http://localhost:8787
+name: lighttrack-pg
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: lighttrack
+      POSTGRES_PASSWORD: lighttrack
+      POSTGRES_DB: lighttrack
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lighttrack"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: ghcr.io/xkazm04/tracklight:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LIGHTTRACK_BIND: 0.0.0.0:8787
+      LIGHTTRACK_DATABASE_URL: postgres://lighttrack:lighttrack@postgres:5432/lighttrack
+      LIGHTTRACK_AUTH_MODE: ${LIGHTTRACK_AUTH_MODE:-dev}
+      LIGHTTRACK_ADMIN_KEY: ${LIGHTTRACK_ADMIN_KEY:-}
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    depends_on:
+      - postgres
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ../../dashboards/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../dashboards/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+volumes:
+  pg-data:

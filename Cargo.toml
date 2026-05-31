@@ -35,3 +35,16 @@ thiserror = "2"
 #   reqwest  = { version = "0.12", features = ["json"] }
 #   clap     = { version = "4", features = ["derive"] }
 #   anyhow   = "1"
+
+# cargo-dist config (for `cargo dist init` adoption). Until then, .github/workflows/release.yml is a
+# hand-rolled equivalent: native matrix build of the binaries → GitHub Release + curl|sh installer.
+[workspace.metadata.dist]
+cargo-dist-version = "0.28.0"
+ci = "github"
+installers = ["shell", "powershell"]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]

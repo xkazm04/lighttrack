@@ -1,0 +1,18 @@
+apiVersion: 1
+
+# Defaults match the docker-compose.postgres.yml stack. For a managed/cloud Postgres
+# (Neon/Supabase/RDS/Cloud SQL/Azure DB), edit url/user/password and set sslmode: require.
+datasources:
+  - name: LightTrack Postgres
+    uid: lighttrack-pg
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: lighttrack
+    isDefault: true
+    jsonData:
+      database: lighttrack
+      sslmode: disable
+      postgresVersion: 1600
+    secureJsonData:
+      password: lighttrack

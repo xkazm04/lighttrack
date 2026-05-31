@@ -1,0 +1,60 @@
+name: release
+
+# Build the LightTrack binaries for each platform on a `v*` tag and attach them to the GitHub
+# Release (consumed by deploy/install.sh / install.ps1). Hand-rolled equivalent of cargo-dist.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu, archive: tar.gz }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,    archive: zip }
+          - { os: macos-latest,   target: aarch64-apple-darwin,      archive: tar.gz }
+          - { os: macos-13,       target: x86_64-apple-darwin,       archive: tar.gz }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps (sqlx native-tls + bundled sqlite)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build binaries
+        run: >
+          cargo build --release --target ${{ matrix.target }}
+          -p lighttrack-cli -p lighttrack-runner -p lighttrack-mcp -p lighttrack-api
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          tar -C "target/${{ matrix.target }}/release" \
+            -czf "dist/lighttrack-${{ matrix.target }}.tar.gz" \
+            lt lt-runner lt-mcp lighttrack-api
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $r = "target/${{ matrix.target }}/release"
+          Compress-Archive -Force -DestinationPath "dist/lighttrack-${{ matrix.target }}.zip" `
+            -Path "$r/lt.exe","$r/lt-runner.exe","$r/lt-mcp.exe","$r/lighttrack-api.exe"
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

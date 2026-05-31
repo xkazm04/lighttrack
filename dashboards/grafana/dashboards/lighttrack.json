@@ -1,0 +1,119 @@
+{
+  "title": "LightTrack — LLM observability",
+  "uid": "lighttrack-overview",
+  "tags": ["lighttrack"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total cost (USD)",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT COALESCE(SUM(cost_usd),0) AS value FROM events WHERE $__timeFilter(ts::timestamptz)"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Calls",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT COUNT(*) AS value FROM events WHERE $__timeFilter(ts::timestamptz)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Tokens",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT COALESCE(SUM(input_tokens+output_tokens),0) AS value FROM events WHERE $__timeFilter(ts::timestamptz)"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Avg score",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 2 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT AVG(value/NULLIF(max,0)) AS value FROM scores WHERE $__timeFilter(created_at::timestamptz)"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Cost over time (hourly)",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "custom": { "drawStyle": "bars", "fillOpacity": 40 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT date_trunc('hour', ts::timestamptz) AS time, provider AS metric, SUM(cost_usd) AS cost FROM events WHERE $__timeFilter(ts::timestamptz) GROUP BY 1, provider ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Cost by project / provider / model",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "cost" }, "properties": [ { "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 4 } ] } ] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT project_id, provider, model, COUNT(*) AS calls, COALESCE(SUM(input_tokens+output_tokens),0)::bigint AS tokens, COALESCE(SUM(cost_usd),0) AS cost FROM events WHERE $__timeFilter(ts::timestamptz) GROUP BY project_id, provider, model ORDER BY cost DESC"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Recent scores",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT created_at, project_id, rubric, value, max, pass, scored_by, cost_usd FROM scores WHERE $__timeFilter(created_at::timestamptz) ORDER BY created_at DESC LIMIT 100"
+        }
+      ]
+    }
+  ]
+}
