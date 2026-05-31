@@ -7,6 +7,7 @@
 pub mod dataset;
 pub mod error;
 pub mod event;
+pub mod job;
 pub mod limits;
 pub mod pricing;
 pub mod project;
@@ -15,6 +16,7 @@ pub mod score;
 
 pub use dataset::{Dataset, DatasetItem};
 pub use error::LtError;
+pub use job::Job;
 pub use rubric::{Rubric, RubricDimension};
 pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
 pub use limits::{LimitAction, LimitMetric, LimitRule, LimitStatus, LimitWindow};

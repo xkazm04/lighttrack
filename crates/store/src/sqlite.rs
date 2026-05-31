@@ -10,9 +10,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, Dataset, DatasetItem, LimitAction, LimitMetric, LimitRule,
-    LimitWindow, LlmEvent, ModelPriceRow, Operation, Project, Provider, Redaction, Rubric, Score,
-    Status, TokenUsage,
+    ApiKey, Benchmark, BenchmarkRun, Dataset, DatasetItem, Job, LimitAction, LimitMetric,
+    LimitRule, LimitWindow, LlmEvent, ModelPriceRow, Operation, Project, Provider, Redaction,
+    Rubric, Score, Status, TokenUsage,
 };
 
 use crate::{CostRow, Result, Store, StoreError, Usage};
@@ -33,6 +33,9 @@ const RUN_COLS: &str = "id, benchmark_id, started_at, finished_at, n_cases, mean
     pass_rate, cost_usd, status, p50_latency_ms, p95_latency_ms, total_tokens, report";
 
 const RUBRIC_COLS: &str = "id, project_id, name, dimensions, threshold, created_at";
+
+const JOB_COLS: &str = "id, type, payload, status, attempts, max_attempts, progress, error, \
+    result, claimed_at, created_at, updated_at";
 
 const PRICE_COLS: &str = "provider, model, input_per_mtok, output_per_mtok, \
     cached_input_per_mtok, effective_date, source_url";
@@ -624,6 +627,106 @@ impl Store for SqliteStore {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         raws.into_iter().map(rubric_from_raw).collect()
     }
+
+    fn create_job(&self, j: &Job) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let payload = json_or_null(&j.payload)?;
+        let result = json_or_null(&j.result)?;
+        conn.execute(
+            "INSERT INTO jobs \
+             (id, type, payload, status, attempts, max_attempts, progress, error, result, claimed_at, created_at, updated_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                j.id,
+                j.job_type,
+                payload,
+                j.status,
+                j.attempts as i64,
+                j.max_attempts as i64,
+                j.progress,
+                j.error,
+                result,
+                j.claimed_at.map(fmt_ts),
+                fmt_ts(j.created_at),
+                fmt_ts(j.updated_at),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
+        let conn = self.conn.lock().unwrap();
+        let now = fmt_ts(Utc::now());
+        let stale = fmt_ts(stale_before);
+        // Atomic: pick the oldest queued (or stale-running) job and flip it to running.
+        let sql = format!(
+            "UPDATE jobs SET status='running', claimed_at=?1, updated_at=?1, attempts=attempts+1 \
+             WHERE id = (SELECT id FROM jobs \
+                         WHERE status='queued' OR (status='running' AND claimed_at < ?2) \
+                         ORDER BY created_at LIMIT 1) \
+             RETURNING {JOB_COLS}"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let raw = stmt.query_row(params![now, stale], map_job_raw).optional()?;
+        raw.map(job_from_raw).transpose()
+    }
+
+    fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE jobs SET progress = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, progress, fmt_ts(Utc::now())],
+        )?;
+        Ok(())
+    }
+
+    fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let result_s = json_or_null(result)?;
+        conn.execute(
+            "UPDATE jobs SET status = ?2, result = ?3, error = ?4, updated_at = ?5 WHERE id = ?1",
+            params![id, status, result_s, error, fmt_ts(Utc::now())],
+        )?;
+        Ok(())
+    }
+
+    fn get_job(&self, id: &str) -> Result<Option<Job>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!("SELECT {JOB_COLS} FROM jobs WHERE id = ?1");
+        let mut stmt = conn.prepare(&sql)?;
+        let raw = stmt.query_row(params![id], map_job_raw).optional()?;
+        raw.map(job_from_raw).transpose()
+    }
+
+    fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
+        let conn = self.conn.lock().unwrap();
+        let raws = if let Some(s) = status {
+            let sql = format!(
+                "SELECT {JOB_COLS} FROM jobs WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let v = stmt
+                .query_map(params![s, limit as i64], map_job_raw)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            v
+        } else {
+            let sql = format!("SELECT {JOB_COLS} FROM jobs ORDER BY created_at DESC LIMIT ?1");
+            let mut stmt = conn.prepare(&sql)?;
+            let v = stmt
+                .query_map(params![limit as i64], map_job_raw)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            v
+        };
+        raws.into_iter().map(job_from_raw).collect()
+    }
+}
+
+fn json_or_null(v: &Value) -> Result<Option<String>> {
+    if v.is_null() {
+        Ok(None)
+    } else {
+        Ok(Some(serde_json::to_string(v)?))
+    }
 }
 
 // --- row mappers / converters for the Phase 2 tables ---
@@ -879,6 +982,66 @@ fn rubric_from_raw(r: RubricRaw) -> Result<Rubric> {
         dimensions: serde_json::from_str(&r.3)?,
         threshold: r.4,
         created_at: parse_ts(&r.5)?,
+    })
+}
+
+fn val_or_null(s: Option<String>) -> Result<Value> {
+    match s {
+        Some(x) => Ok(serde_json::from_str(&x)?),
+        None => Ok(Value::Null),
+    }
+}
+
+// id, type, payload, status, attempts, max_attempts, progress, error, result, claimed_at, created_at, updated_at
+type JobRaw = (
+    String,
+    String,
+    Option<String>,
+    String,
+    i64,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+);
+
+fn map_job_raw(row: &Row) -> rusqlite::Result<JobRaw> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
+    ))
+}
+
+fn job_from_raw(r: JobRaw) -> Result<Job> {
+    Ok(Job {
+        id: r.0,
+        job_type: r.1,
+        payload: val_or_null(r.2)?,
+        status: r.3,
+        attempts: r.4 as u32,
+        max_attempts: r.5 as u32,
+        progress: r.6,
+        error: r.7,
+        result: val_or_null(r.8)?,
+        claimed_at: match r.9 {
+            Some(s) => Some(parse_ts(&s)?),
+            None => None,
+        },
+        created_at: parse_ts(&r.10)?,
+        updated_at: parse_ts(&r.11)?,
     })
 }
 
@@ -1198,5 +1361,45 @@ mod tests {
         assert_eq!(u.tokens, 3700);
         assert!((u.cost_usd - 0.00515).abs() < 1e-9);
         assert!(rule.evaluate(u.cost_usd).breached); // 0.00515 >= 0.005
+    }
+
+    #[test]
+    fn job_queue_claim_finish() {
+        let s = SqliteStore::open_in_memory().unwrap();
+        let now = Utc::now();
+        let job = Job {
+            id: "j1".into(),
+            job_type: "bench_run".into(),
+            payload: serde_json::json!({ "benchmark_id": "b1" }),
+            status: "queued".into(),
+            attempts: 0,
+            max_attempts: 3,
+            progress: None,
+            error: None,
+            result: Value::Null,
+            claimed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        s.create_job(&job).unwrap();
+
+        let claimed = s.claim_job(now).unwrap().unwrap();
+        assert_eq!(claimed.id, "j1");
+        assert_eq!(claimed.status, "running");
+        assert_eq!(claimed.attempts, 1);
+        assert_eq!(claimed.payload["benchmark_id"], "b1");
+
+        // Nothing left to claim (the running job isn't stale).
+        assert!(s
+            .claim_job(now - chrono::Duration::seconds(1))
+            .unwrap()
+            .is_none());
+
+        s.finish_job("j1", "done", &serde_json::json!({ "run_id": "r1" }), None)
+            .unwrap();
+        let got = s.get_job("j1").unwrap().unwrap();
+        assert_eq!(got.status, "done");
+        assert_eq!(got.result["run_id"], "r1");
+        assert_eq!(s.list_jobs(Some("done"), 10).unwrap().len(), 1);
     }
 }

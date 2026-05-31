@@ -62,7 +62,12 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
       (dimension means, weakest dimension, failing-case clustering, recommendations, optional `--heal`
       LLM paragraph). *Verified:* good answer 1.0/pass, fragmented answer 0.56/fail (completeness 0.35),
       weakest=completeness, report + recommendations stored.
-- [ ] 3.6d Async benchmark job queue (jobs table + `lt-runner serve`)
+- [x] 3.6d Async benchmark job queue: `jobs` table (queued→running→done/failed, attempts/retry,
+      stale-claim recovery, progress/result) + `core::Job`; API `POST /v1/benchmarks/:id/enqueue`
+      (returns immediately), `GET /v1/jobs[/:id]`, worker endpoints `POST /v1/jobs/claim|:id/progress|:id/finish`;
+      `lt-runner serve [--once --interval --stale-secs]` claims→runs→finishes with retry up to max_attempts.
+      *Verified:* enqueue returned instantly while ingest kept serving; worker ran the bench and marked the
+      job `done` with a result; run persisted.
 - [ ] 3.6e Multi-provider generation (Claude via `claude -p` now; OpenAI/Gemini when keyed)
 
 ## Phase 4 — MCP ✅

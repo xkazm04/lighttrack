@@ -10,10 +10,11 @@ pub mod sqlite;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serde_json::Value;
 use thiserror::Error;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, Dataset, DatasetItem, LimitRule, LlmEvent, ModelPriceRow,
+    ApiKey, Benchmark, BenchmarkRun, Dataset, DatasetItem, Job, LimitRule, LlmEvent, ModelPriceRow,
     Project, Rubric, Score,
 };
 
@@ -114,4 +115,13 @@ pub trait Store: Send + Sync {
     fn create_rubric(&self, r: &Rubric) -> Result<()>;
     fn get_rubric(&self, id: &str) -> Result<Option<Rubric>>;
     fn list_rubrics(&self, project: &str) -> Result<Vec<Rubric>>;
+
+    // --- job queue (Phase 3.6d) ---
+    fn create_job(&self, j: &Job) -> Result<()>;
+    /// Atomically claim the oldest queued (or stale-running) job: sets it `running`, bumps attempts.
+    fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>>;
+    fn update_job_progress(&self, id: &str, progress: &str) -> Result<()>;
+    fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()>;
+    fn get_job(&self, id: &str) -> Result<Option<Job>>;
+    fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>>;
 }

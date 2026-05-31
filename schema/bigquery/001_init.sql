@@ -70,6 +70,22 @@ CREATE TABLE IF NOT EXISTS `${DATASET}.rubrics` (
   created_at  TIMESTAMP NOT NULL
 );
 
+-- Background job queue (Phase 3.6d). On GCP this is typically replaced by Pub/Sub.
+CREATE TABLE IF NOT EXISTS `${DATASET}.jobs` (
+  id           STRING NOT NULL,
+  type         STRING NOT NULL,
+  payload      JSON,
+  status       STRING NOT NULL,
+  attempts     INT64,
+  max_attempts INT64,
+  progress     STRING,
+  error        STRING,
+  result       JSON,
+  claimed_at   TIMESTAMP,
+  created_at   TIMESTAMP NOT NULL,
+  updated_at   TIMESTAMP NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS `${DATASET}.benchmark_runs` (
   id             STRING NOT NULL,
   benchmark_id   STRING NOT NULL,

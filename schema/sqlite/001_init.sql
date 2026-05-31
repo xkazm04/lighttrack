@@ -97,6 +97,23 @@ CREATE TABLE IF NOT EXISTS rubrics (
   created_at  TEXT NOT NULL
 );
 
+-- Background job queue (Phase 3.6d): enqueue returns immediately; lt-runner serve executes.
+CREATE TABLE IF NOT EXISTS jobs (
+  id           TEXT PRIMARY KEY,
+  type         TEXT NOT NULL,
+  payload      TEXT,           -- JSON
+  status       TEXT NOT NULL DEFAULT 'queued',
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  progress     TEXT,
+  error        TEXT,
+  result       TEXT,           -- JSON
+  claimed_at   TEXT,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
+
 CREATE TABLE IF NOT EXISTS benchmark_runs (
   id              TEXT PRIMARY KEY,
   benchmark_id    TEXT NOT NULL REFERENCES benchmarks(id),
