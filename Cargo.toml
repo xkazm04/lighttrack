@@ -4,6 +4,7 @@ members = [
     "crates/core",
     "crates/store",
     "crates/engine",
+    "crates/anon",
     "crates/api",
     "crates/runner",
     "crates/mcp",

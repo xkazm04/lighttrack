@@ -68,6 +68,15 @@ pub struct JudgeOutcome {
     pub output_tokens: Option<u64>,
 }
 
+/// The result of a free-form text call (e.g. LLM-based anonymization).
+#[derive(Debug, Clone)]
+pub struct TextOutcome {
+    pub text: String,
+    pub cost_usd: Option<f64>,
+    pub model: String,
+    pub latency_ms: Option<u64>,
+}
+
 /// Build a judging prompt for an input/output pair against a rubric.
 pub fn build_judge_prompt(rubric: &str, input: &str, output: &str) -> String {
     format!(
@@ -101,9 +110,8 @@ Respond with ONLY a JSON object (no prose, no code fences):\n\
     )
 }
 
-/// Run the judge with a fully-formed prompt.
-pub fn run_judge(cfg: &EngineConfig, prompt: &str) -> Result<JudgeOutcome> {
-    let schema = judge_verdict_schema().to_string();
+/// Run `claude -p` with the given prompt, returning the parsed JSON envelope and wall-clock latency.
+fn invoke(cfg: &EngineConfig, prompt: &str, schema: Option<&str>) -> Result<(Value, Option<u64>)> {
     let mut cmd = Command::new(&cfg.claude_bin);
     cmd.arg("-p")
         .arg(prompt)
@@ -111,9 +119,10 @@ pub fn run_judge(cfg: &EngineConfig, prompt: &str) -> Result<JudgeOutcome> {
         .arg("json")
         .arg("--model")
         .arg(&cfg.model)
-        .arg("--json-schema")
-        .arg(&schema)
         .stdin(Stdio::null()); // don't block waiting for piped stdin
+    if let Some(s) = schema {
+        cmd.arg("--json-schema").arg(s);
+    }
     if cfg.bare {
         cmd.arg("--bare");
     }
@@ -130,41 +139,65 @@ pub fn run_judge(cfg: &EngineConfig, prompt: &str) -> Result<JudgeOutcome> {
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         });
     }
-
     let envelope: Value = serde_json::from_slice(&output.stdout).map_err(|e| {
         EngineError::Parse(format!(
             "envelope not JSON: {e}; stdout was: {}",
             String::from_utf8_lossy(&output.stdout)
         ))
     })?;
+    Ok((envelope, latency_ms))
+}
 
-    let verdict = parse_verdict(&envelope)?;
-    let cost_usd = envelope.get("total_cost_usd").and_then(Value::as_f64);
-    let session_id = envelope
-        .get("session_id")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let model = envelope
-        .get("model")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| cfg.model.clone());
-
+fn token_counts(envelope: &Value) -> (Option<u64>, Option<u64>) {
     let usage = envelope.get("usage");
-    let input_tokens = usage.map(|u| {
+    let input = usage.map(|u| {
         let f = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
         f("input_tokens") + f("cache_read_input_tokens") + f("cache_creation_input_tokens")
     });
-    let output_tokens = usage.and_then(|u| u.get("output_tokens").and_then(Value::as_u64));
+    let output = usage.and_then(|u| u.get("output_tokens").and_then(Value::as_u64));
+    (input, output)
+}
 
+fn model_of(envelope: &Value, cfg: &EngineConfig) -> String {
+    envelope
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| cfg.model.clone())
+}
+
+/// Run the judge with a fully-formed prompt.
+pub fn run_judge(cfg: &EngineConfig, prompt: &str) -> Result<JudgeOutcome> {
+    let schema = judge_verdict_schema().to_string();
+    let (envelope, latency_ms) = invoke(cfg, prompt, Some(&schema))?;
+    let (input_tokens, output_tokens) = token_counts(&envelope);
     Ok(JudgeOutcome {
-        verdict,
-        cost_usd,
-        model,
-        session_id,
+        verdict: parse_verdict(&envelope)?,
+        cost_usd: envelope.get("total_cost_usd").and_then(Value::as_f64),
+        model: model_of(&envelope, cfg),
+        session_id: envelope
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         latency_ms,
         input_tokens,
         output_tokens,
+    })
+}
+
+/// Run a free-form text generation (no schema), returning the `result` text. Used by the optional
+/// LLM anonymization pass.
+pub fn run_text(cfg: &EngineConfig, prompt: &str) -> Result<TextOutcome> {
+    let (envelope, latency_ms) = invoke(cfg, prompt, None)?;
+    Ok(TextOutcome {
+        text: envelope
+            .get("result")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        cost_usd: envelope.get("total_cost_usd").and_then(Value::as_f64),
+        model: model_of(&envelope, cfg),
+        latency_ms,
     })
 }
 

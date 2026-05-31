@@ -1,0 +1,9 @@
+[package]
+name = "lighttrack-anon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightTrack PII scrubber — heuristic (regex) anonymization for dataset building."
+
+[dependencies]
+regex = "1"

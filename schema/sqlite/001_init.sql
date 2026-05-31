@@ -112,3 +112,27 @@ CREATE TABLE IF NOT EXISTS model_prices (
   source_url            TEXT,
   PRIMARY KEY (provider, model)
 );
+
+-- Versioned evaluation datasets (Phase 3.6b), built by hand or sampled from real events.
+CREATE TABLE IF NOT EXISTS datasets (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  version     INTEGER NOT NULL DEFAULT 1,
+  frozen      INTEGER NOT NULL DEFAULT 0,
+  source      TEXT,
+  created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dataset_items (
+  id              TEXT PRIMARY KEY,
+  dataset_id      TEXT NOT NULL REFERENCES datasets(id),
+  input           TEXT NOT NULL,
+  output          TEXT,
+  expected        TEXT,
+  context         TEXT,
+  tags            TEXT,        -- JSON array
+  source_event_id TEXT,
+  anonymization   TEXT         -- JSON {method, redactions}
+);
+CREATE INDEX IF NOT EXISTS idx_dataset_items_ds ON dataset_items(dataset_id);

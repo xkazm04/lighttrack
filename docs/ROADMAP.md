@@ -48,7 +48,13 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
       `GET /v1/prices` + `PUT /v1/prices/:provider/:model` (live hot-swap, no restart); judge latency +
       tokens captured in the engine; runs record p50/p95 latency, total tokens, cost.
       *Verified:* live price update $1→$2 mid-run; run stored p50=8511ms, tokens=123742.
-- [ ] 3.6b Datasets from real events + hybrid (regex + optional LLM) anonymization
+- [x] 3.6b Datasets from real events + hybrid anonymization: `anon` crate (regex PII scrubber →
+      typed placeholders); `datasets`/`dataset_items` tables + API (`POST/GET /v1/projects/:id/datasets`,
+      `GET /v1/datasets/:id`, `POST/GET /v1/datasets/:id/items`, `POST /v1/datasets/:id/freeze`);
+      `lt-runner dataset build --from events --project --n [--llm-scrub]` (regex always, optional
+      `claude -p` pass for names/free-text); benchmarks can run a stored dataset via `dataset_ref`.
+      *Verified:* 2 PII events → frozen dataset, 9 redactions (EMAIL/PHONE/CC/IP/IBAN/SSN/SECRET), no
+      raw PII; frozen→409; benchmark resolved cases from the dataset and scored them.
 - [ ] 3.6c Golden-standard rubric methodology (weighted anchored dimensions) + report & healing
 - [ ] 3.6d Async benchmark job queue (jobs table + `lt-runner serve`)
 - [ ] 3.6e Multi-provider generation (Claude via `claude -p` now; OpenAI/Gemini when keyed)

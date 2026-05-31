@@ -32,8 +32,9 @@ use serde::{Deserialize, Serialize};
 
 use auth::{AuthMode, Principal};
 use lighttrack_core::{
-    new_id, ApiKey, Benchmark, BenchmarkCase, BenchmarkRun, LimitAction, LimitMetric, LimitRule,
-    LimitStatus, LimitWindow, LlmEvent, ModelPriceRow, PriceBook, Project, Redaction, Score,
+    new_id, ApiKey, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem, LimitAction,
+    LimitMetric, LimitRule, LimitStatus, LimitWindow, LlmEvent, ModelPriceRow, PriceBook, Project,
+    Redaction, Score,
 };
 use lighttrack_store::{CostRow, SqliteStore, Store, StoreError, Usage};
 
@@ -100,6 +101,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/scores", post(post_score).get(get_scores))
         .route("/v1/prices", get(get_prices))
         .route("/v1/prices/:provider/:model", put(put_price))
+        .route(
+            "/v1/projects/:id/datasets",
+            post(create_dataset).get(list_datasets),
+        )
+        .route("/v1/datasets/:id", get(get_dataset))
+        .route(
+            "/v1/datasets/:id/items",
+            post(add_dataset_item).get(list_dataset_items),
+        )
+        .route("/v1/datasets/:id/freeze", post(freeze_dataset))
         .route(
             "/v1/projects/:id/benchmarks",
             post(create_benchmark).get(list_benchmarks),
@@ -420,6 +431,9 @@ struct CreateBenchmarkReq {
     target: serde_json::Value,
     #[serde(default)]
     dataset: Vec<BenchmarkCase>,
+    /// Reference a stored dataset by id instead of (or in addition to) an inline dataset.
+    #[serde(default)]
+    dataset_ref: Option<String>,
     #[serde(default)]
     baseline_score: Option<f64>,
 }
@@ -442,7 +456,7 @@ async fn create_benchmark(
         rubric: req.rubric,
         judge_model: req.judge_model,
         target: req.target,
-        dataset_ref: None,
+        dataset_ref: req.dataset_ref,
         dataset: req.dataset,
         baseline_score: req.baseline_score,
         created_at: Utc::now(),
@@ -570,6 +584,124 @@ async fn put_price(
         *book = PriceBook::from_rows(&rows);
     }
     Ok(Json(row))
+}
+
+// ----------------------------------------------------------------------------
+// Datasets (Phase 3.6b)
+// ----------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct CreateDatasetReq {
+    name: String,
+    #[serde(default)]
+    source: Option<String>,
+}
+
+async fn create_dataset(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(pid): Path<String>,
+    Json(req): Json<CreateDatasetReq>,
+) -> Result<Json<Dataset>, ApiError> {
+    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let d = Dataset {
+        id: new_id(),
+        project_id: pid,
+        name: req.name,
+        version: 1,
+        frozen: false,
+        source: req.source,
+        created_at: Utc::now(),
+    };
+    let store = st.store.clone();
+    let d2 = d.clone();
+    spawn_db(move || store.create_dataset(&d2)).await?;
+    Ok(Json(d))
+}
+
+async fn list_datasets(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(pid): Path<String>,
+) -> Result<Json<Vec<Dataset>>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    resolve_read_project(&p, Some(&pid))?;
+    let store = st.store.clone();
+    let v = spawn_db(move || store.list_datasets(&pid)).await?;
+    Ok(Json(v))
+}
+
+async fn load_dataset_authorized(
+    st: &AppState,
+    p: &Principal,
+    id: &str,
+) -> Result<Dataset, ApiError> {
+    let store = st.store.clone();
+    let id2 = id.to_string();
+    let d = spawn_db(move || store.get_dataset(&id2))
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("dataset '{id}' not found")))?;
+    if let Principal::Project(pid) = p {
+        if &d.project_id != pid {
+            return Err(ApiError::forbidden("key not authorized for that dataset"));
+        }
+    }
+    Ok(d)
+}
+
+async fn get_dataset(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Dataset>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    Ok(Json(load_dataset_authorized(&st, &p, &id).await?))
+}
+
+async fn add_dataset_item(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(mut item): Json<DatasetItem>,
+) -> Result<Json<DatasetItem>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
+    let ds = load_dataset_authorized(&st, &p, &id).await?;
+    if ds.frozen {
+        return Err(ApiError::new(StatusCode::CONFLICT, "dataset is frozen"));
+    }
+    item.dataset_id = id;
+    let store = st.store.clone();
+    let item2 = item.clone();
+    spawn_db(move || store.create_dataset_item(&item2)).await?;
+    Ok(Json(item))
+}
+
+async fn list_dataset_items(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<DatasetItem>>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    load_dataset_authorized(&st, &p, &id).await?;
+    let store = st.store.clone();
+    let items = spawn_db(move || store.list_dataset_items(&id)).await?;
+    Ok(Json(items))
+}
+
+async fn freeze_dataset(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Dataset>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
+    let mut ds = load_dataset_authorized(&st, &p, &id).await?;
+    let store = st.store.clone();
+    let id2 = id.clone();
+    spawn_db(move || store.set_dataset_frozen(&id2, true)).await?;
+    ds.frozen = true;
+    Ok(Json(ds))
 }
 
 // ----------------------------------------------------------------------------

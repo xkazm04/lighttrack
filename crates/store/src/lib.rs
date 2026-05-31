@@ -13,7 +13,8 @@ use serde::Serialize;
 use thiserror::Error;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, LimitRule, LlmEvent, ModelPriceRow, Project, Score,
+    ApiKey, Benchmark, BenchmarkRun, Dataset, DatasetItem, LimitRule, LlmEvent, ModelPriceRow,
+    Project, Score,
 };
 
 pub use sqlite::SqliteStore;
@@ -100,4 +101,12 @@ pub trait Store: Send + Sync {
     // --- model prices (Phase 3.6a) ---
     fn upsert_price(&self, p: &ModelPriceRow) -> Result<()>;
     fn list_prices(&self) -> Result<Vec<ModelPriceRow>>;
+
+    // --- datasets (Phase 3.6b) ---
+    fn create_dataset(&self, d: &Dataset) -> Result<()>;
+    fn get_dataset(&self, id: &str) -> Result<Option<Dataset>>;
+    fn list_datasets(&self, project: &str) -> Result<Vec<Dataset>>;
+    fn set_dataset_frozen(&self, id: &str, frozen: bool) -> Result<()>;
+    fn create_dataset_item(&self, item: &DatasetItem) -> Result<()>;
+    fn list_dataset_items(&self, dataset_id: &str) -> Result<Vec<DatasetItem>>;
 }

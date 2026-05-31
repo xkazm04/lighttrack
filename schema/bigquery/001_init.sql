@@ -85,6 +85,28 @@ CREATE TABLE IF NOT EXISTS `${DATASET}.model_prices` (
   source_url            STRING
 );
 
+CREATE TABLE IF NOT EXISTS `${DATASET}.datasets` (
+  id          STRING NOT NULL,
+  project_id  STRING NOT NULL,
+  name        STRING NOT NULL,
+  version     INT64,
+  frozen      BOOL,
+  source      STRING,
+  created_at  TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS `${DATASET}.dataset_items` (
+  id              STRING NOT NULL,
+  dataset_id      STRING NOT NULL,
+  input           STRING NOT NULL,
+  output          STRING,
+  expected        STRING,
+  context         STRING,
+  tags            ARRAY<STRING>,
+  source_event_id STRING,
+  anonymization   JSON
+);
+
 -- Example free-tier-friendly rollup the notifier / Looker Studio can use:
 -- SELECT project_id, DATE(ts) d, SUM(cost_usd) cost, COUNT(*) calls
 -- FROM `${DATASET}.events` WHERE ts > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)

@@ -4,6 +4,7 @@
 //! the normalized [`event::LlmEvent`] model, the [`pricing::PriceBook`] and cost
 //! calculation, per-project [`limits`] evaluation, and the [`score`] /benchmark types.
 
+pub mod dataset;
 pub mod error;
 pub mod event;
 pub mod limits;
@@ -11,6 +12,7 @@ pub mod pricing;
 pub mod project;
 pub mod score;
 
+pub use dataset::{Dataset, DatasetItem};
 pub use error::LtError;
 pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
 pub use limits::{LimitAction, LimitMetric, LimitRule, LimitStatus, LimitWindow};
