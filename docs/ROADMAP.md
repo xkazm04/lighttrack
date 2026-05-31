@@ -88,13 +88,30 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
       generator family). Judge cost priced from the DB book when the provider returns no $.
       *Verified live:* same answer judged by Gemini and by OpenAI (both 1.0/pass, judge cost priced).
 
+## Judge calibration (post-3.6) ✅
+- [x] `core::calibration` — pure agreement math (Cohen's κ on pass/fail, Pearson, MAE/RMSE, judge-vs-human
+      bias, trust verdict vs a κ bar); unit-tested (perfect/total-disagreement/bias/empty).
+- [x] `lt-runner calibrate --file <jsonl|json> --rubric "<criteria>" | --rubric-id <id>
+      [--threshold 0.7 --kappa-bar 0.6 --samples k --report out.json]` — re-judges each human-labeled
+      `{input, output, human_score}` and reports per-item agreement + aggregate κ/correlation. Judge-only,
+      self-contained (no Store/schema/API changes — works against the existing judge engine).
+      `config/calibration.example.jsonl` ships as a starter set.
+- [x] *Verified live (Haiku judge, 8 items):* κ=0.750 (TRUSTED), pearson=0.985, MAE=0.037, bias=+0.037;
+      the lone miss correctly flagged the judge under-penalizing a verbose-but-correct answer vs the human.
+
 ## Phase 4 — MCP ✅
 - [x] `mcp` (`lt-mcp`): hand-rolled JSON-RPC 2.0 stdio server (no SDK); thin HTTP client of the API
 - [x] Tools: `list_projects`, `get_cost_summary`, `query_events`, `get_limit_status`, `list_scores`
 - [x] Verified via a real JSON-RPC session (initialize → tools/list → tools/call returning live data)
 - [x] `.mcp.json` committed for project-scoped registration in Claude Code
 - [x] Benchmark read tools (`list_benchmarks`, `get_benchmark_runs`) added in Phase 3.5
-      (triggering a run stays in `lt-runner`, which has the `claude -p` engine; MCP is read-only)
+- [x] **Expanded** (commit 088b77c): modularized (`client`/`rpc`/`read`/`write`/`tools` + wiring `main`);
+      grown to 18 read tools (events/costs/scores/prices/limits/projects/benchmarks+runs/datasets+items/
+      rubrics/jobs, all `readOnlyHint`) + 9 write tools (`enqueue_benchmark` + create project/dataset/item/
+      freeze/rubric/benchmark/limit + `put_price`). Writes are OFF by default, gated behind
+      `LIGHTTRACK_MCP_ALLOW_WRITES` atop the API's admin checks; key-minting deliberately not exposed.
+      Fulfils D5 ("trigger benchmarks"). Verified: read-only hides/blocks writes; write mode runs the full
+      create→freeze→benchmark→enqueue→poll loop; frozen-dataset writes still return 409 via the API.
 
 ## Phase 5 — Cloud move
 - [ ] BigQuery `Store` backend + Firestore config backend

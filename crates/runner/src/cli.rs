@@ -61,6 +61,30 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         action: DatasetCmd,
     },
+    /// Measure judge↔human agreement on a labeled set (Cohen's κ, correlation) to validate a rubric.
+    Calibrate {
+        /// JSONL (one object per line) or JSON-array file of {input, output, human_score, ...}.
+        #[arg(long)]
+        file: String,
+        /// Freeform criteria text for the judge (use this OR --rubric-id).
+        #[arg(long)]
+        rubric: Option<String>,
+        /// Structured rubric id to fetch from the API and judge per-dimension (use this OR --rubric).
+        #[arg(long)]
+        rubric_id: Option<String>,
+        /// Pass/fail cutoff for binarizing scores (drives κ + agreement rate).
+        #[arg(long, default_value_t = 0.7)]
+        threshold: f64,
+        /// Minimum Cohen's κ for the rubric to be considered "trusted".
+        #[arg(long, default_value_t = 0.6)]
+        kappa_bar: f64,
+        /// Self-consistency: judge each item this many times and average (rubric mode).
+        #[arg(long, default_value_t = 1)]
+        samples: u32,
+        /// Optional path to write the full JSON report.
+        #[arg(long)]
+        report: Option<String>,
+    },
     /// Run as a worker: poll the job queue and execute jobs (e.g. bench_run).
     Serve {
         /// Process at most one cycle (claim+run one job, or exit if none) and stop.

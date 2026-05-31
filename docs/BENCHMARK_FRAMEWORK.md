@@ -63,7 +63,11 @@ dimension with reasoning, then overall) · Format (strict JSON schema). We alrea
 - **Self-consistency:** sample the judge k times (or k judges), report mean + agreement; low agreement →
   flag the item as ambiguous rather than trusting one score.
 - A **golden/calibration set** of human-labeled items measures judge↔human agreement (Cohen's κ /
-  correlation); a rubric isn't "trusted" until agreement clears a bar.
+  correlation); a rubric isn't "trusted" until agreement clears a bar. ✅ shipped: `lt-runner
+  calibrate --file <jsonl> --rubric "<criteria>" | --rubric-id <id>` re-judges each labeled
+  `{input, output, human_score}`, then reports Cohen's κ + Pearson + MAE/RMSE + judge-vs-human bias
+  and a TRUSTED/NOT-TRUSTED verdict against `--kappa-bar` (default 0.6). Judge-only (no generation),
+  self-contained (no Store/schema changes). Agreement math lives in `core::calibration` (unit-tested).
 
 **Bias controls (the four):** position → randomize/shuffle A/B and aggregate; verbosity → rubric explicitly
 penalizes unnecessary length; self-preference → judge family ≠ generator family (or pairwise+neutral);
@@ -125,9 +129,10 @@ jobs(id, type, payload_json, status, attempts, progress, error, claimed_at, crea
 
 **All sub-phases 3.6a–3.6e are implemented, tested, and verified live** (see ROADMAP). The **Gemini and
 OpenAI generation adapters are now live too** (reqwest/native-tls, keys from `.env`, gen cost priced from
-the DB book) — verified in a 3-way Claude/Gemini/OpenAI comparison. Remaining future work: BigQuery/
-Firestore Store backends + Pub/Sub queue (Phase 5/packaging), prompt-length-tiered & batch pricing, and a
-human-labeled calibration set for judge↔human agreement.
+the DB book) — verified in a 3-way Claude/Gemini/OpenAI comparison. The **judge↔human calibration set is
+now shipped too** (`lt-runner calibrate`; Cohen's κ + correlation + trust verdict — see §3). Remaining
+future work: BigQuery/Firestore Store backends + Pub/Sub queue (Phase 5/packaging), and prompt-length-tiered
+& batch pricing.
 
 ## Sources (researched 2026-05-31)
 - Anthropic API pricing — https://platform.claude.com/docs/en/about-claude/pricing

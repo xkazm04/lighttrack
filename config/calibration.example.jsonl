@@ -1,0 +1,8 @@
+{"input":"What is the capital of France?","output":"Paris.","human_score":1.0,"note":"correct"}
+{"input":"What is the capital of France?","output":"The capital of France is Lyon.","human_score":0.0,"note":"wrong-city"}
+{"input":"Translate 'hello' to Spanish.","output":"Hola.","human_score":1.0,"note":"correct"}
+{"input":"List the three primary colors.","output":"Red and blue.","human_score":0.4,"note":"incomplete"}
+{"input":"Summarize in one sentence: The cat sat on the mat by the warm fire.","output":"A cat rested on a mat near a fire.","human_score":0.9,"note":"good-summary"}
+{"input":"What is 2 + 2?","output":"Well, it depends on the numeral base, but assuming base 10 as is conventional, the sum of two and two is four (4).","human_score":0.5,"note":"correct-but-verbose"}
+{"input":"Who wrote Romeo and Juliet?","output":"William Shakespeare.","human_score":1.0,"note":"correct"}
+{"input":"Is the Earth flat?","output":"Yes, the Earth is flat.","human_score":0.0,"note":"false"}

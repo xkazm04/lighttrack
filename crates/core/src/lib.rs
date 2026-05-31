@@ -4,6 +4,7 @@
 //! the normalized [`event::LlmEvent`] model, the [`pricing::PriceBook`] and cost
 //! calculation, per-project [`limits`] evaluation, and the [`score`] /benchmark types.
 
+pub mod calibration;
 pub mod dataset;
 pub mod error;
 pub mod event;
@@ -14,6 +15,7 @@ pub mod project;
 pub mod rubric;
 pub mod score;
 
+pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use dataset::{Dataset, DatasetItem};
 pub use error::LtError;
 pub use job::Job;

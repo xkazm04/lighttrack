@@ -8,6 +8,7 @@
 //! (+`compare`, `rubric`), `serve`.
 
 mod bench;
+mod calibrate;
 mod cli;
 mod compare;
 mod dataset;
@@ -63,5 +64,25 @@ fn main() -> Result<()> {
             interval,
             stale_secs,
         } => serve::serve(&cli, &http, &engine, *once, *interval, *stale_secs),
+        Cmd::Calibrate {
+            file,
+            rubric,
+            rubric_id,
+            threshold,
+            kappa_bar,
+            samples,
+            report,
+        } => calibrate::calibrate(
+            &cli,
+            &http,
+            &engine,
+            file,
+            rubric.as_deref(),
+            rubric_id.as_deref(),
+            *threshold,
+            *kappa_bar,
+            *samples,
+            report.as_deref(),
+        ),
     }
 }
