@@ -1,8 +1,10 @@
-# LightTrack — Firestore backend (design)
+# LightTrack — Firestore backend
 
 GCP-native `Store` backend, kept per the full-scope decision (Postgres stays the cross-cloud default;
-Firestore is for teams all-in on GCP). Status: **design** — implementation is a focused pass (like the
-Postgres backend was), tracked as Phase 5 part-1/part-2 below.
+Firestore is for teams all-in on GCP). Status: **implemented** — `crates/store-firestore`
+(`FirestoreStore`), selected by `LIGHTTRACK_DATABASE_URL=firestore://<project>`, implements the full
+`Store` trait via the REST approach below (modules: `rest`, `codec`, + one per domain). This doc
+records the design/rationale.
 
 ## Approach: REST over `reqwest` (not gRPC)
 Use the **Firestore REST API** (`https://firestore.googleapis.com/v1`) through the existing `reqwest`

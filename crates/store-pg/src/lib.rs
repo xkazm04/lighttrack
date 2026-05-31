@@ -5,9 +5,9 @@
 //! owns a small Tokio runtime and `block_on`s each query. Callers already invoke store methods from
 //! `spawn_blocking`, so this never blocks the API's async workers.
 //!
-//! Phase 5a part 1: the **core data plane** (events, projects, API keys, limits, prices, scores) is
-//! implemented and verified against Postgres. Benchmark/dataset/rubric/job methods are stubbed with a
-//! clear error and ported in part 2.
+//! Implements the **full** `Store` trait (all 38 methods: events, projects, API keys, limits, prices,
+//! scores, benchmarks, datasets, rubrics, jobs), verified against Postgres. `claim_job` uses
+//! `FOR UPDATE SKIP LOCKED … RETURNING` for a concurrency-safe atomic dequeue.
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::de::DeserializeOwned;

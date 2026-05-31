@@ -131,12 +131,25 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
       Fulfils D5 ("trigger benchmarks"). Verified: read-only hides/blocks writes; write mode runs the full
       create→freeze→benchmark→enqueue→poll loop; frozen-dataset writes still return 409 via the API.
 
-## Phase 5 — Cloud move
-- [ ] BigQuery `Store` backend + Firestore config backend
-- [ ] Containerize `api` → Cloud Run; `runner` → e2-micro; Secret Manager for keys
-- [ ] Pub/Sub job dispatch; Cloud Scheduler periodic checks → Cloud Function alerts
-- [ ] Looker Studio dashboard on BigQuery
-- [ ] Enforce API-key auth + TLS
+## Phase 5 — Packaging & multicloud (design: docs/PACKAGING.md)
+Reframed from "GCP cloud move" to portable, multi-DB/multicloud: one image + one
+`LIGHTTRACK_DATABASE_URL` DSN; `Store`-trait adapters; tiered deploy (compose → Terraform → Helm).
+- [x] 5a **Postgres backend** (`lighttrack-store-pg`, sqlx): full `Store` parity; `claim_job` via
+      `FOR UPDATE SKIP LOCKED`. Selected by `LIGHTTRACK_DATABASE_URL=postgres://…`. Verified vs PG 16.
+- [x] **Firestore backend** (`lighttrack-store-firestore`, REST-over-reqwest): full parity, modular
+      (rest/codec + per-domain). `LIGHTTRACK_DATABASE_URL=firestore://<project>`. See `docs/FIRESTORE.md`.
+- [x] 5b **Containerize → GHCR**: multi-stage `Dockerfile` (all 4 bins), compose, buildx CI; image
+      `ghcr.io/xkazm04/tracklight:v0.0.1` published (amd64).
+- [x] 5f **Binary installers + dashboards**: cargo-dist config + `deploy/install.{sh,ps1}`; Grafana
+      dashboard over Postgres (`dashboards/grafana`, `docker-compose.postgres.yml`).
+- [~] 5d/5e **Helm chart + GCP/Azure Terraform modules** (`deploy/helm`, `deploy/terraform/modules`):
+      scaffolded; **unverified** (no helm/terraform locally, no real cloud creds applied yet).
+- [ ] Remaining: **Store-conformance tests** across backends (gated on a PG/emulator env var — pg &
+      firestore currently have 0 automated tests); validate against real cloud Postgres (Neon/Supabase)
+      + apply Helm/TF with GCP+Azure creds; rebuild/publish a **Postgres-capable image** (v0.0.2) and make
+      the GHCR package public; AWS App Runner TF module; neutral Queue/Blob/Secrets/Notifier adapters
+      (5c); Pub/Sub queue + Cloud Scheduler; optional BigQuery analytical sink (Looker Studio); enforce
+      auth + TLS termination in the cloud deploy.
 
 ## Parallelism & scale targets
 - Expected: 5–10 apps × 10–100 calls/hour ≈ ≤1k calls/hr. `api` handles ingest concurrently (async axum);

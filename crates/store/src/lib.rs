@@ -1,8 +1,9 @@
 //! LightTrack persistence layer.
 //!
 //! [`Store`] is the backend-agnostic interface used by `api` (and later `mcp`/`cli`). The local
-//! implementation is [`sqlite::SqliteStore`]; a BigQuery backend slots in behind the same trait
-//! when we move to the cloud (see `docs/ARCHITECTURE.md` §5).
+//! implementation is [`sqlite::SqliteStore`]; cloud backends slot in behind the same trait, selected
+//! by `LIGHTTRACK_DATABASE_URL`: `lighttrack-store-pg` (Postgres, the cross-cloud default) and
+//! `lighttrack-store-firestore` (GCP-native). See `docs/PACKAGING.md`.
 //!
 //! Methods are synchronous (SQLite is blocking). Async callers wrap them in `spawn_blocking`.
 
