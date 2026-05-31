@@ -1,0 +1,45 @@
+# LightTrack local stack. Run from this directory:  docker compose up --build
+# (Build context is the repo root.)
+name: lighttrack
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: ghcr.io/xkazm04/tracklight:dev
+    ports:
+      - "8787:8787"
+    environment:
+      LIGHTTRACK_BIND: 0.0.0.0:8787
+      LIGHTTRACK_DB: /data/lighttrack.db
+      # Set these in a .env file (git-ignored) for an enforced deployment:
+      LIGHTTRACK_AUTH_MODE: ${LIGHTTRACK_AUTH_MODE:-dev}
+      LIGHTTRACK_ADMIN_KEY: ${LIGHTTRACK_ADMIN_KEY:-}
+    volumes:
+      - lt-data:/data
+    restart: unless-stopped
+
+volumes:
+  lt-data:
+
+# ---------------------------------------------------------------------------
+# Coming with later sub-phases — kept here as a reference:
+#
+#  postgres:                       # 5a: point the app at Postgres instead of SQLite
+#    image: postgres:16-alpine
+#    environment:
+#      POSTGRES_USER: lighttrack
+#      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lighttrack}
+#      POSTGRES_DB: lighttrack
+#    volumes: [pg-data:/var/lib/postgresql/data]
+#    # then on `api`: LIGHTTRACK_DATABASE_URL: postgres://lighttrack:...@postgres/lighttrack
+#
+#  grafana:                        # 5f: cloud-neutral dashboard over the DB
+#    image: grafana/grafana
+#    ports: ["3000:3000"]
+#
+# The `lt-runner` worker (the claude -p judge/queue worker) runs on the HOST,
+# where `claude` and provider keys live — not as a compose service:
+#   lt-runner --base http://127.0.0.1:8787 serve --interval 10
+# ---------------------------------------------------------------------------
