@@ -8,6 +8,7 @@ use lighttrack_store::{Store, StoreError};
 use crate::alerts::Alerter;
 use crate::auth::AuthMode;
 use crate::error::ApiError;
+use crate::redact::Redactor;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -18,6 +19,8 @@ pub(crate) struct AppState {
     pub(crate) admin_key: Option<String>,
     /// Best-effort breach-alert delivery (webhook / ntfy), configured from env.
     pub(crate) alerts: Arc<Alerter>,
+    /// Optional PII redaction of captured input/output on ingest, configured from env.
+    pub(crate) redact: Arc<Redactor>,
 }
 
 /// Run a blocking store call on the blocking pool and flatten the two error layers.

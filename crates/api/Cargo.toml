@@ -10,6 +10,8 @@ lighttrack-core.workspace = true
 lighttrack-store = { path = "../store" }
 lighttrack-store-pg = { path = "../store-pg" }
 lighttrack-store-firestore = { path = "../store-firestore" }
+# Reuse the regex PII scrubber for optional content redaction on ingest.
+lighttrack-anon = { path = "../anon" }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

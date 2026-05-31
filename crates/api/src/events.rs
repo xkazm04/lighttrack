@@ -36,6 +36,11 @@ pub(crate) async fn post_event(
     let principal = authenticate(&st, &headers).await?;
     let pid = resolve_ingest_project(&principal, &ev.project_id)?;
     ev.project_id = pid.clone();
+    // Optional: scrub structured PII from captured input/output before it is stored.
+    let redacted = st.redact.redact_event(&mut ev);
+    if redacted > 0 {
+        eprintln!("[REDACT] project={pid} event={} redacted {redacted} PII span(s)", ev.id);
+    }
     {
         let book = st.prices.read().unwrap();
         ev.ensure_cost(&book);

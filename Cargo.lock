@@ -1067,6 +1067,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "lighttrack-anon",
  "lighttrack-core",
  "lighttrack-store",
  "lighttrack-store-firestore",

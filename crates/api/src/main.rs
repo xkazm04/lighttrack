@@ -19,7 +19,8 @@
 //!
 //! Env: LIGHTTRACK_BIND, LIGHTTRACK_DB, LIGHTTRACK_DATABASE_URL, LIGHTTRACK_PRICING,
 //!      LIGHTTRACK_AUTH_MODE (dev|enforced), LIGHTTRACK_ADMIN_KEY,
-//!      LIGHTTRACK_ALERT_WEBHOOK / LIGHTTRACK_ALERT_NTFY / LIGHTTRACK_ALERT_COOLDOWN_SECS (see alerts).
+//!      LIGHTTRACK_ALERT_WEBHOOK / LIGHTTRACK_ALERT_NTFY / LIGHTTRACK_ALERT_COOLDOWN_SECS (see alerts),
+//!      LIGHTTRACK_REDACT_INGEST (off | all | csv of project_ids — scrub PII from input/output; see redact).
 
 mod alerts;
 mod auth;
@@ -32,6 +33,7 @@ mod jobs;
 mod limits;
 mod prices;
 mod projects;
+mod redact;
 mod rubrics;
 mod scores;
 mod state;
@@ -109,16 +111,19 @@ async fn main() -> anyhow::Result<()> {
 
     let alerts = Arc::new(alerts::Alerter::from_env());
     let alerts_desc = alerts.describe();
+    let redact = Arc::new(redact::Redactor::from_env());
+    let redact_desc = redact.describe();
     let state = AppState {
         store,
         prices: Arc::new(RwLock::new(book)),
         auth_mode,
         admin_key,
         alerts,
+        redact,
     };
 
     println!(
-        "lighttrack-api v{} on http://{bind}  (store={backend}, {n_prices} priced models, auth={:?}, admin_key={}, alerts={alerts_desc})",
+        "lighttrack-api v{} on http://{bind}  (store={backend}, {n_prices} priced models, auth={:?}, admin_key={}, alerts={alerts_desc}, redact={redact_desc})",
         env!("CARGO_PKG_VERSION"),
         state.auth_mode,
         if state.admin_key.is_some() { "set" } else { "unset" },
