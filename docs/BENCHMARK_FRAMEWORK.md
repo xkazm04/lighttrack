@@ -94,8 +94,9 @@ Benchmark runs must never block ingestion. A **jobs** table + a worker loop in `
 - **`model_prices` table** (replaces `pricing.json` as source of truth; JSON becomes the seed/bootstrap):
   `provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok, effective_date, source_url`.
   Seeded from official pages (researched 2026-05-31 — see `config/pricing.json` sources). Cost is computed
-  from the row whose `effective_date` ≤ the event time (price history preserved). Tiered (Gemini Pro by
-  prompt length) and batch/flex rates are noted as a future extension.
+  from the row whose `effective_date` ≤ the event time (price history preserved). **Prompt-length
+  tiers** (e.g. Gemini Pro >200k) and **batch/flex** rates are supported via variant rows
+  (`<model>@in>N`, `<model>@batch`, `<model>@flex`) — no schema change; see `docs/PRICING.md`.
 - API: `GET /v1/prices`, `PUT /v1/prices/:provider/:model` (admin) so prices update without redeploys.
 
 ## Data model additions (SQLite ↔ BigQuery, behind the Store trait)
@@ -130,9 +131,9 @@ jobs(id, type, payload_json, status, attempts, progress, error, claimed_at, crea
 **All sub-phases 3.6a–3.6e are implemented, tested, and verified live** (see ROADMAP). The **Gemini and
 OpenAI generation adapters are now live too** (reqwest/native-tls, keys from `.env`, gen cost priced from
 the DB book) — verified in a 3-way Claude/Gemini/OpenAI comparison. The **judge↔human calibration set is
-now shipped too** (`lt-runner calibrate`; Cohen's κ + correlation + trust verdict — see §3). Remaining
-future work: BigQuery/Firestore Store backends + Pub/Sub queue (Phase 5/packaging), and prompt-length-tiered
-& batch pricing.
+now shipped too** (`lt-runner calibrate`; Cohen's κ + correlation + trust verdict — see §3).
+**Prompt-length-tiered & batch/flex pricing** is shipped via price-row variants (`docs/PRICING.md`).
+Remaining future work: BigQuery analytical sink + Pub/Sub queue (Phase 5/packaging).
 
 ## Sources (researched 2026-05-31)
 - Anthropic API pricing — https://platform.claude.com/docs/en/about-claude/pricing

@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::pricing::PriceBook;
+use crate::pricing::{PriceBook, PricingMode};
 
 /// LLM provider. `Unknown` captures anything we don't model yet (its pricing lookups miss → `None`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,12 +162,28 @@ pub struct LlmEvent {
 }
 
 impl LlmEvent {
-    /// If no provider-reported cost is set, compute it from the price book (best effort).
-    /// Returns the resolved cost, if any.
+    /// If no provider-reported cost is set, compute it from the price book (best effort), honoring
+    /// the call's pricing lane (batch/flex) and prompt-length tiers. Returns the resolved cost.
     pub fn ensure_cost(&mut self, prices: &PriceBook) -> Option<f64> {
         if self.cost_usd.is_none() {
-            self.cost_usd = prices.cost_usd(self.provider, &self.model, &self.usage);
+            let mode = self.pricing_mode();
+            self.cost_usd = prices.cost_usd_mode(self.provider, &self.model, &self.usage, mode);
         }
         self.cost_usd
+    }
+
+    /// The pricing lane for this call: an explicit `metadata.pricing_mode`, else a `batch` / `flex`
+    /// (or `priority`) tag, else standard.
+    fn pricing_mode(&self) -> PricingMode {
+        if let Some(m) = self.metadata.get("pricing_mode").and_then(Value::as_str) {
+            return PricingMode::parse(m);
+        }
+        if self.tags.iter().any(|t| t == "batch") {
+            return PricingMode::Batch;
+        }
+        if self.tags.iter().any(|t| t == "flex" || t == "priority") {
+            return PricingMode::Flex;
+        }
+        PricingMode::Standard
     }
 }

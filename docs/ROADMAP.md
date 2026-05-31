@@ -61,6 +61,11 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
       `GET /v1/prices` + `PUT /v1/prices/:provider/:model` (live hot-swap, no restart); judge latency +
       tokens captured in the engine; runs record p50/p95 latency, total tokens, cost.
       *Verified:* live price update $1→$2 mid-run; run stored p50=8511ms, tokens=123742.
+- [x] **Prompt-length tiers + batch/flex pricing**: variant price rows (`<model>@in>N`,
+      `<model>@batch`, `<model>@flex`) resolved in `core::PriceBook` by input size / call mode
+      (`metadata.pricing_mode` or a `batch`/`flex` tag). No schema/Store change — managed via the same
+      `PUT /v1/prices`. See `docs/PRICING.md`. *Verified live:* tier below/above 200k (0.125 vs 0.75),
+      batch via tag and via metadata (6.25 vs standard 12.5).
 - [x] 3.6b Datasets from real events + hybrid anonymization: `anon` crate (regex PII scrubber →
       typed placeholders); `datasets`/`dataset_items` tables + API (`POST/GET /v1/projects/:id/datasets`,
       `GET /v1/datasets/:id`, `POST/GET /v1/datasets/:id/items`, `POST /v1/datasets/:id/freeze`);

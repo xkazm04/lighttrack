@@ -22,7 +22,7 @@ pub use job::Job;
 pub use rubric::{Rubric, RubricDimension};
 pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
 pub use limits::{LimitAction, LimitMetric, LimitRule, LimitStatus, LimitWindow};
-pub use pricing::{ModelPrice, ModelPriceRow, PriceBook};
+pub use pricing::{ModelPrice, ModelPriceRow, PriceBook, PricingMode};
 pub use project::{ApiKey, Project, Redaction};
 pub use score::{
     judge_verdict_schema, Benchmark, BenchmarkCase, BenchmarkRun, BenchTarget, JudgeVerdict, Score,

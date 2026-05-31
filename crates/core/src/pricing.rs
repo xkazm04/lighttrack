@@ -31,7 +31,43 @@ pub struct ModelPrice {
     pub cached_input_per_mtok: Option<f64>,
 }
 
+/// Which pricing lane a call uses. `Batch`/`Flex` select an alternate price-row variant when one
+/// exists (`<model>@batch` / `<model>@flex`); otherwise they fall back to standard rates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PricingMode {
+    #[default]
+    Standard,
+    Batch,
+    Flex,
+}
+
+impl PricingMode {
+    /// Parse a free-form mode hint: `batch` / `flex` (or `priority`) / anything-else → standard.
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "batch" => PricingMode::Batch,
+            "flex" | "priority" => PricingMode::Flex,
+            _ => PricingMode::Standard,
+        }
+    }
+
+    /// The price-row model-name suffix for this lane, if any.
+    fn suffix(self) -> Option<&'static str> {
+        match self {
+            PricingMode::Standard => None,
+            PricingMode::Batch => Some("@batch"),
+            PricingMode::Flex => Some("@flex"),
+        }
+    }
+}
+
 /// A book of model prices keyed by `"<provider>/<model>"`.
+///
+/// Beyond plain `<model>` rows, a model may also have **variant** rows that encode a modifier in the
+/// `model` name (stored like any other row — no schema change):
+/// - `<model>@in>N`  — prompt-length tier: applies when input tokens exceed `N` (e.g.
+///   `gemini-2.5-pro@in>200000`). The highest exceeded threshold wins.
+/// - `<model>@batch` / `<model>@flex` — alternate rates for batch / flex (priority) calls.
 #[derive(Debug, Clone, Default)]
 pub struct PriceBook {
     entries: HashMap<String, ModelPrice>,
@@ -109,10 +145,22 @@ impl PriceBook {
         None
     }
 
-    /// Compute cost in USD for the given usage, or `None` if the model is unpriced.
-    /// Cached input tokens are billed at the cached rate when one exists; otherwise at the input rate.
+    /// Compute cost in USD at standard rates (convenience for [`PriceBook::cost_usd_mode`]).
     pub fn cost_usd(&self, provider: Provider, model: &str, usage: &TokenUsage) -> Option<f64> {
-        let p = self.lookup(provider, model)?;
+        self.cost_usd_mode(provider, model, usage, PricingMode::Standard)
+    }
+
+    /// Compute cost in USD, honoring prompt-length **tiers** and **batch/flex** rates (encoded as
+    /// price-row variants — see [`PriceBook`]). `None` if the model is unpriced. Cached input tokens
+    /// are billed at the cached rate when one exists; otherwise at the input rate.
+    pub fn cost_usd_mode(
+        &self,
+        provider: Provider,
+        model: &str,
+        usage: &TokenUsage,
+        mode: PricingMode,
+    ) -> Option<f64> {
+        let p = self.resolve(provider, model, usage.input, mode)?;
         let cached = usage.cached_input.unwrap_or(0);
         let billable_input = usage.input.saturating_sub(cached);
 
@@ -123,6 +171,55 @@ impl PriceBook {
         cost += (cached as f64) * cached_rate / 1_000_000.0;
 
         Some(cost)
+    }
+
+    /// Resolve the applicable price row for `(provider, model)` given the input size and mode,
+    /// applying the same date-suffix fallback as [`PriceBook::lookup`].
+    fn resolve(
+        &self,
+        provider: Provider,
+        model: &str,
+        input_tokens: u64,
+        mode: PricingMode,
+    ) -> Option<&ModelPrice> {
+        if let Some(p) = self.resolve_exact(provider, model, input_tokens, mode) {
+            return Some(p);
+        }
+        let trimmed = trim_date_suffix(model);
+        if trimmed != model {
+            return self.resolve_exact(provider, trimmed, input_tokens, mode);
+        }
+        None
+    }
+
+    fn resolve_exact(
+        &self,
+        provider: Provider,
+        model: &str,
+        input_tokens: u64,
+        mode: PricingMode,
+    ) -> Option<&ModelPrice> {
+        // A mode-specific variant (e.g. batch rate) wins when present; else fall through to standard.
+        if let Some(suffix) = mode.suffix() {
+            if let Some(p) = self.entries.get(&Self::key(provider, &format!("{model}{suffix}"))) {
+                return Some(p);
+            }
+        }
+        // Prompt-length tier: the highest `@in>N` whose threshold is exceeded by the input.
+        let prefix = format!("{}/{}@in>", provider.as_str(), model);
+        let mut best: Option<(u64, &ModelPrice)> = None;
+        for (k, v) in &self.entries {
+            if let Some(n) = k.strip_prefix(&prefix).and_then(|s| s.parse::<u64>().ok()) {
+                if input_tokens > n && best.map_or(true, |(b, _)| n > b) {
+                    best = Some((n, v));
+                }
+            }
+        }
+        if let Some((_, p)) = best {
+            return Some(p);
+        }
+        // Base rate.
+        self.entries.get(&Self::key(provider, model))
     }
 
     pub fn len(&self) -> usize {
@@ -186,5 +283,45 @@ mod tests {
     #[test]
     fn unknown_model_is_none() {
         assert!(book().cost_usd(Provider::OpenAi, "nope", &TokenUsage::default()).is_none());
+    }
+
+    fn variant_book() -> PriceBook {
+        let r = |i, o| ModelPrice { input_per_mtok: i, output_per_mtok: o, cached_input_per_mtok: None };
+        let mut m = HashMap::new();
+        m.insert("google/gemini-2.5-pro".to_string(), r(1.25, 10.0)); // <=200k
+        m.insert("google/gemini-2.5-pro@in>200000".to_string(), r(2.5, 15.0)); // >200k
+        m.insert("openai/gpt-4o".to_string(), r(2.5, 10.0));
+        m.insert("openai/gpt-4o@batch".to_string(), r(1.25, 5.0));
+        PriceBook::new(m)
+    }
+
+    fn usage(input: u64, output: u64) -> TokenUsage {
+        TokenUsage { input, output, cached_input: None, reasoning: None }
+    }
+
+    #[test]
+    fn prompt_length_tier() {
+        let b = variant_book();
+        // 100k input → base rate 1.25/Mtok
+        let lo = b.cost_usd(Provider::Google, "gemini-2.5-pro", &usage(100_000, 0)).unwrap();
+        assert!((lo - 100_000.0 * 1.25 / 1e6).abs() < 1e-12, "got {lo}");
+        // 300k input → long-context rate 2.5/Mtok
+        let hi = b.cost_usd(Provider::Google, "gemini-2.5-pro", &usage(300_000, 0)).unwrap();
+        assert!((hi - 300_000.0 * 2.5 / 1e6).abs() < 1e-12, "got {hi}");
+    }
+
+    #[test]
+    fn batch_variant_and_fallback() {
+        let b = variant_book();
+        let u = usage(1_000_000, 1_000_000);
+        // batch mode → @batch row (1.25 in + 5.0 out)
+        let batch = b.cost_usd_mode(Provider::OpenAi, "gpt-4o", &u, PricingMode::Batch).unwrap();
+        assert!((batch - 6.25).abs() < 1e-9, "got {batch}");
+        // standard → base (2.5 + 10.0)
+        let std = b.cost_usd_mode(Provider::OpenAi, "gpt-4o", &u, PricingMode::Standard).unwrap();
+        assert!((std - 12.5).abs() < 1e-9, "got {std}");
+        // flex has no @flex row → falls back to standard base
+        let flex = b.cost_usd_mode(Provider::OpenAi, "gpt-4o", &u, PricingMode::Flex).unwrap();
+        assert!((flex - 12.5).abs() < 1e-9, "got {flex}");
     }
 }
