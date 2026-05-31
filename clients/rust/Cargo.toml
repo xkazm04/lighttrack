@@ -1,0 +1,17 @@
+[package]
+name = "lighttrack-client"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Fire-and-forget client for ingesting LLM call events into LightTrack."
+repository = "https://github.com/xkazm04/tracklight"
+
+# Detached from the parent Cargo workspace so this client builds/versions/publishes on its own and
+# is never pulled into the server's `cargo build`. It depends on `lighttrack-core` by path only.
+[workspace]
+
+[dependencies]
+lighttrack-core = { path = "../../crates/core" }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+serde_json = "1"
+chrono = "0.4"

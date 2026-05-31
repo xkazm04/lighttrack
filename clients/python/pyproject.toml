@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lighttrack-client"
+version = "0.1.0"
+description = "Fire-and-forget client for ingesting LLM call events into LightTrack."
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT OR Apache-2.0"
+keywords = ["llm", "observability", "openai", "anthropic", "gemini", "lighttrack"]
+# Zero runtime dependencies — stdlib only.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/xkazm04/tracklight"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lighttrack"]

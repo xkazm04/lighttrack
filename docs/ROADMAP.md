@@ -13,7 +13,11 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
 - [x] `api`: `POST /v1/events` (normalize + compute cost + write), `GET /v1/events`, `GET /v1/costs`
 - [x] Verify: synthetic traffic from 3 fake "apps", cost rollups confirmed against the running server
 - [x] Project + API-key model; `dev` (relaxed) vs `enforced` auth  → done in Phase 2
-- [ ] Minimal client snippet (Rust + Python) to wrap OpenAI/Anthropic/Gemini calls  → Phase 2.5
+- [x] Client ingestion SDKs (`clients/`): **Python**, **TypeScript**, **Rust** — thin fire-and-forget
+      libraries that wrap OpenAI/Anthropic/Gemini results and POST to `/v1/events` (non-blocking,
+      best-effort, env-configured). Python = stdlib-only background thread; TS = global `fetch`, zero
+      deps; Rust = standalone crate reusing `lighttrack-core::LlmEvent` (no payload drift). *Verified
+      live:* all three ingested into a running API (13 events; provider/model/cost correct).
 
 ## Phase 2 — Projects, keys, limits ✅
 - [x] CRUD for projects, API keys (salted-hash), limit rules (via `lt` CLI + API)

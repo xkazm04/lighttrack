@@ -18,6 +18,16 @@ data/
 service-account*.json
 *-key.json
 
+# Client SDKs (clients/) — build/cache artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+clients/python/dist/
+clients/typescript/node_modules/
+clients/typescript/dist/
+# Library crate: its lockfile is not committed (it's a dependency, not an app).
+clients/rust/Cargo.lock
+
 # OS / editor
 .DS_Store
 Thumbs.db

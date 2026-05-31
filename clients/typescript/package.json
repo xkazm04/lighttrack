@@ -1,0 +1,24 @@
+{
+  "name": "lighttrack-client",
+  "version": "0.1.0",
+  "description": "Fire-and-forget client for ingesting LLM call events into LightTrack.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "example": "node example.ts"
+  },
+  "keywords": ["llm", "observability", "openai", "anthropic", "gemini", "lighttrack"],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
