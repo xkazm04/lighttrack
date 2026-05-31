@@ -149,6 +149,18 @@ fn run_simple(
     Ok(())
 }
 
+/// One output's judge result, preserving the per-dimension breakdown + self-consistency agreement
+/// (so comparison runs can record *why* a score landed where it did, not just the overall).
+pub(crate) struct JudgeResult {
+    pub(crate) overall: f64,
+    pub(crate) pass: bool,
+    pub(crate) cost: f64,
+    /// Cross-sample agreement on the overall score (1.0 = identical across samples).
+    pub(crate) agreement: f64,
+    /// (dimension key, mean score) pairs; empty for freeform-rubric judging.
+    pub(crate) dimensions: Vec<(String, f64)>,
+}
+
 /// Judge one generated/candidate output via the rubric (if any) or the freeform rubric text, using
 /// the configured judge provider/model. Judge cost is priced from the book when the provider gives no $.
 #[allow(clippy::too_many_arguments)]
@@ -162,7 +174,7 @@ pub(crate) fn judge_output(
     output: &str,
     samples: u32,
     prices: &[ModelPriceRow],
-) -> Result<(f64, bool, f64)> {
+) -> Result<JudgeResult> {
     if let Some(r) = rubric {
         let o = run_rubric_judge(
             engine, judge_provider, judge_model, r, &case.input,
@@ -172,7 +184,13 @@ pub(crate) fn judge_output(
         let jc = o.cost_usd.unwrap_or_else(|| {
             price_gen_cost(prices, judge_provider, judge_model, o.input_tokens, o.output_tokens)
         });
-        Ok((o.overall, o.pass, jc))
+        Ok(JudgeResult {
+            overall: o.overall,
+            pass: o.pass,
+            cost: jc,
+            agreement: o.agreement,
+            dimensions: o.dimensions.iter().map(|d| (d.key.clone(), d.score)).collect(),
+        })
     } else {
         let prompt = build_eval_prompt(&bench.rubric, &case.input, case.expected.as_deref(), output);
         let v = run_judge(engine, judge_provider, judge_model, &prompt).context("judge failed")?;
@@ -184,6 +202,12 @@ pub(crate) fn judge_output(
         let jc = v.cost_usd.unwrap_or_else(|| {
             price_gen_cost(prices, judge_provider, judge_model, v.input_tokens, v.output_tokens)
         });
-        Ok((norm, v.verdict.pass, jc))
+        Ok(JudgeResult {
+            overall: norm,
+            pass: v.verdict.pass,
+            cost: jc,
+            agreement: 1.0,
+            dimensions: Vec::new(),
+        })
     }
 }
