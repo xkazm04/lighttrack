@@ -32,6 +32,12 @@ impl std::fmt::Display for Provider {
     }
 }
 
+impl Default for Provider {
+    fn default() -> Self {
+        Provider::Unknown
+    }
+}
+
 /// The kind of operation. `Other` catches anything unmodeled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -41,6 +47,17 @@ pub enum Operation {
     Embedding,
     #[serde(other)]
     Other,
+}
+
+impl Operation {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Operation::Chat => "chat",
+            Operation::Completion => "completion",
+            Operation::Embedding => "embedding",
+            Operation::Other => "other",
+        }
+    }
 }
 
 impl Default for Operation {
@@ -56,6 +73,16 @@ pub enum Status {
     Success,
     Error,
     Timeout,
+}
+
+impl Status {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Status::Success => "success",
+            Status::Error => "error",
+            Status::Timeout => "timeout",
+        }
+    }
 }
 
 impl Default for Status {
@@ -97,6 +124,7 @@ pub struct LlmEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_span_id: Option<String>,
 
+    #[serde(default = "Utc::now")]
     pub ts: DateTime<Utc>,
     pub provider: Provider,
     pub model: String,

@@ -7,4 +7,10 @@ description = "LightTrack ingest + query REST service (axum). Local box → Clou
 
 [dependencies]
 lighttrack-core.workspace = true
-# Added in Phase 1: tokio, axum, tower, rusqlite (bundled), serde, serde_json, anyhow
+lighttrack-store = { path = "../store" }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+anyhow = "1"

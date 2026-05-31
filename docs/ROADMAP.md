@@ -6,14 +6,14 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
 - [x] Repo, workspace, docs, decisions log
 - [x] `core`: normalized `LlmEvent`, `PriceBook` + cost calc, `LimitRule` eval, scoring/benchmark types
 - [x] SQLite + BigQuery DDL, `pricing.json`
-- [ ] `cargo build` green for the whole workspace
+- [x] `cargo build` green for the whole workspace
 
-## Phase 1 — Ingest → query (local, SQLite)
-- [ ] `Store` trait + SQLite backend (`rusqlite`, bundled)
-- [ ] `api`: `POST /v1/events` (normalize + compute cost + write), `GET /v1/events`, `GET /v1/costs`
-- [ ] Project + API-key model; `dev` mode (relaxed auth) vs enforced
+## Phase 1 — Ingest → query (local, SQLite) ✅
+- [x] `Store` trait + SQLite backend (`rusqlite`, bundled)
+- [x] `api`: `POST /v1/events` (normalize + compute cost + write), `GET /v1/events`, `GET /v1/costs`
+- [x] Verify: synthetic traffic from 3 fake "apps", cost rollups confirmed against the running server
+- [ ] Project + API-key model; `dev` mode (relaxed auth) vs enforced  → moved into Phase 2
 - [ ] Minimal client snippet (Rust + Python) to wrap OpenAI/Anthropic/Gemini calls
-- [ ] Verify: send synthetic traffic from 2–3 fake "apps", query cost rollups
 
 ## Phase 2 — Projects, keys, limits
 - [ ] CRUD for projects, API keys (hashed), limit rules (via `cli` + API)
