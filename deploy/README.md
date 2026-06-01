@@ -6,21 +6,29 @@ run `/onboard` in Claude Code.
 ## What's here
 | Path | Purpose | Status |
 |---|---|---|
-| `docker/Dockerfile` | One image, all binaries (api/runner/mcp/cli); musl/distroless later | 5b |
-| `compose/docker-compose.yml` | Local stack (api + SQLite volume; Postgres/Grafana stubs) | 5b |
-| `../.github/workflows/docker.yml` | Multi-arch build → GHCR on tags / manual | 5b |
-| `terraform/` | Per-cloud modules (aws/gcp/azure) | planned 5d |
-| `helm/` | Kubernetes chart | planned 5e |
+| `docker/Dockerfile` | One image, all binaries (api/runner/mcp/cli) + all backends | **available** |
+| `compose/docker-compose.yml` | Local stack (api + SQLite volume) | **available** |
+| `compose/docker-compose.postgres.yml` | api-on-Postgres + Postgres + Grafana | **available** |
+| `../.github/workflows/docker.yml` | Build → GHCR (public) on `v*` tags / manual | **available** |
+| `../.github/workflows/release.yml` | Prebuilt binaries (linux/macOS/Windows) on `v*` tags | **available** |
+| `install.sh` / `install.ps1` | One-line binary installers | **available** |
+| `terraform/modules/{gcp,azure}` | Cloud Run / Container Apps modules | **available** (AWS planned) |
+| `helm/lighttrack` | Kubernetes chart | **available** |
 
 ## Quick start (local, Docker)
 ```bash
-# from repo root, with Docker running:
-docker build -f deploy/docker/Dockerfile -t lighttrack .
-docker run -p 8787:8787 -v lt-data:/data lighttrack
+# pull the published public image (bundles SQLite/Postgres/Firestore):
+docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/tracklight:v0.0.2
 curl localhost:8787/health        # -> ok
 
-# or the whole stack:
-cd deploy/compose && docker compose up --build
+# or build from source:
+docker build -f deploy/docker/Dockerfile -t lighttrack .
+docker run -p 8787:8787 -v lt-data:/data lighttrack
+
+# or the whole local stack (api + SQLite):
+cd deploy/compose && docker compose up -d
+# with Postgres + Grafana instead:
+docker compose -f docker-compose.postgres.yml up -d
 ```
 
 ## The runner
@@ -34,4 +42,5 @@ lt-runner --base http://127.0.0.1:8787 serve --interval 10
 - Set `LIGHTTRACK_AUTH_MODE=enforced` and a strong `LIGHTTRACK_ADMIN_KEY` for any exposed deploy.
 - TLS is terminated by the platform (Cloud Run/App Runner/Container Apps) or a reverse proxy; the app
   stays plain HTTP behind it.
-- Postgres backend (`LIGHTTRACK_DATABASE_URL`) lands in 5a; until then the image uses SQLite on `/data`.
+- Backend selection is one env var: `LIGHTTRACK_DATABASE_URL=postgres://…` or `firestore://<project>`;
+  unset uses SQLite on `/data`. The same image supports all three.

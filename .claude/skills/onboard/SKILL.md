@@ -27,9 +27,11 @@ is implemented vs planned.
   lands in this session — don't try to drive an interactive credential prompt yourself.
 - **Confirm before anything that costs money or is outward-facing** (creating cloud resources, pushing
   images, `terraform apply`). Summarize what will be created and the rough cost first.
-- **Don't over-promise.** If the adapter for a chosen backend/target isn't built yet (see the status
-  column below), say so and offer to implement it first (that's Phase 5a–5f in `docs/PACKAGING.md`) or
-  fall back to a supported option. Verify availability by checking the workspace, not by assuming.
+- **Don't over-promise.** The common paths now ship (SQLite/Postgres/Firestore; Compose/Helm/
+  GCP+Azure Terraform; the public image; Python/TS/Rust SDKs; OpenAI/Anthropic/Gemini). A few are
+  still planned (DuckDB / libSQL / BigQuery, AWS App Runner) — see the **Status** column. If the user
+  picks a planned one, say so and offer to implement it first or fall back to a shipped option.
+  Verify availability by checking the workspace, not by assuming.
 - Prefer the smallest thing that works; default to **local SQLite + Docker Compose** when the user is
   unsure, then offer to graduate to cloud.
 
@@ -37,8 +39,9 @@ is implemented vs planned.
 Detect the environment before asking anything:
 - OS/shell; `git` repo present; `cargo`/`rustc`; `docker`/`docker compose`; cloud CLIs (`gcloud`, `aws`,
   `az`); `kubectl`/`helm`; `claude` (for the judge engine).
-- Report what's present/missing in a short table. Offer to install or work around gaps (e.g. use the
-  prebuilt container image instead of building from source if Rust is missing).
+- Report what's present/missing in a short table. Offer to install or work around gaps — e.g. if Rust
+  is missing, use the **published public image** `ghcr.io/xkazm04/tracklight:v0.0.2` or the prebuilt
+  release binaries (`deploy/install.sh` / `install.ps1`) instead of building from source.
 
 ## Step 1 — Pick the stack (use AskUserQuestion)
 Ask these in order; skip ones already implied. Recommend a sensible default per question.
@@ -87,8 +90,13 @@ Follow the path for the chosen target (details in `docs/PACKAGING.md` §4):
 - Print the final URLs, the admin key location, and the MCP `.mcp.json` setup for Claude Code.
 
 ## Step 6 — Next steps
-Point the user to: adding more projects/keys, building a dataset from real traffic
-(`lt-runner dataset build`), defining a rubric + benchmark, and the Grafana dashboard.
+Point the user to:
+- **Instrument their app** with a client SDK so real traffic flows in — Python (`pip install
+  ./clients/python`), TypeScript (`clients/typescript`), or Rust (`lighttrack-client`). They set
+  `LIGHTTRACK_URL` + `LIGHTTRACK_KEY` and call `track_openai` / `track_anthropic` / `track_gemini`
+  (or the `span` timer). See [`clients/README.md`](../../../clients/README.md).
+- Adding more projects/keys, building a dataset from real traffic (`lt-runner dataset build`),
+  defining a rubric + benchmark, and the Grafana dashboard.
 
 ---
 
@@ -100,30 +108,40 @@ to be implemented first (offer to do it).
 | Option | Selector | Runs where | Credentials needed | Status |
 |---|---|---|---|---|
 | SQLite | `LIGHTTRACK_DB=./data/lt.db` | local / single VM | none | **available** |
+| Postgres (self/RDS/Cloud SQL/Azure DB) | `LIGHTTRACK_DATABASE_URL=postgres://…` | any cloud | DB URL (+ TLS) | **available** |
+| Neon / Supabase (serverless PG) | `LIGHTTRACK_DATABASE_URL=postgres://…` | any (cloud-neutral) | connection string | **available** |
+| Firestore | `LIGHTTRACK_DATABASE_URL=firestore://<project>` | GCP | `GOOGLE_OAUTH_TOKEN` bearer (ADC/metadata wiring is a follow-up); emulator needs none | **available** |
 | DuckDB | `duckdb://…` | local analytical | none | planned |
 | libSQL / Turso | `libsql://…` | local / edge | Turso token | planned |
-| Postgres (self/RDS/Cloud SQL/Azure DB) | `postgres://…` | any cloud | DB URL (+ TLS) | planned (5a) |
-| Neon / Supabase (serverless PG) | `postgres://…` | any (cloud-neutral) | connection string | planned (5a) |
-| Firestore | `firestore://project` | GCP | GCP service account / ADC | planned (full-scope) |
 | BigQuery (analytical sink) | `bigquery://project/dataset` | GCP | GCP service account / ADC | planned |
 
-> Firestore is a **supported full-scope option**, not dropped — it's the GCP-native config store
-> alongside Postgres. Postgres is the cross-cloud default; pick Firestore when the user is all-in on GCP.
+> All three of **SQLite, Postgres, and Firestore ship in the published image** — one
+> `LIGHTTRACK_DATABASE_URL` selects the backend, no rebuild. Postgres is the cross-cloud default;
+> pick Firestore when the user is all-in on GCP; SQLite for local / single-VM.
 
 ### Deploy targets
 | Target | Tooling | Clouds | Credentials | Status |
 |---|---|---|---|---|
-| Local Docker Compose | `docker compose up` | — | none | planned (5b) |
-| Serverless container | image + Cloud Run / App Runner / Container Apps | GCP/AWS/Azure | cloud login | planned (5d) |
-| Kubernetes | Helm chart | EKS/GKE/AKS/any | kubeconfig | planned (5e) |
-| Bare binary | `cargo run` / prebuilt | — | none | **available** |
+| Prebuilt container image | `docker run ghcr.io/xkazm04/tracklight:v0.0.2` | any | none (image is public) | **available** |
+| Local Docker Compose | `deploy/compose/` (SQLite, or Postgres + Grafana) | — | none | **available** |
+| Kubernetes | Helm chart `deploy/helm/lighttrack` | EKS/GKE/AKS/any | kubeconfig | **available** |
+| GCP / Azure (Cloud Run / Container Apps) | Terraform `deploy/terraform/modules/{gcp,azure}` | GCP/Azure | cloud login | **available** |
+| AWS App Runner | Terraform module | AWS | cloud login | planned |
+| Bare binary | install script (`deploy/install.sh`/`.ps1`) / prebuilt release / `cargo build` | — | none | **available** |
 
 ### LLM providers
 | Provider | Used for | Key | Status |
 |---|---|---|---|
-| Anthropic (`claude -p`) | judge engine (default) | subscription OAuth or `ANTHROPIC_API_KEY` | **available** |
-| OpenAI | multi-provider generation | `OPENAI_API_KEY` | planned (3.6e) |
-| Google Gemini | multi-provider generation | `GEMINI_API_KEY` | planned (3.6e) |
+| Anthropic (`claude -p`) | judge engine + generation (default) | subscription OAuth or `ANTHROPIC_API_KEY` | **available** |
+| OpenAI | candidate generation | `OPENAI_API_KEY` | **available** |
+| Google Gemini | candidate generation | `GEMINI_API_KEY` | **available** |
+
+### App SDKs (instrument the user's app to send events)
+| Language | Install | Status |
+|---|---|---|
+| Python | `pip install ./clients/python` | **available** |
+| TypeScript / JS | `npm install` in `clients/typescript` (or vendor it) | **available** |
+| Rust | path/git dep `lighttrack-client` | **available** |
 
 ## References
 `docs/PACKAGING.md` (multicloud/multi-DB design + Phase 5a–5f) · `docs/ARCHITECTURE.md` ·
