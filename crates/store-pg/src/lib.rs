@@ -17,6 +17,7 @@ mod events;
 mod jobs;
 mod prices;
 mod projects;
+mod revenue;
 mod rubrics;
 mod scores;
 mod util;
@@ -27,8 +28,8 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use tokio::runtime::Runtime;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, Dataset, DatasetItem, Job, LimitRule, LlmEvent, ModelPriceRow,
-    Project, Rubric, Score,
+    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule, LlmEvent,
+    ModelPriceRow, Project, RevenueEvent, Rubric, Score,
 };
 use lighttrack_store::{CostRow, Result, Store, StoreError, Usage};
 
@@ -197,5 +198,27 @@ impl Store for PgStore {
     }
     fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
         self.rt.block_on(jobs::list(&self.pool, status, limit))
+    }
+
+    // --- revenue + margin (profit tracking) ---
+    fn insert_revenue_event(&self, ev: &RevenueEvent) -> Result<()> {
+        self.rt.block_on(revenue::insert(&self.pool, ev))
+    }
+    fn list_revenue_events(
+        &self,
+        project: Option<&str>,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<RevenueEvent>> {
+        self.rt.block_on(revenue::list(&self.pool, project, since, until))
+    }
+    fn cost_by_dimension(
+        &self,
+        project: Option<&str>,
+        dim: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<CostByDimension>> {
+        self.rt.block_on(revenue::cost_by_dimension(&self.pool, project, dim, since, until))
     }
 }

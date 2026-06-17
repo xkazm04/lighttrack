@@ -163,3 +163,22 @@ CREATE TABLE IF NOT EXISTS dataset_items (
   anonymization   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dataset_items_ds ON dataset_items(dataset_id);
+
+-- Normalized revenue (profit tracking): the revenue analog of events' cost. Netted against LLM cost
+-- per customer/product for margin. Mirrors schema/sqlite/001_init.sql.
+CREATE TABLE IF NOT EXISTS revenue_events (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  source        TEXT NOT NULL DEFAULT 'manual',
+  external_id   TEXT,
+  customer_id   TEXT,
+  product_id    TEXT,
+  amount_usd    DOUBLE PRECISION NOT NULL,
+  currency      TEXT NOT NULL DEFAULT 'USD',
+  kind          TEXT NOT NULL DEFAULT 'one_time',
+  period_start  TEXT,
+  period_end    TEXT,
+  ts            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_revenue_project_ts ON revenue_events(project_id, ts);
+CREATE INDEX IF NOT EXISTS idx_revenue_customer ON revenue_events(customer_id);
