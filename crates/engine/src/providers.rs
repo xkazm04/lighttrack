@@ -2,11 +2,51 @@
 //! `openai` call their HTTPS APIs (keys from env). Dollar cost is left `None` for the HTTP providers
 //! (the caller prices it from the DB price book by tokens); the APIs don't return a cost.
 
-use std::time::Instant;
+use std::io::Read;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 use crate::{claude, EngineConfig, EngineError, GenOutcome, Result};
+
+/// Outbound provider calls are bounded so a black-holed/overloaded endpoint can't hang an
+/// (unbudgeted) benchmark worker forever, and a pathological body can't be buffered into memory.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Hard ceiling on a single provider response body (a completion is KBs; this stops a multi-GB body).
+const MAX_BODY_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Process-wide blocking client, built once with bounded connect/request timeouts. reqwest pools and
+/// reuses connections, so every provider call shares it.
+fn http_client() -> Result<&'static reqwest::blocking::Client> {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(|e| EngineError::Other(format!("http client init failed: {e}")))?;
+    Ok(CLIENT.get_or_init(|| client))
+}
+
+/// Read a response body with a hard size cap, erroring out if the provider streams past it instead
+/// of buffering an unbounded amount into memory.
+fn read_bounded(resp: reqwest::blocking::Response, who: &str) -> Result<String> {
+    let mut buf = Vec::new();
+    resp.take(MAX_BODY_BYTES + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| EngineError::Other(format!("{who} read failed: {e}")))?;
+    if buf.len() as u64 > MAX_BODY_BYTES {
+        return Err(EngineError::Other(format!(
+            "{who} response exceeded {MAX_BODY_BYTES}-byte cap"
+        )));
+    }
+    String::from_utf8(buf)
+        .map_err(|e| EngineError::Other(format!("{who} returned non-UTF-8 body: {e}")))
+}
 
 /// Generate a candidate output from a target (provider + model + optional system-prompt variant).
 pub fn generate(
@@ -53,7 +93,7 @@ fn generate_gemini(model: &str, system_prompt: Option<&str>, input: &str) -> Res
     }
 
     let started = Instant::now();
-    let resp = reqwest::blocking::Client::new()
+    let resp = http_client()?
         .post(&url)
         .header("x-goog-api-key", &key)
         .json(&body)
@@ -61,9 +101,7 @@ fn generate_gemini(model: &str, system_prompt: Option<&str>, input: &str) -> Res
         .map_err(|e| EngineError::Other(format!("gemini request failed: {e}")))?;
     let latency_ms = Some(started.elapsed().as_millis() as u64);
     let status = resp.status();
-    let text = resp
-        .text()
-        .map_err(|e| EngineError::Other(format!("gemini read failed: {e}")))?;
+    let text = read_bounded(resp, "gemini")?;
     if !status.is_success() {
         return Err(EngineError::Other(format!("gemini HTTP {}: {text}", status.as_u16())));
     }
@@ -103,7 +141,7 @@ fn generate_openai(model: &str, system_prompt: Option<&str>, input: &str) -> Res
     let body = serde_json::json!({ "model": model, "messages": messages });
 
     let started = Instant::now();
-    let resp = reqwest::blocking::Client::new()
+    let resp = http_client()?
         .post("https://api.openai.com/v1/chat/completions")
         .bearer_auth(&key)
         .json(&body)
@@ -111,9 +149,7 @@ fn generate_openai(model: &str, system_prompt: Option<&str>, input: &str) -> Res
         .map_err(|e| EngineError::Other(format!("openai request failed: {e}")))?;
     let latency_ms = Some(started.elapsed().as_millis() as u64);
     let status = resp.status();
-    let text = resp
-        .text()
-        .map_err(|e| EngineError::Other(format!("openai read failed: {e}")))?;
+    let text = read_bounded(resp, "openai")?;
     if !status.is_success() {
         return Err(EngineError::Other(format!("openai HTTP {}: {text}", status.as_u16())));
     }

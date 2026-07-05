@@ -14,7 +14,6 @@ use lighttrack_store::CostRow;
 use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
-use crate::limits::{evaluate_project_limits, is_throttle};
 use crate::state::{spawn_db, AppState};
 
 #[derive(Serialize)]
@@ -46,13 +45,15 @@ pub(crate) async fn post_event(
         ev.ensure_cost(&book);
     }
 
+    // Admission control: evaluate the project's limits and insert in one atomic store step. An
+    // enforcing (Throttle/Block) breach rejects the event — it is NOT recorded and we return 429 so
+    // a cooperating client backs off. This is what makes a configured cap an actual cap, not a flag.
     let store = st.store.clone();
     let to_insert = ev.clone();
-    spawn_db(move || store.insert_event(&to_insert)).await?;
+    let admission = spawn_db(move || store.insert_event_checked(&to_insert)).await?;
 
-    let statuses = evaluate_project_limits(&st, &pid).await?;
-    let breached: Vec<LimitStatus> = statuses.into_iter().filter(|s| s.breached).collect();
-    let throttled = breached.iter().any(is_throttle);
+    let breached: Vec<LimitStatus> =
+        admission.statuses.iter().filter(|s| s.breached).cloned().collect();
     for b in &breached {
         eprintln!(
             "[ALERT] project={} metric={:?} window={:?} value={:.6} >= threshold={:.6} action={:?}",
@@ -62,6 +63,23 @@ pub(crate) async fn post_event(
     // Best-effort, off the request path: deliver breaches to webhook/ntfy (deduped per cooldown).
     st.alerts.notify(&breached);
 
+    if !admission.admitted {
+        let why = breached
+            .iter()
+            .find(|s| s.action.enforces())
+            .map(|s| {
+                format!(
+                    "ingest blocked: project '{}' is over its {:?}/{:?} limit \
+                     ({:.4} >= {:.4}, action={:?})",
+                    s.project_id, s.metric, s.window, s.current, s.threshold, s.action
+                )
+            })
+            .unwrap_or_else(|| "ingest blocked: usage limit exceeded".to_string());
+        return Err(ApiError::rate_limited(why));
+    }
+
+    // Admitted: any remaining breaches are Alert-only (enforcing ones would have 429'd above).
+    let throttled = breached.iter().any(|s| s.rejects_ingest());
     Ok(Json(IngestResponse {
         id: ev.id,
         project_id: pid,

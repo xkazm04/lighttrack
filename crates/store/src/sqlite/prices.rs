@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, Row};
 
 use lighttrack_core::ModelPriceRow;
 
-use super::util::{fmt_ts, parse_ts};
+use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
 
 const COLS: &str = "provider, model, input_per_mtok, output_per_mtok, \

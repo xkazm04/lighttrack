@@ -47,7 +47,9 @@ impl LimitWindow {
     }
 }
 
-/// What happens when a limit is breached. `Block` is advisory until gateway/proxy mode exists.
+/// What happens when a limit is breached. `Alert` only notifies; `Throttle` and `Block` are
+/// **enforced at ingest admission** — a breaching event is rejected with HTTP 429 and not recorded.
+/// (Inline *pre-call* blocking still requires the future gateway/proxy mode.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LimitAction {
@@ -59,6 +61,15 @@ pub enum LimitAction {
 impl Default for LimitAction {
     fn default() -> Self {
         LimitAction::Alert
+    }
+}
+
+impl LimitAction {
+    /// Whether breaching a rule with this action rejects ingest (HTTP 429). `Alert` is
+    /// observe-only (notify but never block); `Throttle` and `Block` both enforce, so a
+    /// configured cap actually caps.
+    pub fn enforces(self) -> bool {
+        matches!(self, LimitAction::Throttle | LimitAction::Block)
     }
 }
 
@@ -92,6 +103,14 @@ pub struct LimitStatus {
     pub breached: bool,
     /// Fraction of the threshold used (1.0 == at limit). Useful for "approaching limit" warnings.
     pub ratio: f64,
+}
+
+impl LimitStatus {
+    /// True when this breach must reject ingest: a breached rule whose action is enforced
+    /// (`Throttle`/`Block`). The ingest path returns HTTP 429 when any status reports this.
+    pub fn rejects_ingest(&self) -> bool {
+        self.breached && self.action.enforces()
+    }
 }
 
 impl LimitRule {
@@ -143,5 +162,28 @@ mod tests {
     #[test]
     fn ratio_tracks_usage() {
         assert!((rule().evaluate(5.0).ratio - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn only_throttle_and_block_enforce() {
+        assert!(!LimitAction::Alert.enforces());
+        assert!(LimitAction::Throttle.enforces());
+        assert!(LimitAction::Block.enforces());
+    }
+
+    #[test]
+    fn rejects_ingest_requires_breach_and_enforcing_action() {
+        let mut r = rule();
+        // Breached + enforcing -> reject.
+        r.action = LimitAction::Block;
+        assert!(r.evaluate(10.0).rejects_ingest());
+        r.action = LimitAction::Throttle;
+        assert!(r.evaluate(10.0).rejects_ingest());
+        // Breached but only Alert -> never rejects.
+        r.action = LimitAction::Alert;
+        assert!(!r.evaluate(10.0).rejects_ingest());
+        // Not breached -> never rejects, even for Block.
+        r.action = LimitAction::Block;
+        assert!(!r.evaluate(9.99).rejects_ingest());
     }
 }

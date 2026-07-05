@@ -1,0 +1,18 @@
+# lt-agent config — copy to agent.toml (gitignored) and adjust. See docs/RELAY.md.
+device = "my-pc"
+poll_secs = 15
+# wait_secs = 20        # long-poll leases (server caps at 25s); keep 0 with many sources
+lease_secs = 1800      # cover the longest expected Claude run
+max_batch = 3
+actions_dir = "actions"
+# claude_bin = "claude"  # default auto-resolves the npm claude.exe on Windows
+
+[[sources]]
+name = "lighttrack-cloud"
+url = "https://your-lighttrack.example.run.app"
+device_key_env = "LT_DEVICE_KEY"   # set in .env / environment, never here
+
+# [[sources]]                      # additional clouds lease round-robin
+# name = "other-project"
+# url = "https://other.example"
+# device_key_env = "OTHER_DEVICE_KEY"

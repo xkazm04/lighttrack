@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use lighttrack_core::{ApiKey, LimitAction, LimitMetric, LimitRule, LimitWindow, Project, Redaction};
 
-use super::util::{enum_to_str, fmt_ts, parse_enum, parse_ts};
+use crate::codec::{enum_to_str, fmt_ts, parse_enum, parse_ts};
 use crate::Result;
 
 // --- projects ---

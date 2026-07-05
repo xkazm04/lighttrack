@@ -4,10 +4,10 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::Value;
 
-use lighttrack_core::{LlmEvent, Operation, Provider, Status, TokenUsage};
+use lighttrack_core::{LlmEvent, Operation, Provider, Status, TokenUsage, TraceSummary};
 
-use super::util::{fmt_ts, parse_enum, parse_ts};
-use crate::{CostRow, Result, Usage};
+use crate::codec::{fmt_ts, parse_enum, parse_ts};
+use crate::{event_contribution, evaluate_admission, Admission, CostRow, Result, Usage};
 
 const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
     operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
@@ -56,6 +56,22 @@ pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
     Ok(())
 }
 
+/// Atomic admission + insert. Because `SqliteStore` runs every call under one locked connection,
+/// this whole check-then-act is a single critical section: concurrent ingest is serialized, so a
+/// burst cannot all read the same pre-burst usage and race past a cap. The event is inserted only
+/// when admitted, so a rejected (over-cap) event is never recorded.
+pub(super) fn insert_checked(conn: &Connection, ev: &LlmEvent) -> Result<Admission> {
+    let rules = super::projects::list_limits(conn, &ev.project_id, true)?;
+    let now = Utc::now();
+    let admission = evaluate_admission(&rules, event_contribution(ev), |w| {
+        usage_since(conn, &ev.project_id, w.since(now))
+    })?;
+    if admission.admitted {
+        insert(conn, ev)?;
+    }
+    Ok(admission)
+}
+
 pub(super) fn list(conn: &Connection, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
     let raws: Vec<RawEvent> = if let Some(p) = project {
         let sql = format!("SELECT {COLS} FROM events WHERE project_id = ?1 ORDER BY ts DESC LIMIT ?2");
@@ -80,6 +96,107 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LlmEvent>> {
     let mut stmt = conn.prepare(&sql)?;
     let raw = stmt.query_row(params![id], map_raw).optional()?;
     raw.map(from_raw).transpose()
+}
+
+/// Every event of one trace, oldest first (the order the rollup expects). Skips rows with no
+/// `trace_id`. Project-agnostic: a trace id is globally unique, and the caller authorizes the result.
+pub(super) fn list_by_trace(conn: &Connection, trace_id: &str) -> Result<Vec<LlmEvent>> {
+    let sql = format!("SELECT {COLS} FROM events WHERE trace_id = ?1 ORDER BY ts ASC");
+    let mut stmt = conn.prepare(&sql)?;
+    let raws = stmt
+        .query_map(params![trace_id], map_raw)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    raws.into_iter().map(from_raw).collect()
+}
+
+/// Per-trace rollups (one row per `trace_id`), most-recent activity first. Aggregated in SQL so
+/// listing stays cheap regardless of how many events each trace holds; duration is computed in Rust
+/// from the min/max timestamps. Rows without a `trace_id` are excluded.
+pub(super) fn list_trace_summaries(
+    conn: &Connection,
+    project: Option<&str>,
+    limit: usize,
+) -> Result<Vec<TraceSummary>> {
+    let cols = "trace_id, MIN(project_id) AS project_id, MIN(ts) AS started, MAX(ts) AS ended, \
+        COUNT(*) AS spans, COALESCE(SUM(cost_usd),0.0) AS cost, \
+        COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
+        SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END) AS errs, \
+        GROUP_CONCAT(DISTINCT model) AS models";
+    let raws = if let Some(p) = project {
+        let sql = format!(
+            "SELECT {cols} FROM events WHERE trace_id IS NOT NULL AND trace_id <> '' \
+             AND project_id = ?1 GROUP BY trace_id ORDER BY ended DESC LIMIT ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let v = stmt
+            .query_map(params![p, limit as i64], map_trace_summary)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        v
+    } else {
+        let sql = format!(
+            "SELECT {cols} FROM events WHERE trace_id IS NOT NULL AND trace_id <> '' \
+             GROUP BY trace_id ORDER BY ended DESC LIMIT ?1"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let v = stmt
+            .query_map(params![limit as i64], map_trace_summary)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        v
+    };
+    raws.into_iter().map(trace_summary_from_raw).collect()
+}
+
+/// Raw aggregate row for a trace summary, before parsing timestamps / splitting models.
+struct TraceSummaryRaw {
+    trace_id: String,
+    project_id: String,
+    started: String,
+    ended: String,
+    spans: i64,
+    cost_usd: f64,
+    input_tokens: i64,
+    output_tokens: i64,
+    errors: i64,
+    models: Option<String>,
+}
+
+fn map_trace_summary(row: &Row) -> rusqlite::Result<TraceSummaryRaw> {
+    Ok(TraceSummaryRaw {
+        trace_id: row.get(0)?,
+        project_id: row.get(1)?,
+        started: row.get(2)?,
+        ended: row.get(3)?,
+        spans: row.get(4)?,
+        cost_usd: row.get(5)?,
+        input_tokens: row.get(6)?,
+        output_tokens: row.get(7)?,
+        errors: row.get(8)?,
+        models: row.get(9)?,
+    })
+}
+
+fn trace_summary_from_raw(r: TraceSummaryRaw) -> Result<TraceSummary> {
+    let started_at = parse_ts(&r.started)?;
+    let ended_at = parse_ts(&r.ended)?;
+    let models = r
+        .models
+        .map(|s| s.split(',').filter(|m| !m.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default();
+    Ok(TraceSummary {
+        trace_id: r.trace_id,
+        project_id: r.project_id,
+        started_at,
+        ended_at,
+        duration_ms: (ended_at - started_at).num_milliseconds().max(0),
+        spans: r.spans as usize,
+        cost_usd: r.cost_usd,
+        input_tokens: r.input_tokens as u64,
+        output_tokens: r.output_tokens as u64,
+        total_tokens: (r.input_tokens + r.output_tokens) as u64,
+        errors: r.errors as usize,
+        status: if r.errors > 0 { "error" } else { "success" }.to_string(),
+        models,
+    })
 }
 
 pub(super) fn cost_summary(conn: &Connection, project: Option<&str>) -> Result<Vec<CostRow>> {

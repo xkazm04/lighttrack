@@ -35,6 +35,20 @@ Either or both channels may be set. The startup banner shows e.g. `alerts=webhoo
 `breach` carries the structured fields for custom receivers. Point `LIGHTTRACK_ALERT_WEBHOOK` straight
 at a Slack/Discord incoming-webhook URL, or at your own endpoint.
 
+The same channels also deliver **forecast alerts** (`"event": "forecast_alert"`, see
+`docs/PREDICTIVE.md` / the forecast module) and **relay dead-letter alerts**
+(`"event": "relay_task_dead"`, see `docs/RELAY.md`) — fired when a relay task exhausts its
+attempts or its device vanishes past the retry envelope:
+
+```json
+{
+  "event": "relay_task_dead",
+  "text": "LightTrack alert: relay task '…' (xprice/…) in project '…' dead-lettered after N attempt(s) — …",
+  "content": "… (same text) …",
+  "task": { "id", "project_id", "action_type", "source", "attempts", "error" }
+}
+```
+
 ## ntfy
 
 POSTs the message as the body to the topic URL (e.g. `https://ntfy.sh/my-lighttrack`), with headers
@@ -46,4 +60,5 @@ POSTs the message as the body to the topic URL (e.g. `https://ntfy.sh/my-lighttr
   (Per-project alert routing would need a schema/Store change — deferred.)
 - Dedup state is **in-memory**: it resets on restart, and multiple API instances each dedup
   independently, so a horizontally-scaled deployment may emit up to one alert per instance per window.
-- `action` (`alert` / `throttle` / `block`) is advisory; the breach is delivered regardless.
+- `action` (`alert` / `throttle` / `block`) doesn't affect alert delivery — the breach is delivered
+  regardless, including when a `throttle`/`block` breach also rejects the ingested event with 429.

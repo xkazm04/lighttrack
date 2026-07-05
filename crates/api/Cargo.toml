@@ -23,3 +23,7 @@ anyhow = "1"
 sha2 = "0.10"
 # Outbound HTTP for breach-alert delivery (webhook / ntfy). Default TLS (SChannel/OpenSSL).
 reqwest = { version = "0.12", features = ["json"] }
+
+[dev-dependencies]
+# Drives the wired axum Router end-to-end in integration tests via `ServiceExt::oneshot`.
+tower = { version = "0.5", features = ["util"] }

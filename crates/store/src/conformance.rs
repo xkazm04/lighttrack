@@ -10,9 +10,10 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 use lighttrack_core::{
-    new_id, ApiKey, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem, Job, LimitAction,
-    LimitMetric, LimitRule, LimitWindow, LlmEvent, ModelPriceRow, Operation, Project, Provider,
-    Redaction, Rubric, RubricDimension, Score, Status, TokenUsage,
+    compute_margin, new_id, ApiKey, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem,
+    Job, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, MarginDimension, ModelPriceRow,
+    Operation, Project, Provider, Redaction, RelayOutcome, RelayTask, RevenueEvent, RevenueKind,
+    Rubric, RubricDimension, Score, Status, TokenUsage,
 };
 
 use crate::{Result, Store};
@@ -29,6 +30,9 @@ pub fn run(store: &dyn Store) -> Result<()> {
     datasets(store, &pid)?;
     rubrics(store, &pid)?;
     jobs(store)?;
+    admission(store)?;
+    revenue(store)?;
+    relay(store, &pid)?;
     Ok(())
 }
 
@@ -54,6 +58,14 @@ fn sample_event(pid: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEve
         source: Some("conformance".into()),
         metadata: json!({ "k": "v" }),
     }
+}
+
+/// A monitored event attributed to a billing `customer` (the linkage `cost_by_dimension` groups on,
+/// read from `metadata.customer_id`).
+fn tagged_event(pid: &str, customer: &str, cost: f64) -> LlmEvent {
+    let mut ev = sample_event(pid, "claude-haiku-4-5", 10, 5, cost);
+    ev.metadata = json!({ "customer_id": customer });
+    ev
 }
 
 fn events(store: &dyn Store, pid: &str) -> Result<()> {
@@ -292,6 +304,150 @@ fn rubrics(store: &dyn Store, pid: &str) -> Result<()> {
     Ok(())
 }
 
+fn admission(store: &dyn Store) -> Result<()> {
+    let pid = new_id();
+
+    // No rules configured: every event is admitted and recorded.
+    let first = store.insert_event_checked(&sample_event(&pid, "claude-haiku-4-5", 10, 5, 1.0))?;
+    assert!(first.admitted, "no rules -> admitted");
+    assert!(first.statuses.is_empty(), "no rules -> no statuses");
+
+    // An Alert rule breaches but never blocks: the event is still recorded.
+    let alert = LimitRule {
+        id: new_id(),
+        project_id: pid.clone(),
+        metric: LimitMetric::Calls,
+        window: LimitWindow::Hour,
+        threshold: 1.0,
+        action: LimitAction::Alert,
+        enabled: true,
+    };
+    store.create_limit_rule(&alert)?;
+    let alerted = store.insert_event_checked(&sample_event(&pid, "claude-haiku-4-5", 10, 5, 1.0))?;
+    assert!(alerted.admitted, "Alert action never blocks ingest");
+    assert!(alerted.statuses.iter().any(|s| s.breached), "Alert rule reports the breach");
+
+    // A Block rule on cost: usage is 2.0 so far; threshold 2.5. The next $1.0 event would push
+    // usage-with-this-event to 3.0 >= 2.5, so it is rejected and not recorded.
+    let block = LimitRule {
+        id: new_id(),
+        project_id: pid.clone(),
+        metric: LimitMetric::CostUsd,
+        window: LimitWindow::Hour,
+        threshold: 2.5,
+        action: LimitAction::Block,
+        enabled: true,
+    };
+    store.create_limit_rule(&block)?;
+    let blocked = store.insert_event_checked(&sample_event(&pid, "claude-haiku-4-5", 10, 5, 1.0))?;
+    assert!(!blocked.admitted, "Block rule rejects an over-cap event");
+    assert!(
+        blocked.statuses.iter().any(|s| s.rejects_ingest()),
+        "rejection carries a breached enforcing status"
+    );
+
+    // The rejected event was never recorded: usage stays at the two admitted events.
+    let u = store.usage_since(&pid, Utc::now() - chrono::Duration::hours(1))?;
+    assert_eq!(u.calls, 2, "only the two admitted events are recorded");
+    assert!((u.cost_usd - 2.0).abs() < 1e-9, "rejected event's cost not counted");
+    Ok(())
+}
+
+/// Revenue + margin (Phase 1 profit tracking). This is the check that catches a backend silently
+/// inheriting the trait's no-op revenue defaults (e.g. a backend with no `revenue.rs`): a no-op
+/// `insert_revenue_event` errors here, and a no-op `list`/`cost_by_dimension` returns empty and trips
+/// the round-trip assertions. Scoped to a fresh project so `cost_by_dimension` (which reads event
+/// metadata over a window) sees only the traffic this check inserts.
+///
+/// It also pins the **idempotent-upsert** invariant: a redelivered webhook — a fresh record sharing
+/// the deterministic `stripe:<external_id>` id `normalize_invoice` mints — must upsert onto the
+/// existing row, so revenue and every margin number derived from it is recognized exactly once. A
+/// backend that keyed off a surrogate row id instead would double-count, and this check fails it.
+fn revenue(store: &dyn Store) -> Result<()> {
+    let pid = new_id();
+    // Monitored traffic for two customers: `heavy` is the money-loser.
+    store.insert_event(&tagged_event(&pid, "acme", 0.50))?;
+    store.insert_event(&tagged_event(&pid, "acme", 0.37))?;
+    store.insert_event(&tagged_event(&pid, "heavy", 142.5))?;
+
+    let now = Utc::now();
+    // Mirror `billing::normalize_invoice`: a synced record carries a *deterministic* id derived from
+    // its external (provider) id — `stripe:<external_id>` — which is the key a redelivered webhook
+    // collapses onto. Building ids this way lets the replay below exercise the real idempotency path
+    // rather than the trivial re-insert-the-same-struct case.
+    let mk_rev = |customer: &str, amount: f64| {
+        let external_id = format!("inv-{customer}");
+        RevenueEvent {
+            id: format!("stripe:{external_id}"),
+            project_id: pid.clone(),
+            source: "stripe".into(),
+            external_id: Some(external_id),
+            customer_id: Some(customer.into()),
+            product_id: None,
+            amount_usd: amount,
+            currency: "USD".into(),
+            kind: RevenueKind::OneTime,
+            period_start: None,
+            period_end: None,
+            ts: now,
+        }
+    };
+    // The batch path (atomic on backends that override it, a per-record loop otherwise).
+    store.insert_revenue_events(&[mk_rev("acme", 20.0), mk_rev("heavy", 99.0)])?;
+
+    let since = now - chrono::Duration::hours(1);
+    let until = now + chrono::Duration::hours(1);
+
+    let listed = store.list_revenue_events(Some(&pid), since, until)?;
+    assert_eq!(listed.len(), 2, "both point-in-time revenue records recognized in window");
+    assert!(listed.iter().all(|r| r.project_id == pid), "list scoped to project");
+    let got_acme = listed
+        .iter()
+        .find(|r| r.customer_id.as_deref() == Some("acme"))
+        .expect("acme revenue present");
+    assert!((got_acme.amount_usd - 20.0).abs() < 1e-9, "amount round-trip");
+    assert_eq!(got_acme.external_id.as_deref(), Some("inv-acme"), "external_id round-trip");
+    assert_eq!(got_acme.kind, RevenueKind::OneTime, "kind round-trip");
+
+    // A replayed Stripe webhook: `normalize_invoice` runs again on the redelivery and yields a *fresh*
+    // record carrying the same deterministic id (`stripe:<external_id>`). The upsert must collapse it
+    // onto the existing row — a second physical row here would silently double every downstream margin
+    // number, the exact corruption profit tracking exists to prevent.
+    store.insert_revenue_event(&mk_rev("acme", 20.0))?;
+    let after = store.list_revenue_events(Some(&pid), since, until)?;
+    assert_eq!(after.len(), 2, "redelivered webhook upserts; total revenue row count unchanged");
+    assert_eq!(
+        after.iter().filter(|r| r.external_id.as_deref() == Some("inv-acme")).count(),
+        1,
+        "acme stays a single row after replay — no double-count",
+    );
+
+    // Cost grouped by the billing dimension, read from event metadata.
+    let costs = store.cost_by_dimension(Some(&pid), "customer", since, until)?;
+    let acme_cost = costs
+        .iter()
+        .find(|c| c.key.as_deref() == Some("acme"))
+        .expect("acme cost group");
+    assert_eq!(acme_cost.calls, 2);
+    assert!((acme_cost.cost_usd - 0.87).abs() < 1e-9, "acme cost summed across its events");
+    let heavy_cost = costs
+        .iter()
+        .find(|c| c.key.as_deref() == Some("heavy"))
+        .expect("heavy cost group");
+    assert_eq!(heavy_cost.calls, 1);
+    assert!((heavy_cost.cost_usd - 142.5).abs() < 1e-9);
+
+    // End-to-end over the post-replay set: the unprofitable customer surfaces first (margin ascending),
+    // and acme's $20 is recognized exactly once despite the redelivery.
+    let rows = compute_margin(&after, &costs, MarginDimension::Customer, since, until);
+    assert_eq!(rows[0].key, "heavy", "money-loser sorts first");
+    assert!((rows[0].gross_margin_usd - (99.0 - 142.5)).abs() < 1e-6);
+    let acme_row = rows.iter().find(|r| r.key == "acme").expect("acme margin row");
+    assert!((acme_row.revenue_usd - 20.0).abs() < 1e-9, "revenue recognized once, not doubled");
+    assert!((acme_row.gross_margin_usd - 19.13).abs() < 1e-9, "revenue − attributed cost");
+    Ok(())
+}
+
 fn jobs(store: &dyn Store) -> Result<()> {
     let now = Utc::now();
     let j = Job {
@@ -324,5 +480,111 @@ fn jobs(store: &dyn Store) -> Result<()> {
     assert_eq!(done.status, "done");
     assert_eq!(done.result, json!({ "ok": true }), "job result round-trip");
     assert!(store.list_jobs(Some("done"), 100)?.iter().any(|x| x.id == j.id));
+    Ok(())
+}
+
+/// Relay queue (docs/RELAY.md): enqueue → lease → settle round-trips, retry/deferral accounting,
+/// and the dead-letter sweep. Skips backends that don't host the relay (the trait's default
+/// `create_relay_task` is a clear error). Like the job claim, lease/sweep are global (oldest-due
+/// first), so on a shared DB we assert on our ids and tolerate other rows in the results.
+fn relay(store: &dyn Store, pid: &str) -> Result<()> {
+    fn task(pid: &str, max_attempts: u32) -> RelayTask {
+        let now = Utc::now();
+        RelayTask {
+            id: new_id(),
+            project_id: pid.into(),
+            source: Some("conformance".into()),
+            action_type: "conf/echo".into(),
+            payload: json!({ "k": "v" }),
+            status: "queued".into(),
+            attempts: 0,
+            max_attempts,
+            retry_interval_secs: 0, // failed attempts become due again immediately
+            idempotency_key: None,
+            device: None,
+            lease_deadline: None,
+            next_attempt_at: now,
+            result: Value::Null,
+            error: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+    fn leased_ours(store: &dyn Store, id: &str) -> Result<Option<RelayTask>> {
+        Ok(store.lease_relay_tasks("conf-dev", 60, 20)?.into_iter().find(|t| t.id == id))
+    }
+
+    let mut t = task(pid, 2);
+    t.idempotency_key = Some(new_id());
+    match store.create_relay_task(&t) {
+        Err(e) if e.to_string().contains("not supported") => {
+            eprintln!("skipping relay conformance: {e}");
+            return Ok(());
+        }
+        r => r?,
+    }
+
+    // Round-trip + idempotency lookup.
+    let got = store.get_relay_task(&t.id)?.expect("get_relay_task Some");
+    assert_eq!(got.payload, json!({ "k": "v" }), "relay payload round-trip");
+    let key = t.idempotency_key.clone().unwrap();
+    assert_eq!(store.find_relay_task_by_key(pid, &key)?.expect("by key").id, t.id);
+    assert!(store.find_relay_task_by_key("other-project", &key)?.is_none());
+
+    // Lease consumes an attempt; a failure requeues (zero interval ⇒ due again) with the error.
+    let leased = leased_ours(store, &t.id)?.expect("our task leased");
+    assert_eq!(leased.status, "leased");
+    assert_eq!(leased.attempts, 1);
+    let requeued = store
+        .settle_relay_task(&t.id, &RelayOutcome::Failed("conf boom".into()))?
+        .expect("settle failed");
+    assert_eq!(requeued.status, "queued");
+    assert_eq!(requeued.error.as_deref(), Some("conf boom"));
+
+    // A deferral hands the consumed attempt back.
+    assert_eq!(leased_ours(store, &t.id)?.expect("re-leased").attempts, 2);
+    let deferred = store
+        .settle_relay_task(
+            &t.id,
+            &RelayOutcome::Deferred { retry_after_secs: Some(0), reason: Some("window".into()) },
+        )?
+        .expect("settle deferred");
+    assert_eq!(deferred.status, "queued");
+    assert_eq!(deferred.attempts, 1, "deferral hands the attempt back");
+
+    // Success is terminal; a duplicate report returns the settled row unchanged.
+    leased_ours(store, &t.id)?.expect("leased again");
+    let done = store
+        .settle_relay_task(&t.id, &RelayOutcome::Succeeded(json!({ "ok": true })))?
+        .expect("settle succeeded");
+    assert_eq!(done.status, "succeeded");
+    assert_eq!(done.result, json!({ "ok": true }), "relay result round-trip");
+    let dup = store
+        .settle_relay_task(&t.id, &RelayOutcome::Failed("late".into()))?
+        .expect("duplicate settle");
+    assert_eq!(dup.status, "succeeded", "duplicate report is a no-op");
+    assert!(store
+        .list_relay_tasks(Some(pid), Some("succeeded"), 100)?
+        .iter()
+        .any(|x| x.id == t.id));
+
+    // Exhausted failure dead-letters…
+    let doomed = task(pid, 1);
+    store.create_relay_task(&doomed)?;
+    leased_ours(store, &doomed.id)?.expect("doomed leased");
+    let dead = store
+        .settle_relay_task(&doomed.id, &RelayOutcome::Failed("final".into()))?
+        .expect("settle dead");
+    assert_eq!(dead.status, "dead");
+
+    // …and so does the sweep, when a vanished device's expired lease has no attempts left.
+    let vanished = task(pid, 1);
+    store.create_relay_task(&vanished)?;
+    let held = store.lease_relay_tasks("conf-dev", 0, 20)?; // zero-second lease: expires at once
+    assert!(held.iter().any(|x| x.id == vanished.id), "vanished task leased");
+    let swept = store.sweep_relay_dead()?;
+    let ours = swept.iter().find(|x| x.id == vanished.id).expect("sweep returns our task");
+    assert_eq!(ours.status, "dead");
+    assert_eq!(ours.error.as_deref(), Some("lease expired without a result"));
     Ok(())
 }

@@ -1,0 +1,292 @@
+//! End-to-end ingest tests for the admission/enforcement + tenant-isolation path.
+//!
+//! These drive the **wired axum router** (`crate::build_router`) over an in-memory `SqliteStore`
+//! via `tower`'s `oneshot`, exercising auth → project-scoping → pricing-from-book → redaction →
+//! limit admission as one stack. They pin the guarantees `events::post_event` makes that no unit
+//! test covers: a project key can only write to its own project; an uncosted event is priced from
+//! the DP price book; PII is scrubbed before the row is stored; and an enforcing (`Throttle`/
+//! `Block`) breach rejects ingest (HTTP 429, not recorded) while an `Alert` breach admits and
+//! records the event.
+
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+use axum::body::{to_bytes, Body};
+use axum::http::{Request, StatusCode};
+use axum::Router;
+use chrono::Utc;
+use serde_json::{json, Value};
+use tower::ServiceExt; // oneshot
+
+use lighttrack_core::{
+    new_id, ApiKey, LimitAction, LimitMetric, LimitRule, LimitWindow, ModelPrice, PriceBook,
+    Project, Redaction,
+};
+use lighttrack_store::{SqliteStore, Store};
+
+use crate::auth::{self, AuthMode};
+use crate::redact::Redactor;
+use crate::state::AppState;
+
+/// Build app state over a fresh in-memory store with the given redactor and a one-model price book
+/// (`anthropic/claude-haiku-4-5` @ $1/Mtok in, $5/Mtok out). Returns the wired state plus the
+/// concrete store handle so a test can inspect the persisted rows after a request.
+pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
+    let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let dyn_store: Arc<dyn Store + Send + Sync> = store.clone();
+
+    let mut entries = HashMap::new();
+    entries.insert(
+        "anthropic/claude-haiku-4-5".to_string(),
+        ModelPrice { input_per_mtok: 1.0, output_per_mtok: 5.0, cached_input_per_mtok: None },
+    );
+    let book = PriceBook::new(entries);
+
+    let state = AppState {
+        store: dyn_store,
+        prices: Arc::new(RwLock::new(book)),
+        auth_mode: AuthMode::Enforced,
+        admin_key: Some("admin-secret".to_string()),
+        relay_device_key: Some("device-secret".to_string()),
+        relay_flat_cost: 1.0,
+        alerts: Arc::new(crate::alerts::Alerter::from_env()),
+        redact: Arc::new(redact),
+        billing: Arc::new(lighttrack_billing::BillingRegistry::from_env()),
+        collective: Arc::new(crate::collective::Collective::from_env()),
+        seen_webhooks: Arc::new(crate::idempotency::SeenWebhooks::new(
+            crate::idempotency::DEFAULT_CAPACITY,
+        )),
+    };
+    (state, store)
+}
+
+/// Create a project and mint a real, usable API key for it; returns the full secret to present as a
+/// bearer token. Uses the production key-gen + hashing so auth resolves it to `Principal::Project`.
+pub(crate) fn make_key(store: &SqliteStore, project_id: &str) -> String {
+    let now = Utc::now();
+    store
+        .create_project(&Project {
+            id: project_id.into(),
+            name: project_id.into(),
+            enabled: true,
+            redaction: Redaction::None,
+            created_at: now,
+        })
+        .unwrap();
+    let g = auth::generate_key();
+    store
+        .create_api_key(&ApiKey {
+            id: new_id(),
+            project_id: project_id.into(),
+            name: "test".into(),
+            prefix: g.prefix.clone(),
+            key_hash: g.key_hash,
+            created_at: now,
+            last_used_at: None,
+            revoked: false,
+        })
+        .unwrap();
+    g.full_key
+}
+
+/// POST one event through the real router with a bearer token; returns the status and parsed JSON.
+pub(crate) async fn ingest(app: &Router, token: &str, body: Value) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: Value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, v)
+}
+
+#[tokio::test]
+async fn project_key_cannot_ingest_into_another_project() {
+    let (state, store) = setup(Redactor::off());
+    let key_a = make_key(&store, "proj-a");
+    // The cross-tenant target exists, so a write could land there if scoping were broken.
+    store
+        .create_project(&Project {
+            id: "proj-b".into(),
+            name: "b".into(),
+            enabled: true,
+            redaction: Redaction::None,
+            created_at: Utc::now(),
+        })
+        .unwrap();
+    let app = crate::build_router(state);
+
+    // A's key submits an event explicitly labelled for proj-b.
+    let (status, body) = ingest(
+        &app,
+        &key_a,
+        json!({
+            "project_id": "proj-b",
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 },
+            "cost_usd": 0.0
+        }),
+    )
+    .await;
+
+    // The key forces its own project; the body's project_id is ignored, not honored.
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["project_id"], "proj-a");
+
+    // Nothing crossed the tenant boundary: proj-b is empty, the event is under proj-a.
+    assert!(
+        store.list_events(Some("proj-b"), 10).unwrap().is_empty(),
+        "a project key must not be able to write into another project"
+    );
+    let a = store.list_events(Some("proj-a"), 10).unwrap();
+    assert_eq!(a.len(), 1);
+    assert_eq!(a[0].project_id, "proj-a");
+}
+
+#[tokio::test]
+async fn uncosted_event_is_priced_from_the_book() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    // No cost_usd supplied: 1M input + 1M output @ ($1, $5)/Mtok → $6.00, priced from the book.
+    let (status, body) = ingest(
+        &app,
+        &key,
+        json!({
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "usage": { "input": 1_000_000, "output": 1_000_000 }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        (body["cost_usd"].as_f64().unwrap() - 6.0).abs() < 1e-9,
+        "response cost not priced from book: {body}"
+    );
+
+    // The priced cost is persisted, not merely returned.
+    let ev = store.list_events(Some("proj-a"), 10).unwrap().pop().unwrap();
+    assert!((ev.cost_usd.unwrap() - 6.0).abs() < 1e-9, "stored cost not priced");
+}
+
+#[tokio::test]
+async fn pii_is_redacted_before_the_row_is_stored() {
+    let (state, store) = setup(Redactor::all());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let (status, _) = ingest(
+        &app,
+        &key,
+        json!({
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 },
+            "cost_usd": 0.0,
+            "input": { "q": "email me at jane@example.com" },
+            "output": "card 4111 1111 1111 1111"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The stored row must carry scrubbed content — raw PII never lands in the DB.
+    let ev = store.list_events(Some("proj-a"), 10).unwrap().pop().unwrap();
+    let stored = serde_json::to_string(&ev).unwrap();
+    assert!(!stored.contains("jane@example.com"), "raw email persisted: {stored}");
+    assert!(!stored.contains("4111"), "raw card persisted: {stored}");
+    assert!(stored.contains("<EMAIL>"), "redaction marker missing: {stored}");
+}
+
+#[tokio::test]
+async fn enforcing_actions_reject_ingest_and_do_not_store() {
+    // Both enforcing actions reject the over-cap event with HTTP 429 and never record it.
+    for action in [LimitAction::Block, LimitAction::Throttle] {
+        let (state, store) = setup(Redactor::off());
+        let key = make_key(&store, "proj-a");
+        store
+            .create_limit_rule(&LimitRule {
+                id: new_id(),
+                project_id: "proj-a".into(),
+                metric: LimitMetric::Calls,
+                window: LimitWindow::Hour,
+                threshold: 1.0, // the very first call reaches the cap (usage-with-event = 1 >= 1)
+                action,
+                enabled: true,
+            })
+            .unwrap();
+        let app = crate::build_router(state);
+
+        let (status, body) = ingest(
+            &app,
+            &key,
+            json!({
+                "provider": "anthropic",
+                "model": "claude-haiku-4-5",
+                "usage": { "input": 10, "output": 5 },
+                "cost_usd": 0.0
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{action:?} must reject ingest");
+        assert_eq!(body["error"]["code"], "rate_limited", "{action:?}: {body}");
+        assert!(
+            store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+            "{action:?}: a rejected event must not be persisted"
+        );
+    }
+}
+
+#[tokio::test]
+async fn alert_limit_flags_but_admits_and_stores() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    store
+        .create_limit_rule(&LimitRule {
+            id: new_id(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::Calls,
+            window: LimitWindow::Hour,
+            threshold: 1.0,
+            action: LimitAction::Alert,
+            enabled: true,
+        })
+        .unwrap();
+    let app = crate::build_router(state);
+
+    let (status, body) = ingest(
+        &app,
+        &key,
+        json!({
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 },
+            "cost_usd": 0.0
+        }),
+    )
+    .await;
+
+    // Alert is observe-only: the event is admitted (200), the breach is surfaced, never throttled.
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["throttled"], false, "an Alert breach must not throttle: {body}");
+    let breached = body["breached"].as_array().expect("breached array present");
+    assert_eq!(breached.len(), 1, "{body}");
+    assert_eq!(breached[0]["action"], "alert");
+    assert!(breached[0]["breached"].as_bool().unwrap());
+    // The event is recorded despite the breach.
+    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
+}

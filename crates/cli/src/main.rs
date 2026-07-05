@@ -62,6 +62,17 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Recent agent traces (events grouped by trace_id): end-to-end cost, latency, tokens, spans.
+    Traces {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// One trace by id: rolled-up totals, the span tree, and any scores within it.
+    Trace {
+        id: String,
+    },
     /// Profit margin: revenue − LLM cost by customer or product (default window: last 30 days).
     Margin {
         #[arg(long, default_value = "customer")]
@@ -74,6 +85,40 @@ enum Cmd {
         /// RFC3339 window end (default now).
         #[arg(long)]
         until: Option<String>,
+    },
+    /// Collective Model Intelligence: the shared real-world model leaderboard (network effect).
+    Collective {
+        #[command(subcommand)]
+        action: CollectiveCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CollectiveCmd {
+    /// Show the merged public leaderboard (quality × cost × latency across contributors).
+    Leaderboard {
+        /// Filter to one task-type bucket (e.g. qa, summarization, coding).
+        #[arg(long = "task-type")]
+        task_type: Option<String>,
+        #[arg(long)]
+        provider: Option<String>,
+    },
+    /// Preview this instance's privacy-safe digest — what `contribute` would publish (admin key).
+    Digest {
+        /// k-anonymity floor: only publish (model, task) buckets with at least this many cases.
+        #[arg(long = "min-cases", default_value_t = 5)]
+        min_cases: u32,
+    },
+    /// Build this instance's digest and contribute it to a leaderboard hub (opt-in).
+    Contribute {
+        /// Base URL of the hub that accepts contributions (its API).
+        #[arg(long)]
+        hub: String,
+        #[arg(long = "min-cases", default_value_t = 5)]
+        min_cases: u32,
+        /// Optional bearer key for the hub (if it runs in enforced auth mode).
+        #[arg(long = "hub-key")]
+        hub_key: Option<String>,
     },
 }
 
@@ -184,6 +229,16 @@ fn main() -> Result<()> {
             }
             call(&cli, Method::GET, &p, None, "query_events")
         }
+        Cmd::Traces { project, limit } => {
+            let mut p = format!("/v1/traces?limit={limit}");
+            if let Some(proj) = project {
+                p.push_str(&format!("&project={proj}"));
+            }
+            call(&cli, Method::GET, &p, None, "list_traces")
+        }
+        Cmd::Trace { id } => {
+            call(&cli, Method::GET, &format!("/v1/traces/{id}"), None, "get_trace")
+        }
         Cmd::Margin { by, project, since, until } => {
             let mut p = format!("/v1/margin?by={by}");
             for (k, v) in [("project", project), ("since", since), ("until", until)] {
@@ -193,7 +248,69 @@ fn main() -> Result<()> {
             }
             call(&cli, Method::GET, &p, None, "get_margin")
         }
+        Cmd::Collective { action } => match action {
+            CollectiveCmd::Leaderboard { task_type, provider } => {
+                let mut p = "/v1/collective/leaderboard".to_string();
+                let mut sep = '?';
+                for (k, v) in [("task_type", task_type), ("provider", provider)] {
+                    if let Some(val) = v {
+                        p.push_str(&format!("{sep}{k}={val}"));
+                        sep = '&';
+                    }
+                }
+                call(&cli, Method::GET, &p, None, "get_collective_leaderboard")
+            }
+            CollectiveCmd::Digest { min_cases } => call(
+                &cli,
+                Method::GET,
+                &format!("/v1/collective/digest?min_cases={min_cases}"),
+                None,
+                "get_collective_digest",
+            ),
+            CollectiveCmd::Contribute { hub, min_cases, hub_key } => {
+                contribute(&cli, hub, *min_cases, hub_key.as_deref())
+            }
+        },
     }
+}
+
+/// Build this instance's digest (from its own API) and POST it to a hub's ingest endpoint. Two hops:
+/// `GET /v1/collective/digest` here → `POST /v1/collective/ingest` there. Keeps cross-instance push in
+/// the CLI rather than baking outbound calls into the API.
+fn contribute(cli: &Cli, hub: &str, min_cases: u32, hub_key: Option<&str>) -> Result<()> {
+    let client = reqwest::blocking::Client::new();
+
+    let mut req = client.get(format!("{}/v1/collective/digest?min_cases={min_cases}", cli.base));
+    if let Some(k) = &cli.key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req.send()?;
+    if !resp.status().is_success() {
+        eprintln!("build digest failed: HTTP {} — {}", resp.status().as_u16(), resp.text()?);
+        std::process::exit(1);
+    }
+    let digest: Value = resp.json()?;
+    let n = digest.get("entries").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+    if n == 0 {
+        println!("nothing to contribute: no (model, task) bucket reached the k≥{min_cases} floor yet.");
+        return Ok(());
+    }
+
+    let hub_base = hub.trim_end_matches('/');
+    let mut req = client.post(format!("{hub_base}/v1/collective/ingest")).json(&digest);
+    if let Some(k) = hub_key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req.send()?;
+    let status = resp.status();
+    let text = resp.text()?;
+    if status.is_success() {
+        println!("contributed {n} bucket(s) to {hub_base}: {text}");
+    } else {
+        eprintln!("contribute failed: HTTP {} — {text}", status.as_u16());
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn path_with_project(base: &str, project: &Option<String>) -> String {

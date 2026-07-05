@@ -22,7 +22,9 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
 ## Phase 2 — Projects, keys, limits ✅
 - [x] CRUD for projects, API keys (salted-hash), limit rules (via `lt` CLI + API)
 - [x] Rolling-window usage + limit evaluation on ingest (cost/calls/tokens × hour/day/month)
-- [x] `GET /v1/limits/status` advisory throttle flag; breaches surfaced in the ingest response
+- [x] `GET /v1/limits/status` throttle flag; breaches surfaced in the ingest response
+- [x] Ingest admission control: `throttle`/`block` breaches reject the event with 429 atomically
+      (check-then-insert in one store step — concurrent bursts can't race past the cap)
 - [x] `dev` vs `enforced` auth (admin key + per-project keys); verified 401/403 boundaries
 - [x] `lt` CLI (projects/keys/limits/costs/events) — verified against the enforced server
 - [x] Inline breach alerts: server-side `[ALERT]` log + **delivery to webhook / ntfy** on breach

@@ -9,9 +9,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{
-    new_id, LimitAction, LimitMetric, LimitRule, LimitStatus, LimitWindow,
-};
+use lighttrack_core::{new_id, LimitAction, LimitMetric, LimitRule, LimitStatus, LimitWindow};
 use lighttrack_store::{StoreError, Usage};
 
 use crate::error::ApiError;
@@ -38,24 +36,12 @@ pub(crate) async fn evaluate_project_limits(
         }
         let out: Vec<LimitStatus> = rules
             .iter()
-            .map(|r| {
-                let u = usage[&r.window];
-                let value = match r.metric {
-                    LimitMetric::CostUsd => u.cost_usd,
-                    LimitMetric::Calls => u.calls as f64,
-                    LimitMetric::Tokens => u.tokens as f64,
-                };
-                r.evaluate(value)
-            })
+            .map(|r| r.evaluate(usage[&r.window].metric_value(r.metric)))
             .collect();
         Ok::<_, StoreError>(out)
     })
     .await?;
     Ok(statuses)
-}
-
-pub(crate) fn is_throttle(s: &LimitStatus) -> bool {
-    s.breached && matches!(s.action, LimitAction::Throttle | LimitAction::Block)
 }
 
 #[derive(Deserialize)]
@@ -129,7 +115,7 @@ pub(crate) async fn limits_status(
     let project = resolve_read_project(&p, q.project.as_deref())?
         .ok_or_else(|| ApiError::bad_request("project is required"))?;
     let statuses = evaluate_project_limits(&st, &project).await?;
-    let throttled = statuses.iter().any(is_throttle);
+    let throttled = statuses.iter().any(|s| s.rejects_ingest());
     Ok(Json(LimitStatusResp {
         project_id: project,
         throttled,

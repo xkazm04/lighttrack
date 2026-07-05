@@ -14,6 +14,8 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "get_margin" => margin_resp(),
         "query_events" => list_of(event()),
         "get_event" => event(),
+        "list_traces" => list_of(trace_summary()),
+        "get_trace" => trace_detail(),
         "list_scores" => list_of(score()),
         "get_limit_status" => limit_status_resp(),
         "list_limits" => list_of(limit_rule()),
@@ -28,6 +30,7 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "list_dataset_items" => list_of(dataset_item()),
         "list_rubrics" => list_of(rubric()),
         "get_rubric" => rubric(),
+        "get_collective_leaderboard" => collective_resp(),
         _ => return None,
     };
     Some(s)
@@ -85,6 +88,38 @@ fn event() -> Value {
         "usage": {"type":"object"}, "cost_usd": {"type":["number","null"]},
         "latency_ms": {"type":["integer","null"]}, "status": {"type":"string"}
     }))
+}
+
+fn trace_summary() -> Value {
+    obj(json!({
+        "trace_id": {"type":"string"}, "project_id": {"type":"string"},
+        "started_at": {"type":"string"}, "ended_at": {"type":"string"},
+        "duration_ms": {"type":"integer"}, "spans": {"type":"integer"},
+        "cost_usd": {"type":"number"}, "input_tokens": {"type":"integer"},
+        "output_tokens": {"type":"integer"}, "total_tokens": {"type":"integer"},
+        "errors": {"type":"integer"}, "status": {"type":"string"},
+        "models": {"type":"array"}
+    }))
+}
+
+fn trace_detail() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+            "trace_id": {"type":"string"}, "project_id": {"type":"string"},
+            "started_at": {"type":"string"}, "ended_at": {"type":"string"},
+            "duration_ms": {"type":"integer"}, "status": {"type":"string"},
+            "models": {"type":"array"},
+            "totals": obj(json!({
+                "spans": {"type":"integer"}, "cost_usd": {"type":"number"},
+                "input_tokens": {"type":"integer"}, "output_tokens": {"type":"integer"},
+                "total_tokens": {"type":"integer"}, "errors": {"type":"integer"}
+            })),
+            "spans": {"type":"array"},
+            "scores": {"type":"array", "items": score()}
+        }
+    })
 }
 
 fn score() -> Value {
@@ -186,4 +221,22 @@ fn rubric() -> Value {
             "anchors": {"type":"array"}, "floor": {"type":["number","null"]}
         })) }
     }))
+}
+
+fn collective_resp() -> Value {
+    json!({
+        "type": "object",
+        "required": ["rows"],
+        "additionalProperties": true,
+        "properties": {
+            "contributors": {"type":"integer"}, "n_models": {"type":"integer"},
+            "task_type": {"type":["string","null"]},
+            "rows": { "type":"array", "items": obj(json!({
+                "provider": {"type":"string"}, "model": {"type":"string"}, "task_type": {"type":"string"},
+                "quality": {"type":"number"}, "pass_rate": {"type":"number"},
+                "avg_cost_usd": {"type":"number"}, "p50_latency_ms": {"type":["integer","null"]},
+                "n_contributors": {"type":"integer"}, "n_runs": {"type":"integer"}, "n_cases": {"type":"integer"}
+            })) }
+        }
+    })
 }

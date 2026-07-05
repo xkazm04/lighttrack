@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use lighttrack_core::Job;
 
-use super::util::{fmt_ts, json_or_null, parse_ts, val_or_null};
+use crate::codec::{fmt_ts, json_or_null, parse_ts, val_or_null};
 use crate::Result;
 
 const COLS: &str = "id, type, payload, status, attempts, max_attempts, progress, error, \

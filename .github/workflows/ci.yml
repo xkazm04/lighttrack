@@ -1,0 +1,175 @@
+name: ci
+
+# Test + lint gate on every push / PR to main. The other workflows (docker.yml, release.yml) are
+# tag-triggered and never run the suite, so a regression could merge with a fully red set of
+# conformance / margin / pricing / billing / judge tests. This is the safety net that catches it
+# before merge instead of after deploy.
+#
+# The store conformance::run contract is exercised against ALL THREE backends here: in-memory SQLite,
+# an ephemeral Postgres service container, and the Firestore emulator. Before, only SQLite ran (the
+# Postgres/Firestore tests are env-gated and skipped), so a codec or ORDER-BY divergence in the cloud
+# backends could ship undetected. Now each backend is its own required check.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same ref supersedes in-flight runs (rapid pushes, PR force-updates).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Required check ────────────────────────────────────────────────────────────────────────────
+  # The in-memory SQLite conformance suite: no external infra, deterministic, fast. This is the gate
+  # that must stay green to merge — mark `sqlite conformance (required)` as a required status check in
+  # the branch-protection rules for main. (rusqlite is `bundled`, so this job needs no system libs.)
+  conformance:
+    name: sqlite conformance (required)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+      - run: cargo test -p lighttrack-store --test sqlite_conformance
+
+  # ── Required check ────────────────────────────────────────────────────────────────────────────
+  # Same conformance::run, but against a real **ephemeral Postgres** so the cloud backend (store-pg)
+  # is held to the identical contract — codec round-trips, ON CONFLICT upserts, the FOR UPDATE SKIP
+  # LOCKED job claim, and the fixed-width RFC3339(Nanos,Z) timestamp invariant that range filters /
+  # ORDER BY depend on. The service container is fresh per run (empty DB); the suite is also safe on a
+  # non-empty one. Mark `postgres conformance (required)` as a required status check for main.
+  pg-conformance:
+    name: postgres conformance (required)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: lighttrack
+        ports:
+          - 5432:5432
+        # Gate the job's steps on the DB actually accepting connections, not just the container start.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d lighttrack"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # PgStore::connect uses sslmode=prefer → plaintext fallback for this non-TLS local container.
+      LIGHTTRACK_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/lighttrack
+    steps:
+      - uses: actions/checkout@v4
+      # store-pg links native-tls (system OpenSSL); needed even against a plaintext local DB to build.
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+      - run: cargo test -p lighttrack-store-pg --test conformance
+
+  # ── Required check ────────────────────────────────────────────────────────────────────────────
+  # Same conformance::run against the **Firestore emulator** so store-firestore stays behaviorally
+  # identical to SQLite/Postgres. The emulator needs no auth (FIRESTORE_EMULATOR_HOST short-circuits
+  # the bearer token in FirestoreStore::connect) and accepts any project id. It is a Java process
+  # started by gcloud, so this job provisions a JDK + the cloud-firestore-emulator component, launches
+  # it in the background, and waits for the port before testing. Mark this required for main too.
+  firestore-conformance:
+    name: firestore conformance (required)
+    runs-on: ubuntu-latest
+    env:
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+      LIGHTTRACK_TEST_FIRESTORE: firestore://demo
+    steps:
+      - uses: actions/checkout@v4
+      # store-firestore's reqwest uses native-tls (system OpenSSL) on Linux — required to build.
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+      # The current gcloud Firestore emulator requires a Java 21+ JRE (it refuses to start on 17).
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+      - name: Set up gcloud + Firestore emulator
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: cloud-firestore-emulator
+      - name: Start Firestore emulator
+        run: |
+          nohup gcloud emulators firestore start --host-port=127.0.0.1:8080 \
+            > "${RUNNER_TEMP}/firestore-emulator.log" 2>&1 &
+          # The emulator answers 200 "Ok" on / once ready; poll it before handing off to the suite.
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/ >/dev/null 2>&1; then
+              echo "Firestore emulator is up after ${i} tries"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Firestore emulator did not become ready"; cat "${RUNNER_TEMP}/firestore-emulator.log"; exit 1
+      - run: cargo test -p lighttrack-store-firestore --test conformance
+
+  # ── Full workspace suite ──────────────────────────────────────────────────────────────────────
+  # Everything: conformance + margin + pricing + billing + judge + store/api/engine unit tests.
+  # Blocking — keep this required alongside the conformance job.
+  test:
+    name: cargo test --workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # store-pg links native-tls (system OpenSSL); cloud Postgres like Neon needs TLS. No live DB is
+      # required to build/run the suite — store-pg uses runtime queries (no compile-time sqlx macros).
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+      - run: cargo test --workspace
+
+  # ── Lint + format ─────────────────────────────────────────────────────────────────────────────
+  # Run at the requested strictness (`clippy -D warnings`, `fmt --check`) so the true state is always
+  # visible in CI, but NON-BLOCKING for now: the tree predates these gates and carries pre-existing
+  # fmt/clippy debt that can't be cleaned here without colliding with in-flight work. Once a dedicated
+  # cleanup PR makes both green, drop `continue-on-error` and mark these as required too.
+  clippy:
+    name: cargo clippy -D warnings (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  fmt:
+    name: cargo fmt --check (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check

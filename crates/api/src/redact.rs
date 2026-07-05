@@ -83,6 +83,18 @@ impl Redactor {
     }
 }
 
+#[cfg(test)]
+impl Redactor {
+    /// Test constructor: redaction disabled.
+    pub(crate) fn off() -> Self {
+        Self { mode: Mode::Off }
+    }
+    /// Test constructor: redact every project.
+    pub(crate) fn all() -> Self {
+        Self { mode: Mode::All }
+    }
+}
+
 /// Recursively scrub every string leaf of a JSON value, preserving structure. Returns the total
 /// redaction count.
 fn scrub_value(v: &mut Value) -> usize {

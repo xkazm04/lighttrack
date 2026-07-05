@@ -19,6 +19,7 @@ import queue
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -148,6 +149,11 @@ def guard(output: str, rules: dict) -> GuardResult:
     return GuardResult(ok=len(violations) == 0, violations=violations, checks=checks)
 
 
+class RelayError(Exception):
+    """A relay call failed (network error or non-2xx). Unlike telemetry, relay enqueue/status is a
+    functional call the app depends on, so failures raise instead of being swallowed."""
+
+
 class LightTrack:
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None, *,
                  project: Optional[str] = None, source: Optional[str] = None,
@@ -177,6 +183,7 @@ class LightTrack:
               operation: Optional[str] = None, latency_ms: Optional[int] = None,
               status: Optional[str] = None, error: Optional[str] = None, input: Any = None,
               output: Any = None, tags: Optional[list] = None, trace_id: Optional[str] = None,
+              span_id: Optional[str] = None, parent_span_id: Optional[str] = None,
               metadata: Any = None, project: Optional[str] = None) -> None:
         """Record one LLM call. Returns immediately; the event is sent best-effort."""
         if not self.enabled:
@@ -206,6 +213,10 @@ class LightTrack:
             ev["tags"] = all_tags
         if trace_id:
             ev["trace_id"] = trace_id
+        if span_id:
+            ev["span_id"] = span_id
+        if parent_span_id:
+            ev["parent_span_id"] = parent_span_id
         if self.source:
             ev["source"] = self.source
         if metadata:
@@ -245,9 +256,61 @@ class LightTrack:
             self._emit(score, "/v1/scores")
         return result
 
+    # ---- relay (cloud→device tasks; docs/RELAY.md) ----
+    def relay_task(self, action_type: str, payload: Any = None, *,
+                   idempotency_key: Optional[str] = None, source: Optional[str] = None,
+                   max_attempts: Optional[int] = None, retry_interval_secs: Optional[int] = None,
+                   project: Optional[str] = None) -> dict:
+        """Enqueue a task for the enrolled local device (executed via Claude Code, offline-tolerant).
+        Synchronous; returns the task dict (re-enqueueing an `idempotency_key` returns the existing
+        task). Raises `RelayError` on failure."""
+        body: dict = {"action_type": action_type}
+        if payload is not None:
+            body["payload"] = payload
+        if idempotency_key:
+            body["idempotency_key"] = idempotency_key
+        if source or self.source:
+            body["source"] = source or self.source
+        if max_attempts is not None:
+            body["max_attempts"] = int(max_attempts)
+        if retry_interval_secs is not None:
+            body["retry_interval_secs"] = int(retry_interval_secs)
+        pid = project or self.project
+        if pid:
+            body["project_id"] = pid
+        return self._request("POST", "/v1/relay/tasks", body)
+
+    def get_relay_task(self, task_id: str) -> dict:
+        """Fetch one relay task (status / result / error). Raises `RelayError` on failure."""
+        return self._request("GET", f"/v1/relay/tasks/{task_id}")
+
+    def wait_relay_task(self, task_id: str, *, timeout: float = 1200.0,
+                        interval: float = 15.0) -> dict:
+        """Poll until the task settles (`succeeded` | `dead`) or `timeout` elapses; returns the last
+        seen task either way. Relay work is offline-tolerant by design — retries may span 5h
+        windows — so only wait on tasks you expect the device to pick up promptly."""
+        deadline = time.monotonic() + timeout
+        while True:
+            task = self.get_relay_task(task_id)
+            if task.get("status") in ("succeeded", "dead") or time.monotonic() >= deadline:
+                return task
+            time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+
     def span(self, provider: str, model: Optional[str], **kw) -> "Span":
         """Time a call and auto-track on exit: `with lt.span("openai","gpt-4o") as s: ...; s.set_openai(resp)`."""
         return Span(self, provider, model, **kw)
+
+    def wrap(self, client: Any) -> Any:
+        """Auto-instrument an OpenAI / Anthropic / Gemini SDK client *instance* so every call it makes
+        is tracked through this client. Returns the same object (drop-in): `client = lt.wrap(OpenAI())`."""
+        from .instrument import wrap as _wrap
+        return _wrap(client, lt=self)
+
+    def instrument(self, providers: Optional[list] = None) -> "LightTrack":
+        """Monkey-patch the installed provider SDK *classes* so every client auto-tracks through this
+        instance. `providers` optionally restricts to a subset (e.g. `["openai"]`)."""
+        from .instrument import instrument as _instrument
+        return _instrument(self, providers=providers)
 
     def flush(self, timeout: float = 5.0) -> None:
         if not (self.enabled and self._async):
@@ -291,6 +354,22 @@ class LightTrack:
             path, body = item
             self._post(path, body)
             self._q.task_done()
+
+    def _request(self, method: str, path: str, body: Optional[dict] = None) -> dict:
+        """Synchronous request that returns the parsed JSON response and raises `RelayError` on
+        any failure — for functional calls (relay), not telemetry."""
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=max(self.timeout, 10.0)) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raise RelayError(f"{method} {path} -> HTTP {e.code}: {e.read().decode('utf-8', 'replace')}") from e
+        except Exception as e:
+            raise RelayError(f"{method} {path} failed: {e}") from e
 
     def _post(self, path: str, body: dict) -> None:
         try:

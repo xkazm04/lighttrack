@@ -31,6 +31,28 @@ The heart of the system. Emitted by monitored apps, normalized + costed by `api`
 | `source` | string? | host / app instance |
 | `metadata` | json | arbitrary app-supplied fields |
 
+## traces — a derived end-to-end view (no table)
+A *trace* is every `event` sharing a `trace_id`, rolled up into one view of a multi-step / agentic
+request. There is **no `traces` table**: the rollup is computed on read (`core::trace::Trace::from_events`)
+from the events, and the span tree is reconstructed from `span_id` / `parent_span_id`. An event whose
+parent is absent from the trace (or unset) is a root.
+
+| Field | Type | Notes |
+|---|---|---|
+| `trace_id` | string | the shared id |
+| `project_id` | string | from the trace's events |
+| `started_at` / `ended_at` | timestamp | first / last event time |
+| `duration_ms` | int | wall-clock span, `ended_at − started_at` |
+| `status` | string | `error` if any span errored, else `success` |
+| `totals` | object | `{spans, cost_usd, input_tokens, output_tokens, total_tokens, errors}` |
+| `models` | string[] | distinct models touched, first-seen order |
+| `spans` | tree | root `{event, children[]}` nodes (detail view only) |
+
+Read via `GET /v1/traces` (compact rollups) and `GET /v1/traces/:id` (totals + span tree + scores
+within the trace). A whole trace can be scored with `POST /v1/traces/:id/score`: the verdict is a
+normal `scores` row anchored to the trace's root span event (or a named `event_id`), so it links back
+through the same `event_id → trace_id` path the read side joins on — no per-score `trace_id` column.
+
 ## `projects`
 | Field | Type | Notes |
 |---|---|---|
@@ -60,7 +82,7 @@ The heart of the system. Emitted by monitored apps, normalized + costed by `api`
 | `metric` | string | `cost_usd` \| `calls` \| `tokens` |
 | `window` | string | `hour` \| `day` \| `month` |
 | `threshold` | float | |
-| `action` | string | `alert` \| `throttle` \| `block` (block = advisory until gateway mode) |
+| `action` | string | `alert` (notify only) \| `throttle` \| `block` (both enforced at ingest: a breaching event is rejected with 429 and not recorded) |
 | `enabled` | bool | |
 
 ## `scores` — LLM-as-judge results

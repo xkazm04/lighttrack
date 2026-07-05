@@ -61,11 +61,10 @@ fn run_cycle(
 ) -> Result<Option<String>> {
     let events: Vec<LlmEvent> = get(cli, http, &format!("/v1/events?project={project}&limit={n}"))?;
     // Watermark = newest event that carries an input (events come back newest-first).
-    let newest = match events.iter().find(|e| e.input.is_some()) {
-        Some(e) => e.id.clone(),
+    let name = match cycle_name(name_prefix, &events) {
+        Some(n) => n,
         None => return Ok(None),
     };
-    let name = format!("{name_prefix}-{}", short(&newest));
 
     // Idempotent: if a dataset for this watermark already exists, this window is captured — skip.
     let existing: Vec<Dataset> = get(cli, http, &format!("/v1/projects/{project}/datasets"))?;
@@ -75,4 +74,53 @@ fn run_cycle(
 
     let built = build_from_events(cli, http, engine, project, &name, &events, llm_scrub)?;
     Ok((built > 0).then_some(name))
+}
+
+/// The watermark dataset name for a cycle: `<prefix>-<short id>` of the newest sampled event that
+/// carries an input (events arrive newest-first), or `None` when nothing is samplable. Naming after
+/// the watermark is what makes a cycle idempotent — re-sampling the same window yields the same name.
+fn cycle_name(name_prefix: &str, events: &[LlmEvent]) -> Option<String> {
+    events
+        .iter()
+        .find(|e| e.input.is_some())
+        .map(|e| format!("{name_prefix}-{}", short(&e.id)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cycle_name;
+    use lighttrack_core::LlmEvent;
+    use serde_json::json;
+
+    fn event(id: &str, input: Option<&str>) -> LlmEvent {
+        let mut v = json!({ "id": id, "provider": "anthropic", "model": "m" });
+        if let Some(i) = input {
+            v["input"] = json!(i);
+        }
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn names_after_first_event_with_input() {
+        let events = vec![
+            event("noinput0", None),
+            event("abcdef0123456789", Some("hello")),
+            event("xyz", Some("later")),
+        ];
+        // Newest-first: the first event carrying an input wins; id is shortened to 8 chars.
+        assert_eq!(cycle_name("online", &events).as_deref(), Some("online-abcdef01"));
+    }
+
+    #[test]
+    fn none_when_no_event_has_input() {
+        let events = vec![event("a", None), event("b", None)];
+        assert_eq!(cycle_name("online", &events), None);
+        assert_eq!(cycle_name("online", &[]), None);
+    }
+
+    #[test]
+    fn honors_custom_prefix() {
+        let events = vec![event("deadbeefcafe", Some("x"))];
+        assert_eq!(cycle_name("nightly", &events).as_deref(), Some("nightly-deadbeef"));
+    }
 }

@@ -9,12 +9,17 @@
  * Uses fake provider response objects, so it runs with no real provider SDK or API key.
  */
 
-import { LightTrack, guard } from "./src/index.ts";
+import { LightTrack, guard, withSpan, withTrace, wrapOpenAI } from "./src/index.ts";
 
 const fakeOpenAI = {
   model: "gpt-4o-mini",
   usage: { prompt_tokens: 120, completion_tokens: 45, prompt_tokens_details: { cached_tokens: 64 } },
 };
+
+// A stand-in for `new OpenAI()` — same shape, so `wrapOpenAI` instruments it identically.
+function fakeOpenAIClient() {
+  return { chat: { completions: { create: async (_args: any) => fakeOpenAI } } };
+}
 const fakeAnthropic = {
   model: "claude-haiku-4-5",
   usage: { input_tokens: 200, output_tokens: 80, cache_read_input_tokens: 0 },
@@ -39,6 +44,16 @@ async function main() {
 
   lt.track("openai", "gpt-4o", { inputTokens: 10, outputTokens: 5, operation: "chat" });
 
+  // One-line auto-instrumentation: wrap the SDK client once, then every call is captured with no
+  // per-call code. `withTrace` shares one trace_id; `withSpan` nests calls as child spans.
+  const openai = wrapOpenAI(fakeOpenAIClient(), lt);
+  await withTrace(async () => {
+    await openai.chat.completions.create({ model: "gpt-4o", messages: [] }); // auto-tracked (trace root)
+    await withSpan(async () => {
+      await openai.chat.completions.create({ model: "gpt-4o", messages: [] }); // auto-tracked (child span)
+    });
+  });
+
   // Inline output guardrails: `guard` is pure (returns a verdict); `trackGuard` also records the
   // verdict as a score so guardrail pass-rates are observable.
   console.log("guard:", guard('{"a":1}', { jsonKeys: ["a", "b"] }).violations); // -> missing 'b'
@@ -46,7 +61,7 @@ async function main() {
   console.log("trackGuard ok:", verdict.ok);
 
   await lt.flush();
-  console.log("sent 5 events + 1 guard score — check: GET /v1/events, /v1/scores, /v1/costs");
+  console.log("sent 7 events + 1 guard score — check: GET /v1/events, /v1/scores, /v1/costs");
 }
 
 main();

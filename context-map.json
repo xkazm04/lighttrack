@@ -1,0 +1,489 @@
+{
+  "$schema": "https://vibeman.dev/schemas/context-map.json",
+  "projectId": "61848e85-5c0c-4eae-b802-f0de01f67062",
+  "projectName": "LightTrack",
+  "projectPath": "C:\\Users\\mkdol\\dolla\\LightTrack",
+  "version": "2.0.0",
+  "groups": [
+    {
+      "name": "Trace Observability & Privacy",
+      "domain": "feature",
+      "type": null,
+      "color": "#3B82F6",
+      "icon": null,
+      "contexts": [
+        {
+          "name": "Projects & Access Control",
+          "description": "Create projects and mint scoped API keys that authorize ingest and reads. Each backend stores the project record plus its keys and redaction policy; the render layer lists projects for operators.",
+          "businessFeature": "Projects & Access Control",
+          "category": "api",
+          "filePaths": [
+            "crates/core/src/project.rs",
+            "crates/api/src/projects.rs",
+            "crates/store/src/sqlite/projects.rs",
+            "crates/store-pg/src/projects.rs",
+            "crates/store-firestore/src/projects.rs",
+            "crates/render/src/projects.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/projects",
+            "/v1/projects/:id/keys"
+          ]
+        },
+        {
+          "name": "Budget Limits & Breach Alerts",
+          "description": "Keep monitored ingest traffic inside per-project budgets: define limit rules (cost/count over rolling windows), evaluate them on every event to set a throttle flag, and fire deduplicated webhook/ntfy alerts off the request path when a budget is breached.",
+          "businessFeature": "Budget Limits & Breach Alerts",
+          "category": "lib",
+          "filePaths": [
+            "crates/core/src/limits.rs",
+            "crates/api/src/limits.rs",
+            "crates/api/src/alerts.rs",
+            "crates/store-firestore/src/limits.rs",
+            "crates/render/src/limits.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/projects/:id/limits",
+            "/v1/limits/status"
+          ]
+        },
+        {
+          "name": "Event Ingestion & Query",
+          "description": "Capture every LLM generation as a normalized trace: POST events get cost-computed and limit-checked, then can be queried by project, fetched by id, or rolled into a cost summary. Optional server-side PII scrubbing redacts input/output on the way in.",
+          "businessFeature": "Event Ingestion & Query",
+          "category": "api",
+          "filePaths": [
+            "crates/core/src/event.rs",
+            "crates/api/src/events.rs",
+            "crates/api/src/redact.rs",
+            "crates/anon/src/lib.rs",
+            "crates/store/src/sqlite/events.rs",
+            "crates/store-pg/src/events.rs",
+            "crates/store-firestore/src/events.rs",
+            "crates/render/src/events.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/events",
+            "/v1/events/:id",
+            "/v1/costs"
+          ]
+        },
+        {
+          "name": "Trace Rollup & Scoring",
+          "description": "Group a request's events (shared trace_id) into one end-to-end view: cost/latency/token totals plus a span tree reconstructed from parent_span_id, and the ability to score a whole trace, not just one call. Pure rollup in core; SQLite aggregates the listing and joins scores; API/render/MCP/CLI expose it.",
+          "businessFeature": "Trace Rollup & Scoring",
+          "category": "api",
+          "filePaths": [
+            "crates/core/src/trace.rs",
+            "crates/api/src/traces.rs",
+            "crates/render/src/traces.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/traces",
+            "/v1/traces/:id",
+            "/v1/traces/:id/score"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "LLM-as-Judge Scoring",
+      "domain": "feature",
+      "type": null,
+      "color": "#8B5CF6",
+      "icon": null,
+      "contexts": [
+        {
+          "name": "Scoring Rubrics",
+          "description": "Author and store the rubrics that drive judging: named dimensions with weights and guidance. The runner can load a rubric for a scoring run; the render layer presents rubric definitions.",
+          "businessFeature": "Scoring Rubrics",
+          "category": "data",
+          "filePaths": [
+            "crates/core/src/rubric.rs",
+            "crates/api/src/rubrics.rs",
+            "crates/store/src/sqlite/rubrics.rs",
+            "crates/store-pg/src/rubrics.rs",
+            "crates/store-firestore/src/rubrics.rs",
+            "crates/render/src/rubrics.rs",
+            "crates/runner/src/rubric.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/projects/:id/rubrics",
+            "/v1/rubrics/:id"
+          ]
+        },
+        {
+          "name": "Score Recording & Query",
+          "description": "Persist and retrieve judge verdicts as scores tied to events or ad-hoc pairs. The runner's score command judges recent unscored events (idempotent, optionally looping), and scores are queryable per project and rendered as tables.",
+          "businessFeature": "Score Recording & Query",
+          "category": "api",
+          "filePaths": [
+            "crates/core/src/score.rs",
+            "crates/api/src/scores.rs",
+            "crates/store/src/sqlite/scores.rs",
+            "crates/store-pg/src/scores.rs",
+            "crates/store-firestore/src/scores.rs",
+            "crates/render/src/scores.rs",
+            "crates/runner/src/score.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/scores"
+          ]
+        },
+        {
+          "name": "Judge Engine",
+          "description": "The LLM-as-judge core: build a structured judging prompt from a rubric, call a provider-configurable model (Claude via CLI, or OpenAI/Gemini over HTTP), and parse its JSON verdict. Includes calibration that measures judge-vs-human agreement.",
+          "businessFeature": "Judge Engine",
+          "category": "lib",
+          "filePaths": [
+            "crates/engine/src/lib.rs",
+            "crates/engine/src/judge.rs",
+            "crates/engine/src/prompts.rs",
+            "crates/engine/src/claude.rs",
+            "crates/engine/src/providers.rs",
+            "crates/core/src/calibration.rs",
+            "crates/runner/src/calibrate.rs"
+          ],
+          "target": null,
+          "apiRoutes": []
+        }
+      ]
+    },
+    {
+      "name": "Benchmarking & Datasets",
+      "domain": "feature",
+      "type": null,
+      "color": "#06B6D4",
+      "icon": null,
+      "contexts": [
+        {
+          "name": "Background Job Queue",
+          "description": "Run long benchmark work asynchronously: enqueue a job, let a worker claim it, report progress, and finish it (with retry up to max attempts). Jobs are persisted per backend and surfaced for monitoring.",
+          "businessFeature": "Background Job Queue",
+          "category": "lib",
+          "filePaths": [
+            "crates/core/src/job.rs",
+            "crates/api/src/jobs.rs",
+            "crates/store/src/sqlite/jobs.rs",
+            "crates/store-pg/src/jobs.rs",
+            "crates/store-firestore/src/jobs.rs",
+            "crates/render/src/jobs.rs",
+            "crates/runner/src/serve.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/jobs",
+            "/v1/jobs/claim",
+            "/v1/jobs/:id",
+            "/v1/jobs/:id/progress",
+            "/v1/jobs/:id/finish",
+            "/v1/benchmarks/:id/enqueue"
+          ]
+        },
+        {
+          "name": "Evaluation Datasets",
+          "description": "Build frozen evaluation datasets by sampling and anonymizing live events, add or list items, and freeze them for reproducible benchmarking. The runner can sample on a schedule (daemon or one-shot cron) so idle periods cost nothing.",
+          "businessFeature": "Evaluation Datasets",
+          "category": "data",
+          "filePaths": [
+            "crates/core/src/dataset.rs",
+            "crates/api/src/datasets.rs",
+            "crates/store/src/sqlite/datasets.rs",
+            "crates/store-pg/src/datasets.rs",
+            "crates/store-firestore/src/datasets.rs",
+            "crates/render/src/datasets.rs",
+            "crates/runner/src/dataset.rs",
+            "crates/runner/src/schedule.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/projects/:id/datasets",
+            "/v1/datasets/:id",
+            "/v1/datasets/:id/items",
+            "/v1/datasets/:id/freeze"
+          ]
+        },
+        {
+          "name": "Benchmark Suites & Runs",
+          "description": "Define benchmark suites of cases and execute them: the runner judges each case (rubric or compare mode), aggregates a scorecard, and records a run. Compare mode produces a multi-target leaderboard of quality vs cost vs latency.",
+          "businessFeature": "Benchmark Suites & Runs",
+          "category": "api",
+          "filePaths": [
+            "crates/api/src/benchmarks.rs",
+            "crates/store/src/sqlite/benchmarks.rs",
+            "crates/store-pg/src/benchmarks.rs",
+            "crates/store-firestore/src/benchmarks.rs",
+            "crates/render/src/benchmarks.rs",
+            "crates/render/src/compare.rs",
+            "crates/runner/src/bench.rs",
+            "crates/runner/src/compare.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/projects/:id/benchmarks",
+            "/v1/benchmarks/:id",
+            "/v1/benchmarks/:id/runs",
+            "/v1/benchmark-runs"
+          ]
+        },
+        {
+          "name": "Collective Model Intelligence",
+          "description": "Opt-in network effect: each instance distills its benchmark run scorecards into a privacy-safe, k-anonymized digest of (provider, model, task_type) -> quality/cost/latency, contributes it to a leaderboard hub, and reads back the merged real-world model leaderboard. Aggregate-only (no events/text), with an opaque contributor id.",
+          "businessFeature": "Collective Model Intelligence",
+          "category": "lib",
+          "filePaths": [
+            "crates/core/src/collective.rs",
+            "crates/store/src/sqlite/collective.rs",
+            "crates/api/src/collective.rs",
+            "crates/render/src/collective.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/collective/digest",
+            "/v1/collective/ingest",
+            "/v1/collective/leaderboard"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cost, Revenue & Profit",
+      "domain": "feature",
+      "type": null,
+      "color": "#F59E0B",
+      "icon": null,
+      "contexts": [
+        {
+          "name": "Billing Integrations (Stripe/Polar)",
+          "description": "Turn external billing events into revenue: a provider registry verifies signed Stripe/Polar webhooks (HMAC) and maps them to revenue records, so margin tracking stays in sync with real customer billing. The runner can also drive billing sync.",
+          "businessFeature": "Billing Integrations (Stripe/Polar)",
+          "category": "api",
+          "filePaths": [
+            "crates/billing/src/lib.rs",
+            "crates/billing/src/stripe.rs",
+            "crates/billing/src/polar.rs",
+            "crates/billing/src/registry.rs",
+            "crates/billing/src/error.rs",
+            "crates/api/src/billing.rs",
+            "crates/api/src/idempotency.rs",
+            "crates/runner/src/billing.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/billing/:provider/webhook"
+          ]
+        },
+        {
+          "name": "Revenue & Margin Tracking",
+          "description": "Profit tracking on top of observability: record revenue events (manual or billing-synced) per customer/product, then roll up margin as revenue minus LLM cost, broken down by customer or product over a time window.",
+          "businessFeature": "Revenue & Margin Tracking",
+          "category": "api",
+          "filePaths": [
+            "crates/core/src/revenue.rs",
+            "crates/core/src/margin.rs",
+            "crates/core/src/customer.rs",
+            "crates/api/src/revenue.rs",
+            "crates/store/src/sqlite/revenue.rs",
+            "crates/store-pg/src/revenue.rs",
+            "crates/render/src/margin.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/revenue",
+            "/v1/margin"
+          ]
+        },
+        {
+          "name": "Model Pricing & Cost Rollup",
+          "description": "The DB-backed pricing book: per provider/model token prices seeded from pricing.json, then editable via API. Generation cost for providers that return no dollar amount is computed from the book by tokens, and usage is rolled up by project/provider/model.",
+          "businessFeature": "Model Pricing & Cost Rollup",
+          "category": "data",
+          "filePaths": [
+            "crates/core/src/pricing.rs",
+            "crates/api/src/prices.rs",
+            "crates/store/src/sqlite/prices.rs",
+            "crates/store-pg/src/prices.rs",
+            "crates/store-firestore/src/prices.rs",
+            "crates/render/src/prices.rs",
+            "crates/render/src/costs.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/v1/prices",
+            "/v1/prices/:provider/:model"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Integration Surfaces",
+      "domain": "integration",
+      "type": null,
+      "color": "#7C3AED",
+      "icon": null,
+      "contexts": [
+        {
+          "name": "Markdown Render Layer",
+          "description": "The shared presentation layer: a Value-in / Markdown-out dispatcher with aligned GFM tables, sparklines, and status glyphs. Both the MCP server and the lt CLI feed raw API JSON through it so humans get the same compact tables everywhere.",
+          "businessFeature": "Markdown Render Layer",
+          "category": "lib",
+          "filePaths": [
+            "crates/render/src/lib.rs",
+            "crates/render/src/md.rs",
+            "crates/render/tests/render.rs"
+          ],
+          "target": null,
+          "apiRoutes": []
+        },
+        {
+          "name": "Operator CLI & Worker Runtime",
+          "description": "The two binaries operators run: the lt CLI (a thin HTTP client over the API for management and reads) and the lt-runner worker shell (clap arg parsing, HTTP client, shared helpers, and claude.exe resolution) that hosts the score/bench/dataset/serve commands.",
+          "businessFeature": "Operator CLI & Worker Runtime",
+          "category": "config",
+          "filePaths": [
+            "crates/cli/src/main.rs",
+            "crates/runner/src/main.rs",
+            "crates/runner/src/cli.rs",
+            "crates/runner/src/http.rs",
+            "crates/runner/src/util.rs"
+          ],
+          "target": null,
+          "apiRoutes": []
+        },
+        {
+          "name": "MCP Server",
+          "description": "Expose LightTrack to Claude Code / agents over the Model Context Protocol (JSON-RPC on stdio). Read tools are side-effect-free; write tools stay gated behind an env flag. It is a thin HTTP client of the API (never touches the DB) and ships pre-built prompt journeys as slash commands.",
+          "businessFeature": "MCP Server",
+          "category": "api",
+          "filePaths": [
+            "crates/mcp/src/main.rs",
+            "crates/mcp/src/client.rs",
+            "crates/mcp/src/tools.rs",
+            "crates/mcp/src/read.rs",
+            "crates/mcp/src/write.rs",
+            "crates/mcp/src/rpc.rs",
+            "crates/mcp/src/schemas.rs",
+            "crates/mcp/src/prompts.rs"
+          ],
+          "target": null,
+          "apiRoutes": []
+        }
+      ]
+    },
+    {
+      "name": "Platform & Persistence Infrastructure",
+      "domain": "infrastructure",
+      "type": null,
+      "color": "#6366F1",
+      "icon": null,
+      "contexts": [
+        {
+          "name": "Cloud Store Backends (Postgres + Firestore)",
+          "description": "The cloud persistence backends behind the same Store trait, selected by LIGHTTRACK_DATABASE_URL: Postgres (the cross-cloud default, e.g. Neon) and a GCP-native Firestore backend with its REST client and typed-value codec. Each runs the shared conformance suite.",
+          "businessFeature": "Cloud Store Backends (Postgres + Firestore)",
+          "category": "data",
+          "filePaths": [
+            "crates/store-pg/src/lib.rs",
+            "crates/store-pg/src/util.rs",
+            "crates/store-pg/tests/conformance.rs",
+            "crates/store-firestore/src/lib.rs",
+            "crates/store-firestore/src/codec.rs",
+            "crates/store-firestore/src/rest.rs",
+            "crates/store-firestore/tests/conformance.rs"
+          ],
+          "target": null,
+          "apiRoutes": []
+        },
+        {
+          "name": "Store Trait & SQLite Engine",
+          "description": "The backend-agnostic Store trait plus the local SQLite implementation (connection plumbing) and the backend-agnostic conformance suite that holds every backend to identical round-trip behavior. The cross-backend codec (fixed-width timestamp, enum, and JSON-column helpers) lives here in codec.rs and is reused by the Postgres and Firestore backends.",
+          "businessFeature": "Store Trait & SQLite Engine",
+          "category": "data",
+          "filePaths": [
+            "crates/store/src/lib.rs",
+            "crates/store/src/codec.rs",
+            "crates/store/src/conformance.rs",
+            "crates/store/src/sqlite/mod.rs",
+            "crates/store/src/sqlite/tests.rs",
+            "crates/store/tests/sqlite_conformance.rs"
+          ],
+          "target": null,
+          "apiRoutes": []
+        },
+        {
+          "name": "Platform Core & API Server",
+          "description": "The pure I/O-free domain model root (shared ids, errors, re-exports) plus the Axum API wiring: main builds the store and price book, assembles the router, and serves. Shared plumbing covers app state, error mapping, auth mode, and request guards.",
+          "businessFeature": "Platform Core & API Server",
+          "category": "config",
+          "filePaths": [
+            "crates/core/src/lib.rs",
+            "crates/core/src/error.rs",
+            "crates/api/src/main.rs",
+            "crates/api/src/state.rs",
+            "crates/api/src/error.rs",
+            "crates/api/src/auth.rs",
+            "crates/api/src/guards.rs"
+          ],
+          "target": null,
+          "apiRoutes": [
+            "/health"
+          ]
+        }
+      ]
+    }
+  ],
+  "ungrouped": [],
+  "relationships": [],
+  "index": [
+    "Trace Observability & Privacy › Projects & Access Control [api] — 6 files",
+    "Trace Observability & Privacy › Budget Limits & Breach Alerts [lib] — 5 files",
+    "Trace Observability & Privacy › Event Ingestion & Query [api] — 8 files",
+    "Trace Observability & Privacy › Trace Rollup & Scoring [api] — 3 files",
+    "LLM-as-Judge Scoring › Scoring Rubrics [data] — 7 files",
+    "LLM-as-Judge Scoring › Score Recording & Query [api] — 7 files",
+    "LLM-as-Judge Scoring › Judge Engine [lib] — 7 files",
+    "Benchmarking & Datasets › Background Job Queue [lib] — 7 files",
+    "Benchmarking & Datasets › Evaluation Datasets [data] — 8 files",
+    "Benchmarking & Datasets › Benchmark Suites & Runs [api] — 8 files",
+    "Benchmarking & Datasets › Collective Model Intelligence [lib] — 4 files",
+    "Cost, Revenue & Profit › Billing Integrations (Stripe/Polar) [api] — 7 files",
+    "Cost, Revenue & Profit › Revenue & Margin Tracking [api] — 7 files",
+    "Cost, Revenue & Profit › Model Pricing & Cost Rollup [data] — 7 files",
+    "Integration Surfaces › Markdown Render Layer [lib] — 3 files",
+    "Integration Surfaces › Operator CLI & Worker Runtime [config] — 5 files",
+    "Integration Surfaces › MCP Server [api] — 8 files",
+    "Platform & Persistence Infrastructure › Cloud Store Backends (Postgres + Firestore) [data] — 7 files",
+    "Platform & Persistence Infrastructure › Store Trait & SQLite Engine [data] — 6 files",
+    "Platform & Persistence Infrastructure › Platform Core & API Server [config] — 7 files"
+  ],
+  "summary": {
+    "totalGroups": 6,
+    "totalContexts": 20,
+    "totalFiles": 127,
+    "categories": {
+      "api": 8,
+      "lib": 5,
+      "data": 5,
+      "config": 2
+    },
+    "domains": {
+      "feature": 4,
+      "integration": 1,
+      "infrastructure": 1
+    }
+  },
+  "audit": {
+    "ok": true,
+    "tier": "medium",
+    "warnings": 0
+  },
+  "instructions": "Context map for LightTrack. Each group is a business domain (domain field); each context is a feature with its files (filePaths) + a technical category. Read this to learn which files belong to which feature BEFORE editing. When you change a context's files, update them here (or run Vibeman's refresh) to keep this fresh.",
+  "generatedAt": "2026-06-20T22:10:36.501Z",
+  "revision": "3f7ff57a7f98"
+}

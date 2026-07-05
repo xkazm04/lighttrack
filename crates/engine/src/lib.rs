@@ -15,6 +15,7 @@ mod providers;
 use lighttrack_core::JudgeVerdict;
 use thiserror::Error;
 
+pub use claude::{resolve_claude_bin, run_raw, RawOutcome};
 pub use judge::{parse_judge_spec, run_judge, run_rubric_judge, run_text};
 pub use prompts::{build_eval_prompt, build_judge_prompt, build_rubric_prompt, build_rubric_schema};
 pub use providers::generate;
@@ -103,6 +104,11 @@ pub struct RubricOutcome {
     pub samples: u32,
     /// Cross-sample agreement on the overall score (1.0 = identical; lower = judge disagreed).
     pub agreement: f64,
+    /// How many of the `samples` judge responses were unparseable (no JSON, truncated/invalid JSON,
+    /// or a dimension whose score was missing/non-numeric) and so were dropped from the means rather
+    /// than scored 0.0. If *every* sample fails, the judge returns [`EngineError::Parse`] instead of
+    /// emitting a phantom zero. Surfaced as an audit trail for self-consistency runs.
+    pub parse_failures: u32,
 }
 
 /// The result of generating one candidate output from a target.

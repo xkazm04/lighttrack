@@ -13,6 +13,13 @@
 //! Revenue events: `order.paid` is the authoritative paid signal (Polar fires `order.created` before
 //! capture); `order.refunded` / `refund.created` are clawbacks. Subscription cycles each arrive as a
 //! fresh `order.paid` with their own id, so renewals re-recognize.
+//!
+//! Refund keying: Polar fans a *single* refund out across up to two webhooks — `order.refunded`
+//! (whose `data` is the **Order**) and `refund.created` (whose `data` is the **Refund**). They carry
+//! different top-level ids, so keying the refund record on each event's own id would store the same
+//! refund twice and overstate refunds / understate margin. We instead key the refund record on the
+//! **order it claws back** — the one stable identifier both deliveries share — so the upsert collapses
+//! them to a single `revenue_events` row (see [`order_ref`]).
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -142,10 +149,11 @@ pub fn normalize_order(obj: &Value, customer_meta_key: &str) -> Option<RevenueEv
     })
 }
 
-/// An `order.refunded` event (data is an Order with `refunded_amount`) → a refund record.
+/// An `order.refunded` event (data is an Order with `refunded_amount`) → a refund record, keyed on
+/// the order (its `data.id` *is* the order id). `refunded_amount` is Polar's running total for the
+/// order, so this record naturally tracks the order's cumulative refunds rather than one delta.
 pub fn normalize_order_refund(obj: &Value, customer_meta_key: &str) -> Option<RevenueEvent> {
-    let order_id = obj.get("order_id").and_then(Value::as_str)
-        .or_else(|| obj.get("id").and_then(Value::as_str))?;
+    let order_id = order_ref(obj)?;
     let amount = obj.get("refunded_amount").and_then(Value::as_i64).or_else(|| amount_minor(obj))?;
     if amount == 0 {
         return None;
@@ -153,22 +161,34 @@ pub fn normalize_order_refund(obj: &Value, customer_meta_key: &str) -> Option<Re
     Some(refund_event(order_id, amount, obj, customer_meta_key))
 }
 
-/// A `refund.created` event (data is a Refund) → a refund record.
+/// A `refund.created` event (data is a Refund) → a refund record. Keyed on the Refund's `order_id`
+/// (not its own refund id) so it collapses onto the same row as the order's `order.refunded` delivery.
 pub fn normalize_refund(obj: &Value, customer_meta_key: &str) -> Option<RevenueEvent> {
-    let id = obj.get("id").and_then(Value::as_str)?;
+    let order_id = order_ref(obj)?;
     let amount = obj.get("amount").and_then(Value::as_i64)?;
     if amount == 0 {
         return None;
     }
-    Some(refund_event(id, amount, obj, customer_meta_key))
+    Some(refund_event(order_id, amount, obj, customer_meta_key))
 }
 
-fn refund_event(key: &str, amount_minor: i64, obj: &Value, customer_meta_key: &str) -> RevenueEvent {
+/// The order a refund claws back — the one identifier the two refund deliveries share, used as the
+/// canonical refund key. `order.refunded`'s Order has no `order_id` field so it resolves via its own
+/// `id` (which *is* the order id); `refund.created`'s Refund carries an explicit `order_id`. The
+/// `id` fallback is also a defensive last resort for a malformed payload (records the refund once,
+/// keyed on whatever id it has, rather than dropping it).
+fn order_ref(obj: &Value) -> Option<&str> {
+    obj.get("order_id")
+        .and_then(Value::as_str)
+        .or_else(|| obj.get("id").and_then(Value::as_str))
+}
+
+fn refund_event(order_id: &str, amount_minor: i64, obj: &Value, customer_meta_key: &str) -> RevenueEvent {
     RevenueEvent {
-        id: format!("polar:refund:{key}"),
+        id: format!("polar:refund:{order_id}"),
         project_id: String::new(),
         source: "polar".into(),
-        external_id: Some(format!("refund:{key}")),
+        external_id: Some(format!("refund:{order_id}")),
         customer_id: customer_id(obj, customer_meta_key),
         product_id: None,
         amount_usd: crate::to_major(amount_minor),
@@ -352,6 +372,39 @@ mod tests {
         assert_eq!(r[0].kind, RevenueKind::Refund);
         assert!((r[0].amount_usd - 5.0).abs() < 1e-9);
         assert_eq!(r[0].id, "polar:refund:ord_1");
+    }
+
+    #[test]
+    fn both_refund_events_for_one_refund_collapse_to_one_id() {
+        // Polar delivers a single refund as TWO webhooks with different top-level ids: the Order
+        // (`order.refunded`, id = order id) and the Refund (`refund.created`, its own id, carrying
+        // order_id). Both must normalize to the SAME record id so the store upsert keeps one row and
+        // the refund is counted once (not double-counted, which would understate margin).
+        let order_refunded = normalize(
+            &json!({
+                "type": "order.refunded",
+                "data": { "id": "ord_42", "refunded_amount": 500, "currency": "usd",
+                          "customer_id": "cust_1", "created_at": "2026-06-13T00:00:00Z" }
+            }),
+            "userId",
+        );
+        let refund_created = normalize(
+            &json!({
+                "type": "refund.created",
+                "data": { "id": "ref_99", "order_id": "ord_42", "amount": 500, "currency": "usd",
+                          "customer_id": "cust_1", "created_at": "2026-06-13T00:00:00Z" }
+            }),
+            "userId",
+        );
+        assert_eq!(order_refunded.len(), 1);
+        assert_eq!(refund_created.len(), 1);
+        // Keyed on the order both deliveries share → identical id → one row after upsert.
+        assert_eq!(order_refunded[0].id, "polar:refund:ord_42");
+        assert_eq!(refund_created[0].id, "polar:refund:ord_42");
+        assert_eq!(order_refunded[0].id, refund_created[0].id);
+        assert_eq!(refund_created[0].kind, RevenueKind::Refund);
+        // external_id is canonical too, so the two deliveries don't fight over it on upsert.
+        assert_eq!(refund_created[0].external_id.as_deref(), Some("refund:ord_42"));
     }
 
     #[test]

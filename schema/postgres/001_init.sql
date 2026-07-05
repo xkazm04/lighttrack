@@ -182,3 +182,28 @@ CREATE TABLE IF NOT EXISTS revenue_events (
 );
 CREATE INDEX IF NOT EXISTS idx_revenue_project_ts ON revenue_events(project_id, ts);
 CREATE INDEX IF NOT EXISTS idx_revenue_customer ON revenue_events(customer_id);
+
+-- Cloud→device relay queue (docs/RELAY.md). Mirrors schema/sqlite/001_init.sql: timestamps are
+-- fixed-width RFC3339 TEXT (string range filters on next_attempt_at / lease_deadline are correct).
+CREATE TABLE IF NOT EXISTS relay_tasks (
+  id                  TEXT PRIMARY KEY,
+  project_id          TEXT NOT NULL,
+  source              TEXT,
+  action_type         TEXT NOT NULL,
+  payload             TEXT,
+  status              TEXT NOT NULL DEFAULT 'queued',  -- queued | leased | succeeded | dead
+  attempts            BIGINT NOT NULL DEFAULT 0,
+  max_attempts        BIGINT NOT NULL DEFAULT 4,
+  retry_interval_secs BIGINT NOT NULL DEFAULT 18000,
+  idempotency_key     TEXT,
+  device              TEXT,
+  lease_deadline      TEXT,
+  next_attempt_at     TEXT NOT NULL,
+  result              TEXT,
+  error               TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relay_due ON relay_tasks(status, next_attempt_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_idem ON relay_tasks(project_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;

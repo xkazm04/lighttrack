@@ -22,11 +22,17 @@ pub(crate) fn sync(
     days: i64,
 ) -> Result<()> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-    let since = now - days.max(0) * 86_400;
+    let since = since_cutoff(now, days);
     match provider {
         "stripe" => sync_stripe(cli, http, project, since),
         other => Err(anyhow!("unsupported billing provider for sync: {other}")),
     }
+}
+
+/// Unix-seconds lower bound for the invoice pull: `now - days*86400`. A negative `--days` is clamped
+/// to 0 so a bad flag can never set the cutoff into the future (which would pull everything).
+fn since_cutoff(now: i64, days: i64) -> i64 {
+    now - days.max(0) * 86_400
 }
 
 fn sync_stripe(cli: &Cli, http: &reqwest::blocking::Client, project: &str, since: i64) -> Result<()> {
@@ -77,4 +83,28 @@ fn sync_stripe(cli: &Cli, http: &reqwest::blocking::Client, project: &str, since
 
     println!("synced {total} paid invoice(s) from stripe → project {project}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::since_cutoff;
+
+    const DAY: i64 = 86_400;
+
+    #[test]
+    fn subtracts_whole_days() {
+        assert_eq!(since_cutoff(1_000_000, 1), 1_000_000 - DAY);
+        assert_eq!(since_cutoff(1_000_000, 30), 1_000_000 - 30 * DAY);
+    }
+
+    #[test]
+    fn zero_days_is_now() {
+        assert_eq!(since_cutoff(1_000_000, 0), 1_000_000);
+    }
+
+    #[test]
+    fn negative_days_clamped_to_now_not_future() {
+        // A negative look-back must not push the cutoff past `now`.
+        assert_eq!(since_cutoff(1_000_000, -5), 1_000_000);
+    }
 }

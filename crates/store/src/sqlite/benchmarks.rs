@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use lighttrack_core::{Benchmark, BenchmarkRun};
 
-use super::util::{fmt_ts, parse_ts};
+use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
 
 const BENCH_COLS: &str = "id, project_id, name, rubric, judge_model, target, dataset_ref, \

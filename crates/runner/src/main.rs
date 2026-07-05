@@ -30,11 +30,11 @@ fn main() -> Result<()> {
     let _ = dotenvy::dotenv(); // load .env (GEMINI_API_KEY, OPENAI_API_KEY, LIGHTTRACK_*) if present
     let cli = Cli::parse();
     let engine = EngineConfig {
-        claude_bin: util::resolve_claude_bin(&cli.claude_bin),
+        claude_bin: lighttrack_engine::resolve_claude_bin(&cli.claude_bin),
         model: cli.model.clone(),
         bare: cli.bare,
     };
-    let http = reqwest::blocking::Client::new();
+    let http = http::client()?;
 
     match &cli.cmd {
         Cmd::Score {

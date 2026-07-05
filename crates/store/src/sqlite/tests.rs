@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
+
 use chrono::Utc;
 use serde_json::Value;
 
 use lighttrack_core::{
     new_id, ApiKey, Job, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation,
-    Project, Provider, Redaction, Status, TokenUsage,
+    Project, Prompt, PromptVersion, Provider, Redaction, Status, TokenUsage,
 };
 
 use super::SqliteStore;
@@ -60,6 +62,66 @@ fn insert_list_cost_roundtrip() {
 }
 
 #[test]
+fn trace_rollup_groups_events_and_scores() {
+    use lighttrack_core::Score;
+
+    let s = SqliteStore::open_in_memory().unwrap();
+
+    // A two-span trace for p1: a root call + a child call. Give them distinct span ids/parents.
+    let mut root = ev("p1", "claude-haiku-4-5", 100, 50, 0.001);
+    root.trace_id = Some("tr-1".into());
+    root.span_id = Some("s-root".into());
+    root.parent_span_id = None;
+    let mut child = ev("p1", "claude-opus-4-8", 200, 80, 0.004);
+    child.trace_id = Some("tr-1".into());
+    child.span_id = Some("s-child".into());
+    child.parent_span_id = Some("s-root".into());
+    // An unrelated single-span trace, and a trace for another project.
+    let mut other = ev("p1", "claude-haiku-4-5", 10, 5, 0.0005);
+    other.trace_id = Some("tr-2".into());
+    let mut foreign = ev("p2", "claude-haiku-4-5", 10, 5, 0.01);
+    foreign.trace_id = Some("tr-3".into());
+    for e in [&root, &child, &other, &foreign] {
+        s.insert_event(e).unwrap();
+    }
+
+    // Listing is per-project and one row per trace, newest first.
+    let traces = s.list_traces(Some("p1"), 10).unwrap();
+    assert_eq!(traces.len(), 2, "two distinct p1 traces");
+    let t1 = traces.iter().find(|t| t.trace_id == "tr-1").expect("tr-1 present");
+    assert_eq!(t1.spans, 2);
+    assert!((t1.cost_usd - 0.005).abs() < 1e-9);
+    assert_eq!(t1.total_tokens, 430);
+    assert_eq!(t1.models.len(), 2, "two distinct models in the trace");
+
+    // The rollup nests child under root and totals the trace.
+    let trace = s.get_trace("tr-1").unwrap().expect("get_trace Some");
+    assert_eq!(trace.totals.spans, 2);
+    assert_eq!(trace.spans.len(), 1, "single root span");
+    assert_eq!(trace.spans[0].children.len(), 1, "child nests under root");
+    assert!(s.get_trace("nope").unwrap().is_none(), "unknown trace -> None");
+
+    // A per-call score on the child + a whole-trace score anchored to the root both surface via join.
+    let mk_score = |event_id: &str, rubric: &str| Score {
+        id: new_id(),
+        project_id: "p1".into(),
+        event_id: Some(event_id.into()),
+        rubric: rubric.into(),
+        value: 0.8,
+        max: 1.0,
+        pass: Some(true),
+        reasoning: None,
+        scored_by: "judge".into(),
+        cost_usd: Some(0.0001),
+        created_at: Utc::now(),
+    };
+    s.insert_score(&mk_score(&child.id, "call-quality")).unwrap();
+    s.insert_score(&mk_score(&root.id, "trace-coherence")).unwrap();
+    let scores = s.list_trace_scores("tr-1").unwrap();
+    assert_eq!(scores.len(), 2, "both the per-call and whole-trace scores join to the trace");
+}
+
+#[test]
 fn projects_keys_limits_usage() {
     let s = SqliteStore::open_in_memory().unwrap();
     let now = Utc::now();
@@ -113,6 +175,61 @@ fn projects_keys_limits_usage() {
 }
 
 #[test]
+fn insert_event_checked_enforces_caps() {
+    let s = SqliteStore::open_in_memory().unwrap();
+
+    // No rules: admitted and recorded.
+    let a = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 100, 50, 1.0)).unwrap();
+    assert!(a.admitted);
+    assert!(a.statuses.is_empty());
+
+    // Block on calls, threshold 2: the 2nd call would push usage-with-this-event to 2 >= 2 -> reject.
+    s.create_limit_rule(&LimitRule {
+        id: "r-block".into(),
+        project_id: "p1".into(),
+        metric: LimitMetric::Calls,
+        window: LimitWindow::Hour,
+        threshold: 2.0,
+        action: LimitAction::Block,
+        enabled: true,
+    })
+    .unwrap();
+    let blocked = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
+    assert!(!blocked.admitted, "Block rejects the over-cap event");
+    assert!(blocked.statuses.iter().any(|st| st.rejects_ingest()));
+
+    // The rejected event is not recorded: still exactly one event for p1.
+    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 1, "rejected event not persisted");
+    let u = s.usage_since("p1", LimitWindow::Hour.since(Utc::now())).unwrap();
+    assert_eq!(u.calls, 1);
+
+    // A different project is unaffected by p1's cap.
+    let other = s.insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
+    assert!(other.admitted, "limits are per-project");
+}
+
+#[test]
+fn insert_event_checked_alert_never_blocks() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    s.create_limit_rule(&LimitRule {
+        id: "r-alert".into(),
+        project_id: "p1".into(),
+        metric: LimitMetric::CostUsd,
+        window: LimitWindow::Hour,
+        threshold: 0.001,
+        action: LimitAction::Alert,
+        enabled: true,
+    })
+    .unwrap();
+    // Way over the Alert threshold, but Alert is observe-only: admitted + recorded, breach reported.
+    let a = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 100, 50, 5.0)).unwrap();
+    assert!(a.admitted, "Alert action does not block");
+    assert!(a.statuses.iter().any(|st| st.breached), "breach is still reported");
+    assert!(!a.statuses.iter().any(|st| st.rejects_ingest()), "Alert breach never rejects");
+    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 1);
+}
+
+#[test]
 fn job_queue_claim_finish() {
     let s = SqliteStore::open_in_memory().unwrap();
     let now = Utc::now();
@@ -145,4 +262,226 @@ fn job_queue_claim_finish() {
     assert_eq!(got.status, "done");
     assert_eq!(got.result["run_id"], "r1");
     assert_eq!(s.list_jobs(Some("done"), 10).unwrap().len(), 1);
+}
+
+#[test]
+fn prompt_registry_versions_and_labels() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    let now = Utc::now();
+    let prompt = Prompt {
+        id: "pr1".into(),
+        project_id: "p1".into(),
+        name: "support-reply".into(),
+        benchmark_id: Some("b1".into()),
+        labels: BTreeMap::new(),
+        created_at: now,
+        updated_at: now,
+    };
+    s.create_prompt(&prompt).unwrap();
+
+    // Two immutable versions.
+    for (v, body) in [(1u32, "v1 text"), (2u32, "v2 text")] {
+        s.create_prompt_version(&PromptVersion {
+            id: new_id(),
+            prompt_id: "pr1".into(),
+            version: v,
+            content: body.into(),
+            config: serde_json::json!({ "model": "haiku" }),
+            note: Some(format!("cut {v}")),
+            created_at: now,
+        })
+        .unwrap();
+    }
+
+    // Lookup by project+name (the runtime fetch path) and by id.
+    let by_name = s.get_prompt("p1", "support-reply").unwrap().unwrap();
+    assert_eq!(by_name.id, "pr1");
+    assert_eq!(by_name.benchmark_id.as_deref(), Some("b1"));
+    assert!(s.get_prompt_by_id("pr1").unwrap().is_some());
+    assert!(s.get_prompt("p1", "missing").unwrap().is_none());
+
+    // Versions: newest first, config + note round-trip.
+    let versions = s.list_prompt_versions("pr1").unwrap();
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0].version, 2);
+    assert_eq!(versions[0].config, serde_json::json!({ "model": "haiku" }));
+    let v1 = s.get_prompt_version("pr1", 1).unwrap().unwrap();
+    assert_eq!(v1.content, "v1 text");
+    assert_eq!(v1.note.as_deref(), Some("cut 1"));
+
+    // Promote a label, then read it back.
+    let mut updated = by_name;
+    updated.labels.insert("production".into(), 2);
+    updated.updated_at = Utc::now();
+    s.update_prompt(&updated).unwrap();
+    let reloaded = s.get_prompt("p1", "support-reply").unwrap().unwrap();
+    assert_eq!(reloaded.labels.get("production"), Some(&2));
+    assert!(s.list_prompts("p1").unwrap().iter().any(|p| p.id == "pr1"));
+}
+
+/// A relay task due immediately, with a zero retry interval so failure requeues are leasable
+/// right away in tests.
+fn relay_task(project: &str, action: &str, max_attempts: u32) -> lighttrack_core::RelayTask {
+    let now = Utc::now();
+    lighttrack_core::RelayTask {
+        id: new_id(),
+        project_id: project.into(),
+        source: Some("test".into()),
+        action_type: action.into(),
+        payload: serde_json::json!({ "sku": "A-1" }),
+        status: "queued".into(),
+        attempts: 0,
+        max_attempts,
+        retry_interval_secs: 0,
+        idempotency_key: None,
+        device: None,
+        lease_deadline: None,
+        next_attempt_at: now,
+        result: Value::Null,
+        error: None,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[test]
+fn relay_lease_settle_success_roundtrip() {
+    use lighttrack_core::RelayOutcome;
+
+    let s = SqliteStore::open_in_memory().unwrap();
+    let t = relay_task("p1", "xprice/summary", 4);
+    s.create_relay_task(&t).unwrap();
+
+    let leased = s.lease_relay_tasks("dev-1", 600, 5).unwrap();
+    assert_eq!(leased.len(), 1);
+    assert_eq!(leased[0].status, "leased");
+    assert_eq!(leased[0].attempts, 1);
+    assert_eq!(leased[0].device.as_deref(), Some("dev-1"));
+    assert_eq!(leased[0].payload["sku"], "A-1");
+
+    // Held lease is not re-leasable.
+    assert!(s.lease_relay_tasks("dev-1", 600, 5).unwrap().is_empty());
+
+    let done = s
+        .settle_relay_task(&t.id, &RelayOutcome::Succeeded(serde_json::json!({ "ok": true })))
+        .unwrap()
+        .unwrap();
+    assert_eq!(done.status, "succeeded");
+    assert_eq!(done.result["ok"], true);
+
+    // A duplicate result report is harmless: the settled row comes back unchanged.
+    let again = s
+        .settle_relay_task(&t.id, &RelayOutcome::Failed("late duplicate".into()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.status, "succeeded");
+}
+
+#[test]
+fn relay_failure_requeues_then_dead_letters() {
+    use lighttrack_core::RelayOutcome;
+
+    let s = SqliteStore::open_in_memory().unwrap();
+    let t = relay_task("p1", "xprice/summary", 2);
+    s.create_relay_task(&t).unwrap();
+
+    // Attempt 1 fails → back to queued (zero interval ⇒ due immediately), error recorded.
+    s.lease_relay_tasks("dev-1", 600, 1).unwrap();
+    let requeued = s
+        .settle_relay_task(&t.id, &RelayOutcome::Failed("boom".into()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(requeued.status, "queued");
+    assert_eq!(requeued.attempts, 1);
+    assert_eq!(requeued.error.as_deref(), Some("boom"));
+
+    // Attempt 2 fails → attempts exhausted → dead.
+    assert_eq!(s.lease_relay_tasks("dev-1", 600, 1).unwrap().len(), 1);
+    let dead = s
+        .settle_relay_task(&t.id, &RelayOutcome::Failed("boom again".into()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(dead.status, "dead");
+    assert_eq!(dead.attempts, 2);
+}
+
+#[test]
+fn relay_deferred_hands_the_attempt_back() {
+    use lighttrack_core::RelayOutcome;
+
+    let s = SqliteStore::open_in_memory().unwrap();
+    let t = relay_task("p1", "xprice/summary", 1);
+    s.create_relay_task(&t).unwrap();
+
+    s.lease_relay_tasks("dev-1", 600, 1).unwrap();
+    let deferred = s
+        .settle_relay_task(
+            &t.id,
+            &RelayOutcome::Deferred {
+                retry_after_secs: Some(0),
+                reason: Some("subscription window exhausted".into()),
+            },
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(deferred.status, "queued");
+    assert_eq!(deferred.attempts, 0); // handed back — deferral never burns an attempt
+
+    // Still leasable despite max_attempts = 1.
+    let released = s.lease_relay_tasks("dev-1", 600, 1).unwrap();
+    assert_eq!(released.len(), 1);
+    assert_eq!(released[0].attempts, 1);
+}
+
+#[test]
+fn relay_expired_lease_is_reclaimed_or_dead_lettered() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    // Two tasks: one with attempts to spare, one on its last attempt.
+    let spare = relay_task("p1", "a/retry", 2);
+    let last = relay_task("p1", "a/last", 1);
+    s.create_relay_task(&spare).unwrap();
+    s.create_relay_task(&last).unwrap();
+
+    // Zero-second leases expire immediately (the device "vanished").
+    assert_eq!(s.lease_relay_tasks("dev-1", 0, 5).unwrap().len(), 2);
+
+    // The sweep dead-letters the exhausted task (and returns it, for alerting) …
+    let dead = s.sweep_relay_dead().unwrap();
+    assert_eq!(dead.len(), 1);
+    assert_eq!(dead[0].id, last.id);
+    assert_eq!(dead[0].status, "dead");
+    assert_eq!(dead[0].error.as_deref(), Some("lease expired without a result"));
+    assert!(s.sweep_relay_dead().unwrap().is_empty()); // idempotent
+
+    // … while the one with attempts to spare is re-leased on attempt 2.
+    let reclaimed = s.lease_relay_tasks("dev-2", 600, 5).unwrap();
+    assert_eq!(reclaimed.len(), 1);
+    assert_eq!(reclaimed[0].id, spare.id);
+    assert_eq!(reclaimed[0].attempts, 2);
+    assert_eq!(reclaimed[0].device.as_deref(), Some("dev-2"));
+}
+
+#[test]
+fn relay_idempotency_key_is_unique_per_project() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    let mut t = relay_task("p1", "xprice/summary", 4);
+    t.idempotency_key = Some("order-42".into());
+    s.create_relay_task(&t).unwrap();
+
+    let found = s.find_relay_task_by_key("p1", "order-42").unwrap().unwrap();
+    assert_eq!(found.id, t.id);
+    assert!(s.find_relay_task_by_key("p2", "order-42").unwrap().is_none());
+
+    // Same (project, key) again violates the partial unique index.
+    let mut dup = relay_task("p1", "xprice/summary", 4);
+    dup.idempotency_key = Some("order-42".into());
+    assert!(s.create_relay_task(&dup).is_err());
+
+    // Listing filters by project and status.
+    let other = relay_task("p2", "b/other", 4);
+    s.create_relay_task(&other).unwrap();
+    assert_eq!(s.list_relay_tasks(None, None, 10).unwrap().len(), 2);
+    assert_eq!(s.list_relay_tasks(Some("p1"), None, 10).unwrap().len(), 1);
+    assert_eq!(s.list_relay_tasks(Some("p1"), Some("queued"), 10).unwrap().len(), 1);
+    assert_eq!(s.list_relay_tasks(Some("p1"), Some("dead"), 10).unwrap().len(), 0);
 }

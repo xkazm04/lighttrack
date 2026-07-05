@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use lighttrack_core::Rubric;
 
-use super::util::{fmt_ts, parse_ts};
+use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
 
 const COLS: &str = "id, project_id, name, dimensions, threshold, created_at";

@@ -9,6 +9,7 @@ members = [
     "crates/anon",
     "crates/render",
     "crates/billing",
+    "crates/agent",
     "crates/api",
     "crates/runner",
     "crates/mcp",

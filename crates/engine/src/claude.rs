@@ -91,3 +91,70 @@ pub(crate) fn model_of(envelope: &Value, fallback: &str) -> String {
         .map(str::to_string)
         .unwrap_or_else(|| fallback.to_string())
 }
+
+/// The result of one raw `claude -p` call, for callers that build their own prompts
+/// (e.g. `lt-agent`'s action library) and need the usage accounting alongside the text.
+#[derive(Debug, Clone)]
+pub struct RawOutcome {
+    pub text: String,
+    pub model: String,
+    pub cost_usd: Option<f64>,
+    pub latency_ms: Option<u64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+}
+
+/// Run one raw `claude -p` call: optional system prompt, optional `--json-schema` (the returned
+/// `text` is then the schema-conforming JSON), `@<effort>` model suffixes as everywhere else.
+pub fn run_raw(
+    cfg: &EngineConfig,
+    prompt: &str,
+    model: &str,
+    system_prompt: Option<&str>,
+    schema: Option<&str>,
+) -> Result<RawOutcome> {
+    let (envelope, latency_ms) = invoke(cfg, prompt, model, system_prompt, schema)?;
+    let (input_tokens, output_tokens) = token_counts(&envelope);
+    Ok(RawOutcome {
+        text: envelope
+            .get("result")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        model: model_of(&envelope, model),
+        cost_usd: envelope.get("total_cost_usd").and_then(Value::as_f64),
+        latency_ms,
+        input_tokens,
+        output_tokens,
+    })
+}
+
+/// Resolve a runnable claude executable. A child process can't invoke the npm `.cmd`/`.ps1` shims
+/// with our quote-heavy args, so on Windows we prefer the real `claude.exe` the shim wraps.
+pub fn resolve_claude_bin(given: &str) -> String {
+    if given != "claude" {
+        return given.to_string();
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let p =
+                format!("{appdata}\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe");
+            if std::path::Path::new(&p).exists() {
+                return p;
+            }
+        }
+    }
+    given.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_claude_bin;
+
+    #[test]
+    fn resolve_claude_bin_passes_through_explicit_paths() {
+        assert_eq!(resolve_claude_bin("/usr/bin/claude"), "/usr/bin/claude");
+        assert_eq!(resolve_claude_bin("C:\\tools\\claude.exe"), "C:\\tools\\claude.exe");
+    }
+}

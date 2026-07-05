@@ -9,39 +9,73 @@
 //!   POST /v1/events                      ingest one event (cost computed; limits evaluated)
 //!   GET  /v1/events?project=&limit=
 //!   GET  /v1/events/:id
+//!   GET  /v1/traces?project=&limit=     list traces (rollups grouped by trace_id)
+//!   GET  /v1/traces/:id                 one trace: totals + span tree + scores within it
+//!   POST /v1/traces/:id/score           score a whole trace (anchored to its root span)
 //!   GET  /v1/costs?project=
 //!   POST /v1/scores  GET /v1/scores?project=&limit=
 //!   GET  /v1/prices  PUT /v1/prices/:provider/:model
 //!   .../datasets .../rubrics .../benchmarks .../jobs            (see modules)
+//!   POST /v1/projects/:id/prompts  GET /v1/projects/:id/prompts          prompt registry
+//!   GET  /v1/projects/:id/prompts/:name?label=production|version=N       runtime fetch by label
+//!   POST /v1/projects/:id/prompts/:name/versions                         new version (auto-benchmarks)
+//!   POST /v1/projects/:id/prompts/:name/promote                          label promote (regression-gated)
 //!   POST /v1/projects  GET /v1/projects   POST /v1/projects/:id/keys
 //!   POST /v1/projects/:id/limits  GET /v1/projects/:id/limits
 //!   GET  /v1/limits/status?project=      evaluate limits -> throttle flag + per-rule status
+//!   POST /v1/relay/tasks                 enqueue a device task (GET ?project=&status=&limit= lists)
+//!   GET  /v1/relay/tasks/:id             task status/result (the originating app polls this)
+//!   POST /v1/relay/lease                 device: lease due tasks (device key; outbound-only)
+//!   POST /v1/relay/tasks/:id/result      device: report succeeded | failed | deferred
 //!   POST /v1/revenue                     record revenue (manual / billing sync) for profit tracking
 //!   GET  /v1/margin?by=customer|product&since=&until=   revenue − LLM cost rollup
+//!   GET  /v1/forecast?project=&by=&horizon=&lookback=   projected spend/budget-breach + margin-erosion + pre-emptive alerts
 //!   POST /v1/billing/:provider/webhook?project=   signed Stripe/Polar webhook → revenue (unauth; HMAC)
+//!   GET  /v1/collective/digest?min_cases=     build this instance's privacy-safe model digest (admin)
+//!   POST /v1/collective/ingest                hub: accept a contributor's digest (gated; off default)
+//!   GET  /v1/collective/leaderboard?task_type=&provider=   merged real-world model leaderboard
 //!
 //! Env: LIGHTTRACK_BIND, LIGHTTRACK_DB, LIGHTTRACK_DATABASE_URL, LIGHTTRACK_PRICING,
 //!      LIGHTTRACK_AUTH_MODE (dev|enforced), LIGHTTRACK_ADMIN_KEY,
+//!      LIGHTTRACK_RELAY_DEVICE_KEY (bearer key of the enrolled local device — relay lease/result),
+//!      LIGHTTRACK_RELAY_FLAT_COST_USD (fixed cost stamped per relay run event; default 1.0),
 //!      LIGHTTRACK_ALERT_WEBHOOK / LIGHTTRACK_ALERT_NTFY / LIGHTTRACK_ALERT_COOLDOWN_SECS (see alerts),
-//!      LIGHTTRACK_REDACT_INGEST (off | all | csv of project_ids — scrub PII from input/output; see redact).
+//!      LIGHTTRACK_REDACT_INGEST (off | all | csv of project_ids — scrub PII from input/output; see redact),
+//!      LIGHTTRACK_COLLECTIVE_ID (opaque source id — hashed before contribution),
+//!      LIGHTTRACK_COLLECTIVE_ACCEPT (1|true — this instance is a leaderboard hub; off by default).
 
 mod alerts;
 mod auth;
 mod benchmarks;
 mod billing;
+mod collective;
 mod datasets;
 mod error;
 mod events;
+mod forecast;
 mod guards;
+mod idempotency;
 mod jobs;
 mod limits;
 mod prices;
 mod projects;
+mod prompts;
 mod redact;
+mod relay;
 mod revenue;
 mod rubrics;
 mod scores;
 mod state;
+mod traces;
+
+#[cfg(test)]
+mod tests_forecast;
+#[cfg(test)]
+mod tests_ingest;
+#[cfg(test)]
+mod tests_relay;
+#[cfg(test)]
+mod tests_traces;
 
 use std::sync::{Arc, RwLock};
 
@@ -65,6 +99,13 @@ async fn main() -> anyhow::Result<()> {
     let admin_key = std::env::var("LIGHTTRACK_ADMIN_KEY")
         .ok()
         .filter(|s| !s.is_empty());
+    let relay_device_key = std::env::var("LIGHTTRACK_RELAY_DEVICE_KEY")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let relay_flat_cost = std::env::var("LIGHTTRACK_RELAY_FLAT_COST_USD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1.0);
 
     // Backend selection: LIGHTTRACK_DATABASE_URL=postgres://... → Postgres; else SQLite at LIGHTTRACK_DB.
     let database_url = std::env::var("LIGHTTRACK_DATABASE_URL")
@@ -120,18 +161,25 @@ async fn main() -> anyhow::Result<()> {
     let redact_desc = redact.describe();
     let billing = Arc::new(lighttrack_billing::BillingRegistry::from_env());
     let billing_desc = billing.describe();
+    let collective = Arc::new(collective::Collective::from_env());
+    let collective_desc = collective.describe();
+    let seen_webhooks = Arc::new(idempotency::SeenWebhooks::new(idempotency::DEFAULT_CAPACITY));
     let state = AppState {
         store,
         prices: Arc::new(RwLock::new(book)),
         auth_mode,
         admin_key,
+        relay_device_key,
+        relay_flat_cost,
         alerts,
         redact,
         billing,
+        collective,
+        seen_webhooks,
     };
 
     println!(
-        "lighttrack-api v{} on http://{bind}  (store={backend}, {n_prices} priced models, auth={:?}, admin_key={}, alerts={alerts_desc}, redact={redact_desc}, billing={billing_desc})",
+        "lighttrack-api v{} on http://{bind}  (store={backend}, {n_prices} priced models, auth={:?}, admin_key={}, alerts={alerts_desc}, redact={redact_desc}, billing={billing_desc}, collective={collective_desc})",
         env!("CARGO_PKG_VERSION"),
         state.auth_mode,
         if state.admin_key.is_some() { "set" } else { "unset" },
@@ -144,11 +192,14 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_router(state: AppState) -> Router {
+pub(crate) fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/v1/events", post(events::post_event).get(events::get_events))
         .route("/v1/events/:id", get(events::get_event_by_id))
+        .route("/v1/traces", get(traces::list_traces))
+        .route("/v1/traces/:id", get(traces::get_trace))
+        .route("/v1/traces/:id/score", post(traces::score_trace))
         .route("/v1/costs", get(events::get_costs))
         .route("/v1/scores", post(scores::post_score).get(scores::get_scores))
         .route("/v1/prices", get(prices::get_prices))
@@ -176,6 +227,16 @@ fn build_router(state: AppState) -> Router {
         .route("/v1/benchmarks/:id/runs", get(benchmarks::list_benchmark_runs))
         .route("/v1/benchmark-runs", post(benchmarks::post_benchmark_run))
         .route("/v1/benchmarks/:id/enqueue", post(jobs::enqueue_benchmark))
+        .route(
+            "/v1/projects/:id/prompts",
+            post(prompts::create_prompt).get(prompts::list_prompts),
+        )
+        .route("/v1/projects/:id/prompts/:name", get(prompts::get_prompt))
+        .route(
+            "/v1/projects/:id/prompts/:name/versions",
+            post(prompts::add_version).get(prompts::list_versions),
+        )
+        .route("/v1/projects/:id/prompts/:name/promote", post(prompts::promote))
         .route("/v1/jobs", get(jobs::list_jobs))
         .route("/v1/jobs/claim", post(jobs::claim_job))
         .route("/v1/jobs/:id", get(jobs::get_job))
@@ -188,9 +249,17 @@ fn build_router(state: AppState) -> Router {
             post(limits::create_limit).get(limits::list_limits),
         )
         .route("/v1/limits/status", get(limits::limits_status))
+        .route("/v1/relay/tasks", post(relay::enqueue_task).get(relay::list_tasks))
+        .route("/v1/relay/tasks/:id", get(relay::get_task))
+        .route("/v1/relay/tasks/:id/result", post(relay::post_result))
+        .route("/v1/relay/lease", post(relay::lease_tasks))
         .route("/v1/revenue", post(revenue::post_revenue))
         .route("/v1/margin", get(revenue::get_margin))
+        .route("/v1/forecast", get(forecast::get_forecast))
         .route("/v1/billing/:provider/webhook", post(billing::post_webhook))
+        .route("/v1/collective/digest", get(collective::get_digest))
+        .route("/v1/collective/ingest", post(collective::post_ingest))
+        .route("/v1/collective/leaderboard", get(collective::get_leaderboard))
         .with_state(state)
 }
 

@@ -52,8 +52,10 @@ Apps send a **normalized event** (see `docs/DATA_MODEL.md`). Two front doors, sa
 Provider SDKs already return token usage; the client just forwards it. Prompts/outputs are **optional**
 and **redactable** per project (store nothing, hashes, or full text).
 
-> A future **gateway/proxy mode** (apps route calls *through* LightTrack) would let limits *block* inline
-> instead of advising. Deferred — it adds latency and a critical-path dependency.
+> Limits are enforced at **ingest admission**: a breaching event is rejected with HTTP 429 and not
+> recorded, so cooperating clients back off. A future **gateway/proxy mode** (apps route calls *through*
+> LightTrack) would additionally block the provider call *inline*, before the spend. Deferred — it adds
+> latency and a critical-path dependency.
 
 ## 5. Storage — local→cloud parity
 A `Store` trait abstracts persistence. Two backends:
@@ -72,10 +74,13 @@ against provider pricing pages** before trusting cost dashboards.
 
 ## 7. Limits (incoming traffic trips them; judge is exempt)
 `LimitRule { project_id, metric: cost|calls|tokens, window: hour|day|month, threshold, action }`.
-On each ingested event we update the project's rolling counter for the window and `evaluate()` matching
-rules. Actions: **Alert** (notify), **Throttle** (set an advisory flag readable via `GET /v1/limits/status`
-and MCP — cooperating apps self-throttle), **Block** (advisory now; enforceable only in gateway mode).
-The scoring/benchmark engine is **not** subject to limits.
+Ingest is **admission-controlled**: `POST /v1/events` evaluates the matching rules against rolling usage
+*including the candidate event* and inserts it in **one atomic store step**, so a concurrent burst can't
+all read the same pre-burst usage and race past the cap (check-then-act TOCTOU). Actions: **Alert**
+(notify only — the event is still recorded), **Throttle** and **Block** (both **enforced** — a breaching
+event is rejected with **429 `rate_limited`** and *not* recorded, so a cooperating client backs off; the
+breach is also readable via `GET /v1/limits/status` and MCP). Inline *pre-call* blocking (before the
+provider spend) still requires gateway mode. The scoring/benchmark engine is **not** subject to limits.
 
 ## 8. Scoring & benchmarking engine
 - **Online scoring:** sample events → enqueue → runner runs a rubric prompt via
@@ -93,6 +98,27 @@ The scoring/benchmark engine is **not** subject to limits.
 - **Local dev:** bind to `127.0.0.1`; auth can run in a relaxed `dev` mode.
 - **e2-micro:** API keys enforced; TLS via Cloud Run (managed) or Caddy in front of the VM. Secrets live in
   **Secret Manager** (cloud) / a git-ignored `.env`/`*.local.toml` (local), never committed.
+
+### Error envelope
+Every non-2xx response is a stable, machine-readable JSON envelope so clients (CLI, MCP, SDKs) branch on a
+code instead of string-matching prose:
+```json
+{ "error": { "code": "not_found", "message": "event 'x' not found" } }
+```
+`code` is a frozen identifier; `message` is human-facing and may change wording — never parse it. Codes and
+their canonical HTTP status (see `crates/api/src/error.rs`):
+
+| code | status | meaning |
+|------|--------|---------|
+| `bad_request`  | 400 | malformed / invalid request (validation) |
+| `unauthorized` | 401 | missing or invalid credentials |
+| `forbidden`    | 403 | authenticated but not permitted |
+| `not_found`    | 404 | resource does not exist |
+| `conflict`     | 409 | conflicts with current state (duplicate / frozen / gated regression) |
+| `rate_limited` | 429 | ingest rejected: an enforcing (`throttle`/`block`) limit was breached (see §7) |
+| `internal`     | 500 | unexpected server fault (store / serialization / I/O) |
+
+Store-layer failures all collapse to `internal` — clients must not branch on backend internals.
 
 ## 10. Notifications
 Cloud Scheduler (3 free jobs) fires periodic checks (rolling cost, score regression) → Pub/Sub → Cloud

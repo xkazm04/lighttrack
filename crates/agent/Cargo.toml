@@ -1,0 +1,24 @@
+[package]
+name = "lighttrack-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightTrack device agent (`lt-agent`) — leases relay tasks from cloud instances and executes them with the local Claude Code CLI."
+
+[[bin]]
+name = "lt-agent"
+path = "src/main.rs"
+
+[dependencies]
+lighttrack-core.workspace = true
+lighttrack-engine = { path = "../engine" }
+serde.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "default-tls"] }
+anyhow = "1"
+dotenvy = "0.15"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "echo": { "type": "string" },
+    "task": { "type": "string" }
+  },
+  "required": ["echo", "task"],
+  "additionalProperties": false
+}

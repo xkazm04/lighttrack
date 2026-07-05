@@ -30,3 +30,39 @@ await lt.flush();                                   // await in-flight sends bef
 
 `lt.span(provider, model)` returns a span; call `span.setOpenAI(resp); span.end()` to record latency
 automatically. See `example.ts` and the repo's `clients/README.md`.
+
+## Auto-instrument (one line)
+
+Skip the per-call `track*`. Wrap a provider SDK client once and every call is captured automatically
+(model, usage, latency, trace ids). `withTrace` shares a `trace_id`; `withSpan` nests `parent_span_id`:
+
+```ts
+import { wrapOpenAI, wrapAnthropic, wrapGemini, withTrace, withSpan } from "lighttrack-client";
+
+const openai = wrapOpenAI(new OpenAI());   // drop-in: same client object back, now observed
+await withTrace(async () => {
+  await openai.chat.completions.create({ ... });   // auto-tracked (trace root)
+  await withSpan(async () => {
+    await openai.chat.completions.create({ ... });  // auto-tracked (child span)
+  });
+});
+```
+
+`wrap(client)` auto-detects which of the three SDKs it is. Best-effort: instrumentation never throws
+into your app. Trace context is a per-process global swapped around the awaited callback — for
+strictly concurrent, interleaved traces, pass an explicit `traceId` to keep them isolated.
+
+## Relay tasks (offline device work)
+
+Enqueue heavy, offline-tolerant LLM tasks for the enrolled local device running `lt-agent`
+(executed via Claude Code on subscription; see `docs/RELAY.md`). Unlike `track*` telemetry these
+are functional calls: they resolve with the task and throw `RelayError` on failure.
+
+```ts
+const task = await lt.relayTask("xprice/reprice-summary", {
+  payload: { sku: "A-1" },
+  idempotencyKey: "order-42",
+});
+const done = await lt.waitRelayTask(task.id);   // optional poll; prefer the connector push
+if (done.status === "succeeded") console.log(done.result);
+```

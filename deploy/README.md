@@ -9,6 +9,8 @@ run `/onboard` in Claude Code.
 | `docker/Dockerfile` | One image, all binaries (api/runner/mcp/cli) + all backends | **available** |
 | `compose/docker-compose.yml` | Local stack (api + SQLite volume) | **available** |
 | `compose/docker-compose.postgres.yml` | api-on-Postgres + Postgres + Grafana | **available** |
+| `cloudrun/deploy.{sh,ps1}` | One-command Cloud Run deploy (scale-to-zero, ~free) | **available** |
+| `cloudrun/cloudbuild.yaml` | Build image from source for the `--build` path | **available** |
 | `../.github/workflows/docker.yml` | Build → GHCR (public) on `v*` tags / manual | **available** |
 | `../.github/workflows/release.yml` | Prebuilt binaries (linux/macOS/Windows) on `v*` tags | **available** |
 | `install.sh` / `install.ps1` | One-line binary installers | **available** |

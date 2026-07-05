@@ -114,6 +114,34 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
 
+-- Prompt registry: named, versioned prompts fetched at runtime by label (e.g. production | staging).
+-- Cutting a new version auto-enqueues the linked benchmark; promoting a label is blocked when that
+-- benchmark's score regresses against its baseline. Reuses the benchmark + job-queue machinery.
+CREATE TABLE IF NOT EXISTS prompts (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  name          TEXT NOT NULL,
+  benchmark_id  TEXT,                         -- linked benchmark; its regression check gates promotion
+  labels        TEXT NOT NULL DEFAULT '{}',   -- JSON object: label -> version (e.g. {"production": 3})
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  UNIQUE (project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_prompts_project ON prompts(project_id, name);
+
+-- Immutable prompt versions (one row per cut). `version` is monotonic per prompt.
+CREATE TABLE IF NOT EXISTS prompt_versions (
+  id          TEXT PRIMARY KEY,
+  prompt_id   TEXT NOT NULL REFERENCES prompts(id),
+  version     INTEGER NOT NULL,
+  content     TEXT NOT NULL,
+  config      TEXT,           -- JSON (model, params, variable schema)
+  note        TEXT,           -- change note / "commit message"
+  created_at  TEXT NOT NULL,
+  UNIQUE (prompt_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_pid ON prompt_versions(prompt_id, version);
+
 CREATE TABLE IF NOT EXISTS benchmark_runs (
   id              TEXT PRIMARY KEY,
   benchmark_id    TEXT NOT NULL REFERENCES benchmarks(id),
@@ -184,3 +212,51 @@ CREATE TABLE IF NOT EXISTS revenue_events (
 );
 CREATE INDEX IF NOT EXISTS idx_revenue_project_ts ON revenue_events(project_id, ts);
 CREATE INDEX IF NOT EXISTS idx_revenue_customer ON revenue_events(customer_id);
+
+-- Collective Model Intelligence (network effect): privacy-safe, aggregate-only digest entries
+-- contributed by other LightTrack instances. No raw text, no project/customer ids — only public model
+-- identities + aggregate quality/cost/latency. The hub merges these into a public leaderboard.
+-- PK (contributor_id, provider, model, task_type) so a re-contribution upserts in place.
+CREATE TABLE IF NOT EXISTS collective_entries (
+  contributor_id  TEXT NOT NULL,   -- opaque, non-reversible source id (a hash)
+  provider        TEXT NOT NULL,
+  model           TEXT NOT NULL,
+  task_type       TEXT NOT NULL,   -- coarse bucket from a fixed vocabulary
+  quality         REAL NOT NULL,   -- mean score 0..1
+  pass_rate       REAL NOT NULL,
+  avg_cost_usd    REAL NOT NULL,   -- per case
+  p50_latency_ms  INTEGER,
+  p95_latency_ms  INTEGER,
+  n_runs          INTEGER NOT NULL DEFAULT 0,
+  n_cases         INTEGER NOT NULL DEFAULT 0,
+  received_at     TEXT NOT NULL,
+  PRIMARY KEY (contributor_id, provider, model, task_type)
+);
+CREATE INDEX IF NOT EXISTS idx_collective_model ON collective_entries(provider, model, task_type);
+
+-- Cloud→device relay queue (docs/RELAY.md): apps enqueue action_type + JSON params; the enrolled
+-- local device leases due tasks over outbound HTTPS, runs them against its local action library
+-- (Claude Code CLI), and settles each with succeeded | failed | deferred. Prompts/tools/credentials
+-- live only on the device — the payload carries parameters, never instructions.
+CREATE TABLE IF NOT EXISTS relay_tasks (
+  id                  TEXT PRIMARY KEY,
+  project_id          TEXT NOT NULL,
+  source              TEXT,                            -- originator tag (which app enqueued it)
+  action_type         TEXT NOT NULL,                   -- resolved against the device's library
+  payload             TEXT,                            -- JSON params
+  status              TEXT NOT NULL DEFAULT 'queued',  -- queued | leased | succeeded | dead
+  attempts            INTEGER NOT NULL DEFAULT 0,      -- consumed on lease; Deferred hands one back
+  max_attempts        INTEGER NOT NULL DEFAULT 4,
+  retry_interval_secs INTEGER NOT NULL DEFAULT 18000,  -- 5h — one Claude subscription window
+  idempotency_key     TEXT,
+  device              TEXT,                            -- which device holds/held the lease
+  lease_deadline      TEXT,                            -- expired lease => reclaimable (or dead)
+  next_attempt_at     TEXT NOT NULL,                   -- not leasable before this (retry backoff)
+  result              TEXT,                            -- JSON
+  error               TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relay_due ON relay_tasks(status, next_attempt_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_idem ON relay_tasks(project_id, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;

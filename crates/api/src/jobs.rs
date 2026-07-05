@@ -36,10 +36,33 @@ pub(crate) async fn enqueue_benchmark(
     let p = authenticate(&st, &headers).await?;
     ensure_can_admin(&p)?;
     let bench = load_benchmark_authorized(&st, &p, &id).await?;
+    let job = enqueue_bench_run(
+        &st,
+        &bench.id,
+        serde_json::json!({ "samples": req.samples, "heal": req.heal }),
+    )
+    .await?;
+    Ok(Json(job))
+}
+
+/// Enqueue a `bench_run` job for a benchmark, merging `extra` payload keys (e.g. `samples`, `heal`,
+/// or a `prompt_id`/`version` for traceability). Shared by the manual enqueue route and the prompt
+/// registry's auto-enqueue on a new version.
+pub(crate) async fn enqueue_bench_run(
+    st: &AppState,
+    benchmark_id: &str,
+    extra: serde_json::Value,
+) -> Result<Job, ApiError> {
+    let mut payload = serde_json::json!({ "benchmark_id": benchmark_id });
+    if let (Some(obj), Some(into)) = (extra.as_object(), payload.as_object_mut()) {
+        for (k, v) in obj {
+            into.insert(k.clone(), v.clone());
+        }
+    }
     let job = Job {
         id: new_id(),
         job_type: "bench_run".to_string(),
-        payload: serde_json::json!({ "benchmark_id": bench.id, "samples": req.samples, "heal": req.heal }),
+        payload,
         status: "queued".to_string(),
         attempts: 0,
         max_attempts: 3,
@@ -53,7 +76,7 @@ pub(crate) async fn enqueue_benchmark(
     let store = st.store.clone();
     let j2 = job.clone();
     spawn_db(move || store.create_job(&j2)).await?;
-    Ok(Json(job))
+    Ok(job)
 }
 
 #[derive(Deserialize)]

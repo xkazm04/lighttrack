@@ -1,0 +1,3 @@
+# Minimal smoke-test action: echoes params.message back as structured JSON.
+model = "haiku"
+schema_file = "schema.json"

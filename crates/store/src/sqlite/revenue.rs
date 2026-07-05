@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, Row};
 
 use lighttrack_core::{CostByDimension, RevenueEvent, RevenueKind};
 
-use super::util::{fmt_ts, parse_ts};
+use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
 
 pub(super) fn insert(conn: &Connection, ev: &RevenueEvent) -> Result<()> {
@@ -40,6 +40,19 @@ pub(super) fn insert(conn: &Connection, ev: &RevenueEvent) -> Result<()> {
             fmt_ts(ev.ts),
         ],
     )?;
+    Ok(())
+}
+
+/// Persist a batch of revenue records atomically: one transaction wraps the per-record upserts, so a
+/// mid-batch failure rolls the whole batch back instead of committing a partial prefix. Safe to retry
+/// on a webhook redelivery — each upsert is idempotent on `id`. `unchecked_transaction` is sound here
+/// because `SqliteStore` already holds the connection mutex, so this is the only writer.
+pub(super) fn insert_batch(conn: &Connection, evs: &[RevenueEvent]) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    for ev in evs {
+        insert(&tx, ev)?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -212,5 +225,51 @@ mod tests {
         assert!((acme.llm_cost_usd - 0.87).abs() < 1e-9);
         assert!((acme.gross_margin_usd - 19.13).abs() < 1e-9);
         assert_eq!(acme.calls, 2);
+    }
+
+    fn rev(id: &str, amount: f64) -> RevenueEvent {
+        RevenueEvent {
+            id: id.into(), project_id: "p1".into(), source: "stripe".into(),
+            external_id: Some(format!("ext-{id}")), customer_id: Some("acme".into()),
+            product_id: None, amount_usd: amount, currency: "USD".into(), kind: RevenueKind::OneTime,
+            period_start: None, period_end: None, ts: parse_ts("2026-06-10T00:00:00Z").unwrap(),
+        }
+    }
+
+    fn all(c: &Connection) -> Vec<RevenueEvent> {
+        let since = parse_ts("2026-01-01T00:00:00Z").unwrap();
+        let until = parse_ts("2027-01-01T00:00:00Z").unwrap();
+        list(c, Some("p1"), since, until).unwrap()
+    }
+
+    #[test]
+    fn batch_is_atomic_all_or_nothing() {
+        let c = conn();
+        // Force a deterministic mid-batch failure: any insert of id='bad' aborts.
+        c.execute_batch(
+            "CREATE TRIGGER boom BEFORE INSERT ON revenue_events \
+             WHEN NEW.id = 'bad' BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+        )
+        .unwrap();
+
+        // A batch whose second record fails rolls the whole batch back — the good first record is
+        // NOT left committed (the old per-event loop would have stranded it).
+        let err = insert_batch(&c, &[rev("good", 10.0), rev("bad", 5.0)]);
+        assert!(err.is_err(), "a failing record must error the batch");
+        assert!(all(&c).is_empty(), "rolled-back batch left a partial write");
+
+        // A fully-valid batch commits every record.
+        insert_batch(&c, &[rev("good", 10.0), rev("good2", 7.0)]).unwrap();
+        assert_eq!(all(&c).len(), 2);
+    }
+
+    #[test]
+    fn batch_redelivery_is_idempotent() {
+        let c = conn();
+        let batch = [rev("r1", 10.0), rev("r2", 7.0)];
+        insert_batch(&c, &batch).unwrap();
+        // Same delivery again (provider retry): upsert-on-id means no duplicates accrue.
+        insert_batch(&c, &batch).unwrap();
+        assert_eq!(all(&c).len(), 2);
     }
 }

@@ -18,6 +18,14 @@ data/
 service-account*.json
 *-key.json
 
+# Relay action library (docs/RELAY.md): per-user prompts/connectors stay local.
+# Only the README and the example action are committed.
+actions/*
+!actions/README.md
+!actions/_example/
+# The agent's own config names env vars, but tends to accumulate local URLs.
+agent.toml
+
 # Client SDKs (clients/) — build/cache artifacts
 __pycache__/
 *.pyc
@@ -27,6 +35,10 @@ clients/typescript/node_modules/
 clients/typescript/dist/
 # Library crate: its lockfile is not committed (it's a dependency, not an app).
 clients/rust/Cargo.lock
+
+# Claude Code execution logs — capture full prompts, file contents and command
+# output verbatim, so any run can embed a real secret. Never commit them.
+.claude/logs/
 
 # OS / editor
 .DS_Store

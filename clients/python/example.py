@@ -11,7 +11,7 @@ Uses fake provider response objects, so it runs with no real provider SDK or API
 import os
 import types
 
-from lighttrack import LightTrack, guard
+from lighttrack import LightTrack, guard, span, trace
 
 
 def fake_openai_response():
@@ -20,6 +20,12 @@ def fake_openai_response():
         prompt_tokens_details=types.SimpleNamespace(cached_tokens=64),
     )
     return types.SimpleNamespace(model="gpt-4o-mini", usage=usage)
+
+
+def fake_openai_client():
+    """A stand-in for `OpenAI()` — same shape, so `lt.wrap(...)` instruments it identically."""
+    completions = types.SimpleNamespace(create=lambda **kw: fake_openai_response())
+    return types.SimpleNamespace(chat=types.SimpleNamespace(completions=completions))
 
 
 def fake_anthropic_response():
@@ -47,6 +53,15 @@ def main():
         # Low-level generic call.
         lt.track("openai", "gpt-4o", input_tokens=10, output_tokens=5, operation="chat")
 
+        # One-line auto-instrumentation: wrap the SDK client once, then every call is captured with
+        # no per-call code. `trace()` shares one trace_id; `span()` nests calls as child spans.
+        # (`import lighttrack.auto` patches the real OpenAI/Anthropic/Gemini SDKs globally instead.)
+        client = lt.wrap(fake_openai_client())
+        with trace():
+            client.chat.completions.create(model="gpt-4o", messages=[])  # auto-tracked (trace root)
+            with span():
+                client.chat.completions.create(model="gpt-4o", messages=[])  # auto-tracked (child)
+
         # Inline output guardrails: `guard` is pure (returns a verdict); `track_guard` also records
         # the verdict as a score so guardrail pass-rates are observable.
         print("guard:", guard('{"a":1}', {"json_keys": ["a", "b"]}).violations)  # -> missing 'b'
@@ -54,7 +69,7 @@ def main():
                                  {"json_keys": ["merchant", "total"], "no_pii": True}, name="extract")
         print("track_guard ok:", verdict.ok)
         lt.flush()
-    print("sent 5 events + 1 guard score — check: GET /v1/events, /v1/scores, /v1/costs")
+    print("sent 7 events + 1 guard score — check: GET /v1/events, /v1/scores, /v1/costs")
 
 
 if __name__ == "__main__":

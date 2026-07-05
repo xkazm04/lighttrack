@@ -62,29 +62,4 @@ pub fn scrub(text: &str) -> ScrubResult {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scrubs_common_pii() {
-        let s = scrub(
-            "Contact john.doe@example.com or call +1 (415) 555-2671. \
-             Card 4111 1111 1111 1111, server 10.0.0.1, key sk-abcd1234efgh5678ijkl.",
-        );
-        assert!(s.text.contains("<EMAIL>"), "{}", s.text);
-        assert!(s.text.contains("<PHONE>"), "{}", s.text);
-        assert!(s.text.contains("<CC>"), "{}", s.text);
-        assert!(s.text.contains("<IP>"), "{}", s.text);
-        assert!(s.text.contains("<SECRET>"), "{}", s.text);
-        assert!(!s.text.contains("john.doe@example.com"));
-        assert!(!s.text.contains("4111"));
-        assert!(s.redactions >= 5, "redactions={}", s.redactions);
-    }
-
-    #[test]
-    fn leaves_clean_text_untouched() {
-        let s = scrub("The capital of France is Paris.");
-        assert_eq!(s.text, "The capital of France is Paris.");
-        assert_eq!(s.redactions, 0);
-    }
-}
+mod tests;

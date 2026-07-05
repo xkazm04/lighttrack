@@ -64,17 +64,40 @@ echo ">> project=$PROJECT region=$REGION service=$SERVICE auth=$AUTH_MODE"
 
 # --- 1. APIs ----------------------------------------------------------------
 echo ">> enabling APIs..."
-APIS="run.googleapis.com secretmanager.googleapis.com"
-[[ $BUILD -eq 1 ]] && APIS="$APIS cloudbuild.googleapis.com artifactregistry.googleapis.com"
+# Artifact Registry is always needed: Cloud Run can only pull from Artifact Registry / gcr.io,
+# so even a prebuilt public image is mirrored into the project's registry first.
+APIS="run.googleapis.com secretmanager.googleapis.com artifactregistry.googleapis.com"
+[[ $BUILD -eq 1 ]] && APIS="$APIS cloudbuild.googleapis.com"
 gcloud services enable $APIS --project "$PROJECT" --quiet
 
-# --- 2. build (optional) ----------------------------------------------------
-if [[ $BUILD -eq 1 ]]; then
-  echo ">> building image from source via Cloud Build (this takes a while)..."
+ensure_repo() {
   gcloud artifacts repositories describe "$SERVICE" --location "$REGION" --project "$PROJECT" >/dev/null 2>&1 \
     || gcloud artifacts repositories create "$SERVICE" --repository-format=docker --location "$REGION" --project "$PROJECT" --quiet
+}
+
+# --- 2. resolve a deployable image (Artifact Registry) ----------------------
+if [[ $BUILD -eq 1 ]]; then
+  echo ">> building image from source via Cloud Build (this takes a while)..."
+  ensure_repo
   IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${SERVICE}/${SERVICE}:latest"
   ( cd "$ROOT" && gcloud builds submit --project "$PROJECT" --config deploy/cloudrun/cloudbuild.yaml --substitutions=_IMAGE="$IMAGE" )
+else
+  case "$IMAGE" in
+    *-docker.pkg.dev/*|gcr.io/*|*.gcr.io/*) : ;;   # already deployable by Cloud Run
+    *)
+      # Cloud Run can't pull from external registries (ghcr.io/docker.io). Front the upstream with an
+      # Artifact Registry *remote repository* (a lazy pull-through cache) and deploy that AR path.
+      REG_HOST="${IMAGE%%/*}"
+      UPSTREAM_PATH="${IMAGE#*/}"
+      REMOTE_REPO="${SERVICE}-remote"
+      gcloud artifacts repositories describe "$REMOTE_REPO" --location "$REGION" --project "$PROJECT" >/dev/null 2>&1 \
+        || gcloud artifacts repositories create "$REMOTE_REPO" --repository-format=docker \
+             --mode=remote-repository --remote-docker-repo="https://${REG_HOST}" \
+             --location "$REGION" --project "$PROJECT" --quiet
+      echo ">> fronting ${REG_HOST} with Artifact Registry remote repo '${REMOTE_REPO}'"
+      IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REMOTE_REPO}/${UPSTREAM_PATH}"
+      ;;
+  esac
 fi
 echo ">> image=$IMAGE"
 

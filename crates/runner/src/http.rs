@@ -1,9 +1,42 @@
 //! Thin HTTP client over the LightTrack API.
 
+use std::io::Read;
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::cli::Cli;
+
+/// Every outbound runner call (LightTrack API + billing providers) goes through one client bounded
+/// by these timeouts, so a black-holed endpoint surfaces as a clean error instead of hanging a run.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// Hard ceiling on a single response body — stops a pathological multi-GB payload from being
+/// buffered into memory. Well above any realistic dataset/benchmark response.
+const MAX_BODY_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Build the shared blocking client used for every outbound call, with bounded timeouts.
+pub(crate) fn client() -> Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .context("building HTTP client")
+}
+
+/// Read a response body with a hard size cap, erroring out if the peer streams past it instead of
+/// buffering an unbounded amount into memory.
+fn read_bounded(resp: reqwest::blocking::Response, what: &str) -> Result<String> {
+    let mut buf = Vec::new();
+    resp.take(MAX_BODY_BYTES + 1)
+        .read_to_end(&mut buf)
+        .with_context(|| format!("reading response from {what}"))?;
+    if buf.len() as u64 > MAX_BODY_BYTES {
+        anyhow::bail!("{what} response exceeded {MAX_BODY_BYTES}-byte cap");
+    }
+    String::from_utf8(buf).with_context(|| format!("decoding response from {what} as UTF-8"))
+}
 
 /// GET `path` and decode JSON into `T` (bearer auth if a key is set).
 pub(crate) fn get<T: serde::de::DeserializeOwned>(
@@ -17,7 +50,7 @@ pub(crate) fn get<T: serde::de::DeserializeOwned>(
     }
     let resp = req.send()?;
     let status = resp.status();
-    let text = resp.text()?;
+    let text = read_bounded(resp, path)?;
     if !status.is_success() {
         anyhow::bail!("GET {path} -> HTTP {}: {text}", status.as_u16());
     }
@@ -37,7 +70,7 @@ pub(crate) fn post(
     }
     let resp = req.send()?;
     let status = resp.status();
-    let text = resp.text()?;
+    let text = read_bounded(resp, path)?;
     if !status.is_success() {
         anyhow::bail!("POST {path} -> HTTP {}: {text}", status.as_u16());
     }

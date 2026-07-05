@@ -15,7 +15,9 @@ mod jobs;
 mod limits;
 mod prices;
 mod projects;
+mod prompts;
 mod rest;
+mod revenue;
 mod rubrics;
 mod scores;
 
@@ -23,8 +25,8 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, Dataset, DatasetItem, Job, LimitRule, LlmEvent, ModelPriceRow,
-    Project, Rubric, Score,
+    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule, LlmEvent,
+    ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent, Rubric, Score,
 };
 use lighttrack_store::{CostRow, Result, Store, StoreError, Usage};
 
@@ -184,5 +186,55 @@ impl Store for FirestoreStore {
     }
     fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
         jobs::list_jobs(&self.rest, status, limit)
+    }
+
+    // ---- prompt registry ---------------------------------------------------
+    fn create_prompt(&self, p: &Prompt) -> Result<()> {
+        prompts::create_prompt(&self.rest, p)
+    }
+    fn update_prompt(&self, p: &Prompt) -> Result<()> {
+        prompts::update_prompt(&self.rest, p)
+    }
+    fn get_prompt(&self, project: &str, name: &str) -> Result<Option<Prompt>> {
+        prompts::get_prompt(&self.rest, project, name)
+    }
+    fn get_prompt_by_id(&self, id: &str) -> Result<Option<Prompt>> {
+        prompts::get_prompt_by_id(&self.rest, id)
+    }
+    fn list_prompts(&self, project: &str) -> Result<Vec<Prompt>> {
+        prompts::list_prompts(&self.rest, project)
+    }
+    fn create_prompt_version(&self, v: &PromptVersion) -> Result<()> {
+        prompts::create_prompt_version(&self.rest, v)
+    }
+    fn get_prompt_version(&self, prompt_id: &str, version: u32) -> Result<Option<PromptVersion>> {
+        prompts::get_prompt_version(&self.rest, prompt_id, version)
+    }
+    fn list_prompt_versions(&self, prompt_id: &str) -> Result<Vec<PromptVersion>> {
+        prompts::list_prompt_versions(&self.rest, prompt_id)
+    }
+
+    // ---- revenue + margin (Phase 1 profit tracking) ------------------------
+    // `insert_revenue_events` (batch) uses the trait default loop — Firestore REST has no
+    // multi-document transaction here, matching the Postgres backend's choice.
+    fn insert_revenue_event(&self, ev: &RevenueEvent) -> Result<()> {
+        revenue::insert(&self.rest, ev)
+    }
+    fn list_revenue_events(
+        &self,
+        project: Option<&str>,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<RevenueEvent>> {
+        revenue::list(&self.rest, project, since, until)
+    }
+    fn cost_by_dimension(
+        &self,
+        project: Option<&str>,
+        dim: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<CostByDimension>> {
+        revenue::cost_by_dimension(&self.rest, project, dim, since, until)
     }
 }

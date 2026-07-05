@@ -52,9 +52,18 @@ pub(crate) fn calibrate(
 
     let mut pairs: Vec<(f64, f64)> = Vec::new();
     let mut cost = 0.0_f64;
+    let mut skipped = 0u32;
     for (i, it) in items.iter().enumerate() {
         let (judge_score, jc) =
-            judge_item(engine, &jp, &jm, &rubric, rubric_text, it, samples, &prices)?;
+            match judge_item(engine, &jp, &jm, &rubric, rubric_text, it, samples, &prices) {
+                Ok(pair) => pair,
+                // A phantom 0.0 here would poison kappa/MAE; drop the item from the calibration set.
+                Err(e) => {
+                    eprintln!("  item #{} skipped — judge output unparseable: {e}", i + 1);
+                    skipped += 1;
+                    continue;
+                }
+            };
         cost += jc;
         let agree = (it.human_score >= threshold) == (judge_score >= threshold);
         pairs.push((it.human_score, judge_score));
@@ -73,6 +82,9 @@ pub(crate) fn calibrate(
         );
     }
 
+    if skipped > 0 {
+        println!("  note: {skipped} item(s) skipped — judge output was unparseable.");
+    }
     let a = agreement(&pairs, threshold, kappa_bar);
     println!(
         "\nagreement (n={}):  \u{3ba}={:.3}  pearson={:.3}  MAE={:.3}  RMSE={:.3}  bias={:+.3}",
@@ -154,8 +166,15 @@ fn judge_item(
 /// Load calibration items from a JSONL file (one object per line) or a JSON array file.
 fn load_items(file: &str) -> Result<Vec<CalibrationItem>> {
     let text = fs::read_to_string(file).with_context(|| format!("reading {file}"))?;
+    parse_items(&text, file)
+}
+
+/// Parse calibration items from file contents: a JSON array (when the text starts with `[`) or JSONL
+/// (one object per line; blank lines and `//`-comment lines are skipped). `file` is used only for
+/// error context. I/O-free so it can be unit-tested without a temp file or a live provider.
+fn parse_items(text: &str, file: &str) -> Result<Vec<CalibrationItem>> {
     if text.trim_start().starts_with('[') {
-        return serde_json::from_str(&text).with_context(|| format!("{file}: invalid JSON array of items"));
+        return serde_json::from_str(text).with_context(|| format!("{file}: invalid JSON array of items"));
     }
     let mut items = Vec::new();
     for (n, line) in text.lines().enumerate() {
@@ -168,4 +187,60 @@ fn load_items(file: &str) -> Result<Vec<CalibrationItem>> {
         );
     }
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_items;
+
+    #[test]
+    fn parses_jsonl_skipping_blanks_and_comments() {
+        let text = "\
+// a leading comment
+{\"input\":\"a\",\"output\":\"x\",\"human_score\":0.9}
+
+{\"input\":\"b\",\"output\":\"y\",\"human_score\":0.2,\"note\":\"case b\"}
+";
+        let items = parse_items(text, "f.jsonl").unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].input, "a");
+        assert!((items[0].human_score - 0.9).abs() < 1e-9);
+        assert_eq!(items[1].note.as_deref(), Some("case b"));
+    }
+
+    #[test]
+    fn parses_json_array_form() {
+        let text = r#"[
+            {"input":"a","output":"x","human_score":0.5},
+            {"input":"b","output":"y","human_score":0.8}
+        ]"#;
+        let items = parse_items(text, "f.json").unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1].output, "y");
+    }
+
+    #[test]
+    fn array_detection_ignores_leading_whitespace() {
+        let items = parse_items("   \n  [{\"input\":\"a\",\"output\":\"x\",\"human_score\":1.0}]", "f").unwrap();
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn empty_input_yields_no_items() {
+        assert!(parse_items("", "f").unwrap().is_empty());
+        assert!(parse_items("// only a comment\n\n", "f").unwrap().is_empty());
+    }
+
+    #[test]
+    fn malformed_line_errors_with_line_number() {
+        let text = "{\"input\":\"a\",\"output\":\"x\",\"human_score\":0.9}\nnot json";
+        let err = parse_items(text, "bad.jsonl").unwrap_err();
+        assert!(err.to_string().contains("bad.jsonl:2"), "got: {err}");
+    }
+
+    #[test]
+    fn missing_required_field_errors() {
+        // `human_score` is required by CalibrationItem.
+        assert!(parse_items("{\"input\":\"a\",\"output\":\"x\"}", "f").is_err());
+    }
 }

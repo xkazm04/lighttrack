@@ -20,10 +20,21 @@ pub(crate) fn tools() -> Vec<Value> {
                 "since":{"type":"string","description":"RFC3339 window start (default 30d ago)"},
                 "until":{"type":"string","description":"RFC3339 window end (default now)"}
             }})),
+        tool("get_forecast", "Predictive cost/margin forecast for a project: projected spend, per-budget breach ETAs (\"will breach in ~N days\"), per-customer/product margin-erosion crossovers (\"turns unprofitable next week\"), and the pre-emptive alerts derived from them. Fits an EWMA/linear trend over the recent daily counters.",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "by":{"type":"string","enum":["customer","product"],"description":"margin dimension (default customer)"},
+                "horizon":{"type":"integer","description":"days to project ahead (default 14, 1..=90)"},
+                "lookback":{"type":"integer","description":"trailing days of history to fit (default 14, 2..=90)"}
+            },"required":["project"]})),
         tool("query_events", "Recent LLM call events (newest first). Optionally filter by project.",
             json!({"type":"object","properties":{"project":{"type":"string"},"limit":{"type":"integer","description":"max events (default 20)"}}})),
         tool("get_event", "Fetch a single LLM call event by id.",
             json!({"type":"object","properties":{"event":{"type":"string","description":"event id"}},"required":["event"]})),
+        tool("list_traces", "Recent agent traces (events grouped by trace_id), newest first — end-to-end cost, latency, tokens, and span count per request. Optionally filter by project.",
+            json!({"type":"object","properties":{"project":{"type":"string"},"limit":{"type":"integer","description":"max traces (default 20)"}}})),
+        tool("get_trace", "Fetch one trace by id: rolled-up totals, the span tree, and any scores recorded within it.",
+            json!({"type":"object","properties":{"trace":{"type":"string","description":"trace id"}},"required":["trace"]})),
         tool("list_scores", "Recent LLM-as-judge scores (newest first). Optionally filter by project.",
             json!({"type":"object","properties":{"project":{"type":"string"},"limit":{"type":"integer","description":"max scores (default 20)"}}})),
         tool("get_limit_status", "Evaluate a project's limit rules now; per-rule status + overall throttle flag.",
@@ -52,6 +63,11 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({"type":"object","properties":{"status":{"type":"string","description":"queued|running|done|error"},"limit":{"type":"integer"}}})),
         tool("get_job", "Fetch one job by id — poll a benchmark run's status / progress / result.",
             json!({"type":"object","properties":{"job":{"type":"string"}},"required":["job"]})),
+        tool("get_collective_leaderboard", "The collective real-world model leaderboard: quality × cost × latency per (provider, model, task type), merged across contributing LightTrack instances. Optionally filter by task_type or provider.",
+            json!({"type":"object","properties":{
+                "task_type":{"type":"string","description":"filter to one task bucket (qa, summarization, coding, …)"},
+                "provider":{"type":"string","description":"filter to one provider (anthropic, openai, …)"}
+            }})),
     ]
 }
 
@@ -77,8 +93,11 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "list_projects" => c.get("/v1/projects"),
         "get_cost_summary" => c.get(&with_project("/v1/costs", args)),
         "get_margin" => c.get(&margin_path(args)),
+        "get_forecast" => c.get(&forecast_path(args)),
         "query_events" => c.get(&list_path("/v1/events", args)),
         "get_event" => bind(args, "event", |id| c.get(&format!("/v1/events/{id}"))),
+        "list_traces" => c.get(&list_path("/v1/traces", args)),
+        "get_trace" => bind(args, "trace", |id| c.get(&format!("/v1/traces/{id}"))),
         "list_scores" => c.get(&list_path("/v1/scores", args)),
         "get_limit_status" => bind(args, "project", |p| c.get(&format!("/v1/limits/status?project={p}"))),
         "list_limits" => bind(args, "project", |p| c.get(&format!("/v1/projects/{p}/limits"))),
@@ -93,6 +112,7 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "get_rubric" => bind(args, "rubric", |r| c.get(&format!("/v1/rubrics/{r}"))),
         "list_jobs" => c.get(&jobs_path(args)),
         "get_job" => bind(args, "job", |j| c.get(&format!("/v1/jobs/{j}"))),
+        "get_collective_leaderboard" => c.get(&collective_path(args)),
         _ => return None,
     };
     Some(r)
@@ -133,11 +153,41 @@ fn margin_path(args: &Value) -> String {
     p
 }
 
+fn forecast_path(args: &Value) -> String {
+    let mut p = "/v1/forecast".to_string();
+    let mut sep = '?';
+    for k in ["project", "by"] {
+        if let Some(v) = args.get(k).and_then(Value::as_str) {
+            p.push_str(&format!("{sep}{k}={v}"));
+            sep = '&';
+        }
+    }
+    for k in ["horizon", "lookback"] {
+        if let Some(v) = args.get(k).and_then(Value::as_u64) {
+            p.push_str(&format!("{sep}{k}={v}"));
+            sep = '&';
+        }
+    }
+    p
+}
+
 fn jobs_path(args: &Value) -> String {
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20);
     let mut p = format!("/v1/jobs?limit={limit}");
     if let Some(s) = args.get("status").and_then(Value::as_str) {
         p.push_str(&format!("&status={s}"));
+    }
+    p
+}
+
+fn collective_path(args: &Value) -> String {
+    let mut p = "/v1/collective/leaderboard".to_string();
+    let mut sep = '?';
+    for k in ["task_type", "provider"] {
+        if let Some(v) = args.get(k).and_then(Value::as_str) {
+            p.push_str(&format!("{sep}{k}={v}"));
+            sep = '&';
+        }
     }
     p
 }

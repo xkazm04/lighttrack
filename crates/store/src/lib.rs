@@ -7,8 +7,11 @@
 //!
 //! Methods are synchronous (SQLite is blocking). Async callers wrap them in `spawn_blocking`.
 
+pub mod codec;
 pub mod conformance;
 pub mod sqlite;
+
+use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -16,8 +19,9 @@ use serde_json::Value;
 use thiserror::Error;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule, LlmEvent,
-    ModelPriceRow, Project, RevenueEvent, Rubric, Score,
+    ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
+    LimitMetric, LimitRule, LimitStatus, LimitWindow, LlmEvent, ModelPriceRow, Project, Prompt,
+    PromptVersion, RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, Trace, TraceSummary,
 };
 
 pub use sqlite::SqliteStore;
@@ -48,12 +52,108 @@ pub struct CostRow {
     pub cost_usd: f64,
 }
 
+/// One UTC calendar day's aggregated usage for a project — a point in the dense daily series that
+/// trend forecasting fits. `day` is the `YYYY-MM-DD` prefix of the (fixed-width, UTC) event `ts`.
+/// Days with no traffic are simply absent; the caller densifies the gaps to zero.
+#[derive(Debug, Clone, Serialize)]
+pub struct DailyUsage {
+    pub day: String,
+    pub cost_usd: f64,
+    pub calls: i64,
+    pub tokens: i64,
+}
+
+/// One UTC day's aggregated LLM cost for a single billing-dimension value (customer/product), for
+/// margin-trend forecasting. `key` is `None` for untagged (unattributed) cost.
+#[derive(Debug, Clone, Serialize)]
+pub struct DailyDimCost {
+    pub day: String,
+    pub key: Option<String>,
+    pub cost_usd: f64,
+    pub calls: i64,
+}
+
 /// Aggregate usage for a project over a time window — used to evaluate limits.
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct Usage {
     pub cost_usd: f64,
     pub calls: i64,
     pub tokens: i64,
+}
+
+impl Usage {
+    /// The value of `metric` in this snapshot, as the comparable `f64` limits evaluate against.
+    pub fn metric_value(&self, metric: LimitMetric) -> f64 {
+        match metric {
+            LimitMetric::CostUsd => self.cost_usd,
+            LimitMetric::Calls => self.calls as f64,
+            LimitMetric::Tokens => self.tokens as f64,
+        }
+    }
+
+    /// Sum two usage snapshots (e.g. rolling usage plus one candidate event's contribution).
+    pub fn plus(self, other: Usage) -> Usage {
+        Usage {
+            cost_usd: self.cost_usd + other.cost_usd,
+            calls: self.calls + other.calls,
+            tokens: self.tokens + other.tokens,
+        }
+    }
+}
+
+/// Outcome of an admission-controlled ingest ([`Store::insert_event_checked`]).
+#[derive(Debug, Clone)]
+pub struct Admission {
+    /// Whether the event was persisted. `false` means a breached enforcing limit
+    /// (`Throttle`/`Block`) rejected it — the API surfaces this as HTTP 429.
+    pub admitted: bool,
+    /// Limit statuses evaluated against rolling usage *including* the candidate event.
+    pub statuses: Vec<LimitStatus>,
+}
+
+impl Admission {
+    /// Admit unless a breached enforcing rule is present.
+    pub(crate) fn from_statuses(statuses: Vec<LimitStatus>) -> Self {
+        let admitted = !statuses.iter().any(|s| s.rejects_ingest());
+        Admission { admitted, statuses }
+    }
+}
+
+/// One event's contribution to rolling usage: one call, its cost, and its prompt+completion tokens
+/// (matching `usage_since`, which sums `input + output`).
+pub(crate) fn event_contribution(ev: &LlmEvent) -> Usage {
+    Usage {
+        cost_usd: ev.cost_usd.unwrap_or(0.0),
+        calls: 1,
+        tokens: (ev.usage.input + ev.usage.output) as i64,
+    }
+}
+
+/// Evaluate `rules` against rolling usage that *includes* `contribution` (the candidate event),
+/// looking up each distinct window's current usage via `current_usage`. Shared by the trait's
+/// default (non-atomic) admission path and backends' transactional overrides so they agree on
+/// semantics: a rule breaches when usage-with-this-event reaches its threshold, and an event is
+/// admitted only if no enforcing rule breaches.
+pub(crate) fn evaluate_admission<F>(
+    rules: &[LimitRule],
+    contribution: Usage,
+    mut current_usage: F,
+) -> Result<Admission>
+where
+    F: FnMut(LimitWindow) -> Result<Usage>,
+{
+    let mut prospective: HashMap<LimitWindow, Usage> = HashMap::new();
+    for r in rules {
+        if let std::collections::hash_map::Entry::Vacant(slot) = prospective.entry(r.window) {
+            // Compute current usage for this window once, then fold in the candidate event.
+            slot.insert(current_usage(r.window)?.plus(contribution));
+        }
+    }
+    let statuses = rules
+        .iter()
+        .map(|r| r.evaluate(prospective[&r.window].metric_value(r.metric)))
+        .collect();
+    Ok(Admission::from_statuses(statuses))
 }
 
 /// Backend-agnostic persistence interface.
@@ -64,6 +164,28 @@ pub trait Store: Send + Sync {
     /// Persist one normalized event.
     fn insert_event(&self, ev: &LlmEvent) -> Result<()>;
 
+    /// Admission-controlled ingest: evaluate the project's enabled limit rules against rolling
+    /// usage *including this event* and persist the event only if no enforcing (`Throttle`/`Block`)
+    /// rule would be breached. Returns whether the event was admitted plus the evaluated statuses.
+    ///
+    /// This is the path ingest must use so a configured cap actually caps. The default
+    /// implementation composes `list_limit_rules` + `usage_since` + `insert_event` and is **not**
+    /// atomic against concurrent ingest. Backends whose store call is a single critical section
+    /// (e.g. SQLite, which serializes all access through one locked connection) override it to make
+    /// the check-and-insert one atomic step, so a concurrent burst cannot all read pre-burst usage
+    /// and sail past the cap (check-then-act TOCTOU).
+    fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
+        let rules = self.list_limit_rules(&ev.project_id, true)?;
+        let now = Utc::now();
+        let admission = evaluate_admission(&rules, event_contribution(ev), |w| {
+            self.usage_since(&ev.project_id, w.since(now))
+        })?;
+        if admission.admitted {
+            self.insert_event(ev)?;
+        }
+        Ok(admission)
+    }
+
     /// Most recent events, newest first, optionally filtered by project.
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>>;
 
@@ -72,6 +194,31 @@ pub trait Store: Send + Sync {
 
     /// Aggregate usage for one project since `since` (inclusive). Used by limit evaluation.
     fn usage_since(&self, project: &str, since: DateTime<Utc>) -> Result<Usage>;
+
+    // --- daily time-series for predictive cost/margin forecasting ---
+    // Default impls so backends that don't (yet) bucket by day compile unchanged: forecasting simply
+    // reads an empty series there (no trend → no forecast) until the backend adds the queries.
+    /// Daily (UTC) usage totals for one project over `[since, until)`, oldest day first — the series
+    /// trend forecasting fits. Days with no traffic are absent (the caller densifies to zero).
+    fn daily_usage(
+        &self,
+        _project: &str,
+        _since: DateTime<Utc>,
+        _until: DateTime<Utc>,
+    ) -> Result<Vec<DailyUsage>> {
+        Ok(Vec::new())
+    }
+    /// Daily (UTC) LLM cost per billing-dimension value (`customer` | `product`, from event
+    /// metadata) over `[since, until)`, for per-customer/product margin-trend forecasting.
+    fn daily_cost_by_dimension(
+        &self,
+        _project: Option<&str>,
+        _dim: &str,
+        _since: DateTime<Utc>,
+        _until: DateTime<Utc>,
+    ) -> Result<Vec<DailyDimCost>> {
+        Ok(Vec::new())
+    }
 
     // --- projects ---
     fn create_project(&self, p: &Project) -> Result<()>;
@@ -93,6 +240,27 @@ pub trait Store: Send + Sync {
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>>;
     fn insert_score(&self, s: &Score) -> Result<()>;
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>>;
+
+    // --- traces: roll events sharing a trace_id into one end-to-end view ---
+    // Default impls so backends that don't (yet) index by trace compile unchanged: the listing reads
+    // empty and `get_trace` composes `list_trace_events` (so any backend that can list a trace's
+    // events gets a correct rollup for free, from the pure `Trace::from_events`).
+    /// Compact summaries of the most recent traces (grouped by `trace_id`), newest activity first.
+    fn list_traces(&self, _project: Option<&str>, _limit: usize) -> Result<Vec<TraceSummary>> {
+        Ok(Vec::new())
+    }
+    /// All events of one trace, regardless of project (the caller authorizes against the result).
+    fn list_trace_events(&self, _trace_id: &str) -> Result<Vec<LlmEvent>> {
+        Ok(Vec::new())
+    }
+    /// Scores attached to any event within a trace (i.e. `scores.event_id` ∈ the trace's events).
+    fn list_trace_scores(&self, _trace_id: &str) -> Result<Vec<Score>> {
+        Ok(Vec::new())
+    }
+    /// Full rollup (totals + span tree) for one trace, or `None` if it has no events.
+    fn get_trace(&self, trace_id: &str) -> Result<Option<Trace>> {
+        Ok(Trace::from_events(self.list_trace_events(trace_id)?))
+    }
 
     // --- benchmarks (Phase 3.5) ---
     fn create_benchmark(&self, b: &Benchmark) -> Result<()>;
@@ -127,6 +295,45 @@ pub trait Store: Send + Sync {
     fn get_job(&self, id: &str) -> Result<Option<Job>>;
     fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>>;
 
+    // --- prompt registry (versioned prompts + label-gated promotion) ---
+    // Default impls so backends that don't (yet) host the registry compile unchanged: writes are a
+    // clear error rather than a silent drop, and reads are empty/None.
+    /// Register a new named prompt (with its initial labels/benchmark link).
+    fn create_prompt(&self, _p: &Prompt) -> Result<()> {
+        Err(StoreError::Other(
+            "prompt registry is not supported by this store backend".to_string(),
+        ))
+    }
+    /// Update a prompt's mutable fields (label pointers, linked benchmark, `updated_at`).
+    fn update_prompt(&self, _p: &Prompt) -> Result<()> {
+        Err(StoreError::Other(
+            "prompt registry is not supported by this store backend".to_string(),
+        ))
+    }
+    /// Look up a prompt by its registry name within a project (the runtime fetch path).
+    fn get_prompt(&self, _project: &str, _name: &str) -> Result<Option<Prompt>> {
+        Ok(None)
+    }
+    fn get_prompt_by_id(&self, _id: &str) -> Result<Option<Prompt>> {
+        Ok(None)
+    }
+    fn list_prompts(&self, _project: &str) -> Result<Vec<Prompt>> {
+        Ok(Vec::new())
+    }
+    /// Append an immutable version to a prompt.
+    fn create_prompt_version(&self, _v: &PromptVersion) -> Result<()> {
+        Err(StoreError::Other(
+            "prompt registry is not supported by this store backend".to_string(),
+        ))
+    }
+    fn get_prompt_version(&self, _prompt_id: &str, _version: u32) -> Result<Option<PromptVersion>> {
+        Ok(None)
+    }
+    /// All versions of a prompt, newest version first.
+    fn list_prompt_versions(&self, _prompt_id: &str) -> Result<Vec<PromptVersion>> {
+        Ok(Vec::new())
+    }
+
     // --- revenue + margin (Phase 1 profit tracking) ---
     // Default impls so backends that don't (yet) support profit tracking compile unchanged: cost is a
     // no-op (empty), and inserting revenue is a clear error rather than a silent drop.
@@ -135,6 +342,18 @@ pub trait Store: Send + Sync {
         Err(StoreError::Other(
             "revenue tracking is not supported by this store backend".to_string(),
         ))
+    }
+    /// Persist a batch of revenue records **atomically** — all-or-nothing. A webhook delivery carries
+    /// many events; if one fails a constraint mid-batch, none may be committed, or the provider's
+    /// retry would re-fail on the same record and the events after it would be lost permanently (the
+    /// handler returns an error, so 1..N-1 are already committed while N..end never land). The default
+    /// loops over [`Store::insert_revenue_event`] and is **not** atomic; backends whose writes share a
+    /// single critical section (e.g. SQLite) override it to wrap the batch in one transaction.
+    fn insert_revenue_events(&self, evs: &[RevenueEvent]) -> Result<()> {
+        for ev in evs {
+            self.insert_revenue_event(ev)?;
+        }
+        Ok(())
     }
     /// Revenue records that may be recognized within `[since, until)`, optionally scoped to a project.
     fn list_revenue_events(
@@ -154,6 +373,73 @@ pub trait Store: Send + Sync {
         _since: DateTime<Utc>,
         _until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
+        Ok(Vec::new())
+    }
+
+    // --- cloud→device relay queue (docs/RELAY.md) ---
+    // Default impls so backends that don't (yet) host the relay compile unchanged: writes are a
+    // clear error rather than a silent drop, and reads/leases are empty/None.
+    /// Enqueue one device task.
+    fn create_relay_task(&self, _t: &RelayTask) -> Result<()> {
+        Err(StoreError::Other(
+            "relay queue is not supported by this store backend".to_string(),
+        ))
+    }
+    fn get_relay_task(&self, _id: &str) -> Result<Option<RelayTask>> {
+        Ok(None)
+    }
+    /// Dedupe lookup for idempotent enqueue: the task holding `key` within `project`, if any.
+    fn find_relay_task_by_key(&self, _project: &str, _key: &str) -> Result<Option<RelayTask>> {
+        Ok(None)
+    }
+    fn list_relay_tasks(
+        &self,
+        _project: Option<&str>,
+        _status: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<RelayTask>> {
+        Ok(Vec::new())
+    }
+    /// Atomically lease up to `max` due tasks for `device`: queued tasks past `next_attempt_at`
+    /// plus expired leases with attempts to spare (each lease consumes an attempt).
+    fn lease_relay_tasks(
+        &self,
+        _device: &str,
+        _lease_secs: i64,
+        _max: usize,
+    ) -> Result<Vec<RelayTask>> {
+        Ok(Vec::new())
+    }
+    /// Dead-letter expired leases with exhausted attempts, returning the newly-dead tasks (for
+    /// alerting). The API runs this before each lease.
+    fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {
+        Ok(Vec::new())
+    }
+    /// Settle a leased task with the device's outcome; returns the updated row (`None` if the id is
+    /// unknown). Settling a task that is no longer leased returns it unchanged, so a duplicate
+    /// result report is harmless.
+    fn settle_relay_task(&self, _id: &str, _outcome: &RelayOutcome) -> Result<Option<RelayTask>> {
+        Err(StoreError::Other(
+            "relay queue is not supported by this store backend".to_string(),
+        ))
+    }
+
+    // --- collective model intelligence (network effect) ---
+    // Default impls so backends that don't (yet) host a leaderboard compile unchanged: ingest is a
+    // clear error rather than a silent drop, and the leaderboard reads as empty.
+    /// Upsert one privacy-safe digest entry received from a contributor (keyed on
+    /// contributor_id + provider + model + task_type).
+    fn upsert_collective_entry(&self, _e: &CollectiveEntry) -> Result<()> {
+        Err(StoreError::Other(
+            "collective leaderboard is not supported by this store backend".to_string(),
+        ))
+    }
+    /// Drop all of a contributor's entries (so a re-contribution replaces, never accretes, its set).
+    fn delete_collective_entries(&self, _contributor_id: &str) -> Result<u64> {
+        Ok(0)
+    }
+    /// All stored digest entries, for merging into the public leaderboard.
+    fn list_collective_entries(&self) -> Result<Vec<CollectiveEntry>> {
         Ok(Vec::new())
     }
 }

@@ -5,11 +5,11 @@
 //! owns a small Tokio runtime and `block_on`s each query. Callers already invoke store methods from
 //! `spawn_blocking`, so this never blocks the API's async workers.
 //!
-//! Implements the **full** `Store` trait (all 38 methods), verified against Postgres. This file is
-//! wiring: `connect` + the `impl Store` that delegates each method to an `async fn` in a per-domain
-//! module (`events`, `scores`, `projects`, `prices`, `benchmarks`, `datasets`, `rubrics`, `jobs`),
-//! mirroring the SQLite backend's layout. `claim_job` uses `FOR UPDATE SKIP LOCKED … RETURNING` for a
-//! concurrency-safe atomic dequeue.
+//! Implements the full `Store` trait, verified against Postgres. This file is wiring: `connect` +
+//! the `impl Store` that delegates each method to an `async fn` in a per-domain module (`events`,
+//! `scores`, `projects`, `prices`, `benchmarks`, `datasets`, `rubrics`, `jobs`, `revenue`,
+//! `relay`), mirroring the SQLite backend's layout. `claim_job` and the relay `lease` use
+//! `FOR UPDATE SKIP LOCKED … RETURNING` for concurrency-safe atomic dequeues.
 
 mod benchmarks;
 mod datasets;
@@ -17,6 +17,7 @@ mod events;
 mod jobs;
 mod prices;
 mod projects;
+mod relay;
 mod revenue;
 mod rubrics;
 mod scores;
@@ -29,7 +30,7 @@ use tokio::runtime::Runtime;
 
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule, LlmEvent,
-    ModelPriceRow, Project, RevenueEvent, Rubric, Score,
+    ModelPriceRow, Project, RelayOutcome, RelayTask, RevenueEvent, Rubric, Score,
 };
 use lighttrack_store::{CostRow, Result, Store, StoreError, Usage};
 
@@ -198,6 +199,34 @@ impl Store for PgStore {
     }
     fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
         self.rt.block_on(jobs::list(&self.pool, status, limit))
+    }
+
+    // --- cloud→device relay queue ---
+    fn create_relay_task(&self, t: &RelayTask) -> Result<()> {
+        self.rt.block_on(relay::create(&self.pool, t))
+    }
+    fn get_relay_task(&self, id: &str) -> Result<Option<RelayTask>> {
+        self.rt.block_on(relay::get(&self.pool, id))
+    }
+    fn find_relay_task_by_key(&self, project: &str, key: &str) -> Result<Option<RelayTask>> {
+        self.rt.block_on(relay::find_by_key(&self.pool, project, key))
+    }
+    fn list_relay_tasks(
+        &self,
+        project: Option<&str>,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RelayTask>> {
+        self.rt.block_on(relay::list(&self.pool, project, status, limit))
+    }
+    fn lease_relay_tasks(&self, device: &str, lease_secs: i64, max: usize) -> Result<Vec<RelayTask>> {
+        self.rt.block_on(relay::lease(&self.pool, device, lease_secs, max))
+    }
+    fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {
+        self.rt.block_on(relay::sweep_dead(&self.pool))
+    }
+    fn settle_relay_task(&self, id: &str, outcome: &RelayOutcome) -> Result<Option<RelayTask>> {
+        self.rt.block_on(relay::settle(&self.pool, id, outcome))
     }
 
     // --- revenue + margin (profit tracking) ---

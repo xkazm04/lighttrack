@@ -19,6 +19,7 @@
   "keywords": ["llm", "observability", "openai", "anthropic", "gemini", "lighttrack"],
   "license": "MIT",
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "typescript": "^5.4.0"
   }
 }

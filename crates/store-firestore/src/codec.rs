@@ -1,13 +1,15 @@
-//! Firestore typed-value codec (REST `Value`/`Document` <-> plain JSON) + field accessors and the
-//! shared ts/enum helpers. Domain modules build a plain `serde_json::Map` of fields and read decoded
-//! maps back, so they look like the SQL row mappers.
+//! Firestore typed-value codec (REST `Value`/`Document` <-> plain JSON) + field accessors. Domain
+//! modules build a plain `serde_json::Map` of fields and read decoded maps back, so they look like the
+//! SQL row mappers. The timestamp/enum/JSON codecs are shared across all backends and re-exported
+//! here (`json_or_null` as the local `json_or_null_str`) — see [`lighttrack_store::codec`].
 
-use chrono::{DateTime, SecondsFormat, Utc};
-use serde::de::DeserializeOwned;
-use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use lighttrack_store::{Result, StoreError};
+
+pub(crate) use lighttrack_store::codec::{
+    enum_to_str, fmt_ts, json_or_null as json_or_null_str, parse_enum, parse_ts,
+};
 
 pub(crate) type Fields = Map<String, Value>;
 
@@ -17,27 +19,6 @@ pub(crate) fn other(msg: impl Into<String>) -> StoreError {
 
 pub(crate) fn missing(field: &str) -> StoreError {
     other(format!("firestore: missing field `{field}`"))
-}
-
-pub(crate) fn fmt_ts(t: DateTime<Utc>) -> String {
-    t.to_rfc3339_opts(SecondsFormat::Nanos, true)
-}
-
-pub(crate) fn parse_ts(s: &str) -> Result<DateTime<Utc>> {
-    Ok(DateTime::parse_from_rfc3339(s)
-        .map_err(|e| other(format!("bad ts {s:?}: {e}")))?
-        .with_timezone(&Utc))
-}
-
-pub(crate) fn enum_to_str<T: Serialize>(v: &T) -> Result<String> {
-    serde_json::to_value(v)?
-        .as_str()
-        .map(str::to_string)
-        .ok_or_else(|| other("enum did not serialize to a string"))
-}
-
-pub(crate) fn parse_enum<T: DeserializeOwned + Default>(s: &str) -> T {
-    serde_json::from_value(Value::String(s.to_string())).unwrap_or_default()
 }
 
 // --- typed value <-> plain JSON ---------------------------------------------
@@ -170,14 +151,5 @@ pub(crate) fn opt_json_str(v: &Option<Value>) -> Result<Option<String>> {
     match v {
         Some(x) => Ok(Some(serde_json::to_string(x)?)),
         None => Ok(None),
-    }
-}
-
-/// Serialize a `Value` to a JSON string, or None when it is JSON null.
-pub(crate) fn json_or_null_str(v: &Value) -> Result<Option<String>> {
-    if v.is_null() {
-        Ok(None)
-    } else {
-        Ok(Some(serde_json::to_string(v)?))
     }
 }

@@ -13,7 +13,7 @@ use crate::cli::Cli;
 use crate::compare::run_compare;
 use crate::http::{get, post};
 use crate::rubric::run_rubric_benchmark;
-use crate::util::{percentiles, price_gen_cost};
+use crate::util::{percentiles, price_gen_cost, run_status};
 
 /// Resolve a benchmark's cases (inline dataset, or a referenced stored dataset) and dispatch to the
 /// right mode: comparison (target matrix), rubric (per-dimension), or simple (freeform single score).
@@ -125,11 +125,7 @@ fn run_simple(
     let mean = if n > 0 { sum / n as f64 } else { 0.0 };
     let pass_rate = if n > 0 { passes as f64 / n as f64 } else { 0.0 };
     let (p50, p95) = percentiles(&mut latencies);
-    let status = match bench.baseline_score {
-        Some(b) if mean + 1e-9 < b => "regressed",
-        Some(_) => "passed",
-        None => "no_baseline",
-    };
+    let status = run_status(bench.baseline_score, mean);
     println!(
         "\nscorecard: mean={mean:.3}  pass_rate={:.0}%  cost=${cost:.5}  p50={}ms p95={}ms  tokens={total_tokens}  status={status}",
         pass_rate * 100.0,

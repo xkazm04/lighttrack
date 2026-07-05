@@ -9,6 +9,7 @@
 use serde_json::Value;
 
 mod benchmarks;
+mod collective;
 mod compare;
 mod costs;
 mod datasets;
@@ -21,6 +22,7 @@ mod prices;
 mod projects;
 mod rubrics;
 mod scores;
+mod traces;
 
 /// Render an API response to Markdown for the given logical `kind` (an MCP tool name, or the matching
 /// CLI verb). Returns `None` when there is no renderer for `kind`, or the value shape is unexpected —
@@ -31,6 +33,8 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "get_cost_summary" => costs::summary(v),
         "query_events" => events::list(v),
         "get_event" => events::detail(v),
+        "list_traces" => traces::list(v),
+        "get_trace" => traces::tree(v),
         "list_scores" => scores::list(v),
         "get_limit_status" => limits::status(v),
         "list_limits" => limits::list(v),
@@ -47,6 +51,8 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "get_rubric" => rubrics::detail(v),
         "compare" => compare::leaderboard(v),
         "get_margin" => margin::report(v),
+        "get_collective_leaderboard" => collective::leaderboard(v),
+        "get_collective_digest" => collective::digest(v),
         _ => None,
     }
 }

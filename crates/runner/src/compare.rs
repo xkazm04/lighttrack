@@ -101,9 +101,17 @@ pub(crate) fn run_compare(
                 if let Some(l) = gen.latency_ms {
                     latencies.push(l);
                 }
-                let jr = judge_output(
+                let jr = match judge_output(
                     engine, &jp, &jm, &rubric, bench, case, &gen.output, samples, &prices,
-                )?;
+                ) {
+                    Ok(jr) => jr,
+                    // Unparseable judge output is no longer a silent 0.0; skip this candidate (and
+                    // the case if none score) rather than aborting the whole comparison.
+                    Err(e) => {
+                        println!("  case {}: judge error — {e}", i + 1);
+                        break;
+                    }
+                };
                 judge_cost += jr.cost;
                 judge_tokens += jr.tokens;
                 case_judge_cost += jr.cost;
@@ -215,4 +223,43 @@ pub(crate) fn run_compare(
         None => println!("\n{}", serde_json::to_string_pretty(&summary)?),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{r3, stability};
+
+    fn approx(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn r3_rounds_to_three_decimals() {
+        assert!(approx(r3(0.123456), 0.123));
+        assert!(approx(r3(0.123654), 0.124)); // rounds half-away-from-zero at the 4th place
+        assert!(approx(r3(1.0), 1.0));
+        assert!(approx(r3(0.0), 0.0));
+    }
+
+    #[test]
+    fn stability_of_short_sets_is_one() {
+        // Fewer than two samples → nothing to disagree on.
+        assert!(approx(stability(&[]), 1.0));
+        assert!(approx(stability(&[0.4]), 1.0));
+    }
+
+    #[test]
+    fn stability_is_one_minus_spread() {
+        // identical scores → perfectly stable
+        assert!(approx(stability(&[0.8, 0.8, 0.8]), 1.0));
+        // spread of 0.3 → 0.7
+        assert!(approx(stability(&[0.6, 0.9, 0.7]), 0.7));
+    }
+
+    #[test]
+    fn stability_clamps_to_zero_when_spread_exceeds_one() {
+        // max-min = 1.0 → 0.0; a >1 spread is clamped, never negative.
+        assert!(approx(stability(&[0.0, 1.0]), 0.0));
+        assert!(approx(stability(&[-0.5, 1.0]), 0.0));
+    }
 }

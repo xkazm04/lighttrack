@@ -8,6 +8,43 @@ The API fills in the rest: it derives the **project from the API key**, assigns 
 timestamp, and computes **cost** from its price book. So the minimal event is just
 `{provider, model, usage}`.
 
+## One-line auto-instrumentation
+
+Don't want to write a `track*` per call? **Wrap the provider SDK once** and every call it makes is
+captured automatically — model, token usage, latency, and trace linkage. Calls made inside a trace
+share a `trace_id`; nested spans set `parent_span_id`, so multi-step / agentic apps feed straight
+into the [trace view](../docs/DATA_MODEL.md). It stays best-effort: instrumentation never throws into
+your app, and a failing provider call is still recorded (as a failed span) before its error rethrows.
+
+```python
+# Python — patch every installed SDK globally with a single import:
+import lighttrack.auto
+resp = openai_client.chat.completions.create(...)   # auto-tracked, no extra code
+
+# ...or instrument just one client instance:
+from lighttrack import wrap, trace
+client = wrap(openai_client)
+with trace():                                        # calls inside share one trace_id
+    client.chat.completions.create(...)
+```
+
+```ts
+// TypeScript — wrap a client instance (drop-in: same object back):
+import { wrapOpenAI, withTrace, withSpan } from "lighttrack-client";
+const openai = wrapOpenAI(new OpenAI());
+await withTrace(async () => {
+  await openai.chat.completions.create({ ... });     // auto-tracked (trace root)
+  await withSpan(async () => {
+    await openai.chat.completions.create({ ... });   // auto-tracked (child span)
+  });
+});
+```
+
+Wrapped methods: OpenAI `chat.completions` / `responses` / `embeddings`, Anthropic `messages`, and
+Google GenAI `models.generate_content` (Python also patches the legacy `google.generativeai`
+`GenerativeModel`). Streaming calls are recorded with latency + model (token usage isn't captured
+from a stream yet). The hand-written `track*` / `span` API below still works for full control.
+
 | Language   | Dir                 | Install / run                              | Notes |
 |------------|---------------------|--------------------------------------------|-------|
 | Python     | `clients/python`    | `pip install ./clients/python`             | stdlib only, background thread |

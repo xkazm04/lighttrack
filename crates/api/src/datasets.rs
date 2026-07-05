@@ -2,7 +2,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     Json,
 };
 use chrono::Utc;
@@ -93,7 +93,7 @@ pub(crate) async fn add_dataset_item(
     ensure_can_admin(&p)?;
     let ds = load_dataset_authorized(&st, &p, &id).await?;
     if ds.frozen {
-        return Err(ApiError::new(StatusCode::CONFLICT, "dataset is frozen"));
+        return Err(ApiError::conflict("dataset is frozen"));
     }
     item.dataset_id = id;
     let store = st.store.clone();

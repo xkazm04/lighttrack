@@ -99,6 +99,31 @@ Benchmark runs must never block ingestion. A **jobs** table + a worker loop in `
   (`<model>@in>N`, `<model>@batch`, `<model>@flex`) — no schema change; see `docs/PRICING.md`.
 - API: `GET /v1/prices`, `PUT /v1/prices/:provider/:model` (admin) so prices update without redeploys.
 
+## 6. Collective Model Intelligence Network (opt-in network effect)  (#6)
+Every instance benchmarks models on *its own real tasks*. The network turns those private scorecards into
+a **shared, real-world model leaderboard** — quality × cost × latency per `(provider, model, task_type)` —
+so model selection rests on collective field data, not vendor marketing benchmarks. The more teams run
+LightTrack, the better the data for everyone (the moat).
+
+- **Privacy-safe by construction** (`core::collective`, pure + unit-tested):
+  - *Aggregate-only inputs.* A digest is built from benchmark **run scorecards**, which already carry no
+    prompt/response text — the builder never touches `events`. No project ids, customer ids, or free text
+    ever enter a digest.
+  - *k-anonymity.* A `(provider, model, task_type)` bucket is published only when it aggregates ≥
+    `min_cases` cases (default 5), so a rare/unique task can't be fingerprinted to one operator.
+  - *Coarse task types.* A benchmark name is classified into a **fixed vocabulary** (`qa`,
+    `summarization`, `coding`, `rag`, …) — the raw name is never published.
+  - *Opaque contributor id.* `LIGHTTRACK_COLLECTIVE_ID` is hashed (SHA-256, truncated) before it goes on
+    the wire, so a hub can update a source idempotently without learning who it is; unset ⇒ `anonymous`.
+- **Topology.** Any LightTrack can be a **hub** (`LIGHTTRACK_COLLECTIVE_ACCEPT=1`, off by default) that
+  receives digests and merges them; others contribute. Same binary, no central service required.
+- **API.** `GET /v1/collective/digest?min_cases=` (admin — preview what we'd publish) ·
+  `POST /v1/collective/ingest` (hub-only; replaces a contributor's set, validates + clamps each entry) ·
+  `GET /v1/collective/leaderboard?task_type=&provider=` (open read — the merged leaderboard).
+- **Surfaces.** `lt collective leaderboard|digest|contribute --hub <url>` (the CLI does the two-hop push:
+  GET own digest → POST to the hub); the `get_collective_leaderboard` MCP read tool; a rendered
+  leaderboard table shared by CLI + MCP.
+
 ## Data model additions (SQLite ↔ BigQuery, behind the Store trait)
 ```
 datasets(id, project_id, name, version, frozen, source, created_at)
@@ -110,6 +135,8 @@ case_results(id, run_id, dataset_item_id, target_id, output, latency_ms, tokens,
 rubrics(id, project_id, name, dimensions_json, threshold)        -- weighted anchored dimensions
 model_prices(provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok, effective_date, source_url)
 jobs(id, type, payload_json, status, attempts, progress, error, claimed_at, created_at)
+collective_entries(contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd,
+                   p50_latency_ms?, p95_latency_ms?, n_runs, n_cases, received_at)  -- hub side; PK=(contributor_id,provider,model,task_type)
 ```
 
 ## Phased plan

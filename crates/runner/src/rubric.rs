@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::{json, Value};
 
 use lighttrack_core::{Benchmark, BenchmarkCase, ModelPriceRow, Rubric};
@@ -10,7 +10,7 @@ use lighttrack_engine::{parse_judge_spec, run_rubric_judge, run_text, EngineConf
 
 use crate::cli::Cli;
 use crate::http::{get, post};
-use crate::util::{dim_mean, percentiles, price_gen_cost};
+use crate::util::{dim_mean, percentiles, price_gen_cost, run_status};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_rubric_benchmark(
@@ -38,6 +38,10 @@ pub(crate) fn run_rubric_benchmark(
     let mut latencies: Vec<u64> = Vec::new();
     let mut min_agreement = 1.0_f64;
     let mut failing: Vec<Value> = Vec::new();
+    // Cases whose judge output was wholly unparseable (skipped, never scored), and the running tally
+    // of individual self-consistency samples dropped from scored cases — kept out of the means so a
+    // flaky judge response never silently records a 0.0.
+    let (mut errored, mut sample_failures) = (0u32, 0u32);
 
     for (i, case) in cases.iter().enumerate() {
         let output = match &case.output {
@@ -47,11 +51,26 @@ pub(crate) fn run_rubric_benchmark(
                 continue;
             }
         };
-        let o = run_rubric_judge(
+        let o = match run_rubric_judge(
             engine, &jp, &jm, &rubric, &case.input, case.expected.as_deref(), output, samples,
-        )
-        .context("rubric judge failed")?;
+        ) {
+            Ok(o) => o,
+            // Don't abort the whole run (or record a phantom 0.0) on one garbage judge response —
+            // skip the case loudly so the scorecard's denominator stays honest.
+            Err(e) => {
+                eprintln!("  case {} skipped — judge output unparseable: {e}", i + 1);
+                errored += 1;
+                continue;
+            }
+        };
         judged += 1;
+        if o.parse_failures > 0 {
+            sample_failures += o.parse_failures;
+            eprintln!(
+                "  case {}: {}/{} judge samples were unparseable and dropped from the mean",
+                i + 1, o.parse_failures, o.samples
+            );
+        }
         overall_sum += o.overall;
         if o.pass {
             passes += 1;
@@ -126,6 +145,12 @@ pub(crate) fn run_rubric_benchmark(
             "Judge agreement dipped to {min_agreement:.2}; tighten anchors or raise --samples."
         ));
     }
+    if errored > 0 || sample_failures > 0 {
+        recs.push(format!(
+            "Judge emitted unparseable output: {errored} case(s) skipped, {sample_failures} sample(s) \
+dropped. Check the judge model/prompt — these scores are absent, not failing."
+        ));
+    }
     recs.push(if mean >= rubric.threshold {
         format!("Overall {mean:.2} meets threshold {:.2}.", rubric.threshold)
     } else {
@@ -157,23 +182,20 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
         None
     };
 
-    let status = match bench.baseline_score {
-        Some(b) if mean + 1e-9 < b => "regressed",
-        Some(_) => "passed",
-        None => "no_baseline",
-    };
+    let status = run_status(bench.baseline_score, mean);
 
     let mut report = json!({
         "rubric": rubric.name, "threshold": rubric.threshold, "samples": samples,
         "overall_mean": mean, "pass_rate": pass_rate, "dimensions": dim_means,
         "weakest_dimension": weakest, "failing_cases": failing, "recommendations": recs,
+        "unparseable_cases": errored, "dropped_samples": sample_failures,
     });
     if let Some(h) = &healing {
         report["healing"] = json!(h);
     }
 
     println!(
-        "\nscorecard: overall={mean:.3}  pass_rate={:.0}%  cost=${cost:.5}  p50={}ms  tokens={total_tokens}  status={status}",
+        "\nscorecard: overall={mean:.3}  pass_rate={:.0}%  cost=${cost:.5}  p50={}ms  tokens={total_tokens}  unparseable={errored}  status={status}",
         pass_rate * 100.0,
         p50.unwrap_or(0)
     );

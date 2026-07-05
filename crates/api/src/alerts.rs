@@ -16,7 +16,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use lighttrack_core::LimitStatus;
+use lighttrack_core::{LimitStatus, RelayTask};
+
+use crate::forecast::ForecastAlert;
 
 struct AlertConfig {
     webhook: Option<String>,
@@ -83,15 +85,56 @@ impl Alerter {
         tokio::spawn(async move { me.deliver(due).await });
     }
 
+    /// Fire best-effort delivery for pre-emptive forecast alerts (budget breach / margin erosion),
+    /// after the same per-key cooldown dedup as breaches so a sustained forecast doesn't spam.
+    pub(crate) fn notify_forecast(self: &Arc<Self>, alerts: &[ForecastAlert]) {
+        if !self.enabled() {
+            return;
+        }
+        let due: Vec<ForecastAlert> = alerts
+            .iter()
+            .filter(|a| self.should_send_key(&a.dedup_key()))
+            .cloned()
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        let me = Arc::clone(self);
+        tokio::spawn(async move { me.deliver_forecast(due).await });
+    }
+
+    /// Fire best-effort delivery for relay tasks that just dead-lettered (exhausted their
+    /// attempts, or their device vanished past the retry envelope). A task dies at most once, but
+    /// the cooldown key still guards against a re-observed transition double-notifying.
+    pub(crate) fn notify_relay_dead(self: &Arc<Self>, tasks: &[RelayTask]) {
+        if !self.enabled() {
+            return;
+        }
+        let due: Vec<RelayTask> = tasks
+            .iter()
+            .filter(|t| self.should_send_key(&format!("relay-dead:{}", t.id)))
+            .cloned()
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        let me = Arc::clone(self);
+        tokio::spawn(async move { me.deliver_relay_dead(due).await });
+    }
+
     /// True if this breach is outside its cooldown (and records the send time).
     fn should_send(&self, b: &LimitStatus) -> bool {
-        let key = format!("{}:{:?}:{:?}", b.project_id, b.metric, b.window);
+        self.should_send_key(&format!("{}:{:?}:{:?}", b.project_id, b.metric, b.window))
+    }
+
+    /// Cooldown gate keyed by an arbitrary dedup string (records the send time on success).
+    fn should_send_key(&self, key: &str) -> bool {
         let now = Instant::now();
         let mut map = self.last_sent.lock().unwrap();
-        match map.get(&key) {
+        match map.get(key) {
             Some(t) if now.duration_since(*t) < self.config.cooldown => false,
             _ => {
-                map.insert(key, now);
+                map.insert(key.to_string(), now);
                 true
             }
         }
@@ -122,10 +165,14 @@ impl Alerter {
     }
 
     async fn post_ntfy(&self, url: &str, msg: &str) {
+        self.post_ntfy_titled(url, "LightTrack limit breach", msg).await
+    }
+
+    async fn post_ntfy_titled(&self, url: &str, title: &str, msg: &str) {
         let req = self
             .http
             .post(url)
-            .header("Title", "LightTrack limit breach")
+            .header("Title", title)
             .header("Tags", "warning")
             .header("Priority", "high")
             .body(msg.to_string());
@@ -133,6 +180,62 @@ impl Alerter {
             Ok(r) if !r.status().is_success() => eprintln!("[alert] ntfy -> HTTP {}", r.status()),
             Err(e) => eprintln!("[alert] ntfy error: {e}"),
             _ => {}
+        }
+    }
+
+    async fn deliver_relay_dead(&self, tasks: Vec<RelayTask>) {
+        for t in &tasks {
+            let msg = format!(
+                "LightTrack alert: relay task '{}' ({}) in project '{}' dead-lettered after {} \
+                 attempt(s) — {}",
+                t.id,
+                t.action_type,
+                t.project_id,
+                t.attempts,
+                t.error.as_deref().unwrap_or("no error recorded"),
+            );
+            if let Some(url) = &self.config.webhook {
+                // `text` (Slack) + `content` (Discord) + a trimmed task (custom receivers) —
+                // not the full row: payload/result can be large and may carry app data.
+                let body = serde_json::json!({
+                    "event": "relay_task_dead", "text": msg, "content": msg,
+                    "task": {
+                        "id": t.id, "project_id": t.project_id, "action_type": t.action_type,
+                        "source": t.source, "attempts": t.attempts, "error": t.error,
+                    },
+                });
+                match self.http.post(url).json(&body).send().await {
+                    Ok(r) if !r.status().is_success() => {
+                        eprintln!("[alert] relay webhook -> HTTP {}", r.status())
+                    }
+                    Err(e) => eprintln!("[alert] relay webhook error: {e}"),
+                    _ => {}
+                }
+            }
+            if let Some(url) = &self.config.ntfy {
+                self.post_ntfy_titled(url, "LightTrack relay task dead", &msg).await;
+            }
+        }
+    }
+
+    async fn deliver_forecast(&self, alerts: Vec<ForecastAlert>) {
+        for a in &alerts {
+            if let Some(url) = &self.config.webhook {
+                // `text` (Slack) + `content` (Discord) + the structured forecast (custom receivers).
+                let body = serde_json::json!({
+                    "event": "forecast_alert", "text": a.message, "content": a.message, "forecast": a,
+                });
+                match self.http.post(url).json(&body).send().await {
+                    Ok(r) if !r.status().is_success() => {
+                        eprintln!("[alert] forecast webhook -> HTTP {}", r.status())
+                    }
+                    Err(e) => eprintln!("[alert] forecast webhook error: {e}"),
+                    _ => {}
+                }
+            }
+            if let Some(url) = &self.config.ntfy {
+                self.post_ntfy_titled(url, "LightTrack forecast", &a.message).await;
+            }
         }
     }
 }

@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use lighttrack_core::{Dataset, DatasetItem};
 
-use super::util::{fmt_ts, parse_ts};
+use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
 
 const DATASET_COLS: &str = "id, project_id, name, version, frozen, source, created_at";

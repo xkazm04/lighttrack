@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, Row};
 
 use lighttrack_core::Score;
 
-use super::util::{fmt_ts, parse_ts};
+use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
 
 const COLS: &str = "id, project_id, event_id, rubric, value, max, pass, reasoning, \
@@ -30,6 +30,27 @@ pub(super) fn insert(conn: &Connection, s: &Score) -> Result<()> {
         ],
     )?;
     Ok(())
+}
+
+/// Scores attached to any event within a trace, newest first. A score links to a trace transitively
+/// through its `event_id` (join `scores.event_id` → `events.trace_id`), so no per-score `trace_id`
+/// column is needed — both per-call scores and a whole-trace score (anchored to the root span) surface.
+pub(super) fn list_by_trace(conn: &Connection, trace_id: &str) -> Result<Vec<Score>> {
+    let sql = format!(
+        "SELECT {} FROM scores s JOIN events e ON s.event_id = e.id \
+         WHERE e.trace_id = ?1 ORDER BY s.created_at DESC",
+        prefixed_cols("s")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let raws = stmt
+        .query_map(params![trace_id], map_raw)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    raws.into_iter().map(from_raw).collect()
+}
+
+/// `COLS` with each column qualified by `alias` (for joins that share column names across tables).
+fn prefixed_cols(alias: &str) -> String {
+    COLS.split(", ").map(|c| format!("{alias}.{c}")).collect::<Vec<_>>().join(", ")
 }
 
 pub(super) fn list(conn: &Connection, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
