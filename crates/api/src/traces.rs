@@ -123,6 +123,7 @@ pub(crate) async fn score_trace(
     let store = st.store.clone();
     let to_insert = score.clone();
     spawn_db(move || store.insert_score(&to_insert)).await?;
+    st.alerts.record_score(&score);
     Ok(Json(score))
 }
 

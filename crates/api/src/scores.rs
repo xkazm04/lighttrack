@@ -23,6 +23,8 @@ pub(crate) async fn post_score(
     let store = st.store.clone();
     let s2 = s.clone();
     spawn_db(move || store.insert_score(&s2)).await?;
+    // Best-effort quality-regression detection over the rolling per-(project,rubric) score window.
+    st.alerts.record_score(&s);
     Ok(Json(s))
 }
 

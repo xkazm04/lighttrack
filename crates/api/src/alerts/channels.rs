@@ -7,7 +7,7 @@ use lighttrack_core::{LimitStatus, RelayTask};
 use reqwest::Client;
 use serde_json::{json, Value};
 
-use super::{AlertConfig, ErrorSpike};
+use super::{AlertConfig, ErrorSpike, ScoreDrop};
 use crate::forecast::ForecastAlert;
 
 pub(super) async fn deliver_breaches(cfg: &AlertConfig, http: &Client, breaches: &[LimitStatus]) {
@@ -64,6 +64,22 @@ pub(super) async fn deliver_error_spike(cfg: &AlertConfig, http: &Client, s: &Er
     post_webhook(cfg, http, "error_spike", &msg, extra).await;
     post_ntfy(cfg, http, "LightTrack error spike", &msg).await;
     post_resend(cfg, http, &format!("LightTrack: error spike in '{}'", s.project_id), &msg).await;
+}
+
+pub(super) async fn deliver_score_drop(cfg: &AlertConfig, http: &Client, d: &ScoreDrop) {
+    let msg = format!(
+        "LightTrack alert: quality regression in '{}' — rubric '{}' down {:.0}% (recent mean {:.2} vs \
+         baseline {:.2} over {} scores, judge {}).",
+        d.project_id, d.rubric, d.drop_pct, d.recent_avg, d.baseline_avg, d.samples, d.scored_by
+    );
+    let extra = json!({ "drop": {
+        "project_id": d.project_id, "rubric": d.rubric, "recent_avg": d.recent_avg,
+        "baseline_avg": d.baseline_avg, "drop_pct": d.drop_pct, "samples": d.samples,
+        "scored_by": d.scored_by,
+    }});
+    post_webhook(cfg, http, "score_drop", &msg, extra).await;
+    post_ntfy(cfg, http, "LightTrack quality regression", &msg).await;
+    post_resend(cfg, http, &format!("LightTrack: quality regression in '{}'", d.project_id), &msg).await;
 }
 
 fn breach_message(b: &LimitStatus) -> String {

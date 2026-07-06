@@ -18,12 +18,15 @@
 //!   LIGHTTRACK_ALERT_COOLDOWN_SECS        re-alert window per dedup key (default 3600)
 //!   LIGHTTRACK_ALERT_ERROR_THRESHOLD      failed calls per window that trip an error-spike (default 5)
 //!   LIGHTTRACK_ALERT_ERROR_WINDOW_SECS    rolling window for the error-spike counter (default 300)
+//!   LIGHTTRACK_ALERT_SCORE_WINDOW         per-(project,rubric) score window for regression (default 20)
+//!   LIGHTTRACK_ALERT_SCORE_MIN_SAMPLES    min scores before a regression can trip (default 8)
+//!   LIGHTTRACK_ALERT_SCORE_DROP           recent-vs-baseline mean drop that trips score_drop (0.15)
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use lighttrack_core::{LimitStatus, LlmEvent, RelayTask};
+use lighttrack_core::{LimitStatus, LlmEvent, RelayTask, Score};
 
 use crate::forecast::ForecastAlert;
 
@@ -36,6 +39,12 @@ struct AlertConfig {
     cooldown: Duration,
     error_threshold: u32,
     error_window: Duration,
+    /// Rolling per-(project, rubric) score window size for quality-regression detection.
+    score_window: usize,
+    /// Minimum scores in the window before a regression can trip.
+    score_min_samples: usize,
+    /// Relative drop of the recent mean vs the baseline mean that trips a `score_drop` (e.g. 0.15).
+    score_drop: f64,
 }
 
 struct ResendConfig {
@@ -55,11 +64,25 @@ struct ErrorSpike {
     error: Option<String>,
 }
 
+/// A detected quality regression: the recent mean score for one (project, rubric) has fallen well
+/// below its baseline mean.
+#[derive(Clone)]
+struct ScoreDrop {
+    project_id: String,
+    rubric: String,
+    recent_avg: f64,
+    baseline_avg: f64,
+    drop_pct: f64,
+    samples: usize,
+    scored_by: String,
+}
+
 pub(crate) struct Alerter {
     config: AlertConfig,
     http: reqwest::Client,
     last_sent: Mutex<HashMap<String, Instant>>,
     error_windows: Mutex<HashMap<String, VecDeque<Instant>>>,
+    score_windows: Mutex<HashMap<String, VecDeque<f64>>>,
 }
 
 impl Alerter {
@@ -72,6 +95,9 @@ impl Alerter {
                 cooldown: Duration::from_secs(env_u64("LIGHTTRACK_ALERT_COOLDOWN_SECS", 3600)),
                 error_threshold: (env_u64("LIGHTTRACK_ALERT_ERROR_THRESHOLD", 5) as u32).max(1),
                 error_window: Duration::from_secs(env_u64("LIGHTTRACK_ALERT_ERROR_WINDOW_SECS", 300)),
+                score_window: (env_u64("LIGHTTRACK_ALERT_SCORE_WINDOW", 20) as usize).max(4),
+                score_min_samples: (env_u64("LIGHTTRACK_ALERT_SCORE_MIN_SAMPLES", 8) as usize).max(4),
+                score_drop: env_f64("LIGHTTRACK_ALERT_SCORE_DROP", 0.15),
             },
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
@@ -79,6 +105,7 @@ impl Alerter {
                 .unwrap_or_default(),
             last_sent: Mutex::new(HashMap::new()),
             error_windows: Mutex::new(HashMap::new()),
+            score_windows: Mutex::new(HashMap::new()),
         }
     }
 
@@ -102,11 +129,12 @@ impl Alerter {
             chans.push(format!("resend({})", r.to.len()));
         }
         format!(
-            "{} (cooldown {}s, error-spike >={}/{}s)",
+            "{} (cooldown {}s, error-spike >={}/{}s, score-drop >={:.0}%)",
             chans.join("+"),
             self.config.cooldown.as_secs(),
             self.config.error_threshold,
             self.config.error_window.as_secs(),
+            self.config.score_drop * 100.0,
         )
     }
 
@@ -197,6 +225,64 @@ impl Alerter {
         dq.len() as u32
     }
 
+    /// Record one judge score and, if the recent mean for its (project, rubric) has regressed below
+    /// the baseline mean by the configured fraction, fire a (cooldown-deduped) `score_drop` alert.
+    pub(crate) fn record_score(self: &Arc<Self>, s: &Score) {
+        if !self.enabled() || s.max <= 0.0 {
+            return;
+        }
+        let normalized = (s.value / s.max).clamp(0.0, 1.0);
+        let key = format!("{}\u{1}{}", s.project_id, s.rubric);
+        let Some((recent, baseline, samples)) = self.note_score(&key, normalized) else {
+            return;
+        };
+        if !self.should_send_key(&format!("score-drop:{key}")) {
+            return;
+        }
+        let drop = ScoreDrop {
+            project_id: s.project_id.clone(),
+            rubric: s.rubric.clone(),
+            recent_avg: recent,
+            baseline_avg: baseline,
+            drop_pct: (baseline - recent) / baseline * 100.0,
+            samples,
+            scored_by: s.scored_by.clone(),
+        };
+        let me = Arc::clone(self);
+        tokio::spawn(async move { channels::deliver_score_drop(&me.config, &me.http, &drop).await });
+    }
+
+    /// Push a normalized score into the (project, rubric) window (capped at `score_window`) and, once
+    /// there are enough samples, return `(recent_mean, baseline_mean)` when the recent tail has
+    /// regressed past the drop threshold. Split out (no I/O) so it is unit-testable.
+    fn note_score(&self, key: &str, normalized: f64) -> Option<(f64, f64, usize)> {
+        let mut map = self.score_windows.lock().unwrap();
+        let dq = map.entry(key.to_string()).or_default();
+        dq.push_back(normalized);
+        while dq.len() > self.config.score_window {
+            dq.pop_front();
+        }
+        let len = dq.len();
+        if len < self.config.score_min_samples {
+            return None;
+        }
+        let recent_k = (len / 4).max(3);
+        let base_n = len.checked_sub(recent_k)?;
+        if base_n < 3 {
+            return None;
+        }
+        let recent: f64 = dq.iter().skip(base_n).sum::<f64>() / recent_k as f64;
+        let baseline: f64 = dq.iter().take(base_n).sum::<f64>() / base_n as f64;
+        if baseline <= 0.0 {
+            return None;
+        }
+        if (baseline - recent) / baseline >= self.config.score_drop {
+            Some((recent, baseline, len))
+        } else {
+            None
+        }
+    }
+
     /// True if this breach is outside its cooldown (and records the send time).
     fn should_send(&self, b: &LimitStatus) -> bool {
         self.should_send_key(&format!("{}:{:?}:{:?}", b.project_id, b.metric, b.window))
@@ -241,6 +327,10 @@ fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
 }
 
+fn env_f64(key: &str, default: f64) -> f64 {
+    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,10 +349,14 @@ mod tests {
                 cooldown: Duration::from_secs(cooldown_secs),
                 error_threshold,
                 error_window: Duration::from_secs(error_window_secs),
+                score_window: 20,
+                score_min_samples: 8,
+                score_drop: 0.15,
             },
             http: reqwest::Client::new(),
             last_sent: Mutex::new(HashMap::new()),
             error_windows: Mutex::new(HashMap::new()),
+            score_windows: Mutex::new(HashMap::new()),
         }
     }
 
@@ -307,5 +401,26 @@ mod tests {
         assert_eq!(a.note_error("p", base + Duration::from_secs(90)), 2);
         // A different project keeps its own independent window.
         assert_eq!(a.note_error("q", base + Duration::from_secs(90)), 1);
+    }
+
+    #[test]
+    fn score_regression_detected() {
+        let a = alerter(3600); // default score window 20 / min 8 / drop 0.15
+        // A run of good scores establishes the baseline — no regression.
+        for _ in 0..12 {
+            assert!(a.note_score("p\u{1}helpfulness", 0.9).is_none());
+        }
+        // The recent tail turning bad trips the regression.
+        let mut tripped = false;
+        for _ in 0..4 {
+            if a.note_score("p\u{1}helpfulness", 0.4).is_some() {
+                tripped = true;
+            }
+        }
+        assert!(tripped);
+        // A steady-but-low rubric (no baseline-vs-recent gap) does not trip.
+        for _ in 0..12 {
+            assert!(a.note_score("p\u{1}steady", 0.5).is_none());
+        }
     }
 }

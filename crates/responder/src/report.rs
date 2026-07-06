@@ -1,21 +1,23 @@
 //! Persist a diagnosis (and any auto-fix outcome) as a Markdown file under the report directory.
+//! Generic over the trigger (an error spike or a quality regression).
 
 use std::path::{Path, PathBuf};
 
 use crate::act::ActOutcome;
 use crate::claude::ClaudeRun;
-use crate::webhook::Spike;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn write_report(
     dir: &str,
     ts: &str,
-    spike: &Spike,
+    project_id: &str,
+    trigger_kind: &str,
+    trigger_detail: &str,
     diag: &ClaudeRun,
     act: Option<&ActOutcome>,
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
-    let safe: String = spike
-        .project_id
+    let safe: String = project_id
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
@@ -23,17 +25,16 @@ pub(crate) fn write_report(
 
     let cost = diag.cost_usd.map(|c| format!("${c:.4}")).unwrap_or_else(|| "n/a".to_string());
     let mut body = format!(
-        "# Diagnosis — {project}\n\n\
+        "# Diagnosis — {project_id}\n\n\
          - when: {ts}\n\
+         - trigger: {trigger_kind}\n\
          - model: {model}\n\
          - cost: {cost}\n\
          - status: {ok}\n\n\
-         ## Triggering error\n\n```\n{error}\n```\n\n\
+         ## Trigger\n\n```\n{trigger_detail}\n```\n\n\
          ## Investigation\n\n{text}\n",
-        project = spike.project_id,
         model = diag.model,
         ok = if diag.ok { "ok" } else { "FAILED" },
-        error = spike.error.as_deref().unwrap_or("(no message)"),
         text = diag.text,
     );
     if let Some(a) = act {
