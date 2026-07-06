@@ -14,28 +14,38 @@ use std::sync::Arc;
 use axum::routing::{get, post};
 use axum::Router;
 
+mod act;
+mod breaker;
+mod claude;
 mod classify;
 mod config;
 mod enrich;
+mod git;
 mod investigate;
 mod pipeline;
 mod report;
+mod state;
 mod webhook;
 
+use breaker::Breaker;
 use config::Config;
+use state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cfg = Arc::new(Config::from_env()?);
+    let n_autofix = cfg.projects.values().filter(|p| p.auto_fix).count();
     println!(
-        "lt-responder v{} on http://{}  (lighttrack={}, model={}, mode={}, budget=${:.2}, projects={}, claude_bin={})",
+        "lt-responder v{} on http://{}  (lighttrack={}, model={}, mode={}, budget=${:.2}, timeout={}s, projects={} ({} auto-fix), claude_bin={})",
         env!("CARGO_PKG_VERSION"),
         cfg.bind,
         cfg.lighttrack_url,
         cfg.defaults.model,
         cfg.defaults.permission_mode,
         cfg.defaults.max_budget_usd,
+        cfg.defaults.timeout_secs,
         cfg.projects.len(),
+        n_autofix,
         cfg.claude_bin,
     );
     if cfg.projects.is_empty() {
@@ -45,10 +55,11 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    let state = AppState { cfg: cfg.clone(), breaker: Arc::new(Breaker::new()) };
     let app = Router::new()
         .route("/health", get(health))
         .route("/webhook", post(webhook::receive))
-        .with_state(cfg.clone());
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&cfg.bind).await?;
     axum::serve(listener, app).await?;

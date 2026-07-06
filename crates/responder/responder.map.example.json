@@ -5,14 +5,18 @@
     "permission_mode": "plan",
     "max_budget_usd": 1.0,
     "enrich_limit": 20,
-    "timeout_secs": 240
+    "timeout_secs": 240,
+    "act_permission_mode": "acceptEdits",
+    "act_cooldown_secs": 3600,
+    "max_acts_per_hour": 3
   },
   "projects": {
     "my-project-dev": {
       "repo": "/absolute/path/to/your/repo",
       "branch": "main",
       "hint": "Where the LLM calls live, e.g. src/lib/llm/ — points the investigator at the right area.",
-      "test_cmd": "npm test"
+      "test_cmd": "npm test",
+      "auto_fix": false
     }
   }
 }

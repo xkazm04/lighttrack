@@ -22,6 +22,12 @@ pub(crate) struct Defaults {
     /// Wall-clock cap on one investigation; the claude child is killed past it. This CLI has no
     /// `--max-turns`, so the timeout is the only hard bound on a runaway (over-)exploration.
     pub timeout_secs: u64,
+    /// Permission mode for the ACT (auto-fix) run — `acceptEdits` lets it edit files without asking.
+    pub act_permission_mode: String,
+    /// Circuit breaker: minimum seconds between auto-fixes on the same project.
+    pub act_cooldown_secs: u64,
+    /// Circuit breaker: max auto-fixes applied across all projects per rolling hour.
+    pub max_acts_per_hour: u32,
 }
 
 /// One mapped project: where its code lives locally, plus optional hints for the investigator.
@@ -34,6 +40,9 @@ pub(crate) struct ProjectEntry {
     pub hint: Option<String>,
     #[serde(default)]
     pub test_cmd: Option<String>,
+    /// Opt-in: allow the ACT stage to auto-apply a fix on a branch for this project. Default off.
+    #[serde(default)]
+    pub auto_fix: bool,
 }
 
 impl Config {
@@ -63,6 +72,9 @@ struct RawDefaults {
     max_budget_usd: Option<f64>,
     enrich_limit: Option<usize>,
     timeout_secs: Option<u64>,
+    act_permission_mode: Option<String>,
+    act_cooldown_secs: Option<u64>,
+    max_acts_per_hour: Option<u32>,
 }
 
 #[derive(Deserialize, Default)]
@@ -97,6 +109,9 @@ fn load_map(path: &str) -> (Defaults, HashMap<String, ProjectEntry>) {
         max_budget_usd: d.max_budget_usd.unwrap_or(1.0),
         enrich_limit: d.enrich_limit.unwrap_or(20),
         timeout_secs: d.timeout_secs.unwrap_or(240),
+        act_permission_mode: d.act_permission_mode.unwrap_or_else(|| "acceptEdits".to_string()),
+        act_cooldown_secs: d.act_cooldown_secs.unwrap_or(3600),
+        max_acts_per_hour: d.max_acts_per_hour.unwrap_or(3),
     };
     (defaults, parsed.projects)
 }
@@ -109,6 +124,9 @@ impl Defaults {
             max_budget_usd: 1.0,
             enrich_limit: 20,
             timeout_secs: 240,
+            act_permission_mode: "acceptEdits".to_string(),
+            act_cooldown_secs: 3600,
+            max_acts_per_hour: 3,
         }
     }
 }

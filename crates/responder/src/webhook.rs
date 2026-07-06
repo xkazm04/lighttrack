@@ -1,16 +1,14 @@
 //! The `/webhook` endpoint: receive a LightTrack alert, pull out the `error_spike` payload, and hand
 //! it to the pipeline on a detached task so we ack the POST immediately (investigations are slow).
 
-use std::sync::Arc;
-
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::config::Config;
 use crate::pipeline;
+use crate::state::AppState;
 
 /// The `spike` object LightTrack's alerter emits for an `error_spike` event.
 #[derive(Deserialize, Clone)]
@@ -26,7 +24,7 @@ pub(crate) struct Spike {
     pub error: Option<String>,
 }
 
-pub(crate) async fn receive(State(cfg): State<Arc<Config>>, Json(body): Json<Value>) -> StatusCode {
+pub(crate) async fn receive(State(st): State<AppState>, Json(body): Json<Value>) -> StatusCode {
     let event = body.get("event").and_then(Value::as_str).unwrap_or("(unknown)");
     let Some(spike_val) = body.get("spike") else {
         // Breach / forecast / relay-dead alerts share this endpoint; only error-spikes drive a run.
@@ -40,6 +38,6 @@ pub(crate) async fn receive(State(cfg): State<Arc<Config>>, Json(body): Json<Val
             return StatusCode::OK;
         }
     };
-    tokio::spawn(pipeline::handle_spike(cfg, spike));
+    tokio::spawn(pipeline::handle_spike(st.cfg, st.breaker, spike));
     StatusCode::OK
 }
