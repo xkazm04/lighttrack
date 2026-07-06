@@ -8,7 +8,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{LimitStatus, LlmEvent};
+use lighttrack_core::{LimitStatus, LlmEvent, Status};
 use lighttrack_store::CostRow;
 
 use crate::auth::Principal;
@@ -76,6 +76,12 @@ pub(crate) async fn post_event(
             })
             .unwrap_or_else(|| "ingest blocked: usage limit exceeded".to_string());
         return Err(ApiError::rate_limited(why));
+    }
+
+    // Best-effort error-spike detection: count admitted non-success calls per project and fire a
+    // (deduped) alert when a project crosses its error threshold within the rolling window.
+    if ev.status != Status::Success {
+        st.alerts.record_error(&ev);
     }
 
     // Admitted: any remaining breaches are Alert-only (enforcing ones would have 429'd above).
