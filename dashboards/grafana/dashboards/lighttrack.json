@@ -1,37 +1,101 @@
 {
-  "title": "LightTrack — LLM observability",
+  "title": "LightTrack — LLM ops monitor",
   "uid": "lighttrack-overview",
   "tags": ["lighttrack"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
-  "time": { "from": "now-7d", "to": "now" },
+  "time": { "from": "now-24h", "to": "now" },
   "templating": { "list": [] },
   "annotations": { "list": [] },
   "panels": [
     {
       "id": 1,
       "type": "stat",
-      "title": "Total cost (USD)",
+      "title": "Error rate",
+      "description": "Share of non-success events (error + timeout) in the selected window.",
       "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
-      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 1 },
+            { "color": "red", "value": 5 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
       "targets": [
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT COALESCE(SUM(cost_usd),0) AS value FROM events WHERE $__timeFilter(ts::timestamptz)"
+          "rawSql": "SELECT (100.0 * COUNT(*) FILTER (WHERE status <> 'success') / NULLIF(COUNT(*),0)) AS value FROM events WHERE $__timeFilter(ts::timestamptz)"
         }
       ]
     },
     {
       "id": 2,
       "type": "stat",
+      "title": "Errors",
+      "description": "Count of non-success events (error + timeout) in the selected window.",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 1 },
+            { "color": "red", "value": 10 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT COUNT(*) FILTER (WHERE status <> 'success') AS value FROM events WHERE $__timeFilter(ts::timestamptz)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
       "title": "Calls",
       "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
       "targets": [
         {
           "refId": "A",
@@ -41,12 +105,43 @@
       ]
     },
     {
-      "id": 3,
+      "id": 4,
+      "type": "stat",
+      "title": "Total cost (USD)",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT COALESCE(SUM(cost_usd),0) AS value FROM events WHERE $__timeFilter(ts::timestamptz)"
+        }
+      ]
+    },
+    {
+      "id": 5,
       "type": "stat",
       "title": "Tokens",
       "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
       "targets": [
         {
           "refId": "A",
@@ -56,12 +151,20 @@
       ]
     },
     {
-      "id": 4,
+      "id": 6,
       "type": "stat",
       "title": "Avg score",
       "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
-      "fieldConfig": { "defaults": { "unit": "short", "decimals": 2 }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
       "targets": [
         {
           "refId": "A",
@@ -71,11 +174,34 @@
       ]
     },
     {
-      "id": 5,
+      "id": 7,
+      "type": "timeseries",
+      "title": "Errors over time (per project)",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "bars", "fillOpacity": 60, "stacking": { "mode": "normal", "group": "A" } },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT $__timeGroupAlias(ts::timestamptz,'5m'), project_id AS metric, COUNT(*) FILTER (WHERE status <> 'success') AS errors FROM events WHERE $__timeFilter(ts::timestamptz) GROUP BY 1, project_id ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 8,
       "type": "timeseries",
       "title": "Cost over time (hourly)",
       "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
       "fieldConfig": { "defaults": { "unit": "currencyUSD", "custom": { "drawStyle": "bars", "fillOpacity": 40 } }, "overrides": [] },
       "targets": [
         {
@@ -86,11 +212,62 @@
       ]
     },
     {
-      "id": 6,
+      "id": 9,
+      "type": "table",
+      "title": "Project health",
+      "description": "One row per project — errors and error rate colored red so a broken project stands out on the wall.",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "err_rate" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              { "id": "decimals", "value": 2 },
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } },
+              { "id": "color", "value": { "mode": "thresholds" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 1 },
+                { "color": "red", "value": 5 }
+              ] } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "errors" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } },
+              { "id": "color", "value": { "mode": "thresholds" } },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 1 },
+                { "color": "red", "value": 10 }
+              ] } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "cost" },
+            "properties": [ { "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 4 } ]
+          }
+        ]
+      },
+      "options": { "sortBy": [ { "displayName": "errors", "desc": true } ] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT project_id, COUNT(*) AS calls, COUNT(*) FILTER (WHERE status <> 'success') AS errors, ROUND(100.0 * COUNT(*) FILTER (WHERE status <> 'success') / NULLIF(COUNT(*),0), 2) AS err_rate, COALESCE(SUM(cost_usd),0) AS cost FROM events WHERE $__timeFilter(ts::timestamptz) GROUP BY project_id ORDER BY errors DESC, cost DESC"
+        }
+      ]
+    },
+    {
+      "id": 10,
       "type": "table",
       "title": "Cost by project / provider / model",
       "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
       "fieldConfig": { "defaults": {}, "overrides": [ { "matcher": { "id": "byName", "options": "cost" }, "properties": [ { "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 4 } ] } ] },
       "targets": [
         {
@@ -101,11 +278,43 @@
       ]
     },
     {
-      "id": 7,
+      "id": 11,
+      "type": "table",
+      "title": "Recent errors",
+      "description": "Latest non-success events with the captured error string — the failure feed for the wall.",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "status" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              { "id": "mappings", "value": [
+                { "type": "value", "options": {
+                  "error": { "color": "red", "index": 0 },
+                  "timeout": { "color": "orange", "index": 1 }
+                } }
+              ] }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT ts, project_id, provider, model, status, error FROM events WHERE status <> 'success' AND $__timeFilter(ts::timestamptz) ORDER BY ts DESC LIMIT 100"
+        }
+      ]
+    },
+    {
+      "id": 12,
       "type": "table",
       "title": "Recent scores",
       "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
       "fieldConfig": { "defaults": {}, "overrides": [] },
       "targets": [
         {
