@@ -18,6 +18,11 @@ data/
 service-account*.json
 *-key.json
 
+# Responder (lt-responder): the real project→repo map holds local absolute paths, and generated
+# diagnoses can quote source. Only the example map is committed.
+responder.map.json
+/diagnoses/
+
 # Relay action library (docs/RELAY.md): per-user prompts/connectors stay local.
 # Only the README and the example action are committed.
 actions/*

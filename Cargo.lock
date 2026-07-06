@@ -1160,6 +1160,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lighttrack-responder"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "lighttrack-runner"
 version = "0.0.1"
 dependencies = [

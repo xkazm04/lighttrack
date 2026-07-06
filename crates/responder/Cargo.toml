@@ -1,0 +1,20 @@
+[package]
+name = "lighttrack-responder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local reactive responder: on a LightTrack error-spike webhook, runs Claude Code (read-only) against the mapped repo and writes a diagnosis."
+
+[[bin]]
+name = "lt-responder"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+anyhow = "1"
+# Fetch failing events from LightTrack for context enrichment.
+reqwest = { version = "0.12", features = ["json"] }
