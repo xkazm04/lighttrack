@@ -119,7 +119,9 @@ async fn deliver(
     }
     if let Some(cfg_email) = &cfg.email {
         let subject = format!("LightTrack diagnosis: {project} ({kind})");
-        email::send(cfg_email, &subject, &md).await;
+        // HTML for rendering, Markdown as the text fallback.
+        let html = report::render_html(project, ts, kind, detail, diag, act_outcome);
+        email::send(cfg_email, &subject, &html, &md).await;
         println!("[responder] '{project}': diagnosis emailed");
     }
 }

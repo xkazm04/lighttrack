@@ -18,3 +18,5 @@ axum = "0.7"
 anyhow = "1"
 # Fetch failing events from LightTrack for context enrichment.
 reqwest = { version = "0.12", features = ["json"] }
+# Render the diagnosis Markdown to HTML for the email body (email clients don't render Markdown).
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }

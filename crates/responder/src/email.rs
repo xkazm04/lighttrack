@@ -33,13 +33,13 @@ impl EmailConfig {
     }
 }
 
-/// Best-effort: send `text` as a plain-text email. Logs and moves on if Resend rejects it.
-pub(crate) async fn send(cfg: &EmailConfig, subject: &str, text: &str) {
+/// Best-effort: send an HTML email with a plain-text fallback. Logs and moves on if Resend rejects it.
+pub(crate) async fn send(cfg: &EmailConfig, subject: &str, html: &str, text: &str) {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap_or_default();
-    let body = json!({ "from": cfg.from, "to": cfg.to, "subject": subject, "text": text });
+    let body = json!({ "from": cfg.from, "to": cfg.to, "subject": subject, "html": html, "text": text });
     match http
         .post("https://api.resend.com/emails")
         .bearer_auth(&cfg.key)
