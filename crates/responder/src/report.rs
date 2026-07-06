@@ -6,23 +6,16 @@ use std::path::{Path, PathBuf};
 use crate::act::ActOutcome;
 use crate::claude::ClaudeRun;
 
+/// Build the Markdown report body (also used verbatim as the email body).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn write_report(
-    dir: &str,
-    ts: &str,
+pub(crate) fn render(
     project_id: &str,
+    ts: &str,
     trigger_kind: &str,
     trigger_detail: &str,
     diag: &ClaudeRun,
     act: Option<&ActOutcome>,
-) -> std::io::Result<PathBuf> {
-    std::fs::create_dir_all(dir)?;
-    let safe: String = project_id
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect();
-    let path = Path::new(dir).join(format!("{safe}-{ts}.md"));
-
+) -> String {
     let cost = diag.cost_usd.map(|c| format!("${c:.4}")).unwrap_or_else(|| "n/a".to_string());
     let mut body = format!(
         "# Diagnosis — {project_id}\n\n\
@@ -40,7 +33,18 @@ pub(crate) fn write_report(
     if let Some(a) = act {
         body.push_str(&render_act(a));
     }
-    std::fs::write(&path, body)?;
+    body
+}
+
+/// Write a rendered report to `dir/{project}-{ts}.md`, returning the path.
+pub(crate) fn write(dir: &str, project_id: &str, ts: &str, markdown: &str) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let safe: String = project_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let path = Path::new(dir).join(format!("{safe}-{ts}.md"));
+    std::fs::write(&path, markdown)?;
     Ok(path)
 }
 

@@ -5,6 +5,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::email::EmailConfig;
+
 pub(crate) struct Config {
     pub bind: String,
     pub lighttrack_url: String,
@@ -12,6 +14,8 @@ pub(crate) struct Config {
     pub report_dir: String,
     pub defaults: Defaults,
     pub projects: HashMap<String, ProjectEntry>,
+    /// Optional email delivery of finished diagnoses (Resend).
+    pub email: Option<EmailConfig>,
 }
 
 pub(crate) struct Defaults {
@@ -61,6 +65,7 @@ impl Config {
             report_dir: env_or("LIGHTTRACK_RESPONDER_REPORT_DIR", "diagnoses"),
             defaults,
             projects,
+            email: EmailConfig::from_env(),
         })
     }
 }

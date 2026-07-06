@@ -19,6 +19,7 @@ mod breaker;
 mod claude;
 mod classify;
 mod config;
+mod email;
 mod enrich;
 mod git;
 mod investigate;
@@ -35,8 +36,12 @@ use state::AppState;
 async fn main() -> anyhow::Result<()> {
     let cfg = Arc::new(Config::from_env()?);
     let n_autofix = cfg.projects.values().filter(|p| p.auto_fix).count();
+    let email = match &cfg.email {
+        Some(e) => format!("on({})", e.recipients()),
+        None => "off".to_string(),
+    };
     println!(
-        "lt-responder v{} on http://{}  (lighttrack={}, model={}, mode={}, budget=${:.2}, timeout={}s, projects={} ({} auto-fix), claude_bin={})",
+        "lt-responder v{} on http://{}  (lighttrack={}, model={}, mode={}, budget=${:.2}, timeout={}s, projects={} ({} auto-fix), email={email}, claude_bin={})",
         env!("CARGO_PKG_VERSION"),
         cfg.bind,
         cfg.lighttrack_url,

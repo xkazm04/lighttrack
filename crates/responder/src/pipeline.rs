@@ -12,7 +12,7 @@ use crate::breaker::Breaker;
 use crate::classify::{classify, Class};
 use crate::config::{Config, ProjectEntry};
 use crate::webhook::{Drop, Spike, Trigger};
-use crate::{act, enrich, investigate, report};
+use crate::{act, email, enrich, investigate, report};
 
 pub(crate) async fn handle_trigger(cfg: Arc<Config>, breaker: Arc<Breaker>, trigger: Trigger) {
     let project = trigger.project_id().to_string();
@@ -75,7 +75,7 @@ async fn run_error(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, spike:
         spike.status.as_deref().unwrap_or("error"),
         spike.error.as_deref().unwrap_or("(no message)")
     );
-    write(cfg, &ts, project, "error", &detail, &diag, act_outcome.as_ref());
+    deliver(cfg, &ts, project, "error", &detail, &diag, act_outcome.as_ref()).await;
 }
 
 async fn run_quality(cfg: &Config, entry: &ProjectEntry, drop: &Drop) {
@@ -99,10 +99,11 @@ async fn run_quality(cfg: &Config, entry: &ProjectEntry, drop: &Drop) {
         drop.baseline_avg.unwrap_or(0.0),
     );
     // Diagnosis-only: no ACT for quality regressions.
-    write(cfg, &ts, project, "quality regression", &detail, &diag, None);
+    deliver(cfg, &ts, project, "quality regression", &detail, &diag, None).await;
 }
 
-fn write(
+/// Render the report once, persist it, and (if email is configured) send the same body.
+async fn deliver(
     cfg: &Config,
     ts: &str,
     project: &str,
@@ -111,9 +112,15 @@ fn write(
     diag: &crate::claude::ClaudeRun,
     act_outcome: Option<&act::ActOutcome>,
 ) {
-    match report::write_report(&cfg.report_dir, ts, project, kind, detail, diag, act_outcome) {
+    let md = report::render(project, ts, kind, detail, diag, act_outcome);
+    match report::write(&cfg.report_dir, project, ts, &md) {
         Ok(path) => println!("[responder] '{project}': report -> {}", path.display()),
         Err(e) => eprintln!("[responder] '{project}': could not write report: {e}"),
+    }
+    if let Some(cfg_email) = &cfg.email {
+        let subject = format!("LightTrack diagnosis: {project} ({kind})");
+        email::send(cfg_email, &subject, &md).await;
+        println!("[responder] '{project}': diagnosis emailed");
     }
 }
 
