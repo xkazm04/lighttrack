@@ -4,7 +4,7 @@
   "tags": ["lighttrack"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "30s",
   "time": { "from": "now-24h", "to": "now" },
   "templating": { "list": [] },
@@ -321,6 +321,63 @@
           "refId": "A",
           "format": "table",
           "rawSql": "SELECT created_at, project_id, rubric, value, max, pass, scored_by, cost_usd FROM scores WHERE $__timeFilter(created_at::timestamptz) ORDER BY created_at DESC LIMIT 100"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Score trend by rubric (hourly)",
+      "description": "Average normalized judge score per rubric. A falling line is a quality regression — what the score_drop alert fires on.",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": true, "thresholdsStyle": { "mode": "dashed" } },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 0.6 },
+            { "color": "green", "value": 0.8 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["last", "min"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT date_trunc('hour', created_at::timestamptz) AS time, rubric AS metric, AVG(value/NULLIF(max,0)) AS score FROM scores WHERE $__timeFilter(created_at::timestamptz) GROUP BY 1, rubric ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Pass rate by rubric (hourly)",
+      "description": "Fraction of judged outputs that passed, per rubric.",
+      "datasource": { "type": "postgres", "uid": "lighttrack-pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": true }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["last"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT date_trunc('hour', created_at::timestamptz) AS time, rubric AS metric, AVG(pass) AS pass_rate FROM scores WHERE $__timeFilter(created_at::timestamptz) GROUP BY 1, rubric ORDER BY 1"
         }
       ]
     }
