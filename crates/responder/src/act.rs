@@ -73,7 +73,8 @@ pub(crate) async fn run_act(
     }
 
     let prompt = build_fix_prompt(entry, spike, diagnosis);
-    let run = claude::run(cfg, &entry.repo, &cfg.defaults.act_permission_mode, &prompt).await;
+    // No tool allowlist: the fix run needs edit + test tools, gated by act_permission_mode (acceptEdits).
+    let run = claude::run(cfg, &entry.repo, &cfg.defaults.act_permission_mode, &[], &prompt).await;
 
     let applied = git::has_changes(&entry.repo).await;
     let mut tests = None;

@@ -17,7 +17,13 @@ pub(crate) struct ClaudeRun {
     pub ok: bool,
 }
 
-pub(crate) async fn run(cfg: &Config, repo: &str, permission_mode: &str, prompt: &str) -> ClaudeRun {
+pub(crate) async fn run(
+    cfg: &Config,
+    repo: &str,
+    permission_mode: &str,
+    allowed_tools: &[&str],
+    prompt: &str,
+) -> ClaudeRun {
     let mut cmd = Command::new(&cfg.claude_bin);
     cmd.arg("-p")
         .arg(prompt)
@@ -28,10 +34,17 @@ pub(crate) async fn run(cfg: &Config, repo: &str, permission_mode: &str, prompt:
         .arg("--output-format")
         .arg("json")
         .arg("--max-budget-usd")
-        .arg(format!("{:.2}", cfg.defaults.max_budget_usd))
-        .current_dir(repo)
-        .stdin(Stdio::null())
-        .kill_on_drop(true);
+        .arg(format!("{:.2}", cfg.defaults.max_budget_usd));
+    // `--allowedTools` is variadic, so it must come LAST or it swallows later flags. An allowlist
+    // (read-only for the investigator) keeps the run read-only WITHOUT plan mode — plan mode makes
+    // Claude write its analysis to a plan file and return only a terse note, losing the diagnosis.
+    if !allowed_tools.is_empty() {
+        cmd.arg("--allowedTools");
+        for t in allowed_tools {
+            cmd.arg(t);
+        }
+    }
+    cmd.current_dir(repo).stdin(Stdio::null()).kill_on_drop(true);
 
     let dur = std::time::Duration::from_secs(cfg.defaults.timeout_secs);
     let output = match tokio::time::timeout(dur, cmd.output()).await {

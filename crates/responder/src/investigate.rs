@@ -1,14 +1,27 @@
-//! Read-only investigation prompts + a thin plan-mode runner (via the shared [`claude`] module).
-//! Two flavors: an *error* investigation (a failing call) and a *quality regression* investigation
-//! (judge scores dropped). Both produce the diagnosis the report — and, for errors, the ACT stage —
-//! are built on.
+//! Read-only investigation prompts + a thin runner (via the shared [`claude`] module). Two flavors:
+//! an *error* investigation (a failing call) and a *quality regression* investigation (judge scores
+//! dropped). Both produce the diagnosis the report — and, for errors, the ACT stage — are built on.
+//! Runs read-only via a tool allowlist (not plan mode), so the full analysis lands in the result.
 
 use crate::claude::{self, ClaudeRun};
 use crate::config::{Config, ProjectEntry};
 use crate::webhook::{Drop, Spike};
 
+/// Read-only tool allowlist for investigations. With these (and permission-mode `default`) the run
+/// can inspect but not modify the repo, and — unlike plan mode — returns its full analysis in the
+/// result rather than writing it to a plan file and returning only a terse note.
+const READONLY_TOOLS: &[&str] = &[
+    "Read",
+    "Grep",
+    "Glob",
+    "Bash(git log:*)",
+    "Bash(git diff:*)",
+    "Bash(git show:*)",
+    "Bash(git status:*)",
+];
+
 pub(crate) async fn investigate(cfg: &Config, entry: &ProjectEntry, prompt: &str) -> ClaudeRun {
-    claude::run(cfg, &entry.repo, &cfg.defaults.permission_mode, prompt).await
+    claude::run(cfg, &entry.repo, &cfg.defaults.permission_mode, READONLY_TOOLS, prompt).await
 }
 
 /// Prompt for an error investigation. The alert's error text is untrusted input, so it is fenced and

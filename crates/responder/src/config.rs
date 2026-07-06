@@ -110,7 +110,7 @@ fn load_map(path: &str) -> (Defaults, HashMap<String, ProjectEntry>) {
     let d = parsed.defaults;
     let defaults = Defaults {
         model: d.model.unwrap_or_else(|| "sonnet".to_string()),
-        permission_mode: d.permission_mode.unwrap_or_else(|| "plan".to_string()),
+        permission_mode: d.permission_mode.unwrap_or_else(|| "default".to_string()),
         max_budget_usd: d.max_budget_usd.unwrap_or(1.0),
         enrich_limit: d.enrich_limit.unwrap_or(20),
         timeout_secs: d.timeout_secs.unwrap_or(240),
@@ -125,7 +125,7 @@ impl Defaults {
     fn fallback() -> Self {
         Defaults {
             model: "sonnet".to_string(),
-            permission_mode: "plan".to_string(),
+            permission_mode: "default".to_string(),
             max_budget_usd: 1.0,
             enrich_limit: 20,
             timeout_secs: 240,

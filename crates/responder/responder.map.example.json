@@ -2,7 +2,7 @@
   "//": "Copy to responder.map.json at the repo root (git-ignored) and edit for your machine.",
   "defaults": {
     "model": "sonnet",
-    "permission_mode": "plan",
+    "permission_mode": "default",
     "max_budget_usd": 1.0,
     "enrich_limit": 20,
     "timeout_secs": 240,
