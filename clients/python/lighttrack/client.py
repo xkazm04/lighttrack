@@ -178,7 +178,7 @@ class LightTrack:
             atexit.register(self.close)
 
     # ---- public API ----
-    def track(self, provider: str, model: Optional[str], *, input_tokens: int = 0,
+    def track(self, provider: str, model: Optional[str], *, name: Optional[str] = None, input_tokens: int = 0,
               output_tokens: int = 0, cached_input: Optional[int] = None,
               operation: Optional[str] = None, latency_ms: Optional[int] = None,
               status: Optional[str] = None, error: Optional[str] = None, input: Any = None,
@@ -195,6 +195,8 @@ class LightTrack:
         pid = project or self.project
         if pid:
             ev["project_id"] = pid
+        if name:
+            ev["name"] = name
         if operation:
             ev["operation"] = operation
         if latency_ms is not None:

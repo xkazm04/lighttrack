@@ -185,6 +185,7 @@ impl<'a> EventBuilder<'a> {
             ts: chrono::Utc::now(),
             provider,
             model,
+            name: None,
             operation: Operation::Chat,
             usage: TokenUsage::default(),
             cost_usd: None,
@@ -224,6 +225,11 @@ impl<'a> EventBuilder<'a> {
     }
     pub fn operation(mut self, op: Operation) -> Self {
         self.ev.operation = op;
+        self
+    }
+    /// Set the use-case / call-site name (the LLM-Overview rollup key).
+    pub fn name(mut self, n: impl Into<String>) -> Self {
+        self.ev.name = Some(n.into());
         self
     }
     pub fn latency_ms(mut self, ms: u64) -> Self {

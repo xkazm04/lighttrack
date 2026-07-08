@@ -15,6 +15,8 @@
 export type ProviderName = "openai" | "anthropic" | "google" | (string & {});
 
 export interface TrackOptions {
+  /** Use-case / call-site name (e.g. "summarize-email") — the LLM-Overview rollup key. */
+  name?: string;
   inputTokens?: number;
   outputTokens?: number;
   cachedInput?: number;
@@ -252,6 +254,7 @@ export class LightTrack {
     };
     const pid = opts.project ?? this.project;
     if (pid) ev.project_id = pid;
+    if (opts.name) ev.name = opts.name;
     if (opts.operation) ev.operation = opts.operation;
     if (opts.latencyMs != null) ev.latency_ms = Math.trunc(opts.latencyMs);
     let status = opts.status;
