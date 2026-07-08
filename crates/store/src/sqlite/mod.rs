@@ -35,7 +35,7 @@ use lighttrack_core::{
     RevenueEvent, Rubric, Score, TraceSummary,
 };
 
-use crate::{Admission, CostRow, DailyDimCost, DailyUsage, Result, Store, Usage};
+use crate::{Admission, CostRow, DailyDimCost, DailyUsage, Result, Store, Usage, UseCaseCostRow};
 
 const SCHEMA: &str = include_str!("../../../../schema/sqlite/001_init.sql");
 
@@ -78,6 +78,15 @@ impl Store for SqliteStore {
     fn init_schema(&self) -> Result<()> {
         self.with(|c| {
             c.execute_batch(SCHEMA)?;
+            // Additive migration for DBs created before `events.name` existed. There's no migration
+            // runner here (the schema batch is CREATE ... IF NOT EXISTS, which skips existing tables),
+            // so ALTER the column in and treat only "duplicate column name" (already applied) as
+            // success — re-raise anything else.
+            if let Err(e) = c.execute("ALTER TABLE events ADD COLUMN name TEXT", []) {
+                if !e.to_string().contains("duplicate column name") {
+                    return Err(e.into());
+                }
+            }
             Ok(())
         })
     }
@@ -94,6 +103,13 @@ impl Store for SqliteStore {
     }
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
         self.with(|c| events::cost_summary(c, project))
+    }
+    fn usecase_costs(
+        &self,
+        project: Option<&str>,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<UseCaseCostRow>> {
+        self.with(|c| events::usecase_costs(c, project, since))
     }
     fn usage_since(&self, project: &str, since: DateTime<Utc>) -> Result<Usage> {
         self.with(|c| events::usage_since(c, project, since))

@@ -46,6 +46,7 @@ fn sample_event(pid: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEve
         ts: Utc::now(),
         provider: Provider::Anthropic,
         model: model.into(),
+        name: None,
         operation: Operation::Chat,
         usage: TokenUsage { input: inp, output: out, cached_input: None, reasoning: None },
         cost_usd: Some(cost),

@@ -21,6 +21,7 @@ fn ev(project: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEvent {
         ts: Utc::now(),
         provider: Provider::Anthropic,
         model: model.into(),
+        name: None,
         operation: Operation::Chat,
         usage: TokenUsage {
             input: inp,
@@ -59,6 +60,44 @@ fn insert_list_cost_roundtrip() {
     assert_eq!(costs[0].calls, 2);
     assert_eq!(costs[0].input_tokens, 300);
     assert!((costs[0].cost_usd - 0.003).abs() < 1e-9);
+}
+
+#[test]
+fn usecase_costs_groups_by_name_with_fallback_and_window() {
+    let s = SqliteStore::open_in_memory().unwrap();
+
+    // Two named use-cases (one with 2 calls) + one un-named call, all in p1.
+    let mut a1 = ev("p1", "claude-haiku-4-5", 100, 50, 0.001);
+    a1.name = Some("summarize".into());
+    let mut a2 = ev("p1", "claude-haiku-4-5", 200, 80, 0.002);
+    a2.name = Some("summarize".into());
+    let mut b1 = ev("p1", "claude-opus-4-8", 10, 5, 0.01);
+    b1.name = Some("classify".into());
+    let unnamed = ev("p1", "gpt-4o-mini", 5, 5, 0.0001); // name: None → model-fallback bucket
+    for e in [&a1, &a2, &b1, &unnamed] {
+        s.insert_event(e).unwrap();
+    }
+
+    // Grouped by (name, provider, model): summarize + classify + the un-named bucket = 3 rows.
+    let rows = s.usecase_costs(Some("p1"), None).unwrap();
+    assert_eq!(rows.len(), 3);
+    let summarize = rows.iter().find(|r| r.name.as_deref() == Some("summarize")).unwrap();
+    assert_eq!(summarize.calls, 2);
+    assert_eq!(summarize.input_tokens, 300);
+    assert_eq!(summarize.model, "claude-haiku-4-5");
+    assert!((summarize.cost_usd - 0.003).abs() < 1e-9);
+    // The un-named call rolls up under a name=None row (keyed by its model).
+    assert!(rows.iter().any(|r| r.name.is_none() && r.model == "gpt-4o-mini"));
+
+    // Windowing: a call stamped 10 days ago is excluded by a 7-day `since`.
+    let mut old = ev("p1", "claude-haiku-4-5", 1, 1, 0.5);
+    old.name = Some("summarize".into());
+    old.ts = Utc::now() - chrono::Duration::days(10);
+    s.insert_event(&old).unwrap();
+    let since = Utc::now() - chrono::Duration::days(7);
+    let windowed = s.usecase_costs(Some("p1"), Some(since)).unwrap();
+    let summ_win = windowed.iter().find(|r| r.name.as_deref() == Some("summarize")).unwrap();
+    assert_eq!(summ_win.calls, 2, "the 10-day-old call is outside the 7-day window");
 }
 
 #[test]

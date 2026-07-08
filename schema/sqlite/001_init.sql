@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS events (
   provider            TEXT NOT NULL,
   model               TEXT NOT NULL,
   operation           TEXT NOT NULL DEFAULT 'chat',
+  name                TEXT,        -- optional use-case / call-site label (rollup key)
   input_tokens        INTEGER NOT NULL DEFAULT 0,
   output_tokens       INTEGER NOT NULL DEFAULT 0,
   cached_input_tokens INTEGER,
@@ -47,6 +48,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_project_ts ON events(project_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_trace ON events(trace_id);
+CREATE INDEX IF NOT EXISTS idx_events_project_name_ts ON events(project_id, name, ts);
 
 CREATE TABLE IF NOT EXISTS limit_rules (
   id          TEXT PRIMARY KEY,

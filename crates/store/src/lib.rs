@@ -52,6 +52,20 @@ pub struct CostRow {
     pub cost_usd: f64,
 }
 
+/// A use-case cost/usage rollup row — grouped by (name, provider, model), optionally windowed by a
+/// `since` cutoff. `name` is `None` for calls that carry no use-case name; the consumer rolls those
+/// up under their model. Powers the Personas "LLM Overview" table.
+#[derive(Debug, Clone, Serialize)]
+pub struct UseCaseCostRow {
+    pub name: Option<String>,
+    pub provider: String,
+    pub model: String,
+    pub calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cost_usd: f64,
+}
+
 /// One UTC calendar day's aggregated usage for a project — a point in the dense daily series that
 /// trend forecasting fits. `day` is the `YYYY-MM-DD` prefix of the (fixed-width, UTC) event `ts`.
 /// Days with no traffic are simply absent; the caller densifies the gaps to zero.
@@ -191,6 +205,18 @@ pub trait Store: Send + Sync {
 
     /// Cost/usage rollup grouped by project + provider + model, optionally filtered by project.
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>>;
+
+    /// Use-case rollup: cost/usage grouped by (name, provider, model), optionally restricted to
+    /// events at/after `since`. Default returns an empty rollup so backends that don't implement it
+    /// (Postgres/Firestore) compile unchanged — the SQLite dev backend is the one that powers the
+    /// LLM-Overview surface.
+    fn usecase_costs(
+        &self,
+        _project: Option<&str>,
+        _since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<UseCaseCostRow>> {
+        Ok(Vec::new())
+    }
 
     /// Aggregate usage for one project since `since` (inclusive). Used by limit evaluation.
     fn usage_since(&self, project: &str, since: DateTime<Utc>) -> Result<Usage>;

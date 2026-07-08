@@ -114,6 +114,10 @@ fn from_fields(m: &Fields) -> Result<LlmEvent> {
         ts: parse_ts(&freq(m, "ts")?)?,
         provider: parse_enum(&freq(m, "provider")?),
         model: freq(m, "model")?,
+        // Schemaless read: picks up `name` if a doc has it, else None. (The
+        // Firestore write path doesn't set it yet — SQLite is the backend that
+        // powers LLM-Overview.)
+        name: fstr(m, "name"),
         operation: parse_enum(&freq(m, "operation")?),
         usage: TokenUsage {
             input: fi64(m, "input_tokens").unwrap_or(0) as u64,

@@ -230,6 +230,7 @@ mod tests {
             ts: Utc::now() + Duration::seconds(secs),
             provider: Provider::Anthropic,
             model: format!("m-{span}"),
+            name: None,
             operation: Default::default(),
             usage: TokenUsage { input: 10, output: 5, cached_input: None, reasoning: None },
             cost_usd: Some(cost),

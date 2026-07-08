@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use lighttrack_core::{LimitStatus, LlmEvent, Status};
-use lighttrack_store::CostRow;
+use lighttrack_store::{CostRow, UseCaseCostRow};
 
 use crate::auth::Principal;
 use crate::error::ApiError;
@@ -129,6 +129,36 @@ pub(crate) async fn get_costs(
     let project = resolve_read_project(&p, q.project.as_deref())?;
     let store = st.store.clone();
     let rows = spawn_db(move || store.cost_summary(project.as_deref())).await?;
+    Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UsecasesParams {
+    project: Option<String>,
+    /// RFC3339 lower bound (inclusive) on event time — the rolling-window start.
+    since: Option<String>,
+}
+
+/// Use-case rollup: usage + cost grouped by (name, provider, model), optionally windowed by `since`.
+/// Powers the Personas "LLM Overview" table; a call's use-case is its `name`, or its model when
+/// unnamed. Read-scoped like the other list endpoints (a project key sees only its own project).
+pub(crate) async fn get_usecases(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<UsecasesParams>,
+) -> Result<Json<Vec<UseCaseCostRow>>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    let project = resolve_read_project(&p, q.project.as_deref())?;
+    let since = match q.since.as_deref() {
+        Some(s) => Some(
+            DateTime::parse_from_rfc3339(s)
+                .map_err(|e| ApiError::bad_request(format!("invalid 'since' timestamp: {e}")))?
+                .with_timezone(&Utc),
+        ),
+        None => None,
+    };
+    let store = st.store.clone();
+    let rows = spawn_db(move || store.usecase_costs(project.as_deref(), since)).await?;
     Ok(Json(rows))
 }
 

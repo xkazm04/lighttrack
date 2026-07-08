@@ -130,6 +130,11 @@ pub struct LlmEvent {
     pub ts: DateTime<Utc>,
     pub provider: Provider,
     pub model: String,
+    /// Optional use-case / call-site name (e.g. "summarize-email"). The unit the
+    /// Personas "LLM Overview" rollup groups by; falls back to provider+model when
+    /// absent. Set it per call via the SDK (`track(..., name=...)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default)]
     pub operation: Operation,
 

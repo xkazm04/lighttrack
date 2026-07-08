@@ -176,6 +176,9 @@ fn from_row(row: &PgRow) -> Result<LlmEvent> {
         ts: parse_ts(&ts)?,
         provider: parse_enum::<Provider>(&provider),
         model: row.try_get(7).map_err(pgerr)?,
+        // The Postgres backend doesn't carry the `name` column yet (SQLite-only
+        // feature powering LLM-Overview); hydrate as None so it compiles cleanly.
+        name: None,
         operation: parse_enum::<Operation>(&operation),
         usage: TokenUsage {
             input: row.try_get::<i64, _>(9).map_err(pgerr)? as u64,

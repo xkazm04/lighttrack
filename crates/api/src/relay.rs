@@ -277,6 +277,7 @@ fn relay_run_event(st: &AppState, task: &RelayTask, req: &ResultReq) -> LlmEvent
         ts: Utc::now(),
         provider: Provider::Anthropic,
         model: req.model.clone().unwrap_or_else(|| "claude-code".to_string()),
+        name: Some("relay-run".to_string()),
         operation: Operation::Chat,
         usage: TokenUsage {
             input: req.input_tokens.unwrap_or(0),

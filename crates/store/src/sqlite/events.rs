@@ -7,11 +7,11 @@ use serde_json::Value;
 use lighttrack_core::{LlmEvent, Operation, Provider, Status, TokenUsage, TraceSummary};
 
 use crate::codec::{fmt_ts, parse_enum, parse_ts};
-use crate::{event_contribution, evaluate_admission, Admission, CostRow, Result, Usage};
+use crate::{event_contribution, evaluate_admission, Admission, CostRow, Result, Usage, UseCaseCostRow};
 
 const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
     operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
-    latency_ms, status, error, input, output, tags, source, metadata";
+    latency_ms, status, error, input, output, tags, source, metadata, name";
 
 pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
     let tags = serde_json::to_string(&ev.tags)?;
@@ -26,8 +26,8 @@ pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
         "INSERT INTO events \
          (id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, operation, \
           input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
-          latency_ms, status, error, input, output, tags, source, metadata) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
+          latency_ms, status, error, input, output, tags, source, metadata, name) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",
         params![
             ev.id,
             ev.project_id,
@@ -51,6 +51,7 @@ pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
             tags,
             ev.source,
             metadata,
+            ev.name,
         ],
     )?;
     Ok(())
@@ -273,6 +274,7 @@ struct RawEvent {
     tags: Option<String>,
     source: Option<String>,
     metadata: Option<String>,
+    name: Option<String>,
 }
 
 fn map_raw(row: &Row) -> rusqlite::Result<RawEvent> {
@@ -299,6 +301,7 @@ fn map_raw(row: &Row) -> rusqlite::Result<RawEvent> {
         tags: row.get(19)?,
         source: row.get(20)?,
         metadata: row.get(21)?,
+        name: row.get(22)?,
     })
 }
 
@@ -329,6 +332,7 @@ fn from_raw(r: RawEvent) -> Result<LlmEvent> {
         ts,
         provider: parse_enum::<Provider>(&r.provider),
         model: r.model,
+        name: r.name,
         operation: parse_enum::<Operation>(&r.operation),
         usage: TokenUsage {
             input: r.input_tokens as u64,
@@ -346,4 +350,59 @@ fn from_raw(r: RawEvent) -> Result<LlmEvent> {
         source: r.source,
         metadata,
     })
+}
+
+/// Use-case rollup: group usage + cost by (name, provider, model), optionally restricted to events
+/// at/after `since` (the rolling-window start). Un-named calls (`name IS NULL`) group together per
+/// model, so the consumer can fold them under their model. Ordered by cost, most expensive first.
+pub(super) fn usecase_costs(
+    conn: &Connection,
+    project: Option<&str>,
+    since: Option<DateTime<Utc>>,
+) -> Result<Vec<UseCaseCostRow>> {
+    let cols = "name, provider, model, COUNT(*) AS calls, \
+        COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
+        COALESCE(SUM(cost_usd),0.0) AS cost";
+    let tail = "GROUP BY name, provider, model ORDER BY cost DESC";
+    let map = |row: &Row| -> rusqlite::Result<UseCaseCostRow> {
+        Ok(UseCaseCostRow {
+            name: row.get(0)?,
+            provider: row.get(1)?,
+            model: row.get(2)?,
+            calls: row.get(3)?,
+            input_tokens: row.get(4)?,
+            output_tokens: row.get(5)?,
+            cost_usd: row.get(6)?,
+        })
+    };
+    let since_str = since.map(fmt_ts);
+    // Bind the collected Vec to `v` and return it (not the query_map tail expression directly) so
+    // `stmt` outlives the borrow — mirrors `cost_summary` above.
+    let rows = match (project, since_str.as_deref()) {
+        (Some(p), Some(s)) => {
+            let sql = format!("SELECT {cols} FROM events WHERE project_id = ?1 AND ts >= ?2 {tail}");
+            let mut stmt = conn.prepare(&sql)?;
+            let v = stmt.query_map(params![p, s], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            v
+        }
+        (Some(p), None) => {
+            let sql = format!("SELECT {cols} FROM events WHERE project_id = ?1 {tail}");
+            let mut stmt = conn.prepare(&sql)?;
+            let v = stmt.query_map(params![p], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            v
+        }
+        (None, Some(s)) => {
+            let sql = format!("SELECT {cols} FROM events WHERE ts >= ?1 {tail}");
+            let mut stmt = conn.prepare(&sql)?;
+            let v = stmt.query_map(params![s], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            v
+        }
+        (None, None) => {
+            let sql = format!("SELECT {cols} FROM events {tail}");
+            let mut stmt = conn.prepare(&sql)?;
+            let v = stmt.query_map([], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            v
+        }
+    };
+    Ok(rows)
 }

@@ -13,6 +13,7 @@
 //!   GET  /v1/traces/:id                 one trace: totals + span tree + scores within it
 //!   POST /v1/traces/:id/score           score a whole trace (anchored to its root span)
 //!   GET  /v1/costs?project=
+//!   GET  /v1/usecases?project=&since=   use-case rollup: usage+cost by name×provider×model, windowed
 //!   POST /v1/scores  GET /v1/scores?project=&limit=
 //!   GET  /v1/prices  PUT /v1/prices/:provider/:model
 //!   .../datasets .../rubrics .../benchmarks .../jobs            (see modules)
@@ -201,6 +202,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/traces/:id", get(traces::get_trace))
         .route("/v1/traces/:id/score", post(traces::score_trace))
         .route("/v1/costs", get(events::get_costs))
+        .route("/v1/usecases", get(events::get_usecases))
         .route("/v1/scores", post(scores::post_score).get(scores::get_scores))
         .route("/v1/prices", get(prices::get_prices))
         .route("/v1/prices/:provider/:model", put(prices::put_price))
