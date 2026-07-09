@@ -1,6 +1,6 @@
 # lighttrack-client (Rust)
 
-Fire-and-forget client for ingesting LLM call events into [LightTrack](https://github.com/xkazm04/tracklight).
+Fire-and-forget client for ingesting LLM call events into [LightTrack](https://github.com/xkazm04/lighttrack).
 Reuses `lighttrack-core`'s `LlmEvent` as the wire type, so the payload can never drift from the API.
 Sends go to a background worker thread and never block or panic the caller.
 
@@ -11,9 +11,9 @@ independently and is not pulled into the server build.
 
 ```toml
 [dependencies]
-lighttrack-client = { git = "https://github.com/xkazm04/tracklight", subdir = "clients/rust" }
+lighttrack-client = { git = "https://github.com/xkazm04/lighttrack", subdir = "clients/rust" }
 # or a path dep when vendored:
-# lighttrack-client = { path = "../tracklight/clients/rust" }
+# lighttrack-client = { path = "../lighttrack/clients/rust" }
 ```
 
 ## Use

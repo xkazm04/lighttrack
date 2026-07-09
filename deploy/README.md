@@ -20,7 +20,7 @@ run `/onboard` in Claude Code.
 ## Quick start (local, Docker)
 ```bash
 # pull the published public image (bundles SQLite/Postgres/Firestore):
-docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/tracklight:v0.0.2
+docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/lighttrack:v0.0.4
 curl localhost:8787/health        # -> ok
 
 # or build from source:

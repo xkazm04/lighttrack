@@ -5,8 +5,8 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/xkazm04/tracklight
-  tag: "v0.0.1"
+  repository: ghcr.io/xkazm04/lighttrack
+  tag: "v0.0.4"
   pullPolicy: IfNotPresent
 
 # imagePullSecrets: [{ name: ghcr-creds }]   # if the GHCR package is private

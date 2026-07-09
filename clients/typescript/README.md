@@ -1,6 +1,6 @@
 # lighttrack-client (TypeScript / JavaScript)
 
-Fire-and-forget client for ingesting LLM call events into [LightTrack](https://github.com/xkazm04/tracklight).
+Fire-and-forget client for ingesting LLM call events into [LightTrack](https://github.com/xkazm04/lighttrack).
 Uses the global `fetch` (Node 18+ / browsers); zero runtime dependencies. `track*` never blocks and
 never throws.
 

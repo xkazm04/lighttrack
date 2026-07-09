@@ -23,7 +23,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
-    image: ghcr.io/xkazm04/tracklight:dev
+    image: ghcr.io/xkazm04/lighttrack:dev
     depends_on:
       postgres:
         condition: service_healthy

@@ -17,7 +17,7 @@ interface, so the same inputs work across providers. Design: [`../../docs/PACKAG
 ## Common interface (both modules)
 | Variable | Meaning | Default |
 |---|---|---|
-| `image` | container image | `ghcr.io/xkazm04/tracklight:v0.0.1` |
+| `image` | container image | `ghcr.io/xkazm04/lighttrack:v0.0.4` |
 | `name` | resource name prefix | `lighttrack` |
 | `auth_mode` | `enforced` / `dev` | `enforced` |
 | `admin_key` | admin key (→ secret → `LIGHTTRACK_ADMIN_KEY`) | `""` |
@@ -39,7 +39,7 @@ runs ephemeral SQLite (fine for a smoke test; **not durable** on serverless — 
 provider "google" { project = "my-proj" }          # or: provider "azurerm" { features {} }
 
 module "lighttrack" {
-  source       = "github.com/xkazm04/tracklight//deploy/terraform/modules/gcp"
+  source       = "github.com/xkazm04/lighttrack//deploy/terraform/modules/gcp"
   project_id   = "my-proj"
   region       = "us-central1"
   admin_key    = var.admin_key            # set via TF_VAR_admin_key / a tfvars file, never commit

@@ -19,7 +19,7 @@ deploy/cloudrun/deploy.sh --project YOUR_PROJECT
 deploy\cloudrun\deploy.ps1 -Project YOUR_PROJECT
 ```
 The script enables the needed APIs, stores a generated admin key in Secret Manager, **mirrors the
-published public image** (`ghcr.io/xkazm04/tracklight`) into your project's Artifact Registry (Cloud
+published public image** (`ghcr.io/xkazm04/lighttrack`) into your project's Artifact Registry (Cloud
 Run only deploys from Artifact Registry / gcr.io, not external registries), deploys it, and curls
 `/health`. It prints the service URL and the admin key (**shown once** — save it).
 

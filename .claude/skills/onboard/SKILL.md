@@ -40,7 +40,7 @@ Detect the environment before asking anything:
 - OS/shell; `git` repo present; `cargo`/`rustc`; `docker`/`docker compose`; cloud CLIs (`gcloud`, `aws`,
   `az`); `kubectl`/`helm`; `claude` (for the judge engine).
 - Report what's present/missing in a short table. Offer to install or work around gaps — e.g. if Rust
-  is missing, use the **published public image** `ghcr.io/xkazm04/tracklight:v0.0.2` or the prebuilt
+  is missing, use the **published public image** `ghcr.io/xkazm04/lighttrack:v0.0.4` or the prebuilt
   release binaries (`deploy/install.sh` / `install.ps1`) instead of building from source.
 
 ## Step 1 — Pick the stack (use AskUserQuestion)
@@ -122,7 +122,7 @@ to be implemented first (offer to do it).
 ### Deploy targets
 | Target | Tooling | Clouds | Credentials | Status |
 |---|---|---|---|---|
-| Prebuilt container image | `docker run ghcr.io/xkazm04/tracklight:v0.0.2` | any | none (image is public) | **available** |
+| Prebuilt container image | `docker run ghcr.io/xkazm04/lighttrack:v0.0.4` | any | none (image is public) | **available** |
 | Local Docker Compose | `deploy/compose/` (SQLite, or Postgres + Grafana) | — | none | **available** |
 | Kubernetes | Helm chart `deploy/helm/lighttrack` | EKS/GKE/AKS/any | kubeconfig | **available** |
 | GCP / Azure (Cloud Run / Container Apps) | Terraform `deploy/terraform/modules/{gcp,azure}` | GCP/Azure | cloud login | **available** |

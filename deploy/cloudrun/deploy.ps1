@@ -23,7 +23,7 @@ param(
   [string]$Project,
   [string]$Region = "us-central1",
   [string]$Service = "lighttrack",
-  [string]$Image = "ghcr.io/xkazm04/tracklight:v0.0.2",
+  [string]$Image = "ghcr.io/xkazm04/lighttrack:v0.0.4",
   [switch]$Build,
   [string]$DatabaseUrl = "",
   [string]$AdminKey = "",

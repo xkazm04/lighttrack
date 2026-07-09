@@ -7,7 +7,7 @@
 #
 #   ./deploy.sh --project my-gcp-project [--region us-central1] [--database-url postgres://...]
 #
-# Defaults to the published public image (ghcr.io/xkazm04/tracklight). Use --build to build the
+# Defaults to the published public image (ghcr.io/xkazm04/lighttrack). Use --build to build the
 # image from local source via Cloud Build (for forks / local changes).
 #
 # Storage:
@@ -23,7 +23,7 @@ set -euo pipefail
 PROJECT=""
 REGION="us-central1"
 SERVICE="lighttrack"
-IMAGE="ghcr.io/xkazm04/tracklight:v0.0.2"
+IMAGE="ghcr.io/xkazm04/lighttrack:v0.0.4"
 BUILD=0
 DATABASE_URL=""
 ADMIN_KEY=""

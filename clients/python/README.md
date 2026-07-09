@@ -1,6 +1,6 @@
 # lighttrack-client (Python)
 
-Fire-and-forget client for ingesting LLM call events into [LightTrack](https://github.com/xkazm04/tracklight).
+Fire-and-forget client for ingesting LLM call events into [LightTrack](https://github.com/xkazm04/lighttrack).
 Stdlib only (no third-party dependencies); sends happen on a background thread and never raise into
 your app.
 

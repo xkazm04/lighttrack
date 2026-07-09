@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 # LightTrack installer (Linux/macOS). Usage:
-#   curl -fsSL https://raw.githubusercontent.com/xkazm04/tracklight/main/deploy/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/xkazm04/lighttrack/main/deploy/install.sh | sh
 # Override the install dir with LIGHTTRACK_BIN_DIR=/usr/local/bin.
 set -eu
 
-REPO="xkazm04/tracklight"
+REPO="xkazm04/lighttrack"
 BINDIR="${LIGHTTRACK_BIN_DIR:-$HOME/.local/bin}"
 
 os="$(uname -s)"

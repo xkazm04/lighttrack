@@ -15,7 +15,7 @@ variable "name" {
 
 variable "image" {
   type    = string
-  default = "ghcr.io/xkazm04/tracklight:v0.0.1"
+  default = "ghcr.io/xkazm04/lighttrack:v0.0.4"
 }
 
 variable "auth_mode" {

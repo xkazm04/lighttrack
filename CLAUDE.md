@@ -47,7 +47,7 @@ those for *what* and *why*; this file is *how we write the code*.
 - `.env` (and `*.local.toml`, `service-account*.json`) are git-ignored. **Never commit API keys.**
   Before committing, `git check-ignore .env` and review `git status` — stage explicit paths, not `-A`,
   when other sessions have untracked work.
-- The remote (`github.com/xkazm04/tracklight`) is **public**.
+- The remote (`github.com/xkazm04/lighttrack`) is **public**.
 
 ## Parallel-session coordination
 - A second session works in this **same working tree** on Phase 5 (packaging) and the **Postgres**

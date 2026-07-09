@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Fire-and-forget client for ingesting LLM call events into LightTrack."
-repository = "https://github.com/xkazm04/tracklight"
+repository = "https://github.com/xkazm04/lighttrack"
 
 # Detached from the parent Cargo workspace so this client builds/versions/publishes on its own and
 # is never pulled into the server's `cargo build`. It depends on `lighttrack-core` by path only.

@@ -27,7 +27,7 @@ your laptop or any cloud.
 
 ### Container (published & public)
 ```bash
-docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/tracklight:v0.0.2
+docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/lighttrack:v0.0.4
 curl localhost:8787/health        # -> ok
 ```
 The image bundles **all backends** (SQLite by default; set `LIGHTTRACK_DATABASE_URL` for
@@ -35,13 +35,13 @@ Postgres/Firestore) and **all binaries** (`lighttrack-api`, `lt-runner`, `lt-mcp
 Pin a version tag (`:v0.0.2`) — there is no `:latest`.
 
 ### Prebuilt binaries
-Download a tarball/zip from [Releases](https://github.com/xkazm04/tracklight/releases), or install the
+Download a tarball/zip from [Releases](https://github.com/xkazm04/lighttrack/releases), or install the
 latest in one line:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xkazm04/tracklight/main/deploy/install.sh | sh    # Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/xkazm04/lighttrack/main/deploy/install.sh | sh    # Linux / macOS
 ```
 ```powershell
-irm https://raw.githubusercontent.com/xkazm04/tracklight/main/deploy/install.ps1 | iex          # Windows
+irm https://raw.githubusercontent.com/xkazm04/lighttrack/main/deploy/install.ps1 | iex          # Windows
 ```
 
 ### From source

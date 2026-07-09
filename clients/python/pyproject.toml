@@ -14,7 +14,7 @@ keywords = ["llm", "observability", "openai", "anthropic", "gemini", "lighttrack
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/xkazm04/tracklight"
+Homepage = "https://github.com/xkazm04/lighttrack"
 
 [tool.hatch.build.targets.wheel]
 packages = ["lighttrack"]
