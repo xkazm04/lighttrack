@@ -12,7 +12,7 @@ pub(crate) fn initialize_result(params: &Value) -> Value {
         .unwrap_or("2024-11-05");
     json!({
         "protocolVersion": pv,
-        "capabilities": { "tools": {}, "prompts": {} },
+        "capabilities": { "tools": {}, "prompts": {}, "resources": {} },
         "serverInfo": { "name": "lighttrack-mcp", "version": env!("CARGO_PKG_VERSION") }
     })
 }

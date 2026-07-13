@@ -16,6 +16,7 @@ mod errors;
 mod prompts;
 mod prompts_tools;
 mod read;
+mod resources;
 mod rpc;
 mod schemas;
 mod tools;
@@ -78,11 +79,14 @@ fn main() {
                 Ok(v) => rpc::send_result(&mut out, id, v),
                 Err(e) => rpc::send_error(&mut out, id, -32602, &e),
             },
-            // Capability probes we don't implement — answer with empties to avoid client noise.
-            "resources/list" => rpc::send_result(&mut out, id, json!({ "resources": [] })),
+            "resources/list" => rpc::send_result(&mut out, id, resources::list()),
             "resources/templates/list" => {
-                rpc::send_result(&mut out, id, json!({ "resourceTemplates": [] }))
+                rpc::send_result(&mut out, id, resources::templates_list())
             }
+            "resources/read" => match resources::read(&client, &params) {
+                Ok(v) => rpc::send_result(&mut out, id, v),
+                Err(e) => rpc::send_error(&mut out, id, -32602, &errors::map_error(&e)),
+            },
             // Notifications carry no id and need no response.
             _ if id.is_none() => {}
             other => rpc::send_error(&mut out, id, -32601, &format!("method not found: {other}")),
