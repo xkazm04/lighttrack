@@ -28,16 +28,23 @@ use lighttrack_core::{
 use lighttrack_store::{Store, StoreError};
 
 use crate::error::ApiError;
-use crate::guards::{authenticate, ensure_can_admin};
+use crate::guards::{authenticate, bearer, ensure_can_admin};
 use crate::state::{spawn_db, AppState};
 
 /// Collective-network config, built from env once at boot (mirrors `Alerter`/`Redactor`).
 pub(crate) struct Collective {
-    /// Opaque, stable contributor id put on the wire (a hash of `LIGHTTRACK_COLLECTIVE_ID`, or
-    /// `anonymous` when unset). Never the raw id.
+    /// Opaque, stable id this instance stamps on its *own* digest preview (a hash of
+    /// `LIGHTTRACK_COLLECTIVE_ID`, or `anonymous` when unset). Never the raw id. NB: a hub **ignores**
+    /// this on ingest and derives the identity from the presented bearer key — see [`post_ingest`].
     pub(crate) contributor_id: String,
     /// Whether this instance acts as a hub that accepts contributions.
     pub(crate) accept: bool,
+    /// Hub-side: accept anonymous (keyless) contributions under a single shared `anonymous` identity.
+    /// Off by default — a keyless push is refused so one poster can't masquerade as many.
+    pub(crate) allow_anon: bool,
+    /// Hub-side k-anonymity floor: buckets contributed with `n_cases` below this are dropped on ingest,
+    /// regardless of what floor the contributor claims to have used. Clamped to ≥1.
+    pub(crate) min_cases: u32,
 }
 
 impl Collective {
@@ -46,17 +53,24 @@ impl Collective {
             Ok(id) if !id.trim().is_empty() => format!("c-{}", opaque(id.trim())),
             _ => lighttrack_core::collective::ANON_CONTRIBUTOR.to_string(),
         };
-        let accept = matches!(
-            std::env::var("LIGHTTRACK_COLLECTIVE_ACCEPT").as_deref(),
-            Ok("1") | Ok("true") | Ok("on") | Ok("yes")
-        );
-        Self { contributor_id, accept }
+        let accept = env_flag("LIGHTTRACK_COLLECTIVE_ACCEPT");
+        let allow_anon = env_flag("LIGHTTRACK_COLLECTIVE_ALLOW_ANON");
+        let min_cases = std::env::var("LIGHTTRACK_COLLECTIVE_MIN_CASES")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(DEFAULT_MIN_CASES)
+            .max(1);
+        Self { contributor_id, accept, allow_anon, min_cases }
     }
 
     pub(crate) fn describe(&self) -> String {
         let who = if self.contributor_id == "anonymous" { "anon" } else { "id-set" };
-        format!("{who}, accept={}", self.accept)
+        format!("{who}, accept={}, allow_anon={}, min_cases={}", self.accept, self.allow_anon, self.min_cases)
     }
+}
+
+fn env_flag(name: &str) -> bool {
+    matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true") | Ok("on") | Ok("yes"))
 }
 
 /// First 12 hex chars of SHA-256 — opaque and non-reversible, enough to keep contributors distinct.
@@ -64,6 +78,14 @@ fn opaque(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
     h.finalize().iter().take(6).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Derive a hub-side contributor id from the raw bearer token the poster presented: `c-` + the first
+/// 12 hex of SHA-256(token). The id is **not** taken from the request body — a poster can only write
+/// under the identity of a key it actually holds, so it can neither overwrite a victim's set nor forge
+/// unlimited ids to inflate `n_contributors`.
+fn derive_contributor_id(bearer: &str) -> String {
+    format!("c-{}", opaque(bearer))
 }
 
 #[derive(Deserialize)]
@@ -96,13 +118,23 @@ pub(crate) async fn get_digest(
 
 #[derive(Serialize)]
 pub(crate) struct IngestAck {
+    /// The **hub-derived** identity this contribution landed under (from the bearer key, not the body).
     contributor_id: String,
     accepted: usize,
+    /// Entries dropped as malformed / identity-less (empty provider, model, or task_type).
     skipped: usize,
+    /// Entries dropped for failing the hub's enforced k-anonymity floor (`n_cases < min_cases`).
+    dropped_under_min: usize,
 }
 
 /// Hub side: accept a contributor's digest and replace its stored entry set (delete-then-upsert so a
 /// bucket that fell below the floor doesn't linger). Off unless `LIGHTTRACK_COLLECTIVE_ACCEPT` is set.
+///
+/// Hardening: the contributor identity is **derived from the presented bearer key**, never trusted from
+/// the request body — so a poster can only ever replace *its own* set. A keyless (dev-mode) push is
+/// refused unless `LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1`, in which case it lands under one shared
+/// `anonymous` identity with a loud warning. The hub also re-enforces its own k-anonymity floor
+/// (`LIGHTTRACK_COLLECTIVE_MIN_CASES`), dropping under-k buckets rather than trusting the poster's floor.
 pub(crate) async fn post_ingest(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -121,13 +153,44 @@ pub(crate) async fn post_ingest(
             digest.schema_version
         )));
     }
-    let contributor = sanitize_contributor(&digest.contributor_id);
+
+    // Derive identity from the bearer key; the body's `contributor_id` is ignored (kept for wire compat).
+    let contributor = match bearer(&headers) {
+        Some(tok) => derive_contributor_id(&tok),
+        None => {
+            if !st.collective.allow_anon {
+                return Err(ApiError::forbidden(
+                    "anonymous (keyless) contributions are refused; present a bearer key, or set \
+                     LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1 to accept them under one shared identity",
+                ));
+            }
+            eprintln!(
+                "WARNING: accepting an ANONYMOUS collective contribution (LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1) \
+                 — all keyless posters share the '{}' identity and can overwrite each other's set",
+                lighttrack_core::collective::ANON_CONTRIBUTOR
+            );
+            lighttrack_core::collective::ANON_CONTRIBUTOR.to_string()
+        }
+    };
+
+    let min_cases = st.collective.min_cases;
     let now = Utc::now();
-    let total = digest.entries.len();
+    let mut skipped = 0usize;
+    let mut dropped_under_min = 0usize;
     let entries: Vec<CollectiveEntry> = digest
         .entries
         .into_iter()
-        .filter_map(|e| sanitize_entry(&contributor, e, now))
+        .filter_map(|e| match sanitize_entry(&contributor, e, now) {
+            None => {
+                skipped += 1;
+                None
+            }
+            Some(ce) if ce.n_cases < min_cases => {
+                dropped_under_min += 1;
+                None
+            }
+            Some(ce) => Some(ce),
+        })
         .take(MAX_ENTRIES)
         .collect();
     let accepted = entries.len();
@@ -143,11 +206,7 @@ pub(crate) async fn post_ingest(
     })
     .await?;
 
-    Ok(Json(IngestAck {
-        contributor_id: contributor,
-        accepted,
-        skipped: total - accepted,
-    }))
+    Ok(Json(IngestAck { contributor_id: contributor, accepted, skipped, dropped_under_min }))
 }
 
 #[derive(Deserialize)]
@@ -248,16 +307,6 @@ fn provider_model(bench: &Benchmark, run: &BenchmarkRun) -> Option<(String, Stri
         (!p.is_empty() && !m.is_empty()).then_some((p, m))
     };
     from(&run.report).or_else(|| from(&bench.target))
-}
-
-fn sanitize_contributor(id: &str) -> String {
-    let id = id.trim();
-    if id.is_empty() {
-        lighttrack_core::collective::ANON_CONTRIBUTOR.to_string()
-    } else {
-        // Keep it opaque + bounded; ids are already hashes from the contributor, but be defensive.
-        id.chars().take(64).collect()
-    }
 }
 
 /// Validate/clamp one contributed entry; `None` if it lacks a usable model identity.

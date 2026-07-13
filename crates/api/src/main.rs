@@ -60,7 +60,10 @@
 //!      LIGHTTRACK_BENCH_WEBHOOK (benchmark-run completion webhook; falls back to LIGHTTRACK_ALERT_WEBHOOK),
 //!      LIGHTTRACK_REDACT_INGEST (off | all | csv of project_ids — scrub PII from input/output; see redact),
 //!      LIGHTTRACK_COLLECTIVE_ID (opaque source id — hashed before contribution),
-//!      LIGHTTRACK_COLLECTIVE_ACCEPT (1|true — this instance is a leaderboard hub; off by default).
+//!      LIGHTTRACK_COLLECTIVE_ACCEPT (1|true — this instance is a leaderboard hub; off by default),
+//!      LIGHTTRACK_COLLECTIVE_ALLOW_ANON (1|true — hub accepts keyless pushes under one shared
+//!        `anonymous` identity; off by default, a keyless push is otherwise refused),
+//!      LIGHTTRACK_COLLECTIVE_MIN_CASES (hub-enforced k-anonymity floor; default 5, clamp ≥1).
 
 mod alerts;
 mod auth;
@@ -89,6 +92,8 @@ mod scores;
 mod state;
 mod traces;
 
+#[cfg(test)]
+mod tests_collective;
 #[cfg(test)]
 mod tests_forecast;
 #[cfg(test)]

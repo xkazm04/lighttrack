@@ -151,6 +151,18 @@ LightTrack, the better the data for everyone (the moat).
     `summarization`, `coding`, `rag`, …) — the raw name is never published.
   - *Opaque contributor id.* `LIGHTTRACK_COLLECTIVE_ID` is hashed (SHA-256, truncated) before it goes on
     the wire, so a hub can update a source idempotently without learning who it is; unset ⇒ `anonymous`.
+- **Hub-side identity is derived, not asserted.** A hub does **not** trust the `contributor_id` in the
+  request body (kept only for wire compat, ignored). It derives the identity from the presented bearer
+  key — `c-` + first 12 hex of SHA-256(token) — so a poster can only ever replace *its own* set and can
+  neither overwrite a victim nor forge ids to inflate `n_contributors`.
+  - *Breaking change for keyless pushes.* A keyless (dev-mode) contribution is **refused** by default.
+    Set `LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1` to accept keyless pushes under one shared `anonymous`
+    identity (with a loud warning) — but then all anonymous posters can overwrite each other, so prefer
+    real keys. Contributors that previously pushed anonymously must now present a bearer key.
+- **Hub-enforced k-floor.** The hub re-enforces its own `LIGHTTRACK_COLLECTIVE_MIN_CASES` (default 5,
+  clamp ≥1): any contributed bucket with `n_cases` below it is dropped per-entry on ingest (not a whole
+  request 400) and the count is returned as `dropped_under_min`, regardless of the floor the contributor
+  claims it used.
 - **Topology.** Any LightTrack can be a **hub** (`LIGHTTRACK_COLLECTIVE_ACCEPT=1`, off by default) that
   receives digests and merges them; others contribute. Same binary, no central service required.
 - **API.** `GET /v1/collective/digest?min_cases=` (admin — preview what we'd publish) ·
