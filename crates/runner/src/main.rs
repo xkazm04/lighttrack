@@ -17,6 +17,7 @@ mod dataset;
 mod gate;
 mod http;
 mod pairwise;
+mod recurrence;
 mod rubric;
 mod schedule;
 mod score;
@@ -105,7 +106,8 @@ fn main() -> Result<()> {
             once,
             interval,
             stale_secs,
-        } => serve::serve(&cli, &http, &engine, *once, *interval, *stale_secs),
+            recur_interval,
+        } => serve::serve(&cli, &http, &engine, *once, *interval, *stale_secs, *recur_interval),
         Cmd::Calibrate {
             file,
             rubric,

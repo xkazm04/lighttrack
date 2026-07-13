@@ -41,10 +41,39 @@ pub(crate) struct CreateBenchmarkReq {
     rubric_id: Option<String>,
     #[serde(default)]
     baseline_score: Option<f64>,
+    /// Opt-in recurrence: when set (> 0), `lt-runner serve` re-runs this benchmark roughly every
+    /// this many seconds, turning it into continuous quality monitoring. Unset = one-shot (runs only
+    /// on manual enqueue or a prompt-version cut). Carried inside `target` — see [`embed_recurrence`].
+    #[serde(default)]
+    schedule_interval_secs: Option<u64>,
 }
 
 fn default_judge_model() -> String {
     "haiku".to_string()
+}
+
+/// Reserved key under a benchmark's free-form `target` object carrying its opt-in recurrence interval
+/// (seconds). Benchmarks are stored as fixed columns with only `target` as free-form JSON, so
+/// recurrence rides there rather than in a new column — keeping the SQLite/Postgres schema untouched.
+const RECURRENCE_KEY: &str = "schedule_interval_secs";
+
+/// Fold an opt-in recurrence interval into the stored `target`. Recurrence needs an object (or empty)
+/// target; a comparison-matrix target is a JSON array with no room for a sibling key, so that
+/// combination is a hard 400 rather than a silent drop (a matrix benchmark simply can't recur in v1).
+fn embed_recurrence(target: serde_json::Value, secs: u64) -> Result<serde_json::Value, String> {
+    match target {
+        serde_json::Value::Null => Ok(serde_json::json!({ RECURRENCE_KEY: secs })),
+        serde_json::Value::Object(mut m) => {
+            m.insert(RECURRENCE_KEY.to_string(), serde_json::json!(secs));
+            Ok(serde_json::Value::Object(m))
+        }
+        serde_json::Value::Array(_) => Err(
+            "schedule_interval_secs is not supported for a comparison-matrix benchmark (an array \
+             `target`/`targets`); use a single-target, rubric, or simple benchmark for recurrence"
+                .into(),
+        ),
+        _ => Err("schedule_interval_secs requires an object or empty `target`".into()),
+    }
 }
 
 /// Validate the stored `target` field before it reaches the store. An **array** is unambiguously a
@@ -78,6 +107,12 @@ pub(crate) async fn create_benchmark(
         req.target
     } else {
         serde_json::to_value(&req.targets).unwrap_or(serde_json::Value::Null)
+    };
+    // Opt-in recurrence rides inside `target` (no schema/column change); reject the one combination
+    // it can't carry (a comparison matrix) up front.
+    let target = match req.schedule_interval_secs.filter(|s| *s > 0) {
+        Some(secs) => embed_recurrence(target, secs).map_err(ApiError::bad_request)?,
+        None => target,
     };
     let b = Benchmark {
         id: new_id(),
@@ -235,7 +270,7 @@ pub(crate) async fn benchmark_gate(
 
 #[cfg(test)]
 mod tests {
-    use super::{decide_gate, validate_target_matrix};
+    use super::{decide_gate, embed_recurrence, validate_target_matrix};
     use lighttrack_core::BenchmarkRun;
     use serde_json::json;
 
@@ -305,5 +340,23 @@ mod tests {
         // Missing required `provider` → rejected (would otherwise silently degrade to simple mode).
         assert!(validate_target_matrix(&json!([{ "model": "x" }])).is_err());
         assert!(validate_target_matrix(&json!(["nope"])).is_err());
+    }
+
+    #[test]
+    fn embed_recurrence_into_object_and_null() {
+        // Null target becomes a fresh object carrying the interval.
+        assert_eq!(embed_recurrence(json!(null), 3600).unwrap(), json!({ "schedule_interval_secs": 3600 }));
+        // An existing free-form object keeps its keys and gains the interval.
+        assert_eq!(
+            embed_recurrence(json!({ "endpoint": "https://x" }), 60).unwrap(),
+            json!({ "endpoint": "https://x", "schedule_interval_secs": 60 })
+        );
+    }
+
+    #[test]
+    fn embed_recurrence_rejects_matrix_and_scalars() {
+        // A comparison matrix (array) has no room for a sibling key → hard error, not a silent drop.
+        assert!(embed_recurrence(json!([{ "provider": "openai", "model": "gpt-4o" }]), 60).is_err());
+        assert!(embed_recurrence(json!("legacy-string"), 60).is_err());
     }
 }

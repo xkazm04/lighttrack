@@ -1,6 +1,6 @@
 //! `serve`: the job-queue worker loop — claim a job, run it, finish it (with retry up to max_attempts).
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -11,8 +11,10 @@ use lighttrack_engine::EngineConfig;
 use crate::bench::run_benchmark;
 use crate::cli::Cli;
 use crate::http::post;
+use crate::recurrence;
 use crate::util::short;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn serve(
     cli: &Cli,
     http: &reqwest::blocking::Client,
@@ -20,9 +22,23 @@ pub(crate) fn serve(
     once: bool,
     interval: u64,
     stale_secs: i64,
+    recur_interval: u64,
 ) -> Result<()> {
-    println!("lt-runner serve: polling {} (interval={interval}s, once={once})", cli.base);
+    println!(
+        "lt-runner serve: polling {} (interval={interval}s, once={once}, recur_interval={recur_interval}s)",
+        cli.base
+    );
+    let mut last_sweep: Option<Instant> = None;
     loop {
+        // Opt-in benchmark recurrence: on a subsampled cadence (and always on the first iteration /
+        // `--once`), enqueue a bench_run for any recurring benchmark that is due. A sweep failure is
+        // non-fatal — like the dataset scheduler, a transient API blip must not kill the worker.
+        if recur_interval > 0 && sweep_due(last_sweep, recur_interval) {
+            if let Err(e) = recurrence::check_and_enqueue(cli, http) {
+                eprintln!("recurrence sweep error (continuing): {e}");
+            }
+            last_sweep = Some(Instant::now());
+        }
         match claim(cli, http, stale_secs)? {
             Some(job) => {
                 println!(
@@ -59,6 +75,15 @@ pub(crate) fn serve(
         }
     }
     Ok(())
+}
+
+/// Whether a recurrence sweep is due: always on the first iteration (`None`), then no more often than
+/// `recur_interval`. Subsampling keeps the sweep off the hot 5s claim loop.
+fn sweep_due(last_sweep: Option<Instant>, recur_interval: u64) -> bool {
+    match last_sweep {
+        None => true,
+        Some(t) => t.elapsed() >= Duration::from_secs(recur_interval),
+    }
 }
 
 fn claim(cli: &Cli, http: &reqwest::blocking::Client, stale_secs: i64) -> Result<Option<Job>> {

@@ -88,6 +88,42 @@ Benchmark runs must never block ingestion. A **jobs** table + a worker loop in `
 - States: `queued → running → done|failed`; heartbeat + `attempts` for retry; concurrency cap so judge
   calls don't stampede. **Cloud:** swap the jobs table for Pub/Sub; same worker.
 
+### 4a. Self-running benchmarks (opt-in recurrence)
+By default a benchmark runs **only** on a manual enqueue (`POST /v1/benchmarks/:id/enqueue`) or a
+prompt-version cut (the registry auto-enqueues) — there is no cron in the benchmark path. Turn a
+benchmark into **continuous quality monitoring** by giving it a recurrence interval:
+
+```bash
+# create a recurring benchmark: re-run itself ~every hour
+curl -sX POST "$LIGHTTRACK_URL/v1/projects/$PID/benchmarks" -H "authorization: Bearer $KEY" \
+  -H 'content-type: application/json' \
+  -d '{ "name": "support-quality", "rubric": "…", "dataset_ref": "online-latest",
+        "baseline_score": 0.8, "schedule_interval_secs": 3600 }'
+```
+
+- **Storage:** `schedule_interval_secs` rides inside the benchmark's free-form `target` JSON — **no
+  schema/column change** (benchmarks are fixed-column rows; `target` is the only free-form field, and
+  it round-trips unchanged through SQLite *and* Postgres). It is therefore **not supported alongside a
+  comparison-matrix** benchmark (an array `target`/`targets` has no room for it) — that combination is
+  rejected with a `400`. Use a single-target, rubric, or simple benchmark for recurrence.
+- **Enable / disable:** set the interval to enable, `0`/unset to disable. There is no `PATCH` surface
+  today, so "changing" recurrence on an existing benchmark means recreating it (v1 story).
+- **Who runs it:** `lt-runner serve` performs a **recurrence sweep** on a subsampled cadence
+  (`--recur-interval`, default 60s; `0` disables). A benchmark is **due** when (a) it has an interval,
+  (b) it has **no** queued/running `bench_run` job, and (c) its most recent run's `finished_at` (or
+  `started_at` fallback) is older than the interval. The sweep enqueues a normal `bench_run` (reusing
+  the existing job path) — the same worker then claims and runs it. This is **idempotent**: an
+  in-flight job or a recent run means "not due", so repeated sweeps never pile up jobs.
+- **OS cron instead of a daemon:** `lt-runner serve --once` runs exactly one sweep + claims one job,
+  so an external scheduler can drive recurrence:
+
+  ```cron
+  */15 * * * *  cd /srv/lighttrack && lt-runner serve --once >> /var/log/lt-serve.log 2>&1
+  ```
+
+  Running "too often" is harmless — the due-check keeps it idempotent. Discovery uses existing read
+  endpoints (list projects → list benchmarks → list runs/jobs) with the runner's admin key.
+
 ## 5. Latency + token cost, DB-backed price table  (#5)
 - **Per-call metrics** captured on generation/judge: `latency_ms`, `input/output/cached tokens`, `cost_usd`.
   Aggregated into runs as p50/p95 latency, total tokens, total $.

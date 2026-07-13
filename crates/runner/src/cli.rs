@@ -161,6 +161,11 @@ pub(crate) enum Cmd {
         /// Reclaim jobs stuck in `running` longer than this many seconds.
         #[arg(long, default_value_t = 600)]
         stale_secs: i64,
+        /// Seconds between benchmark-recurrence sweeps. Each sweep enqueues a `bench_run` for any
+        /// benchmark whose opt-in `schedule_interval_secs` is due (continuous quality monitoring).
+        /// `0` disables recurrence. With `--once`, one sweep always runs (so OS cron can drive it).
+        #[arg(long, default_value_t = 60)]
+        recur_interval: u64,
     },
 }
 
