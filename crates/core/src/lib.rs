@@ -14,6 +14,7 @@ pub mod forecast;
 pub mod job;
 pub mod limits;
 pub mod margin;
+pub mod margin_sim;
 pub mod margin_trend;
 pub mod pricing;
 pub mod project;
@@ -36,6 +37,9 @@ pub use error::LtError;
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
 pub use job::Job;
 pub use margin::{compute_margin, CostByDimension, MarginDimension, MarginRow};
+pub use margin_sim::{
+    compute_margin_simulation, SimAssumptions, SimRow, TokensByDimension,
+};
 pub use margin_trend::{
     compute_margin_trend, DailyKeyCost, MarginTrend, MarginTrendPoint, MarginTrendSeries,
 };

@@ -22,7 +22,7 @@ use lighttrack_core::{
     scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset,
     DatasetItem, Job, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow, LlmEvent,
     ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome, RelayTask, RevenueEvent, Rubric,
-    Score, Trace, TraceSummary,
+    Score, TokensByDimension, Trace, TraceSummary,
 };
 
 pub use sqlite::SqliteStore;
@@ -595,6 +595,18 @@ pub trait Store: Send + Sync {
         _since: DateTime<Utc>,
         _until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
+        Ok(Vec::new())
+    }
+    /// Prompt+completion tokens grouped by a billing dimension (`customer` | `product`, from event
+    /// metadata) over `[since, until)` — the usage side of the pricing what-if simulator. Default empty
+    /// so unported backends (Postgres/Firestore) compile unchanged; SQLite implements it.
+    fn tokens_by_dimension(
+        &self,
+        _project: Option<&str>,
+        _dim: &str,
+        _since: DateTime<Utc>,
+        _until: DateTime<Utc>,
+    ) -> Result<Vec<TokensByDimension>> {
         Ok(Vec::new())
     }
     /// One customer's LLM cost broken down **by model** (`provider/model`) over `[since, until)`,

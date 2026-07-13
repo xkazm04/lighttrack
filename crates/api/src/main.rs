@@ -42,6 +42,7 @@
 //!   GET  /v1/margin?by=customer|product&since=&until=&below=<pct>   revenue − LLM cost rollup
 //!   GET  /v1/margin/trend?by=&days=&top=   per-day revenue/cost/margin series per customer/product
 //!   GET  /v1/margin/customer/:id?since=&until=   one customer's revenue+cost by model & use-case
+//!   GET  /v1/margin/simulate?by=&price_per_mtok=&flat_monthly=&since=&until=   pricing what-if (read-only)
 //!   GET  /v1/forecast?project=&by=&horizon=&lookback=   projected spend/budget-breach + margin-erosion + pre-emptive alerts
 //!   POST /v1/billing/:provider/webhook?project=   signed Stripe/Polar webhook → revenue (unauth; HMAC)
 //!   GET  /v1/collective/digest?min_cases=     build this instance's privacy-safe model digest (admin)
@@ -306,6 +307,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/margin", get(revenue::get_margin))
         .route("/v1/margin/trend", get(revenue::get_margin_trend))
         .route("/v1/margin/customer/:id", get(revenue::get_customer_margin))
+        .route("/v1/margin/simulate", get(revenue::get_margin_simulate))
         .route("/v1/forecast", get(forecast::get_forecast))
         .route("/v1/billing/:provider/webhook", post(billing::post_webhook))
         .route("/v1/collective/digest", get(collective::get_digest))

@@ -97,6 +97,84 @@ pub(crate) fn trend(v: &Value) -> Option<String> {
     Some(out)
 }
 
+/// `get_margin_simulate` — pricing what-if: simulated vs actual margin per key, with the per-key delta.
+pub(crate) fn simulate(v: &Value) -> Option<String> {
+    let rows = v.get("rows")?.as_array()?;
+    let dim = s(v, "dimension");
+    let label = if dim == "product" { "Product" } else { "Customer" };
+    let window = format!("{} → {}", short_ts(s(v, "since")), short_ts(s(v, "until")));
+
+    let assumptions = v.get("assumptions");
+    let ppm = assumptions.and_then(|a| opt_f(a, "price_per_mtok"));
+    let flat = assumptions.and_then(|a| opt_f(a, "flat_monthly"));
+    let days = assumptions.map(|a| f(a, "window_days")).unwrap_or(0.0);
+    let mut model = Vec::new();
+    if let Some(p) = ppm {
+        model.push(format!("{}/Mtok", money(p)));
+    }
+    if let Some(fl) = flat {
+        model.push(format!("{}/mo (prorated ×{:.2})", money(fl), days / 30.0));
+    }
+    let model = if model.is_empty() { "—".to_string() } else { model.join(" + ") };
+
+    let mut out = format!("### Pricing what-if by {dim} · {window}\n\n_Simulated model: {model}. Read-only — nothing was written._\n\n");
+    if rows.is_empty() {
+        out.push_str("_No attributed usage or revenue in this window._");
+        return Some(out);
+    }
+
+    let mut t = Table::new(&[
+        (label, Align::Left),
+        ("Tokens", Align::Right),
+        ("LLM cost", Align::Right),
+        ("Actual margin", Align::Right),
+        ("Sim. margin", Align::Right),
+        ("Δ", Align::Right),
+    ]);
+    for r in rows {
+        let delta = f(r, "margin_delta_usd");
+        t.row(vec![
+            format!("{} {}", delta_glyph(delta), s(r, "key")),
+            commafy(u(r, "tokens")),
+            money(f(r, "llm_cost_usd")),
+            money(f(r, "actual_margin_usd")),
+            money(f(r, "simulated_margin_usd")),
+            signed(delta),
+        ]);
+    }
+    out.push_str(&t.render());
+    out.push_str(&format!(
+        "\n**Total: {} actual → {} simulated margin (Δ {})**\n",
+        money(f(v, "total_actual_margin_usd")),
+        money(f(v, "total_simulated_margin_usd")),
+        signed(f(v, "total_margin_delta_usd")),
+    ));
+    if let Some(note) = opt_s(v, "currency_note") {
+        out.push_str(&format!("\n> ⚠️ {note}\n"));
+    }
+    Some(out)
+}
+
+/// A signed money string with an explicit `+` for gains, so a what-if delta reads at a glance.
+fn signed(x: f64) -> String {
+    if x > 0.0 {
+        format!("+{}", money(x))
+    } else {
+        money(x)
+    }
+}
+
+/// 🟢 the hypothetical model improves margin · ⚪ neutral · 🔴 it earns less.
+fn delta_glyph(delta: f64) -> &'static str {
+    if delta > 0.0 {
+        "🟢"
+    } else if delta < 0.0 {
+        "🔴"
+    } else {
+        "⚪"
+    }
+}
+
 /// `get_customer_margin` — one customer's revenue/cost/margin headline plus cost split by model & name.
 pub(crate) fn customer(v: &Value) -> Option<String> {
     let id = s(v, "customer_id");
@@ -158,5 +236,47 @@ fn glyph(margin: f64, pct: Option<f64>) -> &'static str {
         "⚠️"
     } else {
         "🟢"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn simulate_renders_actual_and_simulated_columns_with_signed_delta() {
+        let v = json!({
+            "simulated": true,
+            "dimension": "customer",
+            "since": "2026-06-15T00:00:00Z",
+            "until": "2026-07-15T00:00:00Z",
+            "assumptions": { "price_per_mtok": 8.0, "flat_monthly": 5.0, "window_days": 30.0 },
+            "total_actual_margin_usd": 15.5,
+            "total_simulated_margin_usd": 37.5,
+            "total_margin_delta_usd": 22.0,
+            "rows": [
+                { "key": "beta", "tokens": 1000000, "calls": 1, "llm_cost_usd": 1.5,
+                  "actual_revenue_usd": 0.0, "actual_margin_usd": -1.5,
+                  "simulated_revenue_usd": 13.0, "simulated_margin_usd": 11.5, "margin_delta_usd": 13.0 }
+            ]
+        });
+        let out = super::simulate(&v).expect("renders");
+        assert!(out.contains("Actual margin") && out.contains("Sim. margin"), "both columns present");
+        assert!(out.contains("+$13.00"), "positive delta gets an explicit + sign");
+        assert!(out.contains("$8.00/Mtok"), "echoes the token rate");
+        assert!(out.contains("Read-only"), "flags the what-if as non-persisting");
+    }
+
+    #[test]
+    fn simulate_empty_rows_is_graceful() {
+        let v = json!({
+            "simulated": true, "dimension": "product",
+            "since": "2026-06-15T00:00:00Z", "until": "2026-07-15T00:00:00Z",
+            "assumptions": { "flat_monthly": 9.0, "window_days": 30.0 },
+            "total_actual_margin_usd": 0.0, "total_simulated_margin_usd": 0.0,
+            "total_margin_delta_usd": 0.0, "rows": []
+        });
+        let out = super::simulate(&v).expect("renders");
+        assert!(out.contains("No attributed usage or revenue"));
     }
 }

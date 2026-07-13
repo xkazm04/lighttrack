@@ -7,7 +7,7 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Row};
 
-use lighttrack_core::{CostByDimension, RevenueEvent, RevenueKind};
+use lighttrack_core::{CostByDimension, RevenueEvent, RevenueKind, TokensByDimension};
 
 use crate::codec::{fmt_ts, parse_ts};
 use crate::{CustomerCostRow, Result};
@@ -107,6 +107,39 @@ pub(super) fn cost_by_dimension(
                 key: row.get::<_, Option<String>>(0)?,
                 calls: row.get(1)?,
                 cost_usd: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Prompt+completion tokens grouped by a billing dimension (`customer` | `product`) over
+/// `[since, until)`, read from event metadata — the usage side of the pricing what-if simulator.
+/// Untagged calls group under a NULL key (`unattributed`), mirroring [`cost_by_dimension`].
+pub(super) fn tokens_by_dimension(
+    conn: &Connection,
+    project: Option<&str>,
+    dim: &str,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> Result<Vec<TokensByDimension>> {
+    let path = match dim {
+        "product" => "$.product_id",
+        _ => "$.customer_id",
+    };
+    let sql = format!(
+        "SELECT json_extract(metadata, '{path}') AS k, \
+         COALESCE(SUM(input_tokens + output_tokens),0) AS toks \
+         FROM events \
+         WHERE (?1 IS NULL OR project_id = ?1) AND ts >= ?2 AND ts < ?3 \
+         GROUP BY k"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![project, fmt_ts(since), fmt_ts(until)], |row: &Row| {
+            Ok(TokensByDimension {
+                key: row.get::<_, Option<String>>(0)?,
+                tokens: row.get(1)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -376,5 +409,37 @@ mod tests {
         assert!((chat.cost_usd - 0.80).abs() < 1e-9);
         let summ = by_name.iter().find(|r| r.key == "summarize").unwrap();
         assert!((summ.cost_usd - 2.0).abs() < 1e-9, "only acme's summarize, not other's $9.99");
+    }
+
+    #[test]
+    fn tokens_by_dimension_sums_prompt_and_completion_tokens_per_key() {
+        let c = conn();
+        // acme: two calls (10+5 each = 15 tokens each → 30); other: one call (15 tokens); one untagged.
+        for e in [
+            ev_full("acme", "anthropic", "claude-haiku-4-5", "chat", 0.5, "2026-06-10T00:00:00Z"),
+            ev_full("acme", "anthropic", "claude-haiku-4-5", "chat", 0.3, "2026-06-11T00:00:00Z"),
+            ev_full("other", "openai", "gpt-5.4", "summarize", 9.99, "2026-06-12T00:00:00Z"),
+        ] {
+            super::super::events::insert(&c, &e).unwrap();
+        }
+        // An untagged event (no customer_id in metadata) → NULL key bucket.
+        let untagged: LlmEvent = serde_json::from_value(json!({
+            "id": "e-untagged", "project_id": "p1", "provider": "anthropic",
+            "model": "claude-haiku-4-5", "ts": "2026-06-12T00:00:00Z", "cost_usd": 0.1,
+            "usage": { "input": 100, "output": 0 }
+        }))
+        .unwrap();
+        super::super::events::insert(&c, &untagged).unwrap();
+
+        let since = parse_ts("2026-06-01T00:00:00Z").unwrap();
+        let until = parse_ts("2026-07-01T00:00:00Z").unwrap();
+        let rows = tokens_by_dimension(&c, Some("p1"), "customer", since, until).unwrap();
+
+        let acme = rows.iter().find(|r| r.key.as_deref() == Some("acme")).unwrap();
+        assert_eq!(acme.tokens, 30, "two calls of 15 tokens each");
+        let other = rows.iter().find(|r| r.key.as_deref() == Some("other")).unwrap();
+        assert_eq!(other.tokens, 15);
+        let untagged = rows.iter().find(|r| r.key.is_none()).unwrap();
+        assert_eq!(untagged.tokens, 100, "untagged usage groups under the NULL key");
     }
 }

@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use lighttrack_core::margin::UNATTRIBUTED;
 use lighttrack_core::{
-    compute_margin, compute_margin_trend, DailyKeyCost, MarginDimension, MarginRow,
-    MarginTrendSeries, RevenueEvent,
+    compute_margin, compute_margin_simulation, compute_margin_trend, CostByDimension, DailyKeyCost,
+    MarginDimension, MarginRow, MarginTrendSeries, RevenueEvent, SimAssumptions, SimRow,
+    TokensByDimension,
 };
 use lighttrack_store::{CustomerCostRow, DailyDimCost, StoreError};
 
@@ -145,6 +146,108 @@ pub(crate) async fn get_margin(
         total_revenue_usd: round(total_revenue_usd),
         total_cost_usd: round(total_cost_usd),
         total_margin_usd: round(total_revenue_usd - total_cost_usd),
+        unconverted_currencies: unconverted,
+        currency_note,
+        rows,
+    }))
+}
+
+// --- pricing what-if simulator ------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub(crate) struct MarginSimulateParams {
+    project: Option<String>,
+    /// `customer` (default) | `product`.
+    by: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+    /// Hypothetical charge per 1M prompt+completion tokens.
+    price_per_mtok: Option<f64>,
+    /// Hypothetical flat charge per key per 30-day month (prorated to the window).
+    flat_monthly: Option<f64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct MarginSimulateResponse {
+    /// Always `true` — a read-only what-if; nothing is persisted.
+    simulated: bool,
+    dimension: String,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+    /// The hypothetical price model applied (echoed back with the proration basis).
+    assumptions: SimAssumptions,
+    total_actual_margin_usd: f64,
+    total_simulated_margin_usd: f64,
+    /// `total_simulated − total_actual` — the aggregate what-if uplift.
+    total_margin_delta_usd: f64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unconverted_currencies: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    currency_note: Option<String>,
+    rows: Vec<SimRow>,
+}
+
+/// `GET /v1/margin/simulate` — recompute margin under a hypothetical price model. Revenue per key is
+/// replaced by `price_per_mtok * tokens/1e6 + flat_monthly` (flat prorated to the window vs 30d); cost
+/// is the real windowed cost. Each row carries the actual margin alongside, so the operator sees the
+/// per-key uplift. Read-only: at least one of the two price params is required (else 400). SQLite fills
+/// the token usage; other backends return an empty simulation until they port `tokens_by_dimension`.
+pub(crate) async fn get_margin_simulate(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<MarginSimulateParams>,
+) -> Result<Json<MarginSimulateResponse>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    let project = resolve_read_project(&p, q.project.as_deref())?;
+    let dim = MarginDimension::parse(q.by.as_deref().unwrap_or("customer"));
+
+    let until = match q.until.as_deref() {
+        Some(s) => parse_rfc3339(s)?,
+        None => Utc::now(),
+    };
+    let since = match q.since.as_deref() {
+        Some(s) => parse_rfc3339(s)?,
+        None => until - Duration::days(30),
+    };
+    if since >= until {
+        return Err(ApiError::bad_request("`since` must be before `until`"));
+    }
+    let assumptions = SimAssumptions::new(q.price_per_mtok, q.flat_monthly, since, until)
+        .map_err(ApiError::bad_request)?;
+
+    let store = st.store.clone();
+    let proj = project.clone();
+    let dim_s = dim.as_str().to_string();
+    let (revenue, costs, tokens): (Vec<RevenueEvent>, Vec<CostByDimension>, Vec<TokensByDimension>) =
+        spawn_db(move || {
+            let revenue = store.list_revenue_events(proj.as_deref(), since, until)?;
+            let costs = store.cost_by_dimension(proj.as_deref(), &dim_s, since, until)?;
+            let tokens = store.tokens_by_dimension(proj.as_deref(), &dim_s, since, until)?;
+            Ok::<_, StoreError>((revenue, costs, tokens))
+        })
+        .await?;
+
+    let unconverted = unconverted_currencies(&revenue);
+    let rows = compute_margin_simulation(&revenue, &costs, &tokens, assumptions, dim, since, until);
+    let total_actual: f64 = rows.iter().map(|r| r.actual_margin_usd).sum();
+    let total_sim: f64 = rows.iter().map(|r| r.simulated_margin_usd).sum();
+    let currency_note = (!unconverted.is_empty()).then(|| {
+        format!(
+            "unconverted currencies present (stored 1:1, USD figures approximate): {}. \
+             Add rates to config/fx_rates.json.",
+            unconverted.join(", ")
+        )
+    });
+
+    Ok(Json(MarginSimulateResponse {
+        simulated: true,
+        dimension: dim.as_str().to_string(),
+        since,
+        until,
+        assumptions,
+        total_actual_margin_usd: round(total_actual),
+        total_simulated_margin_usd: round(total_sim),
+        total_margin_delta_usd: round(total_sim - total_actual),
         unconverted_currencies: unconverted,
         currency_note,
         rows,

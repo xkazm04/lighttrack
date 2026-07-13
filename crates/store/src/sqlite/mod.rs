@@ -34,7 +34,7 @@ use serde_json::Value;
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
     LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome,
-    RelayTask, RevenueEvent, Rubric, Score, TraceSummary,
+    RelayTask, RevenueEvent, Rubric, Score, TokensByDimension, TraceSummary,
 };
 
 use crate::{
@@ -385,6 +385,15 @@ impl Store for SqliteStore {
         until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
         self.with(|c| revenue::cost_by_dimension(c, project, dim, since, until))
+    }
+    fn tokens_by_dimension(
+        &self,
+        project: Option<&str>,
+        dim: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<TokensByDimension>> {
+        self.with(|c| revenue::tokens_by_dimension(c, project, dim, since, until))
     }
     fn customer_cost_by_model(
         &self,

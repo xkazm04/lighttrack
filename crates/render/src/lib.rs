@@ -60,6 +60,7 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "get_margin" => margin::report(v),
         "get_margin_trend" => margin::trend(v),
         "get_margin_customer" => margin::customer(v),
+        "get_margin_simulate" => margin::simulate(v),
         "get_collective_leaderboard" => collective::leaderboard(v),
         "get_collective_digest" => collective::digest(v),
         _ => None,
