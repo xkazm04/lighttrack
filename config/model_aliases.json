@@ -1,0 +1,28 @@
+{
+  "_meta": {
+    "note": "Model-identity normalization for the Collective leaderboard. Applied hub-side at ingest so gpt-4o, openai/gpt-4o, and dated variants like gpt-4o-2024-08-06 merge into one row instead of three. A `provider/` prefix on the model is stripped algorithmically (no entry needed); this file only lists provider synonyms and the dated/aliased model names to collapse to a family. Any identity NOT listed here passes through unchanged, so a new model is never silently mis-merged. Keys match case-insensitively.",
+    "last_reviewed": "2026-07-13"
+  },
+  "providers": {
+    "azure-openai": "openai",
+    "azure": "openai",
+    "google-vertex": "google",
+    "vertex": "google",
+    "gemini": "google",
+    "anthropic-bedrock": "anthropic",
+    "bedrock-anthropic": "anthropic"
+  },
+  "models": {
+    "gpt-4o-2024-05-13": "gpt-4o",
+    "gpt-4o-2024-08-06": "gpt-4o",
+    "gpt-4o-2024-11-20": "gpt-4o",
+    "gpt-4o-mini-2024-07-18": "gpt-4o-mini",
+    "gpt-4-turbo-2024-04-09": "gpt-4-turbo",
+    "claude-3-5-sonnet-20240620": "claude-3-5-sonnet",
+    "claude-3-5-sonnet-20241022": "claude-3-5-sonnet",
+    "claude-3-5-haiku-20241022": "claude-3-5-haiku",
+    "claude-3-opus-20240229": "claude-3-opus",
+    "gemini-1.5-pro-002": "gemini-1.5-pro",
+    "gemini-1.5-flash-002": "gemini-1.5-flash"
+  }
+}

@@ -23,8 +23,8 @@ use sha2::{Digest, Sha256};
 
 use lighttrack_core::{
     build_digest, merge_leaderboard, task_type_from, Benchmark, BenchmarkRun, CollectiveDigest,
-    CollectiveEntry, LeaderboardRow, RunStat, DEFAULT_LOW_CONFIDENCE_CASES, DEFAULT_MIN_CASES,
-    DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
+    CollectiveEntry, LeaderboardRow, ModelAliases, RunStat, DEFAULT_LOW_CONFIDENCE_CASES,
+    DEFAULT_MIN_CASES, DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
 };
 use lighttrack_store::{Store, StoreError};
 
@@ -49,6 +49,9 @@ pub(crate) struct Collective {
     /// Leaderboard display floor: merged rows with fewer than this many total cases are flagged
     /// `low_confidence` (shown, not hidden).
     pub(crate) display_floor: u32,
+    /// Model-identity normalization applied to `(provider, model)` at ingest, so `gpt-4o` /
+    /// `openai/gpt-4o` / `gpt-4o-2024-08-06` collapse to one leaderboard row. Empty ⇒ pass-through.
+    pub(crate) aliases: ModelAliases,
 }
 
 impl Collective {
@@ -68,7 +71,8 @@ impl Collective {
             .ok()
             .and_then(|v| v.trim().parse::<u32>().ok())
             .unwrap_or(DEFAULT_LOW_CONFIDENCE_CASES);
-        Self { contributor_id, accept, allow_anon, min_cases, display_floor }
+        let aliases = load_aliases();
+        Self { contributor_id, accept, allow_anon, min_cases, display_floor, aliases }
     }
 
     pub(crate) fn describe(&self) -> String {
@@ -82,6 +86,20 @@ impl Collective {
 
 fn env_flag(name: &str) -> bool {
     matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true") | Ok("on") | Ok("yes"))
+}
+
+/// Load the model-alias table from `LIGHTTRACK_MODEL_ALIASES` (default `config/model_aliases.json`).
+/// Absent ⇒ an empty (pass-through) table; a parse error is logged and normalization is disabled.
+fn load_aliases() -> ModelAliases {
+    let path = std::env::var("LIGHTTRACK_MODEL_ALIASES")
+        .unwrap_or_else(|_| "config/model_aliases.json".to_string());
+    match std::fs::read_to_string(&path) {
+        Ok(s) => ModelAliases::from_json_str(&s).unwrap_or_else(|e| {
+            eprintln!("model aliases parse error in {path}: {e}; normalization disabled");
+            ModelAliases::default()
+        }),
+        Err(_) => ModelAliases::default(),
+    }
 }
 
 /// First 12 hex chars of SHA-256 — opaque and non-reversible, enough to keep contributors distinct.
@@ -191,7 +209,7 @@ pub(crate) async fn post_ingest(
     let entries: Vec<CollectiveEntry> = digest
         .entries
         .into_iter()
-        .filter_map(|e| match sanitize_entry(&contributor, e, now) {
+        .filter_map(|e| match sanitize_entry(&contributor, e, now, &st.collective.aliases) {
             None => {
                 skipped += 1;
                 None
@@ -226,6 +244,8 @@ pub(crate) struct LeaderboardParams {
     task_type: Option<String>,
     /// Filter to one provider (e.g. `anthropic`).
     provider: Option<String>,
+    /// Filter to rows scored (at least partly) by one judge family (`anthropic|openai|google|unknown`).
+    judge: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -260,6 +280,9 @@ pub(crate) async fn get_leaderboard(
     }
     if let Some(p) = q.provider.as_deref() {
         rows.retain(|r| r.provider == p);
+    }
+    if let Some(j) = q.judge.as_deref() {
+        rows.retain(|r| r.judge_providers.iter().any(|p| p == j));
     }
     Ok(Json(LeaderboardResponse {
         contributors,
@@ -307,7 +330,55 @@ fn run_stat(bench: &Benchmark, run: &BenchmarkRun) -> Option<RunStat> {
         n_cases: run.n_cases,
         p50_latency_ms: run.p50_latency_ms,
         p95_latency_ms: run.p95_latency_ms,
+        judge_provider: judge_provider_of(&bench.judge_model),
+        rubric_fingerprint: rubric_fingerprint_of(bench),
     })
+}
+
+/// Classify a benchmark's `judge_model` (`[provider/]model`) into a coarse judge family — provider
+/// only (`anthropic|openai|google|unknown`), never the full model, to limit fingerprinting. An
+/// explicit `provider/` prefix wins; otherwise the family is inferred from the model name.
+fn judge_provider_of(judge_model: &str) -> Option<String> {
+    let m = judge_model.trim().to_lowercase();
+    if m.is_empty() {
+        return None;
+    }
+    let (prefix, name) = m.split_once('/').unwrap_or(("", m.as_str()));
+    let canon_prefix = match prefix {
+        "anthropic" | "claude" => Some("anthropic"),
+        "openai" | "azure-openai" | "azure" => Some("openai"),
+        "google" | "gemini" | "vertex" | "google-vertex" => Some("google"),
+        _ => None,
+    };
+    if let Some(c) = canon_prefix {
+        return Some(c.to_string());
+    }
+    let name = if name.is_empty() { m.as_str() } else { name };
+    let family = if ["claude", "haiku", "sonnet", "opus"].iter().any(|k| name.contains(k)) {
+        "anthropic"
+    } else if name.contains("gpt") || name.starts_with("o1") || name.starts_with("o3") {
+        "openai"
+    } else if name.contains("gemini") || name.contains("gemma") || name.contains("bison") {
+        "google"
+    } else {
+        "unknown"
+    };
+    Some(family.to_string())
+}
+
+/// A short, one-way fingerprint of a benchmark's rubric shape — 8 hex of SHA-256 over the
+/// whitespace-normalized rubric definition (or its id, if the text is empty). Lets two instances tell
+/// whether they scored under the same rubric without either revealing the rubric text. `None` when the
+/// benchmark carries no rubric at all.
+fn rubric_fingerprint_of(bench: &Benchmark) -> Option<String> {
+    let basis = if !bench.rubric.trim().is_empty() {
+        bench.rubric.split_whitespace().collect::<Vec<_>>().join(" ")
+    } else {
+        bench.rubric_id.as_deref().map(str::trim).filter(|s| !s.is_empty())?.to_string()
+    };
+    let mut h = Sha256::new();
+    h.update(basis.as_bytes());
+    Some(h.finalize().iter().take(4).map(|b| format!("{b:02x}")).collect())
 }
 
 /// Resolve the model identity from the compare-mode run report, else the benchmark's single target.
@@ -320,18 +391,21 @@ fn provider_model(bench: &Benchmark, run: &BenchmarkRun) -> Option<(String, Stri
     from(&run.report).or_else(|| from(&bench.target))
 }
 
-/// Validate/clamp one contributed entry; `None` if it lacks a usable model identity.
+/// Validate/clamp one contributed entry; `None` if it lacks a usable model identity. The model
+/// identity is **normalized** through `aliases` so equivalent spellings merge into one leaderboard row.
 fn sanitize_entry(
     contributor: &str,
     e: lighttrack_core::ModelDigestEntry,
     now: chrono::DateTime<Utc>,
+    aliases: &ModelAliases,
 ) -> Option<CollectiveEntry> {
-    let provider = e.provider.trim().to_string();
-    let model = e.model.trim().to_string();
+    let provider = e.provider.trim();
+    let model = e.model.trim();
     let task_type = e.task_type.trim().to_string();
     if provider.is_empty() || model.is_empty() || task_type.is_empty() || e.n_cases == 0 {
         return None;
     }
+    let (provider, model) = aliases.normalize(provider, model);
     Some(CollectiveEntry {
         contributor_id: contributor.to_string(),
         provider,
@@ -346,8 +420,32 @@ fn sanitize_entry(
         n_cases: e.n_cases,
         // v2: carry the variance if present; a negative value is nonsense, so drop it to None.
         quality_variance: e.quality_variance.filter(|v| v.is_finite() && *v >= 0.0),
+        // v2: clamp the judge tag to the known vocabulary; anything else is `unknown`.
+        judge_provider: e
+            .judge_provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(canon_judge),
+        rubric_fingerprint: e
+            .rubric_fingerprint
+            .map(|r| r.trim().chars().take(32).collect::<String>())
+            .filter(|s| !s.is_empty()),
         received_at: now,
     })
+}
+
+/// Clamp a contributed judge tag to the known vocabulary (`anthropic|openai|google|mixed`), mapping
+/// anything unrecognized to `unknown` so a poster can't inject arbitrary judge labels.
+fn canon_judge(j: &str) -> String {
+    match j.to_lowercase().as_str() {
+        "anthropic" => "anthropic",
+        "openai" => "openai",
+        "google" => "google",
+        "mixed" => "mixed",
+        _ => "unknown",
+    }
+    .to_string()
 }
 
 #[cfg(test)]
@@ -425,23 +523,59 @@ mod tests {
     #[test]
     fn sanitize_entry_clamps_and_drops_identityless() {
         let now = Utc::now();
+        let a = ModelAliases::default();
         let good = lighttrack_core::ModelDigestEntry {
             provider: "anthropic".into(), model: "haiku".into(), task_type: "qa".into(),
             quality: 1.4, pass_rate: -0.2, avg_cost_usd: -1.0,
             p50_latency_ms: None, p95_latency_ms: None, n_runs: 2, n_cases: 9,
             quality_variance: Some(-0.5), // negative variance is nonsense → dropped to None
+            judge_provider: Some("weird-label".into()), // unknown label → clamped to "unknown"
+            rubric_fingerprint: Some("ab12cd34".into()),
         };
-        let s = sanitize_entry("c-abc", good, now).unwrap();
+        let s = sanitize_entry("c-abc", good, now, &a).unwrap();
         assert_eq!(s.quality, 1.0);
         assert_eq!(s.pass_rate, 0.0);
         assert_eq!(s.avg_cost_usd, 0.0);
         assert!(s.quality_variance.is_none(), "negative variance dropped");
+        assert_eq!(s.judge_provider.as_deref(), Some("unknown"), "unknown judge label clamped");
+        assert_eq!(s.rubric_fingerprint.as_deref(), Some("ab12cd34"));
         let bad = lighttrack_core::ModelDigestEntry {
             provider: "  ".into(), model: "haiku".into(), task_type: "qa".into(),
             quality: 0.5, pass_rate: 0.5, avg_cost_usd: 0.1,
             p50_latency_ms: None, p95_latency_ms: None, n_runs: 1, n_cases: 5,
-            quality_variance: None,
+            quality_variance: None, judge_provider: None, rubric_fingerprint: None,
         };
-        assert!(sanitize_entry("c-abc", bad, now).is_none());
+        assert!(sanitize_entry("c-abc", bad, now, &a).is_none());
+    }
+
+    #[test]
+    fn ingest_normalizes_model_identity() {
+        let now = Utc::now();
+        let a = ModelAliases::from_json_str(
+            r#"{"providers":{"azure-openai":"openai"},"models":{"gpt-4o-2024-08-06":"gpt-4o"}}"#,
+        )
+        .unwrap();
+        let e = |provider: &str, model: &str| lighttrack_core::ModelDigestEntry {
+            provider: provider.into(), model: model.into(), task_type: "qa".into(),
+            quality: 0.8, pass_rate: 0.8, avg_cost_usd: 0.01,
+            p50_latency_ms: None, p95_latency_ms: None, n_runs: 1, n_cases: 10,
+            quality_variance: None, judge_provider: None, rubric_fingerprint: None,
+        };
+        // provider/ prefix stripped + dated variant collapsed + provider synonym mapped.
+        let s = sanitize_entry("c", e("openai", "openai/gpt-4o-2024-08-06"), now, &a).unwrap();
+        assert_eq!((s.provider.as_str(), s.model.as_str()), ("openai", "gpt-4o"));
+        let s = sanitize_entry("c", e("azure-openai", "gpt-4o"), now, &a).unwrap();
+        assert_eq!(s.provider, "openai");
+    }
+
+    #[test]
+    fn judge_provider_classification() {
+        assert_eq!(judge_provider_of("anthropic/claude-haiku-4-5").as_deref(), Some("anthropic"));
+        assert_eq!(judge_provider_of("haiku").as_deref(), Some("anthropic"));
+        assert_eq!(judge_provider_of("gpt-4o").as_deref(), Some("openai"));
+        assert_eq!(judge_provider_of("openai/o3-mini").as_deref(), Some("openai"));
+        assert_eq!(judge_provider_of("gemini-1.5-pro").as_deref(), Some("google"));
+        assert_eq!(judge_provider_of("some-local-llm").as_deref(), Some("unknown"));
+        assert_eq!(judge_provider_of("  "), None);
     }
 }

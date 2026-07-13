@@ -46,7 +46,7 @@
 //!   POST /v1/billing/:provider/webhook?project=   signed Stripe/Polar webhook → revenue (unauth; HMAC)
 //!   GET  /v1/collective/digest?min_cases=     build this instance's privacy-safe model digest (admin)
 //!   POST /v1/collective/ingest                hub: accept a contributor's digest (gated; off default)
-//!   GET  /v1/collective/leaderboard?task_type=&provider=   merged real-world model leaderboard
+//!   GET  /v1/collective/leaderboard?task_type=&provider=&judge=   merged real-world model leaderboard
 //!
 //! Env: LIGHTTRACK_BIND, LIGHTTRACK_DB, LIGHTTRACK_DATABASE_URL, LIGHTTRACK_PRICING,
 //!      LIGHTTRACK_MAX_TS_SKEW_SECS (reject events dated > N s from now; 0/unset = off),
@@ -65,7 +65,8 @@
 //!        `anonymous` identity; off by default, a keyless push is otherwise refused),
 //!      LIGHTTRACK_COLLECTIVE_MIN_CASES (hub-enforced k-anonymity floor; default 5, clamp ≥1),
 //!      LIGHTTRACK_COLLECTIVE_DISPLAY_FLOOR (merged rows below this many cases are flagged
-//!        low_confidence; default 30).
+//!        low_confidence; default 30),
+//!      LIGHTTRACK_MODEL_ALIASES (model-identity normalization table; default config/model_aliases.json).
 
 mod alerts;
 mod auth;

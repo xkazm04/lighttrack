@@ -3,10 +3,10 @@
 //!
 //! Leaderboard input: `{ contributors, n_models, task_type?, rows: [ {provider, model, task_type,
 //! quality, quality_ci95?, pass_rate, avg_cost_usd, p50_latency_ms?, p95_latency_ms?, low_confidence,
-//! n_contributors, n_runs, n_cases} ] }`.
+//! judge_providers?, mixed_judges?, n_contributors, n_runs, n_cases} ] }`.
 //! Digest input:      `{ schema_version, contributor_id, min_cases, entries: [ {provider, model,
 //! task_type, quality, pass_rate, avg_cost_usd, p50_latency_ms?, p95_latency_ms?, quality_variance?,
-//! n_runs, n_cases} ] }`.
+//! judge_provider?, rubric_fingerprint?, n_runs, n_cases} ] }`.
 
 use serde_json::Value;
 
@@ -91,6 +91,7 @@ fn model_table(cols: &Cols) -> Table {
     c.push(("Cost/case", Align::Right));
     c.push(("p50", Align::Right));
     c.push(("p95", Align::Right));
+    c.push(("Judge", Align::Left));
     if cols.sources {
         c.push(("Sources", Align::Right));
     }
@@ -122,6 +123,7 @@ fn model_row(r: &Value, cols: &Cols) -> Vec<String> {
     cells.push(money(f(r, "avg_cost_usd")));
     cells.push(lat(r, "p50_latency_ms"));
     cells.push(lat(r, "p95_latency_ms"));
+    cells.push(judge_cell(r, cols));
     if cols.sources {
         cells.push(u(r, "n_contributors").to_string());
     }
@@ -132,6 +134,24 @@ fn model_row(r: &Value, cols: &Cols) -> Vec<String> {
 
 fn lat(r: &Value, key: &str) -> String {
     opt_u(r, key).map(|m| format!("{m}ms")).unwrap_or_else(|| "—".into())
+}
+
+/// The judge cell: on the leaderboard, the distinct judge families (or `mixed(n)` when they disagree);
+/// on the digest, the single coarse judge family for the bucket.
+fn judge_cell(r: &Value, cols: &Cols) -> String {
+    if cols.sources {
+        let js: Vec<&str> =
+            r.get("judge_providers").and_then(Value::as_array).map(|a| {
+                a.iter().filter_map(Value::as_str).collect()
+            }).unwrap_or_default();
+        match js.len() {
+            0 => "—".into(),
+            1 => js[0].to_string(),
+            n => format!("mixed({n})"),
+        }
+    } else {
+        r.get("judge_provider").and_then(Value::as_str).unwrap_or("—").to_string()
+    }
 }
 
 #[cfg(test)]
@@ -146,10 +166,12 @@ mod tests {
                 {"provider":"anthropic","model":"haiku","task_type":"qa","quality":0.87,
                  "quality_ci95":0.028,"pass_rate":0.9,"avg_cost_usd":0.0038,
                  "p50_latency_ms":820,"p95_latency_ms":2100,"low_confidence":false,
+                 "judge_providers":["anthropic","openai"],"mixed_judges":2,
                  "n_contributors":3,"n_runs":12,"n_cases":1200},
                 {"provider":"openai","model":"gpt-x","task_type":"qa","quality":0.80,
                  "pass_rate":0.8,"avg_cost_usd":0.002,"p50_latency_ms":600,
-                 "low_confidence":true,"n_contributors":1,"n_runs":1,"n_cases":12}
+                 "low_confidence":true,"judge_providers":["google"],
+                 "n_contributors":1,"n_runs":1,"n_cases":12}
             ]
         });
         let md = leaderboard(&v).unwrap();
@@ -160,6 +182,8 @@ mod tests {
         assert!(md.contains("n/a"), "missing CI shown as n/a (insufficient variance)");
         assert!(md.contains("gpt-x †"), "low-confidence row flagged");
         assert!(md.contains("low-confidence row"), "legend explains the dagger");
+        assert!(md.contains("mixed(2)"), "mixed judges surfaced");
+        assert!(md.contains("google"), "single judge family surfaced");
         assert!(md.contains("1,200"));
     }
 
@@ -181,10 +205,11 @@ mod tests {
         let v = json!({"contributor_id":"c-abc","min_cases":5,"entries":[
             {"provider":"anthropic","model":"haiku","task_type":"qa","quality":0.87,
              "pass_rate":0.9,"avg_cost_usd":0.0038,"p50_latency_ms":820,"p95_latency_ms":1500,
-             "n_runs":3,"n_cases":300}
+             "judge_provider":"openai","n_runs":3,"n_cases":300}
         ]});
         let md = digest(&v).unwrap();
         assert!(md.contains("1500ms"), "digest shows p95");
+        assert!(md.contains("openai"), "digest shows the single judge family");
         assert!(!md.contains("±95%"), "digest has no CI column");
         assert!(!md.contains("Sources"), "digest has no Sources column");
     }

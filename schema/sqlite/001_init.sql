@@ -239,6 +239,8 @@ CREATE TABLE IF NOT EXISTS collective_entries (
   n_runs          INTEGER NOT NULL DEFAULT 0,
   n_cases         INTEGER NOT NULL DEFAULT 0,
   quality_variance REAL,          -- v2: case-weighted variance of quality across the contributor's runs
+  judge_provider  TEXT,            -- v2: coarse judge family (anthropic|openai|google|unknown|mixed)
+  rubric_fingerprint TEXT,         -- v2: short one-way hash of the rubric shape (no content leak)
   received_at     TEXT NOT NULL,
   PRIMARY KEY (contributor_id, provider, model, task_type)
 );

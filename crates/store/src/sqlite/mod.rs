@@ -104,8 +104,11 @@ impl Store for SqliteStore {
                 "ALTER TABLE limit_rules ADD COLUMN warn_at REAL",
                 "ALTER TABLE limit_rules ADD COLUMN scope_kind TEXT",
                 "ALTER TABLE limit_rules ADD COLUMN scope_value TEXT",
-                // Collective digest v2: per-bucket quality variance (for merged CIs).
+                // Collective digest v2: per-bucket quality variance (for merged CIs), plus the coarse
+                // judge family and rubric-shape fingerprint that scored the bucket.
                 "ALTER TABLE collective_entries ADD COLUMN quality_variance REAL",
+                "ALTER TABLE collective_entries ADD COLUMN judge_provider TEXT",
+                "ALTER TABLE collective_entries ADD COLUMN rubric_fingerprint TEXT",
             ] {
                 if let Err(e) = c.execute(stmt, []) {
                     if !e.to_string().contains("duplicate column name") {

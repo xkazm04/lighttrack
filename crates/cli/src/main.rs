@@ -102,6 +102,9 @@ enum CollectiveCmd {
         task_type: Option<String>,
         #[arg(long)]
         provider: Option<String>,
+        /// Filter to rows scored by one judge family (anthropic|openai|google|unknown).
+        #[arg(long)]
+        judge: Option<String>,
     },
     /// Preview this instance's privacy-safe digest — what `contribute` would publish (admin key).
     Digest {
@@ -323,10 +326,10 @@ fn main() -> Result<()> {
             call(&cli, Method::GET, &p, None, "get_margin")
         }
         Cmd::Collective { action } => match action {
-            CollectiveCmd::Leaderboard { task_type, provider } => {
+            CollectiveCmd::Leaderboard { task_type, provider, judge } => {
                 let mut p = "/v1/collective/leaderboard".to_string();
                 let mut sep = '?';
-                for (k, v) in [("task_type", task_type), ("provider", provider)] {
+                for (k, v) in [("task_type", task_type), ("provider", provider), ("judge", judge)] {
                     if let Some(val) = v {
                         p.push_str(&format!("{sep}{k}={val}"));
                         sep = '&';

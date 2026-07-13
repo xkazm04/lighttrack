@@ -39,6 +39,10 @@ struct Sample {
     /// A pre-computed variance the sample brings (merge side); `None` on the digest side, where the
     /// bucket variance is derived from the spread of run qualities instead.
     variance: Option<f64>,
+    /// Coarse judge family behind this sample (`anthropic|openai|google|unknown|mixed`), if recorded.
+    judge_provider: Option<String>,
+    /// Rubric-shape fingerprint behind this sample, if recorded.
+    rubric_fingerprint: Option<String>,
 }
 
 /// Case-weighted accumulator shared by digest building and leaderboard merging.
@@ -56,6 +60,8 @@ struct Acc {
     var_w: f64,      // Σ w·vᵢ over samples with a known variance — for the merge-side pooled CI
     var_cases: u64,  // Σ w over samples with a known variance
     contributors: BTreeSet<String>,
+    judge_providers: BTreeSet<String>,
+    rubric_fps: BTreeSet<String>,
 }
 
 impl Acc {
@@ -77,6 +83,12 @@ impl Acc {
         if let Some(v) = s.variance {
             self.var_w += v * w;
             self.var_cases += s.cases as u64;
+        }
+        if let Some(j) = s.judge_provider.filter(|j| !j.is_empty()) {
+            self.judge_providers.insert(j);
+        }
+        if let Some(r) = s.rubric_fingerprint.filter(|r| !r.is_empty()) {
+            self.rubric_fps.insert(r);
         }
         if let Some(c) = contributor {
             self.contributors.insert(c.to_string());
@@ -130,6 +142,17 @@ fn key_of(provider: &str, model: &str, task_type: &str) -> Key {
     (provider.to_string(), model.to_string(), task_type.to_string())
 }
 
+/// Collapse a set of tags into a single digest-entry value: the sole tag when they agree, `"mixed"`
+/// when a bucket's runs disagree, `None` when nothing was recorded. Keeps a v2 entry singular while
+/// still signalling incommensurability.
+fn collapse(set: &BTreeSet<String>) -> Option<String> {
+    match set.len() {
+        0 => None,
+        1 => set.iter().next().cloned(),
+        _ => Some("mixed".to_string()),
+    }
+}
+
 /// Build this instance's privacy-safe digest from its benchmark run scorecards. Buckets with fewer
 /// than `min_cases` total cases are **dropped** (k-anonymity); the rest are sorted by quality desc.
 pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> {
@@ -148,6 +171,8 @@ pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> 
                 p95: s.p95_latency_ms,
                 runs: 1,
                 variance: None,
+                judge_provider: s.judge_provider.clone(),
+                rubric_fingerprint: s.rubric_fingerprint.clone(),
             },
             None,
         );
@@ -167,6 +192,8 @@ pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> 
             n_runs: a.runs,
             n_cases: a.cases as u32,
             quality_variance: a.run_variance().map(r6),
+            judge_provider: collapse(&a.judge_providers),
+            rubric_fingerprint: collapse(&a.rubric_fps),
         })
         .collect();
     sort_by_quality(&mut out, |e| (e.quality, &e.provider, &e.model));
@@ -190,26 +217,34 @@ pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32)
                 p95: e.p95_latency_ms,
                 runs: e.n_runs,
                 variance: e.quality_variance,
+                judge_provider: e.judge_provider.clone(),
+                rubric_fingerprint: e.rubric_fingerprint.clone(),
             },
             Some(&e.contributor_id),
         );
     }
     let mut out: Vec<LeaderboardRow> = groups
         .into_iter()
-        .map(|((provider, model, task_type), a)| LeaderboardRow {
-            provider,
-            model,
-            task_type,
-            quality: r3(a.quality()),
-            quality_ci95: a.quality_ci95().map(r3),
-            pass_rate: r3(a.pass_rate()),
-            avg_cost_usd: r6(a.cost()),
-            p50_latency_ms: a.p50(),
-            p95_latency_ms: a.p95(),
-            low_confidence: a.cases < low_confidence_floor as u64,
-            n_contributors: a.contributors.len() as u32,
-            n_runs: a.runs,
-            n_cases: a.cases as u32,
+        .map(|((provider, model, task_type), a)| {
+            let judge_providers: Vec<String> = a.judge_providers.iter().cloned().collect();
+            let mixed_judges = (judge_providers.len() > 1).then(|| judge_providers.len() as u32);
+            LeaderboardRow {
+                provider,
+                model,
+                task_type,
+                quality: r3(a.quality()),
+                quality_ci95: a.quality_ci95().map(r3),
+                pass_rate: r3(a.pass_rate()),
+                avg_cost_usd: r6(a.cost()),
+                p50_latency_ms: a.p50(),
+                p95_latency_ms: a.p95(),
+                low_confidence: a.cases < low_confidence_floor as u64,
+                judge_providers,
+                mixed_judges,
+                n_contributors: a.contributors.len() as u32,
+                n_runs: a.runs,
+                n_cases: a.cases as u32,
+            }
         })
         .collect();
     sort_by_quality(&mut out, |r| (r.quality, &r.provider, &r.model));
@@ -252,6 +287,8 @@ mod tests {
             n_cases: cases,
             p50_latency_ms: Some(800),
             p95_latency_ms: Some(1500),
+            judge_provider: None,
+            rubric_fingerprint: None,
         }
     }
 
@@ -261,6 +298,17 @@ mod tests {
         q: f64,
         cases: u32,
         variance: Option<f64>,
+    ) -> CollectiveEntry {
+        judged(contrib, model, q, cases, variance, None)
+    }
+
+    fn judged(
+        contrib: &str,
+        model: &str,
+        q: f64,
+        cases: u32,
+        variance: Option<f64>,
+        judge: Option<&str>,
     ) -> CollectiveEntry {
         CollectiveEntry {
             contributor_id: contrib.into(),
@@ -275,6 +323,8 @@ mod tests {
             n_runs: 1,
             n_cases: cases,
             quality_variance: variance,
+            judge_provider: judge.map(str::to_string),
+            rubric_fingerprint: None,
             received_at: Utc::now(),
         }
     }
@@ -383,6 +433,45 @@ mod tests {
             DEFAULT_LOW_CONFIDENCE_CASES,
         );
         assert!(rows[0].quality_ci95.is_none(), "thin variance coverage → no CI");
+    }
+
+    #[test]
+    fn digest_collapses_agreeing_judge_and_flags_mixed() {
+        // Two runs, same judge provider → the digest entry keeps that provider.
+        let mut a = stat("anthropic", "haiku", "qa", 0.8, 0.003, 50);
+        a.judge_provider = Some("openai".into());
+        let mut b = stat("anthropic", "haiku", "qa", 0.9, 0.003, 50);
+        b.judge_provider = Some("openai".into());
+        let d = build_digest(&[a, b], 5);
+        assert_eq!(d[0].judge_provider.as_deref(), Some("openai"));
+        // Runs disagreeing on judge → collapsed to "mixed".
+        let mut a = stat("anthropic", "haiku", "qa", 0.8, 0.003, 50);
+        a.judge_provider = Some("openai".into());
+        let mut b = stat("anthropic", "haiku", "qa", 0.9, 0.003, 50);
+        b.judge_provider = Some("google".into());
+        let d = build_digest(&[a, b], 5);
+        assert_eq!(d[0].judge_provider.as_deref(), Some("mixed"));
+    }
+
+    #[test]
+    fn merge_annotates_mixed_judges_across_contributors() {
+        // Same bucket judged by two different providers across contributors → mixed_judges = 2.
+        let rows = merge_leaderboard(
+            &[
+                judged("a", "haiku", 0.8, 50, None, Some("anthropic")),
+                judged("b", "haiku", 0.85, 50, None, Some("openai")),
+            ],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert_eq!(rows[0].mixed_judges, Some(2));
+        assert_eq!(rows[0].judge_providers, vec!["anthropic".to_string(), "openai".to_string()]);
+        // A single-judge bucket carries no mixed annotation.
+        let rows = merge_leaderboard(
+            &[judged("a", "haiku", 0.8, 50, None, Some("anthropic"))],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert!(rows[0].mixed_judges.is_none());
+        assert_eq!(rows[0].judge_providers, vec!["anthropic".to_string()]);
     }
 
     #[test]

@@ -24,6 +24,12 @@ pub struct RunStat {
     pub n_cases: u32,
     pub p50_latency_ms: Option<u64>,
     pub p95_latency_ms: Option<u64>,
+    /// Coarse judge family that scored this run (`anthropic|openai|google|unknown`), or `None` when the
+    /// benchmark records no judge. Provider only — never the full judge model — to limit fingerprinting.
+    pub judge_provider: Option<String>,
+    /// Short, one-way hash of the rubric shape/criteria — lets the hub tell whether two numbers were
+    /// scored under the same rubric without ever seeing the rubric text.
+    pub rubric_fingerprint: Option<String>,
 }
 
 /// A published digest entry: one `(provider, model, task_type)` bucket aggregated across an instance's
@@ -47,6 +53,13 @@ pub struct ModelDigestEntry {
     /// the bucket came from a single run (variance undefined) or from a v1 contributor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_variance: Option<f64>,
+    /// v2: coarse judge family for this bucket (`anthropic|openai|google|unknown`, or `mixed` when the
+    /// bucket's runs disagree). Provider only — never the full judge model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge_provider: Option<String>,
+    /// v2: rubric-shape fingerprint (short one-way hash). `None` when the bucket mixes rubrics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rubric_fingerprint: Option<String>,
 }
 
 /// A full digest an instance contributes to a hub. The `contributor_id` is **opaque** (a hash) but a
@@ -84,6 +97,10 @@ pub struct CollectiveEntry {
     pub n_cases: u32,
     /// v2: population variance of `quality` across the contributor's runs; `None` for v1 contributors.
     pub quality_variance: Option<f64>,
+    /// v2: coarse judge family (`anthropic|openai|google|unknown|mixed`) or `None` (v1 / unrecorded).
+    pub judge_provider: Option<String>,
+    /// v2: rubric-shape fingerprint (short one-way hash) or `None`.
+    pub rubric_fingerprint: Option<String>,
     pub received_at: DateTime<Utc>,
 }
 
@@ -109,6 +126,14 @@ pub struct LeaderboardRow {
     /// `true` when the row aggregates fewer than the display floor of cases: shown, but not to be
     /// trusted as an authoritative ranking.
     pub low_confidence: bool,
+    /// Distinct coarse judge families behind this row (sorted). Cross-instance quality is only
+    /// commensurable when these agree — the row is judged by whatever scored each contribution.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub judge_providers: Vec<String>,
+    /// `Some(n)` when more than one distinct judge family contributed — the number is incommensurable
+    /// across judges, so treat the ranking with care. `None` when a single judge (or none recorded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mixed_judges: Option<u32>,
     pub n_contributors: u32,
     pub n_runs: u32,
     pub n_cases: u32,

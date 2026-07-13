@@ -23,6 +23,7 @@
 //! each leaderboard mean and flag thin rows as low-confidence. See the `merge` submodule for the
 //! estimator and its documented approximations.
 
+mod aliases;
 mod classify;
 mod merge;
 mod types;
@@ -60,6 +61,7 @@ pub const TASK_TYPES: &[&str] = &[
     "general",
 ];
 
+pub use aliases::ModelAliases;
 pub use classify::task_type_from;
 pub use merge::{build_digest, merge_leaderboard};
 pub use types::{CollectiveDigest, CollectiveEntry, LeaderboardRow, ModelDigestEntry, RunStat};

@@ -180,11 +180,25 @@ LightTrack, the better the data for everyone (the moat).
   - *Honest latency.* The merged `p50` is a case-weighted mean of contributors' per-run medians
     (approximate — labelled as such); `p95` is now surfaced as the **worst-observed** tail (the max
     across contributors), not silently discarded.
+- **Judge context + model-identity normalization (v2).** Cross-instance quality is only commensurable
+  when you know *how* it was scored and *which* model it is:
+  - *Judge tagging.* Each v2 entry carries `judge_provider` (the coarse judge family
+    `anthropic|openai|google|unknown` — provider only, never the full judge model, to limit
+    fingerprinting) and `rubric_fingerprint` (a short one-way hash of the rubric shape — no content
+    leak). The contributor derives both from its own run data (benchmark `judge_model` + rubric); the
+    hub clamps the judge tag to the known vocabulary. A leaderboard row exposes the distinct
+    `judge_providers` and, when they disagree, a `mixed_judges` count; `GET …/leaderboard?judge=<prov>`
+    filters to rows a given judge family scored. A bucket whose own runs disagree collapses to `mixed`.
+  - *Model-identity normalization.* At ingest the hub canonicalizes `(provider, model)` through
+    `config/model_aliases.json` (`LIGHTTRACK_MODEL_ALIASES`): a redundant `provider/` prefix is stripped
+    and dated/synonym variants collapse to their family **only where the alias file says so**
+    (`gpt-4o`, `openai/gpt-4o`, `gpt-4o-2024-08-06` → one row). An identity absent from the table passes
+    through unchanged, so a new model is never silently mis-merged.
 - **Topology.** Any LightTrack can be a **hub** (`LIGHTTRACK_COLLECTIVE_ACCEPT=1`, off by default) that
   receives digests and merges them; others contribute. Same binary, no central service required.
 - **API.** `GET /v1/collective/digest?min_cases=` (admin — preview what we'd publish) ·
   `POST /v1/collective/ingest` (hub-only; replaces a contributor's set, validates + clamps each entry) ·
-  `GET /v1/collective/leaderboard?task_type=&provider=` (open read — the merged leaderboard).
+  `GET /v1/collective/leaderboard?task_type=&provider=&judge=` (open read — the merged leaderboard).
 - **Surfaces.** `lt collective leaderboard|digest|contribute --hub <url>` (the CLI does the two-hop push:
   GET own digest → POST to the hub); the `get_collective_leaderboard` MCP read tool; a rendered
   leaderboard table shared by CLI + MCP.
@@ -201,7 +215,8 @@ rubrics(id, project_id, name, dimensions_json, threshold)        -- weighted anc
 model_prices(provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok, effective_date, source_url)
 jobs(id, type, payload_json, status, attempts, progress, error, claimed_at, created_at)
 collective_entries(contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd,
-                   p50_latency_ms?, p95_latency_ms?, n_runs, n_cases, quality_variance?, received_at)  -- hub side; PK=(contributor_id,provider,model,task_type)
+                   p50_latency_ms?, p95_latency_ms?, n_runs, n_cases, quality_variance?,
+                   judge_provider?, rubric_fingerprint?, received_at)  -- hub side; PK=(contributor_id,provider,model,task_type)
 ```
 
 ## Phased plan

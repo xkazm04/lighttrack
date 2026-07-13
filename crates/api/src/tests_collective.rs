@@ -15,7 +15,7 @@ use axum::Router;
 use serde_json::{json, Value};
 use tower::ServiceExt; // oneshot
 
-use lighttrack_core::PriceBook;
+use lighttrack_core::{ModelAliases, PriceBook};
 use lighttrack_store::{SqliteStore, Store};
 
 use crate::auth::AuthMode;
@@ -23,8 +23,13 @@ use crate::collective::Collective;
 use crate::state::AppState;
 
 /// App state over a fresh in-memory store, in **dev** auth mode (so a keyless or arbitrary-bearer
-/// request reaches the collective handler), with a hub configured by the given knobs.
+/// request reaches the collective handler), with a hub configured by the given knobs. Uses a small
+/// fixed alias table so normalization is deterministic regardless of the on-disk config file.
 fn setup(accept: bool, allow_anon: bool, min_cases: u32) -> (AppState, Arc<SqliteStore>) {
+    let aliases = ModelAliases::from_json_str(
+        r#"{"providers":{"azure-openai":"openai"},"models":{"gpt-4o-2024-08-06":"gpt-4o"}}"#,
+    )
+    .unwrap();
     let store = Arc::new(SqliteStore::open_in_memory().unwrap());
     let dyn_store: Arc<dyn Store + Send + Sync> = store.clone();
     let state = AppState {
@@ -43,6 +48,7 @@ fn setup(accept: bool, allow_anon: bool, min_cases: u32) -> (AppState, Arc<Sqlit
             allow_anon,
             min_cases,
             display_floor: 30,
+            aliases,
         }),
         seen_webhooks: Arc::new(crate::idempotency::SeenWebhooks::new(
             crate::idempotency::DEFAULT_CAPACITY,
@@ -78,15 +84,30 @@ async fn ingest(app: &Router, token: Option<&str>, digest: Value) -> (StatusCode
 }
 
 async fn leaderboard(app: &Router) -> (StatusCode, Value) {
-    let req = Request::builder()
-        .method("GET")
-        .uri("/v1/collective/leaderboard")
-        .body(Body::empty())
-        .unwrap();
+    leaderboard_q(app, "").await
+}
+
+async fn leaderboard_q(app: &Router, query: &str) -> (StatusCode, Value) {
+    let uri = if query.is_empty() {
+        "/v1/collective/leaderboard".to_string()
+    } else {
+        format!("/v1/collective/leaderboard?{query}")
+    };
+    let req = Request::builder().method("GET").uri(uri).body(Body::empty()).unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+/// A v2 digest carrying one bucket with an explicit provider/model and judge provider.
+fn digest_of(provider: &str, model: &str, q: f64, cases: u32, judge: &str) -> Value {
+    json!({ "schema_version": 2, "entries": [{
+        "provider": provider, "model": model, "task_type": "qa",
+        "quality": q, "pass_rate": q, "avg_cost_usd": 0.003,
+        "p50_latency_ms": 900, "p95_latency_ms": 2000, "n_runs": 1, "n_cases": cases,
+        "judge_provider": judge
+    }]})
 }
 
 #[tokio::test]
@@ -237,6 +258,44 @@ async fn v2_variance_is_carried_through_to_storage_and_ci() {
     assert!(row["quality_ci95"].as_f64().is_some(), "full variance coverage → CI present: {lb}");
     assert_eq!(row["p95_latency_ms"], 2000, "worst-observed p95 surfaced");
     assert_eq!(row["low_confidence"], false, "200 cases clears the floor");
+}
+
+#[tokio::test]
+async fn ingest_normalizes_identity_so_variants_merge_into_one_row() {
+    // Two contributors report the same model spelled differently; normalization collapses them.
+    let (state, _) = setup(true, false, 5);
+    let app = crate::build_router(state);
+    ingest(&app, Some("key-a"), digest_of("openai", "gpt-4o-2024-08-06", 0.80, 100, "openai")).await;
+    ingest(&app, Some("key-b"), digest_of("azure-openai", "gpt-4o", 0.84, 100, "openai")).await;
+
+    let (ls, lb) = leaderboard(&app).await;
+    assert_eq!(ls, StatusCode::OK);
+    assert_eq!(lb["rows"].as_array().unwrap().len(), 1, "variants merged into one row: {lb}");
+    let row = &lb["rows"][0];
+    assert_eq!(row["provider"], "openai");
+    assert_eq!(row["model"], "gpt-4o");
+    assert_eq!(row["n_contributors"], 2);
+}
+
+#[tokio::test]
+async fn mixed_judges_annotated_and_judge_filter_works() {
+    let (state, _) = setup(true, false, 5);
+    let app = crate::build_router(state);
+    // Same bucket judged by two different providers across contributors.
+    ingest(&app, Some("key-a"), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+    ingest(&app, Some("key-b"), digest_of("anthropic", "haiku", 0.84, 100, "openai")).await;
+
+    let (_s, lb) = leaderboard(&app).await;
+    let row = &lb["rows"][0];
+    assert_eq!(row["mixed_judges"], 2, "distinct judges annotated: {lb}");
+    let judges = row["judge_providers"].as_array().unwrap();
+    assert_eq!(judges.len(), 2);
+
+    // ?judge=anthropic keeps the row (it was partly judged by anthropic); ?judge=cohere drops it.
+    let (_s, kept) = leaderboard_q(&app, "judge=anthropic").await;
+    assert_eq!(kept["rows"].as_array().unwrap().len(), 1, "{kept}");
+    let (_s, dropped) = leaderboard_q(&app, "judge=cohere").await;
+    assert_eq!(dropped["rows"].as_array().unwrap().len(), 0, "{dropped}");
 }
 
 #[tokio::test]
