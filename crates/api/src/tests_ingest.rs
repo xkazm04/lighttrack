@@ -291,6 +291,148 @@ async fn alert_limit_flags_but_admits_and_stores() {
     assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
 }
 
+/// POST a batch array through the router; returns (status, parsed JSON body).
+async fn ingest_batch(app: &Router, token: &str, body: Value) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/events/batch")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn batch_returns_per_item_accept_reject_invalid() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    // Breach on the 3rd call (admission uses `>=`), so the first two valid items admit and the third
+    // is rejected — proving a batch can't bypass the cap.
+    store
+        .create_limit_rule(&LimitRule {
+            id: new_id(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::Calls,
+            window: LimitWindow::Hour,
+            threshold: 3.0,
+            action: LimitAction::Block,
+            enabled: true,
+        })
+        .unwrap();
+    let app = crate::build_router(state);
+
+    let ok = |id: &str| {
+        json!({ "id": id, "provider": "anthropic", "model": "claude-haiku-4-5",
+                "usage": { "input": 1, "output": 1 }, "cost_usd": 0.0 })
+    };
+    // Order: valid, invalid(empty model), valid, valid → three admitted attempts against a cap that
+    // breaches at 3, so the last valid item is rejected.
+    let (status, body) = ingest_batch(
+        &app,
+        &key,
+        json!([
+            ok("a"),
+            { "id": "bad", "provider": "anthropic", "model": "  ", "usage": { "input": 1, "output": 1 } },
+            ok("c"),
+            ok("d"),
+        ]),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "batch is multi-status under 200: {body}");
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 4, "{body}");
+    // Order preserved.
+    assert_eq!(results[0]["status"], "accepted");
+    assert_eq!(results[0]["id"], "a");
+    assert_eq!(results[1]["status"], "invalid", "empty model → invalid: {body}");
+    assert_eq!(results[2]["status"], "accepted");
+    assert_eq!(results[3]["status"], "rejected", "cap reached → rejected: {body}");
+    assert_eq!(body["accepted"], 2);
+    assert_eq!(body["invalid"], 1);
+    assert_eq!(body["rejected"], 1);
+
+    // Cap-bypass regression: exactly the two admitted events were stored, nothing more.
+    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn batch_rejects_empty_and_oversized_requests() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let (s_empty, _) = ingest_batch(&app, &key, json!([])).await;
+    assert_eq!(s_empty, StatusCode::BAD_REQUEST, "empty batch is a 400");
+}
+
+/// GET /v1/events through the router; returns (status, next-cursor header, body array).
+async fn get_events(app: &Router, token: &str, query: &str) -> (StatusCode, Option<String>, Value) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/events?{query}"))
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let cursor = resp
+        .headers()
+        .get("x-next-cursor")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    (status, cursor, v)
+}
+
+#[tokio::test]
+async fn get_events_paginates_by_cursor_and_filters() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    // Three events; two anthropic, one openai (openai isn't in the price book, so supply cost_usd).
+    for (id, provider, model, cost) in [
+        ("p1", "anthropic", "claude-haiku-4-5", None),
+        ("p2", "openai", "gpt-4o", Some(0.01)),
+        ("p3", "anthropic", "claude-haiku-4-5", None),
+    ] {
+        let mut body = json!({
+            "id": id, "provider": provider, "model": model,
+            "usage": { "input": 10, "output": 5 }
+        });
+        if let Some(c) = cost {
+            body["cost_usd"] = json!(c);
+        }
+        let (s, _) = ingest(&app, &key, body).await;
+        assert_eq!(s, StatusCode::OK, "ingest {id}");
+    }
+
+    // Page 1 of 2 → a cursor is returned.
+    let (s1, cur1, b1) = get_events(&app, &key, "limit=2").await;
+    assert_eq!(s1, StatusCode::OK);
+    assert_eq!(b1.as_array().unwrap().len(), 2, "{b1}");
+    let cursor = cur1.expect("X-Next-Cursor present when more rows remain");
+
+    // Page 2 via cursor → the final row, no further cursor.
+    let (s2, cur2, b2) = get_events(&app, &key, &format!("limit=2&cursor={cursor}")).await;
+    assert_eq!(s2, StatusCode::OK);
+    assert_eq!(b2.as_array().unwrap().len(), 1, "{b2}");
+    assert!(cur2.is_none(), "no cursor on the last page");
+
+    // Filter by provider.
+    let (s3, _, b3) = get_events(&app, &key, "provider=openai").await;
+    assert_eq!(s3, StatusCode::OK);
+    let arr = b3.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["provider"], "openai");
+}
+
 #[tokio::test]
 async fn duplicate_event_id_returns_409() {
     let (state, store) = setup(Redactor::off());

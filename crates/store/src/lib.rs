@@ -228,6 +228,22 @@ pub trait Store: Send + Sync {
         Ok(admission)
     }
 
+    /// Admission-controlled **batch** ingest: evaluate + insert each event in `evs`, in order,
+    /// returning one result per item (same order). Admission for item _k_ must account for the usage
+    /// of every *previously-accepted* item in the same batch, so a caller cannot bypass a cap by
+    /// packing many events into one request. Per-item errors (e.g. a duplicate id → `Conflict`) are
+    /// returned in that item's slot rather than aborting the whole batch.
+    ///
+    /// The default loops [`Store::insert_event_checked`] and is **not** one critical section (each
+    /// item is its own transaction); it is nonetheless cap-honest for backends that commit each
+    /// insert before the next admission read (Postgres/Firestore stance — a single-transaction port
+    /// is a handoff). SQLite overrides it to hold its one connection lock for the whole batch so the
+    /// entire check-and-insert sequence is atomic (previously-accepted items are already visible to
+    /// the next item's usage read).
+    fn insert_events_checked(&self, evs: &[LlmEvent]) -> Vec<Result<Admission>> {
+        evs.iter().map(|e| self.insert_event_checked(e)).collect()
+    }
+
     /// Most recent events, newest first, optionally filtered by project.
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>>;
 

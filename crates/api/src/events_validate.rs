@@ -34,6 +34,34 @@ pub(crate) fn body_limit_bytes() -> usize {
         .unwrap_or(DEFAULT_MAX_BODY_BYTES)
 }
 
+/// Env: max number of events accepted in one `POST /v1/events/batch`. Over this the whole request is
+/// rejected 400 (before any item is processed). Default [`DEFAULT_MAX_BATCH`].
+const ENV_MAX_BATCH: &str = "LIGHTTRACK_MAX_BATCH";
+const DEFAULT_MAX_BATCH: usize = 500;
+
+/// Env: request body-size cap (bytes) for the batch ingest route → 413. Default 8 MiB (a batch is
+/// many events, so it's roomier than the single-event cap).
+const ENV_MAX_BATCH_BODY_BYTES: &str = "LIGHTTRACK_MAX_BATCH_BODY_BYTES";
+const DEFAULT_MAX_BATCH_BODY_BYTES: usize = 8 * 1024 * 1024;
+
+/// Resolve the max items-per-batch from the environment.
+pub(crate) fn max_batch() -> usize {
+    std::env::var(ENV_MAX_BATCH)
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_MAX_BATCH)
+}
+
+/// Resolve the batch ingest body-size cap (bytes) from the environment.
+pub(crate) fn batch_body_limit_bytes() -> usize {
+    std::env::var(ENV_MAX_BATCH_BODY_BYTES)
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_MAX_BATCH_BODY_BYTES)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct IngestPolicy {
     /// `0` = disabled (no bound). Otherwise the max allowed |ts − now| in seconds.

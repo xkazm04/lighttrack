@@ -7,6 +7,7 @@
 //! Routes:
 //!   GET  /health
 //!   POST /v1/events                      ingest one event (cost computed; limits evaluated)
+//!   POST /v1/events/batch                ingest an array; per-item accepted|rejected|invalid (HTTP 200)
 //!   GET  /v1/events?project=&limit=&since=&until=&provider=&model=&trace_id=&name=&cursor=
 //!                                        keyset pagination: next page cursor in `X-Next-Cursor`
 //!   GET  /v1/events/:id
@@ -42,6 +43,8 @@
 //! Env: LIGHTTRACK_BIND, LIGHTTRACK_DB, LIGHTTRACK_DATABASE_URL, LIGHTTRACK_PRICING,
 //!      LIGHTTRACK_MAX_TS_SKEW_SECS (reject events dated > N s from now; 0/unset = off),
 //!      LIGHTTRACK_MAX_BODY_BYTES (single-event ingest body cap → 413; default 2 MiB),
+//!      LIGHTTRACK_MAX_BATCH (max items per POST /v1/events/batch; default 500),
+//!      LIGHTTRACK_MAX_BATCH_BODY_BYTES (batch ingest body cap → 413; default 8 MiB),
 //!      LIGHTTRACK_AUTH_MODE (dev|enforced), LIGHTTRACK_ADMIN_KEY,
 //!      LIGHTTRACK_RELAY_DEVICE_KEY (bearer key of the enrolled local device — relay lease/result),
 //!      LIGHTTRACK_RELAY_FLAT_COST_USD (fixed cost stamped per relay run event; default 1.0),
@@ -59,6 +62,7 @@ mod collective;
 mod datasets;
 mod error;
 mod events;
+mod events_batch;
 mod events_validate;
 mod forecast;
 mod guards;
@@ -203,6 +207,7 @@ async fn main() -> anyhow::Result<()> {
 
 pub(crate) fn build_router(state: AppState) -> Router {
     let body_limit = events_validate::body_limit_bytes();
+    let batch_body_limit = events_validate::batch_body_limit_bytes();
     Router::new()
         .route("/health", get(health))
         .route(
@@ -210,6 +215,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
             post(events::post_event)
                 .get(events::get_events)
                 .layer(DefaultBodyLimit::max(body_limit)),
+        )
+        .route(
+            "/v1/events/batch",
+            post(events_batch::post_batch).layer(DefaultBodyLimit::max(batch_body_limit)),
         )
         .route("/v1/events/:id", get(events::get_event_by_id))
         .route("/v1/traces", get(traces::list_traces))

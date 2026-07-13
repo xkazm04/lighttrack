@@ -62,6 +62,66 @@ fn duplicate_event_id_is_a_conflict_not_an_opaque_error() {
 }
 
 #[test]
+fn batch_admission_counts_prior_items_no_cap_bypass() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    s.create_project(&Project {
+        id: "p1".into(),
+        name: "p1".into(),
+        enabled: true,
+        redaction: Redaction::None,
+        created_at: Utc::now(),
+    })
+    .unwrap();
+    // Block when usage-with-event reaches 3 (admission breaches on `>=`), so items 1-2 admit.
+    s.create_limit_rule(&LimitRule {
+        id: new_id(),
+        project_id: "p1".into(),
+        metric: LimitMetric::Calls,
+        window: LimitWindow::Hour,
+        threshold: 3.0,
+        action: LimitAction::Block,
+        enabled: true,
+    })
+    .unwrap();
+
+    // A single batch of 3 must not sail past the cap: items 1-2 admit, item 3 (usage-with-event = 3
+    // >= 3, counting the two already-accepted siblings) is rejected and not stored.
+    let batch: Vec<LlmEvent> = (0..3)
+        .map(|n| {
+            let mut e = ev("p1", "m", 1, 1, 0.0);
+            e.id = format!("b{n}");
+            e
+        })
+        .collect();
+    let outcomes = s.insert_events_checked(&batch);
+    assert_eq!(outcomes.len(), 3);
+    assert!(outcomes[0].as_ref().unwrap().admitted);
+    assert!(outcomes[1].as_ref().unwrap().admitted);
+    assert!(!outcomes[2].as_ref().unwrap().admitted, "3rd item must be capped");
+    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 2, "only admitted rows stored");
+}
+
+#[test]
+fn batch_reports_duplicate_id_as_conflict_without_aborting() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    let mut a = ev("p1", "m", 1, 1, 0.0);
+    a.id = "dup".into();
+    let mut b = a.clone(); // same id → conflict
+    let mut c = ev("p1", "m", 1, 1, 0.0);
+    c.id = "ok".into();
+    b.id = "dup".into();
+    let outcomes = s.insert_events_checked(&[a, b, c]);
+    assert!(outcomes[0].is_ok(), "first insert of the id succeeds");
+    assert!(
+        matches!(&outcomes[1], Err(crate::StoreError::Conflict(_))),
+        "duplicate id in-batch is a per-item Conflict, got {:?}",
+        outcomes[1]
+    );
+    assert!(outcomes[2].is_ok(), "a later item still processes after a sibling's conflict");
+    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 2);
+}
+
+#[test]
 fn keyset_pagination_is_stable_across_interleaved_inserts() {
     use chrono::{TimeZone, Utc as ChronoUtc};
     let s = SqliteStore::open_in_memory().unwrap();

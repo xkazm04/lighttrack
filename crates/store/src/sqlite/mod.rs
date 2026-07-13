@@ -101,6 +101,12 @@ impl Store for SqliteStore {
     fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
         self.with(|c| events::insert_checked(c, ev))
     }
+    fn insert_events_checked(&self, evs: &[LlmEvent]) -> Vec<Result<Admission>> {
+        // One critical section for the whole batch: the connection lock is held across every item, so
+        // each accepted insert is already visible to the next item's usage read (no cap bypass), and
+        // the check-then-insert stays atomic against concurrent ingest.
+        self.with(|c| evs.iter().map(|e| events::insert_checked(c, e)).collect())
+    }
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
         self.with(|c| events::list(c, project, limit))
     }

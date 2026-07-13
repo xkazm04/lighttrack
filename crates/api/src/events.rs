@@ -59,7 +59,7 @@ fn mark_cost_source(ev: &mut LlmEvent, client_supplied: bool) {
 /// Post-admission side effects shared by the single- and batch-ingest paths: log and best-effort
 /// deliver breach alerts, and (for an admitted non-success call) feed error-spike detection. Returns
 /// the breached statuses so the caller can shape its response (429 vs. observe-only flag).
-fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) -> Vec<LimitStatus> {
+pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) -> Vec<LimitStatus> {
     let breached: Vec<LimitStatus> =
         admission.statuses.iter().filter(|s| s.breached).cloned().collect();
     for b in &breached {
@@ -78,7 +78,7 @@ fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) -> Vec<Limi
 }
 
 /// Human-facing reason an admission was rejected (the enforcing breach that caused the 429).
-fn breach_reason(breached: &[LimitStatus]) -> String {
+pub(crate) fn breach_reason(breached: &[LimitStatus]) -> String {
     breached
         .iter()
         .find(|s| s.action.enforces())
