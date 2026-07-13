@@ -56,6 +56,7 @@ mod collective;
 mod datasets;
 mod error;
 mod events;
+mod events_validate;
 mod forecast;
 mod guards;
 mod idempotency;
@@ -84,6 +85,7 @@ mod tests_traces;
 use std::sync::{Arc, RwLock};
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post, put},
     Router,
 };
@@ -197,9 +199,15 @@ async fn main() -> anyhow::Result<()> {
 }
 
 pub(crate) fn build_router(state: AppState) -> Router {
+    let body_limit = events_validate::body_limit_bytes();
     Router::new()
         .route("/health", get(health))
-        .route("/v1/events", post(events::post_event).get(events::get_events))
+        .route(
+            "/v1/events",
+            post(events::post_event)
+                .get(events::get_events)
+                .layer(DefaultBodyLimit::max(body_limit)),
+        )
         .route("/v1/events/:id", get(events::get_event_by_id))
         .route("/v1/traces", get(traces::list_traces))
         .route("/v1/traces/:id", get(traces::get_trace))

@@ -290,3 +290,87 @@ async fn alert_limit_flags_but_admits_and_stores() {
     // The event is recorded despite the breach.
     assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn duplicate_event_id_returns_409() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    let body = json!({
+        "id": "dup-1",
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "usage": { "input": 10, "output": 5 },
+        "cost_usd": 0.0
+    });
+
+    let (s1, _) = ingest(&app, &key, body.clone()).await;
+    assert_eq!(s1, StatusCode::OK);
+
+    // The second insert of the same id collides on the PK → a clear 409 conflict, not a 500.
+    let (s2, b2) = ingest(&app, &key, body).await;
+    assert_eq!(s2, StatusCode::CONFLICT, "{b2}");
+    assert_eq!(b2["error"]["code"], "conflict", "{b2}");
+    // The row was not duplicated.
+    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn empty_model_is_rejected_400() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let (status, body) = ingest(
+        &app,
+        &key,
+        json!({ "provider": "anthropic", "model": "   ", "usage": { "input": 1, "output": 1 } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "bad_request", "{body}");
+    // Nothing was stored.
+    assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn cost_source_is_marked_client_vs_book() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    // Client-declared cost → cost_source=client.
+    let (s1, _) = ingest(
+        &app,
+        &key,
+        json!({
+            "id": "c1", "provider": "anthropic", "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 }, "cost_usd": 0.42
+        }),
+    )
+    .await;
+    assert_eq!(s1, StatusCode::OK);
+
+    // No cost supplied → priced from book → cost_source=book.
+    let (s2, _) = ingest(
+        &app,
+        &key,
+        json!({
+            "id": "c2", "provider": "anthropic", "model": "claude-haiku-4-5",
+            "usage": { "input": 1_000_000, "output": 0 }
+        }),
+    )
+    .await;
+    assert_eq!(s2, StatusCode::OK);
+
+    let by_id = |id: &str| {
+        store
+            .list_events(Some("proj-a"), 10)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.id == id)
+            .unwrap()
+    };
+    assert_eq!(by_id("c1").metadata["cost_source"], "client");
+    assert_eq!(by_id("c2").metadata["cost_source"], "book");
+}

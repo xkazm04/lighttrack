@@ -34,6 +34,12 @@ pub enum StoreError {
     Json(#[from] serde_json::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// A write violated a uniqueness/primary-key constraint (e.g. a duplicate event `id`). Distinct
+    /// from `Other` so the API can map it to a 409 Conflict instead of an opaque 500. Backends that
+    /// don't classify constraint violations simply never produce it (their duplicate writes surface
+    /// as `Sqlite`/`Other`, i.e. current behavior) — SQLite detects and raises it.
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("{0}")]
     Other(String),
 }

@@ -42,6 +42,26 @@ fn ev(project: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEvent {
 }
 
 #[test]
+fn duplicate_event_id_is_a_conflict_not_an_opaque_error() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    let mut e = ev("p1", "claude-haiku-4-5", 10, 5, 0.001);
+    e.id = "fixed-id".into();
+    s.insert_event(&e).unwrap();
+
+    // Re-inserting the same id hits the PK and must surface as a typed `Conflict`, not `Sqlite`/`Other`.
+    let err = s.insert_event(&e).unwrap_err();
+    assert!(
+        matches!(err, crate::StoreError::Conflict(_)),
+        "duplicate id should map to Conflict, got {err:?}"
+    );
+    // The admission path guards the same insert, so a duplicate id through it is a Conflict too.
+    let err2 = s.insert_event_checked(&e).unwrap_err();
+    assert!(matches!(err2, crate::StoreError::Conflict(_)), "got {err2:?}");
+    // Only the one row exists.
+    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 1);
+}
+
+#[test]
 fn insert_list_cost_roundtrip() {
     let s = SqliteStore::open_in_memory().unwrap();
     s.insert_event(&ev("p1", "claude-haiku-4-5", 100, 50, 0.001)).unwrap();

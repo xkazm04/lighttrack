@@ -113,10 +113,16 @@ impl std::fmt::Display for ApiError {
 
 impl From<StoreError> for ApiError {
     fn from(e: StoreError) -> Self {
-        // Every store-layer failure (sqlite/json/io, and the catch-all `Other`) is a server-side
-        // fault from a client's perspective: collapse to a single stable `internal` code. Clients
-        // must not branch on store internals; the message carries the detail for logs/debugging.
-        ApiError::internal(e.to_string())
+        match e {
+            // A constraint violation (e.g. a duplicate event id) is a client fault, not a server
+            // one: surface it as a stable `conflict`/409 so a client can distinguish an idempotency
+            // collision from a real outage instead of seeing an opaque 500.
+            StoreError::Conflict(m) => ApiError::conflict(m),
+            // Every remaining store-layer failure (sqlite/json/io, and the catch-all `Other`) is a
+            // server-side fault from a client's perspective: collapse to a single stable `internal`
+            // code. Clients must not branch on store internals; the message carries the detail.
+            other => ApiError::internal(other.to_string()),
+        }
     }
 }
 
@@ -180,5 +186,17 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["error"]["code"], "internal");
         assert_eq!(v["error"]["message"], "backend says no");
+    }
+
+    #[tokio::test]
+    async fn conflict_store_error_maps_to_409() {
+        // A constraint violation must surface as a stable `conflict`/409, not a 500.
+        let api: ApiError = StoreError::Conflict("event 'abc' already exists".into()).into();
+        let resp = api.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"]["code"], "conflict");
+        assert_eq!(v["error"]["message"], "event 'abc' already exists");
     }
 }

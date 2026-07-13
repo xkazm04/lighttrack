@@ -1,13 +1,28 @@
 //! Events: ingest, list, single-event lookup, cost rollup, and rolling usage.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, ErrorCode, OptionalExtension, Row};
 use serde_json::Value;
 
 use lighttrack_core::{LlmEvent, Operation, Provider, Status, TokenUsage, TraceSummary};
 
 use crate::codec::{fmt_ts, parse_enum, parse_ts};
-use crate::{event_contribution, evaluate_admission, Admission, CostRow, Result, Usage, UseCaseCostRow};
+use crate::{
+    event_contribution, evaluate_admission, Admission, CostRow, Result, StoreError, Usage,
+    UseCaseCostRow,
+};
+
+/// Map a failed event insert to a typed error: a primary-key / uniqueness violation (a duplicate
+/// event `id`) becomes [`StoreError::Conflict`] so the API returns 409, not an opaque 500. Anything
+/// else keeps its native `Sqlite` mapping.
+fn insert_err(e: rusqlite::Error, id: &str) -> StoreError {
+    match &e {
+        rusqlite::Error::SqliteFailure(f, _) if f.code == ErrorCode::ConstraintViolation => {
+            StoreError::Conflict(format!("event '{id}' already exists"))
+        }
+        _ => e.into(),
+    }
+}
 
 const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
     operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
@@ -53,7 +68,8 @@ pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
             metadata,
             ev.name,
         ],
-    )?;
+    )
+    .map_err(|e| insert_err(e, &ev.id))?;
     Ok(())
 }
 

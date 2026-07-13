@@ -7,14 +7,89 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use lighttrack_core::{LimitStatus, LlmEvent, Status};
-use lighttrack_store::{CostRow, UseCaseCostRow};
+use lighttrack_store::{Admission, CostRow, UseCaseCostRow};
 
 use crate::auth::Principal;
 use crate::error::ApiError;
+use crate::events_validate::policy;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
 use crate::state::{spawn_db, AppState};
+
+/// Scope one event to its project, validate it, scrub PII, and fill/mark its cost — everything the
+/// single- and batch-ingest paths share up to the admission step. On a validation failure returns the
+/// human-facing 400 message (the batch path records it per item; the single path maps it to a 400).
+pub(crate) fn prepare_event(st: &AppState, ev: &mut LlmEvent, pid: &str) -> Result<(), String> {
+    ev.project_id = pid.to_string();
+    policy().validate(ev, Utc::now())?;
+    // Optional: scrub structured PII from captured input/output before it is stored.
+    let redacted = st.redact.redact_event(ev);
+    if redacted > 0 {
+        eprintln!("[REDACT] project={pid} event={} redacted {redacted} PII span(s)", ev.id);
+    }
+    let client_supplied = ev.cost_usd.is_some();
+    {
+        let book = st.prices.read().unwrap();
+        ev.ensure_cost(&book);
+    }
+    mark_cost_source(ev, client_supplied);
+    Ok(())
+}
+
+/// Record how an event's `cost_usd` was determined so downstream margin/forecast can trust or discount
+/// it: `"client"` when the caller supplied a cost verbatim, `"book"` when we priced it from the DB
+/// price book. Stamped into `metadata` (not a column) so every store backend carries it unchanged.
+fn mark_cost_source(ev: &mut LlmEvent, client_supplied: bool) {
+    if ev.cost_usd.is_none() {
+        return; // no cost resolved (unpriced) → nothing to attribute
+    }
+    let src = Value::String(if client_supplied { "client" } else { "book" }.to_string());
+    match &mut ev.metadata {
+        Value::Object(m) => {
+            m.insert("cost_source".to_string(), src);
+        }
+        v @ Value::Null => *v = Value::Object([("cost_source".to_string(), src)].into_iter().collect()),
+        _ => {} // non-object, non-null metadata is client-owned: don't clobber it
+    }
+}
+
+/// Post-admission side effects shared by the single- and batch-ingest paths: log and best-effort
+/// deliver breach alerts, and (for an admitted non-success call) feed error-spike detection. Returns
+/// the breached statuses so the caller can shape its response (429 vs. observe-only flag).
+fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) -> Vec<LimitStatus> {
+    let breached: Vec<LimitStatus> =
+        admission.statuses.iter().filter(|s| s.breached).cloned().collect();
+    for b in &breached {
+        eprintln!(
+            "[ALERT] project={} metric={:?} window={:?} value={:.6} >= threshold={:.6} action={:?}",
+            b.project_id, b.metric, b.window, b.current, b.threshold, b.action
+        );
+    }
+    // Best-effort, off the request path: deliver breaches to webhook/ntfy (deduped per cooldown).
+    st.alerts.notify(&breached);
+    // Best-effort error-spike detection: only admitted non-success calls count toward the threshold.
+    if admission.admitted && ev.status != Status::Success {
+        st.alerts.record_error(ev);
+    }
+    breached
+}
+
+/// Human-facing reason an admission was rejected (the enforcing breach that caused the 429).
+fn breach_reason(breached: &[LimitStatus]) -> String {
+    breached
+        .iter()
+        .find(|s| s.action.enforces())
+        .map(|s| {
+            format!(
+                "ingest blocked: project '{}' is over its {:?}/{:?} limit \
+                 ({:.4} >= {:.4}, action={:?})",
+                s.project_id, s.metric, s.window, s.current, s.threshold, s.action
+            )
+        })
+        .unwrap_or_else(|| "ingest blocked: usage limit exceeded".to_string())
+}
 
 #[derive(Serialize)]
 pub(crate) struct IngestResponse {
@@ -34,16 +109,7 @@ pub(crate) async fn post_event(
 ) -> Result<Json<IngestResponse>, ApiError> {
     let principal = authenticate(&st, &headers).await?;
     let pid = resolve_ingest_project(&principal, &ev.project_id)?;
-    ev.project_id = pid.clone();
-    // Optional: scrub structured PII from captured input/output before it is stored.
-    let redacted = st.redact.redact_event(&mut ev);
-    if redacted > 0 {
-        eprintln!("[REDACT] project={pid} event={} redacted {redacted} PII span(s)", ev.id);
-    }
-    {
-        let book = st.prices.read().unwrap();
-        ev.ensure_cost(&book);
-    }
+    prepare_event(&st, &mut ev, &pid).map_err(ApiError::bad_request)?;
 
     // Admission control: evaluate the project's limits and insert in one atomic store step. An
     // enforcing (Throttle/Block) breach rejects the event — it is NOT recorded and we return 429 so
@@ -52,36 +118,9 @@ pub(crate) async fn post_event(
     let to_insert = ev.clone();
     let admission = spawn_db(move || store.insert_event_checked(&to_insert)).await?;
 
-    let breached: Vec<LimitStatus> =
-        admission.statuses.iter().filter(|s| s.breached).cloned().collect();
-    for b in &breached {
-        eprintln!(
-            "[ALERT] project={} metric={:?} window={:?} value={:.6} >= threshold={:.6} action={:?}",
-            b.project_id, b.metric, b.window, b.current, b.threshold, b.action
-        );
-    }
-    // Best-effort, off the request path: deliver breaches to webhook/ntfy (deduped per cooldown).
-    st.alerts.notify(&breached);
-
+    let breached = on_admission(&st, &ev, &admission);
     if !admission.admitted {
-        let why = breached
-            .iter()
-            .find(|s| s.action.enforces())
-            .map(|s| {
-                format!(
-                    "ingest blocked: project '{}' is over its {:?}/{:?} limit \
-                     ({:.4} >= {:.4}, action={:?})",
-                    s.project_id, s.metric, s.window, s.current, s.threshold, s.action
-                )
-            })
-            .unwrap_or_else(|| "ingest blocked: usage limit exceeded".to_string());
-        return Err(ApiError::rate_limited(why));
-    }
-
-    // Best-effort error-spike detection: count admitted non-success calls per project and fire a
-    // (deduped) alert when a project crosses its error threshold within the rolling window.
-    if ev.status != Status::Success {
-        st.alerts.record_error(&ev);
+        return Err(ApiError::rate_limited(breach_reason(&breached)));
     }
 
     // Admitted: any remaining breaches are Alert-only (enforcing ones would have 429'd above).
