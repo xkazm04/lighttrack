@@ -61,6 +61,20 @@ pub(crate) fn invoke(
     Ok((envelope, latency_ms))
 }
 
+/// The completion text from a claude envelope. With `--json-schema` the model's structured answer
+/// lands in `structured_output` (an object) — prefer it, serialized, so downstream JSON extraction
+/// sees clean JSON; otherwise fall back to the free-text `result`.
+pub(crate) fn completion_text(envelope: &Value) -> String {
+    if let Some(v) = envelope.get("structured_output").filter(|v| !v.is_null()) {
+        return v.to_string();
+    }
+    envelope
+        .get("result")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
 /// Total (input, output) tokens from a claude `usage` block (input includes cache read + creation).
 pub(crate) fn token_counts(envelope: &Value) -> (Option<u64>, Option<u64>) {
     let usage = envelope.get("usage");

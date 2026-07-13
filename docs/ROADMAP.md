@@ -36,6 +36,10 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
 ## Phase 3 — Scoring engine ✅ (benchmarks pending)
 - [x] `engine` crate: `claude -p --output-format json --model <m> --json-schema <JudgeVerdict>`
       (stdin=null; structured_output with result-text JSON fallback); parses verdict + `total_cost_usd`
+- [x] Structured-output enforcement on **all** providers (claude `--json-schema`, OpenAI
+      `response_format:json_schema`, Gemini `responseSchema`) with a schema-less prose fallback; one
+      repair re-ask on unparseable output before dropping a sample; typed transient errors retried with
+      backoff (429/5xx/timeout); empty completion distinguished from parse failure
 - [x] `runner` (`lt-runner`): `score` (judge recent events) + `score-text` (ad-hoc); posts to `/v1/scores`;
       Windows `claude.exe` auto-resolution; `--bare` option for cheap judging
 - [x] `api`: `POST/GET /v1/scores`, `GET /v1/events/:id`

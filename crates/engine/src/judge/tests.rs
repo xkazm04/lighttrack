@@ -34,31 +34,50 @@ fn judge_spec_parsing() {
     );
 }
 
-/// Deterministic generator that replays canned JSON judge outputs, one per sample (cycling).
-/// Lets us drive `judge_with` through the [`Generator`] seam with zero network/process calls.
+/// Deterministic generator that replays canned JSON judge outputs, one per sample *index* (cycling).
+/// Being index-based (not call-order-based) keeps it deterministic under concurrency; the repair
+/// re-ask reuses the sample's index, so an index that maps to bad output stays bad through repair.
 struct FakeGen {
     outputs: Vec<String>,
-    calls: usize,
 }
 
 impl FakeGen {
     fn new(outputs: &[&str]) -> Self {
-        FakeGen { outputs: outputs.iter().map(|s| s.to_string()).collect(), calls: 0 }
+        FakeGen { outputs: outputs.iter().map(|s| s.to_string()).collect() }
+    }
+}
+
+fn gen_outcome(output: String) -> GenOutcome {
+    GenOutcome {
+        output,
+        cost_usd: None,
+        model: "fake".into(),
+        latency_ms: Some(1),
+        input_tokens: Some(0),
+        output_tokens: Some(0),
     }
 }
 
 impl Generator for FakeGen {
-    fn generate(&mut self, _prompt: &str) -> Result<GenOutcome> {
-        let output = self.outputs[self.calls % self.outputs.len()].clone();
-        self.calls += 1;
-        Ok(GenOutcome {
-            output,
-            cost_usd: None,
-            model: "fake".into(),
-            latency_ms: Some(1),
-            input_tokens: Some(0),
-            output_tokens: Some(0),
-        })
+    fn generate(&self, index: usize, _prompt: &str) -> Result<GenOutcome> {
+        Ok(gen_outcome(self.outputs[index % self.outputs.len()].clone()))
+    }
+}
+
+/// A generator whose *first* attempt for each index is unparseable and whose repair re-ask (detected
+/// by the repair prompt's stable marker) returns good JSON — to prove a repaired sample is not counted
+/// as a failure.
+struct RepairGen {
+    good: String,
+}
+
+impl Generator for RepairGen {
+    fn generate(&self, _index: usize, prompt: &str) -> Result<GenOutcome> {
+        if prompt.contains("ONLY valid JSON") {
+            Ok(gen_outcome(self.good.clone()))
+        } else {
+            Ok(gen_outcome("the model rambled with no json".into()))
+        }
     }
 }
 
@@ -70,8 +89,8 @@ fn rubric(json: Value) -> Rubric {
 /// Judge canned `outputs` against `r` over `samples`, surfacing the `Result` (no unwrap) so parse
 /// failures can be asserted on.
 fn try_judge(r: &Rubric, outputs: &[&str], samples: u32) -> Result<RubricOutcome> {
-    let mut gen = FakeGen::new(outputs);
-    judge_with(&mut gen, r, "prompt", "fake-model", samples)
+    let gen = FakeGen::new(outputs);
+    judge_with(&gen, r, "prompt", "fake-model", samples)
 }
 
 /// Judge canned `outputs` against `r` over `samples`, via the fake generator.
@@ -219,4 +238,19 @@ fn clean_samples_report_zero_parse_failures() {
     }));
     let out = judge(&r, &[r#"{"x":{"score":0.5}}"#], 1);
     assert_eq!(out.parse_failures, 0);
+}
+
+#[test]
+fn repair_reask_rescues_a_bad_first_response() {
+    let r = rubric(serde_json::json!({
+        "name": "t",
+        "threshold": 0.0,
+        "dimensions": [ { "key": "x", "description": "", "weight": 1.0 } ]
+    }));
+    // First response is unparseable; the one-shot repair returns valid JSON. The sample must score
+    // 0.9 and NOT be counted as a parse failure.
+    let gen = RepairGen { good: r#"{"x":{"score":0.9}}"#.into() };
+    let out = judge_with(&gen, &r, "prompt", "fake-model", 1).unwrap();
+    assert_eq!(out.parse_failures, 0, "a repaired sample is not a failure");
+    assert!((dim_score(&out, "x") - 0.9).abs() < 1e-9, "repaired score {}", dim_score(&out, "x"));
 }

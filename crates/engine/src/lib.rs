@@ -4,13 +4,17 @@
 //! Layout:
 //! - [`prompts`]  — judge/eval/rubric prompt + schema builders (re-exported).
 //! - `claude`     — the `claude -p` subprocess caller + envelope helpers.
-//! - `providers`  — [`generate`] across `anthropic` / `google` / `openai`.
+//! - `providers`  — [`generate`] across `anthropic` / `google` / `openai` (schema-enforced + retried).
+//! - `parse`      — JSON extraction + the one-shot repair re-ask around a single judge sample.
+//! - `retry`      — bounded exponential backoff for transient (429/5xx/timeout) provider failures.
 //! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_text`], [`parse_judge_spec`].
 
 mod claude;
 mod judge;
+mod parse;
 mod prompts;
 mod providers;
+mod retry;
 
 use lighttrack_core::JudgeVerdict;
 use thiserror::Error;
@@ -20,6 +24,9 @@ pub use judge::{parse_judge_spec, run_judge, run_rubric_judge, run_text};
 pub use prompts::{build_eval_prompt, build_judge_prompt, build_rubric_prompt, build_rubric_schema};
 pub use providers::generate;
 
+/// Errors from the scoring engine. Transport failures carry a typed classification (not string
+/// matches) so [`retry`](crate::retry) can retry only the transient ones and the judge can tell an
+/// empty completion apart from output that failed to parse.
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("failed to spawn '{bin}': {source}")]
@@ -29,6 +36,28 @@ pub enum EngineError {
     },
     #[error("claude exited with status {code}: {stderr}")]
     NonZero { code: i32, stderr: String },
+    /// HTTP 429 — retryable.
+    #[error("{who} rate-limited (HTTP 429)")]
+    RateLimited { who: String },
+    /// HTTP 5xx — retryable.
+    #[error("{who} server error (HTTP {status})")]
+    ServerError { who: String, status: u16 },
+    /// Connect/read timeout — retryable.
+    #[error("{who} request timed out")]
+    Timeout { who: String },
+    /// HTTP 4xx other than 429/401/403 — often a rejected JSON schema; triggers the schema-less
+    /// prose fallback in [`generate`](crate::generate).
+    #[error("{who} rejected the request (HTTP {status}): {body}")]
+    BadRequest { who: String, status: u16, body: String },
+    /// HTTP 401/403 — a credentials problem; not retryable.
+    #[error("{who} authentication failed (HTTP {status})")]
+    Auth { who: String, status: u16 },
+    /// The provider returned no completion text (distinct from unparseable output).
+    #[error("{who} returned an empty completion")]
+    EmptyCompletion { who: String },
+    /// A non-transient transport error (DNS, TLS, malformed response, …).
+    #[error("{who} request failed: {detail}")]
+    Http { who: String, detail: String },
     #[error("could not parse judge output: {0}")]
     Parse(String),
     #[error("json: {0}")]

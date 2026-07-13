@@ -1,36 +1,40 @@
 //! LLM-as-judge: provider-agnostic judging built on [`crate::generate`]. The judge is a structured
-//! generation — we ask for JSON and parse the verdict from the model's text — so any provider judges.
+//! generation — we ask for JSON (schema-enforced) and parse the verdict from the model's text — so
+//! any provider judges. Unparseable output triggers one repair re-ask before a sample is dropped.
 
 use std::collections::HashMap;
 
 use serde_json::Value;
 
-use lighttrack_core::{JudgeVerdict, Rubric};
+use lighttrack_core::{judge_verdict_schema, JudgeVerdict, Rubric};
 
 use crate::claude;
-use crate::prompts::build_rubric_prompt;
+use crate::parse::{extract_json_object, extract_json_value, sample_parsed, Parsed};
+use crate::prompts::{build_rubric_prompt, build_rubric_schema};
 use crate::providers::generate;
 use crate::{
     DimScore, EngineConfig, EngineError, GenOutcome, JudgeOutcome, Result, RubricOutcome, TextOutcome,
 };
 
 /// A seam over candidate generation. Production dispatches each judge sample to the configured
-/// provider/model; tests drive a deterministic fake. This lets the scoring/gating math in
-/// [`run_rubric_judge`] be unit-tested without burning live API calls.
+/// provider/model; tests drive a deterministic fake. The `index` identifies the sample so a fake can
+/// answer deterministically regardless of concurrency; the repair re-ask reuses the same index. This
+/// lets the scoring/gating math in [`judge_with`] be unit-tested without burning live API calls.
 pub(crate) trait Generator {
-    fn generate(&mut self, prompt: &str) -> Result<GenOutcome>;
+    fn generate(&self, index: usize, prompt: &str) -> Result<GenOutcome>;
 }
 
-/// The production generator: each call hits the real provider dispatch.
+/// The production generator: each call hits the real provider dispatch with the judge schema enforced.
 struct ProviderGen<'a> {
     cfg: &'a EngineConfig,
     provider: &'a str,
     model: &'a str,
+    schema: Option<Value>,
 }
 
 impl Generator for ProviderGen<'_> {
-    fn generate(&mut self, prompt: &str) -> Result<GenOutcome> {
-        generate(self.cfg, self.provider, self.model, None, prompt)
+    fn generate(&self, _index: usize, prompt: &str) -> Result<GenOutcome> {
+        generate(self.cfg, self.provider, self.model, None, prompt, self.schema.as_ref())
     }
 }
 
@@ -40,20 +44,6 @@ pub fn parse_judge_spec(spec: &str) -> (String, String) {
         Some((p, m)) if !p.is_empty() && !m.is_empty() => (p.to_string(), m.to_string()),
         _ => ("anthropic".to_string(), spec.to_string()),
     }
-}
-
-/// Extract the outermost `{...}` from a string (handles stray prose / code fences).
-fn extract_json_object(s: &str) -> Option<String> {
-    let start = s.find('{')?;
-    let end = s.rfind('}')?;
-    (end > start).then(|| s[start..=end].to_string())
-}
-
-/// Extract a JSON object from text into a Value (lenient; `Null` if none).
-fn extract_json_value(s: &str) -> Value {
-    extract_json_object(s)
-        .and_then(|j| serde_json::from_str(&j).ok())
-        .unwrap_or(Value::Null)
 }
 
 /// Parse one judge response into `(key, score, reasoning)` for *every* rubric dimension. Scores are
@@ -110,26 +100,43 @@ fn weighted(dims: &[(String, f64)], rubric: &Rubric) -> f64 {
     }
 }
 
-/// Run the judge on the given provider/model with a fully-formed prompt.
+/// Run the judge on the given provider/model with a fully-formed prompt. The verdict schema is
+/// enforced and a single repair re-ask is attempted before an unparseable verdict is a hard error.
 pub fn run_judge(
     cfg: &EngineConfig,
     provider: &str,
     model: &str,
     prompt: &str,
 ) -> Result<JudgeOutcome> {
-    let g = generate(cfg, provider, model, None, prompt)?;
-    let json = extract_json_object(&g.output)
-        .ok_or_else(|| EngineError::Parse(format!("no JSON object in judge output: {}", g.output)))?;
-    let verdict: JudgeVerdict = serde_json::from_str(&json)
-        .map_err(|e| EngineError::Parse(format!("judge JSON not a verdict: {e}; got: {json}")))?;
+    let schema = judge_verdict_schema();
+    let parsed = sample_parsed(
+        |_i, p| generate(cfg, provider, model, None, p, Some(&schema)),
+        0,
+        prompt,
+        |raw| {
+            let json = extract_json_object(raw).ok_or_else(|| {
+                EngineError::Parse(format!("no JSON object in judge output: {raw}"))
+            })?;
+            serde_json::from_str::<JudgeVerdict>(&json)
+                .map_err(|e| EngineError::Parse(format!("judge JSON not a verdict: {e}; got: {json}")))
+        },
+    )?;
+    let verdict = parsed.value.ok_or_else(|| {
+        EngineError::Parse(
+            parsed
+                .raw_failure
+                .map(|r| format!("judge output not a verdict after repair: {r}"))
+                .unwrap_or_else(|| "judge produced no verdict".into()),
+        )
+    })?;
     Ok(JudgeOutcome {
         verdict,
-        cost_usd: g.cost_usd,
-        model: g.model,
+        cost_usd: parsed.cost_usd,
+        model: parsed.model,
         session_id: None,
-        latency_ms: g.latency_ms,
-        input_tokens: g.input_tokens,
-        output_tokens: g.output_tokens,
+        latency_ms: Some(parsed.latency_ms),
+        input_tokens: Some(parsed.input_tokens),
+        output_tokens: Some(parsed.output_tokens),
     })
 }
 
@@ -162,22 +169,43 @@ pub fn run_rubric_judge(
     samples: u32,
 ) -> Result<RubricOutcome> {
     let prompt = build_rubric_prompt(rubric, input, expected, output);
-    let mut gen = ProviderGen { cfg, provider, model };
-    judge_with(&mut gen, rubric, &prompt, model, samples)
+    let schema = build_rubric_schema(rubric);
+    let gen = ProviderGen { cfg, provider, model, schema: Some(schema) };
+    judge_with(&gen, rubric, &prompt, model, samples)
 }
 
-/// Core of the rubric judge: drive `samples` generations through `gen`, then compute per-dimension
-/// means, the weighted overall, the floor-gated pass/fail, and cross-sample agreement. Split from
-/// [`run_rubric_judge`] so a fake [`Generator`] can exercise the scoring math without live calls.
+/// Core of the rubric judge: drive `samples` generations through `gen` (each with a one-shot repair),
+/// then aggregate. Split from [`run_rubric_judge`] so a fake [`Generator`] can exercise the scoring
+/// math without live calls. Samples are generated by index and aggregated deterministically in order.
 fn judge_with(
-    gen: &mut impl Generator,
+    gen: &impl Generator,
     rubric: &Rubric,
     prompt: &str,
     model: &str,
     samples: u32,
 ) -> Result<RubricOutcome> {
-    let k = samples.max(1);
+    let k = samples.max(1) as usize;
+    let results: Vec<Parsed<Vec<(String, f64, String)>>> = (0..k)
+        .map(|i| {
+            sample_parsed(
+                |idx, p| gen.generate(idx, p),
+                i,
+                prompt,
+                |raw| parse_sample(raw, rubric),
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    aggregate(&results, rubric, model, k as u32)
+}
 
+/// Fold per-sample [`Parsed`] results (in index order) into per-dimension means, the weighted overall,
+/// the floor-gated pass/fail, cross-sample agreement, and honest cost/latency/failure accounting.
+fn aggregate(
+    results: &[Parsed<Vec<(String, f64, String)>>],
+    rubric: &Rubric,
+    model: &str,
+    k: u32,
+) -> Result<RubricOutcome> {
     let mut per_dim: HashMap<String, Vec<f64>> = HashMap::new();
     let mut reasonings: HashMap<String, String> = HashMap::new();
     let mut overalls: Vec<f64> = Vec::new();
@@ -185,52 +213,52 @@ fn judge_with(
         (0.0_f64, false, 0_u64, 0_u64, 0_u64);
     let mut model_used = model.to_string();
     let mut parse_failures = 0_u32;
-    let mut first_parse_err: Option<EngineError> = None;
+    let mut first_raw_failure: Option<String> = None;
     let mut have_reasonings = false;
 
-    for _ in 0..k {
-        let g = gen.generate(prompt)?;
-        // Account for cost/latency/tokens even on parse failure — the call still consumed real
-        // tokens and $, so hiding it would under-report the judge's true expense.
-        if let Some(c) = g.cost_usd {
+    for r in results {
+        // Account cost/latency/tokens even for a dropped sample — the call still burned real tokens
+        // and $, so hiding it would under-report the judge's true expense.
+        if let Some(c) = r.cost_usd {
             total_cost += c;
             any_cost = true;
         }
-        if let Some(l) = g.latency_ms {
-            max_latency = max_latency.max(l);
+        max_latency = max_latency.max(r.latency_ms);
+        in_tok += r.input_tokens;
+        out_tok += r.output_tokens;
+        if !r.model.is_empty() {
+            model_used = r.model.clone();
         }
-        in_tok += g.input_tokens.unwrap_or(0);
-        out_tok += g.output_tokens.unwrap_or(0);
-        model_used = g.model;
-
-        // Drop unparseable samples from the means instead of folding in a phantom 0.0; remember the
-        // first failure so an all-failed case can surface the raw output in its error.
-        let dims = match parse_sample(&g.output, rubric) {
-            Ok(dims) => dims,
-            Err(e) => {
+        match &r.value {
+            Some(dims) => {
+                let mut sample: Vec<(String, f64)> = Vec::with_capacity(dims.len());
+                for (key, score, reasoning) in dims {
+                    per_dim.entry(key.clone()).or_default().push(*score);
+                    if !have_reasonings {
+                        reasonings.insert(key.clone(), reasoning.clone());
+                    }
+                    sample.push((key.clone(), *score));
+                }
+                have_reasonings = true;
+                overalls.push(weighted(&sample, rubric));
+            }
+            None => {
                 parse_failures += 1;
-                first_parse_err.get_or_insert(e);
-                continue;
+                if first_raw_failure.is_none() {
+                    first_raw_failure = r.raw_failure.clone();
+                }
             }
-        };
-        let mut sample: Vec<(String, f64)> = Vec::with_capacity(dims.len());
-        for (key, score, reasoning) in dims {
-            per_dim.entry(key.clone()).or_default().push(score);
-            if !have_reasonings {
-                reasonings.insert(key.clone(), reasoning);
-            }
-            sample.push((key, score));
         }
-        have_reasonings = true;
-        overalls.push(weighted(&sample, rubric));
     }
 
-    // No sample parsed: there is no real score to report. Surface the raw output (via the captured
-    // parse error) instead of recording a confident-looking 0.0 fail.
+    // No sample parsed (even after repair): there is no real score to report. Surface the raw output
+    // instead of recording a confident-looking 0.0 fail.
     if overalls.is_empty() {
-        return Err(first_parse_err.unwrap_or_else(|| {
-            EngineError::Parse("rubric judge produced no parseable samples".to_string())
-        }));
+        return Err(EngineError::Parse(
+            first_raw_failure
+                .map(|raw| format!("no parseable rubric judge sample; last raw output: {raw}"))
+                .unwrap_or_else(|| "rubric judge produced no parseable samples".to_string()),
+        ));
     }
 
     let dimensions: Vec<DimScore> = rubric

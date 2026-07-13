@@ -1,6 +1,12 @@
 //! Candidate-output generation across providers. `anthropic` runs via `claude -p`; `google` and
 //! `openai` call their HTTPS APIs (keys from env). Dollar cost is left `None` for the HTTP providers
 //! (the caller prices it from the DB price book by tokens); the APIs don't return a cost.
+//!
+//! Structured output is enforced when a `schema` is supplied: `--json-schema` for the claude CLI,
+//! `response_format:{type:"json_schema",…}` for OpenAI, and `generationConfig.responseSchema` (+ JSON
+//! MIME type) for Gemini. Transient failures (429/5xx/timeout) are retried with backoff; a provider
+//! that *rejects* the schema (4xx) falls back once to a schema-less prose call so a strict-schema
+//! model never hard-fails a run.
 
 use std::io::Read;
 use std::sync::OnceLock;
@@ -8,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::retry::with_retry;
 use crate::{claude, EngineConfig, EngineError, GenOutcome, Result};
 
 /// Outbound provider calls are bounded so a black-holed/overloaded endpoint can't hang an
@@ -32,55 +39,141 @@ fn http_client() -> Result<&'static reqwest::blocking::Client> {
     Ok(CLIENT.get_or_init(|| client))
 }
 
+/// Map an HTTP status + body to a typed error (retryability is decided by the variant, never by
+/// string-matching the message).
+fn http_error(who: &str, status: reqwest::StatusCode, body: String) -> EngineError {
+    let s = status.as_u16();
+    match s {
+        429 => EngineError::RateLimited { who: who.to_string() },
+        401 | 403 => EngineError::Auth { who: who.to_string(), status: s },
+        500..=599 => EngineError::ServerError { who: who.to_string(), status: s },
+        _ => EngineError::BadRequest { who: who.to_string(), status: s, body },
+    }
+}
+
+/// Map a reqwest transport error to a typed error: timeouts/connect failures are retryable.
+fn send_error(who: &str, e: reqwest::Error) -> EngineError {
+    if e.is_timeout() || e.is_connect() {
+        EngineError::Timeout { who: who.to_string() }
+    } else {
+        EngineError::Http { who: who.to_string(), detail: e.to_string() }
+    }
+}
+
 /// Read a response body with a hard size cap, erroring out if the provider streams past it instead
 /// of buffering an unbounded amount into memory.
 fn read_bounded(resp: reqwest::blocking::Response, who: &str) -> Result<String> {
     let mut buf = Vec::new();
     resp.take(MAX_BODY_BYTES + 1)
         .read_to_end(&mut buf)
-        .map_err(|e| EngineError::Other(format!("{who} read failed: {e}")))?;
+        .map_err(|e| EngineError::Http { who: who.to_string(), detail: e.to_string() })?;
     if buf.len() as u64 > MAX_BODY_BYTES {
         return Err(EngineError::Other(format!(
             "{who} response exceeded {MAX_BODY_BYTES}-byte cap"
         )));
     }
     String::from_utf8(buf)
-        .map_err(|e| EngineError::Other(format!("{who} returned non-UTF-8 body: {e}")))
+        .map_err(|e| EngineError::Http { who: who.to_string(), detail: format!("non-UTF-8 body: {e}") })
 }
 
 /// Generate a candidate output from a target (provider + model + optional system-prompt variant).
+/// When `schema` is set, structured output is enforced; a provider that *rejects* the schema (a 4xx)
+/// is retried once schema-less (a logged prose fallback) so strict-schema models never hard-fail.
 pub fn generate(
     cfg: &EngineConfig,
     provider: &str,
     model: &str,
     system_prompt: Option<&str>,
     input: &str,
+    schema: Option<&Value>,
+) -> Result<GenOutcome> {
+    match generate_retrying(cfg, provider, model, system_prompt, input, schema) {
+        Err(EngineError::BadRequest { who, status, body }) if schema.is_some() => {
+            eprintln!(
+                "[judge] {who} rejected the JSON schema (HTTP {status}: {}); retrying schema-less",
+                body.chars().take(200).collect::<String>()
+            );
+            generate_retrying(cfg, provider, model, system_prompt, input, None)
+        }
+        other => other,
+    }
+}
+
+/// One dispatch under the transient-failure retry policy.
+fn generate_retrying(
+    cfg: &EngineConfig,
+    provider: &str,
+    model: &str,
+    system_prompt: Option<&str>,
+    input: &str,
+    schema: Option<&Value>,
+) -> Result<GenOutcome> {
+    with_retry(|| generate_once(cfg, provider, model, system_prompt, input, schema))
+}
+
+fn generate_once(
+    cfg: &EngineConfig,
+    provider: &str,
+    model: &str,
+    system_prompt: Option<&str>,
+    input: &str,
+    schema: Option<&Value>,
 ) -> Result<GenOutcome> {
     match provider {
-        "anthropic" => {
-            let (envelope, latency_ms) = claude::invoke(cfg, input, model, system_prompt, None)?;
-            let (input_tokens, output_tokens) = claude::token_counts(&envelope);
-            Ok(GenOutcome {
-                output: envelope
-                    .get("result")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                cost_usd: envelope.get("total_cost_usd").and_then(Value::as_f64),
-                model: claude::model_of(&envelope, model),
-                latency_ms,
-                input_tokens,
-                output_tokens,
-            })
-        }
-        "google" => generate_gemini(model, system_prompt, input),
-        "openai" => generate_openai(model, system_prompt, input),
+        "anthropic" => generate_anthropic(cfg, model, system_prompt, input, schema),
+        "google" => generate_gemini(model, system_prompt, input, schema),
+        "openai" => generate_openai(model, system_prompt, input, schema),
         other => Err(EngineError::Other(format!("unknown provider '{other}'"))),
     }
 }
 
+/// Anthropic via `claude -p`, passing the schema through `--json-schema` (serialized).
+fn generate_anthropic(
+    cfg: &EngineConfig,
+    model: &str,
+    system_prompt: Option<&str>,
+    input: &str,
+    schema: Option<&Value>,
+) -> Result<GenOutcome> {
+    let schema_str = schema.map(|s| s.to_string());
+    let (envelope, latency_ms) = claude::invoke(cfg, input, model, system_prompt, schema_str.as_deref())?;
+    let (input_tokens, output_tokens) = claude::token_counts(&envelope);
+    let output = claude::completion_text(&envelope);
+    if output.is_empty() {
+        return Err(EngineError::EmptyCompletion { who: "claude".into() });
+    }
+    Ok(GenOutcome {
+        output,
+        cost_usd: envelope.get("total_cost_usd").and_then(Value::as_f64),
+        model: claude::model_of(&envelope, model),
+        latency_ms,
+        input_tokens,
+        output_tokens,
+    })
+}
+
+/// Recursively drop a JSON-schema key the provider's schema subset doesn't accept (Gemini's
+/// `responseSchema` rejects `additionalProperties`).
+fn strip_schema_key(v: &Value, key: &str) -> Value {
+    match v {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(k, _)| k.as_str() != key)
+                .map(|(k, val)| (k.clone(), strip_schema_key(val, key)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(|i| strip_schema_key(i, key)).collect()),
+        other => other.clone(),
+    }
+}
+
 /// Google Gemini `generateContent`. Key from GEMINI_API_KEY (or GOOGLE_* fallbacks).
-fn generate_gemini(model: &str, system_prompt: Option<&str>, input: &str) -> Result<GenOutcome> {
+fn generate_gemini(
+    model: &str,
+    system_prompt: Option<&str>,
+    input: &str,
+    schema: Option<&Value>,
+) -> Result<GenOutcome> {
     let key = std::env::var("GEMINI_API_KEY")
         .or_else(|_| std::env::var("GOOGLE_API_KEY"))
         .or_else(|_| std::env::var("GOOGLE_GENERATIVE_AI_API_KEY"))
@@ -91,6 +184,12 @@ fn generate_gemini(model: &str, system_prompt: Option<&str>, input: &str) -> Res
     if let Some(sys) = system_prompt {
         body["system_instruction"] = serde_json::json!({ "parts": [{ "text": sys }] });
     }
+    if let Some(sc) = schema {
+        body["generationConfig"] = serde_json::json!({
+            "responseMimeType": "application/json",
+            "responseSchema": strip_schema_key(sc, "additionalProperties"),
+        });
+    }
 
     let started = Instant::now();
     let resp = http_client()?
@@ -98,12 +197,12 @@ fn generate_gemini(model: &str, system_prompt: Option<&str>, input: &str) -> Res
         .header("x-goog-api-key", &key)
         .json(&body)
         .send()
-        .map_err(|e| EngineError::Other(format!("gemini request failed: {e}")))?;
+        .map_err(|e| send_error("gemini", e))?;
     let latency_ms = Some(started.elapsed().as_millis() as u64);
     let status = resp.status();
     let text = read_bounded(resp, "gemini")?;
     if !status.is_success() {
-        return Err(EngineError::Other(format!("gemini HTTP {}: {text}", status.as_u16())));
+        return Err(http_error("gemini", status, text));
     }
     let v: Value = serde_json::from_str(&text)?;
     let output = v
@@ -116,6 +215,9 @@ fn generate_gemini(model: &str, system_prompt: Option<&str>, input: &str) -> Res
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    if output.is_empty() {
+        return Err(EngineError::EmptyCompletion { who: "gemini".into() });
+    }
     let usage = v.get("usageMetadata");
     Ok(GenOutcome {
         output,
@@ -130,7 +232,12 @@ fn generate_gemini(model: &str, system_prompt: Option<&str>, input: &str) -> Res
 }
 
 /// OpenAI Chat Completions. Key from OPENAI_API_KEY.
-fn generate_openai(model: &str, system_prompt: Option<&str>, input: &str) -> Result<GenOutcome> {
+fn generate_openai(
+    model: &str,
+    system_prompt: Option<&str>,
+    input: &str,
+    schema: Option<&Value>,
+) -> Result<GenOutcome> {
     let key = std::env::var("OPENAI_API_KEY")
         .map_err(|_| EngineError::Other("no OpenAI API key (set OPENAI_API_KEY)".into()))?;
     let mut messages = Vec::new();
@@ -138,7 +245,13 @@ fn generate_openai(model: &str, system_prompt: Option<&str>, input: &str) -> Res
         messages.push(serde_json::json!({ "role": "system", "content": sys }));
     }
     messages.push(serde_json::json!({ "role": "user", "content": input }));
-    let body = serde_json::json!({ "model": model, "messages": messages });
+    let mut body = serde_json::json!({ "model": model, "messages": messages });
+    if let Some(sc) = schema {
+        body["response_format"] = serde_json::json!({
+            "type": "json_schema",
+            "json_schema": { "name": "verdict", "strict": true, "schema": sc },
+        });
+    }
 
     let started = Instant::now();
     let resp = http_client()?
@@ -146,12 +259,12 @@ fn generate_openai(model: &str, system_prompt: Option<&str>, input: &str) -> Res
         .bearer_auth(&key)
         .json(&body)
         .send()
-        .map_err(|e| EngineError::Other(format!("openai request failed: {e}")))?;
+        .map_err(|e| send_error("openai", e))?;
     let latency_ms = Some(started.elapsed().as_millis() as u64);
     let status = resp.status();
     let text = read_bounded(resp, "openai")?;
     if !status.is_success() {
-        return Err(EngineError::Other(format!("openai HTTP {}: {text}", status.as_u16())));
+        return Err(http_error("openai", status, text));
     }
     let v: Value = serde_json::from_str(&text)?;
     let output = v
@@ -162,6 +275,9 @@ fn generate_openai(model: &str, system_prompt: Option<&str>, input: &str) -> Res
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    if output.is_empty() {
+        return Err(EngineError::EmptyCompletion { who: "openai".into() });
+    }
     let usage = v.get("usage");
     Ok(GenOutcome {
         output,
@@ -177,4 +293,26 @@ fn generate_openai(model: &str, system_prompt: Option<&str>, input: &str) -> Res
             .and_then(|u| u.get("completion_tokens"))
             .and_then(Value::as_u64),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_schema_key;
+    use serde_json::json;
+
+    #[test]
+    fn strips_additional_properties_recursively() {
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "dim": { "type": "object", "additionalProperties": false, "properties": { "score": { "type": "number" } } }
+            }
+        });
+        let cleaned = strip_schema_key(&schema, "additionalProperties");
+        assert!(cleaned.get("additionalProperties").is_none());
+        assert!(cleaned["properties"]["dim"].get("additionalProperties").is_none());
+        // Untouched keys survive.
+        assert_eq!(cleaned["properties"]["dim"]["properties"]["score"]["type"], "number");
+    }
 }

@@ -37,6 +37,17 @@ Respond with ONLY a JSON object (no prose, no code fences):\n\
     )
 }
 
+/// One-shot repair re-ask: the judge returned unparseable output, so hand the malformed text back and
+/// demand strict JSON. The marker phrase "ONLY valid JSON matching the schema" is stable so tests (and
+/// humans) can recognise a repair call.
+pub(crate) fn build_repair_prompt(original: &str, malformed: &str) -> String {
+    format!(
+        "{original}\n\n=== YOUR PREVIOUS RESPONSE (rejected) ===\n{malformed}\n\n\
+The response above was not valid JSON in the required shape. Return ONLY valid JSON matching the \
+schema — no prose, no code fences, no commentary before or after."
+    )
+}
+
 /// Build a JSON schema keyed by dimension: each dimension yields `{score, reasoning}`.
 pub fn build_rubric_schema(rubric: &Rubric) -> Value {
     let mut props = Map::new();

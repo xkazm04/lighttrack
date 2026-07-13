@@ -82,6 +82,7 @@ pub(crate) fn run_compare(
                     &t.model,
                     t.system_prompt.as_deref(),
                     &case.input,
+                    None,
                 ) {
                     Ok(g) => g,
                     Err(e) => {

@@ -51,6 +51,18 @@ subscription OAuth and so needs `ANTHROPIC_API_KEY` — exposed as the runner's 
 API key is available. This sharpens the [[lighttrack-project]] post-2026-06-15 credit math: budget ≈
 included-Agent-SDK-credit ÷ ~$0.05 (non-bare) or much more with `--bare`.
 
+**UPDATE (2026-07-13) — structured-output enforcement is now live on every judge path.** The built
+JSON schema is passed through on all three providers: `--json-schema` (claude CLI), OpenAI
+`response_format:{type:"json_schema",strict:true,…}`, and Gemini `generationConfig.responseSchema` (+
+`responseMimeType:application/json`, with `additionalProperties` stripped for Gemini's schema subset).
+A provider that *rejects* the schema (a 4xx) logs to stderr and retries once schema-less (prose
+fallback), so a strict-schema model never hard-fails a run. On unparseable output the judge does one
+**repair re-ask** (hands the malformed text back demanding strict JSON) before dropping the sample; a
+repaired sample is not counted as a `parse_failure`. Transport errors are typed (`RateLimited` /
+`ServerError` / `Timeout` / `EmptyCompletion` / `BadRequest` / `Auth`) instead of string-matched, and
+429/5xx/timeout are retried with bounded jittered exponential backoff (3 tries). An empty completion is
+now a distinct error, no longer a silent `""` that faked a parse failure.
+
 **Windows gotcha:** the npm install provides `claude.cmd`/`claude.ps1` shims (no PATH `claude.exe`); a child
 process can't invoke `.cmd` with our quote-heavy `--json-schema` arg (Rust rejects unsafe batch args). The
 shim wraps a real `bin/claude.exe`, so the runner auto-resolves that on Windows (override via
