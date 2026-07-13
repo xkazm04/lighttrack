@@ -8,9 +8,11 @@ use serde_json::{json, Value};
 use lighttrack_core::{Benchmark, BenchmarkCase, ModelPriceRow, Rubric};
 use lighttrack_engine::{parse_judge_spec, run_rubric_judge, run_text, EngineConfig};
 
+use std::collections::BTreeSet;
+
 use crate::cli::Cli;
 use crate::http::{get, post};
-use crate::util::{dim_mean, percentiles, price_gen_cost, run_status};
+use crate::util::{add_price_warnings, cost_or_book, dim_mean, join_csv, now_ts, percentiles, run_status};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_rubric_benchmark(
@@ -42,6 +44,7 @@ pub(crate) fn run_rubric_benchmark(
     // of individual self-consistency samples dropped from scored cases — kept out of the means so a
     // flaky judge response never silently records a 0.0.
     let (mut errored, mut sample_failures) = (0u32, 0u32);
+    let mut price_warnings: BTreeSet<String> = BTreeSet::new();
 
     for (i, case) in cases.iter().enumerate() {
         let output = match &case.output {
@@ -75,9 +78,11 @@ pub(crate) fn run_rubric_benchmark(
         if o.pass {
             passes += 1;
         }
-        cost += o
-            .cost_usd
-            .unwrap_or_else(|| price_gen_cost(&prices, &jp, &jm, o.input_tokens, o.output_tokens));
+        let (jc, priced) = cost_or_book(o.cost_usd, &prices, &jp, &jm, o.input_tokens, o.output_tokens);
+        if !priced {
+            price_warnings.insert(format!("{jp}/{jm}"));
+        }
+        cost += jc;
         if let Some(l) = o.latency_ms {
             latencies.push(l);
         }
@@ -151,6 +156,12 @@ pub(crate) fn run_rubric_benchmark(
 dropped. Check the judge model/prompt — these scores are absent, not failing."
         ));
     }
+    if !price_warnings.is_empty() {
+        recs.push(format!(
+            "No price-book entry for {}; judge cost is undercounted (seed config/pricing.json).",
+            join_csv(&price_warnings)
+        ));
+    }
     recs.push(if mean >= rubric.threshold {
         format!("Overall {mean:.2} meets threshold {:.2}.", rubric.threshold)
     } else {
@@ -193,6 +204,7 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
     if let Some(h) = &healing {
         report["healing"] = json!(h);
     }
+    add_price_warnings(&mut report, &price_warnings);
 
     println!(
         "\nscorecard: overall={mean:.3}  pass_rate={:.0}%  cost=${cost:.5}  p50={}ms  tokens={total_tokens}  unparseable={errored}  status={status}",
@@ -217,7 +229,7 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
 
     let run = json!({
         "benchmark_id": bench.id, "n_cases": judged, "mean_score": mean, "pass_rate": pass_rate,
-        "cost_usd": cost, "status": status,
+        "cost_usd": cost, "status": status, "finished_at": now_ts(),
         "p50_latency_ms": p50, "p95_latency_ms": p95, "total_tokens": total_tokens, "report": report,
     });
     let stored = post(cli, http, "/v1/benchmark-runs", &run)?;

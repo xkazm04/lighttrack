@@ -1,10 +1,34 @@
 //! Small shared helpers: percentiles, dimension means, token-priced cost, claude resolution.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
-use serde_json::Value;
+use chrono::{SecondsFormat, Utc};
+use serde_json::{json, Value};
 
 use lighttrack_core::ModelPriceRow;
+
+/// Comma-join a set of labels for a one-line log/warning.
+pub(crate) fn join_csv(items: &BTreeSet<String>) -> String {
+    items.iter().cloned().collect::<Vec<_>>().join(", ")
+}
+
+/// Attach collected missing-price warnings to a run report so they persist with the run (queryable),
+/// rather than scrolling past on stderr. No-op when nothing was unpriced.
+pub(crate) fn add_price_warnings(report: &mut Value, warnings: &BTreeSet<String>) {
+    if warnings.is_empty() {
+        return;
+    }
+    let models: Vec<Value> = warnings.iter().map(|m| json!(m)).collect();
+    if let Some(obj) = report.as_object_mut() {
+        obj.insert("price_warnings".into(), json!(models));
+    }
+}
+
+/// `now` as the fixed-width RFC3339(Nanos, Z) the store persists (see store `codec::fmt_ts`). Runs
+/// stamp `finished_at` with this so a recorded run's duration is knowable and string-orderable.
+pub(crate) fn now_ts() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
+}
 
 /// p50/p95 of a latency sample (nearest-rank). Returns (None, None) if empty.
 pub(crate) fn percentiles(latencies: &mut [u64]) -> (Option<u64>, Option<u64>) {
@@ -35,6 +59,39 @@ pub(crate) fn run_status(baseline: Option<f64>, mean: f64) -> &'static str {
     }
 }
 
+/// Roll several per-target verdicts up to one run-level verdict: `regressed` if any target
+/// regressed, else `passed` if any held against a baseline, else `no_baseline`. Used by compare mode
+/// so the whole comparison has a single honest headline status, not just per-target rows.
+pub(crate) fn aggregate_status(statuses: &[&str]) -> &'static str {
+    if statuses.iter().any(|s| *s == "regressed") {
+        "regressed"
+    } else if statuses.iter().any(|s| *s == "passed") {
+        "passed"
+    } else {
+        "no_baseline"
+    }
+}
+
+/// Cost of a call from the DB price book, plus whether the model was actually found in the book.
+/// `priced=false` means there was no book entry, so the token-based cost silently fell back to 0 —
+/// callers surface this as a run-report warning instead of recording a misleadingly-cheap run.
+pub(crate) fn price_gen_cost_checked(
+    prices: &[ModelPriceRow],
+    provider: &str,
+    model: &str,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+) -> (f64, bool) {
+    match prices.iter().find(|p| p.provider == provider && p.model == model) {
+        Some(p) => (
+            (input_tokens.unwrap_or(0) as f64) * p.input_per_mtok / 1_000_000.0
+                + (output_tokens.unwrap_or(0) as f64) * p.output_per_mtok / 1_000_000.0,
+            true,
+        ),
+        None => (0.0, false),
+    }
+}
+
 /// Cost of a call from the DB price book (used when the provider API returns no $ cost).
 pub(crate) fn price_gen_cost(
     prices: &[ModelPriceRow],
@@ -43,14 +100,24 @@ pub(crate) fn price_gen_cost(
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
 ) -> f64 {
-    prices
-        .iter()
-        .find(|p| p.provider == provider && p.model == model)
-        .map(|p| {
-            (input_tokens.unwrap_or(0) as f64) * p.input_per_mtok / 1_000_000.0
-                + (output_tokens.unwrap_or(0) as f64) * p.output_per_mtok / 1_000_000.0
-        })
-        .unwrap_or(0.0)
+    price_gen_cost_checked(prices, provider, model, input_tokens, output_tokens).0
+}
+
+/// A call's cost with a book fallback that flags a missing price. When the provider already returned
+/// a `$` cost we trust it (priced=true); otherwise we price by tokens from the book and report
+/// whether the model was present. Returns `(cost, priced)`; `priced=false` ⇒ collect a warning.
+pub(crate) fn cost_or_book(
+    provider_cost: Option<f64>,
+    prices: &[ModelPriceRow],
+    provider: &str,
+    model: &str,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+) -> (f64, bool) {
+    match provider_cost {
+        Some(c) => (c, true),
+        None => price_gen_cost_checked(prices, provider, model, input_tokens, output_tokens),
+    }
 }
 
 /// Render a JSON value as plain text (strings as-is; everything else compact JSON).
@@ -151,4 +218,41 @@ mod tests {
         assert_eq!(run_status(Some(0.8), 0.8), "passed");
     }
 
+    #[test]
+    fn aggregate_status_prioritizes_regression() {
+        assert_eq!(aggregate_status(&["passed", "regressed", "no_baseline"]), "regressed");
+        assert_eq!(aggregate_status(&["passed", "no_baseline"]), "passed");
+        assert_eq!(aggregate_status(&["no_baseline", "no_baseline"]), "no_baseline");
+        assert_eq!(aggregate_status(&[]), "no_baseline");
+    }
+
+    #[test]
+    fn price_gen_cost_checked_flags_missing() {
+        let prices = vec![price("openai", "gpt-4o", 2.5, 10.0)];
+        let (cost, priced) = price_gen_cost_checked(&prices, "openai", "gpt-4o", Some(1_000_000), None);
+        assert!(approx(cost, 2.5) && priced);
+        let (cost, priced) = price_gen_cost_checked(&prices, "google", "gemini", Some(10), Some(10));
+        assert!(approx(cost, 0.0) && !priced);
+    }
+
+    #[test]
+    fn cost_or_book_trusts_provider_then_falls_back() {
+        let prices = vec![price("openai", "gpt-4o", 2.5, 10.0)];
+        // Provider gave a $ cost → trusted verbatim, priced=true, book untouched.
+        let (cost, priced) = cost_or_book(Some(0.123), &prices, "who", "ever", Some(1), Some(1));
+        assert!(approx(cost, 0.123) && priced);
+        // No provider cost, model in book → priced from tokens.
+        let (cost, priced) = cost_or_book(None, &prices, "openai", "gpt-4o", Some(1_000_000), None);
+        assert!(approx(cost, 2.5) && priced);
+        // No provider cost, model absent → 0 cost and a warning flag.
+        let (cost, priced) = cost_or_book(None, &prices, "x", "y", Some(1), Some(1));
+        assert!(approx(cost, 0.0) && !priced);
+    }
+
+    #[test]
+    fn now_ts_is_fixed_width_nanos_utc() {
+        let s = now_ts();
+        assert!(s.ends_with('Z'));
+        assert_eq!(s.len(), "2026-05-31T00:07:14.110948400Z".len());
+    }
 }

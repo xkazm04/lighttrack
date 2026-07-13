@@ -3,7 +3,7 @@
 //! candidates per case and averages their scores (generation self-consistency), so a single
 //! lucky/unlucky output doesn't dominate — the judge is sampled separately via `samples`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use anyhow::Result;
 use serde_json::{json, Map, Value};
@@ -14,7 +14,9 @@ use lighttrack_engine::{generate, parse_judge_spec, EngineConfig};
 use crate::bench::judge_output;
 use crate::cli::Cli;
 use crate::http::{get, post};
-use crate::util::{percentiles, price_gen_cost};
+use crate::util::{
+    add_price_warnings, aggregate_status, cost_or_book, join_csv, now_ts, percentiles, run_status,
+};
 
 /// Round to 3 decimals for compact report JSON.
 fn r3(x: f64) -> f64 {
@@ -59,6 +61,8 @@ pub(crate) fn run_compare(
 
     // (label, mean, pass_rate, gen_cost, judge_cost, p50_ms, errored, agreement)
     let mut rows: Vec<(String, f64, f64, f64, f64, u64, u32, f64)> = Vec::new();
+    // Per-target verdicts vs the benchmark baseline, rolled up into one honest run-level status below.
+    let mut statuses: Vec<String> = Vec::new();
     for t in targets {
         let label = t
             .label
@@ -72,6 +76,7 @@ pub(crate) fn run_compare(
         let mut agree_sum = 0.0_f64;
         let mut case_reports: Vec<Value> = Vec::new();
         let (mut gen_tokens, mut judge_tokens) = (0u64, 0u64);
+        let mut price_warnings: BTreeSet<String> = BTreeSet::new();
 
         for (i, case) in cases.iter().enumerate() {
             // Generate `ng` candidates for this case and judge each; the case score is their mean.
@@ -94,9 +99,12 @@ pub(crate) fn run_compare(
                         break;
                     }
                 };
-                gen_cost += gen.cost_usd.unwrap_or_else(|| {
-                    price_gen_cost(&prices, &t.provider, &t.model, gen.input_tokens, gen.output_tokens)
-                });
+                let (gc, gpriced) =
+                    cost_or_book(gen.cost_usd, &prices, &t.provider, &t.model, gen.input_tokens, gen.output_tokens);
+                if !gpriced {
+                    price_warnings.insert(format!("{}/{}", t.provider, t.model));
+                }
+                gen_cost += gc;
                 gen_tokens += gen.input_tokens.unwrap_or(0) + gen.output_tokens.unwrap_or(0);
                 if let Some(l) = gen.latency_ms {
                     latencies.push(l);
@@ -112,6 +120,9 @@ pub(crate) fn run_compare(
                         break;
                     }
                 };
+                if !jr.judge_priced {
+                    price_warnings.insert(format!("{jp}/{jm}"));
+                }
                 judge_cost += jr.cost;
                 judge_tokens += jr.tokens;
                 case_judge_cost += jr.cost;
@@ -187,24 +198,44 @@ pub(crate) fn run_compare(
         let (p50, p95) = percentiles(&mut latencies);
         rows.push((label.clone(), mean, pass_rate, gen_cost, judge_cost, p50.unwrap_or(0), errored, mean_agree));
 
+        // Per-target verdict vs the benchmark baseline — the flagship multi-target mode now detects
+        // regressions instead of stamping every run "compared". No baseline ⇒ "no_baseline".
+        let status = if judged > 0 {
+            run_status(bench.baseline_score, mean)
+        } else {
+            "no_baseline"
+        };
+        statuses.push(status.to_string());
+        if !price_warnings.is_empty() {
+            println!("  warning: no price book entry for {} — cost undercounted", join_csv(&price_warnings));
+        }
+
         let dim_means: Map<String, Value> = dim_sums
             .iter()
             .map(|(k, s)| (k.clone(), json!(r3(s / judged.max(1) as f64))))
             .collect();
-        let report = json!({
+        let mut report = json!({
             "mode": "compare", "target": label, "provider": t.provider, "model": t.model,
             "prompt_label": t.label, "gen_cost_usd": gen_cost, "judge_cost_usd": judge_cost,
             "gen_tokens": gen_tokens, "judge_tokens": judge_tokens,
             "errored_cases": errored, "gen_samples": ng, "judge_samples": samples,
             "agreement": r3(mean_agree), "dimensions": Value::Object(dim_means), "cases": case_reports,
+            "verdict": status, "baseline": bench.baseline_score,
         });
+        add_price_warnings(&mut report, &price_warnings);
         let run = json!({
             "benchmark_id": bench.id, "n_cases": judged, "mean_score": mean, "pass_rate": pass_rate,
-            "cost_usd": gen_cost + judge_cost, "status": "compared",
+            "cost_usd": gen_cost + judge_cost, "status": status, "finished_at": now_ts(),
             "p50_latency_ms": p50, "p95_latency_ms": p95, "total_tokens": gen_tokens + judge_tokens,
             "report": report,
         });
         post(cli, http, "/v1/benchmark-runs", &run)?;
+    }
+
+    // One honest headline status for the whole comparison: regressed if any target regressed.
+    let overall = aggregate_status(&statuses.iter().map(String::as_str).collect::<Vec<_>>());
+    if bench.baseline_score.is_some() {
+        println!("\ncompare verdict vs baseline {:.3}: {overall}", bench.baseline_score.unwrap_or(0.0));
     }
 
     // Render the leaderboard via the shared render layer, so the runner, CLI, and MCP agree.
@@ -217,7 +248,7 @@ pub(crate) fn run_compare(
             })
         })
         .collect();
-    let summary = json!({ "n_cases": cases.len(), "targets": targets });
+    let summary = json!({ "n_cases": cases.len(), "targets": targets, "status": overall });
     match lighttrack_render::render("compare", &summary) {
         Some(md) => println!("\n{md}"),
         None => println!("\n{}", serde_json::to_string_pretty(&summary)?),

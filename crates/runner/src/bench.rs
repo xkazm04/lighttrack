@@ -1,8 +1,10 @@
 //! `bench`: dispatch a benchmark run to compare / rubric / simple mode, plus the shared single-output
 //! judging helper.
 
+use std::collections::BTreeSet;
+
 use anyhow::{Context, Result};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, DatasetItem, ModelPriceRow, Rubric};
 use lighttrack_engine::{
@@ -13,7 +15,22 @@ use crate::cli::Cli;
 use crate::compare::run_compare;
 use crate::http::{get, post};
 use crate::rubric::run_rubric_benchmark;
-use crate::util::{percentiles, price_gen_cost, run_status};
+use crate::util::{add_price_warnings, cost_or_book, join_csv, now_ts, percentiles, run_status};
+
+/// Parse a benchmark's `target` field into a comparison matrix. An **array** is unambiguously a
+/// target matrix and must deserialize cleanly — a malformed one is a hard error, not a silent
+/// fallthrough to a different mode. Any non-array (null / object / string) is legacy free-form
+/// `target` and yields no comparison targets.
+pub(crate) fn parse_targets(target: &Value) -> Result<Vec<BenchTarget>> {
+    if target.is_array() {
+        serde_json::from_value(target.clone()).context(
+            "benchmark `target` is an array but not a valid comparison matrix \
+             (expected [{provider, model, system_prompt?, label?}, ...])",
+        )
+    } else {
+        Ok(Vec::new())
+    }
+}
 
 /// Resolve a benchmark's cases (inline dataset, or a referenced stored dataset) and dispatch to the
 /// right mode: comparison (target matrix), rubric (per-dimension), or simple (freeform single score).
@@ -45,7 +62,7 @@ pub(crate) fn run_benchmark(
         Vec::new()
     };
 
-    let targets: Vec<BenchTarget> = serde_json::from_value(bench.target.clone()).unwrap_or_default();
+    let targets = parse_targets(&bench.target)?;
     if !targets.is_empty() {
         return run_compare(cli, http, engine, &bench, &cases, &targets, samples, gen_samples);
     }
@@ -78,6 +95,7 @@ fn run_simple(
     let (mut sum, mut n, mut passes, mut cost) = (0.0_f64, 0u32, 0u32, 0.0_f64);
     let mut latencies: Vec<u64> = Vec::new();
     let mut total_tokens: u64 = 0;
+    let mut price_warnings: BTreeSet<String> = BTreeSet::new();
     for (i, case) in cases.iter().enumerate() {
         let output = match &case.output {
             Some(o) => o,
@@ -98,9 +116,12 @@ fn run_simple(
         if outcome.verdict.pass {
             passes += 1;
         }
-        cost += outcome.cost_usd.unwrap_or_else(|| {
-            price_gen_cost(&prices, &jp, &jm, outcome.input_tokens, outcome.output_tokens)
-        });
+        let (jc, priced) =
+            cost_or_book(outcome.cost_usd, &prices, &jp, &jm, outcome.input_tokens, outcome.output_tokens);
+        if !priced {
+            price_warnings.insert(format!("{jp}/{jm}"));
+        }
+        cost += jc;
         if let Some(l) = outcome.latency_ms {
             latencies.push(l);
         }
@@ -136,11 +157,17 @@ fn run_simple(
         let verdict = if status == "regressed" { "REGRESSION" } else { "ok" };
         println!("baseline={b:.3} -> {verdict}");
     }
+    if !price_warnings.is_empty() {
+        println!("warning: no price book entry for {} — judge cost undercounted", join_csv(&price_warnings));
+    }
 
+    let mut report = json!({ "mode": "simple" });
+    add_price_warnings(&mut report, &price_warnings);
     let run = json!({
         "benchmark_id": bench.id, "n_cases": n, "mean_score": mean, "pass_rate": pass_rate,
-        "cost_usd": cost, "status": status,
+        "cost_usd": cost, "status": status, "finished_at": now_ts(),
         "p50_latency_ms": p50, "p95_latency_ms": p95, "total_tokens": total_tokens,
+        "report": report,
     });
     let stored = post(cli, http, "/v1/benchmark-runs", &run)?;
     println!("recorded run {}", stored.get("id").and_then(|v| v.as_str()).unwrap_or("?"));
@@ -157,6 +184,8 @@ pub(crate) struct JudgeResult {
     pub(crate) tokens: u64,
     /// Cross-sample agreement on the overall score (1.0 = identical across samples).
     pub(crate) agreement: f64,
+    /// False when the judge model had no price-book entry and its cost fell back to 0 (book miss).
+    pub(crate) judge_priced: bool,
     /// (dimension key, mean score) pairs; empty for freeform-rubric judging.
     pub(crate) dimensions: Vec<(String, f64)>,
 }
@@ -181,15 +210,15 @@ pub(crate) fn judge_output(
             case.expected.as_deref(), output, samples,
         )
         .context("rubric judge failed")?;
-        let jc = o.cost_usd.unwrap_or_else(|| {
-            price_gen_cost(prices, judge_provider, judge_model, o.input_tokens, o.output_tokens)
-        });
+        let (jc, priced) =
+            cost_or_book(o.cost_usd, prices, judge_provider, judge_model, o.input_tokens, o.output_tokens);
         Ok(JudgeResult {
             overall: o.overall,
             pass: o.pass,
             cost: jc,
             tokens: o.tokens.unwrap_or(0),
             agreement: o.agreement,
+            judge_priced: priced,
             dimensions: o.dimensions.iter().map(|d| (d.key.clone(), d.score)).collect(),
         })
     } else {
@@ -200,16 +229,62 @@ pub(crate) fn judge_output(
         } else {
             v.verdict.score
         };
-        let jc = v.cost_usd.unwrap_or_else(|| {
-            price_gen_cost(prices, judge_provider, judge_model, v.input_tokens, v.output_tokens)
-        });
+        let (jc, priced) =
+            cost_or_book(v.cost_usd, prices, judge_provider, judge_model, v.input_tokens, v.output_tokens);
         Ok(JudgeResult {
             overall: norm,
             pass: v.verdict.pass,
             cost: jc,
             tokens: v.input_tokens.unwrap_or(0) + v.output_tokens.unwrap_or(0),
             agreement: 1.0,
+            judge_priced: priced,
             dimensions: Vec::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_targets;
+    use crate::util::{add_price_warnings, join_csv};
+    use serde_json::json;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn parse_targets_null_and_object_are_no_matrix() {
+        assert!(parse_targets(&json!(null)).unwrap().is_empty());
+        // A legacy free-form object target is not a comparison matrix (and must not error).
+        assert!(parse_targets(&json!({ "endpoint": "https://x" })).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_targets_valid_array_parses() {
+        let t = parse_targets(&json!([
+            { "provider": "openai", "model": "gpt-4o" },
+            { "provider": "google", "model": "gemini", "label": "g" },
+        ]))
+        .unwrap();
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].provider, "openai");
+        assert_eq!(t[1].label.as_deref(), Some("g"));
+    }
+
+    #[test]
+    fn parse_targets_malformed_array_is_hard_error() {
+        // An array is unambiguously a matrix; a bad element must fail loudly, not silently degrade.
+        assert!(parse_targets(&json!([{ "model": "no-provider" }])).is_err());
+        assert!(parse_targets(&json!(["just-a-string"])).is_err());
+    }
+
+    #[test]
+    fn add_price_warnings_only_when_present() {
+        let mut r = json!({ "mode": "simple" });
+        add_price_warnings(&mut r, &BTreeSet::new());
+        assert!(r.get("price_warnings").is_none());
+        let mut w = BTreeSet::new();
+        w.insert("openai/gpt-4o".to_string());
+        add_price_warnings(&mut r, &w);
+        assert_eq!(r["price_warnings"], json!(["openai/gpt-4o"]));
+        assert_eq!(join_csv(&w), "openai/gpt-4o");
     }
 }

@@ -1178,6 +1178,7 @@ name = "lighttrack-runner"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "dotenvy",
  "lighttrack-anon",

@@ -46,6 +46,23 @@ fn default_judge_model() -> String {
     "haiku".to_string()
 }
 
+/// Validate the stored `target` field before it reaches the store. An **array** is unambiguously a
+/// comparison matrix and must deserialize as `Vec<BenchTarget>`; a malformed one is rejected here
+/// (400) rather than silently degrading to a different benchmark mode at run time. Non-array targets
+/// (null / object / string) are legacy free-form and pass through untouched.
+fn validate_target_matrix(target: &serde_json::Value) -> Result<(), String> {
+    if target.is_array() {
+        serde_json::from_value::<Vec<BenchTarget>>(target.clone()).map(|_| ()).map_err(|e| {
+            format!(
+                "`target` is an array but not a valid comparison matrix \
+                 (expected [{{provider, model, system_prompt?, label?}}, ...]): {e}"
+            )
+        })
+    } else {
+        Ok(())
+    }
+}
+
 pub(crate) async fn create_benchmark(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -53,18 +70,21 @@ pub(crate) async fn create_benchmark(
     Json(req): Json<CreateBenchmarkReq>,
 ) -> Result<Json<Benchmark>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    // The target matrix (if any) is stored in the `target` field as a JSON array. A typed `targets`
+    // is already valid; a raw `target` array must be validated before we persist it.
+    let target = if req.targets.is_empty() {
+        validate_target_matrix(&req.target).map_err(ApiError::bad_request)?;
+        req.target
+    } else {
+        serde_json::to_value(&req.targets).unwrap_or(serde_json::Value::Null)
+    };
     let b = Benchmark {
         id: new_id(),
         project_id: pid,
         name: req.name,
         rubric: req.rubric,
         judge_model: req.judge_model,
-        // The target matrix (if any) is stored in the `target` field as a JSON array.
-        target: if req.targets.is_empty() {
-            req.target
-        } else {
-            serde_json::to_value(&req.targets).unwrap_or(serde_json::Value::Null)
-        },
+        target,
         dataset_ref: req.dataset_ref,
         dataset: req.dataset,
         rubric_id: req.rubric_id,
@@ -140,4 +160,25 @@ pub(crate) async fn post_benchmark_run(
     let run2 = run.clone();
     spawn_db(move || store.create_benchmark_run(&run2)).await?;
     Ok(Json(run))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_target_matrix;
+    use serde_json::json;
+
+    #[test]
+    fn non_array_targets_pass_through() {
+        assert!(validate_target_matrix(&json!(null)).is_ok());
+        assert!(validate_target_matrix(&json!({ "endpoint": "https://x" })).is_ok());
+        assert!(validate_target_matrix(&json!("legacy")).is_ok());
+    }
+
+    #[test]
+    fn valid_matrix_ok_malformed_rejected() {
+        assert!(validate_target_matrix(&json!([{ "provider": "openai", "model": "gpt-4o" }])).is_ok());
+        // Missing required `provider` → rejected (would otherwise silently degrade to simple mode).
+        assert!(validate_target_matrix(&json!([{ "model": "x" }])).is_err());
+        assert!(validate_target_matrix(&json!(["nope"])).is_err());
+    }
 }
