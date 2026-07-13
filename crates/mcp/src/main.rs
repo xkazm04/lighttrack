@@ -14,6 +14,7 @@
 mod client;
 mod errors;
 mod prompts;
+mod prompts_tools;
 mod read;
 mod rpc;
 mod schemas;

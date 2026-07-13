@@ -6,13 +6,15 @@ use serde_json::{json, Value};
 use crate::client::Client;
 use crate::errors::map_error;
 use crate::rpc::{more_results_line, tool_rendered, tool_text};
-use crate::{read, write};
+use crate::{prompts_tools, read, write};
 
 /// The `tools/list` payload. Write tools appear only when `allow_writes`.
 pub(crate) fn list(allow_writes: bool) -> Value {
     let mut tools = read::tools();
+    tools.extend(prompts_tools::read_tools());
     if allow_writes {
         tools.extend(write::tools());
+        tools.extend(prompts_tools::write_tools());
     }
     json!({ "tools": tools })
 }
@@ -33,9 +35,12 @@ pub(crate) fn call(c: &Client, allow_writes: bool, params: &Value) -> Value {
 
     let outcome = if let Some(r) = read::dispatch(c, name, &args) {
         r
-    } else if write::is_write_tool(name) {
+    } else if let Some(r) = prompts_tools::read_dispatch(c, name, &args) {
+        r
+    } else if write::is_write_tool(name) || prompts_tools::is_write_tool(name) {
         if allow_writes {
             write::dispatch(c, name, &args)
+                .or_else(|| prompts_tools::write_dispatch(c, name, &args))
                 .unwrap_or_else(|| Err(format!("unknown tool: {name}")))
         } else {
             Err(format!(

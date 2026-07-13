@@ -21,6 +21,7 @@ mod margin;
 mod md;
 mod prices;
 mod projects;
+mod prompts;
 mod rubrics;
 mod scores;
 mod traces;
@@ -53,6 +54,8 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "list_dataset_items" => datasets::items(v),
         "list_rubrics" => rubrics::list(v),
         "get_rubric" => rubrics::detail(v),
+        "list_prompts" => prompts::list(v),
+        "get_prompt" => prompts::resolved(v),
         "compare" => compare::leaderboard(v),
         "get_margin" => margin::report(v),
         "get_margin_trend" => margin::trend(v),

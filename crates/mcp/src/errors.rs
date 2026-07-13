@@ -6,6 +6,13 @@
 /// Translate a client error string into agent-facing guidance + the preserved original.
 pub(crate) fn map_error(raw: &str) -> String {
     match parse_http(raw) {
+        // The prompt-registry promotion gate returns 409 with a "promotion blocked: …" body. Lead
+        // with a plain-language verdict so an agent reads it as a decision, not a transport failure.
+        Some((409, body)) if body.contains("promotion blocked") => format!(
+            "error: promotion blocked by the benchmark regression gate — the linked benchmark's latest \
+             mean is below its baseline (or it has no scored run yet). Re-run the benchmark and re-check, \
+             or promote with force=true to override intentionally.\n\n{body}"
+        ),
         Some((code, body)) => match guidance(code) {
             // 429 and other 4xx already carry a human-facing body (the breach details / bad-request
             // message); show it without inventing guidance that might contradict it.
@@ -76,6 +83,23 @@ mod tests {
             assert!(out.contains("is the server healthy"), "{out}");
             assert!(out.contains("upstream boom"));
         }
+    }
+
+    #[test]
+    fn promotion_409_leads_with_a_gate_verdict() {
+        let body = "{\"error\":{\"message\":\"promotion blocked: benchmark mean 0.720 regressed below baseline 0.800 (pass force=true to override)\"}}";
+        let out = map_error(&format!("HTTP 409: {body}"));
+        assert!(out.contains("promotion blocked by the benchmark regression gate"), "{out}");
+        assert!(out.contains("force=true"));
+        assert!(out.contains("regressed below baseline 0.800"), "original body preserved: {out}");
+    }
+
+    #[test]
+    fn other_409s_are_not_mistaken_for_the_gate() {
+        // e.g. duplicate prompt name — no gate wording, so no gate verdict.
+        let out = map_error("HTTP 409: {\"error\":{\"message\":\"prompt 'x' already exists\"}}");
+        assert!(out.contains("already exists"));
+        assert!(!out.contains("regression gate"), "{out}");
     }
 
     #[test]

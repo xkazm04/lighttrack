@@ -35,6 +35,8 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "get_rubric" => rubric(),
         "get_collective_leaderboard" => collective_resp(),
         "get_collective_digest" => collective_digest_resp(),
+        "list_prompts" => list_of(prompt_entry()),
+        "get_prompt" => resolved_prompt(),
         _ => return None,
     };
     Some(s)
@@ -54,6 +56,14 @@ mod tests {
         ] {
             assert!(output_schema(t).is_some(), "{t} should declare an outputSchema");
         }
+    }
+
+    #[test]
+    fn prompt_read_tools_declare_output_schemas() {
+        assert!(output_schema("list_prompts").unwrap()["properties"].get("items").is_some());
+        let resolved = output_schema("get_prompt").unwrap();
+        assert!(resolved["properties"].get("content").is_some());
+        assert!(resolved["properties"].get("version").is_some());
     }
 
     #[test]
@@ -336,6 +346,22 @@ fn rubric() -> Value {
             "key": {"type":"string"}, "description": {"type":"string"}, "weight": {"type":"number"},
             "anchors": {"type":"array"}, "floor": {"type":["number","null"]}
         })) }
+    }))
+}
+
+fn prompt_entry() -> Value {
+    obj(json!({
+        "id": {"type":"string"}, "project_id": {"type":"string"}, "name": {"type":"string"},
+        "benchmark_id": {"type":["string","null"]},
+        "labels": {"type":"object","description":"label → version pointers, e.g. {\"production\": 3}"},
+        "created_at": {"type":"string"}, "updated_at": {"type":"string"}
+    }))
+}
+
+fn resolved_prompt() -> Value {
+    obj(json!({
+        "name": {"type":"string"}, "version": {"type":"integer"}, "label": {"type":["string","null"]},
+        "content": {"type":"string"}, "config": {}, "note": {"type":["string","null"]}
     }))
 }
 
