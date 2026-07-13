@@ -154,6 +154,27 @@ enum LimitsCmd {
         threshold: f64,
         #[arg(long, default_value = "alert")]
         action: String,
+        /// Create the rule disabled (it won't enforce or alert until toggled on).
+        #[arg(long)]
+        disabled: bool,
+    },
+    /// Replace a rule's fields by id (also toggles enable/disable via --disabled).
+    Update {
+        id: String,
+        #[arg(long)]
+        metric: String,
+        #[arg(long)]
+        window: String,
+        #[arg(long)]
+        threshold: f64,
+        #[arg(long, default_value = "alert")]
+        action: String,
+        #[arg(long)]
+        disabled: bool,
+    },
+    /// Delete a rule by id.
+    Delete {
+        id: String,
     },
     List {
         #[arg(long)]
@@ -190,16 +211,37 @@ fn main() -> Result<()> {
                 window,
                 threshold,
                 action,
+                disabled,
             } => call(
                 &cli,
                 Method::POST,
                 &format!("/v1/projects/{project}/limits"),
                 Some(json!({
                     "metric": metric, "window": window,
-                    "threshold": threshold, "action": action
+                    "threshold": threshold, "action": action, "enabled": !disabled
                 })),
                 "",
             ),
+            LimitsCmd::Update {
+                id,
+                metric,
+                window,
+                threshold,
+                action,
+                disabled,
+            } => call(
+                &cli,
+                Method::PUT,
+                &format!("/v1/limits/{id}"),
+                Some(json!({
+                    "metric": metric, "window": window,
+                    "threshold": threshold, "action": action, "enabled": !disabled
+                })),
+                "",
+            ),
+            LimitsCmd::Delete { id } => {
+                call(&cli, Method::DELETE, &format!("/v1/limits/{id}"), None, "")
+            }
             LimitsCmd::List { project } => call(
                 &cli,
                 Method::GET,

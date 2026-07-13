@@ -81,7 +81,7 @@ pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
 /// burst cannot all read the same pre-burst usage and race past a cap. The event is inserted only
 /// when admitted, so a rejected (over-cap) event is never recorded.
 pub(super) fn insert_checked(conn: &Connection, ev: &LlmEvent) -> Result<Admission> {
-    let rules = super::projects::list_limits(conn, &ev.project_id, true)?;
+    let rules = super::limits::list(conn, &ev.project_id, true)?;
     let now = Utc::now();
     let admission = evaluate_admission(&rules, event_contribution(ev), |w| {
         usage_since(conn, &ev.project_id, w.since(now))

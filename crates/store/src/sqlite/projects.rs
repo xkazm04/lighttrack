@@ -1,9 +1,9 @@
-//! Projects, API keys, and limit rules.
+//! Projects and API keys. (Limit rules live in the sibling [`super::limits`] submodule.)
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
-use lighttrack_core::{ApiKey, LimitAction, LimitMetric, LimitRule, LimitWindow, Project, Redaction};
+use lighttrack_core::{ApiKey, Project, Redaction};
 
 use crate::codec::{enum_to_str, fmt_ts, parse_enum, parse_ts};
 use crate::Result;
@@ -115,51 +115,5 @@ fn key_from_raw(r: ApiKeyRaw) -> Result<ApiKey> {
             None => None,
         },
         revoked: r.7 != 0,
-    })
-}
-
-// --- limit rules ---
-
-pub(super) fn create_limit(conn: &Connection, r: &LimitRule) -> Result<()> {
-    conn.execute(
-        "INSERT INTO limit_rules (id, project_id, metric, window, threshold, action, enabled) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![
-            r.id,
-            r.project_id,
-            enum_to_str(&r.metric)?,
-            enum_to_str(&r.window)?,
-            r.threshold,
-            enum_to_str(&r.action)?,
-            r.enabled as i64,
-        ],
-    )?;
-    Ok(())
-}
-
-pub(super) fn list_limits(conn: &Connection, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
-    let sql = if only_enabled {
-        "SELECT id, project_id, metric, window, threshold, action, enabled \
-         FROM limit_rules WHERE project_id = ?1 AND enabled = 1"
-    } else {
-        "SELECT id, project_id, metric, window, threshold, action, enabled \
-         FROM limit_rules WHERE project_id = ?1"
-    };
-    let mut stmt = conn.prepare(sql)?;
-    let rows = stmt
-        .query_map(params![project], map_limit)?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
-}
-
-fn map_limit(row: &Row) -> rusqlite::Result<LimitRule> {
-    Ok(LimitRule {
-        id: row.get(0)?,
-        project_id: row.get(1)?,
-        metric: parse_enum::<LimitMetric>(&row.get::<_, String>(2)?),
-        window: parse_enum::<LimitWindow>(&row.get::<_, String>(3)?),
-        threshold: row.get(4)?,
-        action: parse_enum::<LimitAction>(&row.get::<_, String>(5)?),
-        enabled: row.get::<_, i64>(6)? != 0,
     })
 }

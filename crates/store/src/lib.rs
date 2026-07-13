@@ -336,6 +336,28 @@ pub trait Store: Send + Sync {
     // --- limit rules ---
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()>;
     fn list_limit_rules(&self, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>>;
+    /// Fetch one rule by id (across projects — the caller is admin-gated). Default `None` so
+    /// backends that haven't ported the lifecycle read compile unchanged.
+    fn get_limit_rule(&self, _id: &str) -> Result<Option<LimitRule>> {
+        Ok(None)
+    }
+    /// Replace a rule's mutable fields (metric/window/threshold/action/enabled — and, once ported,
+    /// `warn_at`/`scope`), matched by `r.id`; `project_id` is immutable. Returns `true` when a row
+    /// was updated, `false` when the id is unknown (the API maps that to 404). The default is a clear
+    /// unimplemented error rather than a silent no-op, so an operator on an unported backend learns
+    /// the rule was *not* changed instead of believing a cap was tightened.
+    fn update_limit_rule(&self, _r: &LimitRule) -> Result<bool> {
+        Err(StoreError::Other(
+            "updating limit rules is not supported by this store backend".to_string(),
+        ))
+    }
+    /// Delete a rule by id. Returns `true` when a row was removed, `false` when the id is unknown
+    /// (the API maps that to 404). Default is a clear unimplemented error (see `update_limit_rule`).
+    fn delete_limit_rule(&self, _id: &str) -> Result<bool> {
+        Err(StoreError::Other(
+            "deleting limit rules is not supported by this store backend".to_string(),
+        ))
+    }
 
     // --- single event lookup + scores (Phase 3) ---
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>>;

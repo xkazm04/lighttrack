@@ -27,6 +27,7 @@
 //!   POST /v1/projects/:id/prompts/:name/promote                          label promote (regression-gated)
 //!   POST /v1/projects  GET /v1/projects   POST /v1/projects/:id/keys
 //!   POST /v1/projects/:id/limits  GET /v1/projects/:id/limits
+//!   PUT  /v1/limits/:id  DELETE /v1/limits/:id   update (incl. enable/disable) or remove a rule
 //!   GET  /v1/limits/status?project=      evaluate limits -> throttle flag + per-rule status, plus a
 //!                                        `rejected` block (count + est_missed_cost_usd + window) of
 //!                                        429'd ingest attempts per breached rule. That ledger is
@@ -281,6 +282,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route(
             "/v1/projects/:id/limits",
             post(limits::create_limit).get(limits::list_limits),
+        )
+        .route(
+            "/v1/limits/:id",
+            put(limits::update_limit).delete(limits::delete_limit),
         )
         .route("/v1/limits/status", get(limits::limits_status))
         .route("/v1/relay/tasks", post(relay::enqueue_task).get(relay::list_tasks))

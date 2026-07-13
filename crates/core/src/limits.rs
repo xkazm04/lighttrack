@@ -114,6 +114,20 @@ impl LimitStatus {
 }
 
 impl LimitRule {
+    /// Validate a rule's numeric fields before it is created or updated. A `threshold` of `0`,
+    /// negative, or non-finite (`NaN`/`inf`) is nonsensical — the old code silently accepted it and
+    /// evaluated `ratio = ∞`, so the cap breached on *any* usage. Callers surface the `Err` as HTTP
+    /// 400. Kept pure (and here, beside the type) so create and update share exactly one rule.
+    pub fn validate(&self) -> Result<(), String> {
+        if !(self.threshold.is_finite() && self.threshold > 0.0) {
+            return Err(format!(
+                "threshold must be a finite number greater than 0 (got {})",
+                self.threshold
+            ));
+        }
+        Ok(())
+    }
+
     /// Pure evaluation: given the project's current value for this rule's metric+window,
     /// decide whether the limit is breached. The caller computes `current` from the store.
     pub fn evaluate(&self, current: f64) -> LimitStatus {
@@ -162,6 +176,22 @@ mod tests {
     #[test]
     fn ratio_tracks_usage() {
         assert!((rule().evaluate(5.0).ratio - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn validate_rejects_nonpositive_or_nonfinite_threshold() {
+        let mut r = rule();
+        assert!(r.validate().is_ok());
+        r.threshold = 0.0;
+        assert!(r.validate().is_err(), "zero threshold is invalid");
+        r.threshold = -1.0;
+        assert!(r.validate().is_err(), "negative threshold is invalid");
+        r.threshold = f64::INFINITY;
+        assert!(r.validate().is_err(), "non-finite threshold is invalid");
+        r.threshold = f64::NAN;
+        assert!(r.validate().is_err(), "NaN threshold is invalid");
+        r.threshold = 0.0001;
+        assert!(r.validate().is_ok(), "small positive threshold is valid");
     }
 
     #[test]

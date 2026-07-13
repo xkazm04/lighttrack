@@ -11,6 +11,7 @@ mod datasets;
 mod events;
 mod forecast;
 mod jobs;
+mod limits;
 mod prices;
 mod projects;
 mod prompts;
@@ -199,10 +200,19 @@ impl Store for SqliteStore {
         self.with(|c| projects::touch_key(c, id, when))
     }
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()> {
-        self.with(|c| projects::create_limit(c, r))
+        self.with(|c| limits::create(c, r))
     }
     fn list_limit_rules(&self, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
-        self.with(|c| projects::list_limits(c, project, only_enabled))
+        self.with(|c| limits::list(c, project, only_enabled))
+    }
+    fn get_limit_rule(&self, id: &str) -> Result<Option<LimitRule>> {
+        self.with(|c| limits::get(c, id))
+    }
+    fn update_limit_rule(&self, r: &LimitRule) -> Result<bool> {
+        self.with(|c| limits::update(c, r))
+    }
+    fn delete_limit_rule(&self, id: &str) -> Result<bool> {
+        self.with(|c| limits::delete(c, id))
     }
 
     // --- benchmarks ---

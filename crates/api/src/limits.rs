@@ -52,6 +52,14 @@ pub(crate) struct CreateLimitReq {
     threshold: f64,
     #[serde(default)]
     action: LimitAction,
+    /// Whether the rule enforces/alerts on creation. Defaults `true`; the old code hardcoded it,
+    /// silently ignoring a client that asked for a rule created disabled.
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 pub(crate) async fn create_limit(
@@ -75,12 +83,74 @@ pub(crate) async fn create_limit(
         window: req.window,
         threshold: req.threshold,
         action: req.action,
-        enabled: true,
+        enabled: req.enabled,
     };
+    rule.validate().map_err(ApiError::bad_request)?;
     let store = st.store.clone();
     let r2 = rule.clone();
     spawn_db(move || store.create_limit_rule(&r2)).await?;
     Ok(Json(rule))
+}
+
+/// Fields a `PUT /v1/limits/:id` may change. `project_id` is immutable (a rule can't hop projects);
+/// everything else is replaced wholesale. `enabled` is honored so a rule can be toggled off/on.
+#[derive(Deserialize)]
+pub(crate) struct UpdateLimitReq {
+    metric: LimitMetric,
+    window: LimitWindow,
+    threshold: f64,
+    #[serde(default)]
+    action: LimitAction,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+pub(crate) async fn update_limit(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateLimitReq>,
+) -> Result<Json<LimitRule>, ApiError> {
+    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+
+    // Load the existing rule so we keep its (immutable) project_id and can 404 an unknown id.
+    let store = st.store.clone();
+    let id_get = id.clone();
+    let existing = spawn_db(move || store.get_limit_rule(&id_get))
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("limit rule '{id}' not found")))?;
+
+    let rule = LimitRule {
+        id: existing.id,
+        project_id: existing.project_id,
+        metric: req.metric,
+        window: req.window,
+        threshold: req.threshold,
+        action: req.action,
+        enabled: req.enabled,
+    };
+    rule.validate().map_err(ApiError::bad_request)?;
+    let store = st.store.clone();
+    let r2 = rule.clone();
+    // The row exists (we just read it); a `false` here means a concurrent delete raced us.
+    if !spawn_db(move || store.update_limit_rule(&r2)).await? {
+        return Err(ApiError::not_found(format!("limit rule '{}' not found", rule.id)));
+    }
+    Ok(Json(rule))
+}
+
+pub(crate) async fn delete_limit(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let store = st.store.clone();
+    let id2 = id.clone();
+    if !spawn_db(move || store.delete_limit_rule(&id2)).await? {
+        return Err(ApiError::not_found(format!("limit rule '{id}' not found")));
+    }
+    Ok(Json(serde_json::json!({ "deleted": id })))
 }
 
 pub(crate) async fn list_limits(

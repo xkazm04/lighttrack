@@ -498,6 +498,66 @@ fn insert_event_checked_enforces_caps() {
 }
 
 #[test]
+fn limit_rule_update_delete_and_toggle() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    let mut rule = LimitRule {
+        id: "r1".into(),
+        project_id: "p1".into(),
+        metric: LimitMetric::Calls,
+        window: LimitWindow::Hour,
+        threshold: 2.0,
+        action: LimitAction::Block,
+        enabled: true,
+    };
+    s.create_limit_rule(&rule).unwrap();
+
+    // get round-trips.
+    let got = s.get_limit_rule("r1").unwrap().unwrap();
+    assert_eq!(got.threshold, 2.0);
+    assert!(s.get_limit_rule("nope").unwrap().is_none());
+
+    // Update raises the threshold and switches the action; the row reads back changed.
+    rule.threshold = 9.0;
+    rule.action = LimitAction::Alert;
+    assert!(s.update_limit_rule(&rule).unwrap(), "existing row updates");
+    let got = s.get_limit_rule("r1").unwrap().unwrap();
+    assert_eq!(got.threshold, 9.0);
+    assert_eq!(got.action, LimitAction::Alert);
+    // Updating an unknown id reports no row matched (the API maps that to 404).
+    let mut ghost = rule.clone();
+    ghost.id = "ghost".into();
+    assert!(!s.update_limit_rule(&ghost).unwrap());
+
+    // Toggling disabled stops it from enforcing: a Block rule at threshold 1 admits when disabled.
+    let block = LimitRule {
+        id: "r-block".into(),
+        project_id: "p2".into(),
+        metric: LimitMetric::Calls,
+        window: LimitWindow::Hour,
+        threshold: 1.0,
+        action: LimitAction::Block,
+        enabled: false,
+    };
+    s.create_limit_rule(&block).unwrap();
+    let a = s.insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
+    assert!(a.admitted, "a disabled rule does not enforce");
+    assert!(a.statuses.is_empty(), "disabled rules aren't even evaluated");
+    // Enable it, and the next event is blocked (usage-with-event = 1 >= 1).
+    let mut on = block.clone();
+    on.enabled = true;
+    assert!(s.update_limit_rule(&on).unwrap());
+    let b = s.insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
+    assert!(!b.admitted, "enabling the rule enforces the cap");
+
+    // Delete removes it from evaluation entirely.
+    assert!(s.delete_limit_rule("r-block").unwrap());
+    assert!(!s.delete_limit_rule("r-block").unwrap(), "second delete finds nothing");
+    let c = s.insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
+    assert!(c.admitted, "a deleted rule no longer enforces");
+    assert!(s.list_limit_rules("p2", false).unwrap().is_empty());
+}
+
+#[test]
 fn insert_event_checked_alert_never_blocks() {
     let s = SqliteStore::open_in_memory().unwrap();
     s.create_limit_rule(&LimitRule {
