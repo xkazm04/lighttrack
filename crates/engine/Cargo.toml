@@ -7,6 +7,7 @@ description = "LightTrack scoring engine — drives `claude -p` as an LLM-as-jud
 
 [dependencies]
 lighttrack-core.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 # HTTPS client for provider APIs (Gemini/OpenAI generation). native-tls => SChannel on Windows.

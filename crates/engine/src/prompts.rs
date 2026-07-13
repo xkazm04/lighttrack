@@ -75,6 +75,48 @@ pub fn build_rubric_schema(rubric: &Rubric) -> Value {
     Value::Object(root)
 }
 
+/// Pairwise preference prompt: judge which of two answers (A / B) is better for the input, or a tie.
+/// The judge is told explicitly to weigh *content* only — never style, length, formatting, or which
+/// system produced an answer — and that ordering carries no meaning (the caller counterbalances A/B).
+pub fn build_pairwise_prompt(
+    input: &str,
+    expected: Option<&str>,
+    answer_a: &str,
+    answer_b: &str,
+    criteria: Option<&str>,
+) -> String {
+    let reference = expected
+        .map(|e| format!("\n=== REFERENCE / EXPECTED ===\n{e}\n"))
+        .unwrap_or_default();
+    let crit = criteria
+        .filter(|c| !c.is_empty())
+        .map(|c| format!("\nJudge against these criteria: {c}\n"))
+        .unwrap_or_default();
+    format!(
+        "You are an impartial preference judge. Two answers (A and B) respond to the same input. Decide \
+which answer is better on the MERIT OF ITS CONTENT for the input{ref_note}. Judge correctness and \
+usefulness only — ignore style, tone, length, formatting, and which system produced an answer; do NOT \
+prefer an answer merely for being longer or more verbose. The A/B ordering is arbitrary and must not \
+influence you. If they are equally good (or equally bad), answer \"Tie\".{crit}\n\
+Return ONLY a JSON object: {{\"winner\": \"A\" | \"B\" | \"Tie\", \"reasoning\": \"<one sentence>\"}}.\n\n\
+=== INPUT ===\n{input}\n{reference}\n=== ANSWER A ===\n{answer_a}\n\n=== ANSWER B ===\n{answer_b}\n",
+        ref_note = if expected.is_some() { " and the reference" } else { "" }
+    )
+}
+
+/// JSON schema for a [`PairwiseVerdict`](crate::PairwiseVerdict): `{winner: A|B|Tie, reasoning}`.
+pub(crate) fn build_pairwise_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "winner": { "type": "string", "enum": ["A", "B", "Tie"] },
+            "reasoning": { "type": "string" }
+        },
+        "required": ["winner", "reasoning"],
+        "additionalProperties": false
+    })
+}
+
 /// RCAF judge prompt for a rubric: Role, Context (dimensions+anchors+reference), Action, Format.
 pub fn build_rubric_prompt(
     rubric: &Rubric,

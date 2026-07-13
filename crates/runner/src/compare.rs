@@ -114,6 +114,9 @@ fn compute_cell(
     cell
 }
 
+/// One target's leaderboard row: (label, mean, pass_rate, gen_cost, judge_cost, p50_ms, errored, agreement).
+type TargetRow = (String, f64, f64, f64, f64, u64, u32, f64);
+
 /// Round to 3 decimals for compact report JSON.
 fn r3(x: f64) -> f64 {
     (x * 1000.0).round() / 1000.0
@@ -129,6 +132,7 @@ pub(crate) fn run_compare(
     targets: &[BenchTarget],
     samples: u32,
     gen_samples: u32,
+    pairwise: bool,
     jobs: usize,
 ) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
@@ -292,7 +296,7 @@ pub(crate) fn run_compare(
     }
 
     // Render the leaderboard via the shared render layer, so the runner, CLI, and MCP agree.
-    let targets: Vec<Value> = rows
+    let target_rows: Vec<Value> = rows
         .iter()
         .map(|(label, mean, pr, gc, jc, p50, err, agree)| {
             json!({
@@ -301,10 +305,17 @@ pub(crate) fn run_compare(
             })
         })
         .collect();
-    let summary = json!({ "n_cases": cases.len(), "targets": targets, "status": overall });
+    let summary = json!({ "n_cases": cases.len(), "targets": target_rows, "status": overall });
     match lighttrack_render::render("compare", &summary) {
         Some(md) => println!("\n{md}"),
         None => println!("\n{}", serde_json::to_string_pretty(&summary)?),
+    }
+
+    // Optional pairwise phase: printed *alongside* (after) the per-target table, never replacing it.
+    if pairwise {
+        crate::pairwise::run_pairwise_matrix(
+            cli, http, engine, bench, cases, targets, &rubric, &prices, &jp, &jm, jobs,
+        )?;
     }
     Ok(overall.to_string())
 }

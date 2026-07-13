@@ -40,6 +40,9 @@ impl Generator for ProviderGen<'_> {
     }
 }
 
+/// One rubric sample's parsed dimensions: `(key, clamped score, reasoning)` for every dimension.
+type SampleDims = Vec<(String, f64, String)>;
+
 /// Parse a `[provider/]model` judge spec into (provider, model). No prefix => anthropic (claude -p).
 pub fn parse_judge_spec(spec: &str) -> (String, String) {
     match spec.split_once('/') {
@@ -52,7 +55,7 @@ pub fn parse_judge_spec(spec: &str) -> (String, String) {
 /// clamped to `[0.0, 1.0]`. Returns [`EngineError::Parse`] — carrying the raw output — when the
 /// response has no JSON object, or when any dimension's score is absent or non-numeric, so an
 /// unparseable verdict is a loud, audited failure rather than a silent all-zero score.
-fn parse_sample(raw: &str, rubric: &Rubric) -> Result<Vec<(String, f64, String)>> {
+fn parse_sample(raw: &str, rubric: &Rubric) -> Result<SampleDims> {
     let out = extract_json_value(raw);
     if out.is_null() {
         return Err(EngineError::Parse(format!(
@@ -191,7 +194,7 @@ fn judge_with(
     jobs: usize,
 ) -> Result<RubricOutcome> {
     let k = samples.max(1) as usize;
-    let results: Vec<Result<Parsed<Vec<(String, f64, String)>>>> = pool::parallel_map(k, jobs, |i| {
+    let results: Vec<Result<Parsed<SampleDims>>> = pool::parallel_map(k, jobs, |i| {
         sample_parsed(
             |idx, p| gen.generate(idx, p),
             i,
@@ -205,12 +208,7 @@ fn judge_with(
 
 /// Fold per-sample [`Parsed`] results (in index order) into per-dimension means, the weighted overall,
 /// the floor-gated pass/fail, cross-sample agreement, and honest cost/latency/failure accounting.
-fn aggregate(
-    results: &[Parsed<Vec<(String, f64, String)>>],
-    rubric: &Rubric,
-    model: &str,
-    k: u32,
-) -> Result<RubricOutcome> {
+fn aggregate(results: &[Parsed<SampleDims>], rubric: &Rubric, model: &str, k: u32) -> Result<RubricOutcome> {
     let mut per_dim: HashMap<String, Vec<f64>> = HashMap::new();
     let mut reasonings: HashMap<String, String> = HashMap::new();
     let mut overalls: Vec<f64> = Vec::new();

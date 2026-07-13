@@ -47,6 +47,7 @@ pub(crate) fn run_benchmark(
     samples: u32,
     gen_samples: u32,
     heal: bool,
+    pairwise: bool,
     jobs: usize,
 ) -> Result<String> {
     let bench: Benchmark = get(cli, http, &format!("/v1/benchmarks/{benchmark_id}"))?;
@@ -69,7 +70,9 @@ pub(crate) fn run_benchmark(
 
     let targets = parse_targets(&bench.target)?;
     if !targets.is_empty() {
-        return run_compare(cli, http, engine, &bench, &cases, &targets, samples, gen_samples, jobs);
+        return run_compare(
+            cli, http, engine, &bench, &cases, &targets, samples, gen_samples, pairwise, jobs,
+        );
     }
     if let Some(rid) = bench.rubric_id.clone() {
         return run_rubric_benchmark(cli, http, engine, &bench, &cases, &rid, samples, heal, jobs);

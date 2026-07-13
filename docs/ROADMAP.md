@@ -44,6 +44,10 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
       `(target,case)` cells, score events, and calibrate items via `std::thread::scope` (engine stays
       sync). Ordered aggregation keeps `--jobs 1` byte-identical; the engine's k-sample self-consistency
       loop is likewise parallelizable and unit-tested against the sequential aggregate
+- [x] Pairwise preference judging: `bench --pairwise` (compare mode) round-robins order-debiased A-vs-B
+      judgements across targets per case — each pair judged twice with A/B swapped, disagreement ⇒ Tie
+      (position bias flagged) — and prints a win/loss/tie matrix + win-rate ranking alongside the
+      per-target table; per-pair judge cost folds into run totals. (No Elo/Bradley-Terry, no UI.)
 - [x] `runner` (`lt-runner`): `score` (judge recent events) + `score-text` (ad-hoc); posts to `/v1/scores`;
       Windows `claude.exe` auto-resolution; `--bare` option for cheap judging
 - [x] `api`: `POST/GET /v1/scores`, `GET /v1/events/:id`

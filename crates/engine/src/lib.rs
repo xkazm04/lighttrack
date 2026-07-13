@@ -11,6 +11,7 @@
 
 mod claude;
 mod judge;
+mod pairwise;
 mod parse;
 mod pool;
 mod prompts;
@@ -22,7 +23,11 @@ use thiserror::Error;
 
 pub use claude::{resolve_claude_bin, run_raw, RawOutcome};
 pub use judge::{parse_judge_spec, run_judge, run_rubric_judge, run_text};
-pub use prompts::{build_eval_prompt, build_judge_prompt, build_rubric_prompt, build_rubric_schema};
+pub use pairwise::{run_pairwise, PairwiseOutcome, PairwiseVerdict, PairwiseWinner};
+pub use prompts::{
+    build_eval_prompt, build_judge_prompt, build_pairwise_prompt, build_rubric_prompt,
+    build_rubric_schema,
+};
 pub use providers::generate;
 
 /// Errors from the scoring engine. Transport failures carry a typed classification (not string

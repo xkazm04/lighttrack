@@ -15,6 +15,7 @@ mod compare;
 mod dataset;
 mod gate;
 mod http;
+mod pairwise;
 mod rubric;
 mod schedule;
 mod score;
@@ -59,9 +60,10 @@ fn main() -> Result<()> {
             gen_samples,
             heal,
             gate,
+            pairwise,
         } => {
             let status = bench::run_benchmark(
-                &cli, &http, &engine, benchmark, *samples, *gen_samples, *heal, cli.jobs,
+                &cli, &http, &engine, benchmark, *samples, *gen_samples, *heal, *pairwise, cli.jobs,
             )?;
             if *gate {
                 let code = gate::gate_exit_code(&status);

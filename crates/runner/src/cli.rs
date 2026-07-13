@@ -72,6 +72,10 @@ pub(crate) enum Cmd {
         /// pipeline step fails the build. Without this flag the exit code is unchanged (0 on success).
         #[arg(long)]
         gate: bool,
+        /// Compare mode only: also run order-debiased round-robin A-vs-B pairwise judging across the
+        /// targets and print a win/loss/tie matrix + win-rate ranking (alongside the per-target table).
+        #[arg(long)]
+        pairwise: bool,
     },
     /// Build a dataset by sampling real events and anonymizing them.
     Dataset {
