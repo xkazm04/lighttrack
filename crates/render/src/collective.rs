@@ -1,7 +1,7 @@
 //! `collective` — the cross-instance model leaderboard + a single instance's contributable digest.
 //! Shared so the CLI and MCP render the same tables the network is built around.
 //!
-//! Leaderboard input: `{ contributors, n_models, task_type?, rows: [ {provider, model, task_type,
+//! Leaderboard input: `{ contributors, n_models, n_rows, task_type?, rows: [ {provider, model, task_type,
 //! quality, quality_ci95?, pass_rate, avg_cost_usd, p50_latency_ms?, p95_latency_ms?, low_confidence,
 //! judge_providers?, mixed_judges?, n_contributors, n_runs, n_cases} ] }`.
 //! Digest input:      `{ schema_version, contributor_id, min_cases, entries: [ {provider, model,
@@ -43,6 +43,7 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
     let mut notes = vec![
         "p50 is an approximate case-weighted mean of contributors' medians; p95 is the worst observed.",
         "±95% is an approximate CI on quality; `n/a` = insufficient variance data across contributors.",
+        "Confidence = total cases × contributing sources backing the row.",
     ];
     if any_low {
         notes.push("† low-confidence row: too few total cases to rank authoritatively.");
@@ -92,25 +93,23 @@ fn model_table(cols: &Cols) -> Table {
     c.push(("p50", Align::Right));
     c.push(("p95", Align::Right));
     c.push(("Judge", Align::Left));
-    if cols.sources {
-        c.push(("Sources", Align::Right));
-    }
     c.push(("Runs", Align::Right));
-    c.push(("Cases", Align::Right));
+    if cols.sources {
+        // Leaderboard: a single confidence column folding total cases × contributing sources, so a
+        // reader sees at a glance how much evidence backs the row (paired with the † low-confidence flag).
+        c.push(("Confidence", Align::Right));
+    } else {
+        c.push(("Cases", Align::Right));
+    }
     Table::new(&c)
 }
 
 fn model_row(r: &Value, cols: &Cols) -> Vec<String> {
+    // A low-confidence leaderboard row is flagged with a trailing † in the Confidence column.
     let low = r.get("low_confidence").and_then(Value::as_bool).unwrap_or(false);
-    // A low-confidence leaderboard row is marked with a trailing dagger on the model.
-    let model = if cols.sources && low {
-        format!("{} †", s(r, "model"))
-    } else {
-        s(r, "model").to_string()
-    };
     let mut cells = vec![
         s(r, "provider").to_string(),
-        model,
+        s(r, "model").to_string(),
         s(r, "task_type").to_string(),
         format!("{:.3}", f(r, "quality")),
     ];
@@ -124,12 +123,24 @@ fn model_row(r: &Value, cols: &Cols) -> Vec<String> {
     cells.push(lat(r, "p50_latency_ms"));
     cells.push(lat(r, "p95_latency_ms"));
     cells.push(judge_cell(r, cols));
-    if cols.sources {
-        cells.push(u(r, "n_contributors").to_string());
-    }
     cells.push(commafy(u(r, "n_runs")));
-    cells.push(commafy(u(r, "n_cases")));
+    if cols.sources {
+        cells.push(confidence_cell(r, low));
+    } else {
+        cells.push(commafy(u(r, "n_cases")));
+    }
     cells
+}
+
+/// The leaderboard confidence cell: `{cases} × {sources}` — total cases backing the row over the number
+/// of distinct contributing instances — with a trailing `†` mirroring the `low_confidence` flag.
+fn confidence_cell(r: &Value, low: bool) -> String {
+    let cell = format!("{} × {}", commafy(u(r, "n_cases")), u(r, "n_contributors"));
+    if low {
+        format!("{cell} †")
+    } else {
+        cell
+    }
 }
 
 fn lat(r: &Value, key: &str) -> String {
@@ -180,7 +191,10 @@ mod tests {
         assert!(md.contains("±0.028"), "CI half-width surfaced");
         assert!(md.contains("2100ms"), "p95 surfaced");
         assert!(md.contains("n/a"), "missing CI shown as n/a (insufficient variance)");
-        assert!(md.contains("gpt-x †"), "low-confidence row flagged");
+        assert!(md.contains("Confidence"), "confidence column present");
+        assert!(md.contains("1,200 × 3"), "confidence = cases × sources");
+        assert!(md.contains("12 × 1 †"), "low-confidence row flagged in the confidence column");
+        assert!(md.contains("Confidence = total cases"), "legend explains the confidence column");
         assert!(md.contains("low-confidence row"), "legend explains the dagger");
         assert!(md.contains("mixed(2)"), "mixed judges surfaced");
         assert!(md.contains("google"), "single judge family surfaced");

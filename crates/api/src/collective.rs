@@ -250,9 +250,15 @@ pub(crate) struct LeaderboardParams {
 
 #[derive(Serialize)]
 pub(crate) struct LeaderboardResponse {
-    /// Distinct contributing instances overall (before any task_type/provider filter).
+    /// Distinct contributing instances **backing the visible rows** — computed over the filtered row
+    /// set, so it never disagrees with what's shown. A filter that excludes a contributor's only rows
+    /// drops it from this count.
     contributors: usize,
+    /// Distinct `(provider, model)` identities across the filtered rows — a true model count, not a row
+    /// count. (A single model spans multiple rows when it appears under several task types.)
     n_models: usize,
+    /// Number of visible leaderboard rows after filtering (one per `(provider, model, task_type)`).
+    n_rows: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     task_type: Option<String>,
     rows: Vec<LeaderboardRow>,
@@ -268,11 +274,6 @@ pub(crate) async fn get_leaderboard(
     authenticate(&st, &headers).await?;
     let store = st.store.clone();
     let entries = spawn_db(move || store.list_collective_entries()).await?;
-    let contributors = entries
-        .iter()
-        .map(|e| e.contributor_id.as_str())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
 
     let mut rows = merge_leaderboard(&entries, st.collective.display_floor);
     if let Some(tt) = q.task_type.as_deref() {
@@ -284,9 +285,31 @@ pub(crate) async fn get_leaderboard(
     if let Some(j) = q.judge.as_deref() {
         rows.retain(|r| r.judge_providers.iter().any(|p| p == j));
     }
+
+    // Header counts are computed over the FILTERED rows so they never disagree with what's shown.
+    // Contributors backing the visible rows = distinct contributor ids of every stored entry whose
+    // `(provider, model, task_type)` survived filtering (an entry's identity is normalized at ingest,
+    // so its key matches the merged row's key exactly).
+    let surviving: std::collections::BTreeSet<(&str, &str, &str)> = rows
+        .iter()
+        .map(|r| (r.provider.as_str(), r.model.as_str(), r.task_type.as_str()))
+        .collect();
+    let contributors = entries
+        .iter()
+        .filter(|e| surviving.contains(&(e.provider.as_str(), e.model.as_str(), e.task_type.as_str())))
+        .map(|e| e.contributor_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let n_models = rows
+        .iter()
+        .map(|r| (r.provider.as_str(), r.model.as_str()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+
     Ok(Json(LeaderboardResponse {
         contributors,
-        n_models: rows.len(),
+        n_models,
+        n_rows: rows.len(),
         task_type: q.task_type,
         rows,
     }))

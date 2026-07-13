@@ -299,6 +299,52 @@ async fn mixed_judges_annotated_and_judge_filter_works() {
 }
 
 #[tokio::test]
+async fn header_counts_are_computed_over_the_filtered_rows() {
+    // Two contributors, each the *sole* backer of a distinct provider's row. A provider filter that
+    // hides one contributor's only row must drop it from the header `contributors` count too — header
+    // and rows can no longer disagree.
+    let (state, _) = setup(true, false, 5);
+    let app = crate::build_router(state);
+    ingest(&app, Some("key-a"), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+    ingest(&app, Some("key-b"), digest_of("openai", "gpt-x", 0.84, 100, "openai")).await;
+
+    // Unfiltered: both contributors and both models are visible.
+    let (ls, lb) = leaderboard(&app).await;
+    assert_eq!(ls, StatusCode::OK);
+    assert_eq!(lb["contributors"], 2, "{lb}");
+    assert_eq!(lb["n_models"], 2, "{lb}");
+    assert_eq!(lb["n_rows"], 2, "{lb}");
+
+    // Filter to anthropic: only key-a's row survives, so the header must report one contributor.
+    let (_s, only_a) = leaderboard_q(&app, "provider=anthropic").await;
+    assert_eq!(only_a["rows"].as_array().unwrap().len(), 1, "{only_a}");
+    assert_eq!(only_a["contributors"], 1, "excluded contributor drops from the count: {only_a}");
+    assert_eq!(only_a["n_models"], 1, "{only_a}");
+    assert_eq!(only_a["n_rows"], 1, "{only_a}");
+}
+
+#[tokio::test]
+async fn n_models_is_distinct_models_not_row_count() {
+    // One contributor, one model, under two task types → two rows but a single distinct model.
+    let (state, _) = setup(true, false, 5);
+    let app = crate::build_router(state);
+    let two_tasks = json!({ "schema_version": 2, "entries": [
+        {"provider":"anthropic","model":"haiku","task_type":"qa",
+         "quality":0.8,"pass_rate":0.8,"avg_cost_usd":0.003,"n_runs":1,"n_cases":100},
+        {"provider":"anthropic","model":"haiku","task_type":"summarization",
+         "quality":0.7,"pass_rate":0.7,"avg_cost_usd":0.003,"n_runs":1,"n_cases":100}
+    ]});
+    ingest(&app, Some("key-a"), two_tasks).await;
+
+    let (ls, lb) = leaderboard(&app).await;
+    assert_eq!(ls, StatusCode::OK);
+    assert_eq!(lb["rows"].as_array().unwrap().len(), 2, "two task-type rows: {lb}");
+    assert_eq!(lb["n_rows"], 2, "{lb}");
+    assert_eq!(lb["n_models"], 1, "one distinct (provider, model): {lb}");
+    assert_eq!(lb["contributors"], 1, "{lb}");
+}
+
+#[tokio::test]
 async fn anonymous_push_refused_unless_allowed() {
     // Keyless push, hub does not allow anon → 403.
     let (state, _) = setup(true, false, 5);
