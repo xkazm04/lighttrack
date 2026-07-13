@@ -11,7 +11,7 @@ use lighttrack_engine::{build_judge_prompt, parse_judge_spec, run_judge, run_rub
 
 use crate::cli::Cli;
 use crate::http::get;
-use crate::util::{price_gen_cost, short};
+use crate::util::{parallel_map, price_gen_cost, short};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn calibrate(
@@ -25,6 +25,7 @@ pub(crate) fn calibrate(
     kappa_bar: f64,
     samples: u32,
     report_path: Option<&str>,
+    jobs: usize,
 ) -> Result<()> {
     let items = load_items(file)?;
     if items.is_empty() {
@@ -50,20 +51,25 @@ pub(crate) fn calibrate(
     );
     println!("  {:<10}  {:>6}  {:>6}  {:>7}  {:<5}", "item", "human", "judge", "delta", "agree");
 
+    // Judge every item with up to `jobs` concurrency; fold the results in file order so the per-item
+    // table, skips, and κ are identical at any `jobs`.
+    let scored: Vec<Result<(f64, f64)>> = parallel_map(items.len(), jobs, |i| {
+        judge_item(engine, &jp, &jm, &rubric, rubric_text, &items[i], samples, &prices)
+    });
+
     let mut pairs: Vec<(f64, f64)> = Vec::new();
     let mut cost = 0.0_f64;
     let mut skipped = 0u32;
-    for (i, it) in items.iter().enumerate() {
-        let (judge_score, jc) =
-            match judge_item(engine, &jp, &jm, &rubric, rubric_text, it, samples, &prices) {
-                Ok(pair) => pair,
-                // A phantom 0.0 here would poison kappa/MAE; drop the item from the calibration set.
-                Err(e) => {
-                    eprintln!("  item #{} skipped — judge output unparseable: {e}", i + 1);
-                    skipped += 1;
-                    continue;
-                }
-            };
+    for (i, (it, result)) in items.iter().zip(scored).enumerate() {
+        let (judge_score, jc) = match result {
+            Ok(pair) => pair,
+            // A phantom 0.0 here would poison kappa/MAE; drop the item from the calibration set.
+            Err(e) => {
+                eprintln!("  item #{} skipped — judge output unparseable: {e}", i + 1);
+                skipped += 1;
+                continue;
+            }
+        };
         cost += jc;
         let agree = (it.human_score >= threshold) == (judge_score >= threshold);
         pairs.push((it.human_score, judge_score));
@@ -140,8 +146,10 @@ fn judge_item(
     prices: &[ModelPriceRow],
 ) -> Result<(f64, f64)> {
     if let Some(r) = rubric {
+        // jobs=1: the item loop is already parallelized, so keep per-item sample judging sequential to
+        // bound total concurrency at --jobs.
         let o = run_rubric_judge(
-            engine, jp, jm, r, &it.input, it.expected.as_deref(), &it.output, samples,
+            engine, jp, jm, r, &it.input, it.expected.as_deref(), &it.output, samples, 1,
         )
         .context("rubric judge failed")?;
         let jc = o

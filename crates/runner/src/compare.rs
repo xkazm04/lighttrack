@@ -15,7 +15,104 @@ use crate::bench::judge_output;
 use crate::cli::Cli;
 use crate::http::{get, post};
 use crate::stats::{annotate_significance, significance_verdict, stability, Summary};
-use crate::util::{add_price_warnings, aggregate_status, cost_or_book, join_csv, now_ts, percentiles};
+use crate::util::{
+    add_price_warnings, aggregate_status, cost_or_book, join_csv, now_ts, parallel_map, percentiles,
+};
+
+/// One `(target, case)` cell's independent result: the candidate scores/agreements plus this cell's
+/// cost/latency/token contributions. Computed in parallel, then folded in case order so the per-target
+/// leaderboard, posted scores, and printed log are byte-identical at any `--jobs`.
+struct Cell {
+    cand_scores: Vec<f64>,
+    judge_agrees: Vec<f64>,
+    cand_passes: u32,
+    case_dim_sums: HashMap<String, f64>,
+    case_judge_cost: f64,
+    gen_cost: f64,
+    gen_tokens: u64,
+    judge_cost: f64,
+    judge_tokens: u64,
+    latencies: Vec<u64>,
+    /// Models with no price-book entry seen while pricing this cell (cost undercounted).
+    price_warnings: BTreeSet<String>,
+    /// First generation/judge error hit while sampling this cell (printed in the sequential fold).
+    error_msg: Option<String>,
+}
+
+/// Generate `ng` candidates for one case from one target and judge each; pure (no printing/posting)
+/// so it can run concurrently. A generation/judge error stops sampling this cell and is reported back
+/// via `error_msg`; whatever candidates already scored are kept (matching the sequential behaviour).
+#[allow(clippy::too_many_arguments)]
+fn compute_cell(
+    engine: &EngineConfig,
+    t: &BenchTarget,
+    jp: &str,
+    jm: &str,
+    rubric: &Option<Rubric>,
+    bench: &Benchmark,
+    case: &BenchmarkCase,
+    ng: u32,
+    samples: u32,
+    prices: &[ModelPriceRow],
+) -> Cell {
+    let mut cell = Cell {
+        cand_scores: Vec::new(),
+        judge_agrees: Vec::new(),
+        cand_passes: 0,
+        case_dim_sums: HashMap::new(),
+        case_judge_cost: 0.0,
+        gen_cost: 0.0,
+        gen_tokens: 0,
+        judge_cost: 0.0,
+        judge_tokens: 0,
+        latencies: Vec::new(),
+        price_warnings: BTreeSet::new(),
+        error_msg: None,
+    };
+    for _ in 0..ng {
+        let gen = match generate(engine, &t.provider, &t.model, t.system_prompt.as_deref(), &case.input, None) {
+            Ok(g) => g,
+            Err(e) => {
+                cell.error_msg = Some(format!("generation error — {e}"));
+                break;
+            }
+        };
+        let (gc, gpriced) =
+            cost_or_book(gen.cost_usd, prices, &t.provider, &t.model, gen.input_tokens, gen.output_tokens);
+        if !gpriced {
+            cell.price_warnings.insert(format!("{}/{}", t.provider, t.model));
+        }
+        cell.gen_cost += gc;
+        cell.gen_tokens += gen.input_tokens.unwrap_or(0) + gen.output_tokens.unwrap_or(0);
+        if let Some(l) = gen.latency_ms {
+            cell.latencies.push(l);
+        }
+        let jr = match judge_output(engine, jp, jm, rubric, bench, case, &gen.output, samples, prices) {
+            Ok(jr) => jr,
+            // Unparseable judge output is not a silent 0.0; stop sampling this cell (and skip the case
+            // if none scored) rather than aborting the whole comparison.
+            Err(e) => {
+                cell.error_msg = Some(format!("judge error — {e}"));
+                break;
+            }
+        };
+        if !jr.judge_priced {
+            cell.price_warnings.insert(format!("{jp}/{jm}"));
+        }
+        cell.judge_cost += jr.cost;
+        cell.judge_tokens += jr.tokens;
+        cell.case_judge_cost += jr.cost;
+        cell.cand_scores.push(jr.overall);
+        cell.judge_agrees.push(jr.agreement);
+        if jr.pass {
+            cell.cand_passes += 1;
+        }
+        for (k, v) in &jr.dimensions {
+            *cell.case_dim_sums.entry(k.clone()).or_insert(0.0) += v;
+        }
+    }
+    cell
+}
 
 /// Round to 3 decimals for compact report JSON.
 fn r3(x: f64) -> f64 {
@@ -32,6 +129,7 @@ pub(crate) fn run_compare(
     targets: &[BenchTarget],
     samples: u32,
     gen_samples: u32,
+    jobs: usize,
 ) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let ng = gen_samples.max(1);
@@ -68,74 +166,34 @@ pub(crate) fn run_compare(
         let mut price_warnings: BTreeSet<String> = BTreeSet::new();
         let mut case_scores: Vec<f64> = Vec::new();
 
-        for (i, case) in cases.iter().enumerate() {
-            // Generate `ng` candidates for this case and judge each; the case score is their mean.
-            let mut cand_scores: Vec<f64> = Vec::new();
-            let mut judge_agrees: Vec<f64> = Vec::new();
-            let mut cand_passes = 0u32;
-            let mut case_dim_sums: HashMap<String, f64> = HashMap::new();
-            let mut case_judge_cost = 0.0_f64;
-            for _ in 0..ng {
-                let gen = match generate(
-                    engine,
-                    &t.provider,
-                    &t.model,
-                    t.system_prompt.as_deref(),
-                    &case.input,
-                    None,
-                ) {
-                    Ok(g) => g,
-                    Err(e) => {
-                        println!("  case {}: generation error — {e}", i + 1);
-                        break;
-                    }
-                };
-                let (gc, gpriced) =
-                    cost_or_book(gen.cost_usd, &prices, &t.provider, &t.model, gen.input_tokens, gen.output_tokens);
-                if !gpriced {
-                    price_warnings.insert(format!("{}/{}", t.provider, t.model));
-                }
-                gen_cost += gc;
-                gen_tokens += gen.input_tokens.unwrap_or(0) + gen.output_tokens.unwrap_or(0);
-                if let Some(l) = gen.latency_ms {
-                    latencies.push(l);
-                }
-                let jr = match judge_output(
-                    engine, &jp, &jm, &rubric, bench, case, &gen.output, samples, &prices,
-                ) {
-                    Ok(jr) => jr,
-                    // Unparseable judge output is no longer a silent 0.0; skip this candidate (and
-                    // the case if none score) rather than aborting the whole comparison.
-                    Err(e) => {
-                        println!("  case {}: judge error — {e}", i + 1);
-                        break;
-                    }
-                };
-                if !jr.judge_priced {
-                    price_warnings.insert(format!("{jp}/{jm}"));
-                }
-                judge_cost += jr.cost;
-                judge_tokens += jr.tokens;
-                case_judge_cost += jr.cost;
-                cand_scores.push(jr.overall);
-                judge_agrees.push(jr.agreement);
-                if jr.pass {
-                    cand_passes += 1;
-                }
-                for (k, v) in &jr.dimensions {
-                    *case_dim_sums.entry(k.clone()).or_insert(0.0) += v;
-                }
+        // Generate + judge every case for this target with up to `jobs` concurrency; fold the cells in
+        // case order so cost/latency/agreement aggregation is identical to the sequential path.
+        let cells: Vec<Cell> = parallel_map(cases.len(), jobs, |i| {
+            compute_cell(engine, t, &jp, &jm, &rubric, bench, &cases[i], ng, samples, &prices)
+        });
+
+        for (i, cell) in cells.into_iter().enumerate() {
+            if let Some(msg) = &cell.error_msg {
+                println!("  case {}: {msg}", i + 1);
             }
-            if cand_scores.is_empty() {
+            price_warnings.extend(cell.price_warnings);
+            // Costs/latency/tokens accrue even for an errored (no-candidate) case — the calls still
+            // burned tokens and $ before the sampling loop broke.
+            gen_cost += cell.gen_cost;
+            gen_tokens += cell.gen_tokens;
+            judge_cost += cell.judge_cost;
+            judge_tokens += cell.judge_tokens;
+            latencies.extend(cell.latencies);
+            if cell.cand_scores.is_empty() {
                 errored += 1;
                 continue;
             }
 
-            let n = cand_scores.len() as f64;
-            let case_score = cand_scores.iter().sum::<f64>() / n;
-            let case_pass = (cand_passes as f64 / n) >= 0.5; // majority of candidates pass
-            let gen_agree = stability(&cand_scores);
-            let judge_agree = judge_agrees.iter().sum::<f64>() / n;
+            let n = cell.cand_scores.len() as f64;
+            let case_score = cell.cand_scores.iter().sum::<f64>() / n;
+            let case_pass = (cell.cand_passes as f64 / n) >= 0.5; // majority of candidates pass
+            let gen_agree = stability(&cell.cand_scores);
+            let judge_agree = cell.judge_agrees.iter().sum::<f64>() / n;
             // Headline agreement: generation stability when sampling, else the judge's own agreement.
             let case_agree = if ng > 1 { gen_agree } else { judge_agree };
 
@@ -148,7 +206,7 @@ pub(crate) fn run_compare(
             judged += 1;
 
             let mut dims_obj = Map::new();
-            for (k, s) in &case_dim_sums {
+            for (k, s) in &cell.case_dim_sums {
                 let dm = s / n;
                 *dim_sums.entry(k.clone()).or_insert(0.0) += dm;
                 dims_obj.insert(k.clone(), json!(r3(dm)));
@@ -161,7 +219,7 @@ pub(crate) fn run_compare(
             case_reports.push(json!({
                 "case": i + 1, "score": r3(case_score), "pass": case_pass,
                 "gen_agreement": r3(gen_agree), "judge_agreement": r3(judge_agree),
-                "n_candidates": cand_scores.len(), "dimensions": Value::Object(dims_obj),
+                "n_candidates": cell.cand_scores.len(), "dimensions": Value::Object(dims_obj),
             }));
             println!(
                 "  case {}: score={:.2} pass={} gen_agree={:.2} judge_agree={:.2} (n_gen={})  {dim_str}",
@@ -170,7 +228,7 @@ pub(crate) fn run_compare(
                 case_pass,
                 gen_agree,
                 judge_agree,
-                cand_scores.len(),
+                cell.cand_scores.len(),
             );
             // Per-case judge verdict → /v1/scores (queryable per case, not just the run aggregate).
             // Best-effort: a transient post failure must not abort a long comparison run.
@@ -179,7 +237,7 @@ pub(crate) fn run_compare(
                 "rubric": format!("{}:{label}#case{}", bench.name, i + 1),
                 "value": r3(case_score), "max": 1.0, "pass": case_pass,
                 "reasoning": dim_str, "scored_by": format!("{jp}/{jm}"),
-                "cost_usd": case_judge_cost,
+                "cost_usd": cell.case_judge_cost,
             });
             let _ = post(cli, http, "/v1/scores", &score);
         }

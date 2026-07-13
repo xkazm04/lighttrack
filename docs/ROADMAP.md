@@ -40,6 +40,10 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
       `response_format:json_schema`, Gemini `responseSchema`) with a schema-less prose fallback; one
       repair re-ask on unparseable output before dropping a sample; typed transient errors retried with
       backoff (429/5xx/timeout); empty completion distinguished from parse failure
+- [x] Bounded concurrency: `lt-runner --jobs N` (default 4) parallelizes bench cases, compare
+      `(target,case)` cells, score events, and calibrate items via `std::thread::scope` (engine stays
+      sync). Ordered aggregation keeps `--jobs 1` byte-identical; the engine's k-sample self-consistency
+      loop is likewise parallelizable and unit-tested against the sequential aggregate
 - [x] `runner` (`lt-runner`): `score` (judge recent events) + `score-text` (ad-hoc); posts to `/v1/scores`;
       Windows `claude.exe` auto-resolution; `--bare` option for cheap judging
 - [x] `api`: `POST/GET /v1/scores`, `GET /v1/events/:id`

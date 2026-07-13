@@ -90,7 +90,7 @@ fn rubric(json: Value) -> Rubric {
 /// failures can be asserted on.
 fn try_judge(r: &Rubric, outputs: &[&str], samples: u32) -> Result<RubricOutcome> {
     let gen = FakeGen::new(outputs);
-    judge_with(&gen, r, "prompt", "fake-model", samples)
+    judge_with(&gen, r, "prompt", "fake-model", samples, 1)
 }
 
 /// Judge canned `outputs` against `r` over `samples`, via the fake generator.
@@ -250,7 +250,39 @@ fn repair_reask_rescues_a_bad_first_response() {
     // First response is unparseable; the one-shot repair returns valid JSON. The sample must score
     // 0.9 and NOT be counted as a parse failure.
     let gen = RepairGen { good: r#"{"x":{"score":0.9}}"#.into() };
-    let out = judge_with(&gen, &r, "prompt", "fake-model", 1).unwrap();
+    let out = judge_with(&gen, &r, "prompt", "fake-model", 1, 1).unwrap();
     assert_eq!(out.parse_failures, 0, "a repaired sample is not a failure");
     assert!((dim_score(&out, "x") - 0.9).abs() < 1e-9, "repaired score {}", dim_score(&out, "x"));
+}
+
+#[test]
+fn concurrent_samples_match_sequential_aggregate() {
+    let r = rubric(serde_json::json!({
+        "name": "t",
+        "threshold": 0.5,
+        "dimensions": [
+            { "key": "a", "description": "", "weight": 2.0 },
+            { "key": "b", "description": "", "weight": 1.0 }
+        ]
+    }));
+    // Distinct per-index outputs so ordering matters; one unparseable sample to exercise the
+    // parse-failure path under concurrency.
+    let outputs = [
+        r#"{"a":{"score":0.9},"b":{"score":0.3}}"#,
+        r#"{"a":{"score":0.6},"b":{"score":0.8}}"#,
+        "garbage no json",
+        r#"{"a":{"score":0.7},"b":{"score":0.5}}"#,
+        r#"{"a":{"score":0.4},"b":{"score":0.6}}"#,
+    ];
+    let seq = judge_with(&FakeGen::new(&outputs), &r, "prompt", "fake-model", 5, 1).unwrap();
+    let par = judge_with(&FakeGen::new(&outputs), &r, "prompt", "fake-model", 5, 4).unwrap();
+    // Bounded parallelism must not change any aggregate: scores, gating, agreement, or accounting.
+    assert_eq!(seq.overall, par.overall, "overall differs under --jobs");
+    assert_eq!(seq.pass, par.pass);
+    assert_eq!(seq.agreement, par.agreement);
+    assert_eq!(seq.parse_failures, par.parse_failures);
+    assert_eq!(seq.samples, par.samples);
+    for d in &seq.dimensions {
+        assert_eq!(d.score, dim_score(&par, &d.key), "dim {} differs", d.key);
+    }
 }

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, DatasetItem, ModelPriceRow, Rubric};
 use lighttrack_engine::{
-    build_eval_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig,
+    build_eval_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig, JudgeOutcome,
 };
 
 use crate::cli::Cli;
@@ -16,7 +16,7 @@ use crate::compare::run_compare;
 use crate::http::{get, post};
 use crate::rubric::run_rubric_benchmark;
 use crate::stats::{annotate_significance, significance_verdict, Summary};
-use crate::util::{add_price_warnings, cost_or_book, join_csv, now_ts, percentiles};
+use crate::util::{add_price_warnings, cost_or_book, join_csv, now_ts, parallel_map, percentiles};
 
 /// Parse a benchmark's `target` field into a comparison matrix. An **array** is unambiguously a
 /// target matrix and must deserialize cleanly — a malformed one is a hard error, not a silent
@@ -36,7 +36,8 @@ pub(crate) fn parse_targets(target: &Value) -> Result<Vec<BenchTarget>> {
 /// Resolve a benchmark's cases (inline dataset, or a referenced stored dataset) and dispatch to the
 /// right mode: comparison (target matrix), rubric (per-dimension), or simple (freeform single score).
 /// Run a benchmark and return its run-level status (`passed` | `regressed` | `no_baseline`), which
-/// `--gate` maps to an exit code. Compare mode returns the aggregate across targets.
+/// `--gate` maps to an exit code. Compare mode returns the aggregate across targets. `jobs` bounds
+/// concurrency across cases (or compare cells).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_benchmark(
     cli: &Cli,
@@ -46,6 +47,7 @@ pub(crate) fn run_benchmark(
     samples: u32,
     gen_samples: u32,
     heal: bool,
+    jobs: usize,
 ) -> Result<String> {
     let bench: Benchmark = get(cli, http, &format!("/v1/benchmarks/{benchmark_id}"))?;
 
@@ -67,21 +69,23 @@ pub(crate) fn run_benchmark(
 
     let targets = parse_targets(&bench.target)?;
     if !targets.is_empty() {
-        return run_compare(cli, http, engine, &bench, &cases, &targets, samples, gen_samples);
+        return run_compare(cli, http, engine, &bench, &cases, &targets, samples, gen_samples, jobs);
     }
     if let Some(rid) = bench.rubric_id.clone() {
-        return run_rubric_benchmark(cli, http, engine, &bench, &cases, &rid, samples, heal);
+        return run_rubric_benchmark(cli, http, engine, &bench, &cases, &rid, samples, heal, jobs);
     }
-    run_simple(cli, http, engine, &bench, &cases)
+    run_simple(cli, http, engine, &bench, &cases, jobs)
 }
 
-/// Simple mode: judge each provided output with a freeform rubric and a single overall score.
+/// Simple mode: judge each provided output with a freeform rubric and a single overall score. Cases
+/// are judged with up to `jobs` concurrency; printing/posting/aggregation stay in case order.
 fn run_simple(
     cli: &Cli,
     http: &reqwest::blocking::Client,
     engine: &EngineConfig,
     bench: &Benchmark,
     cases: &[BenchmarkCase],
+    jobs: usize,
 ) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
@@ -95,21 +99,32 @@ fn run_simple(
             .unwrap_or_else(|| "none".into())
     );
 
+    // Judge each case with output in parallel; `None` marks a skipped (no-output) case so the
+    // sequential fold below prints/aggregates exactly as the old in-order loop did.
+    let judged: Vec<Result<Option<JudgeOutcome>>> = parallel_map(cases.len(), jobs, |i| {
+        match &cases[i].output {
+            None => Ok(None),
+            Some(output) => {
+                let prompt =
+                    build_eval_prompt(&bench.rubric, &cases[i].input, cases[i].expected.as_deref(), output);
+                run_judge(engine, &jp, &jm, &prompt).context("judge failed").map(Some)
+            }
+        }
+    });
+
     let (mut sum, mut n, mut passes, mut cost) = (0.0_f64, 0u32, 0u32, 0.0_f64);
     let mut latencies: Vec<u64> = Vec::new();
     let mut total_tokens: u64 = 0;
     let mut price_warnings: BTreeSet<String> = BTreeSet::new();
     let mut scores: Vec<f64> = Vec::new();
-    for (i, case) in cases.iter().enumerate() {
-        let output = match &case.output {
+    for (i, outcome) in judged.into_iter().enumerate() {
+        let outcome = match outcome? {
             Some(o) => o,
             None => {
                 println!("  case {}: skipped (no output)", i + 1);
                 continue;
             }
         };
-        let prompt = build_eval_prompt(&bench.rubric, &case.input, case.expected.as_deref(), output);
-        let outcome = run_judge(engine, &jp, &jm, &prompt).context("judge failed")?;
         let norm = if outcome.verdict.max > 0.0 {
             outcome.verdict.score / outcome.verdict.max
         } else {
@@ -216,9 +231,11 @@ pub(crate) fn judge_output(
     prices: &[ModelPriceRow],
 ) -> Result<JudgeResult> {
     if let Some(r) = rubric {
+        // jobs=1: compare parallelizes across (target, case) cells, so per-cell sample judging stays
+        // sequential to keep total concurrency bounded at --jobs.
         let o = run_rubric_judge(
             engine, judge_provider, judge_model, r, &case.input,
-            case.expected.as_deref(), output, samples,
+            case.expected.as_deref(), output, samples, 1,
         )
         .context("rubric judge failed")?;
         let (jc, priced) =

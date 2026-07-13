@@ -15,10 +15,12 @@ use lighttrack_engine::{build_judge_prompt, parse_judge_spec, run_judge, EngineC
 
 use crate::cli::Cli;
 use crate::http::{get, post};
-use crate::util::{short, value_to_text};
+use crate::util::{parallel_map, short, value_to_text};
 
 /// Online scoring: judge recent unscored events (with input+output) for a project. With
-/// `interval > 0`, loops forever, scoring newly-arrived events each cycle.
+/// `interval > 0`, loops forever, scoring newly-arrived events each cycle. `jobs` bounds how many
+/// events are judged concurrently.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn score_recent(
     cli: &Cli,
     http: &reqwest::blocking::Client,
@@ -27,12 +29,13 @@ pub(crate) fn score_recent(
     project: Option<&str>,
     limit: usize,
     interval: u64,
+    jobs: usize,
 ) -> Result<()> {
     if interval > 0 {
         println!("online scoring every {interval}s (judge={}, limit={limit})", engine.model);
     }
     loop {
-        score_once(cli, http, engine, rubric, project, limit)?;
+        score_once(cli, http, engine, rubric, project, limit, jobs)?;
         if interval == 0 {
             break;
         }
@@ -41,8 +44,9 @@ pub(crate) fn score_recent(
     Ok(())
 }
 
-/// One scoring pass: judge recent events that carry content and aren't already scored. Returns the
-/// number newly scored.
+/// One scoring pass: judge recent events that carry content and aren't already scored. Eligible
+/// events are judged with up to `jobs` concurrency; results are posted/printed in fetch order so the
+/// output is deterministic (identical at any `jobs`). Returns the number newly scored.
 fn score_once(
     cli: &Cli,
     http: &reqwest::blocking::Client,
@@ -50,6 +54,7 @@ fn score_once(
     rubric: &str,
     project: Option<&str>,
     limit: usize,
+    jobs: usize,
 ) -> Result<usize> {
     let mut epath = format!("/v1/events?limit={limit}");
     let mut spath = "/v1/scores?limit=1000".to_string();
@@ -66,26 +71,34 @@ fn score_once(
         .collect();
 
     let (jp, jm) = parse_judge_spec(&engine.model);
-    let (mut scored, mut skipped) = (0usize, 0usize);
+    // Partition first (cheap, in order): eligible events keep their (event, input, output); the rest
+    // are skipped. Only the eligible set is judged — and that judging is what we parallelize.
+    let total = events.len();
+    let mut eligible: Vec<(&LlmEvent, String, String)> = Vec::new();
+    let mut skipped = 0usize;
     for ev in &events {
-        if scored_ids.contains(&ev.id) {
-            skipped += 1;
-            continue;
+        match (scored_ids.contains(&ev.id), ev.input.as_ref(), ev.output.as_ref()) {
+            (false, Some(i), Some(o)) => eligible.push((ev, value_to_text(i), value_to_text(o))),
+            _ => skipped += 1,
         }
-        let (input, output) = match (ev.input.as_ref(), ev.output.as_ref()) {
-            (Some(i), Some(o)) => (value_to_text(i), value_to_text(o)),
-            _ => {
-                skipped += 1;
-                continue;
-            }
-        };
-        print!("  - judging {} ({})... ", short(&ev.id), ev.model);
-        let outcome = judge_one(engine, &jp, &jm, rubric, &input, &output)?;
+    }
+
+    let judged: Vec<Result<JudgeOutcome>> = parallel_map(eligible.len(), jobs, |i| {
+        let (_, input, output) = &eligible[i];
+        judge_one(engine, &jp, &jm, rubric, input, output)
+    });
+
+    let mut scored = 0usize;
+    for (i, outcome) in judged.into_iter().enumerate() {
+        let (ev, _, _) = &eligible[i];
+        let outcome = outcome?;
         let score = build_score(&ev.project_id, Some(&ev.id), rubric, &outcome);
         post(cli, http, "/v1/scores", &score)?;
         scored += 1;
         println!(
-            "score={:.2}/{:.0} pass={} cost={} :: {}",
+            "  - {} ({}) score={:.2}/{:.0} pass={} cost={} :: {}",
+            short(&ev.id),
+            ev.model,
             outcome.verdict.score,
             outcome.verdict.max,
             outcome.verdict.pass,
@@ -93,10 +106,7 @@ fn score_once(
             outcome.verdict.reasoning
         );
     }
-    println!(
-        "scored {scored}, skipped {skipped} (already-scored or no content) of {} fetched",
-        events.len()
-    );
+    println!("scored {scored}, skipped {skipped} (already-scored or no content) of {total} fetched");
     Ok(scored)
 }
 

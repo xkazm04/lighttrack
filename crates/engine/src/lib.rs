@@ -12,6 +12,7 @@
 mod claude;
 mod judge;
 mod parse;
+mod pool;
 mod prompts;
 mod providers;
 mod retry;

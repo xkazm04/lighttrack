@@ -44,7 +44,9 @@ fn main() -> Result<()> {
             project,
             limit,
             interval,
-        } => score::score_recent(&cli, &http, &engine, rubric, project.as_deref(), *limit, *interval),
+        } => score::score_recent(
+            &cli, &http, &engine, rubric, project.as_deref(), *limit, *interval, cli.jobs,
+        ),
         Cmd::ScoreText {
             rubric,
             input,
@@ -58,8 +60,9 @@ fn main() -> Result<()> {
             heal,
             gate,
         } => {
-            let status =
-                bench::run_benchmark(&cli, &http, &engine, benchmark, *samples, *gen_samples, *heal)?;
+            let status = bench::run_benchmark(
+                &cli, &http, &engine, benchmark, *samples, *gen_samples, *heal, cli.jobs,
+            )?;
             if *gate {
                 let code = gate::gate_exit_code(&status);
                 if code != 0 {
@@ -119,6 +122,7 @@ fn main() -> Result<()> {
             *kappa_bar,
             *samples,
             report.as_deref(),
+            cli.jobs,
         ),
     }
 }

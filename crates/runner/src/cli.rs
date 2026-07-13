@@ -19,6 +19,11 @@ pub(crate) struct Cli {
     /// Pass --bare to claude (cheap: skips ~40k token context load, but needs ANTHROPIC_API_KEY).
     #[arg(long)]
     pub(crate) bare: bool,
+    /// Max concurrent judge/generation calls for `bench` / `compare` / `score` / `calibrate`. The
+    /// judge is unbudgeted, so bounded parallelism just cuts wall-clock; `1` = fully sequential and
+    /// byte-identical output. Defaults to 4.
+    #[arg(long, default_value_t = 4)]
+    pub(crate) jobs: usize,
     #[command(subcommand)]
     pub(crate) cmd: Cmd,
 }

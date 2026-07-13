@@ -1,6 +1,8 @@
 //! Small shared helpers: percentiles, dimension means, token-priced cost, claude resolution.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
@@ -28,6 +30,44 @@ pub(crate) fn add_price_warnings(report: &mut Value, warnings: &BTreeSet<String>
 /// stamp `finished_at` with this so a recorded run's duration is knowable and string-orderable.
 pub(crate) fn now_ts() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
+}
+
+/// Apply `f` to each `0..n` with at most `jobs` scoped worker threads, returning results in index
+/// order. The heavy work (LLM generation/judging) is blocking, so a bounded thread pool cuts a
+/// benchmark/compare/score/calibrate run's wall-clock with zero effect on aggregation: results come
+/// back ordered, so `jobs == 1` and `jobs == N` are byte-identical. Side effects (printing, POSTing
+/// scores) must stay in the caller's sequential fold, never inside `f`.
+pub(crate) fn parallel_map<T, F>(n: usize, jobs: usize, f: F) -> Vec<T>
+where
+    F: Fn(usize) -> T + Sync,
+    T: Send,
+{
+    let jobs = jobs.clamp(1, n.max(1));
+    if jobs == 1 || n <= 1 {
+        return (0..n).map(f).collect();
+    }
+    let next = AtomicUsize::new(0);
+    let slots: Mutex<Vec<Option<T>>> = Mutex::new((0..n).map(|_| None).collect());
+    std::thread::scope(|scope| {
+        for _ in 0..jobs {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= n {
+                    break;
+                }
+                let v = f(i);
+                if let Ok(mut guard) = slots.lock() {
+                    guard[i] = Some(v);
+                }
+            });
+        }
+    });
+    slots
+        .into_inner()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|o| o.expect("every index is assigned exactly once"))
+        .collect()
 }
 
 /// p50/p95 of a latency sample (nearest-rank). Returns (None, None) if empty.
@@ -204,6 +244,16 @@ mod tests {
         assert_eq!(aggregate_status(&["passed", "no_baseline"]), "passed");
         assert_eq!(aggregate_status(&["no_baseline", "no_baseline"]), "no_baseline");
         assert_eq!(aggregate_status(&[]), "no_baseline");
+    }
+
+    #[test]
+    fn parallel_map_preserves_order_and_matches_sequential() {
+        let seq = parallel_map(25, 1, |i| i * 3);
+        let par = parallel_map(25, 8, |i| i * 3);
+        let expected: Vec<usize> = (0..25).map(|i| i * 3).collect();
+        assert_eq!(seq, expected);
+        assert_eq!(par, expected, "parallel result must match sequential order byte-for-byte");
+        assert_eq!(parallel_map(0, 4, |i: usize| i), Vec::<usize>::new());
     }
 
     #[test]

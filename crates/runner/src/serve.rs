@@ -104,13 +104,15 @@ fn process_job(
             let gen_samples =
                 job.payload.get("gen_samples").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
             let heal = job.payload.get("heal").and_then(|v| v.as_bool()).unwrap_or(false);
+            // Bounded parallelism for queued bench jobs; defaults to the CLI's --jobs (4).
+            let jobs = job.payload.get("jobs").and_then(|v| v.as_u64()).unwrap_or(cli.jobs as u64) as usize;
             let _ = post(
                 cli,
                 http,
                 &format!("/v1/jobs/{}/progress", job.id),
                 &json!({ "progress": format!("running benchmark {bid}") }),
             );
-            run_benchmark(cli, http, engine, bid, samples, gen_samples, heal)?;
+            run_benchmark(cli, http, engine, bid, samples, gen_samples, heal, jobs)?;
             Ok(json!({ "benchmark_id": bid, "status": "completed" }))
         }
         other => Err(anyhow::anyhow!("unknown job type: {other}")),

@@ -6,14 +6,24 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use lighttrack_core::{Benchmark, BenchmarkCase, ModelPriceRow, Rubric};
-use lighttrack_engine::{parse_judge_spec, run_rubric_judge, run_text, EngineConfig};
+use lighttrack_engine::{parse_judge_spec, run_rubric_judge, run_text, EngineConfig, RubricOutcome};
 
 use std::collections::BTreeSet;
 
 use crate::cli::Cli;
 use crate::http::{get, post};
 use crate::stats::{annotate_significance, significance_verdict, Summary};
-use crate::util::{add_price_warnings, cost_or_book, dim_mean, join_csv, now_ts, percentiles};
+use crate::util::{
+    add_price_warnings, cost_or_book, dim_mean, join_csv, now_ts, parallel_map, percentiles,
+};
+
+/// One case's judged result: no candidate output, a judged rubric outcome, or an unparseable judge
+/// response (carried as a message for the in-order skip log).
+enum CaseResult {
+    NoOutput,
+    Judged(Box<RubricOutcome>),
+    Errored(String),
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_rubric_benchmark(
@@ -25,6 +35,7 @@ pub(crate) fn run_rubric_benchmark(
     rubric_id: &str,
     samples: u32,
     heal: bool,
+    jobs: usize,
 ) -> Result<String> {
     let rubric: Rubric = get(cli, http, &format!("/v1/rubrics/{rubric_id}"))?;
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
@@ -48,25 +59,33 @@ pub(crate) fn run_rubric_benchmark(
     let (mut errored, mut sample_failures) = (0u32, 0u32);
     let mut price_warnings: BTreeSet<String> = BTreeSet::new();
 
-    for (i, case) in cases.iter().enumerate() {
-        let output = match &case.output {
-            Some(o) => o,
-            None => {
+    // Judge every case with up to `jobs` concurrency (jobs=1 for the engine's per-case sample loop, so
+    // total concurrency stays bounded at --jobs). Fold the outcomes in case order so the printed log,
+    // posted scores, and scorecard are byte-identical at any `jobs`.
+    let results: Vec<CaseResult> = parallel_map(cases.len(), jobs, |i| match &cases[i].output {
+        None => CaseResult::NoOutput,
+        Some(output) => match run_rubric_judge(
+            engine, &jp, &jm, &rubric, &cases[i].input, cases[i].expected.as_deref(), output, samples, 1,
+        ) {
+            Ok(o) => CaseResult::Judged(Box::new(o)),
+            Err(e) => CaseResult::Errored(e.to_string()),
+        },
+    });
+
+    for (i, result) in results.into_iter().enumerate() {
+        let o = match result {
+            CaseResult::NoOutput => {
                 println!("  case {} skipped (no output)", i + 1);
                 continue;
             }
-        };
-        let o = match run_rubric_judge(
-            engine, &jp, &jm, &rubric, &case.input, case.expected.as_deref(), output, samples,
-        ) {
-            Ok(o) => o,
             // Don't abort the whole run (or record a phantom 0.0) on one garbage judge response —
             // skip the case loudly so the scorecard's denominator stays honest.
-            Err(e) => {
+            CaseResult::Errored(e) => {
                 eprintln!("  case {} skipped — judge output unparseable: {e}", i + 1);
                 errored += 1;
                 continue;
             }
+            CaseResult::Judged(o) => *o,
         };
         judged += 1;
         if o.parse_failures > 0 {
