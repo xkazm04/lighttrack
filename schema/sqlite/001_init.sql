@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS limit_rules (
   window      TEXT NOT NULL,   -- hour | day | month
   threshold   REAL NOT NULL,
   action      TEXT NOT NULL,   -- alert | throttle | block
-  enabled     INTEGER NOT NULL DEFAULT 1
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  warn_at     REAL             -- optional soft-warning fraction in (0,1); NULL = no pre-warning
 );
 
 CREATE TABLE IF NOT EXISTS scores (

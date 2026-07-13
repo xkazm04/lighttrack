@@ -81,6 +81,7 @@ fn batch_admission_counts_prior_items_no_cap_bypass() {
         threshold: 3.0,
         action: LimitAction::Block,
         enabled: true,
+        warn_at: None,
     })
     .unwrap();
 
@@ -449,6 +450,7 @@ fn projects_keys_limits_usage() {
         threshold: 0.005,
         action: LimitAction::Alert,
         enabled: true,
+        warn_at: None,
     };
     s.create_limit_rule(&rule).unwrap();
     assert_eq!(s.list_limit_rules("p1", true).unwrap().len(), 1);
@@ -481,6 +483,7 @@ fn insert_event_checked_enforces_caps() {
         threshold: 2.0,
         action: LimitAction::Block,
         enabled: true,
+        warn_at: None,
     })
     .unwrap();
     let blocked = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
@@ -508,6 +511,7 @@ fn limit_rule_update_delete_and_toggle() {
         threshold: 2.0,
         action: LimitAction::Block,
         enabled: true,
+        warn_at: None,
     };
     s.create_limit_rule(&rule).unwrap();
 
@@ -537,6 +541,7 @@ fn limit_rule_update_delete_and_toggle() {
         threshold: 1.0,
         action: LimitAction::Block,
         enabled: false,
+        warn_at: None,
     };
     s.create_limit_rule(&block).unwrap();
     let a = s.insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
@@ -558,6 +563,32 @@ fn limit_rule_update_delete_and_toggle() {
 }
 
 #[test]
+fn warn_at_round_trips_and_admission_reports_warning() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    s.create_limit_rule(&LimitRule {
+        id: "r-warn".into(),
+        project_id: "p1".into(),
+        metric: LimitMetric::CostUsd,
+        window: LimitWindow::Hour,
+        threshold: 1.0,
+        action: LimitAction::Alert,
+        enabled: true,
+        warn_at: Some(0.8),
+    })
+    .unwrap();
+    // warn_at persists through the store.
+    assert_eq!(s.get_limit_rule("r-warn").unwrap().unwrap().warn_at, Some(0.8));
+    assert_eq!(s.list_limit_rules("p1", true).unwrap()[0].warn_at, Some(0.8));
+
+    // An event putting usage at 0.85 (>= warn_at 0.8, < threshold 1.0) reports warning, not breach,
+    // and is admitted (warnings never enforce).
+    let a = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 10, 5, 0.85)).unwrap();
+    assert!(a.admitted);
+    let st = &a.statuses[0];
+    assert!(st.warning && !st.breached, "crossing warn_at warns without breaching");
+}
+
+#[test]
 fn insert_event_checked_alert_never_blocks() {
     let s = SqliteStore::open_in_memory().unwrap();
     s.create_limit_rule(&LimitRule {
@@ -568,6 +599,7 @@ fn insert_event_checked_alert_never_blocks() {
         threshold: 0.001,
         action: LimitAction::Alert,
         enabled: true,
+        warn_at: None,
     })
     .unwrap();
     // Way over the Alert threshold, but Alert is observe-only: admitted + recorded, breach reported.

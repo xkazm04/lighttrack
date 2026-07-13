@@ -163,5 +163,8 @@ fn limit_rule_from_row(row: &PgRow) -> Result<LimitRule> {
         threshold: row.try_get(4).map_err(pgerr)?,
         action: parse_enum(&action),
         enabled: row.try_get::<i64, _>(6).map_err(pgerr)? != 0,
+        // warn_at / scope: not yet persisted by this backend (handoff) — defaulted so the shared
+        // LimitRule constructs; soft-warnings and scoped caps fall back to their Store trait defaults.
+        warn_at: None,
     })
 }

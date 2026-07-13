@@ -183,6 +183,26 @@ impl Alerter {
         );
     }
 
+    /// Fire best-effort **soft-warning** alerts for rules that crossed their `warn_at` fraction
+    /// without breaching. Deduped on a key *distinct* from the breach key (`warn:…` vs `…`) and its
+    /// own cooldown, so an approaching-limit warning never suppresses the later breach alert (or vice
+    /// versa). Warnings are observe-only — they never enforce.
+    pub(crate) fn notify_warnings(self: &Arc<Self>, warnings: &[LimitStatus]) {
+        if !self.enabled() {
+            return;
+        }
+        let due: Vec<LimitStatus> = warnings
+            .iter()
+            .filter(|w| w.warning && self.should_send_key(&self.warn_key(w)))
+            .cloned()
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        let me = Arc::clone(self);
+        tokio::spawn(async move { channels::deliver_warnings(&me.config, &me.http, &due).await });
+    }
+
     /// Pre-emptive forecast alerts (budget breach / margin erosion), deduped like breaches.
     pub(crate) fn notify_forecast(self: &Arc<Self>, alerts: &[ForecastAlert]) {
         if !self.enabled() {
@@ -339,6 +359,12 @@ impl Alerter {
         format!("{}:{:?}:{:?}", b.project_id, b.metric, b.window)
     }
 
+    /// Cooldown key for a soft-warning — the breach key prefixed with `warn:` so the warning and the
+    /// eventual breach for the *same* rule track independent cooldowns.
+    fn warn_key(&self, b: &LimitStatus) -> String {
+        format!("warn:{}", self.dedup_key(b))
+    }
+
     /// Cooldown gate keyed by an arbitrary dedup string (records the send time on success).
     fn should_send_key(&self, key: &str) -> bool {
         let now = Instant::now();
@@ -423,7 +449,37 @@ mod tests {
             threshold: 1.0,
             breached: true,
             ratio: 2.0,
+            warn_at: None,
+            warning: false,
         }
+    }
+
+    fn warning(project: &str) -> LimitStatus {
+        LimitStatus {
+            rule_id: "r1".into(),
+            project_id: project.into(),
+            metric: LimitMetric::CostUsd,
+            window: LimitWindow::Hour,
+            action: LimitAction::Alert,
+            current: 0.85,
+            threshold: 1.0,
+            breached: false,
+            ratio: 0.85,
+            warn_at: Some(0.8),
+            warning: true,
+        }
+    }
+
+    #[test]
+    fn warning_and_breach_have_independent_cooldowns() {
+        let a = alerter(3600);
+        let w = warning("p1");
+        let b = breach("p1");
+        // Same rule: the warning key and the breach key don't collide, so each sends once and the
+        // warning never suppresses the breach.
+        assert!(a.should_send_key(&a.warn_key(&w)), "warning sends first time");
+        assert!(!a.should_send_key(&a.warn_key(&w)), "warning suppressed within cooldown");
+        assert!(a.should_send(&b), "breach still sends despite the earlier warning");
     }
 
     #[test]

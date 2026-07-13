@@ -79,6 +79,16 @@ pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) 
     };
     // Best-effort, off the request path: deliver breaches to webhook/ntfy (deduped per cooldown).
     st.alerts.notify(&breached, &rej_counts);
+    // Soft-warning tier: for an *admitted* event, alert on any rule that crossed its warn_at without
+    // breaching — the operator's early heads-up before the cap actually bites. Only when admitted, so
+    // the usage the warning reports genuinely includes a recorded event (a rejected event isn't stored).
+    if admission.admitted {
+        let warnings: Vec<LimitStatus> =
+            admission.statuses.iter().filter(|s| s.warning).cloned().collect();
+        if !warnings.is_empty() {
+            st.alerts.notify_warnings(&warnings);
+        }
+    }
     // Best-effort error-spike detection: only admitted non-success calls count toward the threshold.
     if admission.admitted && ev.status != Status::Success {
         st.alerts.record_error(ev);

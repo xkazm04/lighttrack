@@ -136,6 +136,7 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
         threshold: 0.0015,
         action: LimitAction::Alert,
         enabled: true,
+        warn_at: None,
     };
     store.create_limit_rule(&rule)?;
     let enabled = store.list_limit_rules(pid, true)?;
@@ -322,6 +323,7 @@ fn admission(store: &dyn Store) -> Result<()> {
         threshold: 1.0,
         action: LimitAction::Alert,
         enabled: true,
+        warn_at: None,
     };
     store.create_limit_rule(&alert)?;
     let alerted = store.insert_event_checked(&sample_event(&pid, "claude-haiku-4-5", 10, 5, 1.0))?;
@@ -338,6 +340,7 @@ fn admission(store: &dyn Store) -> Result<()> {
         threshold: 2.5,
         action: LimitAction::Block,
         enabled: true,
+        warn_at: None,
     };
     store.create_limit_rule(&block)?;
     let blocked = store.insert_event_checked(&sample_event(&pid, "claude-haiku-4-5", 10, 5, 1.0))?;

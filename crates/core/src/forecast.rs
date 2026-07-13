@@ -252,6 +252,7 @@ mod tests {
             threshold,
             action: LimitAction::Alert,
             enabled: true,
+            warn_at: None,
         }
     }
 

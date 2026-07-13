@@ -84,6 +84,12 @@ pub struct LimitRule {
     pub action: LimitAction,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Optional soft-warning tier: a fraction of the threshold in `(0, 1)`. When rolling usage
+    /// reaches `ratio >= warn_at` *without* breaching, a distinct `limit_warning` alert fires (its
+    /// own cooldown) so the operator hears about an approaching cap before the 429. `None` = no
+    /// pre-warning (old rules deserialize to this, unchanged). Never enforces.
+    #[serde(default)]
+    pub warn_at: Option<f64>,
 }
 
 fn default_true() -> bool {
@@ -103,6 +109,13 @@ pub struct LimitStatus {
     pub breached: bool,
     /// Fraction of the threshold used (1.0 == at limit). Useful for "approaching limit" warnings.
     pub ratio: f64,
+    /// The rule's configured soft-warning fraction, echoed for the status surface (`None` = none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warn_at: Option<f64>,
+    /// In the soft-warning tier: at/over `warn_at` but not yet breached. Drives the "warning" badge
+    /// on the status surface and the `limit_warning` alert. Always `false` when `warn_at` is unset.
+    #[serde(default)]
+    pub warning: bool,
 }
 
 impl LimitStatus {
@@ -125,6 +138,13 @@ impl LimitRule {
                 self.threshold
             ));
         }
+        if let Some(w) = self.warn_at {
+            if !(w.is_finite() && w > 0.0 && w < 1.0) {
+                return Err(format!(
+                    "warn_at must be a fraction strictly between 0 and 1 (got {w})"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -136,6 +156,10 @@ impl LimitRule {
         } else {
             f64::INFINITY
         };
+        let breached = current >= self.threshold;
+        // Warning tier: approaching the cap (ratio past warn_at) but not yet breached. A breached
+        // rule is never "warning" — it has already crossed into enforcement/breach alerting.
+        let warning = !breached && self.warn_at.is_some_and(|w| ratio >= w);
         LimitStatus {
             rule_id: self.id.clone(),
             project_id: self.project_id.clone(),
@@ -144,8 +168,10 @@ impl LimitRule {
             action: self.action,
             current,
             threshold: self.threshold,
-            breached: current >= self.threshold,
+            breached,
             ratio,
+            warn_at: self.warn_at,
+            warning,
         }
     }
 }
@@ -163,7 +189,36 @@ mod tests {
             threshold: 10.0,
             action: LimitAction::Alert,
             enabled: true,
+            warn_at: None,
         }
+    }
+
+    #[test]
+    fn warn_at_sets_warning_below_breach() {
+        let mut r = rule();
+        r.warn_at = Some(0.8);
+        // Below warn_at: neither warning nor breached.
+        let s = r.evaluate(7.0);
+        assert!(!s.warning && !s.breached);
+        // At/over warn_at, under threshold: warning, not breached.
+        let s = r.evaluate(8.5);
+        assert!(s.warning && !s.breached, "crossing warn_at warns without breaching");
+        // At threshold: breached, and warning is suppressed (already past the cap).
+        let s = r.evaluate(10.0);
+        assert!(s.breached && !s.warning);
+    }
+
+    #[test]
+    fn validate_rejects_bad_warn_at() {
+        let mut r = rule();
+        r.warn_at = Some(1.0);
+        assert!(r.validate().is_err(), "warn_at must be < 1");
+        r.warn_at = Some(0.0);
+        assert!(r.validate().is_err(), "warn_at must be > 0");
+        r.warn_at = Some(f64::NAN);
+        assert!(r.validate().is_err());
+        r.warn_at = Some(0.8);
+        assert!(r.validate().is_ok());
     }
 
     #[test]

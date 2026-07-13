@@ -38,5 +38,8 @@ fn limit_from(m: &Fields) -> Result<LimitRule> {
         threshold: ff64(m, "threshold").unwrap_or(0.0),
         action: parse_enum(&fstr(m, "action").unwrap_or_default()),
         enabled: fbool(m, "enabled"),
+        // warn_at / scope: not yet persisted by this backend (handoff) — defaulted so the shared
+        // LimitRule constructs; soft-warnings and scoped caps fall back to their Store trait defaults.
+        warn_at: None,
     })
 }

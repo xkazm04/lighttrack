@@ -91,6 +91,12 @@ impl Store for SqliteStore {
                     return Err(e.into());
                 }
             }
+            // Additive migration for limit rules created before the soft-warning tier existed.
+            if let Err(e) = c.execute("ALTER TABLE limit_rules ADD COLUMN warn_at REAL", []) {
+                if !e.to_string().contains("duplicate column name") {
+                    return Err(e.into());
+                }
+            }
             Ok(())
         })
     }

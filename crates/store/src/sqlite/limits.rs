@@ -12,12 +12,13 @@ use crate::codec::{enum_to_str, parse_enum};
 use crate::Result;
 
 /// The columns a rule row exposes, in the order [`map_limit`] reads them.
-const COLS: &str = "id, project_id, metric, window, threshold, action, enabled";
+const COLS: &str = "id, project_id, metric, window, threshold, action, enabled, warn_at";
 
 pub(super) fn create(conn: &Connection, r: &LimitRule) -> Result<()> {
     conn.execute(
-        "INSERT INTO limit_rules (id, project_id, metric, window, threshold, action, enabled) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO limit_rules \
+         (id, project_id, metric, window, threshold, action, enabled, warn_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
             r.id,
             r.project_id,
@@ -26,6 +27,7 @@ pub(super) fn create(conn: &Connection, r: &LimitRule) -> Result<()> {
             r.threshold,
             enum_to_str(&r.action)?,
             r.enabled as i64,
+            r.warn_at,
         ],
     )?;
     Ok(())
@@ -54,7 +56,8 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LimitRule>> {
 /// whether a row matched.
 pub(super) fn update(conn: &Connection, r: &LimitRule) -> Result<bool> {
     let n = conn.execute(
-        "UPDATE limit_rules SET metric = ?2, window = ?3, threshold = ?4, action = ?5, enabled = ?6 \
+        "UPDATE limit_rules \
+         SET metric = ?2, window = ?3, threshold = ?4, action = ?5, enabled = ?6, warn_at = ?7 \
          WHERE id = ?1",
         params![
             r.id,
@@ -63,6 +66,7 @@ pub(super) fn update(conn: &Connection, r: &LimitRule) -> Result<bool> {
             r.threshold,
             enum_to_str(&r.action)?,
             r.enabled as i64,
+            r.warn_at,
         ],
     )?;
     Ok(n > 0)
@@ -82,5 +86,6 @@ fn map_limit(row: &Row) -> rusqlite::Result<LimitRule> {
         threshold: row.get(4)?,
         action: parse_enum::<LimitAction>(&row.get::<_, String>(5)?),
         enabled: row.get::<_, i64>(6)? != 0,
+        warn_at: row.get(7)?,
     })
 }

@@ -56,6 +56,9 @@ pub(crate) struct CreateLimitReq {
     /// silently ignoring a client that asked for a rule created disabled.
     #[serde(default = "default_true")]
     enabled: bool,
+    /// Optional soft-warning fraction in (0,1) — see [`LimitRule::warn_at`].
+    #[serde(default)]
+    warn_at: Option<f64>,
 }
 
 fn default_true() -> bool {
@@ -84,6 +87,7 @@ pub(crate) async fn create_limit(
         threshold: req.threshold,
         action: req.action,
         enabled: req.enabled,
+        warn_at: req.warn_at,
     };
     rule.validate().map_err(ApiError::bad_request)?;
     let store = st.store.clone();
@@ -103,6 +107,8 @@ pub(crate) struct UpdateLimitReq {
     action: LimitAction,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default)]
+    warn_at: Option<f64>,
 }
 
 pub(crate) async fn update_limit(
@@ -128,6 +134,7 @@ pub(crate) async fn update_limit(
         threshold: req.threshold,
         action: req.action,
         enabled: req.enabled,
+        warn_at: req.warn_at,
     };
     rule.validate().map_err(ApiError::bad_request)?;
     let store = st.store.clone();

@@ -25,6 +25,9 @@ pub(crate) fn status(v: &Value) -> Option<String> {
         let threshold = f(st, "threshold");
         let ratio = f(st, "ratio");
         let breached = st.get("breached").and_then(Value::as_bool).unwrap_or(false);
+        // Prefer the rule's explicit soft-warning flag; fall back to the 0.8 heuristic for rules
+        // that configured no warn_at.
+        let warning = st.get("warning").and_then(Value::as_bool).unwrap_or(false);
         let (used, thr) = if metric == "cost_usd" {
             (money(current), money(threshold))
         } else {
@@ -32,8 +35,8 @@ pub(crate) fn status(v: &Value) -> Option<String> {
         };
         let badge = if breached {
             "❌ over"
-        } else if ratio >= 0.8 {
-            "⚠️ near"
+        } else if warning || ratio >= 0.8 {
+            "⚠️ warning"
         } else {
             "✅ ok"
         };
@@ -95,6 +98,7 @@ pub(crate) fn list(v: &Value) -> Option<String> {
         ("Metric", Align::Left),
         ("Window", Align::Left),
         ("Threshold", Align::Right),
+        ("Warn at", Align::Right),
         ("Action", Align::Left),
         ("Enabled", Align::Left),
     ]);
@@ -106,11 +110,18 @@ pub(crate) fn list(v: &Value) -> Option<String> {
         } else {
             commafy(threshold as u64)
         };
+        // warn_at is an optional fraction of the threshold; show it as a percentage or an em dash.
+        let warn = r
+            .get("warn_at")
+            .and_then(Value::as_f64)
+            .map(|w| pct(w))
+            .unwrap_or_else(|| "—".to_string());
         let enabled = r.get("enabled").and_then(Value::as_bool).unwrap_or(true);
         t.row(vec![
             metric.to_string(),
             s(r, "window").to_string(),
             thr,
+            warn,
             s(r, "action").to_string(),
             if enabled { "✅".into() } else { "—".into() },
         ]);

@@ -58,6 +58,19 @@ pub(super) async fn deliver_breaches(
     }
 }
 
+/// Deliver soft-warning alerts: a rule is approaching its cap (`ratio >= warn_at`) but hasn't
+/// breached. A distinct event type (`limit_warning`) and message so a receiver can route it apart
+/// from the hard `limit_breach`.
+pub(super) async fn deliver_warnings(cfg: &AlertConfig, http: &Client, warnings: &[LimitStatus]) {
+    for w in warnings {
+        let msg = warning_message(w);
+        post_webhook(cfg, http, "limit_warning", &msg, json!({ "warning": w })).await;
+        post_ntfy(cfg, http, "LightTrack limit warning", &msg).await;
+        post_resend(cfg, http, &format!("LightTrack: approaching limit in '{}'", w.project_id), &msg)
+            .await;
+    }
+}
+
 pub(super) async fn deliver_forecast(cfg: &AlertConfig, http: &Client, alerts: &[ForecastAlert]) {
     for a in alerts {
         post_webhook(cfg, http, "forecast_alert", &a.message, json!({ "forecast": a })).await;
@@ -119,6 +132,15 @@ pub(super) async fn deliver_score_drop(cfg: &AlertConfig, http: &Client, d: &Sco
     post_webhook(cfg, http, "score_drop", &msg, extra).await;
     post_ntfy(cfg, http, "LightTrack quality regression", &msg).await;
     post_resend(cfg, http, &format!("LightTrack: quality regression in '{}'", d.project_id), &msg).await;
+}
+
+fn warning_message(w: &LimitStatus) -> String {
+    let warn_pct = w.warn_at.map(|f| f * 100.0).unwrap_or(0.0);
+    format!(
+        "LightTrack warning: project '{}' is approaching its {:?}/{:?} limit — current {:.4} is \
+         {:.0}% of threshold {:.4} (warns at {:.0}%). No traffic has been blocked.",
+        w.project_id, w.metric, w.window, w.current, w.ratio * 100.0, w.threshold, warn_pct
+    )
 }
 
 fn breach_message(b: &LimitStatus, rejected: Option<&u64>) -> String {

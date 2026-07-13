@@ -157,6 +157,9 @@ enum LimitsCmd {
         /// Create the rule disabled (it won't enforce or alert until toggled on).
         #[arg(long)]
         disabled: bool,
+        /// Soft-warning fraction in (0,1): alert when usage reaches this share of the threshold.
+        #[arg(long = "warn-at")]
+        warn_at: Option<f64>,
     },
     /// Replace a rule's fields by id (also toggles enable/disable via --disabled).
     Update {
@@ -171,6 +174,8 @@ enum LimitsCmd {
         action: String,
         #[arg(long)]
         disabled: bool,
+        #[arg(long = "warn-at")]
+        warn_at: Option<f64>,
     },
     /// Delete a rule by id.
     Delete {
@@ -212,13 +217,15 @@ fn main() -> Result<()> {
                 threshold,
                 action,
                 disabled,
+                warn_at,
             } => call(
                 &cli,
                 Method::POST,
                 &format!("/v1/projects/{project}/limits"),
                 Some(json!({
                     "metric": metric, "window": window,
-                    "threshold": threshold, "action": action, "enabled": !disabled
+                    "threshold": threshold, "action": action, "enabled": !disabled,
+                    "warn_at": warn_at
                 })),
                 "",
             ),
@@ -229,13 +236,15 @@ fn main() -> Result<()> {
                 threshold,
                 action,
                 disabled,
+                warn_at,
             } => call(
                 &cli,
                 Method::PUT,
                 &format!("/v1/limits/{id}"),
                 Some(json!({
                     "metric": metric, "window": window,
-                    "threshold": threshold, "action": action, "enabled": !disabled
+                    "threshold": threshold, "action": action, "enabled": !disabled,
+                    "warn_at": warn_at
                 })),
                 "",
             ),
