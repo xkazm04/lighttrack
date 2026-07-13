@@ -32,7 +32,7 @@ pub(crate) fn run_compare(
     targets: &[BenchTarget],
     samples: u32,
     gen_samples: u32,
-) -> Result<()> {
+) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let ng = gen_samples.max(1);
     println!(
@@ -247,7 +247,7 @@ pub(crate) fn run_compare(
         Some(md) => println!("\n{md}"),
         None => println!("\n{}", serde_json::to_string_pretty(&summary)?),
     }
-    Ok(())
+    Ok(overall.to_string())
 }
 
 #[cfg(test)]

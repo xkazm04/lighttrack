@@ -63,6 +63,10 @@ pub(crate) enum Cmd {
         /// Add an LLM-generated recommendations/"healing" paragraph to the report (rubric mode).
         #[arg(long)]
         heal: bool,
+        /// CI gate: exit non-zero on a regressed verdict (code 3) or no baseline (code 4), so a
+        /// pipeline step fails the build. Without this flag the exit code is unchanged (0 on success).
+        #[arg(long)]
+        gate: bool,
     },
     /// Build a dataset by sampling real events and anonymizing them.
     Dataset {

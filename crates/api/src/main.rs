@@ -17,6 +17,8 @@
 //!   POST /v1/scores  GET /v1/scores?project=&limit=
 //!   GET  /v1/prices  PUT /v1/prices/:provider/:model
 //!   .../datasets .../rubrics .../benchmarks .../jobs            (see modules)
+//!   GET  /v1/benchmarks/:id/gate         CI-gate verdict from the latest finished run
+//!                                        (pass|regressed|no_baseline|no_runs + run_id/mean/baseline/n)
 //!   POST /v1/projects/:id/prompts  GET /v1/projects/:id/prompts          prompt registry
 //!   GET  /v1/projects/:id/prompts/:name?label=production|version=N       runtime fetch by label
 //!   POST /v1/projects/:id/prompts/:name/versions                         new version (auto-benchmarks)
@@ -41,6 +43,7 @@
 //!      LIGHTTRACK_RELAY_DEVICE_KEY (bearer key of the enrolled local device — relay lease/result),
 //!      LIGHTTRACK_RELAY_FLAT_COST_USD (fixed cost stamped per relay run event; default 1.0),
 //!      LIGHTTRACK_ALERT_WEBHOOK / LIGHTTRACK_ALERT_NTFY / LIGHTTRACK_ALERT_COOLDOWN_SECS (see alerts),
+//!      LIGHTTRACK_BENCH_WEBHOOK (benchmark-run completion webhook; falls back to LIGHTTRACK_ALERT_WEBHOOK),
 //!      LIGHTTRACK_REDACT_INGEST (off | all | csv of project_ids — scrub PII from input/output; see redact),
 //!      LIGHTTRACK_COLLECTIVE_ID (opaque source id — hashed before contribution),
 //!      LIGHTTRACK_COLLECTIVE_ACCEPT (1|true — this instance is a leaderboard hub; off by default).
@@ -227,6 +230,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/benchmarks/:id", get(benchmarks::get_benchmark))
         .route("/v1/benchmarks/:id/runs", get(benchmarks::list_benchmark_runs))
+        .route("/v1/benchmarks/:id/gate", get(benchmarks::benchmark_gate))
         .route("/v1/benchmark-runs", post(benchmarks::post_benchmark_run))
         .route("/v1/benchmarks/:id/enqueue", post(jobs::enqueue_benchmark))
         .route(

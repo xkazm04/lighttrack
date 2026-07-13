@@ -25,7 +25,7 @@ pub(crate) fn run_rubric_benchmark(
     rubric_id: &str,
     samples: u32,
     heal: bool,
-) -> Result<()> {
+) -> Result<String> {
     let rubric: Rubric = get(cli, http, &format!("/v1/rubrics/{rubric_id}"))?;
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
@@ -242,5 +242,5 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
     });
     let stored = post(cli, http, "/v1/benchmark-runs", &run)?;
     println!("\nrecorded run {}", stored.get("id").and_then(|v| v.as_str()).unwrap_or("?"));
-    Ok(())
+    Ok(status.to_string())
 }

@@ -48,17 +48,6 @@ pub(crate) fn dim_mean(sums: &HashMap<String, f64>, key: &str, n: u32) -> f64 {
     sums.get(key).copied().unwrap_or(0.0) / n.max(1) as f64
 }
 
-/// A benchmark run's status against its recorded baseline: `regressed` if the mean dropped below it
-/// (with a 1e-9 slack so float noise alone never trips a regression), `passed` if a baseline exists
-/// and held, else `no_baseline`. Shared by rubric and simple modes so they verdict identically.
-pub(crate) fn run_status(baseline: Option<f64>, mean: f64) -> &'static str {
-    match baseline {
-        Some(b) if mean + 1e-9 < b => "regressed",
-        Some(_) => "passed",
-        None => "no_baseline",
-    }
-}
-
 /// Roll several per-target verdicts up to one run-level verdict: `regressed` if any target
 /// regressed, else `passed` if any held against a baseline, else `no_baseline`. Used by compare mode
 /// so the whole comparison has a single honest headline status, not just per-target rows.
@@ -207,15 +196,6 @@ mod tests {
         assert_eq!(short("0123456789abcdef"), "01234567");
         assert_eq!(short("abc"), "abc"); // shorter than 8 → whole string
         assert_eq!(short(""), "");
-    }
-
-    #[test]
-    fn run_status_verdicts() {
-        assert_eq!(run_status(None, 0.9), "no_baseline");
-        assert_eq!(run_status(Some(0.8), 0.9), "passed");
-        assert_eq!(run_status(Some(0.8), 0.7), "regressed");
-        // Equal-to-baseline is not a regression (slack absorbs float noise).
-        assert_eq!(run_status(Some(0.8), 0.8), "passed");
     }
 
     #[test]

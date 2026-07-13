@@ -7,8 +7,36 @@ use lighttrack_core::{LimitStatus, RelayTask};
 use reqwest::Client;
 use serde_json::{json, Value};
 
-use super::{AlertConfig, ErrorSpike, ScoreDrop};
+use super::{AlertConfig, BenchRunAlert, ErrorSpike, ScoreDrop};
 use crate::forecast::ForecastAlert;
+
+/// POST a finished benchmark run to the bench-completion webhook. Standalone (its own URL, not the
+/// shared `AlertConfig` webhook) so a CI receiver can subscribe to run completions specifically.
+pub(super) async fn deliver_bench_run(http: &Client, url: &str, r: &BenchRunAlert) {
+    let msg = format!(
+        "LightTrack benchmark '{}' run {} finished: {}{}",
+        r.benchmark,
+        r.run_id,
+        r.status,
+        match (r.mean, r.baseline) {
+            (Some(m), Some(b)) => format!(" (mean {m:.3} vs baseline {b:.3})"),
+            (Some(m), None) => format!(" (mean {m:.3})"),
+            _ => String::new(),
+        },
+    );
+    let body = json!({
+        "event": "bench_run", "text": &msg, "content": &msg,
+        "benchmark": r.benchmark, "run_id": r.run_id, "status": r.status,
+        "mean": r.mean, "baseline": r.baseline,
+    });
+    match http.post(url).json(&body).send().await {
+        Ok(resp) if !resp.status().is_success() => {
+            eprintln!("[alert] bench_run webhook -> HTTP {}", resp.status())
+        }
+        Err(e) => eprintln!("[alert] bench_run webhook error: {e}"),
+        _ => {}
+    }
+}
 
 pub(super) async fn deliver_breaches(cfg: &AlertConfig, http: &Client, breaches: &[LimitStatus]) {
     for b in breaches {

@@ -13,6 +13,7 @@ mod calibrate;
 mod cli;
 mod compare;
 mod dataset;
+mod gate;
 mod http;
 mod rubric;
 mod schedule;
@@ -55,7 +56,20 @@ fn main() -> Result<()> {
             samples,
             gen_samples,
             heal,
-        } => bench::run_benchmark(&cli, &http, &engine, benchmark, *samples, *gen_samples, *heal),
+            gate,
+        } => {
+            let status =
+                bench::run_benchmark(&cli, &http, &engine, benchmark, *samples, *gen_samples, *heal)?;
+            if *gate {
+                let code = gate::gate_exit_code(&status);
+                if code != 0 {
+                    eprintln!("gate: benchmark verdict '{status}' — failing build (exit {code})");
+                    std::process::exit(code);
+                }
+                println!("gate: benchmark verdict '{status}' — ok");
+            }
+            Ok(())
+        }
         Cmd::Dataset { action } => match action {
             DatasetCmd::Build {
                 project,

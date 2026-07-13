@@ -34,6 +34,9 @@ mod channels;
 
 struct AlertConfig {
     webhook: Option<String>,
+    /// Dedicated benchmark-completion webhook (`LIGHTTRACK_BENCH_WEBHOOK`); falls back to the general
+    /// alert webhook so a single receiver can serve both. Independent of the other alert channels.
+    bench_webhook: Option<String>,
     ntfy: Option<String>,
     resend: Option<ResendConfig>,
     cooldown: Duration,
@@ -77,6 +80,16 @@ struct ScoreDrop {
     scored_by: String,
 }
 
+/// A finished benchmark run — the payload of a completion webhook (Direction: CI gate contract).
+#[derive(Clone)]
+pub(crate) struct BenchRunAlert {
+    pub(crate) benchmark: String,
+    pub(crate) run_id: String,
+    pub(crate) status: String,
+    pub(crate) mean: Option<f64>,
+    pub(crate) baseline: Option<f64>,
+}
+
 pub(crate) struct Alerter {
     config: AlertConfig,
     http: reqwest::Client,
@@ -90,6 +103,8 @@ impl Alerter {
         Self {
             config: AlertConfig {
                 webhook: env_opt("LIGHTTRACK_ALERT_WEBHOOK"),
+                bench_webhook: env_opt("LIGHTTRACK_BENCH_WEBHOOK")
+                    .or_else(|| env_opt("LIGHTTRACK_ALERT_WEBHOOK")),
                 ntfy: env_opt("LIGHTTRACK_ALERT_NTFY"),
                 resend: ResendConfig::from_env(),
                 cooldown: Duration::from_secs(env_u64("LIGHTTRACK_ALERT_COOLDOWN_SECS", 3600)),
@@ -116,7 +131,11 @@ impl Alerter {
     /// One-line summary for the startup banner.
     pub(crate) fn describe(&self) -> String {
         if !self.enabled() {
-            return "off".to_string();
+            return if self.config.bench_webhook.is_some() {
+                "off (bench-webhook on)".to_string()
+            } else {
+                "off".to_string()
+            };
         }
         let mut chans = Vec::new();
         if self.config.webhook.is_some() {
@@ -181,6 +200,20 @@ impl Alerter {
         }
         let me = Arc::clone(self);
         tokio::spawn(async move { channels::deliver_relay_dead(&me.config, &me.http, &due).await });
+    }
+
+    /// Fire a best-effort benchmark-completion webhook (off the request path), deduped per
+    /// (benchmark, status) within the cooldown so a flapping benchmark doesn't spam the receiver.
+    /// No-op unless a bench webhook is configured. Independent of the other alert channels.
+    pub(crate) fn notify_bench_run(self: &Arc<Self>, run: BenchRunAlert) {
+        let Some(url) = self.config.bench_webhook.clone() else {
+            return;
+        };
+        if !self.should_send_key(&format!("bench-run:{}:{}", run.benchmark, run.status)) {
+            return;
+        }
+        let http = self.http.clone();
+        tokio::spawn(async move { channels::deliver_bench_run(&http, &url, &run).await });
     }
 
     /// Record one non-success ingest event and, if the project crosses its error threshold within the
@@ -344,6 +377,7 @@ mod tests {
         Alerter {
             config: AlertConfig {
                 webhook: Some("x".into()),
+                bench_webhook: None,
                 ntfy: None,
                 resend: None,
                 cooldown: Duration::from_secs(cooldown_secs),

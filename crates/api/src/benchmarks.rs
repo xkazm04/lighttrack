@@ -6,12 +6,13 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use lighttrack_core::{
     new_id, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun,
 };
 
+use crate::alerts::BenchRunAlert;
 use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
@@ -155,17 +156,141 @@ pub(crate) async fn post_benchmark_run(
     Json(run): Json<BenchmarkRun>,
 ) -> Result<Json<BenchmarkRun>, ApiError> {
     let p = authenticate(&st, &headers).await?;
-    load_benchmark_authorized(&st, &p, &run.benchmark_id).await?; // authorize via the benchmark
+    let bench = load_benchmark_authorized(&st, &p, &run.benchmark_id).await?; // authorize via the benchmark
     let store = st.store.clone();
     let run2 = run.clone();
     spawn_db(move || store.create_benchmark_run(&run2)).await?;
+    // Best-effort completion webhook (off the request path, cooldown-deduped) so a CI gate / dashboard
+    // learns a run finished with its honest status.
+    st.alerts.notify_bench_run(BenchRunAlert {
+        benchmark: run.benchmark_id.clone(),
+        run_id: run.id.clone(),
+        status: run.status.clone(),
+        mean: run.mean_score,
+        baseline: bench.baseline_score,
+    });
     Ok(Json(run))
+}
+
+/// Machine-readable CI-gate verdict for a benchmark, from its latest finished run. `status` is
+/// `pass | regressed | no_baseline | no_runs`. Consumers (a pipeline step, a dashboard badge) branch
+/// on `status`; `run_id`/`mean`/`baseline`/`n` give the supporting numbers.
+#[derive(Debug, Serialize, PartialEq)]
+pub(crate) struct GateResponse {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mean: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseline: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    n: Option<u64>,
+}
+
+/// Decide the gate verdict from a benchmark's runs (newest-first, as the store returns them) and its
+/// baseline. Uses the latest *finished* run's honest status (Direction 1/2); legacy runs that predate
+/// the honest-status work fall back to a scalar mean-vs-baseline compare. `n` prefers the report's
+/// significance `n`, else `n_cases`.
+pub(crate) fn decide_gate(runs: &[BenchmarkRun], baseline: Option<f64>) -> GateResponse {
+    let Some(run) = runs.iter().find(|r| r.finished_at.is_some()) else {
+        return GateResponse { status: "no_runs".into(), run_id: None, mean: None, baseline, n: None };
+    };
+    let status = match run.status.as_str() {
+        "passed" => "pass",
+        "regressed" => "regressed",
+        "no_baseline" => "no_baseline",
+        // Legacy status (e.g. "completed"/"compared") → scalar compare of mean vs baseline.
+        _ => match (run.mean_score, baseline) {
+            (Some(m), Some(b)) if m + 1e-9 < b => "regressed",
+            (Some(_), Some(_)) => "pass",
+            _ => "no_baseline",
+        },
+    };
+    let n = run
+        .report
+        .get("n")
+        .and_then(serde_json::Value::as_u64)
+        .or(Some(run.n_cases as u64));
+    GateResponse {
+        status: status.into(),
+        run_id: Some(run.id.clone()),
+        mean: run.mean_score,
+        baseline,
+        n,
+    }
+}
+
+pub(crate) async fn benchmark_gate(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<GateResponse>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    let bench = load_benchmark_authorized(&st, &p, &id).await?;
+    let store = st.store.clone();
+    let runs = spawn_db(move || store.list_benchmark_runs(&id)).await?;
+    Ok(Json(decide_gate(&runs, bench.baseline_score)))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::validate_target_matrix;
+    use super::{decide_gate, validate_target_matrix};
+    use lighttrack_core::BenchmarkRun;
     use serde_json::json;
+
+    /// Build a run via serde so the test doesn't hand-construct every field.
+    fn run(status: &str, finished: bool, mean: Option<f64>, report: serde_json::Value) -> BenchmarkRun {
+        let mut v = json!({
+            "id": format!("run-{status}"), "benchmark_id": "b", "started_at": "2026-01-01T00:00:00.000000000Z",
+            "n_cases": 5, "mean_score": mean, "status": status, "report": report,
+        });
+        if finished {
+            v["finished_at"] = json!("2026-01-01T00:01:00.000000000Z");
+        }
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn gate_no_runs_when_none_finished() {
+        let g = decide_gate(&[], Some(0.8));
+        assert_eq!(g.status, "no_runs");
+        // A run that never finished is ignored.
+        let g = decide_gate(&[run("passed", false, Some(0.9), json!(null))], Some(0.8));
+        assert_eq!(g.status, "no_runs");
+    }
+
+    #[test]
+    fn gate_maps_honest_statuses() {
+        let g = decide_gate(&[run("passed", true, Some(0.9), json!({ "n": 30 }))], Some(0.8));
+        assert_eq!(g.status, "pass");
+        assert_eq!(g.n, Some(30)); // report n wins over n_cases
+        assert_eq!(g.run_id.as_deref(), Some("run-passed"));
+
+        assert_eq!(decide_gate(&[run("regressed", true, Some(0.5), json!(null))], Some(0.8)).status, "regressed");
+        assert_eq!(decide_gate(&[run("no_baseline", true, Some(0.5), json!(null))], None).status, "no_baseline");
+    }
+
+    #[test]
+    fn gate_legacy_status_falls_back_to_scalar() {
+        // "completed" predates honest statuses → scalar mean-vs-baseline compare.
+        assert_eq!(decide_gate(&[run("completed", true, Some(0.5), json!(null))], Some(0.8)).status, "regressed");
+        assert_eq!(decide_gate(&[run("completed", true, Some(0.9), json!(null))], Some(0.8)).status, "pass");
+        // No baseline → no_baseline; n falls back to n_cases when the report has none.
+        let g = decide_gate(&[run("completed", true, Some(0.9), json!(null))], None);
+        assert_eq!(g.status, "no_baseline");
+        assert_eq!(g.n, Some(5));
+    }
+
+    #[test]
+    fn gate_uses_latest_finished_run() {
+        // Store returns newest-first; the first finished run wins.
+        let runs = [
+            run("regressed", true, Some(0.5), json!(null)),
+            run("passed", true, Some(0.9), json!(null)),
+        ];
+        assert_eq!(decide_gate(&runs, Some(0.8)).status, "regressed");
+    }
 
     #[test]
     fn non_array_targets_pass_through() {

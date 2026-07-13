@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 /// z for a ~95% two-sided normal confidence interval.
 pub(crate) const Z_95: f64 = 1.959_963_984_540_054;
 
-/// The float slack that keeps pure float noise from tripping a comparison (mirrors `util::run_status`).
+/// The float slack that keeps pure float noise from tripping a comparison.
 const EPS: f64 = 1e-9;
 
 /// Below this many samples the nearest-rank p95 collapses toward the max — annotated as a caveat.

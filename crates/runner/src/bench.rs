@@ -35,6 +35,8 @@ pub(crate) fn parse_targets(target: &Value) -> Result<Vec<BenchTarget>> {
 
 /// Resolve a benchmark's cases (inline dataset, or a referenced stored dataset) and dispatch to the
 /// right mode: comparison (target matrix), rubric (per-dimension), or simple (freeform single score).
+/// Run a benchmark and return its run-level status (`passed` | `regressed` | `no_baseline`), which
+/// `--gate` maps to an exit code. Compare mode returns the aggregate across targets.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_benchmark(
     cli: &Cli,
@@ -44,7 +46,7 @@ pub(crate) fn run_benchmark(
     samples: u32,
     gen_samples: u32,
     heal: bool,
-) -> Result<()> {
+) -> Result<String> {
     let bench: Benchmark = get(cli, http, &format!("/v1/benchmarks/{benchmark_id}"))?;
 
     let cases: Vec<BenchmarkCase> = if !bench.dataset.is_empty() {
@@ -80,7 +82,7 @@ fn run_simple(
     engine: &EngineConfig,
     bench: &Benchmark,
     cases: &[BenchmarkCase],
-) -> Result<()> {
+) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
     println!(
@@ -180,7 +182,7 @@ fn run_simple(
     });
     let stored = post(cli, http, "/v1/benchmark-runs", &run)?;
     println!("recorded run {}", stored.get("id").and_then(|v| v.as_str()).unwrap_or("?"));
-    Ok(())
+    Ok(status.to_string())
 }
 
 /// One output's judge result, preserving the per-dimension breakdown + self-consistency agreement
