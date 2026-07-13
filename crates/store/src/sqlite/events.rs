@@ -15,7 +15,7 @@ use super::usage_cache::UsageCache;
 use crate::codec::{fmt_ts, parse_enum, parse_ts};
 use crate::{
     event_contribution, evaluate_admission, Admission, CostRow, EventFilter, EventPage, Result,
-    StoreError, Usage, UseCaseCostRow,
+    StoreError, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 /// Map a failed event insert to a typed error: a primary-key / uniqueness violation (a duplicate
@@ -249,42 +249,104 @@ pub(super) fn list_by_trace(conn: &Connection, trace_id: &str) -> Result<Vec<Llm
 /// Models are *not* aggregated with `GROUP_CONCAT` (whose order is unspecified and drifted from the
 /// detail view): [`attach_models`] fetches them in first-seen (min-ts) order in a second query, so
 /// `list` and `get_trace` report identical model ordering.
+/// Aggregate select-list for a trace summary row. `ended` (MAX ts) is the keyset/order column and
+/// the bound `until`/`cursor`/`status`/`min_cost` filters compare against `MAX(ts)`/`SUM(...)`.
+const TRACE_SUMMARY_COLS: &str = "trace_id, MIN(project_id) AS project_id, MIN(ts) AS started, \
+    MAX(ts) AS ended, COUNT(*) AS spans, COALESCE(SUM(cost_usd),0.0) AS cost, \
+    COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
+    SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END) AS errs";
+
 pub(super) fn list_trace_summaries(
     conn: &Connection,
     project: Option<&str>,
     limit: usize,
 ) -> Result<Vec<TraceSummary>> {
-    let cols = "trace_id, MIN(project_id) AS project_id, MIN(ts) AS started, MAX(ts) AS ended, \
-        COUNT(*) AS spans, COALESCE(SUM(cost_usd),0.0) AS cost, \
-        COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
-        SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END) AS errs";
-    let raws = if let Some(p) = project {
-        let sql = format!(
-            "SELECT {cols} FROM events WHERE trace_id IS NOT NULL AND trace_id <> '' \
-             AND project_id = ?1 GROUP BY trace_id ORDER BY ended DESC LIMIT ?2"
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let v = stmt
-            .query_map(params![p, limit as i64], map_trace_summary)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        v
+    Ok(list_trace_summaries_filtered(conn, project, &TraceFilter::default(), limit)?.traces)
+}
+
+/// Filtered, keyset-paginated trace summaries (newest `ended` first), paging on `(ended, trace_id)`
+/// descending. `since` is pushed to the event-time `WHERE` so the project+window slice is served by
+/// `idx_events_project_ts` (project-scoped) / `idx_events_project_trace` for the grouping rather than
+/// scanning the whole table; `until`, `status`, `min_cost`, and the keyset cursor are aggregate-level
+/// and so applied in `HAVING`, after grouping. Fetches `limit + 1` rows to detect a further page.
+///
+/// Note: because `since` prunes at the event level, a trace whose activity straddles `since` rolls up
+/// only its in-window spans (its `ended`/set membership stay correct — `ended` is the true MAX ≥
+/// `since`). Omitting `since` preserves the full-history rollup exactly.
+pub(super) fn list_trace_summaries_filtered(
+    conn: &Connection,
+    project: Option<&str>,
+    filter: &TraceFilter,
+    limit: usize,
+) -> Result<TracePage> {
+    let mut where_conds: Vec<&str> = vec!["trace_id IS NOT NULL", "trace_id <> ''"];
+    let mut args: Vec<Box<dyn ToSql>> = Vec::new();
+    if let Some(p) = project {
+        where_conds.push("project_id = ?");
+        args.push(Box::new(p.to_string()));
+    }
+    if let Some(s) = filter.since {
+        where_conds.push("ts >= ?");
+        args.push(Box::new(fmt_ts(s)));
+    }
+
+    // Aggregate-level predicates: the window's upper bound, status, min cost, and the keyset cursor
+    // all constrain grouped values, so they belong in HAVING (after GROUP BY), not WHERE.
+    let mut having: Vec<&str> = Vec::new();
+    if let Some(u) = filter.until {
+        having.push("MAX(ts) < ?");
+        args.push(Box::new(fmt_ts(u)));
+    }
+    match filter.status.as_deref() {
+        Some("error") => having.push("errs > 0"),
+        Some("success") => having.push("errs = 0"),
+        _ => {}
+    }
+    if let Some(mc) = filter.min_cost {
+        having.push("cost >= ?");
+        args.push(Box::new(mc));
+    }
+    if let Some(cursor) = &filter.cursor {
+        let (cts, cid) = decode_cursor(cursor)
+            .ok_or_else(|| StoreError::Other(format!("invalid cursor {cursor:?}")))?;
+        // Strictly after (ended, trace_id) in DESC order.
+        having.push("(MAX(ts) < ? OR (MAX(ts) = ? AND trace_id < ?))");
+        args.push(Box::new(cts.clone()));
+        args.push(Box::new(cts));
+        args.push(Box::new(cid));
+    }
+
+    let where_clause = format!("WHERE {} ", where_conds.join(" AND "));
+    let having_clause = if having.is_empty() {
+        String::new()
     } else {
-        let sql = format!(
-            "SELECT {cols} FROM events WHERE trace_id IS NOT NULL AND trace_id <> '' \
-             GROUP BY trace_id ORDER BY ended DESC LIMIT ?1"
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let v = stmt
-            .query_map(params![limit as i64], map_trace_summary)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        v
+        format!("HAVING {} ", having.join(" AND "))
     };
+    let fetch = (limit as i64).saturating_add(1);
+    args.push(Box::new(fetch));
+    let sql = format!(
+        "SELECT {TRACE_SUMMARY_COLS} FROM events {where_clause}GROUP BY trace_id \
+         {having_clause}ORDER BY ended DESC, trace_id DESC LIMIT ?"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let raws = stmt
+        .query_map(params_from_iter(args.iter()), map_trace_summary)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut summaries = raws
         .into_iter()
         .map(trace_summary_from_raw)
         .collect::<Result<Vec<_>>>()?;
+
+    let next_cursor = if summaries.len() as i64 > limit as i64 {
+        summaries.truncate(limit);
+        summaries
+            .last()
+            .map(|t| encode_cursor(&fmt_ts(t.ended_at), &t.trace_id))
+    } else {
+        None
+    };
     attach_models(conn, &mut summaries)?;
-    Ok(summaries)
+    Ok(TracePage { traces: summaries, next_cursor })
 }
 
 /// Fill each summary's `models` with the trace's distinct models in first-seen (min-ts) order — the

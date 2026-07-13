@@ -11,13 +11,15 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, HeaderValue},
+    response::{IntoResponse, Response},
     Json,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{new_id, Score, Trace, TraceSummary};
+use lighttrack_core::{new_id, Score, Trace};
+use lighttrack_store::TraceFilter;
 
 use crate::auth::Principal;
 use crate::error::ApiError;
@@ -28,20 +30,64 @@ use crate::state::{spawn_db, AppState};
 pub(crate) struct TracesParams {
     project: Option<String>,
     limit: Option<usize>,
+    /// RFC3339 bounds on the trace's `ended` time (`since` inclusive lower, `until` exclusive upper).
+    since: Option<String>,
+    until: Option<String>,
+    /// `success` | `error` — keep only traces of that status.
+    status: Option<String>,
+    /// Minimum whole-trace cost (USD).
+    min_cost: Option<f64>,
+    /// Opaque keyset cursor from a prior page's `X-Next-Cursor` header.
+    cursor: Option<String>,
 }
 
-/// List recent traces (one rollup row per `trace_id`), newest activity first.
+/// Parse an optional RFC3339 query param into a UTC instant, 400 on malformed input.
+fn parse_opt_ts(field: &str, raw: Option<&str>) -> Result<Option<DateTime<Utc>>, ApiError> {
+    match raw {
+        Some(s) => Ok(Some(
+            DateTime::parse_from_rfc3339(s)
+                .map_err(|e| ApiError::bad_request(format!("invalid '{field}' timestamp: {e}")))?
+                .with_timezone(&Utc),
+        )),
+        None => Ok(None),
+    }
+}
+
+/// List recent traces (one rollup row per `trace_id`), newest `ended` first. Optional `since`/`until`
+/// window, `status`, and `min_cost` filters narrow the set; keyset paging on `(ended, trace_id)`
+/// returns the next cursor in the `X-Next-Cursor` header when more traces remain (mirrors
+/// `/v1/events`). The JSON body stays a bare array so render/CLI shape is unchanged.
 pub(crate) async fn list_traces(
     State(st): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<TracesParams>,
-) -> Result<Json<Vec<TraceSummary>>, ApiError> {
+) -> Result<Response, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
+    if let Some(s) = q.status.as_deref() {
+        if s != "success" && s != "error" {
+            return Err(ApiError::bad_request("status must be 'success' or 'error'"));
+        }
+    }
+    let filter = TraceFilter {
+        since: parse_opt_ts("since", q.since.as_deref())?,
+        until: parse_opt_ts("until", q.until.as_deref())?,
+        status: q.status.clone(),
+        min_cost: q.min_cost,
+        cursor: q.cursor.clone(),
+    };
     let store = st.store.clone();
     let limit = q.limit.unwrap_or(50).min(1000);
-    let traces = spawn_db(move || store.list_traces(project.as_deref(), limit)).await?;
-    Ok(Json(traces))
+    let page =
+        spawn_db(move || store.list_traces_filtered(project.as_deref(), &filter, limit)).await?;
+
+    let mut resp = Json(page.traces).into_response();
+    if let Some(cursor) = page.next_cursor {
+        if let Ok(v) = HeaderValue::from_str(&cursor) {
+            resp.headers_mut().insert("x-next-cursor", v);
+        }
+    }
+    Ok(resp)
 }
 
 /// The detail payload: the trace rollup flattened together with the scores recorded within it.

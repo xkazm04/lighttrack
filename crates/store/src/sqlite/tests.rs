@@ -9,7 +9,7 @@ use lighttrack_core::{
 };
 
 use super::SqliteStore;
-use crate::Store;
+use crate::{Store, TraceFilter};
 
 fn ev(project: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEvent {
     LlmEvent {
@@ -410,6 +410,116 @@ fn trace_queries_use_indexes_not_full_scan() {
         summaries.contains("idx_events_project_trace"),
         "list_trace_summaries plan should use the composite index: {summaries}"
     );
+}
+
+#[test]
+fn trace_filters_and_keyset_pagination() {
+    use chrono::{TimeZone, Utc as ChronoUtc};
+
+    let s = SqliteStore::open_in_memory().unwrap();
+    // One single-span trace each, at distinct `ended` seconds, with distinct cost + status.
+    let mk = |trace: &str, sec: u32, cost: f64, status: Status| {
+        let mut e = ev("p1", "m", 1, 1, cost);
+        e.id = format!("{trace}-{sec}");
+        e.trace_id = Some(trace.into());
+        e.span_id = Some(format!("s-{trace}"));
+        e.status = status;
+        e.ts = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, sec).unwrap();
+        e
+    };
+    s.insert_event(&mk("tr-a", 10, 0.01, Status::Success)).unwrap();
+    s.insert_event(&mk("tr-b", 20, 0.05, Status::Error)).unwrap();
+    s.insert_event(&mk("tr-c", 30, 0.10, Status::Success)).unwrap();
+    s.insert_event(&mk("tr-d", 40, 0.20, Status::Error)).unwrap();
+
+    let ids = |p: &crate::TracePage| p.traces.iter().map(|t| t.trace_id.clone()).collect::<Vec<_>>();
+
+    // Keyset page 1 (limit 2): newest `ended` first, with a next cursor.
+    let f = TraceFilter::default();
+    let p1 = s.list_traces_filtered(Some("p1"), &f, 2).unwrap();
+    assert_eq!(ids(&p1), vec!["tr-d", "tr-c"]);
+    let cursor = p1.next_cursor.clone().expect("more pages remain");
+
+    // Cursor stability across inserts: a brand-new *newer* trace (tr-e@50) and an older one
+    // (tr-f@25) land after page 1. Continuing from the cursor returns only traces strictly older
+    // than tr-c@30 — tr-e is not duplicated onto page 2, and nothing already returned reappears.
+    s.insert_event(&mk("tr-e", 50, 0.30, Status::Success)).unwrap();
+    s.insert_event(&mk("tr-f", 25, 0.02, Status::Success)).unwrap();
+    let f2 = TraceFilter { cursor: Some(cursor), ..Default::default() };
+    let p2 = s.list_traces_filtered(Some("p1"), &f2, 10).unwrap();
+    assert_eq!(ids(&p2), vec!["tr-f", "tr-b", "tr-a"], "keyset continues past cursor, no dup/skip");
+    assert!(p2.next_cursor.is_none(), "last page has no cursor");
+
+    // status filter (aggregate-level HAVING).
+    let err = s
+        .list_traces_filtered(Some("p1"), &TraceFilter { status: Some("error".into()), ..Default::default() }, 10)
+        .unwrap();
+    assert_eq!(ids(&err), vec!["tr-d", "tr-b"]);
+    let ok = s
+        .list_traces_filtered(Some("p1"), &TraceFilter { status: Some("success".into()), ..Default::default() }, 10)
+        .unwrap();
+    assert_eq!(ids(&ok), vec!["tr-e", "tr-c", "tr-f", "tr-a"]);
+
+    // min_cost filter.
+    let costly = s
+        .list_traces_filtered(Some("p1"), &TraceFilter { min_cost: Some(0.10), ..Default::default() }, 10)
+        .unwrap();
+    assert_eq!(ids(&costly), vec!["tr-e", "tr-d", "tr-c"]);
+
+    // since/until on the `ended` bound.
+    let since = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, 26).unwrap();
+    let recent = s
+        .list_traces_filtered(Some("p1"), &TraceFilter { since: Some(since), ..Default::default() }, 10)
+        .unwrap();
+    assert_eq!(ids(&recent), vec!["tr-e", "tr-d", "tr-c"], "ended >= 26");
+    let until = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, 26).unwrap();
+    let older = s
+        .list_traces_filtered(Some("p1"), &TraceFilter { until: Some(until), ..Default::default() }, 10)
+        .unwrap();
+    assert_eq!(ids(&older), vec!["tr-f", "tr-b", "tr-a"], "ended < 26");
+
+    // filter + cursor combined: paginate the error traces one at a time.
+    let e1 = s
+        .list_traces_filtered(Some("p1"), &TraceFilter { status: Some("error".into()), ..Default::default() }, 1)
+        .unwrap();
+    assert_eq!(ids(&e1), vec!["tr-d"]);
+    let e2 = s
+        .list_traces_filtered(
+            Some("p1"),
+            &TraceFilter { status: Some("error".into()), cursor: e1.next_cursor, ..Default::default() },
+            1,
+        )
+        .unwrap();
+    assert_eq!(ids(&e2), vec!["tr-b"]);
+    assert!(e2.next_cursor.is_none());
+}
+
+#[test]
+fn trace_since_prunes_to_in_window_spans() {
+    use chrono::{TimeZone, Utc as ChronoUtc};
+
+    let s = SqliteStore::open_in_memory().unwrap();
+    // A trace straddling the window start: one span at :05 (cost 1.0), one at :32 (cost 2.0).
+    let span = |sec: u32, cost: f64| {
+        let mut e = ev("p1", "m", 1, 1, cost);
+        e.id = format!("strad-{sec}");
+        e.trace_id = Some("tr-strad".into());
+        e.span_id = Some(format!("s-{sec}"));
+        e.ts = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, sec).unwrap();
+        e
+    };
+    s.insert_event(&span(5, 1.0)).unwrap();
+    s.insert_event(&span(32, 2.0)).unwrap();
+
+    let since = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, 15).unwrap();
+    let page = s
+        .list_traces_filtered(Some("p1"), &TraceFilter { since: Some(since), ..Default::default() }, 10)
+        .unwrap();
+    // Set membership stays correct (ended = :32 >= :15), but the rollup reflects only in-window spans.
+    assert_eq!(page.traces.len(), 1);
+    let t = &page.traces[0];
+    assert_eq!(t.spans, 1, "pre-window span pruned from the rollup");
+    assert!((t.cost_usd - 2.0).abs() < 1e-9, "only in-window cost counted");
 }
 
 #[test]

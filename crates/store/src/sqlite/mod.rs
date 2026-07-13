@@ -38,8 +38,8 @@ use lighttrack_core::{
 };
 
 use crate::{
-    Admission, CostRow, DailyDimCost, DailyUsage, EventFilter, EventPage, Result, Store, Usage,
-    UseCaseCostRow,
+    Admission, CostRow, DailyDimCost, DailyUsage, EventFilter, EventPage, Result, Store, TraceFilter,
+    TracePage, Usage, UseCaseCostRow,
 };
 
 const SCHEMA: &str = include_str!("../../../../schema/sqlite/001_init.sql");
@@ -196,6 +196,14 @@ impl Store for SqliteStore {
     // --- traces ---
     fn list_traces(&self, project: Option<&str>, limit: usize) -> Result<Vec<TraceSummary>> {
         self.with(|c| events::list_trace_summaries(c, project, limit))
+    }
+    fn list_traces_filtered(
+        &self,
+        project: Option<&str>,
+        filter: &TraceFilter,
+        limit: usize,
+    ) -> Result<TracePage> {
+        self.with(|c| events::list_trace_summaries_filtered(c, project, filter, limit))
     }
     fn list_trace_events(&self, trace_id: &str) -> Result<Vec<LlmEvent>> {
         self.with(|c| events::list_by_trace(c, trace_id))

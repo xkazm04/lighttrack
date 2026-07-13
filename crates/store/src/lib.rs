@@ -81,6 +81,30 @@ pub struct EventPage {
     pub next_cursor: Option<String>,
 }
 
+/// Optional filters + keyset cursor for [`Store::list_traces_filtered`]. All fields AND-combine;
+/// `None` fields don't constrain. `since`/`until` bound the trace's `ended` (its newest event); of
+/// these `since` is pushed to the event scan (index-served) while `until`, `status`, and `min_cost`
+/// are aggregate-level (applied after grouping). `cursor` is an opaque token minted by a previous
+/// page ([`TracePage::next_cursor`]) that the backend decodes into an `(ended, trace_id)` keyset
+/// position. `status` is `"success"` or `"error"` (a trace is `error` iff any span errored).
+#[derive(Debug, Clone, Default)]
+pub struct TraceFilter {
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    pub status: Option<String>,
+    pub min_cost: Option<f64>,
+    pub cursor: Option<String>,
+}
+
+/// One page of trace summaries plus the cursor to fetch the next page (newest-ended first).
+/// `next_cursor` is `Some` only when more traces remain beyond this page; pass it back as
+/// [`TraceFilter::cursor`] to continue.
+#[derive(Debug, Clone)]
+pub struct TracePage {
+    pub traces: Vec<TraceSummary>,
+    pub next_cursor: Option<String>,
+}
+
 /// A use-case cost/usage rollup row — grouped by (name, provider, model), optionally windowed by a
 /// `since` cutoff. `name` is `None` for calls that carry no use-case name; the consumer rolls those
 /// up under their model. Powers the Personas "LLM Overview" table.
@@ -418,6 +442,25 @@ pub trait Store: Send + Sync {
     /// Compact summaries of the most recent traces (grouped by `trace_id`), newest activity first.
     fn list_traces(&self, _project: Option<&str>, _limit: usize) -> Result<Vec<TraceSummary>> {
         Ok(Vec::new())
+    }
+    /// Filtered, keyset-paginated trace listing (newest `ended` first). Applies the [`TraceFilter`]
+    /// and pages on `(ended, trace_id)` descending, returning up to `limit` summaries plus a
+    /// `next_cursor` when more remain.
+    ///
+    /// The default ignores the filter/cursor and delegates to [`Store::list_traces`] (no pagination)
+    /// so backends that only return empty traces (Postgres/Firestore) compile unchanged — the SQLite
+    /// backend, which owns the trace surface, implements the full windowed/paginated form. Correct
+    /// string-keyset paging relies on the fixed-width `RFC3339(Nanos, Z)` timestamp invariant.
+    fn list_traces_filtered(
+        &self,
+        project: Option<&str>,
+        _filter: &TraceFilter,
+        limit: usize,
+    ) -> Result<TracePage> {
+        Ok(TracePage {
+            traces: self.list_traces(project, limit)?,
+            next_cursor: None,
+        })
     }
     /// All events of one trace, regardless of project (the caller authorizes against the result).
     fn list_trace_events(&self, _trace_id: &str) -> Result<Vec<LlmEvent>> {
