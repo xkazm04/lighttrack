@@ -19,6 +19,8 @@ const NAMES: &[&str] = &[
     "create_rubric",
     "create_benchmark",
     "create_limit",
+    "update_limit",
+    "delete_limit",
     "put_price",
 ];
 
@@ -100,6 +102,23 @@ pub(crate) fn tools() -> Vec<Value> {
                 "action":{"type":"string","enum":["alert","throttle","block"],"description":"default alert"}
             },"required":["project","metric","window","threshold"]}),
             false),
+        wtool("update_limit",
+            "Replace a usage-limit rule wholesale (by rule id). Toggle it with `enabled`, retune `threshold`/`warn_at`, or change `scope`. `metric`/`window`/`threshold` are required (the rule is replaced, not patched); `project_id` is immutable.",
+            json!({"type":"object","properties":{
+                "id":{"type":"string","description":"limit rule id (from list_limits)"},
+                "metric":{"type":"string","enum":["cost_usd","calls","tokens"]},
+                "window":{"type":"string","enum":["hour","day","month"]},
+                "threshold":{"type":"number"},
+                "action":{"type":"string","enum":["alert","throttle","block"],"description":"default alert"},
+                "enabled":{"type":"boolean","description":"toggle the rule on/off (default true)"},
+                "warn_at":{"type":"number","description":"soft-warning fraction of threshold in (0,1)"},
+                "scope":{"type":"object","description":"dimension scope, e.g. {\"model\":\"gpt-4o\"} or {\"provider\":\"openai\"} or {\"name\":\"summarize\"}; omit for project-wide"}
+            },"required":["id","metric","window","threshold"]}),
+            true),
+        wtool("delete_limit",
+            "Remove a usage-limit rule by id. Idempotent from the caller's view; 404s if the id is unknown.",
+            json!({"type":"object","properties":{"id":{"type":"string","description":"limit rule id (from list_limits)"}},"required":["id"]}),
+            true),
         wtool("put_price",
             "Upsert a model's price (per-million-token rates); hot-swaps the live price book. Idempotent.",
             json!({"type":"object","properties":{
@@ -176,6 +195,18 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
             ),
             Err(e) => Err(e),
         },
+        "update_limit" => match need(args, "id") {
+            Ok(id) => post_put(
+                c, args, &["metric", "window", "threshold"],
+                &["metric", "window", "threshold", "action", "enabled", "warn_at", "scope"],
+                format!("/v1/limits/{id}"),
+            ),
+            Err(e) => Err(e),
+        },
+        "delete_limit" => match need(args, "id") {
+            Ok(id) => c.delete(&format!("/v1/limits/{id}")),
+            Err(e) => Err(e),
+        },
         "put_price" => match (need(args, "provider"), need(args, "model")) {
             (Ok(p), Ok(m)) => {
                 let required = &["input_per_mtok", "output_per_mtok"];
@@ -199,6 +230,14 @@ fn post_with(c: &Client, args: &Value, required: &[&str], body_keys: &[&str], pa
     match missing(args, required) {
         Some(e) => Err(e),
         None => c.post(&path, &pick(args, body_keys)),
+    }
+}
+
+/// PUT `body_keys` from `args` to `path`, after asserting `required` are present (replace semantics).
+fn post_put(c: &Client, args: &Value, required: &[&str], body_keys: &[&str], path: String) -> Result<Value, String> {
+    match missing(args, required) {
+        Some(e) => Err(e),
+        None => c.put(&path, &pick(args, body_keys)),
     }
 }
 
@@ -229,4 +268,56 @@ fn pick(args: &Value, keys: &[&str]) -> Value {
         }
     }
     Value::Object(m)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn new_write_tools_are_gated() {
+        assert!(is_write_tool("update_limit"));
+        assert!(is_write_tool("delete_limit"));
+    }
+
+    #[test]
+    fn new_write_tools_are_listed_and_idempotent() {
+        let names: Vec<String> = tools()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        for n in ["update_limit", "delete_limit"] {
+            assert!(names.contains(&n.to_string()), "{n} missing from tools()");
+        }
+        // Both replace/remove a rule by id → idempotent from the caller's view.
+        for t in tools() {
+            if matches!(t["name"].as_str(), Some("update_limit") | Some("delete_limit")) {
+                assert_eq!(t["annotations"]["idempotentHint"], json!(true));
+                assert_eq!(t["annotations"]["readOnlyHint"], json!(false));
+            }
+        }
+    }
+
+    #[test]
+    fn dispatch_requires_id_before_any_http() {
+        // `need(id)` fails first, so no request is attempted against the client's base URL.
+        let c = Client::from_env();
+        for tool in ["update_limit", "delete_limit"] {
+            let r = dispatch(&c, tool, &json!({})).expect("is a write tool");
+            assert!(r.unwrap_err().contains("id"), "{tool} should require id");
+        }
+    }
+
+    #[test]
+    fn pick_copies_present_non_null_keys() {
+        let body = pick(
+            &json!({ "metric": "cost_usd", "threshold": 5.0, "action": null }),
+            &["metric", "threshold", "action", "scope"],
+        );
+        assert_eq!(body["metric"], "cost_usd");
+        assert_eq!(body["threshold"], 5.0);
+        assert!(body.get("action").is_none()); // null skipped
+        assert!(body.get("scope").is_none()); // absent skipped
+    }
 }

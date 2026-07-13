@@ -1,11 +1,32 @@
-//! `get_benchmark_runs` (run-history leaderboard + mean-score trend) and `list_benchmarks`.
+//! `get_benchmark_runs` (run-history leaderboard + mean-score trend), `list_benchmarks`, and
+//! `check_benchmark_gate` (the CI-gate verdict badge).
 
 use serde_json::Value;
 
 use crate::md::{
-    commafy, f, money, opt_f, opt_u, pct, s, short_ts, sparkline, status_glyph, trunc, u, Align,
-    Table,
+    commafy, f, money, opt_f, opt_s, opt_u, pct, s, short_ts, sparkline, status_glyph, trunc, u,
+    Align, Table,
 };
+
+/// The CI-gate verdict for a benchmark's latest finished run. Renders a one-line badge with the
+/// supporting numbers so a pipeline log (or an agent) can read the pass/fail at a glance.
+pub(crate) fn gate(v: &Value) -> Option<String> {
+    let status = v.get("status")?.as_str()?;
+    let (glyph, headline) = match status {
+        "pass" => ("✅", "PASS"),
+        "regressed" => ("❌", "REGRESSED"),
+        "no_baseline" => ("•", "NO BASELINE"),
+        "no_runs" => ("•", "NO RUNS"),
+        other => ("·", other),
+    };
+    let mean = opt_f(v, "mean").map(|m| format!("{m:.3}")).unwrap_or_else(|| "—".into());
+    let baseline = opt_f(v, "baseline").map(|b| format!("{b:.3}")).unwrap_or_else(|| "—".into());
+    let n = opt_u(v, "n").map(|n| n.to_string()).unwrap_or_else(|| "—".into());
+    let run = opt_s(v, "run_id").filter(|s| !s.is_empty()).unwrap_or("—");
+    Some(format!(
+        "### Gate {glyph} **{headline}**\n\n- mean **{mean}** vs baseline **{baseline}** (n={n})\n- run `{run}`"
+    ))
+}
 
 pub(crate) fn runs(v: &Value) -> Option<String> {
     let rows = v.as_array()?;

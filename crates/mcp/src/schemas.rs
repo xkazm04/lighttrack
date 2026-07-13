@@ -23,6 +23,9 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "list_benchmarks" => list_of(benchmark()),
         "get_benchmark" => benchmark(),
         "get_benchmark_runs" => list_of(benchmark_run()),
+        "check_benchmark_gate" => gate_resp(),
+        "get_usecases" => list_of(usecase_row()),
+        "get_forecast" => forecast_resp(),
         "list_jobs" => list_of(job()),
         "get_job" => job(),
         "list_datasets" => list_of(dataset()),
@@ -31,9 +34,42 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "list_rubrics" => list_of(rubric()),
         "get_rubric" => rubric(),
         "get_collective_leaderboard" => collective_resp(),
+        "get_collective_digest" => collective_digest_resp(),
         _ => return None,
     };
     Some(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::output_schema;
+
+    #[test]
+    fn new_tools_declare_an_output_schema() {
+        for t in [
+            "check_benchmark_gate",
+            "get_usecases",
+            "get_forecast",
+            "get_collective_digest",
+        ] {
+            assert!(output_schema(t).is_some(), "{t} should declare an outputSchema");
+        }
+    }
+
+    #[test]
+    fn limit_status_schema_carries_the_rejected_block() {
+        let s = output_schema("get_limit_status").expect("schema present");
+        let props = &s["properties"];
+        assert!(props.get("statuses").is_some());
+        assert!(props.get("rejected").is_some(), "rejected block must be schema'd");
+    }
+
+    #[test]
+    fn gate_schema_enumerates_the_four_verdicts() {
+        let s = output_schema("check_benchmark_gate").unwrap();
+        let variants = s["properties"]["status"]["enum"].as_array().unwrap();
+        assert_eq!(variants.len(), 4);
+    }
 }
 
 /// `tool_rendered` wraps a top-level array under `items`; mirror that here.
@@ -143,6 +179,86 @@ fn limit_status_resp() -> Value {
                 "metric": {"type":"string"}, "window": {"type":"string"}, "action": {"type":"string"},
                 "current": {"type":"number"}, "threshold": {"type":"number"},
                 "breached": {"type":"boolean"}, "ratio": {"type":"number"}
+            })) },
+            // Best-effort, process-local ledger of ingest attempts the caps turned away (429), with the
+            // estimated missed cost per (metric, window[, scope]). Absent when nothing's been rejected.
+            "rejected": { "type":"array", "items": obj(json!({
+                "metric": {"type":"string"}, "window": {"type":"string"}, "scope": {"type":["object","null"]},
+                "count": {"type":"integer"}, "est_missed_cost_usd": {"type":"number"},
+                "first_ts": {"type":"string"}, "last_ts": {"type":"string"}
+            })) }
+        }
+    })
+}
+
+fn gate_resp() -> Value {
+    json!({
+        "type": "object",
+        "required": ["status"],
+        "additionalProperties": true,
+        "properties": {
+            "status": {"type":"string","enum":["pass","regressed","no_baseline","no_runs"]},
+            "run_id": {"type":["string","null"]}, "mean": {"type":["number","null"]},
+            "baseline": {"type":["number","null"]}, "n": {"type":["integer","null"]}
+        }
+    })
+}
+
+fn usecase_row() -> Value {
+    obj(json!({
+        "name": {"type":["string","null"]}, "provider": {"type":"string"}, "model": {"type":"string"},
+        "calls": {"type":"integer"}, "input_tokens": {"type":"integer"},
+        "output_tokens": {"type":"integer"}, "cost_usd": {"type":"number"}
+    }))
+}
+
+fn forecast_resp() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["spend", "budgets", "margins"],
+        "properties": {
+            "project_id": {"type":"string"}, "generated_at": {"type":"string"},
+            "dimension": {"type":"string"}, "horizon_days": {"type":"integer"},
+            "lookback_days": {"type":"integer"},
+            "spend": obj(json!({
+                "cost_trend": {"type":"object"},
+                "projected_daily_cost_usd": {"type":"number"},
+                "projected_cost_next_7d_usd": {"type":"number"},
+                "projected_cost_next_30d_usd": {"type":"number"}
+            })),
+            "budgets": { "type":"array", "items": obj(json!({
+                "rule_id": {"type":"string"}, "metric": {"type":"string"}, "window": {"type":"string"},
+                "threshold": {"type":"number"}, "current": {"type":"number"},
+                "projected_daily": {"type":"number"}, "eta_days": {"type":["number","null"]}
+            })) },
+            "margins": { "type":"array", "items": obj(json!({
+                "key": {"type":"string"}, "revenue_per_day": {"type":"number"},
+                "cost_per_day": {"type":"number"}, "margin_usd": {"type":"number"},
+                "currently_profitable": {"type":"boolean"},
+                "eta_unprofitable_days": {"type":["number","null"]}
+            })) },
+            "alerts": { "type":"array", "items": obj(json!({
+                "kind": {"type":"string"}, "severity": {"type":"string"}, "subject": {"type":"string"},
+                "eta_days": {"type":"number"}, "message": {"type":"string"}
+            })) }
+        }
+    })
+}
+
+fn collective_digest_resp() -> Value {
+    json!({
+        "type": "object",
+        "required": ["entries"],
+        "additionalProperties": true,
+        "properties": {
+            "schema_version": {"type":"integer"}, "contributor_id": {"type":"string"},
+            "generated_at": {"type":"string"}, "min_cases": {"type":"integer"},
+            "entries": { "type":"array", "items": obj(json!({
+                "provider": {"type":"string"}, "model": {"type":"string"}, "task_type": {"type":"string"},
+                "quality": {"type":"number"}, "pass_rate": {"type":"number"},
+                "avg_cost_usd": {"type":"number"}, "p50_latency_ms": {"type":["integer","null"]},
+                "n_runs": {"type":"integer"}, "n_cases": {"type":"integer"}
             })) }
         }
     })

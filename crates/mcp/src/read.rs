@@ -67,6 +67,13 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({"type":"object","properties":{"benchmark":{"type":"string"}},"required":["benchmark"]})),
         tool("get_benchmark_runs", "Run history (scorecards: mean score, pass rate, cost, status) for a benchmark.",
             json!({"type":"object","properties":{"benchmark":{"type":"string"}},"required":["benchmark"]})),
+        tool("check_benchmark_gate", "CI-gate verdict for a benchmark from its latest finished run: pass | regressed | no_baseline | no_runs, with the supporting run id, mean, baseline, and case count. Use in a pipeline step to block a regression.",
+            json!({"type":"object","properties":{"benchmark":{"type":"string","description":"benchmark id"}},"required":["benchmark"]})),
+        tool("get_usecases", "Use-case cost rollup: usage + cost grouped by (name, provider, model) for a project, optionally windowed from `since`. A call's use-case is its `name`, or its model when unnamed.",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "since":{"type":"string","description":"RFC3339 window start (inclusive); omit for full history"}
+            },"required":["project"]})),
         tool("list_datasets", "List a project's datasets.",
             json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
         tool("get_dataset", "Fetch one dataset by id.",
@@ -85,6 +92,10 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({"type":"object","properties":{
                 "task_type":{"type":"string","description":"filter to one task bucket (qa, summarization, coding, …)"},
                 "provider":{"type":"string","description":"filter to one provider (anthropic, openai, …)"}
+            }})),
+        tool("get_collective_digest", "This instance's privacy-safe, k-anonymized model digest — the aggregate scorecards it would contribute to a collective hub (admin key required). Never reads raw events.",
+            json!({"type":"object","properties":{
+                "min_cases":{"type":"integer","description":"k-anonymity floor: only (model, task) buckets with ≥ this many cases are published (default from server)"}
             }})),
     ]
 }
@@ -121,6 +132,8 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "list_benchmarks" => bind(args, "project", |p| c.get(&format!("/v1/projects/{p}/benchmarks"))),
         "get_benchmark" => bind(args, "benchmark", |b| c.get(&format!("/v1/benchmarks/{b}"))),
         "get_benchmark_runs" => bind(args, "benchmark", |b| c.get(&format!("/v1/benchmarks/{b}/runs"))),
+        "check_benchmark_gate" => bind(args, "benchmark", |b| c.get(&format!("/v1/benchmarks/{b}/gate"))),
+        "get_usecases" => c.get(&usecases_path(args)),
         "list_datasets" => bind(args, "project", |p| c.get(&format!("/v1/projects/{p}/datasets"))),
         "get_dataset" => bind(args, "dataset", |d| c.get(&format!("/v1/datasets/{d}"))),
         "list_dataset_items" => bind(args, "dataset", |d| c.get(&format!("/v1/datasets/{d}/items"))),
@@ -129,6 +142,7 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "list_jobs" => c.get(&jobs_path(args)),
         "get_job" => bind(args, "job", |j| c.get(&format!("/v1/jobs/{j}"))),
         "get_collective_leaderboard" => c.get(&collective_path(args)),
+        "get_collective_digest" => c.get(&collective_digest_path(args)),
         _ => return None,
     };
     Some(r)
@@ -257,6 +271,26 @@ fn collective_path(args: &Value) -> String {
     p
 }
 
+fn collective_digest_path(args: &Value) -> String {
+    match args.get("min_cases").and_then(Value::as_u64) {
+        Some(n) => format!("/v1/collective/digest?min_cases={n}"),
+        None => "/v1/collective/digest".to_string(),
+    }
+}
+
+/// `GET /v1/usecases` — required `project`, optional `since` window.
+fn usecases_path(args: &Value) -> String {
+    let mut p = "/v1/usecases".to_string();
+    let mut sep = '?';
+    for k in ["project", "since"] {
+        if let Some(v) = args.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            p.push_str(&format!("{sep}{k}={v}"));
+            sep = '&';
+        }
+    }
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +334,35 @@ mod tests {
         assert!(p.contains("&status=error"));
         assert!(p.contains("&min_cost=0.5"));
         assert!(p.contains("&cursor=abcd"));
+    }
+
+    #[test]
+    fn usecases_path_requires_project_and_optional_since() {
+        assert_eq!(usecases_path(&json!({ "project": "p1" })), "/v1/usecases?project=p1");
+        assert_eq!(
+            usecases_path(&json!({ "project": "p1", "since": "2026-01-01T00:00:00Z" })),
+            "/v1/usecases?project=p1&since=2026-01-01T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn collective_digest_path_passes_min_cases() {
+        assert_eq!(collective_digest_path(&json!({})), "/v1/collective/digest");
+        assert_eq!(
+            collective_digest_path(&json!({ "min_cases": 5 })),
+            "/v1/collective/digest?min_cases=5"
+        );
+    }
+
+    #[test]
+    fn new_read_tools_are_registered_with_schemas() {
+        let names: Vec<String> = tools()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        for n in ["check_benchmark_gate", "get_usecases", "get_collective_digest"] {
+            assert!(names.contains(&n.to_string()), "{n} missing");
+        }
     }
 
     #[test]

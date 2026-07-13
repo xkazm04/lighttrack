@@ -44,6 +44,10 @@ impl Client {
         self.send(self.http.put(self.url(path)).json(body))
     }
 
+    pub(crate) fn delete(&self, path: &str) -> Result<Value, String> {
+        self.send(self.http.delete(self.url(path)))
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base, path)
     }

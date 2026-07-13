@@ -14,6 +14,7 @@ mod compare;
 mod costs;
 mod datasets;
 mod events;
+mod forecast;
 mod jobs;
 mod limits;
 mod margin;
@@ -31,6 +32,8 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
     match kind {
         "list_projects" => projects::list(v),
         "get_cost_summary" => costs::summary(v),
+        "get_usecases" => costs::usecases(v),
+        "get_forecast" => forecast::report(v),
         "query_events" => events::list(v),
         "get_event" => events::detail(v),
         "list_traces" => traces::list(v),
@@ -42,6 +45,7 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "list_benchmarks" => benchmarks::list(v),
         "get_benchmark" => benchmarks::detail(v),
         "get_benchmark_runs" => benchmarks::runs(v),
+        "check_benchmark_gate" => benchmarks::gate(v),
         "list_jobs" => jobs::list(v),
         "get_job" => jobs::detail(v),
         "list_datasets" => datasets::list(v),
