@@ -2,7 +2,8 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, HeaderValue},
+    response::{IntoResponse, Response},
     Json,
 };
 use chrono::{DateTime, Utc};
@@ -10,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use lighttrack_core::{LimitStatus, LlmEvent, Status};
-use lighttrack_store::{Admission, CostRow, UseCaseCostRow};
+use lighttrack_store::{Admission, CostRow, EventFilter, UseCaseCostRow};
 
 use crate::auth::Principal;
 use crate::error::ApiError;
@@ -139,35 +140,81 @@ pub(crate) async fn post_event(
 pub(crate) struct EventsParams {
     project: Option<String>,
     limit: Option<usize>,
+    /// RFC3339 lower/upper bounds on event time (`since` inclusive, `until` exclusive).
+    since: Option<String>,
+    until: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    trace_id: Option<String>,
+    name: Option<String>,
+    /// Opaque keyset cursor from a prior page's `X-Next-Cursor` header.
+    cursor: Option<String>,
 }
 
+/// Parse an optional RFC3339 query param into a UTC instant, 400 on malformed input.
+fn parse_opt_ts(field: &str, raw: Option<&str>) -> Result<Option<DateTime<Utc>>, ApiError> {
+    match raw {
+        Some(s) => Ok(Some(
+            DateTime::parse_from_rfc3339(s)
+                .map_err(|e| ApiError::bad_request(format!("invalid '{field}' timestamp: {e}")))?
+                .with_timezone(&Utc),
+        )),
+        None => Ok(None),
+    }
+}
+
+/// Paged, filtered event listing. The JSON body stays a bare array (render/CLI shape unchanged); when
+/// more rows remain the next keyset cursor is returned in the `X-Next-Cursor` response header.
 pub(crate) async fn get_events(
     State(st): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<EventsParams>,
-) -> Result<Json<Vec<LlmEvent>>, ApiError> {
+) -> Result<Response, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
+    let filter = EventFilter {
+        since: parse_opt_ts("since", q.since.as_deref())?,
+        until: parse_opt_ts("until", q.until.as_deref())?,
+        provider: q.provider.clone(),
+        model: q.model.clone(),
+        trace_id: q.trace_id.clone(),
+        name: q.name.clone(),
+        cursor: q.cursor.clone(),
+    };
     let store = st.store.clone();
     let limit = q.limit.unwrap_or(50).min(1000);
-    let events = spawn_db(move || store.list_events(project.as_deref(), limit)).await?;
-    Ok(Json(events))
+    let page =
+        spawn_db(move || store.list_events_filtered(project.as_deref(), &filter, limit)).await?;
+
+    let mut resp = Json(page.events).into_response();
+    if let Some(cursor) = page.next_cursor {
+        if let Ok(v) = HeaderValue::from_str(&cursor) {
+            resp.headers_mut().insert("x-next-cursor", v);
+        }
+    }
+    Ok(resp)
 }
 
 #[derive(Deserialize)]
-pub(crate) struct ProjectParam {
+pub(crate) struct CostsParams {
     project: Option<String>,
+    /// Optional RFC3339 window (`since` inclusive, `until` exclusive); omit for full history.
+    since: Option<String>,
+    until: Option<String>,
 }
 
 pub(crate) async fn get_costs(
     State(st): State<AppState>,
     headers: HeaderMap,
-    Query(q): Query<ProjectParam>,
+    Query(q): Query<CostsParams>,
 ) -> Result<Json<Vec<CostRow>>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
+    let since = parse_opt_ts("since", q.since.as_deref())?;
+    let until = parse_opt_ts("until", q.until.as_deref())?;
     let store = st.store.clone();
-    let rows = spawn_db(move || store.cost_summary(project.as_deref())).await?;
+    let rows =
+        spawn_db(move || store.cost_summary_windowed(project.as_deref(), since, until)).await?;
     Ok(Json(rows))
 }
 

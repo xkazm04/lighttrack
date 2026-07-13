@@ -7,12 +7,13 @@
 //! Routes:
 //!   GET  /health
 //!   POST /v1/events                      ingest one event (cost computed; limits evaluated)
-//!   GET  /v1/events?project=&limit=
+//!   GET  /v1/events?project=&limit=&since=&until=&provider=&model=&trace_id=&name=&cursor=
+//!                                        keyset pagination: next page cursor in `X-Next-Cursor`
 //!   GET  /v1/events/:id
 //!   GET  /v1/traces?project=&limit=     list traces (rollups grouped by trace_id)
 //!   GET  /v1/traces/:id                 one trace: totals + span tree + scores within it
 //!   POST /v1/traces/:id/score           score a whole trace (anchored to its root span)
-//!   GET  /v1/costs?project=
+//!   GET  /v1/costs?project=&since=&until=
 //!   GET  /v1/usecases?project=&since=   use-case rollup: usage+cost by name×provider×model, windowed
 //!   POST /v1/scores  GET /v1/scores?project=&limit=
 //!   GET  /v1/prices  PUT /v1/prices/:provider/:model
@@ -39,6 +40,8 @@
 //!   GET  /v1/collective/leaderboard?task_type=&provider=   merged real-world model leaderboard
 //!
 //! Env: LIGHTTRACK_BIND, LIGHTTRACK_DB, LIGHTTRACK_DATABASE_URL, LIGHTTRACK_PRICING,
+//!      LIGHTTRACK_MAX_TS_SKEW_SECS (reject events dated > N s from now; 0/unset = off),
+//!      LIGHTTRACK_MAX_BODY_BYTES (single-event ingest body cap → 413; default 2 MiB),
 //!      LIGHTTRACK_AUTH_MODE (dev|enforced), LIGHTTRACK_ADMIN_KEY,
 //!      LIGHTTRACK_RELAY_DEVICE_KEY (bearer key of the enrolled local device — relay lease/result),
 //!      LIGHTTRACK_RELAY_FLAT_COST_USD (fixed cost stamped per relay run event; default 1.0),

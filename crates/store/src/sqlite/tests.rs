@@ -62,6 +62,117 @@ fn duplicate_event_id_is_a_conflict_not_an_opaque_error() {
 }
 
 #[test]
+fn keyset_pagination_is_stable_across_interleaved_inserts() {
+    use chrono::{TimeZone, Utc as ChronoUtc};
+    let s = SqliteStore::open_in_memory().unwrap();
+    // Five events, strictly increasing ts (so DESC order is e5,e4,e3,e2,e1).
+    let mk = |n: u32| {
+        let mut e = ev("p1", "m", 1, 1, 0.0);
+        e.id = format!("e{n}");
+        e.ts = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, n).unwrap();
+        e
+    };
+    for n in 1..=5 {
+        s.insert_event(&mk(n)).unwrap();
+    }
+
+    let filter = crate::EventFilter::default();
+    let page1 = s.list_events_filtered(Some("p1"), &filter, 2).unwrap();
+    assert_eq!(
+        page1.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+        ["e5", "e4"]
+    );
+    let c1 = page1.next_cursor.expect("more rows remain");
+
+    // Insert a brand-new, newest event mid-pagination. Keyset paging must not shift the window: the
+    // next page continues strictly below e4, unaffected by e6.
+    s.insert_event(&mk(6)).unwrap();
+
+    let f2 = crate::EventFilter { cursor: Some(c1), ..Default::default() };
+    let page2 = s.list_events_filtered(Some("p1"), &f2, 2).unwrap();
+    assert_eq!(
+        page2.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+        ["e3", "e2"]
+    );
+    let c2 = page2.next_cursor.expect("one more row remains");
+
+    let f3 = crate::EventFilter { cursor: Some(c2), ..Default::default() };
+    let page3 = s.list_events_filtered(Some("p1"), &f3, 2).unwrap();
+    assert_eq!(page3.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e1"]);
+    assert!(page3.next_cursor.is_none(), "last page has no cursor");
+    // No duplicates, no skips across the session (e6 correctly excluded — it's newer than the cursor).
+}
+
+#[test]
+fn filtered_listing_ands_all_predicates() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    let mut a = ev("p1", "claude-haiku-4-5", 1, 1, 0.0);
+    a.id = "a".into();
+    a.provider = Provider::Anthropic;
+    a.name = Some("summarize".into());
+    a.trace_id = Some("t-a".into());
+    let mut b = ev("p1", "gpt-4o", 1, 1, 0.0);
+    b.id = "b".into();
+    b.provider = Provider::OpenAi;
+    b.name = Some("classify".into());
+    b.trace_id = Some("t-b".into());
+    s.insert_event(&a).unwrap();
+    s.insert_event(&b).unwrap();
+
+    let by_provider = crate::EventFilter { provider: Some("openai".into()), ..Default::default() };
+    let r = s.list_events_filtered(Some("p1"), &by_provider, 50).unwrap();
+    assert_eq!(r.events.len(), 1);
+    assert_eq!(r.events[0].id, "b");
+
+    let by_model_and_name = crate::EventFilter {
+        model: Some("claude-haiku-4-5".into()),
+        name: Some("summarize".into()),
+        ..Default::default()
+    };
+    let r = s.list_events_filtered(Some("p1"), &by_model_and_name, 50).unwrap();
+    assert_eq!(r.events.len(), 1);
+    assert_eq!(r.events[0].id, "a");
+
+    // Contradictory predicates → empty.
+    let none = crate::EventFilter {
+        provider: Some("openai".into()),
+        name: Some("summarize".into()),
+        ..Default::default()
+    };
+    assert!(s.list_events_filtered(Some("p1"), &none, 50).unwrap().events.is_empty());
+}
+
+#[test]
+fn windowed_filter_and_cost_summary_respect_since_inclusive_until_exclusive() {
+    use chrono::{TimeZone, Utc as ChronoUtc};
+    let s = SqliteStore::open_in_memory().unwrap();
+    let at = |h: u32, id: &str| {
+        let mut e = ev("p1", "m", 1, 1, 1.0);
+        e.id = id.into();
+        e.ts = ChronoUtc.with_ymd_and_hms(2026, 1, 1, h, 0, 0).unwrap();
+        e
+    };
+    for (h, id) in [(1, "h1"), (2, "h2"), (3, "h3")] {
+        s.insert_event(&at(h, id)).unwrap();
+    }
+    let since = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 2, 0, 0).unwrap();
+    let until = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 3, 0, 0).unwrap();
+
+    // [since, until): h2 only (h1 before since, h3 at until is excluded).
+    let f = crate::EventFilter { since: Some(since), until: Some(until), ..Default::default() };
+    let r = s.list_events_filtered(Some("p1"), &f, 50).unwrap();
+    assert_eq!(r.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["h2"]);
+
+    let costs = s.cost_summary_windowed(Some("p1"), Some(since), Some(until)).unwrap();
+    assert_eq!(costs.len(), 1);
+    assert_eq!(costs[0].calls, 1, "only h2 falls in the window");
+
+    // No bounds == full history (matches cost_summary).
+    let all = s.cost_summary_windowed(Some("p1"), None, None).unwrap();
+    assert_eq!(all[0].calls, 3);
+}
+
+#[test]
 fn insert_list_cost_roundtrip() {
     let s = SqliteStore::open_in_memory().unwrap();
     s.insert_event(&ev("p1", "claude-haiku-4-5", 100, 50, 0.001)).unwrap();

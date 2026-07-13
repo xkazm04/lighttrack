@@ -58,6 +58,28 @@ pub struct CostRow {
     pub cost_usd: f64,
 }
 
+/// Optional filters + keyset cursor for [`Store::list_events_filtered`]. All fields are additive and
+/// AND-combined; `None` fields don't constrain. `cursor` is an opaque token minted by a previous page
+/// ([`EventPage::next_cursor`]) — the backend decodes it into a `(ts, id)` keyset position.
+#[derive(Debug, Clone, Default)]
+pub struct EventFilter {
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub trace_id: Option<String>,
+    pub name: Option<String>,
+    pub cursor: Option<String>,
+}
+
+/// One page of events plus the cursor to fetch the next page (newest-first). `next_cursor` is `Some`
+/// only when more rows exist beyond this page; pass it back as [`EventFilter::cursor`] to continue.
+#[derive(Debug, Clone)]
+pub struct EventPage {
+    pub events: Vec<LlmEvent>,
+    pub next_cursor: Option<String>,
+}
+
 /// A use-case cost/usage rollup row — grouped by (name, provider, model), optionally windowed by a
 /// `since` cutoff. `name` is `None` for calls that carry no use-case name; the consumer rolls those
 /// up under their model. Powers the Personas "LLM Overview" table.
@@ -209,8 +231,39 @@ pub trait Store: Send + Sync {
     /// Most recent events, newest first, optionally filtered by project.
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>>;
 
+    /// Filtered, keyset-paginated event listing (newest first). Applies the [`EventFilter`] and pages
+    /// on `(ts, id)` descending, returning up to `limit` events plus a `next_cursor` when more remain.
+    ///
+    /// The default ignores the filter/cursor and delegates to [`Store::list_events`] (no pagination) so
+    /// backends that haven't ported the keyset query compile unchanged — the SQLite backend implements
+    /// the full filtered/paginated form. Correct string-keyset paging relies on the fixed-width
+    /// `RFC3339(Nanos, Z)` timestamp invariant (see [`codec::fmt_ts`]).
+    fn list_events_filtered(
+        &self,
+        project: Option<&str>,
+        _filter: &EventFilter,
+        limit: usize,
+    ) -> Result<EventPage> {
+        Ok(EventPage {
+            events: self.list_events(project, limit)?,
+            next_cursor: None,
+        })
+    }
+
     /// Cost/usage rollup grouped by project + provider + model, optionally filtered by project.
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>>;
+
+    /// Cost/usage rollup over an optional `[since, until)` time window (both bounds optional). The
+    /// default ignores the window and delegates to [`Store::cost_summary`] (full history) so backends
+    /// that haven't ported the windowed query compile unchanged; SQLite implements the window.
+    fn cost_summary_windowed(
+        &self,
+        project: Option<&str>,
+        _since: Option<DateTime<Utc>>,
+        _until: Option<DateTime<Utc>>,
+    ) -> Result<Vec<CostRow>> {
+        self.cost_summary(project)
+    }
 
     /// Use-case rollup: cost/usage grouped by (name, provider, model), optionally restricted to
     /// events at/after `since`. Default returns an empty rollup so backends that don't implement it

@@ -1,15 +1,16 @@
 //! Events: ingest, list, single-event lookup, cost rollup, and rolling usage.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, ErrorCode, OptionalExtension, Row};
+use rusqlite::types::ToSql;
+use rusqlite::{params, params_from_iter, Connection, ErrorCode, OptionalExtension, Row};
 use serde_json::Value;
 
 use lighttrack_core::{LlmEvent, Operation, Provider, Status, TokenUsage, TraceSummary};
 
 use crate::codec::{fmt_ts, parse_enum, parse_ts};
 use crate::{
-    event_contribution, evaluate_admission, Admission, CostRow, Result, StoreError, Usage,
-    UseCaseCostRow,
+    event_contribution, evaluate_admission, Admission, CostRow, EventFilter, EventPage, Result,
+    StoreError, Usage, UseCaseCostRow,
 };
 
 /// Map a failed event insert to a typed error: a primary-key / uniqueness violation (a duplicate
@@ -106,6 +107,106 @@ pub(super) fn list(conn: &Connection, project: Option<&str>, limit: usize) -> Re
         rows
     };
     raws.into_iter().map(from_raw).collect()
+}
+
+/// Filtered, keyset-paginated listing (newest first), paging on `(ts, id)` descending. Fetches
+/// `limit + 1` rows to detect whether a further page exists; when it does, the extra row is dropped and
+/// a `next_cursor` encoding the last returned row's `(ts, id)` is returned. String comparison on `ts`
+/// is chronological because the stored format is fixed-width (see `codec::fmt_ts`).
+pub(super) fn list_filtered(
+    conn: &Connection,
+    project: Option<&str>,
+    filter: &EventFilter,
+    limit: usize,
+) -> Result<EventPage> {
+    let mut conds: Vec<&str> = Vec::new();
+    let mut args: Vec<Box<dyn ToSql>> = Vec::new();
+    if let Some(p) = project {
+        conds.push("project_id = ?");
+        args.push(Box::new(p.to_string()));
+    }
+    if let Some(s) = filter.since {
+        conds.push("ts >= ?");
+        args.push(Box::new(fmt_ts(s)));
+    }
+    if let Some(u) = filter.until {
+        conds.push("ts < ?");
+        args.push(Box::new(fmt_ts(u)));
+    }
+    if let Some(p) = &filter.provider {
+        conds.push("provider = ?");
+        args.push(Box::new(p.clone()));
+    }
+    if let Some(m) = &filter.model {
+        conds.push("model = ?");
+        args.push(Box::new(m.clone()));
+    }
+    if let Some(t) = &filter.trace_id {
+        conds.push("trace_id = ?");
+        args.push(Box::new(t.clone()));
+    }
+    if let Some(n) = &filter.name {
+        conds.push("name = ?");
+        args.push(Box::new(n.clone()));
+    }
+    if let Some(cursor) = &filter.cursor {
+        let (cts, cid) = decode_cursor(cursor)
+            .ok_or_else(|| StoreError::Other(format!("invalid cursor {cursor:?}")))?;
+        // Strictly after (cts, cid) in DESC (ts, id) order.
+        conds.push("(ts < ? OR (ts = ? AND id < ?))");
+        args.push(Box::new(cts.clone()));
+        args.push(Box::new(cts));
+        args.push(Box::new(cid));
+    }
+
+    let where_clause = if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {} ", conds.join(" AND "))
+    };
+    // Over-fetch by one so we can tell whether another page exists without a second COUNT query.
+    let fetch = (limit as i64).saturating_add(1);
+    args.push(Box::new(fetch));
+    let sql =
+        format!("SELECT {COLS} FROM events {where_clause}ORDER BY ts DESC, id DESC LIMIT ?");
+    let mut stmt = conn.prepare(&sql)?;
+    let raws = stmt
+        .query_map(params_from_iter(args.iter()), map_raw)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut events =
+        raws.into_iter().map(from_raw).collect::<Result<Vec<LlmEvent>>>()?;
+
+    let next_cursor = if events.len() as i64 > limit as i64 {
+        events.truncate(limit);
+        events
+            .last()
+            .map(|e| encode_cursor(&fmt_ts(e.ts), &e.id))
+    } else {
+        None
+    };
+    Ok(EventPage { events, next_cursor })
+}
+
+/// Encode a `(ts, id)` keyset position as an opaque, URL/header-safe cursor (hex of `ts|id`). Both
+/// components are `|`-free by construction (fixed-width RFC3339 ts, UUID id), so decoding is exact.
+fn encode_cursor(ts: &str, id: &str) -> String {
+    let raw = format!("{ts}|{id}");
+    raw.bytes().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Decode a cursor minted by [`encode_cursor`] back into `(ts, id)`; `None` if it isn't valid hex of a
+/// `ts|id` pair.
+fn decode_cursor(s: &str) -> Option<(String, String)> {
+    if s.is_empty() || s.len() % 2 != 0 {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect();
+    let raw = String::from_utf8(bytes?).ok()?;
+    let (ts, id) = raw.split_once('|')?;
+    Some((ts.to_string(), id.to_string()))
 }
 
 pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LlmEvent>> {
@@ -247,6 +348,56 @@ pub(super) fn cost_summary(conn: &Connection, project: Option<&str>) -> Result<V
         let v = stmt.query_map([], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
         v
     };
+    Ok(rows)
+}
+
+/// Cost/usage rollup over an optional `[since, until)` window (both bounds optional). Same grouping /
+/// ordering as [`cost_summary`]; window bounds compare against the fixed-width `ts` string.
+pub(super) fn cost_summary_windowed(
+    conn: &Connection,
+    project: Option<&str>,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+) -> Result<Vec<CostRow>> {
+    let cols = "project_id, provider, model, COUNT(*) AS calls, \
+        COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
+        COALESCE(SUM(cost_usd),0.0) AS cost";
+    let mut conds: Vec<&str> = Vec::new();
+    let mut args: Vec<Box<dyn ToSql>> = Vec::new();
+    if let Some(p) = project {
+        conds.push("project_id = ?");
+        args.push(Box::new(p.to_string()));
+    }
+    if let Some(s) = since {
+        conds.push("ts >= ?");
+        args.push(Box::new(fmt_ts(s)));
+    }
+    if let Some(u) = until {
+        conds.push("ts < ?");
+        args.push(Box::new(fmt_ts(u)));
+    }
+    let where_clause = if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {} ", conds.join(" AND "))
+    };
+    let sql = format!(
+        "SELECT {cols} FROM events {where_clause}GROUP BY project_id, provider, model ORDER BY cost DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params_from_iter(args.iter()), |row: &Row| {
+            Ok(CostRow {
+                project_id: row.get(0)?,
+                provider: row.get(1)?,
+                model: row.get(2)?,
+                calls: row.get(3)?,
+                input_tokens: row.get(4)?,
+                output_tokens: row.get(5)?,
+                cost_usd: row.get(6)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
 

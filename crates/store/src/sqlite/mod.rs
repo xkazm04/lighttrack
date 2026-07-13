@@ -35,7 +35,10 @@ use lighttrack_core::{
     RevenueEvent, Rubric, Score, TraceSummary,
 };
 
-use crate::{Admission, CostRow, DailyDimCost, DailyUsage, Result, Store, Usage, UseCaseCostRow};
+use crate::{
+    Admission, CostRow, DailyDimCost, DailyUsage, EventFilter, EventPage, Result, Store, Usage,
+    UseCaseCostRow,
+};
 
 const SCHEMA: &str = include_str!("../../../../schema/sqlite/001_init.sql");
 
@@ -101,8 +104,24 @@ impl Store for SqliteStore {
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
         self.with(|c| events::list(c, project, limit))
     }
+    fn list_events_filtered(
+        &self,
+        project: Option<&str>,
+        filter: &EventFilter,
+        limit: usize,
+    ) -> Result<EventPage> {
+        self.with(|c| events::list_filtered(c, project, filter, limit))
+    }
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
         self.with(|c| events::cost_summary(c, project))
+    }
+    fn cost_summary_windowed(
+        &self,
+        project: Option<&str>,
+        since: Option<DateTime<Utc>>,
+        until: Option<DateTime<Utc>>,
+    ) -> Result<Vec<CostRow>> {
+        self.with(|c| events::cost_summary_windowed(c, project, since, until))
     }
     fn usecase_costs(
         &self,
