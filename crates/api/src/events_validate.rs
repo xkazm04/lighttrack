@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
 
-use lighttrack_core::{LlmEvent, Provider};
+use lighttrack_core::LlmEvent;
 
 /// Env: max allowed absolute skew, in seconds, between an event's `ts` and server `now`. Unset or `0`
 /// disables the check (current behavior). A positive value rejects events dated more than that many
@@ -83,13 +83,10 @@ impl IngestPolicy {
         if ev.model.trim().is_empty() {
             return Err("`model` must not be empty".to_string());
         }
-        // A `provider` that didn't match a modeled variant deserializes to `Unknown`; reject it so we
-        // never silently store un-priceable, un-rollup-able traffic. Callers with a genuinely
-        // unmodeled provider should have it added to `Provider` rather than ingesting it as garbage.
-        if ev.provider == Provider::Unknown {
-            return Err("`provider` is unrecognized (expected one of: openai, anthropic, google)"
-                .to_string());
-        }
+        // A `provider` outside the modeled variants deserializes to `Unknown` and is ACCEPTED:
+        // observability must ingest traffic from providers we haven't modeled yet (mistral, bedrock,
+        // ollama, …). Its cost simply stays unpriced (`cost_usd: null`, no `cost_source`), which is
+        // visible rather than silent.
         if self.max_ts_skew_secs > 0 {
             let skew = (ev.ts - now).num_seconds().abs();
             if skew > self.max_ts_skew_secs {
@@ -112,6 +109,7 @@ pub(crate) fn policy() -> &'static IngestPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lighttrack_core::Provider;
     use serde_json::json;
 
     fn ev(overrides: serde_json::Value) -> LlmEvent {
@@ -147,12 +145,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unrecognized_provider() {
+    fn accepts_unmodeled_provider() {
         let now = Utc::now();
-        // A garbage provider string deserializes to `Provider::Unknown` and must be rejected.
-        let e = ev(json!({ "provider": "definitely-not-a-provider" }));
-        let err = disabled_skew().validate(&e, now).unwrap_err();
-        assert!(err.contains("provider"), "{err}");
+        // An unmodeled provider string deserializes to `Provider::Unknown` and is accepted —
+        // observability must ingest traffic from providers we haven't modeled yet.
+        let e = ev(json!({ "provider": "mistral" }));
+        assert_eq!(e.provider, Provider::Unknown);
+        assert!(disabled_skew().validate(&e, now).is_ok());
     }
 
     #[test]
