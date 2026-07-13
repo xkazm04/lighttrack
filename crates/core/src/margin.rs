@@ -110,7 +110,7 @@ pub fn compute_margin(
     rows
 }
 
-fn dim_key(r: &RevenueEvent, dim: MarginDimension) -> String {
+pub(crate) fn dim_key(r: &RevenueEvent, dim: MarginDimension) -> String {
     match dim {
         MarginDimension::Customer => r.customer_id.clone(),
         MarginDimension::Product => r.product_id.clone(),
@@ -119,8 +119,10 @@ fn dim_key(r: &RevenueEvent, dim: MarginDimension) -> String {
 }
 
 /// Amount of `r` recognized within `[since, until)`. Refunds are negative. Subscriptions with a valid
-/// period amortize linearly across the overlap; everything else is recognized fully at `ts`.
-fn recognized_amount(r: &RevenueEvent, since: DateTime<Utc>, until: DateTime<Utc>) -> f64 {
+/// period amortize linearly across the overlap; everything else is recognized fully at `ts`. Shared by
+/// the window rollup ([`compute_margin`]) and the per-day trend ([`crate::margin_trend`]) so both apply
+/// identical recognition rules — a daily point is just this over a one-day window.
+pub(crate) fn recognized_amount(r: &RevenueEvent, since: DateTime<Utc>, until: DateTime<Utc>) -> f64 {
     let signed = if r.kind == RevenueKind::Refund {
         -r.amount_usd.abs()
     } else {

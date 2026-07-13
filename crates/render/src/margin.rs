@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::md::{commafy, f, money, opt_f, opt_s, pct, s, short_ts, u, Align, Table};
+use crate::md::{commafy, f, money, opt_f, opt_s, pct, s, short_ts, sparkline, u, Align, Table};
 
 pub(crate) fn report(v: &Value) -> Option<String> {
     let rows = v.get("rows")?.as_array()?;
@@ -46,6 +46,64 @@ pub(crate) fn report(v: &Value) -> Option<String> {
         out.push_str(&format!("\n> ⚠️ {note}\n"));
     }
     Some(out)
+}
+
+/// `get_margin_trend` — a compact per-key margin sparkline table plus window totals.
+pub(crate) fn trend(v: &Value) -> Option<String> {
+    let dim = s(v, "dimension");
+    let label = if dim == "product" { "Product" } else { "Customer" };
+    let days = u(v, "days");
+    let series = v.get("series")?.as_array()?;
+    let totals = v.get("totals");
+
+    let mut out = format!("### Margin trend by {dim} · last {days}d\n\n");
+    if let Some(t) = totals {
+        out.push_str(&format!(
+            "**All keys:** {} revenue − {} cost = {} margin  ·  margin `{}`\n\n",
+            money(f(t, "total_revenue_usd")),
+            money(f(t, "total_cost_usd")),
+            money(f(t, "total_margin_usd")),
+            margin_spark(t),
+        ));
+    }
+    if series.is_empty() {
+        out.push_str("_No revenue or attributed cost in this window._");
+        return Some(out);
+    }
+
+    let mut tbl = Table::new(&[
+        (label, Align::Left),
+        ("Margin trend", Align::Left),
+        ("Revenue", Align::Right),
+        ("Cost", Align::Right),
+        ("Margin", Align::Right),
+    ]);
+    for row in series {
+        let m = f(row, "total_margin_usd");
+        tbl.row(vec![
+            format!("{} {}", glyph(m, None), s(row, "key")),
+            margin_spark(row),
+            money(f(row, "total_revenue_usd")),
+            money(f(row, "total_cost_usd")),
+            money(m),
+        ]);
+    }
+    let shown = series.len();
+    let total_keys = u(v, "key_count");
+    out.push_str(&tbl.render());
+    if total_keys as usize > shown {
+        out.push_str(&format!("\n_Showing top {shown} of {total_keys} by |margin|._\n"));
+    }
+    Some(out)
+}
+
+/// A sparkline over a series' per-day `margin_usd`.
+fn margin_spark(series: &Value) -> String {
+    let pts = series.get("points").and_then(Value::as_array);
+    let xs: Vec<f64> = pts
+        .map(|a| a.iter().map(|p| f(p, "margin_usd")).collect())
+        .unwrap_or_default();
+    sparkline(&xs)
 }
 
 /// 🔴 losing money · ⚠️ thin margin (<20%) · 🟢 healthy.

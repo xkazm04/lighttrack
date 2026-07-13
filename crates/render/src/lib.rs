@@ -55,6 +55,7 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "get_rubric" => rubrics::detail(v),
         "compare" => compare::leaderboard(v),
         "get_margin" => margin::report(v),
+        "get_margin_trend" => margin::trend(v),
         "get_collective_leaderboard" => collective::leaderboard(v),
         "get_collective_digest" => collective::digest(v),
         _ => None,

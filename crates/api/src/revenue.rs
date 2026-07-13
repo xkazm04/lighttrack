@@ -9,7 +9,12 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{compute_margin, MarginDimension, MarginRow, RevenueEvent};
+use lighttrack_core::margin::UNATTRIBUTED;
+use lighttrack_core::{
+    compute_margin, compute_margin_trend, DailyKeyCost, MarginDimension, MarginRow,
+    MarginTrendSeries, RevenueEvent,
+};
+use lighttrack_store::DailyDimCost;
 
 use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
@@ -125,6 +130,99 @@ pub(crate) async fn get_margin(
         currency_note,
         rows,
     }))
+}
+
+// --- margin trend (per-day series per dimension key) --------------------------------------------
+
+/// Hard cap on the trend window, to bound the O(revenue × days) recognition work and the response.
+const MAX_TREND_DAYS: u32 = 365;
+/// Default top-N keys (by |margin|) when `?top=` is absent and `LIGHTTRACK_MARGIN_TREND_TOP_N` unset.
+const DEFAULT_TREND_TOP_N: usize = 20;
+
+#[derive(Deserialize)]
+pub(crate) struct MarginTrendParams {
+    project: Option<String>,
+    /// `customer` (default) | `product`.
+    by: Option<String>,
+    /// Trailing window length in days (default 30, clamped to 1..=365).
+    days: Option<u32>,
+    /// Max keys returned, by |total margin| (default `LIGHTTRACK_MARGIN_TREND_TOP_N` or 20).
+    top: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct MarginTrendResponse {
+    dimension: String,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+    days: u32,
+    /// Distinct dimension keys before the top-N cap (so the client can say "showing N of key_count").
+    key_count: usize,
+    top_n: usize,
+    /// All-keys per-day totals (complete, not capped).
+    totals: MarginTrendSeries,
+    /// The top-N keys' dense daily series.
+    series: Vec<MarginTrendSeries>,
+}
+
+/// `GET /v1/margin/trend` — per-day revenue/cost/margin per customer or product over a trailing window.
+/// Revenue is recognized per day by the same rules as `/v1/margin`; cost from the per-day dimension
+/// rollup. Only the SQLite backend fills the daily cost series today; Postgres/Firestore return an
+/// empty cost series (revenue-only trend) until they port `daily_cost_by_dimension`.
+pub(crate) async fn get_margin_trend(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<MarginTrendParams>,
+) -> Result<Json<MarginTrendResponse>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    let project = resolve_read_project(&p, q.project.as_deref())?;
+    let dim = MarginDimension::parse(q.by.as_deref().unwrap_or("customer"));
+    let days = q.days.unwrap_or(30).clamp(1, MAX_TREND_DAYS);
+    let top_n = q.top.unwrap_or_else(default_top_n).max(1);
+
+    let until = Utc::now();
+    // `days` UTC calendar days ending today; `start_day` is the oldest bucket's date.
+    let start_day = (until - Duration::days((days - 1) as i64)).date_naive();
+    let since = start_day.and_hms_opt(0, 0, 0).unwrap().and_utc();
+
+    let store = st.store.clone();
+    let proj = project.clone();
+    let dim_s = dim.as_str().to_string();
+    let (revenue, daily): (Vec<RevenueEvent>, Vec<DailyDimCost>) = spawn_db(move || {
+        let revenue = store.list_revenue_events(proj.as_deref(), since, until)?;
+        let daily = store.daily_cost_by_dimension(proj.as_deref(), &dim_s, since, until)?;
+        Ok::<_, lighttrack_store::StoreError>((revenue, daily))
+    })
+    .await?;
+
+    let daily_cost: Vec<DailyKeyCost> = daily
+        .into_iter()
+        .map(|d| DailyKeyCost {
+            day: d.day,
+            key: d.key.unwrap_or_else(|| UNATTRIBUTED.to_string()),
+            cost_usd: d.cost_usd,
+        })
+        .collect();
+
+    let trend = compute_margin_trend(&revenue, &daily_cost, dim, start_day, days, top_n);
+    Ok(Json(MarginTrendResponse {
+        dimension: dim.as_str().to_string(),
+        since,
+        until,
+        days,
+        key_count: trend.key_count,
+        top_n: trend.top_n,
+        totals: trend.totals,
+        series: trend.series,
+    }))
+}
+
+fn default_top_n() -> usize {
+    std::env::var("LIGHTTRACK_MARGIN_TREND_TOP_N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_TREND_TOP_N)
 }
 
 fn parse_rfc3339(s: &str) -> Result<DateTime<Utc>, ApiError> {

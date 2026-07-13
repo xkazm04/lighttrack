@@ -39,7 +39,9 @@
 //!   POST /v1/relay/lease                 device: lease due tasks (device key; outbound-only)
 //!   POST /v1/relay/tasks/:id/result      device: report succeeded | failed | deferred
 //!   POST /v1/revenue                     record revenue (manual / billing sync) for profit tracking
-//!   GET  /v1/margin?by=customer|product&since=&until=   revenue − LLM cost rollup
+//!   GET  /v1/margin?by=customer|product&since=&until=&below=<pct>   revenue − LLM cost rollup
+//!   GET  /v1/margin/trend?by=&days=&top=   per-day revenue/cost/margin series per customer/product
+//!   GET  /v1/margin/customer/:id?since=&until=   one customer's revenue+cost by model & use-case
 //!   GET  /v1/forecast?project=&by=&horizon=&lookback=   projected spend/budget-breach + margin-erosion + pre-emptive alerts
 //!   POST /v1/billing/:provider/webhook?project=   signed Stripe/Polar webhook → revenue (unauth; HMAC)
 //!   GET  /v1/collective/digest?min_cases=     build this instance's privacy-safe model digest (admin)
@@ -294,6 +296,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/relay/lease", post(relay::lease_tasks))
         .route("/v1/revenue", post(revenue::post_revenue))
         .route("/v1/margin", get(revenue::get_margin))
+        .route("/v1/margin/trend", get(revenue::get_margin_trend))
         .route("/v1/forecast", get(forecast::get_forecast))
         .route("/v1/billing/:provider/webhook", post(billing::post_webhook))
         .route("/v1/collective/digest", get(collective::get_digest))

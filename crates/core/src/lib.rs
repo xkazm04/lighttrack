@@ -14,6 +14,7 @@ pub mod forecast;
 pub mod job;
 pub mod limits;
 pub mod margin;
+pub mod margin_trend;
 pub mod pricing;
 pub mod project;
 pub mod prompt;
@@ -34,6 +35,9 @@ pub use error::LtError;
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
 pub use job::Job;
 pub use margin::{compute_margin, CostByDimension, MarginDimension, MarginRow};
+pub use margin_trend::{
+    compute_margin_trend, DailyKeyCost, MarginTrend, MarginTrendPoint, MarginTrendSeries,
+};
 pub use revenue::{RevenueEvent, RevenueKind};
 pub use rubric::{Rubric, RubricDimension};
 pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
