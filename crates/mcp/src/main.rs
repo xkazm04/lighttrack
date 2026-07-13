@@ -12,12 +12,14 @@
 //!      LIGHTTRACK_MCP_ALLOW_WRITES (1/true/yes/on enables writes).
 
 mod client;
+mod errors;
 mod prompts;
 mod read;
 mod rpc;
 mod schemas;
 mod tools;
 mod write;
+mod write_schemas;
 
 use std::io::{self, BufRead};
 

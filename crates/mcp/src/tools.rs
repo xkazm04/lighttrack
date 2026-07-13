@@ -4,6 +4,7 @@
 use serde_json::{json, Value};
 
 use crate::client::Client;
+use crate::errors::map_error;
 use crate::rpc::{more_results_line, tool_rendered, tool_text};
 use crate::{read, write};
 
@@ -26,7 +27,7 @@ pub(crate) fn call(c: &Client, allow_writes: bool, params: &Value) -> Value {
     if let Some(r) = read::dispatch_paged(c, name, &args) {
         return match r {
             Ok((v, cursor)) => render_result(name, &v, cursor.as_deref()),
-            Err(e) => tool_text(&format!("error: {e}"), true),
+            Err(e) => tool_text(&map_error(&e), true),
         };
     }
 
@@ -47,7 +48,7 @@ pub(crate) fn call(c: &Client, allow_writes: bool, params: &Value) -> Value {
 
     match outcome {
         Ok(v) => render_result(name, &v, None),
-        Err(e) => tool_text(&format!("error: {e}"), true),
+        Err(e) => tool_text(&map_error(&e), true),
     }
 }
 

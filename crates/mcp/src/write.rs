@@ -74,7 +74,7 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({"type":"object","properties":{
                 "project":{"type":"string"},
                 "name":{"type":"string"},
-                "dimensions":{"type":"array","description":"[{key, description, weight?, anchors?:[string], floor?:number}]","items":{"type":"object"}},
+                "dimensions": crate::write_schemas::rubric_dimensions(),
                 "threshold":{"type":"number","description":"overall pass threshold 0-1 (default 0.7)"}
             },"required":["project","name","dimensions"]}),
             false),
@@ -87,8 +87,8 @@ pub(crate) fn tools() -> Vec<Value> {
                 "rubric_id":{"type":"string","description":"structured rubric id (per-dimension mode)"},
                 "judge_model":{"type":"string","description":"[provider/]model, e.g. haiku or openai/gpt-4o-mini (default haiku)"},
                 "dataset_ref":{"type":"string","description":"stored dataset id"},
-                "dataset":{"type":"array","description":"inline cases [{input, expected?, ...}]","items":{"type":"object"}},
-                "targets":{"type":"array","description":"comparison matrix [{provider, model, prompt?}]","items":{"type":"object"}},
+                "dataset": crate::write_schemas::benchmark_dataset(),
+                "targets": crate::write_schemas::benchmark_targets(),
                 "baseline_score":{"type":"number"}
             },"required":["project","name"]}),
             false),
