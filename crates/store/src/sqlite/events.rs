@@ -11,6 +11,7 @@ use lighttrack_core::{
     LimitScope, LlmEvent, Operation, Provider, Status, TokenUsage, TraceSummary,
 };
 
+use super::usage_cache::UsageCache;
 use crate::codec::{fmt_ts, parse_enum, parse_ts};
 use crate::{
     event_contribution, evaluate_admission, Admission, CostRow, EventFilter, EventPage, Result,
@@ -78,16 +79,25 @@ pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
     Ok(())
 }
 
-/// Atomic admission + insert. Because `SqliteStore` runs every call under one locked connection,
-/// this whole check-then-act is a single critical section: concurrent ingest is serialized, so a
-/// burst cannot all read the same pre-burst usage and race past a cap. The event is inserted only
-/// when admitted, so a rejected (over-cap) event is never recorded.
-pub(super) fn insert_checked(conn: &Connection, ev: &LlmEvent) -> Result<Admission> {
+/// Atomic admission + insert. Because `SqliteStore` runs every call under one locked connection (and
+/// holds the `usage_cache` lock alongside it), this whole check-then-act is a single critical
+/// section: concurrent ingest is serialized, so a burst cannot all read the same pre-burst usage and
+/// race past a cap. The event is inserted only when admitted, so a rejected (over-cap) event is never
+/// recorded.
+///
+/// Rolling usage comes from the incremental [`UsageCache`] — `O(events since the last check)` rather
+/// than a full-window re-aggregate — but is byte-for-byte equivalent to the [`usage_since`] /
+/// [`usage_since_scoped`] full scans (the property tests in [`super::tests`] pin the equivalence, and
+/// those functions remain the reference the cache is checked against).
+pub(super) fn insert_checked(
+    conn: &Connection,
+    cache: &mut UsageCache,
+    ev: &LlmEvent,
+) -> Result<Admission> {
     let rules = super::limits::list(conn, &ev.project_id, true)?;
     let now = Utc::now();
-    let admission = evaluate_admission(&rules, ev, event_contribution(ev), |w, scope| match scope {
-        None => usage_since(conn, &ev.project_id, w.since(now)),
-        Some(s) => usage_since_scoped(conn, &ev.project_id, w.since(now), s),
+    let admission = evaluate_admission(&rules, ev, event_contribution(ev), |w, scope| {
+        cache.usage(conn, &ev.project_id, w, scope, now)
     })?;
     if admission.admitted {
         insert(conn, ev)?;

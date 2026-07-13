@@ -142,6 +142,17 @@ impl Usage {
             tokens: self.tokens + other.tokens,
         }
     }
+
+    /// Subtract one snapshot from another — the inverse of [`Usage::plus`], used to remove an event's
+    /// contribution from a running rolling total when it ages out of the window (see the SQLite
+    /// backend's `usage_cache`).
+    pub fn minus(self, other: Usage) -> Usage {
+        Usage {
+            cost_usd: self.cost_usd - other.cost_usd,
+            calls: self.calls - other.calls,
+            tokens: self.tokens - other.tokens,
+        }
+    }
 }
 
 /// Outcome of an admission-controlled ingest ([`Store::insert_event_checked`]).

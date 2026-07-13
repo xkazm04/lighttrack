@@ -468,6 +468,136 @@ fn projects_keys_limits_usage() {
 }
 
 #[test]
+fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
+    use chrono::{Duration, TimeZone, Utc as CU};
+    use lighttrack_core::LimitScope;
+
+    // The incremental admission cache must be byte-for-byte equivalent to the full-scan reference
+    // (`usage_since` / `usage_since_scoped`). We drive both over randomized event sets whose
+    // timestamps straddle window boundaries, across multiple scopes, interleaving inserts with reads
+    // at a *monotonically advancing* `now` so the incremental load path AND the eviction path (events
+    // leaving the window) are exercised repeatedly. Costs are dyadic rationals (multiples of 0.25),
+    // so f64 sums are exact regardless of summation order — hence exact equality, not a tolerance.
+    let s = SqliteStore::open_in_memory().unwrap();
+    let mut cache = super::usage_cache::UsageCache::default();
+    let conn = s.conn.lock().unwrap();
+
+    // Deterministic LCG (no dev-dependency) so any failure reproduces.
+    let mut seed: u64 = 0x1234_5678_9abc_def0;
+    let mut rng = || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        seed >> 33
+    };
+
+    let base = CU.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap();
+    let models = ["m-a", "m-b", "m-c"];
+    let names: [Option<&str>; 3] = [Some("x"), Some("y"), None];
+    let providers = [Provider::OpenAi, Provider::Anthropic];
+    let windows = [LimitWindow::Hour, LimitWindow::Day, LimitWindow::Month];
+    let scopes: Vec<Option<LimitScope>> = vec![
+        None,
+        Some(LimitScope::Model("m-a".into())),
+        Some(LimitScope::Model("m-c".into())),
+        Some(LimitScope::Provider("openai".into())),
+        Some(LimitScope::Name("x".into())),
+        Some(LimitScope::Name("y".into())),
+    ];
+
+    let mut id_counter = 0u64;
+    let mut now = base;
+    for round in 0..40 {
+        // Insert 0..3 events with timestamps scattered +/- ~40 days around `base` (whole seconds),
+        // random model/provider/use-case, dyadic cost.
+        for _ in 0..(rng() % 4) {
+            id_counter += 1;
+            let offset = (rng() % (80 * 24 * 3600)) as i64 - (40 * 24 * 3600);
+            let mut e = ev("proj", models[(rng() % 3) as usize], rng() % 100, rng() % 100, (rng() % 40) as f64 * 0.25);
+            e.id = format!("e-{id_counter}");
+            e.provider = providers[(rng() % 2) as usize];
+            e.name = names[(rng() % 3) as usize].map(|s| s.to_string());
+            e.ts = base + Duration::seconds(offset);
+            super::events::insert(&conn, &e).unwrap();
+        }
+        // Advance `now` forward (monotonic) by up to 2 days, so windows advance and evict.
+        now += Duration::seconds((rng() % (2 * 24 * 3600)) as i64);
+
+        for w in windows {
+            for sc in &scopes {
+                let got = cache.usage(&conn, "proj", w, sc.as_ref(), now).unwrap();
+                let want = match sc {
+                    None => super::events::usage_since(&conn, "proj", w.since(now)).unwrap(),
+                    Some(scope) => {
+                        super::events::usage_since_scoped(&conn, "proj", w.since(now), scope).unwrap()
+                    }
+                };
+                assert_eq!(got.calls, want.calls, "calls: round {round} {w:?} {sc:?}");
+                assert_eq!(got.tokens, want.tokens, "tokens: round {round} {w:?} {sc:?}");
+                assert_eq!(got.cost_usd, want.cost_usd, "cost: round {round} {w:?} {sc:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn usage_cache_evicts_events_leaving_the_window() {
+    use chrono::{Duration, TimeZone, Utc as CU};
+    // The hard part of any incremental design: an event that ages out of the rolling window must be
+    // *subtracted* from the running total, not merely left in place. Three events one hour apart; as
+    // `now` marches forward, an Hour window should shed them one by one down to exactly zero.
+    let s = SqliteStore::open_in_memory().unwrap();
+    let mut cache = super::usage_cache::UsageCache::default();
+    let conn = s.conn.lock().unwrap();
+
+    let base = CU.with_ymd_and_hms(2026, 4, 1, 0, 0, 0).unwrap();
+    for (h, id) in [(0, "a"), (1, "b"), (2, "c")] {
+        let mut e = ev("p", "m", 10, 10, 1.0);
+        e.id = id.into();
+        e.ts = base + Duration::hours(h);
+        super::events::insert(&conn, &e).unwrap();
+    }
+    let win = LimitWindow::Hour;
+    // now = 02:30 → window [01:30, 02:30): only "c" (02:00) is in range.
+    let u = cache.usage(&conn, "p", win, None, base + Duration::minutes(150)).unwrap();
+    assert_eq!(u.calls, 1);
+    assert_eq!(u.cost_usd, 1.0);
+    // now = 05:00 → window [04:00, 05:00): all three have aged out; total snaps back to exactly zero.
+    let u = cache.usage(&conn, "p", win, None, base + Duration::hours(5)).unwrap();
+    assert_eq!(u.calls, 0);
+    assert_eq!(u.tokens, 0);
+    assert_eq!(u.cost_usd, 0.0);
+    // Cross-check the reference agrees at both points.
+    let want = super::events::usage_since(&conn, "p", win.since(base + Duration::hours(5))).unwrap();
+    assert_eq!(want.calls, 0);
+}
+
+#[test]
+fn usage_cache_load_uses_rowid_range_not_full_scan() {
+    // Complexity evidence: the per-ingest load rides the integer primary key as a range scan
+    // (`rowid > seen`), so its cost is O(events since the last check) — never a full window SCAN.
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(super::SCHEMA).unwrap();
+    let mut stmt = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT rowid, project_id, provider, model, name, ts, cost_usd, \
+             (input_tokens + output_tokens) FROM events WHERE rowid > 5 ORDER BY rowid",
+        )
+        .unwrap();
+    let plan = stmt
+        .query_map([], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join(" | ");
+    assert!(
+        plan.contains("USING INTEGER PRIMARY KEY"),
+        "incremental load should be a rowid range scan, got: {plan}"
+    );
+    assert!(!plan.contains("SCAN events"), "load must not full-scan events, got: {plan}");
+}
+
+#[test]
 fn insert_event_checked_enforces_caps() {
     let s = SqliteStore::open_in_memory().unwrap();
 

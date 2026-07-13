@@ -19,6 +19,7 @@ mod relay;
 mod revenue;
 mod rubrics;
 mod scores;
+mod usage_cache;
 
 #[cfg(test)]
 mod tests;
@@ -46,6 +47,10 @@ const SCHEMA: &str = include_str!("../../../../schema/sqlite/001_init.sql");
 /// SQLite store. A single connection guarded by a mutex — fine for our throughput (≤1k calls/hr).
 pub struct SqliteStore {
     conn: Mutex<Connection>,
+    /// Incremental rolling-usage totals for admission control, so a cap check costs `O(new events)`
+    /// instead of re-aggregating the whole window. Locked *before* `conn` in the two admission
+    /// methods, so the count-then-insert stays one atomic critical section. See [`usage_cache`].
+    usage_cache: Mutex<usage_cache::UsageCache>,
 }
 
 impl SqliteStore {
@@ -58,6 +63,7 @@ impl SqliteStore {
         }
         let store = Self {
             conn: Mutex::new(Connection::open(path)?),
+            usage_cache: Mutex::new(usage_cache::UsageCache::default()),
         };
         store.init_schema()?;
         Ok(store)
@@ -67,6 +73,7 @@ impl SqliteStore {
     pub fn open_in_memory() -> Result<Self> {
         let store = Self {
             conn: Mutex::new(Connection::open_in_memory()?),
+            usage_cache: Mutex::new(usage_cache::UsageCache::default()),
         };
         store.init_schema()?;
         Ok(store)
@@ -113,13 +120,17 @@ impl Store for SqliteStore {
         self.with(|c| events::insert(c, ev))
     }
     fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
-        self.with(|c| events::insert_checked(c, ev))
+        // Lock the usage cache *before* the connection (consistent order in both admission methods,
+        // so no deadlock) and hold both across the check-count-insert — one atomic critical section.
+        let mut cache = self.usage_cache.lock().unwrap();
+        self.with(|c| events::insert_checked(c, &mut cache, ev))
     }
     fn insert_events_checked(&self, evs: &[LlmEvent]) -> Vec<Result<Admission>> {
-        // One critical section for the whole batch: the connection lock is held across every item, so
-        // each accepted insert is already visible to the next item's usage read (no cap bypass), and
-        // the check-then-insert stays atomic against concurrent ingest.
-        self.with(|c| evs.iter().map(|e| events::insert_checked(c, e)).collect())
+        // One critical section for the whole batch: the cache + connection locks are held across every
+        // item, so each accepted insert is already visible to the next item's usage read (no cap
+        // bypass), and the check-then-insert stays atomic against concurrent ingest.
+        let mut cache = self.usage_cache.lock().unwrap();
+        self.with(|c| evs.iter().map(|e| events::insert_checked(c, &mut cache, e)).collect())
     }
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
         self.with(|c| events::list(c, project, limit))
