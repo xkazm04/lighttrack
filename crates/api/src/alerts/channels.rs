@@ -49,7 +49,7 @@ pub(super) async fn deliver_breaches(
     for b in breaches {
         // For an enforcing breach, `rejections` carries how many ingest attempts this cap has turned
         // away (429'd) in the current rolling window — surfaced so the alert isn't blind to them.
-        let rejected = rejections.get(&format!("{}:{:?}:{:?}", b.project_id, b.metric, b.window));
+        let rejected = rejections.get(&b.alert_key());
         let msg = breach_message(b, rejected);
         post_webhook(cfg, http, "limit_breach", &msg, json!({ "breach": b, "rejected_count": rejected }))
             .await;
@@ -148,9 +148,14 @@ fn breach_message(b: &LimitStatus, rejected: Option<&u64>) -> String {
         Some(n) => format!(" — {n} ingest attempt(s) rejected so far in this window"),
         None => String::new(),
     };
+    // Name the scoped dimension so a "cap gpt-4o" breach reads differently from a project-wide one.
+    let scope = match &b.scope {
+        Some(s) => format!(" [scope {}]", s.label()),
+        None => String::new(),
+    };
     format!(
-        "LightTrack alert: project '{}' breached {:?}/{:?} limit — current {:.4} >= threshold {:.4} \
-         ({:.0}% of limit), action={:?}{tail}",
+        "LightTrack alert: project '{}'{scope} breached {:?}/{:?} limit — current {:.4} >= threshold \
+         {:.4} ({:.0}% of limit), action={:?}{tail}",
         b.project_id, b.metric, b.window, b.current, b.threshold, b.ratio * 100.0, b.action
     )
 }

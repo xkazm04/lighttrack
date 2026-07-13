@@ -19,9 +19,10 @@ use serde_json::Value;
 use thiserror::Error;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
-    LimitMetric, LimitRule, LimitStatus, LimitWindow, LlmEvent, ModelPriceRow, Project, Prompt,
-    PromptVersion, RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, Trace, TraceSummary,
+    scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset,
+    DatasetItem, Job, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow, LlmEvent,
+    ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome, RelayTask, RevenueEvent, Rubric,
+    Score, Trace, TraceSummary,
 };
 
 pub use sqlite::SqliteStore;
@@ -171,30 +172,47 @@ pub(crate) fn event_contribution(ev: &LlmEvent) -> Usage {
     }
 }
 
-/// Evaluate `rules` against rolling usage that *includes* `contribution` (the candidate event),
-/// looking up each distinct window's current usage via `current_usage`. Shared by the trait's
-/// default (non-atomic) admission path and backends' transactional overrides so they agree on
-/// semantics: a rule breaches when usage-with-this-event reaches its threshold, and an event is
-/// admitted only if no enforcing rule breaches.
+/// Evaluate `rules` against rolling usage that *includes* `contribution` (the candidate event `ev`),
+/// looking up each distinct `(window, scope)`'s current usage via `current_usage`. Shared by the
+/// trait's default (non-atomic) admission path and backends' transactional overrides so they agree
+/// on semantics.
+///
+/// **Scope semantics:** a scoped rule only *applies* to an event whose dimensions match its scope —
+/// non-matching scoped rules are skipped entirely (never evaluated, never able to reject this
+/// event), so a "cap gpt-4o" rule can't turn away a gpt-4o-mini call. Every rule that *does* apply
+/// (unscoped, or scoped-and-matching) folds the candidate into its own `(window, scope)` usage, then
+/// breaches when that usage reaches its threshold; the event is admitted only if no applied enforcing
+/// rule breaches.
 pub(crate) fn evaluate_admission<F>(
     rules: &[LimitRule],
+    ev: &LlmEvent,
     contribution: Usage,
     mut current_usage: F,
 ) -> Result<Admission>
 where
-    F: FnMut(LimitWindow) -> Result<Usage>,
+    F: FnMut(LimitWindow, Option<&LimitScope>) -> Result<Usage>,
 {
-    let mut prospective: HashMap<LimitWindow, Usage> = HashMap::new();
+    let (provider, model, name) = (ev.provider.as_str(), ev.model.as_str(), ev.name.as_deref());
+    // Usage cache now keys by (window, scope): a scoped cap and a project-wide cap over the same
+    // window read different rolling totals.
+    let mut prospective: HashMap<(LimitWindow, Option<LimitScope>), Usage> = HashMap::new();
+    let mut statuses = Vec::new();
     for r in rules {
-        if let std::collections::hash_map::Entry::Vacant(slot) = prospective.entry(r.window) {
-            // Compute current usage for this window once, then fold in the candidate event.
-            slot.insert(current_usage(r.window)?.plus(contribution));
+        if !scope_matches(r.scope.as_ref(), provider, model, name) {
+            continue; // a scoped rule the candidate doesn't match can neither count it nor reject it
         }
+        let key = (r.window, r.scope.clone());
+        let usage = match prospective.get(&key) {
+            Some(u) => *u,
+            None => {
+                // Applied rule → the candidate matches this scope → fold it into the scoped total.
+                let u = current_usage(r.window, r.scope.as_ref())?.plus(contribution);
+                prospective.insert(key, u);
+                u
+            }
+        };
+        statuses.push(r.evaluate(usage.metric_value(r.metric)));
     }
-    let statuses = rules
-        .iter()
-        .map(|r| r.evaluate(prospective[&r.window].metric_value(r.metric)))
-        .collect();
     Ok(Admission::from_statuses(statuses))
 }
 
@@ -219,8 +237,10 @@ pub trait Store: Send + Sync {
     fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
         let rules = self.list_limit_rules(&ev.project_id, true)?;
         let now = Utc::now();
-        let admission = evaluate_admission(&rules, event_contribution(ev), |w| {
-            self.usage_since(&ev.project_id, w.since(now))
+        let admission = evaluate_admission(&rules, ev, event_contribution(ev), |w, scope| match scope
+        {
+            None => self.usage_since(&ev.project_id, w.since(now)),
+            Some(s) => self.usage_since_scoped(&ev.project_id, w.since(now), s),
         })?;
         if admission.admitted {
             self.insert_event(ev)?;
@@ -295,6 +315,22 @@ pub trait Store: Send + Sync {
 
     /// Aggregate usage for one project since `since` (inclusive). Used by limit evaluation.
     fn usage_since(&self, project: &str, since: DateTime<Utc>) -> Result<Usage>;
+
+    /// Aggregate usage for one project since `since`, restricted to a single dimension
+    /// ([`LimitScope`]: provider / model / use-case). Used to evaluate scoped limit rules.
+    ///
+    /// The default **conservatively** falls back to project-wide [`Store::usage_since`] — i.e. a
+    /// scoped cap on a backend that hasn't ported the scoped query counts *all* project usage against
+    /// it, so it may trip early but can never silently under-enforce. Backends add a `WHERE`-clause
+    /// query (SQLite does) for exact scoping; Postgres/Firestore are a documented handoff.
+    fn usage_since_scoped(
+        &self,
+        project: &str,
+        since: DateTime<Utc>,
+        _scope: &LimitScope,
+    ) -> Result<Usage> {
+        self.usage_since(project, since)
+    }
 
     // --- daily time-series for predictive cost/margin forecasting ---
     // Default impls so backends that don't (yet) bucket by day compile unchanged: forecasting simply

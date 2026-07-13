@@ -227,6 +227,8 @@ async fn enforcing_actions_reject_ingest_and_do_not_store() {
                 threshold: 1.0, // the very first call reaches the cap (usage-with-event = 1 >= 1)
                 action,
                 enabled: true,
+                warn_at: None,
+                scope: None,
             })
             .unwrap();
         let app = crate::build_router(state);
@@ -282,6 +284,8 @@ async fn rejected_events_are_ledgered_but_never_touch_usage_math() {
             threshold: 1.0, // the first call reaches the cap and is rejected
             action: LimitAction::Block,
             enabled: true,
+            warn_at: None,
+            scope: None,
         })
         .unwrap();
     let app = crate::build_router(state.clone());
@@ -338,6 +342,8 @@ async fn alert_limit_flags_but_admits_and_stores() {
             threshold: 1.0,
             action: LimitAction::Alert,
             enabled: true,
+            warn_at: None,
+            scope: None,
         })
         .unwrap();
     let app = crate::build_router(state);
@@ -395,6 +401,8 @@ async fn batch_returns_per_item_accept_reject_invalid() {
             threshold: 3.0,
             action: LimitAction::Block,
             enabled: true,
+            warn_at: None,
+            scope: None,
         })
         .unwrap();
     let app = crate::build_router(state);

@@ -353,10 +353,11 @@ impl Alerter {
         self.should_send_key(&self.dedup_key(b))
     }
 
-    /// Stable per-breach key (`project:metric:window`) — shared by cooldown dedup and the rejection
-    /// ledger so a breach's alert can be matched to its running rejection count.
+    /// Stable per-breach key (`project:metric:window:scope`) — shared by cooldown dedup and the
+    /// rejection ledger so a breach's alert can be matched to its running rejection count, and a
+    /// scoped cap doesn't collide with a project-wide one on the same metric+window.
     fn dedup_key(&self, b: &LimitStatus) -> String {
-        format!("{}:{:?}:{:?}", b.project_id, b.metric, b.window)
+        b.alert_key()
     }
 
     /// Cooldown key for a soft-warning — the breach key prefixed with `warn:` so the warning and the
@@ -451,6 +452,7 @@ mod tests {
             ratio: 2.0,
             warn_at: None,
             warning: false,
+            scope: None,
         }
     }
 
@@ -467,6 +469,7 @@ mod tests {
             ratio: 0.85,
             warn_at: Some(0.8),
             warning: true,
+            scope: None,
         }
     }
 

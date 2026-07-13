@@ -62,7 +62,9 @@ CREATE TABLE IF NOT EXISTS limit_rules (
   threshold   REAL NOT NULL,
   action      TEXT NOT NULL,   -- alert | throttle | block
   enabled     INTEGER NOT NULL DEFAULT 1,
-  warn_at     REAL             -- optional soft-warning fraction in (0,1); NULL = no pre-warning
+  warn_at     REAL,            -- optional soft-warning fraction in (0,1); NULL = no pre-warning
+  scope_kind  TEXT,            -- provider | model | name; NULL = project-wide (unscoped)
+  scope_value TEXT             -- the scoped dimension value; NULL when unscoped
 );
 
 CREATE TABLE IF NOT EXISTS scores (

@@ -253,6 +253,7 @@ mod tests {
             action: LimitAction::Alert,
             enabled: true,
             warn_at: None,
+            scope: None,
         }
     }
 

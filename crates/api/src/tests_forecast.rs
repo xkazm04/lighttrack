@@ -54,6 +54,8 @@ async fn forecast_projects_budget_breach_and_margin_erosion() {
             threshold: 15.0,
             action: LimitAction::Alert,
             enabled: true,
+            warn_at: None,
+            scope: None,
         })
         .unwrap();
 

@@ -98,7 +98,8 @@ pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) 
 
 /// Fold a just-rejected event into the rejection ledger — once per enforcing breach that turned it
 /// away — and return the running rejection count for each, keyed the same way the alerter dedups
-/// breaches (`project:metric:window`) so the count can be attached to the outgoing alert.
+/// breaches ([`LimitStatus::alert_key`], which includes the scope) so the count can be attached to
+/// the outgoing alert.
 fn record_rejection(
     st: &AppState,
     ev: &LlmEvent,
@@ -108,8 +109,9 @@ fn record_rejection(
     let now = Utc::now();
     let mut counts = std::collections::HashMap::new();
     for b in breached.iter().filter(|s| s.rejects_ingest()) {
-        let count = st.rejections.record(&b.project_id, b.metric, b.window, cost, now);
-        counts.insert(format!("{}:{:?}:{:?}", b.project_id, b.metric, b.window), count);
+        let count =
+            st.rejections.record(&b.project_id, b.metric, b.window, b.scope.clone(), cost, now);
+        counts.insert(b.alert_key(), count);
     }
     counts
 }
@@ -120,8 +122,12 @@ pub(crate) fn breach_reason(breached: &[LimitStatus]) -> String {
         .iter()
         .find(|s| s.action.enforces())
         .map(|s| {
+            let scope = match &s.scope {
+                Some(sc) => format!(" [scope {}]", sc.label()),
+                None => String::new(),
+            };
             format!(
-                "ingest blocked: project '{}' is over its {:?}/{:?} limit \
+                "ingest blocked: project '{}'{scope} is over its {:?}/{:?} limit \
                  ({:.4} >= {:.4}, action={:?})",
                 s.project_id, s.metric, s.window, s.current, s.threshold, s.action
             )

@@ -160,6 +160,15 @@ enum LimitsCmd {
         /// Soft-warning fraction in (0,1): alert when usage reaches this share of the threshold.
         #[arg(long = "warn-at")]
         warn_at: Option<f64>,
+        /// Scope the cap to one provider (mutually exclusive with --scope-model/--scope-name).
+        #[arg(long = "scope-provider", group = "scope")]
+        scope_provider: Option<String>,
+        /// Scope the cap to one model.
+        #[arg(long = "scope-model", group = "scope")]
+        scope_model: Option<String>,
+        /// Scope the cap to one use-case (event `name`).
+        #[arg(long = "scope-name", group = "scope")]
+        scope_name: Option<String>,
     },
     /// Replace a rule's fields by id (also toggles enable/disable via --disabled).
     Update {
@@ -176,6 +185,12 @@ enum LimitsCmd {
         disabled: bool,
         #[arg(long = "warn-at")]
         warn_at: Option<f64>,
+        #[arg(long = "scope-provider", group = "scope")]
+        scope_provider: Option<String>,
+        #[arg(long = "scope-model", group = "scope")]
+        scope_model: Option<String>,
+        #[arg(long = "scope-name", group = "scope")]
+        scope_name: Option<String>,
     },
     /// Delete a rule by id.
     Delete {
@@ -218,6 +233,9 @@ fn main() -> Result<()> {
                 action,
                 disabled,
                 warn_at,
+                scope_provider,
+                scope_model,
+                scope_name,
             } => call(
                 &cli,
                 Method::POST,
@@ -225,7 +243,8 @@ fn main() -> Result<()> {
                 Some(json!({
                     "metric": metric, "window": window,
                     "threshold": threshold, "action": action, "enabled": !disabled,
-                    "warn_at": warn_at
+                    "warn_at": warn_at,
+                    "scope": scope_json(scope_provider, scope_model, scope_name)
                 })),
                 "",
             ),
@@ -237,6 +256,9 @@ fn main() -> Result<()> {
                 action,
                 disabled,
                 warn_at,
+                scope_provider,
+                scope_model,
+                scope_name,
             } => call(
                 &cli,
                 Method::PUT,
@@ -244,7 +266,8 @@ fn main() -> Result<()> {
                 Some(json!({
                     "metric": metric, "window": window,
                     "threshold": threshold, "action": action, "enabled": !disabled,
-                    "warn_at": warn_at
+                    "warn_at": warn_at,
+                    "scope": scope_json(scope_provider, scope_model, scope_name)
                 })),
                 "",
             ),
@@ -362,6 +385,24 @@ fn contribute(cli: &Cli, hub: &str, min_cases: u32, hub_key: Option<&str>) -> Re
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Build the optional dimension-scope object for a limit rule from the CLI's mutually-exclusive
+/// `--scope-*` flags (clap enforces at most one). `null` (unscoped) when none is set.
+fn scope_json(
+    provider: &Option<String>,
+    model: &Option<String>,
+    name: &Option<String>,
+) -> Value {
+    if let Some(v) = provider {
+        json!({ "provider": v })
+    } else if let Some(v) = model {
+        json!({ "model": v })
+    } else if let Some(v) = name {
+        json!({ "name": v })
+    } else {
+        Value::Null
+    }
 }
 
 fn path_with_project(base: &str, project: &Option<String>) -> String {

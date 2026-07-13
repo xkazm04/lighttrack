@@ -4,6 +4,15 @@ use serde_json::Value;
 
 use crate::md::{commafy, f, money, pct, s, Align, Table};
 
+/// Render a rule/status's optional `scope` object (`{"model":"gpt-4o"}`) as a compact `kind=value`,
+/// or an em dash when the rule is project-wide (unscoped).
+fn scope_label(v: &Value) -> String {
+    match v.get("scope").and_then(Value::as_object).and_then(|m| m.iter().next()) {
+        Some((kind, val)) => format!("{kind}={}", val.as_str().unwrap_or_default()),
+        None => "—".to_string(),
+    }
+}
+
 pub(crate) fn status(v: &Value) -> Option<String> {
     let statuses = v.get("statuses")?.as_array()?;
     let project = s(v, "project_id");
@@ -14,6 +23,7 @@ pub(crate) fn status(v: &Value) -> Option<String> {
     let mut t = Table::new(&[
         ("Metric", Align::Left),
         ("Window", Align::Left),
+        ("Scope", Align::Left),
         ("Used", Align::Right),
         ("Threshold", Align::Right),
         ("Used %", Align::Right),
@@ -43,6 +53,7 @@ pub(crate) fn status(v: &Value) -> Option<String> {
         t.row(vec![
             metric.to_string(),
             s(st, "window").to_string(),
+            scope_label(st),
             used,
             thr,
             pct(ratio),
@@ -97,6 +108,7 @@ pub(crate) fn list(v: &Value) -> Option<String> {
     let mut t = Table::new(&[
         ("Metric", Align::Left),
         ("Window", Align::Left),
+        ("Scope", Align::Left),
         ("Threshold", Align::Right),
         ("Warn at", Align::Right),
         ("Action", Align::Left),
@@ -120,6 +132,7 @@ pub(crate) fn list(v: &Value) -> Option<String> {
         t.row(vec![
             metric.to_string(),
             s(r, "window").to_string(),
+            scope_label(r),
             thr,
             warn,
             s(r, "action").to_string(),

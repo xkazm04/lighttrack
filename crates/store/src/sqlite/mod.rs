@@ -32,8 +32,8 @@ use serde_json::Value;
 
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
-    LimitRule, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome, RelayTask,
-    RevenueEvent, Rubric, Score, TraceSummary,
+    LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome,
+    RelayTask, RevenueEvent, Rubric, Score, TraceSummary,
 };
 
 use crate::{
@@ -91,10 +91,17 @@ impl Store for SqliteStore {
                     return Err(e.into());
                 }
             }
-            // Additive migration for limit rules created before the soft-warning tier existed.
-            if let Err(e) = c.execute("ALTER TABLE limit_rules ADD COLUMN warn_at REAL", []) {
-                if !e.to_string().contains("duplicate column name") {
-                    return Err(e.into());
+            // Additive migrations for limit rules created before the soft-warning tier and
+            // dimension scoping existed. Each tolerates "duplicate column name" (already applied).
+            for stmt in [
+                "ALTER TABLE limit_rules ADD COLUMN warn_at REAL",
+                "ALTER TABLE limit_rules ADD COLUMN scope_kind TEXT",
+                "ALTER TABLE limit_rules ADD COLUMN scope_value TEXT",
+            ] {
+                if let Err(e) = c.execute(stmt, []) {
+                    if !e.to_string().contains("duplicate column name") {
+                        return Err(e.into());
+                    }
                 }
             }
             Ok(())
@@ -145,6 +152,14 @@ impl Store for SqliteStore {
     }
     fn usage_since(&self, project: &str, since: DateTime<Utc>) -> Result<Usage> {
         self.with(|c| events::usage_since(c, project, since))
+    }
+    fn usage_since_scoped(
+        &self,
+        project: &str,
+        since: DateTime<Utc>,
+        scope: &LimitScope,
+    ) -> Result<Usage> {
+        self.with(|c| events::usage_since_scoped(c, project, since, scope))
     }
     fn daily_usage(
         &self,

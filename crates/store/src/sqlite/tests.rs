@@ -82,6 +82,7 @@ fn batch_admission_counts_prior_items_no_cap_bypass() {
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
+        scope: None,
     })
     .unwrap();
 
@@ -451,6 +452,7 @@ fn projects_keys_limits_usage() {
         action: LimitAction::Alert,
         enabled: true,
         warn_at: None,
+        scope: None,
     };
     s.create_limit_rule(&rule).unwrap();
     assert_eq!(s.list_limit_rules("p1", true).unwrap().len(), 1);
@@ -484,6 +486,7 @@ fn insert_event_checked_enforces_caps() {
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
+        scope: None,
     })
     .unwrap();
     let blocked = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
@@ -512,6 +515,7 @@ fn limit_rule_update_delete_and_toggle() {
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
+        scope: None,
     };
     s.create_limit_rule(&rule).unwrap();
 
@@ -542,6 +546,7 @@ fn limit_rule_update_delete_and_toggle() {
         action: LimitAction::Block,
         enabled: false,
         warn_at: None,
+        scope: None,
     };
     s.create_limit_rule(&block).unwrap();
     let a = s.insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
@@ -574,6 +579,7 @@ fn warn_at_round_trips_and_admission_reports_warning() {
         action: LimitAction::Alert,
         enabled: true,
         warn_at: Some(0.8),
+        scope: None,
     })
     .unwrap();
     // warn_at persists through the store.
@@ -589,6 +595,53 @@ fn warn_at_round_trips_and_admission_reports_warning() {
 }
 
 #[test]
+fn scoped_cap_rejects_only_matching_dimension() {
+    use lighttrack_core::LimitScope;
+    let s = SqliteStore::open_in_memory().unwrap();
+    // Block model "gpt-4o" at 2 calls/hour; other models are untouched.
+    s.create_limit_rule(&LimitRule {
+        id: "r-model".into(),
+        project_id: "p1".into(),
+        metric: LimitMetric::Calls,
+        window: LimitWindow::Hour,
+        threshold: 2.0,
+        action: LimitAction::Block,
+        enabled: true,
+        warn_at: None,
+        scope: Some(LimitScope::Model("gpt-4o".into())),
+    })
+    .unwrap();
+    // scope round-trips through the store.
+    assert_eq!(
+        s.get_limit_rule("r-model").unwrap().unwrap().scope,
+        Some(LimitScope::Model("gpt-4o".into()))
+    );
+
+    let gpt = |cost: f64| {
+        let mut e = ev("p1", "gpt-4o", 1, 1, cost);
+        e.provider = Provider::OpenAi;
+        e
+    };
+    // Two gpt-4o calls admit; the third (usage-with-event = 3 >=... no, threshold 2) — 2nd hits 2>=2.
+    assert!(s.insert_event_checked(&gpt(0.0)).unwrap().admitted);
+    let blocked = s.insert_event_checked(&gpt(0.0)).unwrap();
+    assert!(!blocked.admitted, "2nd gpt-4o call reaches the scoped cap");
+
+    // A different model is unaffected by gpt-4o's cap, even after gpt-4o is capped: the scoped rule
+    // doesn't apply to it (no matching status, admitted).
+    let other = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
+    assert!(other.admitted, "a scoped cap on model A must not reject model B");
+    assert!(other.statuses.is_empty(), "the non-matching scoped rule isn't evaluated for model B");
+
+    // The scoped usage counts only gpt-4o rows: one gpt-4o admitted + one claude admitted = the
+    // scoped total is 1 (the blocked gpt-4o wasn't stored).
+    let scoped = s
+        .usage_since_scoped("p1", LimitWindow::Hour.since(Utc::now()), &LimitScope::Model("gpt-4o".into()))
+        .unwrap();
+    assert_eq!(scoped.calls, 1, "only the one admitted gpt-4o row counts toward the model scope");
+}
+
+#[test]
 fn insert_event_checked_alert_never_blocks() {
     let s = SqliteStore::open_in_memory().unwrap();
     s.create_limit_rule(&LimitRule {
@@ -600,6 +653,7 @@ fn insert_event_checked_alert_never_blocks() {
         action: LimitAction::Alert,
         enabled: true,
         warn_at: None,
+        scope: None,
     })
     .unwrap();
     // Way over the Alert threshold, but Alert is observe-only: admitted + recorded, breach reported.

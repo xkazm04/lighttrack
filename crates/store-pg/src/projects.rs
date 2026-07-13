@@ -166,5 +166,6 @@ fn limit_rule_from_row(row: &PgRow) -> Result<LimitRule> {
         // warn_at / scope: not yet persisted by this backend (handoff) — defaulted so the shared
         // LimitRule constructs; soft-warnings and scoped caps fall back to their Store trait defaults.
         warn_at: None,
+        scope: None,
     })
 }

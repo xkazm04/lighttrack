@@ -7,7 +7,9 @@ use rusqlite::types::ToSql;
 use rusqlite::{params, params_from_iter, Connection, ErrorCode, OptionalExtension, Row};
 use serde_json::Value;
 
-use lighttrack_core::{LlmEvent, Operation, Provider, Status, TokenUsage, TraceSummary};
+use lighttrack_core::{
+    LimitScope, LlmEvent, Operation, Provider, Status, TokenUsage, TraceSummary,
+};
 
 use crate::codec::{fmt_ts, parse_enum, parse_ts};
 use crate::{
@@ -83,8 +85,9 @@ pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
 pub(super) fn insert_checked(conn: &Connection, ev: &LlmEvent) -> Result<Admission> {
     let rules = super::limits::list(conn, &ev.project_id, true)?;
     let now = Utc::now();
-    let admission = evaluate_admission(&rules, event_contribution(ev), |w| {
-        usage_since(conn, &ev.project_id, w.since(now))
+    let admission = evaluate_admission(&rules, ev, event_contribution(ev), |w, scope| match scope {
+        None => usage_since(conn, &ev.project_id, w.since(now)),
+        Some(s) => usage_since_scoped(conn, &ev.project_id, w.since(now), s),
     })?;
     if admission.admitted {
         insert(conn, ev)?;
@@ -448,6 +451,38 @@ pub(super) fn usage_since(conn: &Connection, project: &str, since: DateTime<Utc>
          FROM events WHERE project_id = ?1 AND ts >= ?2",
     )?;
     let usage = stmt.query_row(params![project, fmt_ts(since)], |row| {
+        Ok(Usage {
+            cost_usd: row.get(0)?,
+            calls: row.get(1)?,
+            tokens: row.get(2)?,
+        })
+    })?;
+    Ok(usage)
+}
+
+/// Rolling usage for one project since `since`, restricted to a single scope dimension. The scoped
+/// column (`provider` / `model` / `name`) is chosen by the [`LimitScope`] variant; the `name` case
+/// matches only rows whose use-case equals the value (a NULL `name` never matches a name scope). The
+/// `(project_id, ts)` and `(project_id, name, ts)` indexes cover the project+window filter.
+pub(super) fn usage_since_scoped(
+    conn: &Connection,
+    project: &str,
+    since: DateTime<Utc>,
+    scope: &LimitScope,
+) -> Result<Usage> {
+    // `column` is a fixed keyword from the enum (never user input) — safe to interpolate.
+    let column = match scope {
+        LimitScope::Provider(_) => "provider",
+        LimitScope::Model(_) => "model",
+        LimitScope::Name(_) => "name",
+    };
+    let sql = format!(
+        "SELECT COALESCE(SUM(cost_usd),0.0), COUNT(*), \
+         COALESCE(SUM(input_tokens + output_tokens),0) \
+         FROM events WHERE project_id = ?1 AND ts >= ?2 AND {column} = ?3"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let usage = stmt.query_row(params![project, fmt_ts(since), scope.value()], |row| {
         Ok(Usage {
             cost_usd: row.get(0)?,
             calls: row.get(1)?,

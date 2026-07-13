@@ -37,7 +37,9 @@ pub use margin::{compute_margin, CostByDimension, MarginDimension, MarginRow};
 pub use revenue::{RevenueEvent, RevenueKind};
 pub use rubric::{Rubric, RubricDimension};
 pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
-pub use limits::{LimitAction, LimitMetric, LimitRule, LimitStatus, LimitWindow};
+pub use limits::{
+    scope_matches, LimitAction, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow,
+};
 pub use pricing::{ModelPrice, ModelPriceRow, PriceBook, PricingMode};
 pub use project::{ApiKey, Project, Redaction};
 pub use prompt::{Prompt, PromptVersion};

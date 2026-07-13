@@ -33,7 +33,7 @@ fn limit_status_badges_and_throttle() {
     let md = render("get_limit_status", &v).expect("renders");
     println!("\n=== get_limit_status ===\n{md}");
     assert!(md.contains("throttled"));
-    assert!(md.contains("⚠️ near")); // 84% of threshold
+    assert!(md.contains("⚠️ warning")); // 84% of threshold (>= 0.8 heuristic)
     assert!(md.contains("❌ over")); // breached
     assert!(md.contains("1,200"));
 }

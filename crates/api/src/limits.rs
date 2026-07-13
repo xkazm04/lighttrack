@@ -9,7 +9,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{new_id, LimitAction, LimitMetric, LimitRule, LimitStatus, LimitWindow};
+use lighttrack_core::{
+    new_id, LimitAction, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow,
+};
 use lighttrack_store::{StoreError, Usage};
 
 use crate::error::ApiError;
@@ -27,18 +29,26 @@ pub(crate) async fn evaluate_project_limits(
     let statuses = spawn_db(move || {
         let rules = store.list_limit_rules(&pid, true)?;
         let now = chrono::Utc::now();
-        // Compute usage once per distinct window.
-        let mut usage: HashMap<LimitWindow, Usage> = HashMap::new();
+        // Compute usage once per distinct (window, scope): a scoped rule reads its own dimension's
+        // rolling total, an unscoped rule the project-wide total. This is the read-only status view
+        // (no candidate event), so nothing is folded in.
+        let mut usage: HashMap<(LimitWindow, Option<LimitScope>), Usage> = HashMap::new();
+        let mut out: Vec<LimitStatus> = Vec::with_capacity(rules.len());
         for r in &rules {
-            if !usage.contains_key(&r.window) {
-                let u = store.usage_since(&pid, r.window.since(now))?;
-                usage.insert(r.window, u);
-            }
+            let key = (r.window, r.scope.clone());
+            let u = match usage.get(&key) {
+                Some(u) => *u,
+                None => {
+                    let u = match &r.scope {
+                        None => store.usage_since(&pid, r.window.since(now))?,
+                        Some(s) => store.usage_since_scoped(&pid, r.window.since(now), s)?,
+                    };
+                    usage.insert(key, u);
+                    u
+                }
+            };
+            out.push(r.evaluate(u.metric_value(r.metric)));
         }
-        let out: Vec<LimitStatus> = rules
-            .iter()
-            .map(|r| r.evaluate(usage[&r.window].metric_value(r.metric)))
-            .collect();
         Ok::<_, StoreError>(out)
     })
     .await?;
@@ -59,6 +69,9 @@ pub(crate) struct CreateLimitReq {
     /// Optional soft-warning fraction in (0,1) — see [`LimitRule::warn_at`].
     #[serde(default)]
     warn_at: Option<f64>,
+    /// Optional dimension scope (`{"model":"gpt-4o"}` etc.) — see [`LimitRule::scope`].
+    #[serde(default)]
+    scope: Option<LimitScope>,
 }
 
 fn default_true() -> bool {
@@ -88,6 +101,7 @@ pub(crate) async fn create_limit(
         action: req.action,
         enabled: req.enabled,
         warn_at: req.warn_at,
+        scope: req.scope,
     };
     rule.validate().map_err(ApiError::bad_request)?;
     let store = st.store.clone();
@@ -109,6 +123,8 @@ pub(crate) struct UpdateLimitReq {
     enabled: bool,
     #[serde(default)]
     warn_at: Option<f64>,
+    #[serde(default)]
+    scope: Option<LimitScope>,
 }
 
 pub(crate) async fn update_limit(
@@ -135,6 +151,7 @@ pub(crate) async fn update_limit(
         action: req.action,
         enabled: req.enabled,
         warn_at: req.warn_at,
+        scope: req.scope,
     };
     rule.validate().map_err(ApiError::bad_request)?;
     let store = st.store.clone();

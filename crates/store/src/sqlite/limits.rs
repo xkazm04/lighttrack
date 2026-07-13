@@ -6,19 +6,21 @@
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
-use lighttrack_core::{LimitAction, LimitMetric, LimitRule, LimitWindow};
+use lighttrack_core::{LimitAction, LimitMetric, LimitRule, LimitScope, LimitWindow};
 
 use crate::codec::{enum_to_str, parse_enum};
 use crate::Result;
 
 /// The columns a rule row exposes, in the order [`map_limit`] reads them.
-const COLS: &str = "id, project_id, metric, window, threshold, action, enabled, warn_at";
+const COLS: &str =
+    "id, project_id, metric, window, threshold, action, enabled, warn_at, scope_kind, scope_value";
 
 pub(super) fn create(conn: &Connection, r: &LimitRule) -> Result<()> {
+    let (scope_kind, scope_value) = scope_parts(&r.scope);
     conn.execute(
         "INSERT INTO limit_rules \
-         (id, project_id, metric, window, threshold, action, enabled, warn_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+         (id, project_id, metric, window, threshold, action, enabled, warn_at, scope_kind, scope_value) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             r.id,
             r.project_id,
@@ -28,9 +30,19 @@ pub(super) fn create(conn: &Connection, r: &LimitRule) -> Result<()> {
             enum_to_str(&r.action)?,
             r.enabled as i64,
             r.warn_at,
+            scope_kind,
+            scope_value,
         ],
     )?;
     Ok(())
+}
+
+/// Split an optional scope into its `(kind, value)` column pair (both `None` when unscoped).
+fn scope_parts(scope: &Option<LimitScope>) -> (Option<&'static str>, Option<String>) {
+    match scope {
+        None => (None, None),
+        Some(s) => (Some(s.kind_str()), Some(s.value().to_string())),
+    }
 }
 
 pub(super) fn list(conn: &Connection, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
@@ -55,9 +67,11 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LimitRule>> {
 /// Update a rule's mutable columns in place (matched by id); `project_id` is left untouched. Returns
 /// whether a row matched.
 pub(super) fn update(conn: &Connection, r: &LimitRule) -> Result<bool> {
+    let (scope_kind, scope_value) = scope_parts(&r.scope);
     let n = conn.execute(
         "UPDATE limit_rules \
-         SET metric = ?2, window = ?3, threshold = ?4, action = ?5, enabled = ?6, warn_at = ?7 \
+         SET metric = ?2, window = ?3, threshold = ?4, action = ?5, enabled = ?6, warn_at = ?7, \
+             scope_kind = ?8, scope_value = ?9 \
          WHERE id = ?1",
         params![
             r.id,
@@ -67,6 +81,8 @@ pub(super) fn update(conn: &Connection, r: &LimitRule) -> Result<bool> {
             enum_to_str(&r.action)?,
             r.enabled as i64,
             r.warn_at,
+            scope_kind,
+            scope_value,
         ],
     )?;
     Ok(n > 0)
@@ -87,5 +103,9 @@ fn map_limit(row: &Row) -> rusqlite::Result<LimitRule> {
         action: parse_enum::<LimitAction>(&row.get::<_, String>(5)?),
         enabled: row.get::<_, i64>(6)? != 0,
         warn_at: row.get(7)?,
+        scope: match (row.get::<_, Option<String>>(8)?, row.get::<_, Option<String>>(9)?) {
+            (Some(kind), Some(value)) => LimitScope::from_parts(&kind, value),
+            _ => None,
+        },
     })
 }

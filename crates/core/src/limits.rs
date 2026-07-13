@@ -1,6 +1,75 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Optional dimension a limit is scoped to — one of provider / model / use-case (`name`). An
+/// unscoped rule (`None` on [`LimitRule::scope`]) applies to the whole project, exactly as before;
+/// a scoped rule only counts (and can reject) traffic matching the selected dimension value, so an
+/// operator can "cap gpt-4o at $5/day" or "cap use-case X" without touching other traffic.
+///
+/// Serializes externally-tagged, e.g. `{"model":"gpt-4o"}` / `{"provider":"openai"}` /
+/// `{"name":"summarize"}`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitScope {
+    Provider(String),
+    Model(String),
+    /// Use-case, matched against an event's `name`.
+    Name(String),
+}
+
+impl LimitScope {
+    /// The storage discriminant (`provider` | `model` | `name`).
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            LimitScope::Provider(_) => "provider",
+            LimitScope::Model(_) => "model",
+            LimitScope::Name(_) => "name",
+        }
+    }
+
+    /// The scoped value.
+    pub fn value(&self) -> &str {
+        match self {
+            LimitScope::Provider(v) | LimitScope::Model(v) | LimitScope::Name(v) => v,
+        }
+    }
+
+    /// Reconstruct from stored `(kind, value)` columns; `None` for an unknown kind.
+    pub fn from_parts(kind: &str, value: String) -> Option<LimitScope> {
+        match kind {
+            "provider" => Some(LimitScope::Provider(value)),
+            "model" => Some(LimitScope::Model(value)),
+            "name" => Some(LimitScope::Name(value)),
+            _ => None,
+        }
+    }
+
+    /// A compact `kind=value` label for alert messages / dedup keys / rendering.
+    pub fn label(&self) -> String {
+        format!("{}={}", self.kind_str(), self.value())
+    }
+
+    /// Whether an event with these dimensions falls under this scope.
+    pub fn matches(&self, provider: &str, model: &str, name: Option<&str>) -> bool {
+        match self {
+            LimitScope::Provider(v) => provider == v,
+            LimitScope::Model(v) => model == v,
+            LimitScope::Name(v) => name == Some(v.as_str()),
+        }
+    }
+}
+
+/// Whether a rule's optional scope admits an event with these dimensions. `None` (unscoped) always
+/// matches — identical to pre-scope behavior.
+pub fn scope_matches(
+    scope: Option<&LimitScope>,
+    provider: &str,
+    model: &str,
+    name: Option<&str>,
+) -> bool {
+    scope.map_or(true, |s| s.matches(provider, model, name))
+}
+
 /// What a limit measures over its window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -90,6 +159,11 @@ pub struct LimitRule {
     /// pre-warning (old rules deserialize to this, unchanged). Never enforces.
     #[serde(default)]
     pub warn_at: Option<f64>,
+    /// Optional dimension this rule caps (provider / model / use-case). `None` (serde-default) =
+    /// project-wide, byte-identical to pre-scope behavior. A scoped rule only counts and rejects
+    /// traffic matching its scope.
+    #[serde(default)]
+    pub scope: Option<LimitScope>,
 }
 
 fn default_true() -> bool {
@@ -116,6 +190,9 @@ pub struct LimitStatus {
     /// on the status surface and the `limit_warning` alert. Always `false` when `warn_at` is unset.
     #[serde(default)]
     pub warning: bool,
+    /// The rule's dimension scope, echoed for the status surface / alerts (`None` = project-wide).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<LimitScope>,
 }
 
 impl LimitStatus {
@@ -123,6 +200,21 @@ impl LimitStatus {
     /// (`Throttle`/`Block`). The ingest path returns HTTP 429 when any status reports this.
     pub fn rejects_ingest(&self) -> bool {
         self.breached && self.action.enforces()
+    }
+
+    /// A compact scope tag for keys/labels: `all` when project-wide, else `kind=value`.
+    pub fn scope_tag(&self) -> String {
+        match &self.scope {
+            None => "all".to_string(),
+            Some(s) => s.label(),
+        }
+    }
+
+    /// Stable per-rule key for alert-cooldown dedup and for matching a breach to its running
+    /// rejection count. Includes the scope so a scoped cap and a project-wide cap on the same
+    /// metric+window don't collide on one key.
+    pub fn alert_key(&self) -> String {
+        format!("{}:{:?}:{:?}:{}", self.project_id, self.metric, self.window, self.scope_tag())
     }
 }
 
@@ -172,6 +264,7 @@ impl LimitRule {
             ratio,
             warn_at: self.warn_at,
             warning,
+            scope: self.scope.clone(),
         }
     }
 }
@@ -190,7 +283,37 @@ mod tests {
             action: LimitAction::Alert,
             enabled: true,
             warn_at: None,
+            scope: None,
         }
+    }
+
+    #[test]
+    fn scope_matches_dimension() {
+        let s = LimitScope::Model("gpt-4o".into());
+        assert!(s.matches("openai", "gpt-4o", None), "model matches");
+        assert!(!s.matches("openai", "gpt-4o-mini", None), "other model does not");
+        let p = LimitScope::Provider("openai".into());
+        assert!(p.matches("openai", "gpt-4o", Some("x")));
+        assert!(!p.matches("anthropic", "claude", None));
+        let n = LimitScope::Name("summarize".into());
+        assert!(n.matches("openai", "gpt-4o", Some("summarize")));
+        assert!(!n.matches("openai", "gpt-4o", None), "unnamed event doesn't match a name scope");
+        // Unscoped always matches.
+        assert!(scope_matches(None, "any", "any", None));
+    }
+
+    #[test]
+    fn scope_roundtrips_through_parts_and_key() {
+        let s = LimitScope::Model("gpt-4o".into());
+        assert_eq!(LimitScope::from_parts(s.kind_str(), s.value().to_string()), Some(s.clone()));
+        assert_eq!(s.label(), "model=gpt-4o");
+        let mut r = rule();
+        r.scope = Some(s);
+        let st = r.evaluate(5.0);
+        assert_eq!(st.scope_tag(), "model=gpt-4o");
+        assert!(st.alert_key().ends_with(":model=gpt-4o"));
+        // Unscoped tag/key.
+        assert_eq!(rule().evaluate(5.0).scope_tag(), "all");
     }
 
     #[test]
