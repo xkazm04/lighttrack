@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::event::LlmEvent;
@@ -24,12 +24,23 @@ pub struct TraceTotals {
     pub total_tokens: u64,
     /// Spans whose status is not `success` (errors + timeouts).
     pub errors: usize,
+    /// Summed per-span latency — the trace's total *compute* time, distinct from the wall-clock
+    /// `duration_ms` (which spans idle gaps but counts overlapping work once).
+    #[serde(default)]
+    pub total_latency_ms: u64,
 }
 
 /// One node of a trace's span tree: an event and the spans whose parent it is.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceSpan {
     pub event: LlmEvent,
+    /// Milliseconds from the trace's start to this span's start — its offset on the waterfall.
+    #[serde(default)]
+    pub offset_ms: i64,
+    /// This span's own latency (compute time), mirrored from the event so a consumer can place the
+    /// bar `[offset_ms, offset_ms + latency_ms]` without digging into `event`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TraceSpan>,
 }
@@ -64,7 +75,9 @@ pub struct Trace {
     pub project_id: String,
     pub started_at: DateTime<Utc>,
     pub ended_at: DateTime<Utc>,
-    /// Wall-clock span from the first to the last recorded event, in milliseconds.
+    /// Wall-clock milliseconds from the first span's start to the last span's *finish*
+    /// (`max(ts + latency)`), so a trailing call's latency is counted. May exceed
+    /// `ended_at - started_at` (which is start-to-last-start) by that final span's compute time.
     pub duration_ms: i64,
     /// `success` unless any span errored, then `error`.
     pub status: String,
@@ -97,12 +110,19 @@ impl Trace {
         let project_id = events[0].project_id.clone();
         let started_at = events.first().map(|e| e.ts).unwrap_or_else(Utc::now);
         let ended_at = events.iter().map(|e| e.ts).max().unwrap_or(started_at);
-        let duration_ms = (ended_at - started_at).num_milliseconds().max(0);
+        // Honest duration: the trace ends when its *last-finishing* span finishes, not when the last
+        // one started. Undercounted before by omitting the final span's latency.
+        let last_finish = events
+            .iter()
+            .map(|e| e.ts + Duration::milliseconds(e.latency_ms.unwrap_or(0) as i64))
+            .max()
+            .unwrap_or(started_at);
+        let duration_ms = (last_finish - started_at).num_milliseconds().max(0);
 
         let totals = totals_of(&events);
         let models = distinct_models(&events);
         let status = if totals.errors > 0 { "error" } else { "success" }.to_string();
-        let spans = build_forest(events);
+        let spans = build_forest(events, started_at);
 
         Some(Trace {
             trace_id,
@@ -133,6 +153,7 @@ fn totals_of(events: &[LlmEvent]) -> TraceTotals {
         t.cost_usd += e.cost_usd.unwrap_or(0.0);
         t.input_tokens += e.usage.input;
         t.output_tokens += e.usage.output;
+        t.total_latency_ms += e.latency_ms.unwrap_or(0);
         if e.status != crate::event::Status::Success {
             t.errors += 1;
         }
@@ -154,7 +175,8 @@ fn distinct_models(events: &[LlmEvent]) -> Vec<String> {
 }
 
 /// Arrange events (already sorted oldest-first) into a forest of [`TraceSpan`]s by parent links.
-fn build_forest(events: Vec<LlmEvent>) -> Vec<TraceSpan> {
+/// `trace_start` anchors each span's `offset_ms` on the waterfall.
+fn build_forest(events: Vec<LlmEvent>, trace_start: DateTime<Utc>) -> Vec<TraceSpan> {
     // span_id -> index of the event that owns it (first occurrence wins on duplicates).
     let mut owner: HashMap<&str, usize> = HashMap::new();
     for (i, e) in events.iter().enumerate() {
@@ -178,14 +200,14 @@ fn build_forest(events: Vec<LlmEvent>) -> Vec<TraceSpan> {
     let mut visited: HashSet<usize> = HashSet::new();
     let mut forest = Vec::with_capacity(roots.len());
     for r in roots {
-        if let Some(node) = take_subtree(r, &mut slots, &children, &mut visited) {
+        if let Some(node) = take_subtree(r, &mut slots, &children, &mut visited, trace_start) {
             forest.push(node);
         }
     }
     // Any event not reachable from a root (a parent cycle) is promoted to a root so none is lost.
     for i in 0..slots.len() {
         if slots[i].is_some() {
-            if let Some(node) = take_subtree(i, &mut slots, &children, &mut visited) {
+            if let Some(node) = take_subtree(i, &mut slots, &children, &mut visited, trace_start) {
                 forest.push(node);
             }
         }
@@ -198,19 +220,22 @@ fn take_subtree(
     slots: &mut [Option<LlmEvent>],
     children: &HashMap<usize, Vec<usize>>,
     visited: &mut HashSet<usize>,
+    trace_start: DateTime<Utc>,
 ) -> Option<TraceSpan> {
     if !visited.insert(idx) {
         return None; // cycle guard
     }
     let event = slots[idx].take()?;
+    let offset_ms = (event.ts - trace_start).num_milliseconds().max(0);
+    let latency_ms = event.latency_ms;
     let kids = children.get(&idx).map(Vec::as_slice).unwrap_or(&[]);
     let mut child_nodes = Vec::with_capacity(kids.len());
     for &c in kids {
-        if let Some(node) = take_subtree(c, slots, children, visited) {
+        if let Some(node) = take_subtree(c, slots, children, visited, trace_start) {
             child_nodes.push(node);
         }
     }
-    Some(TraceSpan { event, children: child_nodes })
+    Some(TraceSpan { event, offset_ms, latency_ms, children: child_nodes })
 }
 
 #[cfg(test)]
@@ -324,6 +349,69 @@ mod tests {
         c.model = "first".into();
         let t = Trace::from_events(vec![c, a, b]).unwrap(); // unsorted input
         assert_eq!(t.models, vec!["first".to_string(), "second".to_string()]);
+    }
+
+    #[test]
+    fn honest_duration_counts_final_span_latency() {
+        // Two spans 2s apart, each 100ms latency. Wall-by-starts is 2000ms; honest end is the last
+        // span's start (+2000ms) plus its 100ms latency = 2100ms.
+        let evs = vec![
+            ev("a", None, 0, 0.0, Status::Success),
+            ev("b", Some("a"), 2, 0.0, Status::Success),
+        ];
+        let t = Trace::from_events(evs).unwrap();
+        assert_eq!(t.duration_ms, 2100, "final span's latency is no longer dropped");
+        assert_eq!(t.totals.total_latency_ms, 200, "compute time sums per-span latency");
+    }
+
+    #[test]
+    fn missing_latency_is_treated_as_zero() {
+        let mut a = ev("a", None, 0, 0.0, Status::Success);
+        a.latency_ms = None;
+        let mut b = ev("b", Some("a"), 1, 0.0, Status::Success);
+        b.latency_ms = None;
+        let t = Trace::from_events(vec![a, b]).unwrap();
+        assert_eq!(t.duration_ms, 1000, "no latency -> plain wall clock, no panic");
+        assert_eq!(t.totals.total_latency_ms, 0);
+        assert_eq!(t.spans[0].latency_ms, None);
+    }
+
+    #[test]
+    fn overlapping_spans_end_at_last_finish() {
+        // a starts at 0 and runs 5s; b starts at +1s and runs 0.5s. Wall duration is the later
+        // finish (5000ms), while compute time counts both (5500ms) even though they overlap.
+        let mut a = ev("a", None, 0, 0.0, Status::Success);
+        a.latency_ms = Some(5000);
+        let mut b = ev("b", Some("a"), 1, 0.0, Status::Success);
+        b.latency_ms = Some(500);
+        let t = Trace::from_events(vec![a, b]).unwrap();
+        assert_eq!(t.duration_ms, 5000, "duration is the last-finishing span, not the last-started");
+        assert_eq!(t.totals.total_latency_ms, 5500);
+    }
+
+    #[test]
+    fn single_span_offset_zero_and_latency_surfaced() {
+        let mut a = ev("a", None, 0, 0.0, Status::Success);
+        a.latency_ms = Some(350);
+        let t = Trace::from_events(vec![a]).unwrap();
+        assert_eq!(t.duration_ms, 350);
+        assert_eq!(t.spans.len(), 1);
+        assert_eq!(t.spans[0].offset_ms, 0, "root sits at the trace start");
+        assert_eq!(t.spans[0].latency_ms, Some(350), "latency mirrored onto the node");
+    }
+
+    #[test]
+    fn out_of_order_input_offsets_from_true_start() {
+        // Feed events unsorted; offsets must anchor to the earliest ts regardless of input order.
+        let a = ev("a", None, 0, 0.0, Status::Success); // +0s
+        let b = ev("b", Some("a"), 3, 0.0, Status::Success); // +3s
+        let c = ev("c", Some("a"), 1, 0.0, Status::Success); // +1s
+        let t = Trace::from_events(vec![b, c, a]).unwrap();
+        let root = &t.spans[0];
+        assert_eq!(root.offset_ms, 0);
+        // Children kept chronological: c (+1s) before b (+3s), with matching offsets.
+        assert_eq!(root.children[0].offset_ms, 1000);
+        assert_eq!(root.children[1].offset_ms, 3000);
     }
 
     fn count_nodes(spans: &[TraceSpan]) -> usize {

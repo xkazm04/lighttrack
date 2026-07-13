@@ -57,10 +57,13 @@ pub(crate) fn tree(v: &Value) -> Option<String> {
 
     let mut out = format!("### Trace `{trace_id}` {glyph}\n\n");
     let when = short_ts(s(v, "started_at"));
-    out.push_str(&format!(
-        "- **When:** {when} · {}\n",
-        dur(opt_u(v, "duration_ms").unwrap_or(0))
-    ));
+    // Wall duration, plus total compute time when present (they differ when spans overlap or idle).
+    let wall = dur(opt_u(v, "duration_ms").unwrap_or(0));
+    let timing = match opt_u(totals, "total_latency_ms") {
+        Some(c) => format!("{wall} wall · {} compute", dur(c)),
+        None => wall,
+    };
+    out.push_str(&format!("- **When:** {when} · {timing}\n"));
     out.push_str(&format!("- **Spans:** {}\n", u(totals, "spans")));
     let (in_t, out_t) = (u(totals, "input_tokens"), u(totals, "output_tokens"));
     out.push_str(&format!(
@@ -122,16 +125,20 @@ fn render_node(node: &Value, depth: usize, out: &mut String) {
         .map(|x| (u(x, "input"), u(x, "output")))
         .unwrap_or((0, 0));
     let cost = opt_f(ev, "cost_usd").map(money).unwrap_or_else(|| "—".into());
-    let lat = opt_u(ev, "latency_ms")
-        .map(|m| format!("{m} ms"))
-        .unwrap_or_else(|| "—".into());
+    // Waterfall placement: `@<offset>ms +<latency>ms`. Offset/latency live on the span node (with
+    // latency mirrored from the event); fall back to the event for older payloads.
+    let offset = opt_u(node, "offset_ms").unwrap_or(0);
+    let lat = opt_u(node, "latency_ms")
+        .or_else(|| opt_u(ev, "latency_ms"))
+        .map(|m| format!("+{m}ms"))
+        .unwrap_or_else(|| "+—".into());
     let model = {
         let provider = s(ev, "provider");
         let m = s(ev, "model");
         if provider.is_empty() { m.to_string() } else { format!("{provider}/{m}") }
     };
     out.push_str(&format!(
-        "{}- {glyph} `{}` · {}/{} tok · {cost} · {lat}\n",
+        "{}- {glyph} `{}` · @{offset}ms {lat} · {}/{} tok · {cost}\n",
         "  ".repeat(depth),
         trunc(&model, 30),
         commafy(in_t),
@@ -179,11 +186,14 @@ mod tests {
             "trace_id": "tr-1", "status": "success",
             "started_at": "2026-06-21T12:34:56.000000000Z", "duration_ms": 500,
             "models": ["m1"],
-            "totals": { "spans": 2, "input_tokens": 200, "output_tokens": 100, "cost_usd": 0.003, "errors": 0 },
+            "totals": { "spans": 2, "input_tokens": 200, "output_tokens": 100, "cost_usd": 0.003,
+                        "errors": 0, "total_latency_ms": 200 },
             "spans": [{
+                "offset_ms": 0, "latency_ms": 120,
                 "event": { "provider": "anthropic", "model": "m1", "status": "success",
                            "usage": { "input": 100, "output": 50 }, "cost_usd": 0.001, "latency_ms": 120 },
                 "children": [{
+                    "offset_ms": 120, "latency_ms": 80,
                     "event": { "provider": "anthropic", "model": "m1", "status": "success",
                                "usage": { "input": 100, "output": 50 }, "cost_usd": 0.002, "latency_ms": 80 },
                     "children": []
@@ -195,6 +205,10 @@ mod tests {
         assert!(md.contains("### Trace `tr-1`"));
         assert!(md.contains("**Spans:**"));
         assert!(md.contains("  - ✅"), "child span is indented one level: {md}");
+        // Waterfall placement per node + total compute time in the header.
+        assert!(md.contains("@0ms +120ms"), "root waterfall: {md}");
+        assert!(md.contains("@120ms +80ms"), "child waterfall: {md}");
+        assert!(md.contains("compute"), "header shows total compute time: {md}");
         assert!(md.contains("**Scores:**"));
         assert!(md.contains("coherence"));
         // Not an object / no id -> no render.
