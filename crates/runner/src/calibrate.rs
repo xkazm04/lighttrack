@@ -1,17 +1,27 @@
 //! `calibrate`: measure judge↔human agreement on a labeled set so a rubric can be *trusted* before
 //! it's used for gating. Judge-only — the outputs are given and the judge re-scores them, then we
 //! compare to the human labels (Cohen's κ + correlation). See docs/BENCHMARK_FRAMEWORK.md §3.
+//!
+//! The judging core (`judge_set`) is shared with the watch-mode drift sentinel (`calibrate_watch`),
+//! so a one-shot run and a scheduled cycle compute κ identically.
 
 use std::fs;
 
 use anyhow::{bail, Context, Result};
 
-use lighttrack_core::{agreement, CalibrationItem, ModelPriceRow, Rubric};
+use lighttrack_core::{agreement, Agreement, CalibrationItem, ModelPriceRow, Rubric};
 use lighttrack_engine::{build_judge_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig};
 
 use crate::cli::Cli;
 use crate::http::get;
 use crate::util::{parallel_map, price_gen_cost, short};
+
+/// Outcome of judging a calibration set: the agreement metrics plus judge cost and skip count.
+pub(crate) struct Calibrated {
+    pub(crate) agreement: Agreement,
+    pub(crate) cost: f64,
+    pub(crate) skipped: u32,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn calibrate(
@@ -31,12 +41,7 @@ pub(crate) fn calibrate(
     if items.is_empty() {
         bail!("no calibration items in {file}");
     }
-
-    // Structured rubric (fetched from the API) takes precedence over freeform text.
-    let rubric: Option<Rubric> = match rubric_id {
-        Some(id) => Some(get(cli, http, &format!("/v1/rubrics/{id}"))?),
-        None => None,
-    };
+    let rubric = resolve_rubric(cli, http, rubric_id)?;
     if rubric.is_none() && rubric_text.is_none() {
         bail!("provide --rubric \"<criteria>\" or --rubric-id <id>");
     }
@@ -44,17 +49,69 @@ pub(crate) fn calibrate(
     let (jp, jm) = parse_judge_spec(&engine.model);
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
 
-    println!(
-        "calibrating {} item(s) — judge={jp}/{jm}, threshold={threshold:.2}, \u{3ba}-bar={kappa_bar:.2}{}",
-        items.len(),
-        rubric.as_ref().map(|r| format!(", rubric={}", r.name)).unwrap_or_default(),
+    let c = judge_set(
+        engine, &jp, &jm, &rubric, rubric_text, &items, threshold, kappa_bar, samples, jobs, &prices,
+        true,
     );
-    println!("  {:<10}  {:>6}  {:>6}  {:>7}  {:<5}", "item", "human", "judge", "delta", "agree");
 
-    // Judge every item with up to `jobs` concurrency; fold the results in file order so the per-item
-    // table, skips, and κ are identical at any `jobs`.
+    if let Some(p) = report_path {
+        let report = serde_json::json!({
+            "file": file,
+            "judge": format!("{jp}/{jm}"),
+            "rubric": rubric.as_ref().map(|r| r.name.clone()),
+            "samples": samples,
+            "agreement": c.agreement,
+            "judge_cost_usd": c.cost,
+        });
+        fs::write(p, serde_json::to_string_pretty(&report)?).with_context(|| format!("writing {p}"))?;
+        println!("wrote report to {p}");
+    }
+    Ok(())
+}
+
+/// Fetch the structured rubric (if an id was given). A structured rubric takes precedence over
+/// freeform criteria text; `None` means "use the freeform `--rubric` text".
+pub(crate) fn resolve_rubric(
+    cli: &Cli,
+    http: &reqwest::blocking::Client,
+    rubric_id: Option<&str>,
+) -> Result<Option<Rubric>> {
+    match rubric_id {
+        Some(id) => Ok(Some(get(cli, http, &format!("/v1/rubrics/{id}"))?)),
+        None => Ok(None),
+    }
+}
+
+/// Judge every item (up to `jobs` concurrency) and fold the per-item results — in file order, so κ is
+/// identical at any `jobs` — into an [`Agreement`]. When `verbose`, prints the one-shot CLI view (the
+/// header, the per-item table, and the summary block); the watch sentinel passes `false` and prints
+/// its own compact per-cycle line instead.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn judge_set(
+    engine: &EngineConfig,
+    jp: &str,
+    jm: &str,
+    rubric: &Option<Rubric>,
+    rubric_text: Option<&str>,
+    items: &[CalibrationItem],
+    threshold: f64,
+    kappa_bar: f64,
+    samples: u32,
+    jobs: usize,
+    prices: &[ModelPriceRow],
+    verbose: bool,
+) -> Calibrated {
+    if verbose {
+        println!(
+            "calibrating {} item(s) — judge={jp}/{jm}, threshold={threshold:.2}, \u{3ba}-bar={kappa_bar:.2}{}",
+            items.len(),
+            rubric.as_ref().map(|r| format!(", rubric={}", r.name)).unwrap_or_default(),
+        );
+        println!("  {:<10}  {:>6}  {:>6}  {:>7}  {:<5}", "item", "human", "judge", "delta", "agree");
+    }
+
     let scored: Vec<Result<(f64, f64)>> = parallel_map(items.len(), jobs, |i| {
-        judge_item(engine, &jp, &jm, &rubric, rubric_text, &items[i], samples, &prices)
+        judge_item(engine, jp, jm, rubric, rubric_text, &items[i], samples, prices)
     });
 
     let mut pairs: Vec<(f64, f64)> = Vec::new();
@@ -71,27 +128,37 @@ pub(crate) fn calibrate(
             }
         };
         cost += jc;
-        let agree = (it.human_score >= threshold) == (judge_score >= threshold);
         pairs.push((it.human_score, judge_score));
-        let label = it
-            .note
-            .as_deref()
-            .map(|s| short(s).to_string())
-            .unwrap_or_else(|| format!("#{}", i + 1));
-        println!(
-            "  {:<10}  {:>6.2}  {:>6.2}  {:>+7.2}  {:<5}",
-            label,
-            it.human_score,
-            judge_score,
-            judge_score - it.human_score,
-            if agree { "ok" } else { "MISS" },
-        );
+        if verbose {
+            let agree = (it.human_score >= threshold) == (judge_score >= threshold);
+            let label = it
+                .note
+                .as_deref()
+                .map(|s| short(s).to_string())
+                .unwrap_or_else(|| format!("#{}", i + 1));
+            println!(
+                "  {:<10}  {:>6.2}  {:>6.2}  {:>+7.2}  {:<5}",
+                label,
+                it.human_score,
+                judge_score,
+                judge_score - it.human_score,
+                if agree { "ok" } else { "MISS" },
+            );
+        }
     }
 
+    let a = agreement(&pairs, threshold, kappa_bar);
+    if verbose {
+        print_summary(&a, cost, skipped, kappa_bar);
+    }
+    Calibrated { agreement: a, cost, skipped }
+}
+
+/// Print the one-shot summary block (agreement line, rates, verdict, bias note).
+fn print_summary(a: &Agreement, cost: f64, skipped: u32, kappa_bar: f64) {
     if skipped > 0 {
         println!("  note: {skipped} item(s) skipped — judge output was unparseable.");
     }
-    let a = agreement(&pairs, threshold, kappa_bar);
     println!(
         "\nagreement (n={}):  \u{3ba}={:.3}  pearson={:.3}  MAE={:.3}  RMSE={:.3}  bias={:+.3}",
         a.n, a.cohen_kappa, a.pearson, a.mae, a.rmse, a.bias,
@@ -116,20 +183,6 @@ pub(crate) fn calibrate(
             a.bias.abs(),
         );
     }
-
-    if let Some(p) = report_path {
-        let report = serde_json::json!({
-            "file": file,
-            "judge": format!("{jp}/{jm}"),
-            "rubric": rubric.as_ref().map(|r| r.name.clone()),
-            "samples": samples,
-            "agreement": a,
-            "judge_cost_usd": cost,
-        });
-        fs::write(p, serde_json::to_string_pretty(&report)?).with_context(|| format!("writing {p}"))?;
-        println!("wrote report to {p}");
-    }
-    Ok(())
 }
 
 /// Judge one item via the structured rubric (if any) or freeform criteria text; returns
@@ -172,7 +225,7 @@ fn judge_item(
 }
 
 /// Load calibration items from a JSONL file (one object per line) or a JSON array file.
-fn load_items(file: &str) -> Result<Vec<CalibrationItem>> {
+pub(crate) fn load_items(file: &str) -> Result<Vec<CalibrationItem>> {
     let text = fs::read_to_string(file).with_context(|| format!("reading {file}"))?;
     parse_items(&text, file)
 }

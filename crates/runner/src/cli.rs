@@ -110,6 +110,24 @@ pub(crate) enum Cmd {
         /// Optional path to write the full JSON report.
         #[arg(long)]
         report: Option<String>,
+        /// Drift sentinel: re-judge the golden set on a schedule, persist κ history via /v1/scores
+        /// under `lt:calibration:<judge>`, and alert on trust degradation. Daemon unless `--once`.
+        #[arg(long)]
+        watch: bool,
+        /// Run a single watch cycle and exit (for cron / Cloud Scheduler); implies `--watch`. Exits
+        /// non-zero when the cycle ends untrusted (κ < --kappa-bar).
+        #[arg(long)]
+        once: bool,
+        /// Seconds between watch cycles (daemon mode).
+        #[arg(long, default_value_t = 3600)]
+        interval: u64,
+        /// Watch mode: warn when κ falls by more than this vs the previous run, even if still trusted.
+        #[arg(long, default_value_t = 0.15)]
+        drift_threshold: f64,
+        /// Watch mode: project id to attach the persisted calibration scores to (else derived from
+        /// the API key). Also scopes the history read used for drift detection.
+        #[arg(long)]
+        project: Option<String>,
     },
     /// Periodically sample live events into frozen datasets (online sampling). Daemon by default;
     /// `--once` runs a single cycle (for OS cron / Cloud Scheduler / a systemd timer).

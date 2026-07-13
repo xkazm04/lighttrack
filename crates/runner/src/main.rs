@@ -10,6 +10,7 @@
 mod bench;
 mod billing;
 mod calibrate;
+mod calibrate_watch;
 mod cli;
 mod compare;
 mod dataset;
@@ -113,18 +114,46 @@ fn main() -> Result<()> {
             kappa_bar,
             samples,
             report,
-        } => calibrate::calibrate(
-            &cli,
-            &http,
-            &engine,
-            file,
-            rubric.as_deref(),
-            rubric_id.as_deref(),
-            *threshold,
-            *kappa_bar,
-            *samples,
-            report.as_deref(),
-            cli.jobs,
-        ),
+            watch,
+            once,
+            interval,
+            drift_threshold,
+            project,
+        } => {
+            if *watch || *once {
+                let params = calibrate_watch::WatchParams {
+                    file,
+                    rubric_text: rubric.as_deref(),
+                    rubric_id: rubric_id.as_deref(),
+                    project: project.as_deref(),
+                    threshold: *threshold,
+                    kappa_bar: *kappa_bar,
+                    drift_threshold: *drift_threshold,
+                    samples: *samples,
+                    interval: *interval,
+                    once: *once,
+                    jobs: cli.jobs,
+                };
+                let code = calibrate_watch::watch(&cli, &http, &engine, &params)?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
+                Ok(())
+            } else {
+                calibrate::calibrate(
+                    &cli,
+                    &http,
+                    &engine,
+                    file,
+                    rubric.as_deref(),
+                    rubric_id.as_deref(),
+                    *threshold,
+                    *kappa_bar,
+                    *samples,
+                    report.as_deref(),
+                    cli.jobs,
+                )
+            }
+        }
     }
 }
