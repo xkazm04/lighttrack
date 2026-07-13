@@ -57,6 +57,34 @@ pub(crate) fn get<T: serde::de::DeserializeOwned>(
     serde_json::from_str(&text).with_context(|| format!("decoding response from {path}"))
 }
 
+/// GET `path`, decoding the JSON body into `T` and also returning the `X-Next-Cursor` response
+/// header (the keyset cursor for the next page) when present. Used to walk paginated list endpoints
+/// like `/v1/traces` and `/v1/events` a page at a time.
+pub(crate) fn get_paged<T: serde::de::DeserializeOwned>(
+    cli: &Cli,
+    http: &reqwest::blocking::Client,
+    path: &str,
+) -> Result<(T, Option<String>)> {
+    let mut req = http.get(format!("{}{}", cli.base, path));
+    if let Some(k) = &cli.key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req.send()?;
+    let status = resp.status();
+    let next = resp
+        .headers()
+        .get("x-next-cursor")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let text = read_bounded(resp, path)?;
+    if !status.is_success() {
+        anyhow::bail!("GET {path} -> HTTP {}: {text}", status.as_u16());
+    }
+    let value =
+        serde_json::from_str(&text).with_context(|| format!("decoding response from {path}"))?;
+    Ok((value, next))
+}
+
 /// POST `body` to `path`, returning the JSON response (or Null).
 pub(crate) fn post(
     cli: &Cli,

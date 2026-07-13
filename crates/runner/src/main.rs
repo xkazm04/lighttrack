@@ -21,6 +21,7 @@ mod recurrence;
 mod rubric;
 mod schedule;
 mod score;
+mod score_traces;
 mod serve;
 mod stats;
 mod util;
@@ -56,6 +57,38 @@ fn main() -> Result<()> {
             output,
             project,
         } => score::score_text(&cli, &http, &engine, rubric, input, output, project),
+        Cmd::ScoreTraces {
+            project,
+            rubric,
+            rubric_id,
+            sample_every,
+            errors_always,
+            settle_secs,
+            limit,
+            judge,
+            interval,
+            once,
+        } => {
+            // Per-command judge override, else the global --model. Built without cloning EngineConfig.
+            let eng = EngineConfig {
+                claude_bin: engine.claude_bin.clone(),
+                model: judge.clone().unwrap_or_else(|| engine.model.clone()),
+                bare: engine.bare,
+            };
+            let params = score_traces::Params {
+                project,
+                rubric_text: rubric.as_deref(),
+                rubric_id: rubric_id.as_deref(),
+                sample_every: *sample_every,
+                errors_always: *errors_always,
+                settle_secs: *settle_secs,
+                limit: *limit,
+                interval: *interval,
+                once: *once,
+                jobs: cli.jobs,
+            };
+            score_traces::run(&cli, &http, &eng, &params)
+        }
         Cmd::Bench {
             benchmark,
             samples,

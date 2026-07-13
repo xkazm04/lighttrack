@@ -54,6 +54,43 @@ pub(crate) enum Cmd {
         #[arg(long)]
         project: String,
     },
+    /// Auto-score whole traces: sample recently-completed traces for a project, judge each one's
+    /// root exchange, and post a whole-trace score. Idempotent — a trace already scored for this
+    /// rubric is never re-judged, so repeated runs never double-score. `--interval` runs it as a
+    /// daemon; `--once` runs a single cycle (for OS cron / Cloud Scheduler).
+    ScoreTraces {
+        #[arg(long)]
+        project: String,
+        /// Freeform judge criteria (use this OR --rubric-id).
+        #[arg(long)]
+        rubric: Option<String>,
+        /// Structured rubric id to fetch from the API and judge per-dimension (use this OR --rubric).
+        #[arg(long)]
+        rubric_id: Option<String>,
+        /// Sample rate: judge ~1 of every N settled traces, chosen by a stable hash of the trace id
+        /// (order-independent, so the same ~1/N subset is picked each cycle). 1 = every trace.
+        #[arg(long, default_value_t = 1)]
+        sample_every: usize,
+        /// Always judge error traces, regardless of the sample rate.
+        #[arg(long)]
+        errors_always: bool,
+        /// A trace counts as "completed" once its newest event is older than this many seconds — the
+        /// settle window (traces carry no explicit completion marker).
+        #[arg(long, default_value_t = 120)]
+        settle_secs: i64,
+        /// Max settled traces to consider per cycle (walked newest-first via keyset pages).
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        /// Judge spec `[provider/]model` override for this run (else the global --model).
+        #[arg(long)]
+        judge: Option<String>,
+        /// Run continuously, scoring newly-settled traces every N seconds. 0 = one-shot.
+        #[arg(long, default_value_t = 0)]
+        interval: u64,
+        /// Run a single cycle and exit (for an external scheduler). Overrides --interval.
+        #[arg(long)]
+        once: bool,
+    },
     /// Run a stored benchmark: judge each case, aggregate a scorecard, record a run.
     Bench {
         #[arg(long)]
