@@ -14,23 +14,12 @@ use lighttrack_engine::{generate, parse_judge_spec, EngineConfig};
 use crate::bench::judge_output;
 use crate::cli::Cli;
 use crate::http::{get, post};
-use crate::util::{
-    add_price_warnings, aggregate_status, cost_or_book, join_csv, now_ts, percentiles, run_status,
-};
+use crate::stats::{annotate_significance, significance_verdict, stability, Summary};
+use crate::util::{add_price_warnings, aggregate_status, cost_or_book, join_csv, now_ts, percentiles};
 
 /// Round to 3 decimals for compact report JSON.
 fn r3(x: f64) -> f64 {
     (x * 1000.0).round() / 1000.0
-}
-
-/// Stability of a set of scores: `1 - (max - min)`, clamped to [0,1]. 1.0 = identical.
-fn stability(xs: &[f64]) -> f64 {
-    if xs.len() < 2 {
-        return 1.0;
-    }
-    let mx = xs.iter().cloned().fold(f64::MIN, f64::max);
-    let mn = xs.iter().cloned().fold(f64::MAX, f64::min);
-    (1.0 - (mx - mn)).clamp(0.0, 1.0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -77,6 +66,7 @@ pub(crate) fn run_compare(
         let mut case_reports: Vec<Value> = Vec::new();
         let (mut gen_tokens, mut judge_tokens) = (0u64, 0u64);
         let mut price_warnings: BTreeSet<String> = BTreeSet::new();
+        let mut case_scores: Vec<f64> = Vec::new();
 
         for (i, case) in cases.iter().enumerate() {
             // Generate `ng` candidates for this case and judge each; the case score is their mean.
@@ -149,6 +139,7 @@ pub(crate) fn run_compare(
             let case_agree = if ng > 1 { gen_agree } else { judge_agree };
 
             overall_sum += case_score;
+            case_scores.push(case_score);
             agree_sum += case_agree;
             if case_pass {
                 passes += 1;
@@ -199,11 +190,13 @@ pub(crate) fn run_compare(
         rows.push((label.clone(), mean, pass_rate, gen_cost, judge_cost, p50.unwrap_or(0), errored, mean_agree));
 
         // Per-target verdict vs the benchmark baseline — the flagship multi-target mode now detects
-        // regressions instead of stamping every run "compared". No baseline ⇒ "no_baseline".
-        let status = if judged > 0 {
-            run_status(bench.baseline_score, mean)
+        // regressions (significance-aware) instead of stamping every run "compared". No baseline ⇒
+        // "no_baseline"; the CI must exclude the baseline below before a target counts as regressed.
+        let summary = Summary::of(&case_scores);
+        let (status, scalar_fallback) = if judged > 0 {
+            significance_verdict(bench.baseline_score, &summary)
         } else {
-            "no_baseline"
+            ("no_baseline", false)
         };
         statuses.push(status.to_string());
         if !price_warnings.is_empty() {
@@ -222,6 +215,7 @@ pub(crate) fn run_compare(
             "agreement": r3(mean_agree), "dimensions": Value::Object(dim_means), "cases": case_reports,
             "verdict": status, "baseline": bench.baseline_score,
         });
+        annotate_significance(&mut report, &summary, scalar_fallback);
         add_price_warnings(&mut report, &price_warnings);
         let run = json!({
             "benchmark_id": bench.id, "n_cases": judged, "mean_score": mean, "pass_rate": pass_rate,
@@ -258,7 +252,7 @@ pub(crate) fn run_compare(
 
 #[cfg(test)]
 mod tests {
-    use super::{r3, stability};
+    use super::r3;
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
@@ -270,27 +264,5 @@ mod tests {
         assert!(approx(r3(0.123654), 0.124)); // rounds half-away-from-zero at the 4th place
         assert!(approx(r3(1.0), 1.0));
         assert!(approx(r3(0.0), 0.0));
-    }
-
-    #[test]
-    fn stability_of_short_sets_is_one() {
-        // Fewer than two samples → nothing to disagree on.
-        assert!(approx(stability(&[]), 1.0));
-        assert!(approx(stability(&[0.4]), 1.0));
-    }
-
-    #[test]
-    fn stability_is_one_minus_spread() {
-        // identical scores → perfectly stable
-        assert!(approx(stability(&[0.8, 0.8, 0.8]), 1.0));
-        // spread of 0.3 → 0.7
-        assert!(approx(stability(&[0.6, 0.9, 0.7]), 0.7));
-    }
-
-    #[test]
-    fn stability_clamps_to_zero_when_spread_exceeds_one() {
-        // max-min = 1.0 → 0.0; a >1 spread is clamped, never negative.
-        assert!(approx(stability(&[0.0, 1.0]), 0.0));
-        assert!(approx(stability(&[-0.5, 1.0]), 0.0));
     }
 }

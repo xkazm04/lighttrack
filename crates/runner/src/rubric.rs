@@ -12,7 +12,8 @@ use std::collections::BTreeSet;
 
 use crate::cli::Cli;
 use crate::http::{get, post};
-use crate::util::{add_price_warnings, cost_or_book, dim_mean, join_csv, now_ts, percentiles, run_status};
+use crate::stats::{annotate_significance, significance_verdict, Summary};
+use crate::util::{add_price_warnings, cost_or_book, dim_mean, join_csv, now_ts, percentiles};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_rubric_benchmark(
@@ -35,6 +36,7 @@ pub(crate) fn run_rubric_benchmark(
 
     let mut dim_sums: HashMap<String, f64> = HashMap::new();
     let mut overall_sum = 0.0_f64;
+    let mut scores: Vec<f64> = Vec::new();
     let (mut passes, mut judged, mut total_tokens) = (0u32, 0u32, 0u64);
     let mut cost = 0.0_f64;
     let mut latencies: Vec<u64> = Vec::new();
@@ -75,6 +77,7 @@ pub(crate) fn run_rubric_benchmark(
             );
         }
         overall_sum += o.overall;
+        scores.push(o.overall);
         if o.pass {
             passes += 1;
         }
@@ -193,7 +196,9 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
         None
     };
 
-    let status = run_status(bench.baseline_score, mean);
+    // Significance-aware verdict (CI-excludes-baseline for n≥2, scalar fallback otherwise).
+    let summary = Summary::of(&scores);
+    let (status, scalar_fallback) = significance_verdict(bench.baseline_score, &summary);
 
     let mut report = json!({
         "rubric": rubric.name, "threshold": rubric.threshold, "samples": samples,
@@ -204,10 +209,13 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
     if let Some(h) = &healing {
         report["healing"] = json!(h);
     }
+    annotate_significance(&mut report, &summary, scalar_fallback);
     add_price_warnings(&mut report, &price_warnings);
 
     println!(
-        "\nscorecard: overall={mean:.3}  pass_rate={:.0}%  cost=${cost:.5}  p50={}ms  tokens={total_tokens}  unparseable={errored}  status={status}",
+        "\nscorecard: overall={mean:.3}±{:.3} (n={})  pass_rate={:.0}%  cost=${cost:.5}  p50={}ms  tokens={total_tokens}  unparseable={errored}  status={status}",
+        summary.stderr,
+        summary.n,
         pass_rate * 100.0,
         p50.unwrap_or(0)
     );

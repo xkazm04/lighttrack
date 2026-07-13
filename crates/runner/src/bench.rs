@@ -15,7 +15,8 @@ use crate::cli::Cli;
 use crate::compare::run_compare;
 use crate::http::{get, post};
 use crate::rubric::run_rubric_benchmark;
-use crate::util::{add_price_warnings, cost_or_book, join_csv, now_ts, percentiles, run_status};
+use crate::stats::{annotate_significance, significance_verdict, Summary};
+use crate::util::{add_price_warnings, cost_or_book, join_csv, now_ts, percentiles};
 
 /// Parse a benchmark's `target` field into a comparison matrix. An **array** is unambiguously a
 /// target matrix and must deserialize cleanly — a malformed one is a hard error, not a silent
@@ -96,6 +97,7 @@ fn run_simple(
     let mut latencies: Vec<u64> = Vec::new();
     let mut total_tokens: u64 = 0;
     let mut price_warnings: BTreeSet<String> = BTreeSet::new();
+    let mut scores: Vec<f64> = Vec::new();
     for (i, case) in cases.iter().enumerate() {
         let output = match &case.output {
             Some(o) => o,
@@ -112,6 +114,7 @@ fn run_simple(
             outcome.verdict.score
         };
         sum += norm;
+        scores.push(norm);
         n += 1;
         if outcome.verdict.pass {
             passes += 1;
@@ -146,9 +149,14 @@ fn run_simple(
     let mean = if n > 0 { sum / n as f64 } else { 0.0 };
     let pass_rate = if n > 0 { passes as f64 / n as f64 } else { 0.0 };
     let (p50, p95) = percentiles(&mut latencies);
-    let status = run_status(bench.baseline_score, mean);
+    // Significance-aware verdict: a regression needs the whole ~95% CI below baseline (n≥2), else a
+    // scalar fallback. Same regressed/passed/no_baseline vocabulary as the other modes.
+    let summary = Summary::of(&scores);
+    let (status, scalar_fallback) = significance_verdict(bench.baseline_score, &summary);
     println!(
-        "\nscorecard: mean={mean:.3}  pass_rate={:.0}%  cost=${cost:.5}  p50={}ms p95={}ms  tokens={total_tokens}  status={status}",
+        "\nscorecard: mean={mean:.3}±{:.3} (n={})  pass_rate={:.0}%  cost=${cost:.5}  p50={}ms p95={}ms  tokens={total_tokens}  status={status}",
+        summary.stderr,
+        summary.n,
         pass_rate * 100.0,
         p50.unwrap_or(0),
         p95.unwrap_or(0),
@@ -162,6 +170,7 @@ fn run_simple(
     }
 
     let mut report = json!({ "mode": "simple" });
+    annotate_significance(&mut report, &summary, scalar_fallback);
     add_price_warnings(&mut report, &price_warnings);
     let run = json!({
         "benchmark_id": bench.id, "n_cases": n, "mean_score": mean, "pass_rate": pass_rate,

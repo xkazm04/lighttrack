@@ -18,6 +18,7 @@ mod rubric;
 mod schedule;
 mod score;
 mod serve;
+mod stats;
 mod util;
 
 use anyhow::Result;
