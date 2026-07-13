@@ -238,6 +238,7 @@ CREATE TABLE IF NOT EXISTS collective_entries (
   p95_latency_ms  INTEGER,
   n_runs          INTEGER NOT NULL DEFAULT 0,
   n_cases         INTEGER NOT NULL DEFAULT 0,
+  quality_variance REAL,          -- v2: case-weighted variance of quality across the contributor's runs
   received_at     TEXT NOT NULL,
   PRIMARY KEY (contributor_id, provider, model, task_type)
 );

@@ -163,6 +163,23 @@ LightTrack, the better the data for everyone (the moat).
   clamp ≥1): any contributed bucket with `n_cases` below it is dropped per-entry on ingest (not a whole
   request 400) and the count is returned as `dropped_under_min`, regardless of the floor the contributor
   claims it used.
+- **Trustworthy merge math (digest schema v2).** A point estimate lies when a 5-case bucket ranks next
+  to a 50k-case one, so v2 carries second-order summaries and the merge surfaces uncertainty:
+  - *Per-bucket variance.* Each v2 entry adds `quality_variance` — the **case-weighted population
+    variance of the contributing runs' mean scores** (`None` for a single-run bucket, variance
+    undefined). A hub accepts **both v1 and v2** (`MIN_SCHEMA_VERSION..=DIGEST_SCHEMA_VERSION`); v1
+    entries land with `quality_variance` NULL rather than being orphaned by the version bump.
+  - *Approximate CI.* Each leaderboard row carries `quality ± quality_ci95` — a pooled, case-weighted
+    95% interval (`SE = √(V/N_known)`, `V = Σnᵢvᵢ/Σnᵢ`). It is an honest **approximation** (it treats
+    between-run variance as case-level dispersion and ignores between-contributor shifts, so it is a
+    floor on the true uncertainty). When fewer than half the cases carry a known variance the CI is
+    `None` — an explicit "insufficient variance data" marker, never a fabricated interval.
+  - *Low-confidence, not hidden.* Rows aggregating fewer than the display floor
+    (`LIGHTTRACK_COLLECTIVE_DISPLAY_FLOOR`, default 30) of cases are flagged `low_confidence` (shown,
+    with a `†` in the rendered table) instead of being dropped. Ranking is always by the point estimate.
+  - *Honest latency.* The merged `p50` is a case-weighted mean of contributors' per-run medians
+    (approximate — labelled as such); `p95` is now surfaced as the **worst-observed** tail (the max
+    across contributors), not silently discarded.
 - **Topology.** Any LightTrack can be a **hub** (`LIGHTTRACK_COLLECTIVE_ACCEPT=1`, off by default) that
   receives digests and merges them; others contribute. Same binary, no central service required.
 - **API.** `GET /v1/collective/digest?min_cases=` (admin — preview what we'd publish) ·
@@ -184,7 +201,7 @@ rubrics(id, project_id, name, dimensions_json, threshold)        -- weighted anc
 model_prices(provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok, effective_date, source_url)
 jobs(id, type, payload_json, status, attempts, progress, error, claimed_at, created_at)
 collective_entries(contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd,
-                   p50_latency_ms?, p95_latency_ms?, n_runs, n_cases, received_at)  -- hub side; PK=(contributor_id,provider,model,task_type)
+                   p50_latency_ms?, p95_latency_ms?, n_runs, n_cases, quality_variance?, received_at)  -- hub side; PK=(contributor_id,provider,model,task_type)
 ```
 
 ## Phased plan

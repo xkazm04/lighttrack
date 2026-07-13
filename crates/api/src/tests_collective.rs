@@ -42,6 +42,7 @@ fn setup(accept: bool, allow_anon: bool, min_cases: u32) -> (AppState, Arc<Sqlit
             accept,
             allow_anon,
             min_cases,
+            display_floor: 30,
         }),
         seen_webhooks: Arc::new(crate::idempotency::SeenWebhooks::new(
             crate::idempotency::DEFAULT_CAPACITY,
@@ -192,6 +193,50 @@ async fn under_k_buckets_are_dropped_and_counted() {
     let stored = store.list_collective_entries().unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].model, "haiku");
+}
+
+#[tokio::test]
+async fn v1_digest_accepted_and_lands_with_null_variance() {
+    // A legacy v1 digest (schema_version 1, no quality_variance) must not be orphaned by the v2 bump.
+    let (state, store) = setup(true, false, 5);
+    let app = crate::build_router(state);
+    let (status, ack) = ingest(
+        &app,
+        Some("some-key"),
+        json!({ "schema_version": 1, "entries": [entry("haiku", 0.8, 10)] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted"], 1);
+    let stored = store.list_collective_entries().unwrap();
+    assert!(stored[0].quality_variance.is_none(), "v1 entry lands with variance NULL");
+}
+
+#[tokio::test]
+async fn v2_variance_is_carried_through_to_storage_and_ci() {
+    // Two contributors report variance over enough cases → the leaderboard row carries a CI.
+    let (state, store) = setup(true, false, 5);
+    let app = crate::build_router(state);
+    let with_var = |model: &str, q: f64, var: f64, cases: u32| {
+        json!({ "schema_version": 2, "entries": [{
+            "provider": "anthropic", "model": model, "task_type": "qa",
+            "quality": q, "pass_rate": q, "avg_cost_usd": 0.003,
+            "p50_latency_ms": 900, "p95_latency_ms": 2000,
+            "n_runs": 3, "n_cases": cases, "quality_variance": var
+        }]})
+    };
+    ingest(&app, Some("key-a"), with_var("haiku", 0.80, 0.04, 100)).await;
+    ingest(&app, Some("key-b"), with_var("haiku", 0.84, 0.04, 100)).await;
+
+    let stored = store.list_collective_entries().unwrap();
+    assert!(stored.iter().all(|e| e.quality_variance == Some(0.04)), "variance persisted");
+
+    let (ls, lb) = leaderboard(&app).await;
+    assert_eq!(ls, StatusCode::OK);
+    let row = &lb["rows"][0];
+    assert!(row["quality_ci95"].as_f64().is_some(), "full variance coverage → CI present: {lb}");
+    assert_eq!(row["p95_latency_ms"], 2000, "worst-observed p95 surfaced");
+    assert_eq!(row["low_confidence"], false, "200 cases clears the floor");
 }
 
 #[tokio::test]

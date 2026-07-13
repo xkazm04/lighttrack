@@ -63,7 +63,9 @@
 //!      LIGHTTRACK_COLLECTIVE_ACCEPT (1|true — this instance is a leaderboard hub; off by default),
 //!      LIGHTTRACK_COLLECTIVE_ALLOW_ANON (1|true — hub accepts keyless pushes under one shared
 //!        `anonymous` identity; off by default, a keyless push is otherwise refused),
-//!      LIGHTTRACK_COLLECTIVE_MIN_CASES (hub-enforced k-anonymity floor; default 5, clamp ≥1).
+//!      LIGHTTRACK_COLLECTIVE_MIN_CASES (hub-enforced k-anonymity floor; default 5, clamp ≥1),
+//!      LIGHTTRACK_COLLECTIVE_DISPLAY_FLOOR (merged rows below this many cases are flagged
+//!        low_confidence; default 30).
 
 mod alerts;
 mod auth;

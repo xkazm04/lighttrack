@@ -104,6 +104,8 @@ impl Store for SqliteStore {
                 "ALTER TABLE limit_rules ADD COLUMN warn_at REAL",
                 "ALTER TABLE limit_rules ADD COLUMN scope_kind TEXT",
                 "ALTER TABLE limit_rules ADD COLUMN scope_value TEXT",
+                // Collective digest v2: per-bucket quality variance (for merged CIs).
+                "ALTER TABLE collective_entries ADD COLUMN quality_variance REAL",
             ] {
                 if let Err(e) = c.execute(stmt, []) {
                     if !e.to_string().contains("duplicate column name") {

@@ -23,7 +23,8 @@ use sha2::{Digest, Sha256};
 
 use lighttrack_core::{
     build_digest, merge_leaderboard, task_type_from, Benchmark, BenchmarkRun, CollectiveDigest,
-    CollectiveEntry, LeaderboardRow, RunStat, DEFAULT_MIN_CASES, DIGEST_SCHEMA_VERSION,
+    CollectiveEntry, LeaderboardRow, RunStat, DEFAULT_LOW_CONFIDENCE_CASES, DEFAULT_MIN_CASES,
+    DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
 };
 use lighttrack_store::{Store, StoreError};
 
@@ -45,6 +46,9 @@ pub(crate) struct Collective {
     /// Hub-side k-anonymity floor: buckets contributed with `n_cases` below this are dropped on ingest,
     /// regardless of what floor the contributor claims to have used. Clamped to ≥1.
     pub(crate) min_cases: u32,
+    /// Leaderboard display floor: merged rows with fewer than this many total cases are flagged
+    /// `low_confidence` (shown, not hidden).
+    pub(crate) display_floor: u32,
 }
 
 impl Collective {
@@ -60,12 +64,19 @@ impl Collective {
             .and_then(|v| v.trim().parse::<u32>().ok())
             .unwrap_or(DEFAULT_MIN_CASES)
             .max(1);
-        Self { contributor_id, accept, allow_anon, min_cases }
+        let display_floor = std::env::var("LIGHTTRACK_COLLECTIVE_DISPLAY_FLOOR")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(DEFAULT_LOW_CONFIDENCE_CASES);
+        Self { contributor_id, accept, allow_anon, min_cases, display_floor }
     }
 
     pub(crate) fn describe(&self) -> String {
         let who = if self.contributor_id == "anonymous" { "anon" } else { "id-set" };
-        format!("{who}, accept={}, allow_anon={}, min_cases={}", self.accept, self.allow_anon, self.min_cases)
+        format!(
+            "{who}, accept={}, allow_anon={}, min_cases={}, display_floor={}",
+            self.accept, self.allow_anon, self.min_cases, self.display_floor
+        )
     }
 }
 
@@ -147,9 +158,9 @@ pub(crate) async fn post_ingest(
             "this instance does not accept collective contributions (set LIGHTTRACK_COLLECTIVE_ACCEPT=1)",
         ));
     }
-    if digest.schema_version != DIGEST_SCHEMA_VERSION {
+    if !(MIN_SCHEMA_VERSION..=DIGEST_SCHEMA_VERSION).contains(&digest.schema_version) {
         return Err(ApiError::bad_request(format!(
-            "unsupported digest schema_version {} (this hub speaks v{DIGEST_SCHEMA_VERSION})",
+            "unsupported digest schema_version {} (this hub accepts v{MIN_SCHEMA_VERSION}..=v{DIGEST_SCHEMA_VERSION})",
             digest.schema_version
         )));
     }
@@ -243,7 +254,7 @@ pub(crate) async fn get_leaderboard(
         .collect::<std::collections::BTreeSet<_>>()
         .len();
 
-    let mut rows = merge_leaderboard(&entries);
+    let mut rows = merge_leaderboard(&entries, st.collective.display_floor);
     if let Some(tt) = q.task_type.as_deref() {
         rows.retain(|r| r.task_type == tt);
     }
@@ -333,6 +344,8 @@ fn sanitize_entry(
         p95_latency_ms: e.p95_latency_ms,
         n_runs: e.n_runs,
         n_cases: e.n_cases,
+        // v2: carry the variance if present; a negative value is nonsense, so drop it to None.
+        quality_variance: e.quality_variance.filter(|v| v.is_finite() && *v >= 0.0),
         received_at: now,
     })
 }
@@ -416,15 +429,18 @@ mod tests {
             provider: "anthropic".into(), model: "haiku".into(), task_type: "qa".into(),
             quality: 1.4, pass_rate: -0.2, avg_cost_usd: -1.0,
             p50_latency_ms: None, p95_latency_ms: None, n_runs: 2, n_cases: 9,
+            quality_variance: Some(-0.5), // negative variance is nonsense → dropped to None
         };
         let s = sanitize_entry("c-abc", good, now).unwrap();
         assert_eq!(s.quality, 1.0);
         assert_eq!(s.pass_rate, 0.0);
         assert_eq!(s.avg_cost_usd, 0.0);
+        assert!(s.quality_variance.is_none(), "negative variance dropped");
         let bad = lighttrack_core::ModelDigestEntry {
             provider: "  ".into(), model: "haiku".into(), task_type: "qa".into(),
             quality: 0.5, pass_rate: 0.5, avg_cost_usd: 0.1,
             p50_latency_ms: None, p95_latency_ms: None, n_runs: 1, n_cases: 5,
+            quality_variance: None,
         };
         assert!(sanitize_entry("c-abc", bad, now).is_none());
     }

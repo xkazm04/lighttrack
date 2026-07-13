@@ -27,7 +27,8 @@ pub mod trace;
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use collective::{
     build_digest, merge_leaderboard, task_type_from, CollectiveDigest, CollectiveEntry,
-    LeaderboardRow, ModelDigestEntry, RunStat, DEFAULT_MIN_CASES, DIGEST_SCHEMA_VERSION,
+    LeaderboardRow, ModelDigestEntry, RunStat, DEFAULT_LOW_CONFIDENCE_CASES, DEFAULT_MIN_CASES,
+    DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
 };
 pub use customer::{BillingProduct, Customer};
 pub use dataset::{Dataset, DatasetItem};

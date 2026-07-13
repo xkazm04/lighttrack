@@ -15,12 +15,13 @@ pub(super) fn upsert(conn: &Connection, e: &CollectiveEntry) -> Result<()> {
     conn.execute(
         "INSERT INTO collective_entries \
          (contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd, \
-          p50_latency_ms, p95_latency_ms, n_runs, n_cases, received_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) \
+          p50_latency_ms, p95_latency_ms, n_runs, n_cases, quality_variance, received_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) \
          ON CONFLICT(contributor_id, provider, model, task_type) DO UPDATE SET \
            quality=excluded.quality, pass_rate=excluded.pass_rate, avg_cost_usd=excluded.avg_cost_usd, \
            p50_latency_ms=excluded.p50_latency_ms, p95_latency_ms=excluded.p95_latency_ms, \
-           n_runs=excluded.n_runs, n_cases=excluded.n_cases, received_at=excluded.received_at",
+           n_runs=excluded.n_runs, n_cases=excluded.n_cases, \
+           quality_variance=excluded.quality_variance, received_at=excluded.received_at",
         params![
             e.contributor_id,
             e.provider,
@@ -33,6 +34,7 @@ pub(super) fn upsert(conn: &Connection, e: &CollectiveEntry) -> Result<()> {
             e.p95_latency_ms.map(|v| v as i64),
             e.n_runs as i64,
             e.n_cases as i64,
+            e.quality_variance,
             fmt_ts(e.received_at),
         ],
     )?;
@@ -50,7 +52,7 @@ pub(super) fn delete(conn: &Connection, contributor_id: &str) -> Result<u64> {
 
 pub(super) fn list(conn: &Connection) -> Result<Vec<CollectiveEntry>> {
     let sql = "SELECT contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd, \
-               p50_latency_ms, p95_latency_ms, n_runs, n_cases, received_at \
+               p50_latency_ms, p95_latency_ms, n_runs, n_cases, quality_variance, received_at \
                FROM collective_entries";
     let mut stmt = conn.prepare(sql)?;
     let raws = stmt
@@ -71,6 +73,7 @@ struct Raw {
     p95_latency_ms: Option<i64>,
     n_runs: i64,
     n_cases: i64,
+    quality_variance: Option<f64>,
     received_at: String,
 }
 
@@ -87,7 +90,8 @@ fn map_raw(row: &Row) -> rusqlite::Result<Raw> {
         p95_latency_ms: row.get(8)?,
         n_runs: row.get(9)?,
         n_cases: row.get(10)?,
-        received_at: row.get(11)?,
+        quality_variance: row.get(11)?,
+        received_at: row.get(12)?,
     })
 }
 
@@ -104,6 +108,7 @@ fn from_raw(r: Raw) -> Result<CollectiveEntry> {
         p95_latency_ms: r.p95_latency_ms.map(|v| v as u64),
         n_runs: r.n_runs as u32,
         n_cases: r.n_cases as u32,
+        quality_variance: r.quality_variance,
         received_at: parse_ts(&r.received_at)?,
     })
 }
@@ -112,7 +117,7 @@ fn from_raw(r: Raw) -> Result<CollectiveEntry> {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use lighttrack_core::merge_leaderboard;
+    use lighttrack_core::{merge_leaderboard, DEFAULT_LOW_CONFIDENCE_CASES};
 
     fn conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
@@ -133,6 +138,7 @@ mod tests {
             p95_latency_ms: Some(2100),
             n_runs: 1,
             n_cases: cases,
+            quality_variance: None,
             received_at: Utc::now(),
         }
     }
@@ -167,12 +173,27 @@ mod tests {
         let c = conn();
         upsert(&c, &entry("a", "sonnet", 0.8, 50)).unwrap();
         upsert(&c, &entry("b", "sonnet", 0.9, 50)).unwrap();
-        let rows = merge_leaderboard(&list(&c).unwrap());
+        let rows = merge_leaderboard(&list(&c).unwrap(), DEFAULT_LOW_CONFIDENCE_CASES);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].model, "sonnet");
         assert_eq!(rows[0].n_contributors, 2);
         assert_eq!(rows[0].n_cases, 100);
         assert!((rows[0].quality - 0.85).abs() < 1e-9);
         assert_eq!(rows[0].p50_latency_ms, Some(900));
+    }
+
+    #[test]
+    fn quality_variance_round_trips() {
+        let c = conn();
+        let mut e = entry("a", "sonnet", 0.8, 50);
+        e.quality_variance = Some(0.0081);
+        upsert(&c, &e).unwrap();
+        let got = list(&c).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].quality_variance, Some(0.0081));
+        // A NULL (v1) variance also round-trips as None.
+        upsert(&c, &entry("b", "haiku", 0.7, 20)).unwrap();
+        let b = list(&c).unwrap().into_iter().find(|r| r.model == "haiku").unwrap();
+        assert!(b.quality_variance.is_none());
     }
 }
