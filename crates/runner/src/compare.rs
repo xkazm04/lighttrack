@@ -115,8 +115,6 @@ fn compute_cell(
 }
 
 /// One target's leaderboard row: (label, mean, pass_rate, gen_cost, judge_cost, p50_ms, errored, agreement).
-type TargetRow = (String, f64, f64, f64, f64, u64, u32, f64);
-
 /// Round to 3 decimals for compact report JSON.
 fn r3(x: f64) -> f64 {
     (x * 1000.0).round() / 1000.0
