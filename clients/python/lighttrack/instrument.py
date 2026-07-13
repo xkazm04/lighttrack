@@ -34,8 +34,22 @@ Extract = Callable[[Any], Tuple[Optional[str], int, int, Optional[int]]]
 _trace_id: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
     "lighttrack_trace_id", default=None
 )
-_parent_span: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
-    "lighttrack_parent_span", default=None
+class _SpanFrame:
+    """The active logical span. Its FIRST recorded call *owns* the span — it is emitted with
+    `span_id == id`, parenting to the enclosing span — and later calls in the same span become that
+    call's children (`parent_span_id == id`). This makes the span tree real (multi-level) without
+    emitting synthetic zero-cost events to stand in for the span itself."""
+
+    __slots__ = ("id", "parent_id", "owned")
+
+    def __init__(self, id: str, parent_id: Optional[str]) -> None:
+        self.id = id
+        self.parent_id = parent_id
+        self.owned = False
+
+
+_span_frame: "contextvars.ContextVar[Optional[_SpanFrame]]" = contextvars.ContextVar(
+    "lighttrack_span_frame", default=None
 )
 
 
@@ -49,35 +63,53 @@ def current_trace_id() -> Optional[str]:
 
 
 def current_span_id() -> Optional[str]:
-    """The span id auto-instrumented calls will attach to as their parent (None at trace root)."""
-    return _parent_span.get()
+    """The id of the active logical span (None at trace root). Calls inside it either own it (the
+    first) or nest under it (subsequent)."""
+    frame = _span_frame.get()
+    return frame.id if frame else None
 
 
 @contextlib.contextmanager
 def trace(trace_id: Optional[str] = None):
     """Open a trace: every auto-instrumented call inside shares this `trace_id`. Nestable; a fresh
-    trace resets the parent span. Yields the resolved trace id."""
+    trace resets the span stack. Yields the resolved trace id."""
     tok = _trace_id.set(trace_id or _new_id())
-    ptok = _parent_span.set(None)
+    ftok = _span_frame.set(None)
     try:
         yield _trace_id.get()
     finally:
-        _parent_span.reset(ptok)
+        _span_frame.reset(ftok)
         _trace_id.reset(tok)
 
 
 @contextlib.contextmanager
 def span(span_id: Optional[str] = None):
-    """Open a logical span: auto-instrumented calls inside link to it via `parent_span_id` (so agent
-    steps nest in the trace tree). Starts a trace if none is open. Yields the span id."""
+    """Open a logical span: auto-instrumented calls inside nest under it in the trace tree. Nested
+    spans chain — an inner span's parent is the enclosing span. Starts a trace if none is open.
+    Yields the span id."""
     sid = span_id or _new_id()
+    enclosing = _span_frame.get()
+    frame = _SpanFrame(sid, enclosing.id if enclosing else None)
     ttok = _trace_id.set(_trace_id.get() or _new_id())
-    ptok = _parent_span.set(sid)
+    ftok = _span_frame.set(frame)
     try:
         yield sid
     finally:
-        _parent_span.reset(ptok)
+        _span_frame.reset(ftok)
         _trace_id.reset(ttok)
+
+
+def _span_ids() -> Tuple[str, Optional[str]]:
+    """The `(span_id, parent_span_id)` for the next recorded call, per the ownership rule: the first
+    call in a span claims the span id (parenting to the enclosing span); later calls get a fresh id
+    parented to the span. Outside any span the call is a standalone root."""
+    frame = _span_frame.get()
+    if frame is None:
+        return _new_id(), None
+    if not frame.owned:
+        frame.owned = True
+        return frame.id, frame.parent_id
+    return _new_id(), frame.id
 
 
 # ---- default client --------------------------------------------------------
@@ -106,6 +138,7 @@ def _record(lt: LightTrack, provider: str, extract: Extract, operation: str,
         if resp is not None:
             m, inp, out, cached = extract(resp)
             model = m or fallback_model
+        sid, psid = _span_ids()
         lt.track(
             provider, model,
             input_tokens=inp, output_tokens=out, cached_input=cached,
@@ -113,8 +146,8 @@ def _record(lt: LightTrack, provider: str, extract: Extract, operation: str,
             status="error" if error is not None else None,
             error=str(error) if error is not None else None,
             trace_id=current_trace_id() or _new_id(),
-            span_id=_new_id(),
-            parent_span_id=current_span_id(),
+            span_id=sid,
+            parent_span_id=psid,
         )
     except Exception:
         pass  # instrumentation must never break the host app

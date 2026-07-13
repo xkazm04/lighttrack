@@ -14,12 +14,14 @@
   "files": ["dist", "src"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "example": "node example.ts"
+    "example": "node example.ts",
+    "test": "tsx --test src/*.test.ts"
   },
   "keywords": ["llm", "observability", "openai", "anthropic", "gemini", "lighttrack"],
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.4.0"
   }
 }

@@ -26,9 +26,21 @@ type Extract = (resp: any) => [string | undefined, number, number, number | unde
 // This propagates correctly through sequential `await`s inside one trace. For strictly concurrent,
 // interleaved traces in the same process, pass an explicit `traceId` to keep them isolated.
 
+/**
+ * The active logical span. Its FIRST recorded call *owns* the span (emitted with `span_id === id`,
+ * parenting to the enclosing span); later calls in the same span become that call's children
+ * (`parent_span_id === id`). This makes the span tree real (multi-level) without emitting synthetic
+ * zero-cost events to stand in for the span itself.
+ */
+interface SpanFrame {
+  id: string;
+  parentId?: string;
+  owned: boolean;
+}
+
 interface Ctx {
   traceId?: string;
-  parentSpanId?: string;
+  span?: SpanFrame;
 }
 
 let ctx: Ctx = {};
@@ -47,15 +59,16 @@ export function currentTraceId(): string | undefined {
   return ctx.traceId;
 }
 
-/** The span id wrapped calls will attach to as their parent (undefined at trace root). */
+/** The id of the active logical span (undefined at trace root). Calls inside it either own it (the
+ * first) or nest under it (subsequent). */
 export function currentSpanId(): string | undefined {
-  return ctx.parentSpanId;
+  return ctx.span?.id;
 }
 
 /** Run `fn` inside a trace; every wrapped call it makes shares one `trace_id`. Returns `fn`'s result. */
 export async function withTrace<T>(fn: () => T | Promise<T>, opts: { traceId?: string } = {}): Promise<T> {
   const prev = ctx;
-  ctx = { traceId: opts.traceId ?? randomId(), parentSpanId: undefined };
+  ctx = { traceId: opts.traceId ?? randomId() };
   try {
     return await fn();
   } finally {
@@ -63,15 +76,32 @@ export async function withTrace<T>(fn: () => T | Promise<T>, opts: { traceId?: s
   }
 }
 
-/** Run `fn` inside a logical span; wrapped calls get this span as their `parent_span_id`. */
+/** Run `fn` inside a logical span; wrapped calls nest under it in the trace tree. Nested spans
+ * chain — an inner span's parent is the enclosing span. */
 export async function withSpan<T>(fn: () => T | Promise<T>, opts: { spanId?: string } = {}): Promise<T> {
   const prev = ctx;
-  ctx = { traceId: prev.traceId ?? randomId(), parentSpanId: opts.spanId ?? randomId() };
+  ctx = {
+    traceId: prev.traceId ?? randomId(),
+    span: { id: opts.spanId ?? randomId(), parentId: prev.span?.id, owned: false },
+  };
   try {
     return await fn();
   } finally {
     ctx = prev;
   }
+}
+
+/** `[spanId, parentSpanId]` for the next recorded call, per the ownership rule: the first call in a
+ * span claims the span id (parenting to the enclosing span); later calls get a fresh id under it.
+ * Outside any span the call is a standalone root. */
+function spanIds(): [string, string | undefined] {
+  const f = ctx.span;
+  if (!f) return [randomId(), undefined];
+  if (!f.owned) {
+    f.owned = true;
+    return [f.id, f.parentId];
+  }
+  return [randomId(), f.id];
 }
 
 // ---- default client --------------------------------------------------------
@@ -108,6 +138,7 @@ function record(
       output = o;
       cached = c;
     }
+    const [spanId, parentSpanId] = spanIds();
     lt.track(provider, model, {
       inputTokens: input,
       outputTokens: output,
@@ -117,8 +148,8 @@ function record(
       status: error != null ? "error" : undefined,
       error: error != null ? String(error) : undefined,
       traceId: currentTraceId() ?? randomId(),
-      spanId: randomId(),
-      parentSpanId: currentSpanId(),
+      spanId,
+      parentSpanId,
       tags: stream ? ["stream"] : undefined,
     });
   } catch {
