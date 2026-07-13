@@ -3,6 +3,8 @@
 //! over `&AlertConfig` + `&reqwest::Client` with no state of their own, mirroring the store's
 //! per-domain function split. Every path is best-effort: a down sink logs to stderr, never panics.
 
+use std::collections::HashMap;
+
 use lighttrack_core::{LimitStatus, RelayTask};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -38,10 +40,19 @@ pub(super) async fn deliver_bench_run(http: &Client, url: &str, r: &BenchRunAler
     }
 }
 
-pub(super) async fn deliver_breaches(cfg: &AlertConfig, http: &Client, breaches: &[LimitStatus]) {
+pub(super) async fn deliver_breaches(
+    cfg: &AlertConfig,
+    http: &Client,
+    breaches: &[LimitStatus],
+    rejections: &HashMap<String, u64>,
+) {
     for b in breaches {
-        let msg = breach_message(b);
-        post_webhook(cfg, http, "limit_breach", &msg, json!({ "breach": b })).await;
+        // For an enforcing breach, `rejections` carries how many ingest attempts this cap has turned
+        // away (429'd) in the current rolling window — surfaced so the alert isn't blind to them.
+        let rejected = rejections.get(&format!("{}:{:?}:{:?}", b.project_id, b.metric, b.window));
+        let msg = breach_message(b, rejected);
+        post_webhook(cfg, http, "limit_breach", &msg, json!({ "breach": b, "rejected_count": rejected }))
+            .await;
         post_ntfy(cfg, http, "LightTrack limit breach", &msg).await;
         post_resend(cfg, http, &format!("LightTrack: limit breach in '{}'", b.project_id), &msg).await;
     }
@@ -110,10 +121,14 @@ pub(super) async fn deliver_score_drop(cfg: &AlertConfig, http: &Client, d: &Sco
     post_resend(cfg, http, &format!("LightTrack: quality regression in '{}'", d.project_id), &msg).await;
 }
 
-fn breach_message(b: &LimitStatus) -> String {
+fn breach_message(b: &LimitStatus, rejected: Option<&u64>) -> String {
+    let tail = match rejected {
+        Some(n) => format!(" — {n} ingest attempt(s) rejected so far in this window"),
+        None => String::new(),
+    };
     format!(
         "LightTrack alert: project '{}' breached {:?}/{:?} limit — current {:.4} >= threshold {:.4} \
-         ({:.0}% of limit), action={:?}",
+         ({:.0}% of limit), action={:?}{tail}",
         b.project_id, b.metric, b.window, b.current, b.threshold, b.ratio * 100.0, b.action
     )
 }

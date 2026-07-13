@@ -158,8 +158,10 @@ impl Alerter {
     }
 
     /// Fire best-effort delivery for the given breaches (after per-key cooldown dedup). Returns
-    /// immediately; the actual HTTP happens on a spawned task.
-    pub(crate) fn notify(self: &Arc<Self>, breaches: &[LimitStatus]) {
+    /// immediately; the actual HTTP happens on a spawned task. `rejections` maps a breach's dedup key
+    /// (`project:metric:window`) to the running count of ingest attempts that rule has rejected, so an
+    /// enforcing breach's alert can report how many calls the cap has turned away.
+    pub(crate) fn notify(self: &Arc<Self>, breaches: &[LimitStatus], rejections: &HashMap<String, u64>) {
         if !self.enabled() {
             return;
         }
@@ -167,8 +169,18 @@ impl Alerter {
         if due.is_empty() {
             return;
         }
+        // Carry only the counts for the breaches actually being sent.
+        let counts: HashMap<String, u64> = due
+            .iter()
+            .filter_map(|b| {
+                let k = self.dedup_key(b);
+                rejections.get(&k).map(|c| (k, *c))
+            })
+            .collect();
         let me = Arc::clone(self);
-        tokio::spawn(async move { channels::deliver_breaches(&me.config, &me.http, &due).await });
+        tokio::spawn(
+            async move { channels::deliver_breaches(&me.config, &me.http, &due, &counts).await },
+        );
     }
 
     /// Pre-emptive forecast alerts (budget breach / margin erosion), deduped like breaches.
@@ -318,7 +330,13 @@ impl Alerter {
 
     /// True if this breach is outside its cooldown (and records the send time).
     fn should_send(&self, b: &LimitStatus) -> bool {
-        self.should_send_key(&format!("{}:{:?}:{:?}", b.project_id, b.metric, b.window))
+        self.should_send_key(&self.dedup_key(b))
+    }
+
+    /// Stable per-breach key (`project:metric:window`) — shared by cooldown dedup and the rejection
+    /// ledger so a breach's alert can be matched to its running rejection count.
+    fn dedup_key(&self, b: &LimitStatus) -> String {
+        format!("{}:{:?}:{:?}", b.project_id, b.metric, b.window)
     }
 
     /// Cooldown gate keyed by an arbitrary dedup string (records the send time on success).

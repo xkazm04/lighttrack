@@ -27,7 +27,12 @@
 //!   POST /v1/projects/:id/prompts/:name/promote                          label promote (regression-gated)
 //!   POST /v1/projects  GET /v1/projects   POST /v1/projects/:id/keys
 //!   POST /v1/projects/:id/limits  GET /v1/projects/:id/limits
-//!   GET  /v1/limits/status?project=      evaluate limits -> throttle flag + per-rule status
+//!   GET  /v1/limits/status?project=      evaluate limits -> throttle flag + per-rule status, plus a
+//!                                        `rejected` block (count + est_missed_cost_usd + window) of
+//!                                        429'd ingest attempts per breached rule. That ledger is
+//!                                        best-effort and process-local: it lives in memory, resets on
+//!                                        restart, and rolls entries off after 24h (rejected events are
+//!                                        never stored — that would corrupt the usage/cost rollups).
 //!   POST /v1/relay/tasks                 enqueue a device task (GET ?project=&status=&limit= lists)
 //!   GET  /v1/relay/tasks/:id             task status/result (the originating app polls this)
 //!   POST /v1/relay/lease                 device: lease due tasks (device key; outbound-only)
@@ -73,6 +78,7 @@ mod prices;
 mod projects;
 mod prompts;
 mod redact;
+mod rejections;
 mod relay;
 mod revenue;
 mod rubrics;
@@ -177,6 +183,7 @@ async fn main() -> anyhow::Result<()> {
     let collective = Arc::new(collective::Collective::from_env());
     let collective_desc = collective.describe();
     let seen_webhooks = Arc::new(idempotency::SeenWebhooks::new(idempotency::DEFAULT_CAPACITY));
+    let rejections = Arc::new(rejections::RejectionLedger::new());
     let state = AppState {
         store,
         prices: Arc::new(RwLock::new(book)),
@@ -189,6 +196,7 @@ async fn main() -> anyhow::Result<()> {
         billing,
         collective,
         seen_webhooks,
+        rejections,
     };
 
     println!(

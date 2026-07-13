@@ -57,8 +57,9 @@ fn mark_cost_source(ev: &mut LlmEvent, client_supplied: bool) {
 }
 
 /// Post-admission side effects shared by the single- and batch-ingest paths: log and best-effort
-/// deliver breach alerts, and (for an admitted non-success call) feed error-spike detection. Returns
-/// the breached statuses so the caller can shape its response (429 vs. observe-only flag).
+/// deliver breach alerts, count a rejected event into the rejection ledger, and (for an admitted
+/// non-success call) feed error-spike detection. Returns the breached statuses so the caller can
+/// shape its response (429 vs. observe-only flag).
 pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) -> Vec<LimitStatus> {
     let breached: Vec<LimitStatus> =
         admission.statuses.iter().filter(|s| s.breached).cloned().collect();
@@ -68,13 +69,39 @@ pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) 
             b.project_id, b.metric, b.window, b.current, b.threshold, b.action
         );
     }
+    // A rejected event is never stored (that would corrupt usage/cost), so count it out-of-band in the
+    // best-effort rejection ledger — the running per-key count then rides along on the breach alert.
+    // Its estimated cost is the priced `cost_usd` if we resolved one, else $0 (unpriced).
+    let rej_counts = if admission.admitted {
+        std::collections::HashMap::new()
+    } else {
+        record_rejection(st, ev, &breached)
+    };
     // Best-effort, off the request path: deliver breaches to webhook/ntfy (deduped per cooldown).
-    st.alerts.notify(&breached);
+    st.alerts.notify(&breached, &rej_counts);
     // Best-effort error-spike detection: only admitted non-success calls count toward the threshold.
     if admission.admitted && ev.status != Status::Success {
         st.alerts.record_error(ev);
     }
     breached
+}
+
+/// Fold a just-rejected event into the rejection ledger — once per enforcing breach that turned it
+/// away — and return the running rejection count for each, keyed the same way the alerter dedups
+/// breaches (`project:metric:window`) so the count can be attached to the outgoing alert.
+fn record_rejection(
+    st: &AppState,
+    ev: &LlmEvent,
+    breached: &[LimitStatus],
+) -> std::collections::HashMap<String, u64> {
+    let cost = ev.cost_usd.unwrap_or(0.0);
+    let now = Utc::now();
+    let mut counts = std::collections::HashMap::new();
+    for b in breached.iter().filter(|s| s.rejects_ingest()) {
+        let count = st.rejections.record(&b.project_id, b.metric, b.window, cost, now);
+        counts.insert(format!("{}:{:?}:{:?}", b.project_id, b.metric, b.window), count);
+    }
+    counts
 }
 
 /// Human-facing reason an admission was rejected (the enforcing breach that caused the 429).

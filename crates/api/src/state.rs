@@ -12,6 +12,7 @@ use crate::collective::Collective;
 use crate::error::ApiError;
 use crate::idempotency::SeenWebhooks;
 use crate::redact::Redactor;
+use crate::rejections::RejectionLedger;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -39,6 +40,10 @@ pub(crate) struct AppState {
     pub(crate) seen_webhooks: Arc<SeenWebhooks>,
     /// Collective Model Intelligence config (opaque contributor id + hub accept flag), from env.
     pub(crate) collective: Arc<Collective>,
+    /// Best-effort, process-local ledger of ingest attempts that limit rules rejected (429). Rejected
+    /// events are deliberately never stored (they'd corrupt usage/cost), so this counts them out-of-band
+    /// so history isn't blind exactly when a cap bites. Resets on restart; entries roll off after 24h.
+    pub(crate) rejections: Arc<RejectionLedger>,
 }
 
 /// Run a blocking store call on the blocking pool and flatten the two error layers.

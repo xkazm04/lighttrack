@@ -14,6 +14,7 @@ use lighttrack_store::{StoreError, Usage};
 
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
+use crate::rejections::RejectionStat;
 use crate::state::{spawn_db, AppState};
 
 /// Evaluate all enabled limit rules for a project against current rolling usage.
@@ -104,6 +105,13 @@ pub(crate) struct LimitStatusResp {
     project_id: String,
     throttled: bool,
     statuses: Vec<LimitStatus>,
+    /// Rejected-traffic ledger: per (metric, window), the ingest attempts this project's caps have
+    /// turned away (429) with their estimated missed cost. **Best-effort and process-local** — held in
+    /// memory, reset on restart, rolled off after 24h (rejected events are never stored, since that
+    /// would corrupt the usage/cost math the caps are evaluated against). Empty when nothing's been
+    /// rejected recently.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    rejected: Vec<RejectionStat>,
 }
 
 pub(crate) async fn limits_status(
@@ -116,9 +124,11 @@ pub(crate) async fn limits_status(
         .ok_or_else(|| ApiError::bad_request("project is required"))?;
     let statuses = evaluate_project_limits(&st, &project).await?;
     let throttled = statuses.iter().any(|s| s.rejects_ingest());
+    let rejected = st.rejections.snapshot(&project, chrono::Utc::now());
     Ok(Json(LimitStatusResp {
         project_id: project,
         throttled,
         statuses,
+        rejected,
     }))
 }

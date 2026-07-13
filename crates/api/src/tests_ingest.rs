@@ -56,6 +56,7 @@ pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
         seen_webhooks: Arc::new(crate::idempotency::SeenWebhooks::new(
             crate::idempotency::DEFAULT_CAPACITY,
         )),
+        rejections: Arc::new(crate::rejections::RejectionLedger::new()),
     };
     (state, store)
 }
@@ -249,6 +250,79 @@ async fn enforcing_actions_reject_ingest_and_do_not_store() {
             "{action:?}: a rejected event must not be persisted"
         );
     }
+}
+
+/// GET /v1/limits/status through the router; returns (status, parsed JSON body).
+async fn get_limits_status(app: &Router, token: &str, project: &str) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/limits/status?project={project}"))
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn rejected_events_are_ledgered_but_never_touch_usage_math() {
+    // A rejected event must be counted in the rejection ledger yet stay completely out of the
+    // usage/cost rollups — the very math admission is evaluated against. This pins the invariant that
+    // the ledger can never corrupt a cap's own accounting.
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    store
+        .create_limit_rule(&LimitRule {
+            id: new_id(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::Calls,
+            window: LimitWindow::Hour,
+            threshold: 1.0, // the first call reaches the cap and is rejected
+            action: LimitAction::Block,
+            enabled: true,
+        })
+        .unwrap();
+    let app = crate::build_router(state.clone());
+
+    let (status, _) = ingest(
+        &app,
+        &key,
+        json!({
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 },
+            "cost_usd": 0.42
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+
+    // Usage math is provably untouched: no event row, no cost rows, zero usage.
+    assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty(), "rejected event was stored");
+    assert!(
+        store.cost_summary_windowed(Some("proj-a"), None, None).unwrap().is_empty(),
+        "rejected event leaked into the cost summary"
+    );
+    let usage = store.usage_since("proj-a", Utc::now() - chrono::Duration::hours(1)).unwrap();
+    assert_eq!(usage.calls, 0, "rejected event counted toward usage");
+    assert_eq!(usage.cost_usd, 0.0, "rejected event counted toward cost usage");
+
+    // But it *is* visible out-of-band: the ledger recorded one rejection with its estimated cost.
+    let (s, body) = get_limits_status(&app, &key, "proj-a").await;
+    assert_eq!(s, StatusCode::OK);
+    let rejected = body["rejected"].as_array().expect("rejected block present");
+    assert_eq!(rejected.len(), 1, "{body}");
+    assert_eq!(rejected[0]["metric"], "calls");
+    assert_eq!(rejected[0]["window"], "hour");
+    assert_eq!(rejected[0]["count"], 1, "{body}");
+    assert!(
+        (rejected[0]["est_missed_cost_usd"].as_f64().unwrap() - 0.42).abs() < 1e-9,
+        "{body}"
+    );
+    // The rule itself still reads zero usage (recomputed live from the store, not the ledger).
+    assert_eq!(body["statuses"][0]["current"], 0.0, "{body}");
 }
 
 #[tokio::test]

@@ -51,7 +51,39 @@ pub(crate) fn status(v: &Value) -> Option<String> {
     } else {
         format!("### Limits — `{project}` ✅ within limits\n\n")
     };
-    Some(format!("{header}{}", t.render()))
+    let mut out = format!("{header}{}", t.render());
+    if let Some(rejected) = rejected_table(v) {
+        out.push_str("\n\n");
+        out.push_str(&rejected);
+    }
+    Some(out)
+}
+
+/// Best-effort rejected-traffic ledger (process-local, 24h rolling): calls the caps turned away with
+/// their estimated missed cost. Only rendered when the `rejected` block is present and non-empty.
+fn rejected_table(v: &Value) -> Option<String> {
+    let rows = v.get("rejected")?.as_array()?;
+    if rows.is_empty() {
+        return None;
+    }
+    let mut t = Table::new(&[
+        ("Metric", Align::Left),
+        ("Window", Align::Left),
+        ("Rejected", Align::Right),
+        ("Est. missed $", Align::Right),
+    ]);
+    for r in rows {
+        t.row(vec![
+            s(r, "metric").to_string(),
+            s(r, "window").to_string(),
+            commafy(f(r, "count") as u64),
+            money(f(r, "est_missed_cost_usd")),
+        ]);
+    }
+    Some(format!(
+        "**Rejected traffic** (last 24h, best-effort; resets on restart)\n\n{}",
+        t.render()
+    ))
 }
 
 pub(crate) fn list(v: &Value) -> Option<String> {
