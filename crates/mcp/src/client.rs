@@ -30,6 +30,12 @@ impl Client {
         self.send(self.http.get(self.url(path)))
     }
 
+    /// Like [`get`], but also returns the `X-Next-Cursor` header (the keyset cursor for the next page)
+    /// when the API sets it. Used by the paged list tools so an agent can walk past the first page.
+    pub(crate) fn get_paged(&self, path: &str) -> Result<(Value, Option<String>), String> {
+        self.send_full(self.http.get(self.url(path)))
+    }
+
     pub(crate) fn post(&self, path: &str, body: &Value) -> Result<Value, String> {
         self.send(self.http.post(self.url(path)).json(body))
     }
@@ -42,19 +48,36 @@ impl Client {
         format!("{}{}", self.base, path)
     }
 
-    fn send(&self, mut req: reqwest::blocking::RequestBuilder) -> Result<Value, String> {
+    fn send(&self, req: reqwest::blocking::RequestBuilder) -> Result<Value, String> {
+        self.send_full(req).map(|(v, _)| v)
+    }
+
+    /// The shared request path: attach auth, send, and return the parsed body plus the
+    /// `X-Next-Cursor` header (headers of interest). On a non-2xx it preserves the API's status and
+    /// body as `HTTP {code}: {body}` so callers can map it to actionable guidance.
+    fn send_full(
+        &self,
+        mut req: reqwest::blocking::RequestBuilder,
+    ) -> Result<(Value, Option<String>), String> {
         if let Some(k) = &self.key {
             req = req.bearer_auth(k);
         }
         let resp = req.send().map_err(|e| e.to_string())?;
         let status = resp.status();
+        // Grab the header before `text()` consumes the response.
+        let next_cursor = resp
+            .headers()
+            .get("x-next-cursor")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
         let text = resp.text().map_err(|e| e.to_string())?;
         if !status.is_success() {
             return Err(format!("HTTP {}: {text}", status.as_u16()));
         }
         if text.trim().is_empty() {
-            return Ok(Value::Null);
+            return Ok((Value::Null, next_cursor));
         }
-        serde_json::from_str(&text).map_err(|e| e.to_string())
+        let value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        Ok((value, next_cursor))
     }
 }

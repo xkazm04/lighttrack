@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 use crate::client::Client;
-use crate::rpc::{tool_rendered, tool_text};
+use crate::rpc::{more_results_line, tool_rendered, tool_text};
 use crate::{read, write};
 
 /// The `tools/list` payload. Write tools appear only when `allow_writes`.
@@ -20,6 +20,15 @@ pub(crate) fn list(allow_writes: bool) -> Value {
 pub(crate) fn call(c: &Client, allow_writes: bool, params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+
+    // Paged read tools carry a keyset cursor out-of-band (the `X-Next-Cursor` header), so they route
+    // through their own dispatch that returns `(body, next_cursor)`.
+    if let Some(r) = read::dispatch_paged(c, name, &args) {
+        return match r {
+            Ok((v, cursor)) => render_result(name, &v, cursor.as_deref()),
+            Err(e) => tool_text(&format!("error: {e}"), true),
+        };
+    }
 
     let outcome = if let Some(r) = read::dispatch(c, name, &args) {
         r
@@ -37,10 +46,22 @@ pub(crate) fn call(c: &Client, allow_writes: bool, params: &Value) -> Value {
     };
 
     match outcome {
-        Ok(v) => match lighttrack_render::render(name, &v) {
-            Some(md) => tool_rendered(&md, &v),
-            None => tool_text(&serde_json::to_string_pretty(&v).unwrap_or_default(), false),
-        },
+        Ok(v) => render_result(name, &v, None),
         Err(e) => tool_text(&format!("error: {e}"), true),
+    }
+}
+
+/// Shape a successful tool body into an MCP result: rendered Markdown + `structuredContent` when a
+/// renderer matches, else pretty JSON. `next_cursor` (paged tools) is surfaced in both.
+fn render_result(name: &str, body: &Value, next_cursor: Option<&str>) -> Value {
+    match lighttrack_render::render(name, body) {
+        Some(md) => tool_rendered(&md, body, next_cursor),
+        None => {
+            let mut text = serde_json::to_string_pretty(body).unwrap_or_default();
+            if let Some(c) = next_cursor {
+                text.push_str(&more_results_line(c));
+            }
+            tool_text(&text, false)
+        }
     }
 }

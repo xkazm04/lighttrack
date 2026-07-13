@@ -27,12 +27,30 @@ pub(crate) fn tools() -> Vec<Value> {
                 "horizon":{"type":"integer","description":"days to project ahead (default 14, 1..=90)"},
                 "lookback":{"type":"integer","description":"trailing days of history to fit (default 14, 2..=90)"}
             },"required":["project"]})),
-        tool("query_events", "Recent LLM call events (newest first). Optionally filter by project.",
-            json!({"type":"object","properties":{"project":{"type":"string"},"limit":{"type":"integer","description":"max events (default 20)"}}})),
+        tool("query_events", "Recent LLM call events (newest first). Filter by project/time window/provider/model/trace/use-case name; page with `cursor` (from a prior call's next_cursor).",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "limit":{"type":"integer","description":"max events (default 20, max 1000)"},
+                "since":{"type":"string","description":"RFC3339 lower bound on event time (inclusive)"},
+                "until":{"type":"string","description":"RFC3339 upper bound on event time (exclusive)"},
+                "provider":{"type":"string","description":"exact provider match (anthropic, openai, …)"},
+                "model":{"type":"string","description":"exact model match"},
+                "trace_id":{"type":"string","description":"only events in this trace"},
+                "name":{"type":"string","description":"use-case name filter (a call's `name`)"},
+                "cursor":{"type":"string","description":"keyset cursor from a prior call's next_cursor"}
+            }})),
         tool("get_event", "Fetch a single LLM call event by id.",
             json!({"type":"object","properties":{"event":{"type":"string","description":"event id"}},"required":["event"]})),
-        tool("list_traces", "Recent agent traces (events grouped by trace_id), newest first — end-to-end cost, latency, tokens, and span count per request. Optionally filter by project.",
-            json!({"type":"object","properties":{"project":{"type":"string"},"limit":{"type":"integer","description":"max traces (default 20)"}}})),
+        tool("list_traces", "Recent agent traces (events grouped by trace_id), newest first — end-to-end cost, latency, tokens, and span count per request. Filter by project/time window/status/min cost; page with `cursor`.",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "limit":{"type":"integer","description":"max traces (default 20, max 1000)"},
+                "since":{"type":"string","description":"RFC3339 lower bound on the trace's end time (inclusive)"},
+                "until":{"type":"string","description":"RFC3339 upper bound on the trace's end time (exclusive)"},
+                "status":{"type":"string","enum":["success","error"],"description":"keep only traces of this status"},
+                "min_cost":{"type":"number","description":"minimum whole-trace cost (USD)"},
+                "cursor":{"type":"string","description":"keyset cursor from a prior call's next_cursor"}
+            }})),
         tool("get_trace", "Fetch one trace by id: rolled-up totals, the span tree, and any scores recorded within it.",
             json!({"type":"object","properties":{"trace":{"type":"string","description":"trace id"}},"required":["trace"]})),
         tool("list_scores", "Recent LLM-as-judge scores (newest first). Optionally filter by project.",
@@ -94,9 +112,7 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "get_cost_summary" => c.get(&with_project("/v1/costs", args)),
         "get_margin" => c.get(&margin_path(args)),
         "get_forecast" => c.get(&forecast_path(args)),
-        "query_events" => c.get(&list_path("/v1/events", args)),
         "get_event" => bind(args, "event", |id| c.get(&format!("/v1/events/{id}"))),
-        "list_traces" => c.get(&list_path("/v1/traces", args)),
         "get_trace" => bind(args, "trace", |id| c.get(&format!("/v1/traces/{id}"))),
         "list_scores" => c.get(&list_path("/v1/scores", args)),
         "get_limit_status" => bind(args, "project", |p| c.get(&format!("/v1/limits/status?project={p}"))),
@@ -116,6 +132,21 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         _ => return None,
     };
     Some(r)
+}
+
+/// Route a paged read tool (keyset cursor returned in the response header). Returns `None` for tools
+/// that aren't paged, so `tools::call` falls back to the plain `dispatch`.
+pub(crate) fn dispatch_paged(
+    c: &Client,
+    name: &str,
+    args: &Value,
+) -> Option<Result<(Value, Option<String>), String>> {
+    let path = match name {
+        "query_events" => events_path(args),
+        "list_traces" => traces_path(args),
+        _ => return None,
+    };
+    Some(c.get_paged(&path))
 }
 
 /// Extract a required string arg and run `f` with it, or return a clear error.
@@ -138,6 +169,40 @@ fn list_path(base: &str, args: &Value) -> String {
     let mut p = format!("{base}?limit={limit}");
     if let Some(proj) = args.get("project").and_then(Value::as_str) {
         p.push_str(&format!("&project={proj}"));
+    }
+    p
+}
+
+/// Append `&key=value` for each present, non-empty string arg in `keys`. Cursors are opaque hex and the
+/// other values are ids/enums/timestamps, so no percent-encoding is needed (matching the rest of the
+/// client, which interpolates query values directly).
+fn push_str_params(p: &mut String, args: &Value, keys: &[&str]) {
+    for k in keys {
+        if let Some(v) = args.get(*k).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            p.push_str(&format!("&{k}={v}"));
+        }
+    }
+}
+
+/// `GET /v1/events` with its full filter + keyset-cursor set (see `get_events` in the API).
+fn events_path(args: &Value) -> String {
+    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20);
+    let mut p = format!("/v1/events?limit={limit}");
+    push_str_params(
+        &mut p,
+        args,
+        &["project", "since", "until", "provider", "model", "trace_id", "name", "cursor"],
+    );
+    p
+}
+
+/// `GET /v1/traces` with its window/status/min_cost filters + keyset cursor (see `list_traces`).
+fn traces_path(args: &Value) -> String {
+    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20);
+    let mut p = format!("/v1/traces?limit={limit}");
+    push_str_params(&mut p, args, &["project", "since", "until", "status", "cursor"]);
+    if let Some(mc) = args.get("min_cost").and_then(Value::as_f64) {
+        p.push_str(&format!("&min_cost={mc}"));
     }
     p
 }
@@ -190,4 +255,58 @@ fn collective_path(args: &Value) -> String {
         }
     }
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn events_path_defaults_to_limit_only() {
+        assert_eq!(events_path(&json!({})), "/v1/events?limit=20");
+    }
+
+    #[test]
+    fn events_path_assembles_all_filters_and_cursor() {
+        let p = events_path(&json!({
+            "limit": 100, "project": "p1", "since": "2026-01-01T00:00:00Z",
+            "until": "2026-02-01T00:00:00Z", "provider": "openai", "model": "gpt-4o",
+            "trace_id": "t-9", "name": "summarize", "cursor": "deadbeef"
+        }));
+        assert!(p.starts_with("/v1/events?limit=100"));
+        for frag in [
+            "&project=p1", "&since=2026-01-01T00:00:00Z", "&until=2026-02-01T00:00:00Z",
+            "&provider=openai", "&model=gpt-4o", "&trace_id=t-9", "&name=summarize",
+            "&cursor=deadbeef",
+        ] {
+            assert!(p.contains(frag), "missing {frag} in {p}");
+        }
+    }
+
+    #[test]
+    fn events_path_skips_empty_and_absent() {
+        let p = events_path(&json!({ "project": "", "provider": "anthropic" }));
+        assert_eq!(p, "/v1/events?limit=20&provider=anthropic");
+    }
+
+    #[test]
+    fn traces_path_includes_status_and_numeric_min_cost() {
+        let p = traces_path(&json!({
+            "project": "p1", "status": "error", "min_cost": 0.5, "cursor": "abcd"
+        }));
+        assert!(p.starts_with("/v1/traces?limit=20"));
+        assert!(p.contains("&project=p1"));
+        assert!(p.contains("&status=error"));
+        assert!(p.contains("&min_cost=0.5"));
+        assert!(p.contains("&cursor=abcd"));
+    }
+
+    #[test]
+    fn dispatch_paged_only_matches_paged_tools() {
+        // A trivial client is never actually called for the non-paged branch (returns None first).
+        let c = Client::from_env();
+        assert!(dispatch_paged(&c, "list_scores", &json!({})).is_none());
+        assert!(dispatch_paged(&c, "get_event", &json!({})).is_none());
+    }
 }
