@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 
+use lighttrack_billing::fx::shared_fx;
 use lighttrack_billing::stripe::normalize_invoice;
 
 use crate::cli::Cli;
@@ -64,8 +65,9 @@ fn sync_stripe(cli: &Cli, http: &reqwest::blocking::Client, project: &str, since
         if data.is_empty() {
             break;
         }
+        let fx = shared_fx();
         for inv in &data {
-            if let Some(mut ev) = normalize_invoice(inv) {
+            if let Some(mut ev) = normalize_invoice(inv, &fx) {
                 ev.project_id = project.to_string();
                 post(cli, http, "/v1/revenue", &serde_json::to_value(&ev)?)?;
                 total += 1;
