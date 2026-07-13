@@ -352,6 +352,65 @@ fn trace_rollup_groups_events_and_scores() {
 }
 
 #[test]
+fn trace_list_and_detail_models_match_first_seen_order() {
+    use chrono::{TimeZone, Utc as ChronoUtc};
+
+    let s = SqliteStore::open_in_memory().unwrap();
+    // One trace, models by timestamp: beta (t0), alpha (t1), beta again (t2). Distinct first-seen
+    // order is therefore [beta, alpha] — GROUP_CONCAT(DISTINCT ...) gave no such guarantee.
+    let mk = |sec: u32, model: &str, id: &str| {
+        let mut e = ev("p1", model, 1, 1, 0.0);
+        e.id = id.into();
+        e.trace_id = Some("tr-order".into());
+        e.ts = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, sec).unwrap();
+        e
+    };
+    s.insert_event(&mk(0, "beta", "e0")).unwrap();
+    s.insert_event(&mk(1, "alpha", "e1")).unwrap();
+    s.insert_event(&mk(2, "beta", "e2")).unwrap();
+
+    let list = s.list_traces(Some("p1"), 10).unwrap();
+    let listed = list.iter().find(|t| t.trace_id == "tr-order").expect("trace listed");
+    let detail = s.get_trace("tr-order").unwrap().expect("trace detail");
+
+    assert_eq!(listed.models, vec!["beta".to_string(), "alpha".to_string()], "first-seen order");
+    assert_eq!(listed.models, detail.models, "list and detail agree on model ordering");
+}
+
+#[test]
+fn trace_queries_use_indexes_not_full_scan() {
+    // Prove (via EXPLAIN QUERY PLAN) the trace read paths hit an index rather than scanning the
+    // whole events table. Runs against a raw connection seeded with the shipped schema.
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(super::SCHEMA).unwrap();
+
+    let plan = |sql: &str| -> String {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let detail = stmt
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        detail.join(" | ")
+    };
+
+    // list_by_trace: WHERE trace_id = ? — served by idx_events_trace (a SEARCH, never a full SCAN).
+    let by_trace = plan("SELECT id FROM events WHERE trace_id = 'x' ORDER BY ts ASC");
+    assert!(by_trace.contains("USING INDEX idx_events_trace"), "list_by_trace plan: {by_trace}");
+
+    // list_trace_summaries (project-scoped): filter project_id + GROUP BY trace_id — served by the
+    // new composite idx_events_project_trace instead of scanning + building a grouping b-tree.
+    let summaries = plan(
+        "SELECT trace_id, COUNT(*) FROM events WHERE trace_id IS NOT NULL AND trace_id <> '' \
+         AND project_id = 'p' GROUP BY trace_id ORDER BY MAX(ts) DESC LIMIT 10",
+    );
+    assert!(
+        summaries.contains("idx_events_project_trace"),
+        "list_trace_summaries plan should use the composite index: {summaries}"
+    );
+}
+
+#[test]
 fn projects_keys_limits_usage() {
     let s = SqliteStore::open_in_memory().unwrap();
     let now = Utc::now();

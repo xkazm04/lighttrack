@@ -1,5 +1,7 @@
 //! Events: ingest, list, single-event lookup, cost rollup, and rolling usage.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use rusqlite::types::ToSql;
 use rusqlite::{params, params_from_iter, Connection, ErrorCode, OptionalExtension, Row};
@@ -230,6 +232,10 @@ pub(super) fn list_by_trace(conn: &Connection, trace_id: &str) -> Result<Vec<Llm
 /// Per-trace rollups (one row per `trace_id`), most-recent activity first. Aggregated in SQL so
 /// listing stays cheap regardless of how many events each trace holds; duration is computed in Rust
 /// from the min/max timestamps. Rows without a `trace_id` are excluded.
+///
+/// Models are *not* aggregated with `GROUP_CONCAT` (whose order is unspecified and drifted from the
+/// detail view): [`attach_models`] fetches them in first-seen (min-ts) order in a second query, so
+/// `list` and `get_trace` report identical model ordering.
 pub(super) fn list_trace_summaries(
     conn: &Connection,
     project: Option<&str>,
@@ -238,8 +244,7 @@ pub(super) fn list_trace_summaries(
     let cols = "trace_id, MIN(project_id) AS project_id, MIN(ts) AS started, MAX(ts) AS ended, \
         COUNT(*) AS spans, COALESCE(SUM(cost_usd),0.0) AS cost, \
         COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
-        SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END) AS errs, \
-        GROUP_CONCAT(DISTINCT model) AS models";
+        SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END) AS errs";
     let raws = if let Some(p) = project {
         let sql = format!(
             "SELECT {cols} FROM events WHERE trace_id IS NOT NULL AND trace_id <> '' \
@@ -261,10 +266,51 @@ pub(super) fn list_trace_summaries(
             .collect::<rusqlite::Result<Vec<_>>>()?;
         v
     };
-    raws.into_iter().map(trace_summary_from_raw).collect()
+    let mut summaries = raws
+        .into_iter()
+        .map(trace_summary_from_raw)
+        .collect::<Result<Vec<_>>>()?;
+    attach_models(conn, &mut summaries)?;
+    Ok(summaries)
 }
 
-/// Raw aggregate row for a trace summary, before parsing timestamps / splitting models.
+/// Fill each summary's `models` with the trace's distinct models in first-seen (min-ts) order — the
+/// same ordering [`lighttrack_core::Trace::from_events`] produces for the detail view. One extra
+/// query, scoped to the trace ids actually returned (not N+1). Project-agnostic per trace, matching
+/// the detail rollup's `list_by_trace`.
+fn attach_models(conn: &Connection, summaries: &mut [TraceSummary]) -> Result<()> {
+    if summaries.is_empty() {
+        return Ok(());
+    }
+    let placeholders = std::iter::repeat("?").take(summaries.len()).collect::<Vec<_>>().join(",");
+    // Group to one row per (trace, model) with that model's first timestamp, then order globally by
+    // that first timestamp; pushing rows in that order builds each trace's list in first-seen order.
+    let sql = format!(
+        "SELECT trace_id, model FROM \
+         (SELECT trace_id, model, MIN(ts) AS mt FROM events WHERE trace_id IN ({placeholders}) \
+          GROUP BY trace_id, model) ORDER BY mt ASC"
+    );
+    let ids: Vec<&str> = summaries.iter().map(|s| s.trace_id.as_str()).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params_from_iter(ids.iter()), |row: &Row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut by_trace: HashMap<String, Vec<String>> = HashMap::new();
+    for (trace_id, model) in rows {
+        by_trace.entry(trace_id).or_default().push(model);
+    }
+    for s in summaries.iter_mut() {
+        if let Some(models) = by_trace.remove(&s.trace_id) {
+            s.models = models;
+        }
+    }
+    Ok(())
+}
+
+/// Raw aggregate row for a trace summary, before parsing timestamps. Models are attached separately
+/// (see [`attach_models`]).
 struct TraceSummaryRaw {
     trace_id: String,
     project_id: String,
@@ -275,7 +321,6 @@ struct TraceSummaryRaw {
     input_tokens: i64,
     output_tokens: i64,
     errors: i64,
-    models: Option<String>,
 }
 
 fn map_trace_summary(row: &Row) -> rusqlite::Result<TraceSummaryRaw> {
@@ -289,17 +334,12 @@ fn map_trace_summary(row: &Row) -> rusqlite::Result<TraceSummaryRaw> {
         input_tokens: row.get(6)?,
         output_tokens: row.get(7)?,
         errors: row.get(8)?,
-        models: row.get(9)?,
     })
 }
 
 fn trace_summary_from_raw(r: TraceSummaryRaw) -> Result<TraceSummary> {
     let started_at = parse_ts(&r.started)?;
     let ended_at = parse_ts(&r.ended)?;
-    let models = r
-        .models
-        .map(|s| s.split(',').filter(|m| !m.is_empty()).map(str::to_string).collect())
-        .unwrap_or_default();
     Ok(TraceSummary {
         trace_id: r.trace_id,
         project_id: r.project_id,
@@ -313,7 +353,7 @@ fn trace_summary_from_raw(r: TraceSummaryRaw) -> Result<TraceSummary> {
         total_tokens: (r.input_tokens + r.output_tokens) as u64,
         errors: r.errors as usize,
         status: if r.errors > 0 { "error" } else { "success" }.to_string(),
-        models,
+        models: Vec::new(),
     })
 }
 

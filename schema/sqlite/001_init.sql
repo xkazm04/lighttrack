@@ -48,6 +48,10 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_project_ts ON events(project_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_trace ON events(trace_id);
+-- Composite for the project-scoped trace rollup (list_trace_summaries): filter project_id + group
+-- by trace_id without a full scan. Single-column idx_events_trace still serves the project-agnostic
+-- per-trace fetch (list_by_trace: WHERE trace_id = ?).
+CREATE INDEX IF NOT EXISTS idx_events_project_trace ON events(project_id, trace_id);
 CREATE INDEX IF NOT EXISTS idx_events_project_name_ts ON events(project_id, name, ts);
 
 CREATE TABLE IF NOT EXISTS limit_rules (
