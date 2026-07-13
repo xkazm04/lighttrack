@@ -21,6 +21,8 @@
 //! **order it claws back** — the one stable identifier both deliveries share — so the upsert collapses
 //! them to a single `revenue_events` row (see [`order_ref`]).
 
+use std::sync::Arc;
+
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
@@ -29,6 +31,7 @@ use sha2::Sha256;
 
 use lighttrack_core::{RevenueEvent, RevenueKind};
 
+use crate::fx::{shared_fx, FxTable};
 use crate::{BillingError, BillingSource};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -41,6 +44,7 @@ pub struct PolarSource {
     /// Defaults to `userId`: the apps echo their internal user id into Polar order metadata, and LLM
     /// events are tagged with that same id — so per-customer margin joins the two streams on it.
     customer_meta_key: String,
+    fx: Arc<FxTable>,
 }
 
 impl PolarSource {
@@ -49,7 +53,13 @@ impl PolarSource {
     }
 
     pub fn with_customer_key(secret: impl Into<String>, customer_meta_key: impl Into<String>) -> Self {
-        Self { secret: secret.into(), customer_meta_key: customer_meta_key.into() }
+        Self { secret: secret.into(), customer_meta_key: customer_meta_key.into(), fx: shared_fx() }
+    }
+
+    /// Override the FX table (tests, and any programmatic seeding).
+    pub fn with_fx(mut self, fx: Arc<FxTable>) -> Self {
+        self.fx = fx;
+        self
     }
 }
 
@@ -73,7 +83,7 @@ impl BillingSource for PolarSource {
         verify_signature(&self.secret, &id, &ts, &sig, body, now_unix)?;
         let envelope: Value =
             serde_json::from_slice(body).map_err(|e| BillingError::Parse(e.to_string()))?;
-        Ok(normalize(&envelope, &self.customer_meta_key))
+        Ok(normalize(&envelope, &self.customer_meta_key, &self.fx))
     }
 }
 
@@ -108,20 +118,23 @@ fn verify_signature(
 
 /// Normalize a Polar event `{type, data}` into revenue records (empty for events we don't track).
 /// `customer_meta_key` is the order-metadata field to key the customer on (else Polar `customer_id`).
-pub fn normalize(envelope: &Value, customer_meta_key: &str) -> Vec<RevenueEvent> {
+/// `fx` normalizes each amount to USD (per-currency minor→major + rate).
+pub fn normalize(envelope: &Value, customer_meta_key: &str, fx: &FxTable) -> Vec<RevenueEvent> {
     let typ = envelope.get("type").and_then(Value::as_str).unwrap_or("");
     let null = Value::Null;
     let data = envelope.get("data").unwrap_or(&null);
     match typ {
-        "order.paid" => normalize_order(data, customer_meta_key).into_iter().collect(),
-        "order.refunded" => normalize_order_refund(data, customer_meta_key).into_iter().collect(),
-        "refund.created" => normalize_refund(data, customer_meta_key).into_iter().collect(),
+        "order.paid" => normalize_order(data, customer_meta_key, fx).into_iter().collect(),
+        "order.refunded" => {
+            normalize_order_refund(data, customer_meta_key, fx).into_iter().collect()
+        }
+        "refund.created" => normalize_refund(data, customer_meta_key, fx).into_iter().collect(),
         _ => Vec::new(),
     }
 }
 
 /// A paid Polar order → a (subscription or one-time) revenue record.
-pub fn normalize_order(obj: &Value, customer_meta_key: &str) -> Option<RevenueEvent> {
+pub fn normalize_order(obj: &Value, customer_meta_key: &str, fx: &FxTable) -> Option<RevenueEvent> {
     let id = obj.get("id").and_then(Value::as_str)?;
     let amount = amount_minor(obj)?;
     let subscription = obj.get("subscription_id").and_then(Value::as_str);
@@ -136,7 +149,7 @@ pub fn normalize_order(obj: &Value, customer_meta_key: &str) -> Option<RevenueEv
         external_id: Some(id.to_string()),
         customer_id: customer_id(obj, customer_meta_key),
         product_id: product_id(obj),
-        amount_usd: crate::to_major(amount),
+        amount_usd: fx.to_usd(amount, &currency(obj)).amount_usd,
         currency: currency(obj),
         kind: if subscription.is_some() {
             RevenueKind::Subscription
@@ -152,24 +165,28 @@ pub fn normalize_order(obj: &Value, customer_meta_key: &str) -> Option<RevenueEv
 /// An `order.refunded` event (data is an Order with `refunded_amount`) → a refund record, keyed on
 /// the order (its `data.id` *is* the order id). `refunded_amount` is Polar's running total for the
 /// order, so this record naturally tracks the order's cumulative refunds rather than one delta.
-pub fn normalize_order_refund(obj: &Value, customer_meta_key: &str) -> Option<RevenueEvent> {
+pub fn normalize_order_refund(
+    obj: &Value,
+    customer_meta_key: &str,
+    fx: &FxTable,
+) -> Option<RevenueEvent> {
     let order_id = order_ref(obj)?;
     let amount = obj.get("refunded_amount").and_then(Value::as_i64).or_else(|| amount_minor(obj))?;
     if amount == 0 {
         return None;
     }
-    Some(refund_event(order_id, amount, obj, customer_meta_key))
+    Some(refund_event(order_id, amount, obj, customer_meta_key, fx))
 }
 
 /// A `refund.created` event (data is a Refund) → a refund record. Keyed on the Refund's `order_id`
 /// (not its own refund id) so it collapses onto the same row as the order's `order.refunded` delivery.
-pub fn normalize_refund(obj: &Value, customer_meta_key: &str) -> Option<RevenueEvent> {
+pub fn normalize_refund(obj: &Value, customer_meta_key: &str, fx: &FxTable) -> Option<RevenueEvent> {
     let order_id = order_ref(obj)?;
     let amount = obj.get("amount").and_then(Value::as_i64)?;
     if amount == 0 {
         return None;
     }
-    Some(refund_event(order_id, amount, obj, customer_meta_key))
+    Some(refund_event(order_id, amount, obj, customer_meta_key, fx))
 }
 
 /// The order a refund claws back — the one identifier the two refund deliveries share, used as the
@@ -183,7 +200,13 @@ fn order_ref(obj: &Value) -> Option<&str> {
         .or_else(|| obj.get("id").and_then(Value::as_str))
 }
 
-fn refund_event(order_id: &str, amount_minor: i64, obj: &Value, customer_meta_key: &str) -> RevenueEvent {
+fn refund_event(
+    order_id: &str,
+    amount_minor: i64,
+    obj: &Value,
+    customer_meta_key: &str,
+    fx: &FxTable,
+) -> RevenueEvent {
     RevenueEvent {
         id: format!("polar:refund:{order_id}"),
         project_id: String::new(),
@@ -191,7 +214,7 @@ fn refund_event(order_id: &str, amount_minor: i64, obj: &Value, customer_meta_ke
         external_id: Some(format!("refund:{order_id}")),
         customer_id: customer_id(obj, customer_meta_key),
         product_id: None,
-        amount_usd: crate::to_major(amount_minor),
+        amount_usd: fx.to_usd(amount_minor, &currency(obj)).amount_usd,
         currency: currency(obj),
         kind: RevenueKind::Refund,
         period_start: None,
@@ -246,6 +269,14 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
+
+    /// A test FX book: USD native, EUR convertible, everything else unconverted.
+    fn fx() -> FxTable {
+        let mut r = HashMap::new();
+        r.insert("EUR".to_string(), 1.10);
+        FxTable::new("USD", r)
+    }
 
     /// Sign exactly as Polar (Standard Webhooks) does: HMAC over `{id}.{ts}.{body}` with the raw
     /// secret bytes as key, base64-encoded, prefixed `v1,`.
@@ -347,15 +378,24 @@ mod tests {
         let with_meta = json!({ "id": "o1", "total_amount": 1000, "currency": "usd",
             "customer_id": "cust_x", "metadata": { "userId": "user-42" } });
         assert_eq!(
-            normalize_order(&with_meta, "userId").unwrap().customer_id.as_deref(),
+            normalize_order(&with_meta, "userId", &fx()).unwrap().customer_id.as_deref(),
             Some("user-42")
         );
         // no metadata.userId → fall back to Polar's customer_id.
         let no_meta = json!({ "id": "o2", "total_amount": 1000, "currency": "usd", "customer_id": "cust_y" });
         assert_eq!(
-            normalize_order(&no_meta, "userId").unwrap().customer_id.as_deref(),
+            normalize_order(&no_meta, "userId", &fx()).unwrap().customer_id.as_deref(),
             Some("cust_y")
         );
+    }
+
+    #[test]
+    fn eur_order_converts_and_keeps_currency() {
+        // €10.00 (1000 minor) at 1.10 → $11.00; the stored label stays EUR.
+        let o = json!({ "id": "o3", "total_amount": 1000, "currency": "eur", "customer_id": "c" });
+        let e = normalize_order(&o, "userId", &fx()).unwrap();
+        assert!((e.amount_usd - 11.0).abs() < 1e-9, "got {}", e.amount_usd);
+        assert_eq!(e.currency, "EUR");
     }
 
     #[test]
@@ -367,6 +407,7 @@ mod tests {
                           "currency": "usd", "customer_id": "cust_1", "created_at": "2026-06-13T00:00:00Z" }
             }),
             "userId",
+            &fx(),
         );
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].kind, RevenueKind::Refund);
@@ -387,6 +428,7 @@ mod tests {
                           "customer_id": "cust_1", "created_at": "2026-06-13T00:00:00Z" }
             }),
             "userId",
+            &fx(),
         );
         let refund_created = normalize(
             &json!({
@@ -395,6 +437,7 @@ mod tests {
                           "customer_id": "cust_1", "created_at": "2026-06-13T00:00:00Z" }
             }),
             "userId",
+            &fx(),
         );
         assert_eq!(order_refunded.len(), 1);
         assert_eq!(refund_created.len(), 1);
@@ -409,6 +452,8 @@ mod tests {
 
     #[test]
     fn untracked_event_is_ignored() {
-        assert!(normalize(&json!({ "type": "checkout.updated", "data": {} }), "userId").is_empty());
+        assert!(
+            normalize(&json!({ "type": "checkout.updated", "data": {} }), "userId", &fx()).is_empty()
+        );
     }
 }

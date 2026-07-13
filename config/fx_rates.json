@@ -1,0 +1,51 @@
+{
+  "_meta": {
+    "note": "Static FX book seeded at startup (like pricing.json). Each rate is the USD value of ONE unit of the currency, so amount_usd = major_units * rate. USD is the base (implicit 1.0). A currency absent here is stored at 1:1 and flagged 'unconverted' by the margin surface — add its rate rather than relying on the fallback. Minor-unit decimals (JPY=0, KWD=3, ...) are handled in code (crates/billing/src/fx.rs), NOT here: rates are on major units. These are a periodic manual snapshot, NOT a live feed — margins are as fresh as this file. Override the path with LIGHTTRACK_FX_RATES. See docs/CURRENCY.md.",
+    "base": "USD",
+    "rates_are": "USD value of one major unit of the currency",
+    "last_verified": "2026-07-13",
+    "sources": [
+      "https://www.ecb.europa.eu/stats/eurofxref/",
+      "https://www.imf.org/external/np/fin/data/rms_five.aspx"
+    ]
+  },
+  "base": "USD",
+  "rates": {
+    "EUR": 1.09,
+    "GBP": 1.27,
+    "CHF": 1.12,
+    "CAD": 0.73,
+    "AUD": 0.66,
+    "NZD": 0.60,
+    "JPY": 0.0064,
+    "CNY": 0.138,
+    "HKD": 0.128,
+    "SGD": 0.74,
+    "INR": 0.0117,
+    "KRW": 0.00073,
+    "TWD": 0.031,
+    "SEK": 0.094,
+    "NOK": 0.092,
+    "DKK": 0.146,
+    "PLN": 0.25,
+    "CZK": 0.043,
+    "HUF": 0.0028,
+    "RON": 0.219,
+    "BRL": 0.18,
+    "MXN": 0.055,
+    "ARS": 0.0011,
+    "CLP": 0.00105,
+    "ZAR": 0.055,
+    "TRY": 0.030,
+    "AED": 0.272,
+    "SAR": 0.267,
+    "ILS": 0.27,
+    "THB": 0.028,
+    "MYR": 0.213,
+    "IDR": 0.0000615,
+    "PHP": 0.0172,
+    "VND": 0.0000393,
+    "KWD": 3.25,
+    "BHD": 2.65
+  }
+}

@@ -6,11 +6,13 @@
 //! loop. Stripe ships today (`stripe`); Polar slots in behind the same [`BillingSource`] trait.
 
 mod error;
+pub mod fx;
 mod registry;
 pub mod polar;
 pub mod stripe;
 
 pub use error::BillingError;
+pub use fx::{shared_fx, FxTable, UsdAmount};
 pub use registry::BillingRegistry;
 
 use lighttrack_core::RevenueEvent;
@@ -32,9 +34,4 @@ pub trait BillingSource: Send + Sync {
         body: &[u8],
         now_unix: i64,
     ) -> Result<Vec<RevenueEvent>, BillingError>;
-}
-
-/// Convert a provider minor-unit amount (cents) to major units (dollars).
-pub(crate) fn to_major(minor_units: i64) -> f64 {
-    minor_units as f64 / 100.0
 }

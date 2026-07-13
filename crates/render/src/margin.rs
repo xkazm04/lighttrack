@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::md::{commafy, f, money, opt_f, pct, s, short_ts, u, Align, Table};
+use crate::md::{commafy, f, money, opt_f, opt_s, pct, s, short_ts, u, Align, Table};
 
 pub(crate) fn report(v: &Value) -> Option<String> {
     let rows = v.get("rows")?.as_array()?;
@@ -35,13 +35,17 @@ pub(crate) fn report(v: &Value) -> Option<String> {
             commafy(u(r, "calls")),
         ]);
     }
-    Some(format!(
+    let mut out = format!(
         "### Margin by {dim} · {window}\n\n{}\n**Total: {} revenue − {} cost = {} margin**\n",
         t.render(),
         money(f(v, "total_revenue_usd")),
         money(f(v, "total_cost_usd")),
         money(f(v, "total_margin_usd")),
-    ))
+    );
+    if let Some(note) = opt_s(v, "currency_note") {
+        out.push_str(&format!("\n> ⚠️ {note}\n"));
+    }
+    Some(out)
 }
 
 /// 🔴 losing money · ⚠️ thin margin (<20%) · 🟢 healthy.

@@ -48,7 +48,27 @@ pub(crate) struct MarginResponse {
     total_revenue_usd: f64,
     total_cost_usd: f64,
     total_margin_usd: f64,
+    /// Currencies in this window's revenue that had no FX rate and were stored at 1:1 — the USD
+    /// figures above are approximate for them. Empty (omitted) when every currency was convertible.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unconverted_currencies: Vec<String>,
+    /// Human-facing note when `unconverted_currencies` is non-empty (rendered as a caveat).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    currency_note: Option<String>,
     rows: Vec<MarginRow>,
+}
+
+/// Distinct non-convertible currencies present in `revenue` (per the shared FX table): non-USD codes
+/// with no rate, whose `amount_usd` was a 1:1 fallback. Sorted, deduped, for a stable health note.
+fn unconverted_currencies(revenue: &[RevenueEvent]) -> Vec<String> {
+    let fx = lighttrack_billing::shared_fx();
+    let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for r in revenue {
+        if !fx.is_convertible(&r.currency) {
+            set.insert(r.currency.to_uppercase());
+        }
+    }
+    set.into_iter().collect()
 }
 
 pub(crate) async fn get_margin(
@@ -82,9 +102,18 @@ pub(crate) async fn get_margin(
     let costs =
         spawn_db(move || store.cost_by_dimension(proj.as_deref(), &dim_s, since, until)).await?;
 
+    let unconverted = unconverted_currencies(&revenue);
+
     let rows = compute_margin(&revenue, &costs, dim, since, until);
     let total_revenue_usd: f64 = rows.iter().map(|r| r.revenue_usd).sum();
     let total_cost_usd: f64 = rows.iter().map(|r| r.llm_cost_usd).sum();
+    let currency_note = (!unconverted.is_empty()).then(|| {
+        format!(
+            "unconverted currencies present (stored 1:1, USD figures approximate): {}. \
+             Add rates to config/fx_rates.json.",
+            unconverted.join(", ")
+        )
+    });
     Ok(Json(MarginResponse {
         dimension: dim.as_str().to_string(),
         since,
@@ -92,6 +121,8 @@ pub(crate) async fn get_margin(
         total_revenue_usd: round(total_revenue_usd),
         total_cost_usd: round(total_cost_usd),
         total_margin_usd: round(total_revenue_usd - total_cost_usd),
+        unconverted_currencies: unconverted,
+        currency_note,
         rows,
     }))
 }
