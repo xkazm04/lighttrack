@@ -26,10 +26,13 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use lighttrack_core::{LimitStatus, LlmEvent, RelayTask, Score};
+use lighttrack_store::SqliteStore;
 
 use crate::forecast::ForecastAlert;
 
+mod attribution;
 mod channels;
 
 struct AlertConfig {
@@ -48,6 +51,10 @@ struct AlertConfig {
     score_min_samples: usize,
     /// Relative drop of the recent mean vs the baseline mean that trips a `score_drop` (e.g. 0.15).
     score_drop: f64,
+    /// SQLite path used to compute best-effort breach attribution (top spenders) inside the delivery
+    /// task. `Some` only on the SQLite backend (`LIGHTTRACK_DB`); other backends leave it `None` —
+    /// the cost/use-case rollups it relies on are SQLite-only, so attribution is simply absent there.
+    attribution_db: Option<String>,
 }
 
 struct ResendConfig {
@@ -96,6 +103,10 @@ pub(crate) struct Alerter {
     last_sent: Mutex<HashMap<String, Instant>>,
     error_windows: Mutex<HashMap<String, VecDeque<Instant>>>,
     score_windows: Mutex<HashMap<String, VecDeque<f64>>>,
+    /// Lazily-opened read handle to the SQLite DB for breach attribution, cached after first use.
+    /// A second connection to the same file is fine for the read-only rollups (best-effort — a
+    /// failed open just skips attribution). See [`AlertConfig::attribution_db`].
+    attribution_store: Mutex<Option<Arc<SqliteStore>>>,
 }
 
 impl Alerter {
@@ -113,6 +124,7 @@ impl Alerter {
                 score_window: (env_u64("LIGHTTRACK_ALERT_SCORE_WINDOW", 20) as usize).max(4),
                 score_min_samples: (env_u64("LIGHTTRACK_ALERT_SCORE_MIN_SAMPLES", 8) as usize).max(4),
                 score_drop: env_f64("LIGHTTRACK_ALERT_SCORE_DROP", 0.15),
+                attribution_db: attribution_db_from_env(),
             },
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
@@ -121,6 +133,7 @@ impl Alerter {
             last_sent: Mutex::new(HashMap::new()),
             error_windows: Mutex::new(HashMap::new()),
             score_windows: Mutex::new(HashMap::new()),
+            attribution_store: Mutex::new(None),
         }
     }
 
@@ -178,9 +191,65 @@ impl Alerter {
             })
             .collect();
         let me = Arc::clone(self);
-        tokio::spawn(
-            async move { channels::deliver_breaches(&me.config, &me.http, &due, &counts).await },
-        );
+        tokio::spawn(async move {
+            // Attribute the spend inside the delivery task (off the ingest path), best-effort.
+            let attributions = me.attribute(&due).await;
+            channels::deliver_breaches(&me.config, &me.http, &due, &counts, &attributions).await
+        });
+    }
+
+    /// Best-effort top-spender attribution for the breaches being delivered, keyed by
+    /// [`LimitStatus::alert_key`]. Computed off the ingest path; a missing store handle or a failed
+    /// rollup yields no attribution and the alert delivers unchanged. Runs the blocking store reads on
+    /// the blocking pool.
+    async fn attribute(
+        &self,
+        breaches: &[LimitStatus],
+    ) -> HashMap<String, attribution::Attribution> {
+        let Some(store) = self.attribution_store() else {
+            return HashMap::new();
+        };
+        let breaches = breaches.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let now = Utc::now();
+            let mut map = HashMap::new();
+            for b in &breaches {
+                let attr = attribution::fetch(
+                    store.as_ref(),
+                    &b.project_id,
+                    b.window,
+                    now,
+                    b.scope.as_ref(),
+                );
+                if !attr.is_empty() {
+                    map.insert(b.alert_key(), attr);
+                }
+            }
+            map
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// The lazily-opened, cached SQLite handle for attribution, or `None` when attribution is
+    /// unavailable (non-SQLite backend, or the file couldn't be opened).
+    fn attribution_store(&self) -> Option<Arc<SqliteStore>> {
+        let path = self.config.attribution_db.clone()?;
+        let mut slot = self.attribution_store.lock().unwrap();
+        if let Some(s) = slot.as_ref() {
+            return Some(Arc::clone(s));
+        }
+        match SqliteStore::open(&path) {
+            Ok(s) => {
+                let handle = Arc::new(s);
+                *slot = Some(Arc::clone(&handle));
+                Some(handle)
+            }
+            Err(e) => {
+                eprintln!("[alert] attribution store open failed ({path}): {e}");
+                None
+            }
+        }
     }
 
     /// Fire best-effort **soft-warning** alerts for rules that crossed their `warn_at` fraction
@@ -401,6 +470,17 @@ fn env_opt(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|s| !s.is_empty())
 }
 
+/// Resolve the SQLite path for breach attribution, mirroring the API's backend selection in
+/// `main.rs`: a `LIGHTTRACK_DATABASE_URL` pointing at Postgres/Firestore means the SQLite-only
+/// rollups aren't available, so attribution is disabled (`None`); otherwise it's the SQLite file at
+/// `LIGHTTRACK_DB` (default `data/lighttrack.db`).
+fn attribution_db_from_env() -> Option<String> {
+    match env_opt("LIGHTTRACK_DATABASE_URL") {
+        Some(u) if u.starts_with("postgres") || u.starts_with("firestore") => None,
+        _ => Some(env_opt("LIGHTTRACK_DB").unwrap_or_else(|| "data/lighttrack.db".to_string())),
+    }
+}
+
 fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
 }
@@ -431,11 +511,13 @@ mod tests {
                 score_window: 20,
                 score_min_samples: 8,
                 score_drop: 0.15,
+                attribution_db: None,
             },
             http: reqwest::Client::new(),
             last_sent: Mutex::new(HashMap::new()),
             error_windows: Mutex::new(HashMap::new()),
             score_windows: Mutex::new(HashMap::new()),
+            attribution_store: Mutex::new(None),
         }
     }
 

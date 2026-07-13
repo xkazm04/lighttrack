@@ -9,6 +9,7 @@ use lighttrack_core::{LimitStatus, RelayTask};
 use reqwest::Client;
 use serde_json::{json, Value};
 
+use super::attribution::Attribution;
 use super::{AlertConfig, BenchRunAlert, ErrorSpike, ScoreDrop};
 use crate::forecast::ForecastAlert;
 
@@ -45,14 +46,24 @@ pub(super) async fn deliver_breaches(
     http: &Client,
     breaches: &[LimitStatus],
     rejections: &HashMap<String, u64>,
+    attributions: &HashMap<String, Attribution>,
 ) {
     for b in breaches {
         // For an enforcing breach, `rejections` carries how many ingest attempts this cap has turned
         // away (429'd) in the current rolling window — surfaced so the alert isn't blind to them.
         let rejected = rejections.get(&b.alert_key());
-        let msg = breach_message(b, rejected);
-        post_webhook(cfg, http, "limit_breach", &msg, json!({ "breach": b, "rejected_count": rejected }))
-            .await;
+        // Top spenders that drove the breached window (absent on a failed/empty rollup).
+        let attribution = attributions.get(&b.alert_key());
+        let msg = breach_message(b, rejected, attribution);
+        let contributors = attribution.map(|a| a.to_json());
+        post_webhook(
+            cfg,
+            http,
+            "limit_breach",
+            &msg,
+            json!({ "breach": b, "rejected_count": rejected, "attribution": contributors }),
+        )
+        .await;
         post_ntfy(cfg, http, "LightTrack limit breach", &msg).await;
         post_resend(cfg, http, &format!("LightTrack: limit breach in '{}'", b.project_id), &msg).await;
     }
@@ -143,7 +154,7 @@ fn warning_message(w: &LimitStatus) -> String {
     )
 }
 
-fn breach_message(b: &LimitStatus, rejected: Option<&u64>) -> String {
+fn breach_message(b: &LimitStatus, rejected: Option<&u64>, attribution: Option<&Attribution>) -> String {
     let tail = match rejected {
         Some(n) => format!(" — {n} ingest attempt(s) rejected so far in this window"),
         None => String::new(),
@@ -153,9 +164,11 @@ fn breach_message(b: &LimitStatus, rejected: Option<&u64>) -> String {
         Some(s) => format!(" [scope {}]", s.label()),
         None => String::new(),
     };
+    // What drove the spend: top contributors over the breached window (empty when unavailable).
+    let spenders = attribution.and_then(|a| a.message_tail()).unwrap_or_default();
     format!(
         "LightTrack alert: project '{}'{scope} breached {:?}/{:?} limit — current {:.4} >= threshold \
-         {:.4} ({:.0}% of limit), action={:?}{tail}",
+         {:.4} ({:.0}% of limit), action={:?}{tail}.{spenders}",
         b.project_id, b.metric, b.window, b.current, b.threshold, b.ratio * 100.0, b.action
     )
 }
