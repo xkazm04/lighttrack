@@ -2,7 +2,7 @@
 //! book prices every provider); revenue is netted against it per customer/product over a window.
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     Json,
 };
@@ -14,7 +14,7 @@ use lighttrack_core::{
     compute_margin, compute_margin_trend, DailyKeyCost, MarginDimension, MarginRow,
     MarginTrendSeries, RevenueEvent,
 };
-use lighttrack_store::DailyDimCost;
+use lighttrack_store::{CustomerCostRow, DailyDimCost, StoreError};
 
 use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
@@ -43,6 +43,22 @@ pub(crate) struct MarginParams {
     /// RFC3339 window bounds; default to the last 30 days.
     since: Option<String>,
     until: Option<String>,
+    /// Below-breakeven roster: keep only rows whose margin percentage is under this value (e.g.
+    /// `below=20` → margin% < 20%). `below=0` is the loss-making set. A cost-only row (no revenue, so
+    /// no margin%) counts as below any threshold when it is losing money.
+    below: Option<f64>,
+}
+
+/// Keep only rows under the `below` margin-percentage threshold. A row with no revenue (undefined
+/// margin%) qualifies when it is losing money, so free-tier cost sinks aren't hidden by the filter.
+pub(crate) fn filter_below(rows: Vec<MarginRow>, below: f64) -> Vec<MarginRow> {
+    let frac = below / 100.0;
+    rows.into_iter()
+        .filter(|r| match r.margin_pct {
+            Some(p) => p < frac,
+            None => r.gross_margin_usd < 0.0,
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -109,7 +125,10 @@ pub(crate) async fn get_margin(
 
     let unconverted = unconverted_currencies(&revenue);
 
-    let rows = compute_margin(&revenue, &costs, dim, since, until);
+    let mut rows = compute_margin(&revenue, &costs, dim, since, until);
+    if let Some(below) = q.below {
+        rows = filter_below(rows, below);
+    }
     let total_revenue_usd: f64 = rows.iter().map(|r| r.revenue_usd).sum();
     let total_cost_usd: f64 = rows.iter().map(|r| r.llm_cost_usd).sum();
     let currency_note = (!unconverted.is_empty()).then(|| {
@@ -225,6 +244,94 @@ fn default_top_n() -> usize {
         .unwrap_or(DEFAULT_TREND_TOP_N)
 }
 
+// --- per-customer breakdown (cost by model & by use-case) ---------------------------------------
+
+#[derive(Deserialize)]
+pub(crate) struct CustomerMarginParams {
+    project: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct CustomerMarginResponse {
+    customer_id: String,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+    revenue_usd: f64,
+    cost_usd: f64,
+    margin_usd: f64,
+    /// `margin / revenue`; `None` when the customer had no recognized revenue in the window.
+    margin_pct: Option<f64>,
+    /// LLM cost broken down by `provider/model`, most expensive first.
+    by_model: Vec<CustomerCostRow>,
+    /// LLM cost broken down by use-case `name`, most expensive first.
+    by_name: Vec<CustomerCostRow>,
+}
+
+/// `GET /v1/margin/customer/:id` — one customer's window revenue + cost, with the cost split by model
+/// and by use-case name. Answers "which models drive customer X's cost". SQLite-backed; other backends
+/// return empty breakdowns (see docs/MARGIN.md).
+pub(crate) async fn get_customer_margin(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(customer_id): Path<String>,
+    Query(q): Query<CustomerMarginParams>,
+) -> Result<Json<CustomerMarginResponse>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    let project = resolve_read_project(&p, q.project.as_deref())?;
+
+    let until = match q.until.as_deref() {
+        Some(s) => parse_rfc3339(s)?,
+        None => Utc::now(),
+    };
+    let since = match q.since.as_deref() {
+        Some(s) => parse_rfc3339(s)?,
+        None => until - Duration::days(30),
+    };
+    if since >= until {
+        return Err(ApiError::bad_request("`since` must be before `until`"));
+    }
+
+    let store = st.store.clone();
+    let proj = project.clone();
+    let cust = customer_id.clone();
+    let (revenue, by_model, by_name) = spawn_db(move || {
+        let revenue = store.list_revenue_events(proj.as_deref(), since, until)?;
+        let by_model = store.customer_cost_by_model(proj.as_deref(), &cust, since, until)?;
+        let by_name = store.customer_cost_by_name(proj.as_deref(), &cust, since, until)?;
+        Ok::<_, StoreError>((revenue, by_model, by_name))
+    })
+    .await?;
+
+    // Recognized revenue for this customer, via the same rules /v1/margin uses: filter to the
+    // customer, then let compute_margin do recognition (one key → one row, or none).
+    let mine: Vec<RevenueEvent> = revenue
+        .into_iter()
+        .filter(|r| r.customer_id.as_deref() == Some(customer_id.as_str()))
+        .collect();
+    let revenue_usd = compute_margin(&mine, &[], MarginDimension::Customer, since, until)
+        .first()
+        .map(|r| r.revenue_usd)
+        .unwrap_or(0.0);
+    // Cost total from the model breakdown (same events as the name breakdown — sum one, not both).
+    let cost_usd = round(by_model.iter().map(|r| r.cost_usd).sum());
+    let margin_usd = round(revenue_usd - cost_usd);
+    let margin_pct = (revenue_usd > 0.0).then(|| margin_usd / revenue_usd);
+
+    Ok(Json(CustomerMarginResponse {
+        customer_id,
+        since,
+        until,
+        revenue_usd,
+        cost_usd,
+        margin_usd,
+        margin_pct,
+        by_model,
+        by_name,
+    }))
+}
+
 fn parse_rfc3339(s: &str) -> Result<DateTime<Utc>, ApiError> {
     DateTime::parse_from_rfc3339(s)
         .map(|d| d.with_timezone(&Utc))
@@ -233,4 +340,52 @@ fn parse_rfc3339(s: &str) -> Result<DateTime<Utc>, ApiError> {
 
 fn round(x: f64) -> f64 {
     (x * 1_000_000.0).round() / 1_000_000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(key: &str, revenue: f64, cost: f64) -> MarginRow {
+        let gross = revenue - cost;
+        MarginRow {
+            key: key.into(),
+            revenue_usd: revenue,
+            llm_cost_usd: cost,
+            gross_margin_usd: gross,
+            margin_pct: (revenue > 0.0).then(|| gross / revenue),
+            calls: 0,
+        }
+    }
+
+    #[test]
+    fn below_filters_by_margin_percentage() {
+        let rows = vec![
+            row("healthy", 100.0, 5.0), // 95%
+            row("thin", 100.0, 85.0),   // 15%
+            row("loss", 100.0, 130.0),  // -30%
+        ];
+        // below=20 → keep thin (15%) and loss (-30%), drop healthy (95%).
+        let kept = filter_below(rows.clone(), 20.0);
+        let keys: Vec<&str> = kept.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, vec!["thin", "loss"]);
+
+        // below=0 → only the loss-makers.
+        let losers = filter_below(rows, 0.0);
+        assert_eq!(losers.len(), 1);
+        assert_eq!(losers[0].key, "loss");
+    }
+
+    #[test]
+    fn below_includes_revenueless_cost_sinks_when_losing() {
+        // A free-tier customer: cost, no revenue → undefined margin% but clearly below breakeven.
+        let free_tier = row("trial", 0.0, 2.0);
+        assert!(free_tier.margin_pct.is_none());
+        let kept = filter_below(vec![free_tier], 0.0);
+        assert_eq!(kept.len(), 1, "revenueless loss is below breakeven");
+
+        // A row with neither revenue nor cost is not 'losing' → excluded.
+        let idle = row("idle", 0.0, 0.0);
+        assert!(filter_below(vec![idle], 50.0).is_empty());
+    }
 }

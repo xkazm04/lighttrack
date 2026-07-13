@@ -10,7 +10,7 @@ use rusqlite::{params, Connection, Row};
 use lighttrack_core::{CostByDimension, RevenueEvent, RevenueKind};
 
 use crate::codec::{fmt_ts, parse_ts};
-use crate::Result;
+use crate::{CustomerCostRow, Result};
 
 pub(super) fn insert(conn: &Connection, ev: &RevenueEvent) -> Result<()> {
     // Upsert on the (deterministic, for synced records) id so webhook redelivery is idempotent —
@@ -109,6 +109,67 @@ pub(super) fn cost_by_dimension(
                 cost_usd: row.get(2)?,
             })
         })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// One customer's LLM cost grouped by `provider/model`, over `[since, until)`. Scoped by the billing
+/// linkage in event metadata (`$.customer_id`), so it answers "which models drive this customer's cost".
+pub(super) fn customer_cost_by_model(
+    conn: &Connection,
+    project: Option<&str>,
+    customer: &str,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> Result<Vec<CustomerCostRow>> {
+    let sql = "SELECT provider || '/' || model AS k, COUNT(*) AS calls, \
+               COALESCE(SUM(cost_usd),0.0) AS cost \
+               FROM events \
+               WHERE (?1 IS NULL OR project_id = ?1) \
+                 AND json_extract(metadata, '$.customer_id') = ?2 \
+                 AND ts >= ?3 AND ts < ?4 \
+               GROUP BY k ORDER BY cost DESC, k ASC";
+    customer_cost(conn, sql, project, customer, since, until)
+}
+
+/// One customer's LLM cost grouped by use-case `name` (null → `(unnamed)`), over `[since, until)`.
+pub(super) fn customer_cost_by_name(
+    conn: &Connection,
+    project: Option<&str>,
+    customer: &str,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> Result<Vec<CustomerCostRow>> {
+    let sql = "SELECT COALESCE(name, '(unnamed)') AS k, COUNT(*) AS calls, \
+               COALESCE(SUM(cost_usd),0.0) AS cost \
+               FROM events \
+               WHERE (?1 IS NULL OR project_id = ?1) \
+                 AND json_extract(metadata, '$.customer_id') = ?2 \
+                 AND ts >= ?3 AND ts < ?4 \
+               GROUP BY k ORDER BY cost DESC, k ASC";
+    customer_cost(conn, sql, project, customer, since, until)
+}
+
+fn customer_cost(
+    conn: &Connection,
+    sql: &str,
+    project: Option<&str>,
+    customer: &str,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> Result<Vec<CustomerCostRow>> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt
+        .query_map(
+            params![project, customer, fmt_ts(since), fmt_ts(until)],
+            |r: &Row| {
+                Ok(CustomerCostRow {
+                    key: r.get(0)?,
+                    calls: r.get(1)?,
+                    cost_usd: r.get(2)?,
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -271,5 +332,49 @@ mod tests {
         // Same delivery again (provider retry): upsert-on-id means no duplicates accrue.
         insert_batch(&c, &batch).unwrap();
         assert_eq!(all(&c).len(), 2);
+    }
+
+    /// A tagged event with an explicit provider/model/name, for the per-customer breakdown tests.
+    fn ev_full(customer: &str, provider: &str, model: &str, name: &str, cost: f64, ts: &str) -> LlmEvent {
+        serde_json::from_value(json!({
+            "id": format!("e-{customer}-{provider}-{name}-{ts}"), "project_id": "p1",
+            "provider": provider, "model": model, "name": name,
+            "ts": ts, "cost_usd": cost, "usage": { "input": 10, "output": 5 },
+            "metadata": { "customer_id": customer }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn customer_breakdown_by_model_and_name_is_scoped_to_the_customer() {
+        let c = conn();
+        for e in [
+            ev_full("acme", "anthropic", "claude-haiku-4-5", "chat", 0.50, "2026-06-10T00:00:00Z"),
+            ev_full("acme", "anthropic", "claude-haiku-4-5", "chat", 0.30, "2026-06-11T00:00:00Z"),
+            ev_full("acme", "openai", "gpt-5.4", "summarize", 2.00, "2026-06-12T00:00:00Z"),
+            // Another customer's traffic must NOT leak into acme's breakdown.
+            ev_full("other", "openai", "gpt-5.4", "summarize", 9.99, "2026-06-12T00:00:00Z"),
+        ] {
+            super::super::events::insert(&c, &e).unwrap();
+        }
+        let since = parse_ts("2026-06-01T00:00:00Z").unwrap();
+        let until = parse_ts("2026-07-01T00:00:00Z").unwrap();
+
+        let by_model = customer_cost_by_model(&c, Some("p1"), "acme", since, until).unwrap();
+        // Two model groups; ordered by cost desc → gpt-5.4 ($2) before haiku ($0.80).
+        assert_eq!(by_model.len(), 2);
+        assert_eq!(by_model[0].key, "openai/gpt-5.4");
+        assert!((by_model[0].cost_usd - 2.0).abs() < 1e-9);
+        let haiku = by_model.iter().find(|r| r.key == "anthropic/claude-haiku-4-5").unwrap();
+        assert_eq!(haiku.calls, 2);
+        assert!((haiku.cost_usd - 0.80).abs() < 1e-9, "acme haiku cost summed, 'other' excluded");
+
+        let by_name = customer_cost_by_name(&c, Some("p1"), "acme", since, until).unwrap();
+        assert_eq!(by_name.len(), 2);
+        let chat = by_name.iter().find(|r| r.key == "chat").unwrap();
+        assert_eq!(chat.calls, 2);
+        assert!((chat.cost_usd - 0.80).abs() < 1e-9);
+        let summ = by_name.iter().find(|r| r.key == "summarize").unwrap();
+        assert!((summ.cost_usd - 2.0).abs() < 1e-9, "only acme's summarize, not other's $9.99");
     }
 }

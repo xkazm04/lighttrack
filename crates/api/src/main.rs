@@ -297,6 +297,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/revenue", post(revenue::post_revenue))
         .route("/v1/margin", get(revenue::get_margin))
         .route("/v1/margin/trend", get(revenue::get_margin_trend))
+        .route("/v1/margin/customer/:id", get(revenue::get_customer_margin))
         .route("/v1/forecast", get(forecast::get_forecast))
         .route("/v1/billing/:provider/webhook", post(billing::post_webhook))
         .route("/v1/collective/digest", get(collective::get_digest))

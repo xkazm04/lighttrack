@@ -105,6 +105,15 @@ pub struct TracePage {
     pub next_cursor: Option<String>,
 }
 
+/// One cost/usage bucket in a single customer's margin breakdown — grouped by model (`provider/model`)
+/// or by use-case `name`. `key` is that bucket label (`unattributed` / `(unnamed)` for the null group).
+#[derive(Debug, Clone, Serialize)]
+pub struct CustomerCostRow {
+    pub key: String,
+    pub calls: i64,
+    pub cost_usd: f64,
+}
+
 /// A use-case cost/usage rollup row — grouped by (name, provider, model), optionally windowed by a
 /// `since` cutoff. `name` is `None` for calls that carry no use-case name; the consumer rolls those
 /// up under their model. Powers the Personas "LLM Overview" table.
@@ -586,6 +595,29 @@ pub trait Store: Send + Sync {
         _since: DateTime<Utc>,
         _until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
+        Ok(Vec::new())
+    }
+    /// One customer's LLM cost broken down **by model** (`provider/model`) over `[since, until)`,
+    /// scoped by `json_extract(metadata,'$.customer_id') = customer`. Default empty so unported
+    /// backends (Postgres/Firestore) compile unchanged; SQLite implements it.
+    fn customer_cost_by_model(
+        &self,
+        _project: Option<&str>,
+        _customer: &str,
+        _since: DateTime<Utc>,
+        _until: DateTime<Utc>,
+    ) -> Result<Vec<CustomerCostRow>> {
+        Ok(Vec::new())
+    }
+    /// One customer's LLM cost broken down **by use-case `name`** over `[since, until)`, scoped by the
+    /// same `metadata.customer_id`. Default empty (see [`Store::customer_cost_by_model`]).
+    fn customer_cost_by_name(
+        &self,
+        _project: Option<&str>,
+        _customer: &str,
+        _since: DateTime<Utc>,
+        _until: DateTime<Utc>,
+    ) -> Result<Vec<CustomerCostRow>> {
         Ok(Vec::new())
     }
 

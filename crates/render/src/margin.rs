@@ -97,6 +97,50 @@ pub(crate) fn trend(v: &Value) -> Option<String> {
     Some(out)
 }
 
+/// `get_customer_margin` — one customer's revenue/cost/margin headline plus cost split by model & name.
+pub(crate) fn customer(v: &Value) -> Option<String> {
+    let id = s(v, "customer_id");
+    if id.is_empty() {
+        return None;
+    }
+    let window = format!("{} → {}", short_ts(s(v, "since")), short_ts(s(v, "until")));
+    let margin = f(v, "margin_usd");
+    let mpct = opt_f(v, "margin_pct");
+    let mut out = format!("### Customer `{id}` · {window}\n\n");
+    out.push_str(&format!(
+        "{} **{} revenue − {} cost = {} margin{}**\n\n",
+        glyph(margin, mpct),
+        money(f(v, "revenue_usd")),
+        money(f(v, "cost_usd")),
+        money(margin),
+        mpct.map(|p| format!(" ({})", pct(p))).unwrap_or_default(),
+    ));
+    out.push_str(&breakdown_table("By model", v.get("by_model")));
+    out.push_str(&breakdown_table("By use-case", v.get("by_name")));
+    Some(out)
+}
+
+/// A cost breakdown sub-table (`key`, calls, cost), or an em-dash line when empty/absent.
+fn breakdown_table(title: &str, rows: Option<&Value>) -> String {
+    let rows = match rows.and_then(Value::as_array) {
+        Some(r) if !r.is_empty() => r,
+        _ => return format!("**{title}:** _none_\n\n"),
+    };
+    let mut t = Table::new(&[
+        (title, Align::Left),
+        ("Calls", Align::Right),
+        ("Cost", Align::Right),
+    ]);
+    for r in rows {
+        t.row(vec![
+            s(r, "key").to_string(),
+            commafy(u(r, "calls")),
+            money(f(r, "cost_usd")),
+        ]);
+    }
+    format!("{}\n", t.render())
+}
+
 /// A sparkline over a series' per-day `margin_usd`.
 fn margin_spark(series: &Value) -> String {
     let pts = series.get("points").and_then(Value::as_array);

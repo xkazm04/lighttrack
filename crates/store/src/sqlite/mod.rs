@@ -38,8 +38,8 @@ use lighttrack_core::{
 };
 
 use crate::{
-    Admission, CostRow, DailyDimCost, DailyUsage, EventFilter, EventPage, Result, Store, TraceFilter,
-    TracePage, Usage, UseCaseCostRow,
+    Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, EventFilter, EventPage, Result,
+    Store, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 const SCHEMA: &str = include_str!("../../../../schema/sqlite/001_init.sql");
@@ -380,6 +380,24 @@ impl Store for SqliteStore {
         until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
         self.with(|c| revenue::cost_by_dimension(c, project, dim, since, until))
+    }
+    fn customer_cost_by_model(
+        &self,
+        project: Option<&str>,
+        customer: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<CustomerCostRow>> {
+        self.with(|c| revenue::customer_cost_by_model(c, project, customer, since, until))
+    }
+    fn customer_cost_by_name(
+        &self,
+        project: Option<&str>,
+        customer: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<CustomerCostRow>> {
+        self.with(|c| revenue::customer_cost_by_name(c, project, customer, since, until))
     }
 
     // --- cloud→device relay queue ---
