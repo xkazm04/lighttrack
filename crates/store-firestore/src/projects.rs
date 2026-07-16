@@ -15,6 +15,7 @@ pub(crate) fn create_project(rest: &Rest, p: &Project) -> Result<()> {
     m.insert("name".into(), json!(p.name));
     m.insert("enabled".into(), json!(p.enabled as i64));
     m.insert("redaction".into(), json!(enum_to_str(&p.redaction)?));
+    m.insert("collective_opt_in".into(), json!(p.collective_opt_in as i64));
     m.insert("created_at".into(), json!(fmt_ts(p.created_at)));
     rest.put_doc("projects", &p.id, &m)
 }
@@ -59,6 +60,8 @@ fn project_from(m: &Fields) -> Result<Project> {
         name: freq(m, "name")?,
         enabled: fbool(m, "enabled"),
         redaction: parse_enum::<Redaction>(&fstr(m, "redaction").unwrap_or_default()),
+        // Docs written before the consent field existed read as opted OUT — the safe default.
+        collective_opt_in: fbool(m, "collective_opt_in"),
         created_at: parse_ts(&freq(m, "created_at")?)?,
     })
 }

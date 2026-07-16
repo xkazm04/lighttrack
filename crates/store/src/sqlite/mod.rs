@@ -125,6 +125,8 @@ impl Store for SqliteStore {
                 "ALTER TABLE collective_entries ADD COLUMN quality_variance REAL",
                 "ALTER TABLE collective_entries ADD COLUMN judge_provider TEXT",
                 "ALTER TABLE collective_entries ADD COLUMN rubric_fingerprint TEXT",
+                // Collective consent: per-project opt-in to digest contribution (default off).
+                "ALTER TABLE projects ADD COLUMN collective_opt_in INTEGER NOT NULL DEFAULT 0",
             ] {
                 if let Err(e) = c.execute(stmt, []) {
                     if !e.to_string().contains("duplicate column name") {

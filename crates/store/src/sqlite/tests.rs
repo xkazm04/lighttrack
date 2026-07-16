@@ -69,6 +69,7 @@ fn batch_admission_counts_prior_items_no_cap_bypass() {
         name: "p1".into(),
         enabled: true,
         redaction: Redaction::None,
+        collective_opt_in: false,
         created_at: Utc::now(),
     })
     .unwrap();
@@ -532,6 +533,7 @@ fn projects_keys_limits_usage() {
         name: "demo".into(),
         enabled: true,
         redaction: Redaction::None,
+        collective_opt_in: false,
         created_at: now,
     };
     s.create_project(&proj).unwrap();

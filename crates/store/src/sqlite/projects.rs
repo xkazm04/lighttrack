@@ -12,31 +12,42 @@ use crate::Result;
 
 pub(super) fn create(conn: &Connection, p: &Project) -> Result<()> {
     conn.execute(
-        "INSERT INTO projects (id, name, enabled, redaction, created_at) VALUES (?1,?2,?3,?4,?5)",
-        params![p.id, p.name, p.enabled as i64, enum_to_str(&p.redaction)?, fmt_ts(p.created_at)],
+        "INSERT INTO projects (id, name, enabled, redaction, collective_opt_in, created_at) \
+         VALUES (?1,?2,?3,?4,?5,?6)",
+        params![
+            p.id,
+            p.name,
+            p.enabled as i64,
+            enum_to_str(&p.redaction)?,
+            p.collective_opt_in as i64,
+            fmt_ts(p.created_at),
+        ],
     )?;
     Ok(())
 }
 
 pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Project>> {
-    let mut stmt =
-        conn.prepare("SELECT id, name, enabled, redaction, created_at FROM projects WHERE id = ?1")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at \
+         FROM projects WHERE id = ?1",
+    )?;
     let raw = stmt.query_row(params![id], map_project).optional()?;
     raw.map(project_from_raw).transpose()
 }
 
 pub(super) fn list(conn: &Connection) -> Result<Vec<Project>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, enabled, redaction, created_at FROM projects ORDER BY created_at DESC",
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at \
+         FROM projects ORDER BY created_at DESC",
     )?;
     let raws = stmt.query_map([], map_project)?.collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(project_from_raw).collect()
 }
 
-type ProjectRaw = (String, String, i64, String, String);
+type ProjectRaw = (String, String, i64, String, i64, String);
 
 fn map_project(row: &Row) -> rusqlite::Result<ProjectRaw> {
-    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
 }
 
 fn project_from_raw(r: ProjectRaw) -> Result<Project> {
@@ -45,7 +56,8 @@ fn project_from_raw(r: ProjectRaw) -> Result<Project> {
         name: r.1,
         enabled: r.2 != 0,
         redaction: parse_enum::<Redaction>(&r.3),
-        created_at: parse_ts(&r.4)?,
+        collective_opt_in: r.4 != 0,
+        created_at: parse_ts(&r.5)?,
     })
 }
 

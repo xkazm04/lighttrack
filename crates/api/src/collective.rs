@@ -145,13 +145,16 @@ pub(crate) async fn get_digest(
     let min_cases = q.min_cases.unwrap_or(DEFAULT_MIN_CASES).max(1);
 
     let store = st.store.clone();
-    let stats = spawn_db(move || gather_run_stats(store.as_ref())).await?;
+    let (stats, projects_included, projects_excluded) =
+        spawn_db(move || gather_run_stats(store.as_ref())).await?;
     let entries = build_digest(&stats, min_cases);
     Ok(Json(CollectiveDigest {
         schema_version: DIGEST_SCHEMA_VERSION,
         contributor_id: st.collective.contributor_id.clone(),
         generated_at: Utc::now(),
         min_cases,
+        projects_included,
+        projects_excluded,
         entries,
     }))
 }
@@ -346,11 +349,20 @@ pub(crate) async fn get_leaderboard(
 /// Hard cap on entries accepted from one contributor, so a malformed/abusive digest can't blow up.
 const MAX_ENTRIES: usize = 5000;
 
-/// Walk every project's benchmarks and reduce each run scorecard to a [`RunStat`]. Only runs whose
-/// model identity is known and that scored ≥1 case contribute — so no empty/ambiguous rows leak.
-fn gather_run_stats(store: &dyn Store) -> Result<Vec<RunStat>, StoreError> {
+/// Walk the **consenting** projects' benchmarks and reduce each run scorecard to a [`RunStat`].
+/// A project contributes only when `collective_opt_in` is set — contribution is an act, not an
+/// inheritance, so an NDA'd project sitting next to a dozen internal ones can never ship by accident.
+/// Returns `(stats, projects_included, projects_excluded)` so the digest discloses its own scope.
+/// Only runs whose model identity is known and that scored ≥1 case contribute.
+fn gather_run_stats(store: &dyn Store) -> Result<(Vec<RunStat>, u32, u32), StoreError> {
     let mut stats = Vec::new();
+    let (mut included, mut excluded) = (0u32, 0u32);
     for p in store.list_projects()? {
+        if !p.collective_opt_in {
+            excluded += 1;
+            continue;
+        }
+        included += 1;
         for b in store.list_benchmarks(&p.id)? {
             for run in store.list_benchmark_runs(&b.id)? {
                 if let Some(s) = run_stat(&b, &run) {
@@ -359,7 +371,7 @@ fn gather_run_stats(store: &dyn Store) -> Result<Vec<RunStat>, StoreError> {
             }
         }
     }
-    Ok(stats)
+    Ok((stats, included, excluded))
 }
 
 /// Reduce one `(Benchmark, run)` to a [`RunStat`], or `None` when it can't contribute (no known

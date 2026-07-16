@@ -13,12 +13,14 @@ use crate::util::{enum_to_str, fmt_ts, parse_enum, parse_ts, pgerr};
 
 pub(crate) async fn create(pool: &PgPool, p: &Project) -> Result<()> {
     sqlx::query(
-        "INSERT INTO projects (id, name, enabled, redaction, created_at) VALUES ($1,$2,$3,$4,$5)",
+        "INSERT INTO projects (id, name, enabled, redaction, collective_opt_in, created_at) \
+         VALUES ($1,$2,$3,$4,$5,$6)",
     )
     .bind(p.id.clone())
     .bind(p.name.clone())
     .bind(p.enabled as i64)
     .bind(enum_to_str(&p.redaction)?)
+    .bind(p.collective_opt_in as i64)
     .bind(fmt_ts(p.created_at))
     .execute(pool)
     .await
@@ -27,20 +29,25 @@ pub(crate) async fn create(pool: &PgPool, p: &Project) -> Result<()> {
 }
 
 pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Project>> {
-    let row = sqlx::query("SELECT id, name, enabled, redaction, created_at FROM projects WHERE id = $1")
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+    let row = sqlx::query(
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at \
+         FROM projects WHERE id = $1",
+    )
+    .bind(id.to_string())
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     row.as_ref().map(project_from_row).transpose()
 }
 
 pub(crate) async fn list(pool: &PgPool) -> Result<Vec<Project>> {
-    let rows =
-        sqlx::query("SELECT id, name, enabled, redaction, created_at FROM projects ORDER BY created_at DESC")
-            .fetch_all(pool)
-            .await
-            .map_err(pgerr)?;
+    let rows = sqlx::query(
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at \
+         FROM projects ORDER BY created_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(pgerr)?;
     rows.iter().map(project_from_row).collect()
 }
 
@@ -123,12 +130,13 @@ pub(crate) async fn list_limits(pool: &PgPool, project: &str, only_enabled: bool
 
 fn project_from_row(row: &PgRow) -> Result<Project> {
     let redaction: String = row.try_get(3).map_err(pgerr)?;
-    let created_at: String = row.try_get(4).map_err(pgerr)?;
+    let created_at: String = row.try_get(5).map_err(pgerr)?;
     Ok(Project {
         id: row.try_get(0).map_err(pgerr)?,
         name: row.try_get(1).map_err(pgerr)?,
         enabled: row.try_get::<i64, _>(2).map_err(pgerr)? != 0,
         redaction: parse_enum::<Redaction>(&redaction),
+        collective_opt_in: row.try_get::<i64, _>(4).map_err(pgerr)? != 0,
         created_at: parse_ts(&created_at)?,
     })
 }

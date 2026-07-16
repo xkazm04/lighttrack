@@ -28,6 +28,11 @@ pub struct Project {
     pub enabled: bool,
     #[serde(default)]
     pub redaction: Redaction,
+    /// Consent to include this project's benchmark runs in a collective-network digest. Default
+    /// **off**: contributing a project's eval results to a shared hub is an act, not an inheritance —
+    /// `lt collective contribute` must never ship a project nobody opted in.
+    #[serde(default)]
+    pub collective_opt_in: bool,
     pub created_at: DateTime<Utc>,
 }
 

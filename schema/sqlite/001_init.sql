@@ -6,6 +6,9 @@ CREATE TABLE IF NOT EXISTS projects (
   name        TEXT NOT NULL,
   enabled     INTEGER NOT NULL DEFAULT 1,
   redaction   TEXT NOT NULL DEFAULT 'none',   -- none | hash | drop
+  -- Consent to include this project's benchmark runs in a collective-network digest. Default off:
+  -- contribution is an act, not an inheritance.
+  collective_opt_in INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL
 );
 

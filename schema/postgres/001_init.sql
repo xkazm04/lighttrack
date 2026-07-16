@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS projects (
   name        TEXT NOT NULL,
   enabled     BIGINT NOT NULL DEFAULT 1,
   redaction   TEXT NOT NULL DEFAULT 'none',
+  -- Consent to include this project's benchmark runs in a collective-network digest. Default off.
+  collective_opt_in BIGINT NOT NULL DEFAULT 0,
   created_at  TEXT NOT NULL
 );
 

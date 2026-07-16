@@ -83,6 +83,7 @@ pub(crate) fn make_key_with_redaction(
             name: project_id.into(),
             enabled: true,
             redaction,
+            collective_opt_in: false,
             created_at: now,
         })
         .unwrap();
@@ -169,6 +170,7 @@ async fn project_key_cannot_ingest_into_another_project() {
             name: "b".into(),
             enabled: true,
             redaction: Redaction::None,
+            collective_opt_in: false,
             created_at: Utc::now(),
         })
         .unwrap();

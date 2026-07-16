@@ -76,6 +76,13 @@ pub struct CollectiveDigest {
     /// The k-anonymity floor used to build this digest (for auditability).
     #[serde(default)]
     pub min_cases: u32,
+    /// Consent envelope: how many projects opted into this digest, and how many were withheld for
+    /// lacking `collective_opt_in`. Makes what leaves the building legible *before* the POST.
+    /// Serde-defaulted so v1/v2 hubs (which ignore unknown fields) stay wire-compatible.
+    #[serde(default)]
+    pub projects_included: u32,
+    #[serde(default)]
+    pub projects_excluded: u32,
     #[serde(default)]
     pub entries: Vec<ModelDigestEntry>,
 }

@@ -20,6 +20,9 @@ pub(crate) struct CreateProjectReq {
     name: String,
     #[serde(default)]
     redaction: Redaction,
+    /// Consent to include this project's benchmark runs in collective digests. Default off.
+    #[serde(default)]
+    collective_opt_in: bool,
 }
 
 pub(crate) async fn create_project(
@@ -33,6 +36,7 @@ pub(crate) async fn create_project(
         name: req.name,
         enabled: true,
         redaction: req.redaction,
+        collective_opt_in: req.collective_opt_in,
         created_at: Utc::now(),
     };
     let store = st.store.clone();

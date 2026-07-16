@@ -274,6 +274,81 @@ async fn v2_variance_is_carried_through_to_storage_and_ci() {
 }
 
 #[tokio::test]
+async fn digest_includes_only_consenting_projects() {
+    use chrono::Utc;
+    use lighttrack_core::{new_id, Benchmark, BenchmarkCase, BenchmarkRun, Project, Redaction};
+
+    let (state, store) = setup(true, false, 1);
+    let app = crate::build_router(state);
+
+    // Two projects with identical benchmark runs; only one has consented.
+    let mk_project = |id: &str, opt_in: bool| Project {
+        id: id.into(),
+        name: id.into(),
+        enabled: true,
+        redaction: Redaction::None,
+        collective_opt_in: opt_in,
+        created_at: Utc::now(),
+    };
+    let mk_bench_run = |project: &str, model: &str| {
+        let b = Benchmark {
+            id: new_id(),
+            project_id: project.into(),
+            name: "qa bench".into(),
+            rubric: "is it right".into(),
+            judge_model: "haiku".into(),
+            target: json!({ "provider": "anthropic", "model": model }),
+            dataset_ref: None,
+            rubric_id: None,
+            dataset: vec![BenchmarkCase { input: "2+2".into(), expected: None, output: None }],
+            baseline_score: None,
+            created_at: Utc::now(),
+        };
+        store.create_benchmark(&b).unwrap();
+        store
+            .create_benchmark_run(&BenchmarkRun {
+                id: new_id(),
+                benchmark_id: b.id.clone(),
+                started_at: Utc::now(),
+                finished_at: Some(Utc::now()),
+                n_cases: 10,
+                mean_score: Some(0.9),
+                pass_rate: Some(0.9),
+                cost_usd: 0.1,
+                status: "passed".into(),
+                p50_latency_ms: Some(100),
+                p95_latency_ms: Some(200),
+                total_tokens: Some(100),
+                report: Value::Null,
+            })
+            .unwrap();
+    };
+    store.create_project(&mk_project("proj-nda", false)).unwrap();
+    store.create_project(&mk_project("proj-open", true)).unwrap();
+    mk_bench_run("proj-nda", "secret-model");
+    mk_bench_run("proj-open", "public-model");
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/collective/digest")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let digest: Value = serde_json::from_slice(&bytes).unwrap();
+
+    let blob = digest.to_string();
+    assert!(blob.contains("public-model"), "consenting project's runs are in the digest: {blob}");
+    assert!(
+        !blob.contains("secret-model"),
+        "a project that never opted in must not ship in the digest: {blob}"
+    );
+    assert_eq!(digest["projects_included"], 1, "consent envelope disclosed: {digest}");
+    assert_eq!(digest["projects_excluded"], 1);
+}
+
+#[tokio::test]
 async fn single_source_rows_are_withheld_below_the_contributor_floor() {
     // Hub with a real source floor (k=2): a row backed by one contributor must never surface —
     // however many cases it has, and no filter may resurrect it.

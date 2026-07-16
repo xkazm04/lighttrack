@@ -105,10 +105,14 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
         name: "conf".into(),
         enabled: true,
         redaction: Redaction::None,
+        // Non-default on purpose: pins that the consent flag round-trips on every backend (a backend
+        // that drops it silently opts a project out of — or worse, into — collective contribution).
+        collective_opt_in: true,
         created_at: Utc::now(),
     };
     store.create_project(&proj)?;
-    assert!(store.get_project(pid)?.is_some(), "get_project Some");
+    let got = store.get_project(pid)?.expect("get_project Some");
+    assert!(got.collective_opt_in, "collective_opt_in round-trips");
     assert!(store.get_project(&new_id())?.is_none(), "get_project None");
     assert!(store.list_projects()?.iter().any(|p| p.id == pid), "list_projects contains ours");
 
