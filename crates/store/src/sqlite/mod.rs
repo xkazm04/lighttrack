@@ -39,7 +39,7 @@ use lighttrack_core::{
 
 use crate::{
     Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, EventFilter, EventPage, Result,
-    Store, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    Store, StoreError, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 const SCHEMA: &str = include_str!("../../../../schema/sqlite/001_init.sql");
@@ -152,8 +152,53 @@ impl Store for SqliteStore {
         // One critical section for the whole batch: the cache + connection locks are held across every
         // item, so each accepted insert is already visible to the next item's usage read (no cap
         // bypass), and the check-then-insert stays atomic against concurrent ingest.
+        //
+        // One TRANSACTION for the whole batch too: without it every item is its own autocommit —
+        // one fsync per event, so a 500-item batch held the global connection lock for ~500 fsyncs
+        // (~0.5-2.5s of cluster-wide ingest stall) and the "efficient" batch path was worse than 500
+        // interleaved single posts. A per-item failure (e.g. duplicate id) does not poison the
+        // transaction — the survivors still commit, preserving the "previously-accepted items stay
+        // committed" contract the batch response is built on. `unchecked_transaction` is sound here
+        // because we already hold the connection mutex (same justification as `revenue::insert_batch`).
+        //
+        // Limit rules are also hoisted: fetched once per distinct project (a batch is single-project
+        // by construction today) instead of re-queried per item.
         let mut cache = self.usage_cache.lock().unwrap();
-        self.with(|c| evs.iter().map(|e| events::insert_checked(c, &mut cache, e)).collect())
+        self.with(|c| {
+            let tx = match c.unchecked_transaction() {
+                Ok(tx) => tx,
+                Err(e) => {
+                    let msg = format!("batch begin failed: {e}");
+                    return evs.iter().map(|_| Err(StoreError::Other(msg.clone()))).collect();
+                }
+            };
+            let mut rules_by_project: std::collections::HashMap<&str, Vec<LimitRule>> =
+                std::collections::HashMap::new();
+            let mut out: Vec<Result<Admission>> = Vec::with_capacity(evs.len());
+            for e in evs {
+                let rules = match rules_by_project.entry(e.project_id.as_str()) {
+                    std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(v) => {
+                        match limits::list(&tx, &e.project_id, true) {
+                            Ok(r) => v.insert(r),
+                            Err(err) => {
+                                out.push(Err(err));
+                                continue;
+                            }
+                        }
+                    }
+                };
+                out.push(events::insert_checked_with_rules(&tx, &mut cache, e, rules));
+            }
+            if let Err(e) = tx.commit() {
+                // The whole batch is lost (all-or-nothing beats a torn batch a client can't detect).
+                // The in-memory usage cache may now over-count the uncommitted events — the safe
+                // direction (over-enforcement), and it re-syncs from the table on its next rebuild.
+                let msg = format!("batch commit failed: {e}");
+                return evs.iter().map(|_| Err(StoreError::Other(msg.clone()))).collect();
+            }
+            out
+        })
     }
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
         self.with(|c| events::list(c, project, limit))

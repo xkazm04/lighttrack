@@ -95,8 +95,21 @@ pub(super) fn insert_checked(
     ev: &LlmEvent,
 ) -> Result<Admission> {
     let rules = super::limits::list(conn, &ev.project_id, true)?;
+    insert_checked_with_rules(conn, cache, ev, &rules)
+}
+
+/// [`insert_checked`] with the project's (already-fetched) enabled limit rules. The batch path loads
+/// the rule set once per distinct project and reuses it across the batch — the rules are config that
+/// cannot change mid-call (the store serializes all writers) — instead of re-querying and
+/// re-deserializing the same rows once per item.
+pub(super) fn insert_checked_with_rules(
+    conn: &Connection,
+    cache: &mut UsageCache,
+    ev: &LlmEvent,
+    rules: &[lighttrack_core::LimitRule],
+) -> Result<Admission> {
     let now = Utc::now();
-    let admission = evaluate_admission(&rules, ev, event_contribution(ev), |w, scope| {
+    let admission = evaluate_admission(rules, ev, event_contribution(ev), |w, scope| {
         cache.usage(conn, &ev.project_id, w, scope, now)
     })?;
     if admission.admitted {
