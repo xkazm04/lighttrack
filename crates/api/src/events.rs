@@ -19,13 +19,25 @@ use crate::events_validate::policy;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
 use crate::state::{spawn_db, AppState};
 
-/// Scope one event to its project, validate it, scrub PII, and fill/mark its cost — everything the
-/// single- and batch-ingest paths share up to the admission step. On a validation failure returns the
-/// human-facing 400 message (the batch path records it per item; the single path maps it to a 400).
-pub(crate) fn prepare_event(st: &AppState, ev: &mut LlmEvent, pid: &str) -> Result<(), String> {
+/// Scope one event to its project, validate it, enforce the project's payload-persistence policy,
+/// scrub PII, and fill/mark its cost — everything the single- and batch-ingest paths share up to the
+/// admission step. On a validation failure returns the human-facing 400 message (the batch path
+/// records it per item; the single path maps it to a 400).
+pub(crate) fn prepare_event(
+    st: &AppState,
+    ev: &mut LlmEvent,
+    pid: &str,
+    persistence: lighttrack_core::Redaction,
+) -> Result<(), String> {
     ev.project_id = pid.to_string();
     policy().validate(ev, Utc::now())?;
-    // Optional: scrub structured PII from captured input/output before it is stored.
+    // 1. The project's stored persistence policy (hash/drop) — the setting the projects API accepts
+    // and the operator table displays, now actually enforced. Applied before the PII scrub: `drop`
+    // removes the payloads outright; `hash` leaves nothing scrubbable.
+    if crate::redact::apply_policy(ev, persistence) {
+        eprintln!("[REDACT] project={pid} event={} applied persistence policy {persistence:?}", ev.id);
+    }
+    // 2. Optional env-configured floor: scrub structured PII from what remains before it is stored.
     let redacted = st.redact.redact_event(ev);
     if redacted > 0 {
         eprintln!("[REDACT] project={pid} event={} redacted {redacted} PII span(s)", ev.id);
@@ -153,7 +165,8 @@ pub(crate) async fn post_event(
 ) -> Result<Json<IngestResponse>, ApiError> {
     let principal = authenticate(&st, &headers).await?;
     let pid = resolve_ingest_project(&principal, &ev.project_id)?;
-    prepare_event(&st, &mut ev, &pid).map_err(ApiError::bad_request)?;
+    let persistence = crate::state::redaction_policy_for(&st, &pid).await?;
+    prepare_event(&st, &mut ev, &pid, persistence).map_err(ApiError::bad_request)?;
 
     // Admission control: evaluate the project's limits and insert in one atomic store step. An
     // enforcing (Throttle/Block) breach rejects the event — it is NOT recorded and we return 429 so

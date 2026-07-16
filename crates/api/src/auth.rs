@@ -47,7 +47,7 @@ pub struct GeneratedKey {
     pub key_hash: String,
 }
 
-fn sha256_hex(input: &str) -> String {
+pub(crate) fn sha256_hex(input: &str) -> String {
     let mut h = Sha256::new();
     h.update(input.as_bytes());
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()

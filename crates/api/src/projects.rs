@@ -38,6 +38,9 @@ pub(crate) async fn create_project(
     let store = st.store.clone();
     let pc = proj.clone();
     spawn_db(move || store.create_project(&pc)).await?;
+    // Keep the ingest-path policy cache current, so the new project's persistence policy (hash/drop)
+    // is enforced from its very first event.
+    st.redaction_policies.write().unwrap().insert(proj.id.clone(), proj.redaction);
     Ok(Json(proj))
 }
 

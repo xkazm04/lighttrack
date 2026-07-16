@@ -54,6 +54,7 @@ fn setup(accept: bool, allow_anon: bool, min_cases: u32) -> (AppState, Arc<Sqlit
             crate::idempotency::DEFAULT_CAPACITY,
         )),
         rejections: Arc::new(crate::rejections::RejectionLedger::new()),
+        redaction_policies: Arc::new(RwLock::new(HashMap::new())),
     };
     (state, store)
 }

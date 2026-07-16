@@ -1,9 +1,10 @@
 //! Shared application state + the blocking-DB call helper.
 
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use lighttrack_billing::BillingRegistry;
-use lighttrack_core::PriceBook;
+use lighttrack_core::{PriceBook, Redaction};
 use lighttrack_store::{Store, StoreError};
 
 use crate::alerts::Alerter;
@@ -32,6 +33,12 @@ pub(crate) struct AppState {
     pub(crate) alerts: Arc<Alerter>,
     /// Optional PII redaction of captured input/output on ingest, configured from env.
     pub(crate) redact: Arc<Redactor>,
+    /// Per-project payload-persistence policies (the stored `Project.redaction` field), cached so the
+    /// ingest hot path doesn't pay a store read per event. Warmed from `list_projects()` at startup,
+    /// updated on project create, and back-filled lazily on first sight of an unknown project (see
+    /// [`redaction_policy_for`]). Single-API-instance authoritative — matching the store's
+    /// one-writer architecture; a multi-replica deploy would need a TTL or invalidation bus.
+    pub(crate) redaction_policies: Arc<RwLock<HashMap<String, Redaction>>>,
     /// Configured billing-webhook sources (Stripe/Polar), keyed by provider.
     pub(crate) billing: Arc<BillingRegistry>,
     /// In-process idempotency for webhook deliveries — collapses provider retries / duplicate
@@ -44,6 +51,24 @@ pub(crate) struct AppState {
     /// events are deliberately never stored (they'd corrupt usage/cost), so this counts them out-of-band
     /// so history isn't blind exactly when a cap bites. Resets on restart; entries roll off after 24h.
     pub(crate) rejections: Arc<RejectionLedger>,
+}
+
+/// The payload-persistence policy for `pid`, from the cache — falling back to one store read on the
+/// first sight of a project the cache doesn't know (then remembered, including the "no project row"
+/// default, so the miss is paid once per project per process). This is what makes the stored
+/// `Project.redaction` field an *enforced* policy on ingest instead of a decorative column.
+pub(crate) async fn redaction_policy_for(st: &AppState, pid: &str) -> Result<Redaction, ApiError> {
+    if let Some(p) = st.redaction_policies.read().unwrap().get(pid) {
+        return Ok(*p);
+    }
+    let store = st.store.clone();
+    let id = pid.to_string();
+    let policy = spawn_db(move || store.get_project(&id))
+        .await?
+        .map(|p| p.redaction)
+        .unwrap_or_default();
+    st.redaction_policies.write().unwrap().insert(pid.to_string(), policy);
+    Ok(policy)
 }
 
 /// Run a blocking store call on the blocking pool and flatten the two error layers.

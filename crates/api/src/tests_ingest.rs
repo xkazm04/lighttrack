@@ -57,6 +57,9 @@ pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
             crate::idempotency::DEFAULT_CAPACITY,
         )),
         rejections: Arc::new(crate::rejections::RejectionLedger::new()),
+        // Empty cache: policies are back-filled lazily from the store on first sight, which is also
+        // the path these tests exercise.
+        redaction_policies: Arc::new(RwLock::new(HashMap::new())),
     };
     (state, store)
 }
@@ -64,13 +67,22 @@ pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
 /// Create a project and mint a real, usable API key for it; returns the full secret to present as a
 /// bearer token. Uses the production key-gen + hashing so auth resolves it to `Principal::Project`.
 pub(crate) fn make_key(store: &SqliteStore, project_id: &str) -> String {
+    make_key_with_redaction(store, project_id, Redaction::None)
+}
+
+/// [`make_key`] with an explicit payload-persistence policy on the created project.
+pub(crate) fn make_key_with_redaction(
+    store: &SqliteStore,
+    project_id: &str,
+    redaction: Redaction,
+) -> String {
     let now = Utc::now();
     store
         .create_project(&Project {
             id: project_id.into(),
             name: project_id.into(),
             enabled: true,
-            redaction: Redaction::None,
+            redaction,
             created_at: now,
         })
         .unwrap();
@@ -108,6 +120,42 @@ pub(crate) async fn ingest(app: &Router, token: &str, body: Value) -> (StatusCod
         serde_json::from_slice(&bytes).unwrap()
     };
     (status, v)
+}
+
+#[tokio::test]
+async fn project_persistence_policy_is_enforced_on_ingest() {
+    let (state, store) = setup(Redactor::off());
+    let key_drop = make_key_with_redaction(&store, "proj-drop", Redaction::Drop);
+    let key_hash = make_key_with_redaction(&store, "proj-hash", Redaction::Hash);
+    let app = crate::build_router(state);
+
+    let payload = json!({
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "usage": { "input": 10, "output": 5 },
+        "cost_usd": 0.0,
+        "input": { "q": "the secret prompt" },
+        "output": "the secret answer"
+    });
+
+    // `drop`: the event is recorded, its payloads are not.
+    let (status, _) = ingest(&app, &key_drop, payload.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = store.list_events(Some("proj-drop"), 10).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].input.is_none() && rows[0].output.is_none(), "drop persists no payloads");
+    assert_eq!(rows[0].usage.input, 10, "metering fields untouched");
+
+    // `hash`: presence/diff survive as sha256 digests; no plaintext lands in the store.
+    let (status, _) = ingest(&app, &key_hash, payload).await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = store.list_events(Some("proj-hash"), 10).unwrap();
+    assert_eq!(rows.len(), 1);
+    let stored = serde_json::to_string(&rows[0]).unwrap();
+    assert!(!stored.contains("secret"), "no plaintext payload survives hashing: {stored}");
+    let digest = rows[0].input.as_ref().and_then(|v| v.get("sha256")).and_then(Value::as_str);
+    assert_eq!(digest.map(str::len), Some(64), "input replaced by a sha256 digest");
+    assert!(rows[0].output.as_ref().and_then(|v| v.get("sha256")).is_some());
 }
 
 #[tokio::test]

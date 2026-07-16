@@ -196,6 +196,14 @@ async fn main() -> anyhow::Result<()> {
     let collective_desc = collective.describe();
     let seen_webhooks = Arc::new(idempotency::SeenWebhooks::new(idempotency::DEFAULT_CAPACITY));
     let rejections = Arc::new(rejections::RejectionLedger::new());
+    // Warm the per-project persistence-policy cache so the ingest hot path never pays a store read
+    // for a known project (created-after-startup projects are added on create / first sight).
+    let redaction_policies: std::collections::HashMap<_, _> = store
+        .list_projects()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| (p.id, p.redaction))
+        .collect();
     let state = AppState {
         store,
         prices: Arc::new(RwLock::new(book)),
@@ -209,6 +217,7 @@ async fn main() -> anyhow::Result<()> {
         collective,
         seen_webhooks,
         rejections,
+        redaction_policies: Arc::new(RwLock::new(redaction_policies)),
     };
 
     println!(

@@ -88,7 +88,17 @@ pub(crate) async fn post_batch(
                 continue;
             }
         };
-        match prepare_event(&st, ev, &pid) {
+        // Per-item policy lookup is a cache hit after the first event of each project in the batch.
+        let persistence = match crate::state::redaction_policy_for(&st, &pid).await {
+            Ok(p) => p,
+            Err(e) => {
+                results.push(Some(BatchItem::Invalid {
+                    reason: format!("could not resolve project policy: {e}"),
+                }));
+                continue;
+            }
+        };
+        match prepare_event(&st, ev, &pid, persistence) {
             Ok(()) => {
                 valid_idx.push(i);
                 valid.push(ev.clone());
