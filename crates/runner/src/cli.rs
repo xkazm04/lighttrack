@@ -24,6 +24,12 @@ pub(crate) struct Cli {
     /// byte-identical output. Defaults to 4.
     #[arg(long, default_value_t = 4)]
     pub(crate) jobs: usize,
+    /// Pairwise cost guard: refuse to start a `bench --pairwise` round-robin whose game count exceeds
+    /// this before a single (paid) call goes out. Round-robin is O(targets² · cases) games at TWO
+    /// judge calls each, so cost jumps super-linearly in targets. The abort message prints the exact
+    /// value to pass to proceed. Defaults to 500 games (~1000 judge calls).
+    #[arg(long, default_value_t = 500)]
+    pub(crate) max_games: usize,
     #[command(subcommand)]
     pub(crate) cmd: Cmd,
 }

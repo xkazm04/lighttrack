@@ -86,6 +86,26 @@ pub(crate) fn run_pairwise_matrix(
     let (n_t, n_c) = (targets.len(), cases.len());
     println!("\nPAIRWISE (round-robin, order-debiased): {n_t} targets × {n_c} case(s), judge={jp}/{jm}");
 
+    // Pre-flight cost gate. The full round-robin is `round_robin_games` games and each game is TWO
+    // judge calls (both A/B orders, for debias), so the call count jumps super-linearly in targets:
+    // 4→8 targets is ~4.7× the spend for a 2× target list, and nothing downstream warns before the
+    // first call is paid for. Surface the number and refuse to start an oversized sweep.
+    let max_possible = round_robin_games(n_t, n_c);
+    let judge_calls = 2 * max_possible;
+    let dollar_hint = match price_gen_cost(prices, jp, jm, Some(1500), Some(400)) {
+        c if c > 0.0 => format!(" (~${:.2} at ~1.5k/0.4k tokens per call)", c * judge_calls as f64),
+        _ => String::new(),
+    };
+    println!("  cost pre-flight: up to {max_possible} games ⇒ ~{judge_calls} judge calls{dollar_hint}");
+    if max_possible > cli.max_games {
+        println!(
+            "  ABORT (pairwise): {max_possible} games exceeds --max-games {}. Re-run with \
+             --max-games {max_possible} to proceed, or reduce targets/cases.",
+            cli.max_games
+        );
+        return Ok(());
+    }
+
     // 1. Generate one candidate per (target, case) cell, in parallel.
     let cells: Vec<GenCell> = parallel_map(n_t * n_c, jobs, |idx| {
         let (ti, ci) = (idx / n_c, idx % n_c);
@@ -135,28 +155,48 @@ pub(crate) fn run_pairwise_matrix(
     });
 
     // 4. Fold outcomes (in game order — deterministic at any --jobs): accrue judge cost/tokens and
-    // collect the per-game winners, then tally standings + head-to-head matrix.
+    // collect the per-game winners, then tally standings + head-to-head matrix. `parallel_map` is
+    // eager, so every game has already been run and PAID FOR by the time we fold. A `?` here would
+    // discard the whole matrix — every good verdict and the generation spend — on one transient
+    // tail failure, and skip `post_run` so the cost never lands in the ledger. Instead, drop the
+    // failed game (count it), keep the rest, and always reach `post_run`.
     let (mut judge_cost, mut judge_tokens) = (0.0_f64, 0u64);
+    let mut played: Vec<(usize, usize, usize)> = Vec::with_capacity(games.len());
     let mut winners: Vec<(PairwiseWinner, bool)> = Vec::with_capacity(games.len());
-    for outcome in outcomes {
-        let o = outcome?;
-        judge_cost += o
-            .cost_usd
-            .unwrap_or_else(|| price_gen_cost(prices, jp, jm, Some(o.input_tokens), Some(o.output_tokens)));
-        judge_tokens += o.tokens;
-        winners.push((o.winner, o.position_bias));
+    let mut judge_errors = 0u32;
+    for (&g, outcome) in games.iter().zip(outcomes) {
+        match outcome {
+            Ok(o) => {
+                judge_cost += o.cost_usd.unwrap_or_else(|| {
+                    price_gen_cost(prices, jp, jm, Some(o.input_tokens), Some(o.output_tokens))
+                });
+                judge_tokens += o.tokens;
+                played.push(g);
+                winners.push((o.winner, o.position_bias));
+            }
+            Err(e) => {
+                let (ci, i, j) = g;
+                eprintln!("  judge error [case {}, {} vs {}]: {e}", ci + 1, labels[i], labels[j]);
+                judge_errors += 1;
+            }
+        }
     }
-    let (standings, beats, bias_count) = tally(n_t, &games, &winners);
+    let (standings, beats, bias_count) = tally(n_t, &played, &winners);
 
     print_ranking(&labels, &standings);
     print_matrix(&labels, &beats);
     println!(
-        "  games={}  positional_ties(bias)={bias_count}  gen_cost=${gen_cost:.5}  judge_cost=${judge_cost:.5}  total=${:.5}",
-        games.len(),
+        "  games={}  judge_errors={judge_errors}  positional_ties(bias)={bias_count}  gen_cost=${gen_cost:.5}  judge_cost=${judge_cost:.5}  total=${:.5}",
+        played.len(),
         gen_cost + judge_cost,
     );
 
-    post_run(cli, http, bench, &labels, &standings, &beats, games.len(), bias_count, gen_cost, judge_cost, gen_tokens + judge_tokens)
+    post_run(cli, http, bench, &labels, &standings, &beats, played.len(), judge_errors, bias_count, gen_cost, judge_cost, gen_tokens + judge_tokens)
+}
+
+/// Number of games in a full round-robin: one per unordered target pair, per case. `O(n_t² · n_c)`.
+fn round_robin_games(n_t: usize, n_c: usize) -> usize {
+    n_c * n_t * n_t.saturating_sub(1) / 2
 }
 
 /// Roll per-game winners (aligned with `games`) into standings + a head-to-head matrix + a count of
@@ -249,6 +289,7 @@ fn post_run(
     standings: &[Standing],
     beats: &[Vec<u32>],
     n_games: usize,
+    judge_errors: u32,
     bias_count: u32,
     gen_cost: f64,
     judge_cost: f64,
@@ -266,7 +307,8 @@ fn post_run(
         .collect();
     let report = json!({
         "mode": "pairwise", "targets": labels, "ranking": ranking,
-        "beats_matrix": beats, "n_games": n_games, "positional_bias_ties": bias_count,
+        "beats_matrix": beats, "n_games": n_games, "judge_errors": judge_errors,
+        "positional_bias_ties": bias_count,
         "gen_cost_usd": gen_cost, "judge_cost_usd": judge_cost,
     });
     // A pairwise run ranks targets against each other — there is no baseline to regress against, so
@@ -310,6 +352,19 @@ mod tests {
         assert_eq!(beats[0][1], 1);
         assert_eq!(beats[2][0], 1);
         assert_eq!(beats[1][0], 0);
+    }
+
+    #[test]
+    fn round_robin_games_is_quadratic_in_targets() {
+        // 2 targets × N cases = N games (the common "A vs B" shape).
+        assert_eq!(round_robin_games(2, 100), 100);
+        // The report's danger case: 8 targets × 100 cases = 2800 games ⇒ 5600 judge calls.
+        assert_eq!(round_robin_games(8, 100), 2800);
+        // 4→8 targets is a ~4.7× jump for a 2× target list (600 → 2800 games at 100 cases).
+        assert_eq!(round_robin_games(4, 100), 600);
+        // Degenerate inputs don't panic (saturating_sub guards n_t = 0).
+        assert_eq!(round_robin_games(0, 100), 0);
+        assert_eq!(round_robin_games(1, 100), 0);
     }
 
     #[test]
