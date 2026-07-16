@@ -1,5 +1,29 @@
 # Follow-ups — perf+feature campaign 2026-07-16
 
+## ✅ DONE (Wave 3 session): privacy & consent integrity
+
+- projects-access-control #1 (Critical) closed `039bdae` — per-project redaction (hash/drop) enforced
+  on ingest via an AppState policy cache; env PII scrub now also covers `error`/`tags`.
+- collective-api-rendering #1 (Critical) closed `fef1c68` — `collective_opt_in` consent flag (default
+  off) across core + schemas + 3 backends; digest walks only consenting projects + consent envelope.
+- collective-api-rendering #2 (High) closed `454131b` — `min_contributors` source floor (default 2),
+  applied before filters, suppression disclosed as `held_back`.
+- ⚠ Release-note flips: hubs contribute nothing until projects opt in; single-contributor hubs show an
+  empty board at the default floor (`held_back` explains).
+
+## ⚠ OPEN (wave-3 tail): collective serving + consent UX follow-ons
+
+- **collective-api-rendering.perf #1 (Critical, bounded)** — leaderboard decodes the full (capped)
+  `collective_entries` table per request; fix = filtered store list method (backend-parity family, do
+  with the other store-trait additions + conformance).
+- Consent UX follow-ons (additive): `LIGHTTRACK_COLLECTIVE_CONTRIBUTE` master switch + `contributable`
+  stamp so the CLI refuses to POST; `DELETE /v1/collective/contribution` (right-to-withdraw, ~20 lines
+  on existing `derive_contributor_id` + `delete_collective_entries`); digest scope headline in render;
+  `received_at` freshness/retention (collective-api #3 High).
+- Redaction audit trail (event-ingestion #2 remainder): stderr-only logging → a queryable provenance
+  stamp (e.g. `metadata.redaction_applied`), and surface the *effective* policy (project ∨ env floor)
+  in the projects table.
+
 ## ✅ DONE (Wave 2 session): money-truth query scans
 
 - cost-forecasting #1 (Critical) + revenue-margin-tracking #2 (High) closed in `7b11ccc` — sargable
