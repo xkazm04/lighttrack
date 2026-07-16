@@ -138,7 +138,23 @@ fn process_job(
                 &format!("/v1/jobs/{}/progress", job.id),
                 &json!({ "progress": format!("running benchmark {bid}") }),
             );
-            run_benchmark(cli, http, engine, bid, samples, gen_samples, heal, pairwise, jobs)?;
+            // Provenance passthrough: a version-triggered enqueue (prompts::maybe_enqueue) tags its
+            // job payload with the prompt + version being scored; stamp them into the run report so
+            // the promotion gate can find the run that scored THAT version.
+            let extra = {
+                let mut m = serde_json::Map::new();
+                if let Some(pid) = job.payload.get("prompt_id").filter(|v| !v.is_null()) {
+                    m.insert("prompt_id".into(), pid.clone());
+                }
+                if let Some(v) = job.payload.get("version").filter(|v| !v.is_null()) {
+                    m.insert("prompt_version".into(), v.clone());
+                }
+                (!m.is_empty()).then_some(Value::Object(m))
+            };
+            run_benchmark(
+                cli, http, engine, bid, samples, gen_samples, heal, pairwise, jobs,
+                extra.as_ref(),
+            )?;
             Ok(json!({ "benchmark_id": bid, "status": "completed" }))
         }
         other => Err(anyhow::anyhow!("unknown job type: {other}")),

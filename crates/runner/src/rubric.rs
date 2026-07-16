@@ -36,6 +36,7 @@ pub(crate) fn run_rubric_benchmark(
     samples: u32,
     heal: bool,
     jobs: usize,
+    report_extra: Option<&serde_json::Value>,
 ) -> Result<String> {
     let rubric: Rubric = get(cli, http, &format!("/v1/rubrics/{rubric_id}"))?;
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
@@ -254,6 +255,7 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
         println!("\nhealing:\n{h}");
     }
 
+    crate::bench::stamp_pins(&mut report, bench, report_extra);
     let run = json!({
         "benchmark_id": bench.id, "n_cases": judged, "mean_score": mean, "pass_rate": pass_rate,
         "cost_usd": cost, "status": status, "finished_at": now_ts(),

@@ -99,6 +99,7 @@ fn main() -> Result<()> {
         } => {
             let status = bench::run_benchmark(
                 &cli, &http, &engine, benchmark, *samples, *gen_samples, *heal, *pairwise, cli.jobs,
+                None,
             )?;
             if *gate {
                 let code = gate::gate_exit_code(&status);

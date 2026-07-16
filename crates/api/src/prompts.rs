@@ -13,7 +13,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use lighttrack_core::{new_id, Prompt, PromptVersion};
+use lighttrack_core::{new_id, BenchmarkRun, Prompt, PromptVersion};
 
 use crate::benchmarks::load_benchmark_authorized;
 use crate::error::ApiError;
@@ -265,12 +265,14 @@ pub(crate) async fn promote(
         return Err(ApiError::not_found(format!("'{name}' has no version {}", req.version)));
     }
 
-    // Regression gate: compare the linked benchmark's latest scored run against its baseline.
+    // Regression gate: compare the linked benchmark's latest scored run FOR THE VERSION BEING
+    // PROMOTED against its baseline. Previously this took the newest scored run of any version, so
+    // a green run of v3 could clear v9 for production.
     if let Some(bid) = prompt.benchmark_id.clone() {
         let bench = load_benchmark_authorized(&st, &p, &bid).await?;
         let store = st.store.clone();
         let runs = spawn_db(move || store.list_benchmark_runs(&bid)).await?;
-        let latest = runs.iter().find_map(|r| r.mean_score);
+        let latest = version_scored_mean(&runs, &prompt.id, req.version);
         if let Some(reason) = gate_promotion(latest, bench.baseline_score, req.force) {
             return Err(ApiError::conflict(reason));
         }
@@ -344,6 +346,27 @@ fn gate_promotion(latest_mean: Option<f64>, baseline: Option<f64>, force: bool) 
     }
 }
 
+/// The mean score of the most recent run that **provably scored `version` of `prompt_id`** — its
+/// report carries the `{prompt_id, prompt_version}` the version-triggered enqueue stamped through
+/// the runner. Runs are matched newest-`finished_at`-first. For benches whose runs predate the
+/// tagging (no tagged run at all), falls back to the newest scored run of any version, so legacy
+/// projects keep a working gate rather than an always-blocking one; once tagged runs exist for the
+/// version, only they count — a tagged-but-unscored set correctly reads as "no scored run yet".
+fn version_scored_mean(runs: &[BenchmarkRun], prompt_id: &str, version: u32) -> Option<f64> {
+    let mut tagged: Vec<&BenchmarkRun> = runs
+        .iter()
+        .filter(|r| {
+            r.report.get("prompt_id").and_then(Value::as_str) == Some(prompt_id)
+                && r.report.get("prompt_version").and_then(Value::as_u64) == Some(version as u64)
+        })
+        .collect();
+    if tagged.is_empty() {
+        return runs.iter().find_map(|r| r.mean_score);
+    }
+    tagged.sort_by_key(|r| r.finished_at);
+    tagged.iter().rev().find_map(|r| r.mean_score)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,6 +389,49 @@ mod tests {
         assert_eq!(next_version(&[]), 1, "first version is 1");
         // Order-independent: max + 1, not count + 1.
         assert_eq!(next_version(&[pv(2), pv(1), pv(3)]), 4);
+    }
+
+    fn run_with(report: Value, mean: Option<f64>, finished_offset_secs: i64) -> BenchmarkRun {
+        BenchmarkRun {
+            id: new_id(),
+            benchmark_id: "b".into(),
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now() + chrono::Duration::seconds(finished_offset_secs)),
+            n_cases: 1,
+            mean_score: mean,
+            pass_rate: mean,
+            cost_usd: 0.0,
+            status: "passed".into(),
+            p50_latency_ms: None,
+            p95_latency_ms: None,
+            total_tokens: None,
+            report,
+        }
+    }
+
+    #[test]
+    fn gate_reads_the_run_for_the_promoted_version_not_the_newest() {
+        let tag = |v: u32| serde_json::json!({ "prompt_id": "p1", "prompt_version": v });
+        let runs = vec![
+            // Newest run overall scored v3 GREEN — must NOT clear a v9 promotion.
+            run_with(tag(3), Some(0.95), 100),
+            // The run that actually scored v9 is older and RED.
+            run_with(tag(9), Some(0.40), 50),
+        ];
+        assert_eq!(version_scored_mean(&runs, "p1", 9), Some(0.40), "v9's own run counts");
+        assert_eq!(version_scored_mean(&runs, "p1", 3), Some(0.95));
+        // Two runs for the same version: the newest finished_at wins.
+        let runs2 = vec![run_with(tag(9), Some(0.40), 10), run_with(tag(9), Some(0.90), 20)];
+        assert_eq!(version_scored_mean(&runs2, "p1", 9), Some(0.90));
+        // Tagged runs exist but none scored → None (the gate blocks as "no scored run yet").
+        let runs3 = vec![run_with(tag(9), None, 10)];
+        assert_eq!(version_scored_mean(&runs3, "p1", 9), None);
+        // Legacy: no tagged runs at all → newest scored run of any version (old behavior preserved).
+        let legacy = vec![run_with(Value::Null, Some(0.7), 10)];
+        assert_eq!(version_scored_mean(&legacy, "p1", 9), Some(0.7));
+        // A different prompt's tag never matches.
+        let other = vec![run_with(serde_json::json!({"prompt_id":"px","prompt_version":9}), Some(0.9), 10)];
+        assert_eq!(version_scored_mean(&other, "p1", 9), Some(0.9), "falls back to legacy path");
     }
 
     #[test]

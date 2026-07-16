@@ -33,11 +33,33 @@ pub(crate) fn parse_targets(target: &Value) -> Result<Vec<BenchTarget>> {
     }
 }
 
+/// Stamp reproducibility pins into a run report: what judged (`judge_model`), against what
+/// (`rubric_id` / `dataset_ref`, when the benchmark has them), plus caller-supplied provenance —
+/// e.g. the `{prompt_id, prompt_version}` a version-triggered run was scoring, which is what makes
+/// the promotion gate version-aware. A run that pins nothing cannot be re-run as published.
+pub(crate) fn stamp_pins(report: &mut Value, bench: &Benchmark, extra: Option<&Value>) {
+    if let Value::Object(m) = report {
+        m.insert("judge_model".into(), json!(bench.judge_model));
+        if let Some(r) = &bench.rubric_id {
+            m.insert("rubric_id".into(), json!(r));
+        }
+        if let Some(d) = &bench.dataset_ref {
+            m.insert("dataset_ref".into(), json!(d));
+        }
+        if let Some(Value::Object(e)) = extra {
+            for (k, v) in e {
+                m.insert(k.clone(), v.clone());
+            }
+        }
+    }
+}
+
 /// Resolve a benchmark's cases (inline dataset, or a referenced stored dataset) and dispatch to the
 /// right mode: comparison (target matrix), rubric (per-dimension), or simple (freeform single score).
 /// Run a benchmark and return its run-level status (`passed` | `regressed` | `no_baseline`), which
 /// `--gate` maps to an exit code. Compare mode returns the aggregate across targets. `jobs` bounds
-/// concurrency across cases (or compare cells).
+/// concurrency across cases (or compare cells). `report_extra` is merged into the run report by
+/// [`stamp_pins`] (provenance, e.g. the prompt version a version-triggered run scores).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_benchmark(
     cli: &Cli,
@@ -49,6 +71,7 @@ pub(crate) fn run_benchmark(
     heal: bool,
     pairwise: bool,
     jobs: usize,
+    report_extra: Option<&Value>,
 ) -> Result<String> {
     let bench: Benchmark = get(cli, http, &format!("/v1/benchmarks/{benchmark_id}"))?;
 
@@ -72,12 +95,15 @@ pub(crate) fn run_benchmark(
     if !targets.is_empty() {
         return run_compare(
             cli, http, engine, &bench, &cases, &targets, samples, gen_samples, pairwise, jobs,
+            report_extra,
         );
     }
     if let Some(rid) = bench.rubric_id.clone() {
-        return run_rubric_benchmark(cli, http, engine, &bench, &cases, &rid, samples, heal, jobs);
+        return run_rubric_benchmark(
+            cli, http, engine, &bench, &cases, &rid, samples, heal, jobs, report_extra,
+        );
     }
-    run_simple(cli, http, engine, &bench, &cases, jobs)
+    run_simple(cli, http, engine, &bench, &cases, jobs, report_extra)
 }
 
 /// Simple mode: judge each provided output with a freeform rubric and a single overall score. Cases
@@ -89,6 +115,7 @@ fn run_simple(
     bench: &Benchmark,
     cases: &[BenchmarkCase],
     jobs: usize,
+    report_extra: Option<&Value>,
 ) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
@@ -192,6 +219,7 @@ fn run_simple(
     let mut report = json!({ "mode": "simple" });
     annotate_significance(&mut report, &summary, scalar_fallback);
     add_price_warnings(&mut report, &price_warnings);
+    stamp_pins(&mut report, bench, report_extra);
     let run = json!({
         "benchmark_id": bench.id, "n_cases": n, "mean_score": mean, "pass_rate": pass_rate,
         "cost_usd": cost, "status": status, "finished_at": now_ts(),

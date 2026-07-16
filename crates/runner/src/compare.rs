@@ -132,6 +132,7 @@ pub(crate) fn run_compare(
     gen_samples: u32,
     pairwise: bool,
     jobs: usize,
+    report_extra: Option<&Value>,
 ) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let ng = gen_samples.max(1);
@@ -278,6 +279,7 @@ pub(crate) fn run_compare(
         });
         annotate_significance(&mut report, &summary, scalar_fallback);
         add_price_warnings(&mut report, &price_warnings);
+        crate::bench::stamp_pins(&mut report, bench, report_extra);
         let run = json!({
             "benchmark_id": bench.id, "n_cases": judged, "mean_score": mean, "pass_rate": pass_rate,
             "cost_usd": gen_cost + judge_cost, "status": status, "finished_at": now_ts(),
