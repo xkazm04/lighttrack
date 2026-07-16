@@ -118,6 +118,9 @@ impl Store for FirestoreStore {
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
         scores::list_scores(&self.rest, project, limit)
     }
+    fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
+        scores::scored_event_ids(&self.rest, event_ids)
+    }
 
     fn upsert_price(&self, p: &ModelPriceRow) -> Result<()> {
         prices::upsert_price(&self.rest, p)

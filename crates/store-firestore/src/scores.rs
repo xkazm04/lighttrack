@@ -33,6 +33,22 @@ pub(crate) fn list_scores(rest: &Rest, project: Option<&str>, limit: usize) -> R
     docs.iter().map(score_from).collect()
 }
 
+/// The subset of `event_ids` that already carry at least one score. Firestore has no server-side
+/// anti-join, so we probe per id with the same single-field `EQUAL` query `list_scores` uses (a
+/// single-field index is automatic). The caller passes only one page of event ids at a time, so this
+/// stays a small, bounded number of point lookups — never a blind top-N scan of the collection.
+pub(crate) fn scored_event_ids(rest: &Rest, event_ids: &[String]) -> Result<Vec<String>> {
+    let mut scored = Vec::new();
+    for id in event_ids {
+        let filters: Vec<(&str, &str, Value)> = vec![("event_id", "EQUAL", json!(id))];
+        // limit 1: we only need existence, not the score rows.
+        if !rest.query("scores", &filters, None, Some(1))?.is_empty() {
+            scored.push(id.clone());
+        }
+    }
+    Ok(scored)
+}
+
 fn score_from(m: &Fields) -> Result<Score> {
     Ok(Score {
         id: freq(m, "id")?,

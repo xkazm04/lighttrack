@@ -192,6 +192,10 @@ pub(crate) struct EventsParams {
     name: Option<String>,
     /// Opaque keyset cursor from a prior page's `X-Next-Cursor` header.
     cursor: Option<String>,
+    /// When `1`/`true`, return only the most recent events that do not yet have a score (the online
+    /// scorer's work list). Uses a scoped anti-join, so it stays correct however large `scores` grows;
+    /// ignores the filter/cursor params (project + limit only).
+    unscored: Option<bool>,
 }
 
 /// Parse an optional RFC3339 query param into a UTC instant, 400 on malformed input.
@@ -226,6 +230,15 @@ pub(crate) async fn get_events(
     };
     let store = st.store.clone();
     let limit = q.limit.unwrap_or(50).min(1000);
+
+    // Unscored work-list mode: a scoped anti-join (project + limit only), no filter/cursor. Bare
+    // array, no next-cursor — the online scorer pages by re-asking after it has scored a batch.
+    if q.unscored == Some(true) {
+        let events =
+            spawn_db(move || store.list_unscored_events(project.as_deref(), limit)).await?;
+        return Ok(Json(events).into_response());
+    }
+
     let page =
         spawn_db(move || store.list_events_filtered(project.as_deref(), &filter, limit)).await?;
 

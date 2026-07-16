@@ -167,6 +167,32 @@ fn scores(store: &dyn Store, pid: &str) -> Result<()> {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].scored_by, "judge");
     assert_eq!(listed[0].pass, Some(true));
+
+    // Unscored anti-join (online scorer work list). Insert two events, score exactly one of them, and
+    // assert the scoped `scored_event_ids` / `list_unscored_events` see the one and only the one — the
+    // guarantee the old top-1000 client anti-join lost once a project passed 1000 scores.
+    let scored_ev = sample_event(pid, "claude-haiku-4-5", 1, 1, 0.0);
+    let unscored_ev = sample_event(pid, "claude-haiku-4-5", 1, 1, 0.0);
+    store.insert_event(&scored_ev)?;
+    store.insert_event(&unscored_ev)?;
+    let mut sc = s.clone();
+    sc.id = new_id();
+    sc.event_id = Some(scored_ev.id.clone());
+    store.insert_score(&sc)?;
+
+    let scored_set = store.scored_event_ids(&[scored_ev.id.clone(), unscored_ev.id.clone()])?;
+    assert_eq!(scored_set, vec![scored_ev.id.clone()], "only the scored event id comes back");
+    assert!(store.scored_event_ids(&[])?.is_empty(), "empty input -> empty output");
+
+    let unscored = store.list_unscored_events(Some(pid), 50)?;
+    assert!(
+        unscored.iter().any(|e| e.id == unscored_ev.id),
+        "unscored event is in the work list"
+    );
+    assert!(
+        !unscored.iter().any(|e| e.id == scored_ev.id),
+        "scored event is excluded from the work list",
+    );
     Ok(())
 }
 

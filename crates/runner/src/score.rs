@@ -4,13 +4,12 @@
 //! skips events that already have a score (idempotent / re-runnable), and with `--interval` runs
 //! as a continuous loop scoring newly-arrived events.
 
-use std::collections::HashSet;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use lighttrack_core::{LlmEvent, Score};
+use lighttrack_core::LlmEvent;
 use lighttrack_engine::{build_judge_prompt, parse_judge_spec, run_judge, EngineConfig, JudgeOutcome};
 
 use crate::cli::Cli;
@@ -56,29 +55,26 @@ fn score_once(
     limit: usize,
     jobs: usize,
 ) -> Result<usize> {
-    let mut epath = format!("/v1/events?limit={limit}");
-    let mut spath = "/v1/scores?limit=1000".to_string();
+    // Ask the server for the unscored work list directly. This replaces the old client-side anti-join
+    // that fetched the top-1000 scores and skipped events found among them — which silently re-judged
+    // events (burning paid judge calls) once a project passed 1000 scores, and transferred up to 1000
+    // full Score rows every interval tick. The server scopes the "already scored" check to exactly the
+    // returned page's event ids, so it stays correct at any scale.
+    let mut epath = format!("/v1/events?unscored=1&limit={limit}");
     if let Some(p) = project {
         epath.push_str(&format!("&project={p}"));
-        spath.push_str(&format!("&project={p}"));
     }
     let events: Vec<LlmEvent> = get(cli, http, &epath)?;
-    // Already-scored event ids → skip, so re-runs / the online loop don't re-judge.
-    let scored_ids: HashSet<String> = get::<Vec<Score>>(cli, http, &spath)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|s| s.event_id)
-        .collect();
 
     let (jp, jm) = parse_judge_spec(&engine.model);
-    // Partition first (cheap, in order): eligible events keep their (event, input, output); the rest
-    // are skipped. Only the eligible set is judged — and that judging is what we parallelize.
+    // Partition first (cheap, in order): eligible events keep their (event, input, output); events
+    // without both input and output content are skipped. Only the eligible set is judged.
     let total = events.len();
     let mut eligible: Vec<(&LlmEvent, String, String)> = Vec::new();
     let mut skipped = 0usize;
     for ev in &events {
-        match (scored_ids.contains(&ev.id), ev.input.as_ref(), ev.output.as_ref()) {
-            (false, Some(i), Some(o)) => eligible.push((ev, value_to_text(i), value_to_text(o))),
+        match (ev.input.as_ref(), ev.output.as_ref()) {
+            (Some(i), Some(o)) => eligible.push((ev, value_to_text(i), value_to_text(o))),
             _ => skipped += 1,
         }
     }

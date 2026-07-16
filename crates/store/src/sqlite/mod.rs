@@ -224,6 +224,9 @@ impl Store for SqliteStore {
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
         self.with(|c| scores::list(c, project, limit))
     }
+    fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
+        self.with(|c| scores::scored_event_ids(c, event_ids))
+    }
 
     // --- projects / api keys / limits ---
     fn create_project(&self, p: &Project) -> Result<()> {

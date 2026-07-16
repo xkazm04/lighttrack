@@ -124,6 +124,9 @@ impl Store for PgStore {
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
         self.rt.block_on(scores::list(&self.pool, project, limit))
     }
+    fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
+        self.rt.block_on(scores::scored_event_ids(&self.pool, event_ids))
+    }
 
     // --- prices ---
     fn upsert_price(&self, p: &ModelPriceRow) -> Result<()> {

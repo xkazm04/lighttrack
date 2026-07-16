@@ -443,6 +443,25 @@ pub trait Store: Send + Sync {
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>>;
     fn insert_score(&self, s: &Score) -> Result<()>;
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>>;
+    /// Of the given event ids, which already carry at least one score. Scoped to **exactly these ids**
+    /// — never a blind top-N of the `scores` table — so the online scorer's "skip already-scored"
+    /// stays correct however large the scores table grows. Required (no default): a wrong answer here
+    /// re-judges events (burning paid judge calls) or skips new ones, so every backend implements it
+    /// and the conformance suite pins it. Backed by `idx_scores_event`.
+    fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>>;
+    /// Recent events (newest first, optionally project-scoped) that do **not** yet have a score — the
+    /// online scorer's work list. The default fetches a page via [`Store::list_events`] and removes the
+    /// scored ones via [`Store::scored_event_ids`], which is correct and bounded on every backend (it
+    /// reads scores only for the page's ids, unlike the old client-side top-1000 anti-join that
+    /// silently re-judged once a project passed 1000 scores). SQL backends may override with a single
+    /// `LEFT JOIN scores ... WHERE s.id IS NULL` for one round-trip.
+    fn list_unscored_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
+        let events = self.list_events(project, limit)?;
+        let ids: Vec<String> = events.iter().map(|e| e.id.clone()).collect();
+        let scored: std::collections::HashSet<String> =
+            self.scored_event_ids(&ids)?.into_iter().collect();
+        Ok(events.into_iter().filter(|e| !scored.contains(&e.id)).collect())
+    }
 
     // --- traces: roll events sharing a trace_id into one end-to-end view ---
     // Default impls so backends that don't (yet) index by trace compile unchanged: the listing reads

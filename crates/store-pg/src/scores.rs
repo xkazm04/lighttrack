@@ -56,6 +56,21 @@ pub(crate) async fn list(pool: &PgPool, project: Option<&str>, limit: usize) -> 
     rows.iter().map(from_row).collect()
 }
 
+/// The subset of `event_ids` that already carry at least one score. `= ANY($1)` over the id array
+/// rides `idx_scores_event`; scoped to the given ids so it never scans the whole scores table.
+pub(crate) async fn scored_event_ids(pool: &PgPool, event_ids: &[String]) -> Result<Vec<String>> {
+    if event_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows =
+        sqlx::query("SELECT DISTINCT event_id FROM scores WHERE event_id = ANY($1) AND event_id IS NOT NULL")
+            .bind(event_ids)
+            .fetch_all(pool)
+            .await
+            .map_err(pgerr)?;
+    rows.iter().map(|r| r.try_get::<String, _>(0).map_err(pgerr)).collect()
+}
+
 fn from_row(row: &PgRow) -> Result<Score> {
     let created_at: String = row.try_get(10).map_err(pgerr)?;
     Ok(Score {

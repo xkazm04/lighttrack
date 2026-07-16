@@ -74,6 +74,23 @@ pub(super) fn list(conn: &Connection, project: Option<&str>, limit: usize) -> Re
     raws.into_iter().map(from_raw).collect()
 }
 
+/// The subset of `event_ids` that already carry at least one score. `event_id IN (...)` rides
+/// `idx_scores_event`; scoped to the given ids so it never full-scans the scores table.
+pub(super) fn scored_event_ids(conn: &Connection, event_ids: &[String]) -> Result<Vec<String>> {
+    if event_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = std::iter::repeat("?").take(event_ids.len()).collect::<Vec<_>>().join(",");
+    let sql = format!("SELECT DISTINCT event_id FROM scores WHERE event_id IN ({placeholders})");
+    let mut stmt = conn.prepare(&sql)?;
+    let bound: Vec<&dyn rusqlite::ToSql> =
+        event_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+    let ids = stmt
+        .query_map(bound.as_slice(), |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(ids)
+}
+
 type ScoreRaw = (
     String,
     String,

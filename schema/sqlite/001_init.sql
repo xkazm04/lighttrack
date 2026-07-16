@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS scores (
   created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_scores_project ON scores(project_id, created_at);
+-- Probe scores by the event they judged: powers the trace-scores join and the online scorer's
+-- unscored-events anti-join (WHERE event_id IN / LEFT JOIN scores). Without it both full-scan `scores`.
+CREATE INDEX IF NOT EXISTS idx_scores_event ON scores(event_id);
 
 CREATE TABLE IF NOT EXISTS benchmarks (
   id             TEXT PRIMARY KEY,
