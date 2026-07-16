@@ -54,9 +54,19 @@ pub(crate) fn cost_by_dimension(
     until: DateTime<Utc>,
 ) -> Result<Vec<CostByDimension>> {
     let field = if dim == "product" { "product_id" } else { "customer_id" };
-    let docs = rest.query("events", &project_filter(project), None, None)?;
+    // Push the `[since, until)` window into the query (fixed-width RFC3339 strings make the
+    // lexicographic range filter correct — the exact property docs/FIRESTORE.md chose them for, and
+    // the same `project_id EQUAL + ts range` shape `events::usage_since` already runs, so this rides
+    // the already-required `(project_id, ts)` composite index). Previously only `project_id` was
+    // filtered and the window was applied client-side, so every margin/simulate/trend call read the
+    // project's ENTIRE event history — billed per doc — however narrow the window.
+    let mut filters = project_filter(project);
+    filters.push(("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))));
+    filters.push(("ts", "LESS_THAN", json!(fmt_ts(until))));
+    let docs = rest.query("events", &filters, None, None)?;
     let mut agg: BTreeMap<Option<String>, (i64, f64)> = BTreeMap::new();
     for m in &docs {
+        // Belt-and-suspenders re-check of the window client-side (also skips ts-less docs).
         let ts = match fstr(m, "ts") {
             Some(s) => parse_ts(&s)?,
             None => continue,
