@@ -1,5 +1,24 @@
 # Follow-ups — perf+feature campaign 2026-07-16
 
+## ✅ DONE (Wave 5 session): ingest correctness
+
+- ingest-hardening perf #1 (Critical) closed `d445bc4` — batch = one transaction + hoisted limit rules.
+- ingest-hardening feature #1 (Critical) + #3 + perf #2 closed `1bec836` — duplicate-id = replay
+  (PK-backstop, requires client id+ts — shipped SDKs send both), batch items carry index/id/code,
+  double deep-clone killed.
+- ingest-hardening perf #3 (Medium) closed `221b847` — rejection-ledger prune amortized (60s gate).
+
+## ⚠ OPEN (wave-5 tail)
+
+- **Drop ledger / ingest health (ingest-hardening feature #2, High):** generalize `RejectionLedger`
+  to a `DropReason`-keyed ledger (LimitBreach | InvalidModel | TsSkew | UnresolvedProject |
+  DuplicateConflict | BatchTooLarge | BodyTooLarge) + `GET /v1/ingest/health` with per-bucket counts,
+  est. missed cost, and one allowlisted sample detail. The "why are my events missing?" answer;
+  self-contained DX feature.
+- **`Idempotency-Key` envelope fast path:** generalize `SeenWebhooks` → `SeenKeys<V>` caching the
+  serialized `BatchResponse` per `(project, key)`; the PK replay (shipped) stays the durable backstop.
+  Then give the Rust SDK a retry-on-5xx/timeout loop keyed per batch and stop discarding responses.
+
 ## ✅ DONE (Wave 3 session): privacy & consent integrity
 
 - projects-access-control #1 (Critical) closed `039bdae` — per-project redaction (hash/drop) enforced
