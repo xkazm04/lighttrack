@@ -581,12 +581,93 @@ async fn duplicate_event_id_returns_409() {
     let (s1, _) = ingest(&app, &key, body.clone()).await;
     assert_eq!(s1, StatusCode::OK);
 
-    // The second insert of the same id collides on the PK → a clear 409 conflict, not a 500.
+    // Same id, but no client-supplied ts: the server assigned each attempt a different ts, so this
+    // is NOT recognizable as a replay of the same logical event → a clear 409 conflict, not a 500.
+    // (Retry-safe ingest requires the client to send its own id AND ts — the shipped SDKs set both;
+    // see replayed_ingest_is_acknowledged_not_conflicted for that path.)
     let (s2, b2) = ingest(&app, &key, body).await;
     assert_eq!(s2, StatusCode::CONFLICT, "{b2}");
     assert_eq!(b2["error"]["code"], "conflict", "{b2}");
     // The row was not duplicated.
     assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn replayed_ingest_is_acknowledged_not_conflicted() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    // A full SDK-shaped event: client-generated id AND ts (what the shipped SDKs send).
+    let body = json!({
+        "id": "retry-1",
+        "ts": "2026-07-16T10:00:00Z",
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "usage": { "input": 10, "output": 5 },
+        "cost_usd": 0.25
+    });
+
+    let (s1, b1) = ingest(&app, &key, body.clone()).await;
+    assert_eq!(s1, StatusCode::OK);
+    assert!(b1.get("duplicate").is_none(), "first write is not a duplicate: {b1}");
+
+    // The retry (a timed-out POST resent verbatim): acknowledged as the original write, 200 with
+    // duplicate: true — a client can now tell "you already have this" from "malformed and gone".
+    let (s2, b2) = ingest(&app, &key, body.clone()).await;
+    assert_eq!(s2, StatusCode::OK, "a replay is an acknowledgement, not an error: {b2}");
+    assert_eq!(b2["duplicate"], true, "{b2}");
+    assert_eq!(b2["cost_usd"], 0.25, "the ORIGINAL outcome is returned");
+    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1, "nothing double-counted");
+
+    // Same id but a DIFFERENT payload: a true conflict, still refused.
+    let mut different = body;
+    different["usage"] = json!({ "input": 999, "output": 5 });
+    let (s3, b3) = ingest(&app, &key, different).await;
+    assert_eq!(s3, StatusCode::CONFLICT, "{b3}");
+    assert_eq!(b3["error"]["code"], "conflict", "{b3}");
+}
+
+#[tokio::test]
+async fn replayed_batch_is_acknowledged_per_item() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let batch = json!([
+        { "id": "b-1", "ts": "2026-07-16T10:00:00Z", "provider": "anthropic",
+          "model": "claude-haiku-4-5", "usage": { "input": 10, "output": 5 }, "cost_usd": 0.0 },
+        { "id": "b-2", "ts": "2026-07-16T10:00:01Z", "provider": "anthropic",
+          "model": "claude-haiku-4-5", "usage": { "input": 20, "output": 5 }, "cost_usd": 0.0 },
+    ]);
+    let post = |body: Value| {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/events/batch")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {key}"))
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        app.clone().oneshot(req)
+    };
+
+    let resp = post(batch.clone()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // The whole batch resent (e.g. after a response timeout): every item is acknowledged as a
+    // duplicate accept — with its index and id — and nothing is double-counted.
+    let resp = post(batch).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["accepted"], 2, "replayed items count as accepted: {v}");
+    assert_eq!(v["invalid"], 0, "{v}");
+    for (i, item) in v["results"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(item["status"], "accepted", "{item}");
+        assert_eq!(item["duplicate"], true, "{item}");
+        assert_eq!(item["index"], i, "positional correlation is explicit");
+    }
+    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2, "no double-count");
 }
 
 #[tokio::test]

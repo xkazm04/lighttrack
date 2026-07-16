@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use lighttrack_core::{LimitStatus, LlmEvent, Status};
-use lighttrack_store::{Admission, CostRow, EventFilter, UseCaseCostRow};
+use lighttrack_store::{Admission, CostRow, EventFilter, StoreError, UseCaseCostRow};
 
 use crate::auth::Principal;
 use crate::error::ApiError;
@@ -156,6 +156,29 @@ pub(crate) struct IngestResponse {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     breached: Vec<LimitStatus>,
     throttled: bool,
+    /// `true` when this request was a replay of an already-recorded event (same id, same logical
+    /// payload): the original outcome is returned and nothing is double-counted, so a client may
+    /// retry a timed-out POST safely. Omitted (false) on first-time writes.
+    #[serde(skip_serializing_if = "is_false")]
+    duplicate: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Whether a stored event and an incoming write are the same **logical** event — the replay test for
+/// a retried request. Compares the identity scalars (project, client-supplied ts, provider/model,
+/// token counts) and deliberately NOT `cost_usd` (the price book may have changed between attempts)
+/// or `input`/`output` (the redaction policy may have). A PK collision that passes this is a client
+/// retry to acknowledge; one that fails it is a true id conflict to refuse.
+pub(crate) fn same_logical_event(stored: &LlmEvent, incoming: &LlmEvent) -> bool {
+    stored.project_id == incoming.project_id
+        && stored.ts == incoming.ts
+        && stored.provider == incoming.provider
+        && stored.model == incoming.model
+        && stored.usage.input == incoming.usage.input
+        && stored.usage.output == incoming.usage.output
 }
 
 pub(crate) async fn post_event(
@@ -173,7 +196,38 @@ pub(crate) async fn post_event(
     // a cooperating client backs off. This is what makes a configured cap an actual cap, not a flag.
     let store = st.store.clone();
     let to_insert = ev.clone();
-    let admission = spawn_db(move || store.insert_event_checked(&to_insert)).await?;
+    let inserted = tokio::task::spawn_blocking(move || store.insert_event_checked(&to_insert))
+        .await
+        .map_err(|e| ApiError::internal(format!("task join error: {e}")))?;
+    let admission = match inserted {
+        Ok(a) => a,
+        // A PK collision is a RETRY until proven otherwise: a client whose POST timed out after the
+        // server committed must be able to resend and learn "you already have this, all good" —
+        // previously this was a bare 409, indistinguishable from "malformed and gone", which is why
+        // the SDK couldn't retry at all. Same logical payload → acknowledge the original write
+        // (nothing double-counted); different payload under the same id → a true conflict, still 409.
+        Err(StoreError::Conflict(_)) => {
+            let store = st.store.clone();
+            let id = ev.id.clone();
+            let stored = spawn_db(move || store.get_event(&id)).await?;
+            return match stored {
+                Some(s) if same_logical_event(&s, &ev) => Ok(Json(IngestResponse {
+                    id: ev.id,
+                    project_id: pid,
+                    cost_usd: s.cost_usd,
+                    ts: s.ts,
+                    breached: Vec::new(),
+                    throttled: false,
+                    duplicate: true,
+                })),
+                _ => Err(ApiError::conflict(format!(
+                    "event '{}' already exists with a different payload",
+                    ev.id
+                ))),
+            };
+        }
+        Err(e) => return Err(e.into()),
+    };
 
     let breached = on_admission(&st, &ev, &admission);
     if !admission.admitted {
@@ -189,6 +243,7 @@ pub(crate) async fn post_event(
         ts: ev.ts,
         breached,
         throttled,
+        duplicate: false,
     }))
 }
 
