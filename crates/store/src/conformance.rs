@@ -11,12 +11,12 @@ use serde_json::{json, Value};
 
 use lighttrack_core::{
     compute_margin, new_id, ApiKey, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem,
-    Job, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, MarginDimension, ModelPriceRow,
-    Operation, Project, Provider, Redaction, RelayOutcome, RelayTask, RevenueEvent, RevenueKind,
-    Rubric, RubricDimension, Score, Status, TokenUsage,
+    Job, LimitAction, LimitMetric, LimitRule, LimitScope, LimitWindow, LlmEvent, MarginDimension,
+    ModelPriceRow, Operation, Project, Provider, Redaction, RelayOutcome, RelayTask, RevenueEvent,
+    RevenueKind, Rubric, RubricDimension, Score, Status, TokenUsage,
 };
 
-use crate::{Result, Store};
+use crate::{EventFilter, Result, Store};
 
 /// Run the full conformance suite against `store` (assumed already schema-initialized by its
 /// constructor). Panics on a failed assertion; returns `Err` on a backend error.
@@ -25,6 +25,7 @@ pub fn run(store: &dyn Store) -> Result<()> {
     events(store, &pid)?;
     projects_keys_limits(store, &pid)?;
     scores(store, &pid)?;
+    parity_gap_methods(store)?;
     prices(store)?;
     benchmarks(store, &pid)?;
     datasets(store, &pid)?;
@@ -193,6 +194,54 @@ fn scores(store: &dyn Store, pid: &str) -> Result<()> {
         !unscored.iter().any(|e| e.id == scored_ev.id),
         "scored event is excluded from the work list",
     );
+    Ok(())
+}
+
+/// Exercises the trait's default-bearing query methods — `list_events_filtered`,
+/// `cost_summary_windowed`, `usage_since_scoped`, `usecase_costs` — which the SQLite backend overrides
+/// but Postgres/Firestore currently inherit. The inherited defaults return *plausible-but-wrong* data
+/// (an unfiltered list, all-time cost, project-wide usage, an empty rollup), so before this section
+/// the suite passed a backend that silently answered these wrong. It pins the correct behavior against
+/// SQLite and will now fail any backend that hasn't ported these queries — the drift signal the
+/// systemic parity gap was missing. Scoped to a fresh project so the window/scope math is deterministic.
+fn parity_gap_methods(store: &dyn Store) -> Result<()> {
+    let pid = new_id();
+    let now = Utc::now();
+    let mk = |model: &str, name: &str, cost: f64, ts: chrono::DateTime<Utc>| {
+        let mut e = sample_event(&pid, model, 10, 5, cost);
+        e.name = Some(name.into());
+        e.ts = ts;
+        e
+    };
+    store.insert_event(&mk("m-a", "gen", 1.0, now))?;
+    store.insert_event(&mk("m-b", "summarize", 2.0, now))?;
+    store.insert_event(&mk("m-a", "gen", 4.0, now - chrono::Duration::hours(48)))?;
+
+    // list_events_filtered: a model filter must actually filter (the default returns ALL events).
+    let filter = EventFilter { model: Some("m-b".into()), ..Default::default() };
+    let page = store.list_events_filtered(Some(&pid), &filter, 50)?;
+    assert_eq!(page.events.len(), 1, "model filter returns only m-b (default would return all 3)");
+    assert_eq!(page.events[0].model, "m-b");
+
+    // cost_summary_windowed: a 1h window excludes the 48h-old event (the default returns all-time).
+    let since = now - chrono::Duration::hours(1);
+    let windowed = store.cost_summary_windowed(Some(&pid), Some(since), None)?;
+    let total: f64 = windowed.iter().map(|c| c.cost_usd).sum();
+    assert!((total - 3.0).abs() < 1e-9, "windowed cost = a+b = 3.0, not all-time 7.0 (got {total})");
+
+    // usage_since_scoped: scoping to model m-b sees only b (the default falls back to project-wide).
+    let scoped = store.usage_since_scoped(&pid, since, &LimitScope::Model("m-b".into()))?;
+    assert_eq!(scoped.calls, 1, "scoped usage counts only m-b (default would count both)");
+    assert!((scoped.cost_usd - 2.0).abs() < 1e-9);
+
+    // usecase_costs: groups by (name, provider, model) within the window (the default returns empty).
+    let uc = store.usecase_costs(Some(&pid), Some(since))?;
+    let summarize = uc
+        .iter()
+        .find(|r| r.name.as_deref() == Some("summarize"))
+        .expect("summarize use-case group present (default returns an empty rollup)");
+    assert_eq!(summarize.calls, 1);
+    assert!((summarize.cost_usd - 2.0).abs() < 1e-9);
     Ok(())
 }
 
