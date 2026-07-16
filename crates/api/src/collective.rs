@@ -49,6 +49,12 @@ pub(crate) struct Collective {
     /// Leaderboard display floor: merged rows with fewer than this many total cases are flagged
     /// `low_confidence` (shown, not hidden).
     pub(crate) display_floor: u32,
+    /// k-anonymity floor over **sources**: merged rows backed by fewer than this many distinct
+    /// contributors are withheld from the leaderboard entirely. `min_cases` anonymizes over cases
+    /// *within* one contributor's bucket — it does nothing against a row whose numbers all belong to
+    /// a single instance, which `?provider=`/`?task_type=` can isolate in one request. Default 2 (the
+    /// weakest defensible K); a private/single-tenant hub sets 1 to opt out explicitly.
+    pub(crate) min_contributors: u32,
     /// Model-identity normalization applied to `(provider, model)` at ingest, so `gpt-4o` /
     /// `openai/gpt-4o` / `gpt-4o-2024-08-06` collapse to one leaderboard row. Empty ⇒ pass-through.
     pub(crate) aliases: ModelAliases,
@@ -71,15 +77,20 @@ impl Collective {
             .ok()
             .and_then(|v| v.trim().parse::<u32>().ok())
             .unwrap_or(DEFAULT_LOW_CONFIDENCE_CASES);
+        let min_contributors = std::env::var("LIGHTTRACK_COLLECTIVE_MIN_CONTRIBUTORS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(2)
+            .max(1);
         let aliases = load_aliases();
-        Self { contributor_id, accept, allow_anon, min_cases, display_floor, aliases }
+        Self { contributor_id, accept, allow_anon, min_cases, display_floor, min_contributors, aliases }
     }
 
     pub(crate) fn describe(&self) -> String {
         let who = if self.contributor_id == "anonymous" { "anon" } else { "id-set" };
         format!(
-            "{who}, accept={}, allow_anon={}, min_cases={}, display_floor={}",
-            self.accept, self.allow_anon, self.min_cases, self.display_floor
+            "{who}, accept={}, allow_anon={}, min_cases={}, display_floor={}, min_contributors={}",
+            self.accept, self.allow_anon, self.min_cases, self.display_floor, self.min_contributors
         )
     }
 }
@@ -259,6 +270,9 @@ pub(crate) struct LeaderboardResponse {
     n_models: usize,
     /// Number of visible leaderboard rows after filtering (one per `(provider, model, task_type)`).
     n_rows: usize,
+    /// Rows withheld for having fewer than the hub's `min_contributors` distinct sources — disclosed
+    /// rather than silently shrinking the board, so an empty/short board is legible.
+    held_back: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     task_type: Option<String>,
     rows: Vec<LeaderboardRow>,
@@ -276,6 +290,19 @@ pub(crate) async fn get_leaderboard(
     let entries = spawn_db(move || store.list_collective_entries()).await?;
 
     let mut rows = merge_leaderboard(&entries, st.collective.display_floor);
+
+    // k-anonymity over SOURCES, applied before any filter: a row backed by fewer than
+    // `min_contributors` distinct instances is not "the collective", it is that instance's private
+    // eval results on a billboard — and a `?provider=` filter must never be able to strip a row down
+    // to a lone source. (`min_cases` is a *case*-count floor within one contributor's bucket; it does
+    // not anonymize across contributors. A 5000-case single-source row is still one source.)
+    let k = st.collective.min_contributors;
+    let held_back = {
+        let before = rows.len();
+        rows.retain(|r| r.n_contributors >= k);
+        before - rows.len()
+    };
+
     if let Some(tt) = q.task_type.as_deref() {
         rows.retain(|r| r.task_type == tt);
     }
@@ -310,6 +337,7 @@ pub(crate) async fn get_leaderboard(
         contributors,
         n_models,
         n_rows: rows.len(),
+        held_back,
         task_type: q.task_type,
         rows,
     }))

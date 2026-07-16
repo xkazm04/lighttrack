@@ -26,6 +26,17 @@ use crate::state::AppState;
 /// request reaches the collective handler), with a hub configured by the given knobs. Uses a small
 /// fixed alias table so normalization is deterministic regardless of the on-disk config file.
 fn setup(accept: bool, allow_anon: bool, min_cases: u32) -> (AppState, Arc<SqliteStore>) {
+    // min_contributors=1 preserves the single-contributor behavior most of these tests exercise;
+    // the k-anonymity tests use `setup_k` with a real floor.
+    setup_k(accept, allow_anon, min_cases, 1)
+}
+
+fn setup_k(
+    accept: bool,
+    allow_anon: bool,
+    min_cases: u32,
+    min_contributors: u32,
+) -> (AppState, Arc<SqliteStore>) {
     let aliases = ModelAliases::from_json_str(
         r#"{"providers":{"azure-openai":"openai"},"models":{"gpt-4o-2024-08-06":"gpt-4o"}}"#,
     )
@@ -48,6 +59,7 @@ fn setup(accept: bool, allow_anon: bool, min_cases: u32) -> (AppState, Arc<Sqlit
             allow_anon,
             min_cases,
             display_floor: 30,
+            min_contributors,
             aliases,
         }),
         seen_webhooks: Arc::new(crate::idempotency::SeenWebhooks::new(
@@ -259,6 +271,39 @@ async fn v2_variance_is_carried_through_to_storage_and_ci() {
     assert!(row["quality_ci95"].as_f64().is_some(), "full variance coverage → CI present: {lb}");
     assert_eq!(row["p95_latency_ms"], 2000, "worst-observed p95 surfaced");
     assert_eq!(row["low_confidence"], false, "200 cases clears the floor");
+}
+
+#[tokio::test]
+async fn single_source_rows_are_withheld_below_the_contributor_floor() {
+    // Hub with a real source floor (k=2): a row backed by one contributor must never surface —
+    // however many cases it has, and no filter may resurrect it.
+    let (state, _) = setup_k(true, false, 5, 2);
+    let app = crate::build_router(state);
+    // One lone contributor benchmarks cohere; two contributors overlap on haiku.
+    ingest(&app, Some("key-solo"), digest_of("cohere", "command-r", 0.9, 5000, "openai")).await;
+    ingest(&app, Some("key-a"), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+    ingest(&app, Some("key-b"), digest_of("anthropic", "haiku", 0.84, 100, "anthropic")).await;
+
+    let (ls, lb) = leaderboard(&app).await;
+    assert_eq!(ls, StatusCode::OK);
+    let rows = lb["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "only the 2-source row is visible: {lb}");
+    assert_eq!(rows[0]["model"], "haiku");
+    assert_eq!(lb["held_back"], 1, "the withheld row is disclosed, not silently dropped");
+
+    // A provider filter must not strip the board down to the lone source.
+    let (fs, fb) = leaderboard_q(&app, "provider=cohere").await;
+    assert_eq!(fs, StatusCode::OK);
+    assert!(fb["rows"].as_array().unwrap().is_empty(), "filter cannot resurrect a 1-source row: {fb}");
+
+    // The same data on a single-tenant hub (k=1, the explicit opt-out) shows everything.
+    let (state1, _) = setup_k(true, false, 5, 1);
+    let app1 = crate::build_router(state1);
+    ingest(&app1, Some("key-solo"), digest_of("cohere", "command-r", 0.9, 5000, "openai")).await;
+    let (s1, b1) = leaderboard(&app1).await;
+    assert_eq!(s1, StatusCode::OK);
+    assert_eq!(b1["rows"].as_array().unwrap().len(), 1, "k=1 opts out of the source floor");
+    assert_eq!(b1["held_back"], 0);
 }
 
 #[tokio::test]
