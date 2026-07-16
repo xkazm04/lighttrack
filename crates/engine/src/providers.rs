@@ -87,13 +87,44 @@ pub fn generate(
     input: &str,
     schema: Option<&Value>,
 ) -> Result<GenOutcome> {
-    match generate_retrying(cfg, provider, model, system_prompt, input, schema) {
+    match generate_retrying(cfg, provider, model, system_prompt, input, schema, false) {
         Err(EngineError::BadRequest { who, status, body }) if schema.is_some() => {
             eprintln!(
                 "[judge] {who} rejected the JSON schema (HTTP {status}: {}); retrying schema-less",
                 body.chars().take(200).collect::<String>()
             );
-            generate_retrying(cfg, provider, model, system_prompt, input, None)
+            generate_retrying(cfg, provider, model, system_prompt, input, None, false)
+        }
+        other => other,
+    }
+}
+
+/// [`generate`] with **deterministic sampling requested** — the judge path. A verdict should be a
+/// measurement, not a sample: without `temperature: 0` (+ a fixed `seed` where the API takes one)
+/// the same rubric over the same candidate can flip between runs, which both undermines
+/// reproducibility ("re-run the eval, get the ranking you published") and confounds the
+/// self-consistency agreement metric (disagreement should signal a genuinely ambiguous case, not
+/// sampling noise). Best-effort per provider: OpenAI gets `temperature`+`seed`, Gemini gets
+/// `generationConfig.temperature`+`seed`; the Claude CLI exposes no sampling knobs, so that path is
+/// unchanged (documented residual). A provider that rejects either strict feature (schema or the
+/// sampling params — some reasoning models refuse `temperature`) falls back once to a plain,
+/// non-deterministic schema-less call with a loud log, so judging degrades rather than hard-fails.
+pub fn generate_deterministic(
+    cfg: &EngineConfig,
+    provider: &str,
+    model: &str,
+    system_prompt: Option<&str>,
+    input: &str,
+    schema: Option<&Value>,
+) -> Result<GenOutcome> {
+    match generate_retrying(cfg, provider, model, system_prompt, input, schema, true) {
+        Err(EngineError::BadRequest { who, status, body }) => {
+            eprintln!(
+                "[judge] {who} rejected the strict judge request (HTTP {status}: {}); retrying \
+                 schema-less and non-deterministic",
+                body.chars().take(200).collect::<String>()
+            );
+            generate_retrying(cfg, provider, model, system_prompt, input, None, false)
         }
         other => other,
     }
@@ -107,8 +138,9 @@ fn generate_retrying(
     system_prompt: Option<&str>,
     input: &str,
     schema: Option<&Value>,
+    deterministic: bool,
 ) -> Result<GenOutcome> {
-    with_retry(|| generate_once(cfg, provider, model, system_prompt, input, schema))
+    with_retry(|| generate_once(cfg, provider, model, system_prompt, input, schema, deterministic))
 }
 
 fn generate_once(
@@ -118,14 +150,19 @@ fn generate_once(
     system_prompt: Option<&str>,
     input: &str,
     schema: Option<&Value>,
+    deterministic: bool,
 ) -> Result<GenOutcome> {
     match provider {
+        // The Claude CLI has no sampling knobs to pass; the deterministic request is best-effort.
         "anthropic" => generate_anthropic(cfg, model, system_prompt, input, schema),
-        "google" => generate_gemini(model, system_prompt, input, schema),
-        "openai" => generate_openai(model, system_prompt, input, schema),
+        "google" => generate_gemini(model, system_prompt, input, schema, deterministic),
+        "openai" => generate_openai(model, system_prompt, input, schema, deterministic),
         other => Err(EngineError::Other(format!("unknown provider '{other}'"))),
     }
 }
+
+/// Fixed seed for deterministic judge calls — any constant works; what matters is that it never varies.
+const JUDGE_SEED: u64 = 42;
 
 /// Anthropic via `claude -p`, passing the schema through `--json-schema` (serialized).
 fn generate_anthropic(
@@ -173,6 +210,7 @@ fn generate_gemini(
     system_prompt: Option<&str>,
     input: &str,
     schema: Option<&Value>,
+    deterministic: bool,
 ) -> Result<GenOutcome> {
     let key = std::env::var("GEMINI_API_KEY")
         .or_else(|_| std::env::var("GOOGLE_API_KEY"))
@@ -184,11 +222,18 @@ fn generate_gemini(
     if let Some(sys) = system_prompt {
         body["system_instruction"] = serde_json::json!({ "parts": [{ "text": sys }] });
     }
+    let mut gen_config = serde_json::Map::new();
     if let Some(sc) = schema {
-        body["generationConfig"] = serde_json::json!({
-            "responseMimeType": "application/json",
-            "responseSchema": strip_schema_key(sc, "additionalProperties"),
-        });
+        gen_config.insert("responseMimeType".into(), serde_json::json!("application/json"));
+        gen_config
+            .insert("responseSchema".into(), strip_schema_key(sc, "additionalProperties"));
+    }
+    if deterministic {
+        gen_config.insert("temperature".into(), serde_json::json!(0.0));
+        gen_config.insert("seed".into(), serde_json::json!(JUDGE_SEED));
+    }
+    if !gen_config.is_empty() {
+        body["generationConfig"] = Value::Object(gen_config);
     }
 
     let started = Instant::now();
@@ -237,6 +282,7 @@ fn generate_openai(
     system_prompt: Option<&str>,
     input: &str,
     schema: Option<&Value>,
+    deterministic: bool,
 ) -> Result<GenOutcome> {
     let key = std::env::var("OPENAI_API_KEY")
         .map_err(|_| EngineError::Other("no OpenAI API key (set OPENAI_API_KEY)".into()))?;
@@ -251,6 +297,11 @@ fn generate_openai(
             "type": "json_schema",
             "json_schema": { "name": "verdict", "strict": true, "schema": sc },
         });
+    }
+    if deterministic {
+        // Some reasoning models reject `temperature`; generate_deterministic's fallback strips it.
+        body["temperature"] = serde_json::json!(0.0);
+        body["seed"] = serde_json::json!(JUDGE_SEED);
     }
 
     let started = Instant::now();

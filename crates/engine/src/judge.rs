@@ -12,7 +12,6 @@ use crate::claude;
 use crate::parse::{extract_json_object, extract_json_value, sample_parsed, Parsed};
 use crate::pool;
 use crate::prompts::{build_rubric_prompt, build_rubric_schema};
-use crate::providers::generate;
 use crate::{
     DimScore, EngineConfig, EngineError, GenOutcome, JudgeOutcome, Result, RubricOutcome, TextOutcome,
 };
@@ -36,7 +35,17 @@ struct ProviderGen<'a> {
 
 impl Generator for ProviderGen<'_> {
     fn generate(&self, _index: usize, prompt: &str) -> Result<GenOutcome> {
-        generate(self.cfg, self.provider, self.model, None, prompt, self.schema.as_ref())
+        // A verdict is a measurement: judge calls request deterministic sampling (temperature 0 +
+        // fixed seed where the provider takes one), so re-running an eval reproduces its scores and
+        // self-consistency disagreement signals ambiguity rather than sampling noise.
+        crate::providers::generate_deterministic(
+            self.cfg,
+            self.provider,
+            self.model,
+            None,
+            prompt,
+            self.schema.as_ref(),
+        )
     }
 }
 
@@ -115,7 +124,10 @@ pub fn run_judge(
 ) -> Result<JudgeOutcome> {
     let schema = judge_verdict_schema();
     let parsed = sample_parsed(
-        |_i, p| generate(cfg, provider, model, None, p, Some(&schema)),
+        // Deterministic sampling — a verdict is a measurement (see ProviderGen::generate).
+        |_i, p| {
+            crate::providers::generate_deterministic(cfg, provider, model, None, p, Some(&schema))
+        },
         0,
         prompt,
         |raw| {

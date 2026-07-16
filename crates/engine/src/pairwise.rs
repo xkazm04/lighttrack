@@ -7,7 +7,6 @@ use serde::Deserialize;
 
 use crate::parse::{extract_json_object, sample_parsed, Parsed};
 use crate::prompts::{build_pairwise_prompt, build_pairwise_schema};
-use crate::providers::generate;
 use crate::{EngineConfig, EngineError, GenOutcome, Result};
 
 /// Which answer a pairwise judgement preferred. `A`/`B` are in the *caller's* order (A = first arg).
@@ -139,7 +138,10 @@ pub fn run_pairwise(
 ) -> Result<PairwiseOutcome> {
     let schema = build_pairwise_schema();
     pairwise_via(
-        |_order, p| generate(cfg, provider, model, None, p, Some(&schema)),
+        // Deterministic sampling: an A-vs-B verdict must not flip between runs on sampling noise.
+        |_order, p| {
+            crate::providers::generate_deterministic(cfg, provider, model, None, p, Some(&schema))
+        },
         input,
         expected,
         answer_a,
