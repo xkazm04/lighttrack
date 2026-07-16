@@ -36,9 +36,21 @@
   exceeds N (re-judging, missed sweeps). Recurs in score-recording, relay dead-letter, calibration drift.
   Scope the read to the specific ids you need, or do the anti-join server-side.
 
-## Open follow-ups (from Wave 1, 2026-07-16)
-- **score-recording #1 (Critical) — DEFERRED.** Client-side anti-join with a hard 1000-score cap re-judges
-  events past 1000 scores. Correct fix spans Store trait + 3 backends + `/v1/scores` API + `idx_scores_event`
-  index — backend-parity family, do with conformance coverage. Full plan in `followups-2026-07-16.md`.
-- Waves 2–8 unstarted. See `perf-feature-2026-07-16/INDEX.md` "Suggested fix-wave split" and the 10
-  cross-cutting themes (T1–T10) — the themes, not the 179 individual findings, are where the fix leverage is.
+## Testing constraints (important)
+- **2026-07-16** — PG and Firestore conformance tests (`store-pg`/`store-firestore` `tests/conformance.rs`)
+  run ONLY against a live database via an env var; without it they **skip and report ok**. On the Windows dev
+  box there is no live PG/Firestore, so those backends are **compile-verified only** — the default `cargo test
+  --workspace` never actually exercises their queries. SQLite conformance (`store/tests/sqlite_conformance.rs`,
+  in-memory) runs the full `run()` for real every time. Plan backend-parity work accordingly: write it, but
+  flag PG/Firestore as needing live-DB verification.
+
+## Open follow-ups (updated 2026-07-16, Wave 4)
+- **DONE:** score-recording #1 (Critical) + #2 (High) closed (`a62b792`); store-trait conformance-gap #1
+  (High) closed (`bcc23dc`). See `perf-feature-2026-07-16/FIXES-WAVE-4.md`.
+- **OPEN — PG/Firestore query-method parity.** The conformance suite now encodes the contract for
+  `list_events_filtered` / `cost_summary_windowed` / `usage_since_scoped` / `usecase_costs`, which PG/Firestore
+  still inherit wrong. Implement per backend (PG `usecase_costs` also needs a `name` column). Needs live DBs.
+  Plan in `followups-2026-07-16.md`. Also: Firestore transport batch write (`commit_update` 1-element array).
+- Waves 2, 3, 5–8 unstarted. See `perf-feature-2026-07-16/INDEX.md` and the 10 themes (T1–T10) — the themes,
+  not the 179 individual findings, are where the leverage is. Note theme T2 (backend parity) is now half-done:
+  conformance covers it; the per-backend impls remain.

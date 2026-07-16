@@ -1,41 +1,46 @@
 # Follow-ups — perf+feature campaign 2026-07-16
 
-## Deferred from Wave 1: score-recording #1 (Critical) — server-side unscored-events query
+## ✅ DONE (Wave 4 session): score-recording #1 (Critical) + #2 (High)
 
-**Why deferred:** the fix is cross-cutting (Store trait + SQLite + Postgres + Firestore + `/v1/scores` API +
-schema index) and belongs to the backend-parity / query-correctness family (Wave 2/4), where it should be done
-*with* conformance coverage rather than as a rushed change at the tail of the Wave-1 governor session.
+Closed in `a62b792`. Server-side scoped anti-join: `Store::scored_event_ids` (required, all 3 backends) +
+`Store::list_unscored_events` (correct default) + `GET /v1/events?unscored=1` + runner rewrite +
+`idx_scores_event` in both schemas. SQLite conformance verifies the new methods; PG/Firestore impls are
+compile-verified only (need a live DB).
 
-**The bug** (`crates/runner/src/score.rs:59-84`): `score_once` builds its "already scored" set from a blind
-`/v1/scores?limit=1000` (the API also clamps to 1000, `api/src/scores.rs:45`) and does the anti-join
-client-side. Past 1000 stored scores, an event whose score aged out of that window is re-judged if the events
-query still returns it — the idempotency guarantee silently degrades exactly when the table is large. Each
-`--interval` tick also transfers up to 1000 full `Score` rows (incl. `reasoning` free-text) just to read
-`event_id`, and re-does it every tick even with nothing new (on Firestore: up to 1000 billed doc reads/tick,
-indefinitely).
+## ✅ DONE (Wave 4 session): store-trait conformance-gap (High)
 
-**Recommended fix (two parts):**
-1. **Index (also closes score-recording #2, High):** `CREATE INDEX IF NOT EXISTS idx_scores_event ON
-   scores(event_id);` in both `schema/sqlite/001_init.sql` and `schema/postgres/001_init.sql`. Turns
-   `list_trace_scores`' join into an index probe and backs the anti-join below.
-2. **Server-side unscored query:** add `Store::list_unscored_events(project, limit)` (NOT a default impl —
-   each backend implements it, and add it to `store/src/conformance.rs` so PG/Firestore can't silently inherit
-   a wrong answer — see the store-trait conformance-gap finding).
-   - SQLite/PG: `SELECT e.* FROM events e LEFT JOIN scores s ON s.event_id = e.id WHERE s.id IS NULL [AND
-     e.project_id=?] ORDER BY e.ts DESC LIMIT N`.
-   - Firestore (no server-side anti-join): fetch the events page, then read scores scoped to *exactly that
-     page's event ids* (`event_id IN [...]`, batched by Firestore's IN-limit) and filter locally — correct and
-     bounded, unlike the blind top-1000.
-   - Expose via `/v1/events?unscored=1` (or a dedicated endpoint); switch `score_once` to it and delete the
-     client-side `scored_ids` HashSet + the `/v1/scores?limit=1000` fetch.
+Closed in `bcc23dc`. The conformance suite now exercises `list_events_filtered`, `cost_summary_windowed`,
+`usage_since_scoped`, `usecase_costs`. SQLite passes; the suite will now correctly FAIL PG/Firestore live.
 
-**Test:** extend `store/src/conformance.rs` to insert N events, score some, and assert `list_unscored_events`
-returns exactly the unscored set (proves parity across all three backends and guards the 1000-cap regression).
+## ⚠ OPEN: implement the default-bearing query methods on Postgres + Firestore
+
+The conformance suite now encodes the correct contract, and PG/Firestore inherit *wrong* defaults for:
+`list_events_filtered` (returns unfiltered), `cost_summary_windowed` (returns all-time),
+`usage_since_scoped` (falls back to project-wide), `usecase_costs` (returns empty). They must each override
+these. **Requires a live Postgres + Firestore to verify** — cannot be done on the Windows dev box, which is
+why it was not attempted this session (writing untested query code across two backends is the exact risk the
+audit warns about).
+
+- **Postgres**: mirror the SQLite SQL (`crates/store/src/sqlite/events.rs`) with `$N` placeholders / `sqlx`.
+  `list_events_filtered` (keyset paging on `(ts,id)`), `cost_summary_windowed` (windowed GROUP BY),
+  `usage_since_scoped` (add the scope WHERE clause). **`usecase_costs` also needs a schema change**: the PG
+  `events` table has no `name` column (event-ingestion-query #1), so ingest must persist `name` and the query
+  group by it — bigger than the other three.
+- **Firestore**: REST structured queries. Windowed/scoped are range+equality filters (composite index needed);
+  `usecase_costs` groups client-side after a windowed fetch. Keyset paging on `(ts,id)` via `startAfter`.
+- **Verification**: run `cargo test -p lighttrack-store-pg` / `-firestore` with the live-DB env var set; the
+  conformance `parity_gap_methods` section is the acceptance test.
+
+## ⚠ OPEN: Firestore transport batch write (cloud-store-backends.perf #1, High)
+
+`commit_update` hard-codes a 1-element writes array, so trait-default batch methods loop one HTTP RTT per
+doc (and are non-atomic on the revenue path). Use `:commit`'s 500-write batch. Firestore-only; needs live
+verification. Not started.
 
 ## Notes for whoever resumes
 
-- Branch `vibeman/perf-feature-2026-07-16` holds Wave 1 (4 commits), off `main`, not pushed.
-- The same "1000-row cap silently breaks correctness" shape (INDEX theme T7) also appears in relay dead-letter
-  lookup and the calibration drift-window — worth sweeping together.
-- The score-recording anti-join fix pairs naturally with Wave 4's conformance-suite extension (INDEX theme T2):
-  do the conformance harness first, then the unscored-events method lands with coverage for free.
+- Branch `vibeman/perf-feature-2026-07-16` holds Wave 1 (4 commits) + Wave 4 (3 commits: a62b792, bcc23dc,
+  plus this doc), off `main`, not pushed.
+- The "1000-row cap silently breaks correctness" shape (INDEX theme T7) still appears in relay dead-letter
+  lookup and the calibration drift-window — same fix pattern as the score anti-join, worth a sweep.
+- Remaining waves: 2 (money-truth Firestore/forecast scans), 3 (privacy & consent), 5–8. See INDEX.md.
