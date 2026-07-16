@@ -1,5 +1,30 @@
 # Follow-ups — perf+feature campaign 2026-07-16
 
+## ✅ DONE (Wave 6): eval reproducibility
+
+- judge-engine #1 (High) `bb57d79` — deterministic judge sampling (temp 0 + seed).
+- prompt-registry #2 + benchmark-suites #3 `b46a92f` — version-aware promotion gate + run-report pins.
+- prompt-registry #1 (Critical) `a832674` — prompt-version attribution + `GET /v1/costs/prompts`.
+
+## ✅ DONE (Wave 7): dead-capability — API key lifecycle
+
+- projects-access-control #2 (High) `87784d5` — `list_api_keys` + `set_api_key_revoked` (3 backends,
+  conformance-pinned) + `GET/DELETE /v1/projects/:id/keys[/:kid]`. Wires `last_used_at` + `revoked`.
+
+## ⚠ OPEN — remaining theme T3 (dead capability) + operability
+
+- **Project mutation (projects-access-control #3, Med):** `PATCH /v1/projects/:id` + `update_project`;
+  the gate is *enforcing* `enabled` on ingest, which must extend the Wave-3 policy cache (enforce-or-
+  nothing — a settable-but-ignored `enabled` recreates the anti-pattern). Fold the cache to carry
+  `(enabled, redaction)` per project.
+- **FX `converted` lossy** (margin-sim #2): persist original minor amount + rate on `RevenueEvent`
+  (schema, 3 backends, live-DB verify) so a wrong conversion is correctable.
+- **`effective_date` unread / price book overwrites** (model-pricing #H2): effective-dated pricing.
+- **`Customer`/`BillingProduct` dead structs** (revenue-margin #1): the "Phase 2 sync" — product call.
+- **calibration `bias`/`trusted` unconsumed** (judge-engine): wire trust into the gate.
+- **agent `retry_after_secs` + `paused_until` loop** (device-agent #1): rate-limit backoff, own session.
+- Operability: store-exercising `/health`, `/metrics`, graceful shutdown (platform-core feature).
+
 ## ✅ DONE (Wave 5 session): ingest correctness
 
 - ingest-hardening perf #1 (Critical) closed `d445bc4` — batch = one transaction + hoisted limit rules.
