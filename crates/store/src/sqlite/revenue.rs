@@ -65,15 +65,18 @@ pub(super) fn list(
     since: DateTime<Utc>,
     until: DateTime<Utc>,
 ) -> Result<Vec<RevenueEvent>> {
-    let sql = "SELECT id, project_id, source, external_id, customer_id, product_id, amount_usd, \
-               currency, kind, period_start, period_end, ts \
-               FROM revenue_events \
-               WHERE (?1 IS NULL OR project_id = ?1) AND ( \
-                   (period_start IS NOT NULL AND period_end IS NOT NULL \
-                    AND period_start < ?3 AND period_end > ?2) \
-                OR ((period_start IS NULL OR period_end IS NULL) AND ts >= ?2 AND ts < ?3) \
-               ) ORDER BY ts DESC";
-    let mut stmt = conn.prepare(sql)?;
+    let sql = format!(
+        "SELECT id, project_id, source, external_id, customer_id, product_id, amount_usd, \
+         currency, kind, period_start, period_end, ts \
+         FROM revenue_events \
+         WHERE {proj} AND ( \
+             (period_start IS NOT NULL AND period_end IS NOT NULL \
+              AND period_start < ?3 AND period_end > ?2) \
+          OR ((period_start IS NULL OR period_end IS NULL) AND ts >= ?2 AND ts < ?3) \
+         ) ORDER BY ts DESC",
+        proj = super::project_pred(project),
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
         .query_map(params![project, fmt_ts(since), fmt_ts(until)], map_raw)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -97,8 +100,9 @@ pub(super) fn cost_by_dimension(
         "SELECT json_extract(metadata, '{path}') AS k, COUNT(*) AS calls, \
          COALESCE(SUM(cost_usd),0.0) AS cost \
          FROM events \
-         WHERE (?1 IS NULL OR project_id = ?1) AND ts >= ?2 AND ts < ?3 \
-         GROUP BY k"
+         WHERE {proj} AND ts >= ?2 AND ts < ?3 \
+         GROUP BY k",
+        proj = super::project_pred(project),
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
@@ -131,8 +135,9 @@ pub(super) fn tokens_by_dimension(
         "SELECT json_extract(metadata, '{path}') AS k, \
          COALESCE(SUM(input_tokens + output_tokens),0) AS toks \
          FROM events \
-         WHERE (?1 IS NULL OR project_id = ?1) AND ts >= ?2 AND ts < ?3 \
-         GROUP BY k"
+         WHERE {proj} AND ts >= ?2 AND ts < ?3 \
+         GROUP BY k",
+        proj = super::project_pred(project),
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
@@ -155,14 +160,17 @@ pub(super) fn customer_cost_by_model(
     since: DateTime<Utc>,
     until: DateTime<Utc>,
 ) -> Result<Vec<CustomerCostRow>> {
-    let sql = "SELECT provider || '/' || model AS k, COUNT(*) AS calls, \
-               COALESCE(SUM(cost_usd),0.0) AS cost \
-               FROM events \
-               WHERE (?1 IS NULL OR project_id = ?1) \
-                 AND json_extract(metadata, '$.customer_id') = ?2 \
-                 AND ts >= ?3 AND ts < ?4 \
-               GROUP BY k ORDER BY cost DESC, k ASC";
-    customer_cost(conn, sql, project, customer, since, until)
+    let sql = format!(
+        "SELECT provider || '/' || model AS k, COUNT(*) AS calls, \
+         COALESCE(SUM(cost_usd),0.0) AS cost \
+         FROM events \
+         WHERE {proj} \
+           AND json_extract(metadata, '$.customer_id') = ?2 \
+           AND ts >= ?3 AND ts < ?4 \
+         GROUP BY k ORDER BY cost DESC, k ASC",
+        proj = super::project_pred(project),
+    );
+    customer_cost(conn, &sql, project, customer, since, until)
 }
 
 /// One customer's LLM cost grouped by use-case `name` (null → `(unnamed)`), over `[since, until)`.
@@ -173,14 +181,17 @@ pub(super) fn customer_cost_by_name(
     since: DateTime<Utc>,
     until: DateTime<Utc>,
 ) -> Result<Vec<CustomerCostRow>> {
-    let sql = "SELECT COALESCE(name, '(unnamed)') AS k, COUNT(*) AS calls, \
-               COALESCE(SUM(cost_usd),0.0) AS cost \
-               FROM events \
-               WHERE (?1 IS NULL OR project_id = ?1) \
-                 AND json_extract(metadata, '$.customer_id') = ?2 \
-                 AND ts >= ?3 AND ts < ?4 \
-               GROUP BY k ORDER BY cost DESC, k ASC";
-    customer_cost(conn, sql, project, customer, since, until)
+    let sql = format!(
+        "SELECT COALESCE(name, '(unnamed)') AS k, COUNT(*) AS calls, \
+         COALESCE(SUM(cost_usd),0.0) AS cost \
+         FROM events \
+         WHERE {proj} \
+           AND json_extract(metadata, '$.customer_id') = ?2 \
+           AND ts >= ?3 AND ts < ?4 \
+         GROUP BY k ORDER BY cost DESC, k ASC",
+        proj = super::project_pred(project),
+    );
+    customer_cost(conn, &sql, project, customer, since, until)
 }
 
 fn customer_cost(
@@ -275,6 +286,51 @@ mod tests {
             "ts": ts, "cost_usd": cost, "metadata": { "customer_id": customer }
         }))
         .unwrap()
+    }
+
+    /// The joined `EXPLAIN QUERY PLAN` details for `sql` (params unbound — the plan shape doesn't
+    /// depend on the bound values, only on the predicate form).
+    fn plan(c: &Connection, sql: &str) -> String {
+        let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        // rusqlite insists every placeholder is bound; the values don't shape the plan.
+        let rows = stmt
+            .query_map(params!["p1", "2026-01-01T00:00:00Z", "2027-01-01T00:00:00Z"], |r| {
+                r.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        rows.join(" | ")
+    }
+
+    #[test]
+    fn money_path_queries_ride_the_project_ts_index() {
+        let c = conn();
+        // The sargable form (what cost_by_dimension/tokens_by_dimension/daily_cost_by_dimension now
+        // build for a concrete project) seeks idx_events_project_ts…
+        let fixed = format!(
+            "SELECT json_extract(metadata,'$.customer_id') AS k, COUNT(*), \
+             COALESCE(SUM(cost_usd),0.0) \
+             FROM events WHERE {} AND ts >= ?2 AND ts < ?3 GROUP BY k",
+            super::super::project_pred(Some("p1")),
+        );
+        let p = plan(&c, &fixed);
+        assert!(
+            p.contains("idx_events_project_ts"),
+            "sargable project predicate must ride the (project_id, ts) index; plan: {p}"
+        );
+
+        // …while the old `(?1 IS NULL OR project_id = ?1)` form cannot use the index even when a
+        // project IS given: the OR with a non-column condition forces a full scan of events.
+        let old = "SELECT json_extract(metadata,'$.customer_id') AS k, COUNT(*), \
+                   COALESCE(SUM(cost_usd),0.0) \
+                   FROM events WHERE (?1 IS NULL OR project_id = ?1) AND ts >= ?2 AND ts < ?3 \
+                   GROUP BY k";
+        let p_old = plan(&c, old);
+        assert!(
+            !p_old.contains("idx_events_project_ts"),
+            "the OR form was expected to full-scan (that is the bug this pins); plan: {p_old}"
+        );
     }
 
     #[test]

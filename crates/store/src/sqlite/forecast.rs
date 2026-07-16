@@ -53,8 +53,9 @@ pub(super) fn daily_cost_by_dimension(
     let sql = format!(
         "SELECT substr(ts,1,10) AS day, json_extract(metadata, '{path}') AS k, \
          COALESCE(SUM(cost_usd),0.0) AS cost, COUNT(*) AS calls \
-         FROM events WHERE (?1 IS NULL OR project_id = ?1) AND ts >= ?2 AND ts < ?3 \
-         GROUP BY day, k ORDER BY day ASC"
+         FROM events WHERE {proj} AND ts >= ?2 AND ts < ?3 \
+         GROUP BY day, k ORDER BY day ASC",
+        proj = super::project_pred(project),
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt

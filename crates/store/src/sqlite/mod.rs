@@ -44,6 +44,22 @@ use crate::{
 
 const SCHEMA: &str = include_str!("../../../../schema/sqlite/001_init.sql");
 
+/// A **sargable** project predicate for `?1`-bound project queries. When a project is given this is an
+/// index-seekable equality (`project_id = ?1`), so a `WHERE project_pred(..) AND ts >= ?2 AND ts < ?3`
+/// rides `idx_events_project_ts`; when it is absent it is a constant TRUE (the all-projects path is
+/// inherently a scan). This replaces the `(?1 IS NULL OR project_id = ?1)` form, which the SQLite
+/// planner cannot use the index for **even when a project IS given** — the `OR` with a non-column
+/// condition forces a full table scan of `events` (across all projects and all time) under the global
+/// connection mutex on every windowed cost/usage/forecast read. The `?1` binding is unchanged in both
+/// arms, so callers bind exactly as before.
+pub(super) fn project_pred(project: Option<&str>) -> &'static str {
+    if project.is_some() {
+        "project_id = ?1"
+    } else {
+        "?1 IS NULL"
+    }
+}
+
 /// SQLite store. A single connection guarded by a mutex — fine for our throughput (≤1k calls/hr).
 pub struct SqliteStore {
     conn: Mutex<Connection>,
