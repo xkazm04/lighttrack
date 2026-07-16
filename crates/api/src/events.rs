@@ -342,6 +342,28 @@ pub(crate) async fn get_costs(
     Ok(Json(rows))
 }
 
+/// Cost grouped by prompt tag — the analytics half of prompt-version attribution. Events stamped
+/// with `metadata.prompt = "<name>@v<version>"` (the `tag` that `GET .../prompts/:name` hands every
+/// client) roll up here, so "did v4 cost less than v3 in production?" is one request. Untagged
+/// traffic groups under a `null` key. Window defaults to the last 30 days.
+pub(crate) async fn get_prompt_costs(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<CostsParams>,
+) -> Result<Json<Vec<lighttrack_core::CostByDimension>>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    let project = resolve_read_project(&p, q.project.as_deref())?;
+    let until = parse_opt_ts("until", q.until.as_deref())?.unwrap_or_else(Utc::now);
+    let since =
+        parse_opt_ts("since", q.since.as_deref())?.unwrap_or(until - chrono::Duration::days(30));
+    let store = st.store.clone();
+    let mut rows =
+        spawn_db(move || store.cost_by_dimension(project.as_deref(), "prompt", since, until))
+            .await?;
+    rows.sort_by(|a, b| b.cost_usd.total_cmp(&a.cost_usd));
+    Ok(Json(rows))
+}
+
 #[derive(Deserialize)]
 pub(crate) struct UsecasesParams {
     project: Option<String>,

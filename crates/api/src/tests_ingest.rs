@@ -593,6 +593,63 @@ async fn duplicate_event_id_returns_409() {
 }
 
 #[tokio::test]
+async fn prompt_tagged_traffic_rolls_up_per_version() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    // Traffic stamped with the metadata.prompt convention: two calls on v3, one on v4, one untagged.
+    let ev = |id: &str, cost: f64, tag: Option<&str>| {
+        let mut e = json!({
+            "id": id, "provider": "anthropic", "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 }, "cost_usd": cost,
+        });
+        if let Some(t) = tag {
+            e["metadata"] = json!({ "prompt": t });
+        }
+        e
+    };
+    for (id, cost, tag) in [
+        ("e1", 0.30, Some("summarize@v3")),
+        ("e2", 0.50, Some("summarize@v3")),
+        ("e3", 0.20, Some("summarize@v4")),
+        ("e4", 0.10, None),
+    ] {
+        let (s, b) = ingest(&app, &key, ev(id, cost, tag)).await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+    }
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/costs/prompts?project=proj-a")
+        .header("authorization", format!("Bearer {key}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let rows: Value = serde_json::from_slice(&bytes).unwrap();
+    let rows = rows.as_array().unwrap();
+
+    let find = |key: Option<&str>| {
+        rows.iter()
+            .find(|r| r["key"].as_str() == key)
+            .unwrap_or_else(|| panic!("row for {key:?} in {rows:?}"))
+    };
+    // "Did v4 cost less than v3 in production?" — one request, answered.
+    let v3 = find(Some("summarize@v3"));
+    assert_eq!(v3["calls"], 2);
+    assert!((v3["cost_usd"].as_f64().unwrap() - 0.80).abs() < 1e-9);
+    let v4 = find(Some("summarize@v4"));
+    assert_eq!(v4["calls"], 1);
+    assert!((v4["cost_usd"].as_f64().unwrap() - 0.20).abs() < 1e-9);
+    // Untagged traffic is disclosed under the null key, not silently dropped.
+    assert_eq!(find(None)["calls"], 1);
+    // Sorted by cost desc: v3 ($0.80) first.
+    assert_eq!(rows[0]["key"], "summarize@v3");
+}
+
+#[tokio::test]
 async fn replayed_ingest_is_acknowledged_not_conflicted() {
     let (state, store) = setup(Redactor::off());
     let key = make_key(&store, "proj-a");

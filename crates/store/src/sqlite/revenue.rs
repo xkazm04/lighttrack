@@ -94,6 +94,7 @@ pub(super) fn cost_by_dimension(
 ) -> Result<Vec<CostByDimension>> {
     let path = match dim {
         "product" => "$.product_id",
+        "prompt" => "$.prompt",
         _ => "$.customer_id",
     };
     let sql = format!(
@@ -129,6 +130,7 @@ pub(super) fn tokens_by_dimension(
 ) -> Result<Vec<TokensByDimension>> {
     let path = match dim {
         "product" => "$.product_id",
+        "prompt" => "$.prompt",
         _ => "$.customer_id",
     };
     let sql = format!(

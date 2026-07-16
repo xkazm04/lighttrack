@@ -53,7 +53,11 @@ pub(crate) fn cost_by_dimension(
     since: DateTime<Utc>,
     until: DateTime<Utc>,
 ) -> Result<Vec<CostByDimension>> {
-    let field = if dim == "product" { "product_id" } else { "customer_id" };
+    let field = match dim {
+        "product" => "product_id",
+        "prompt" => "prompt",
+        _ => "customer_id",
+    };
     // Push the `[since, until)` window into the query (fixed-width RFC3339 strings make the
     // lexicographic range filter correct — the exact property docs/FIRESTORE.md chose them for, and
     // the same `project_id EQUAL + ts range` shape `events::usage_since` already runs, so this rides

@@ -48,6 +48,7 @@ pub(super) fn daily_cost_by_dimension(
 ) -> Result<Vec<DailyDimCost>> {
     let path = match dim {
         "product" => "$.product_id",
+        "prompt" => "$.prompt",
         _ => "$.customer_id",
     };
     let sql = format!(

@@ -178,10 +178,18 @@ pub(crate) struct FetchParams {
 
 #[derive(Serialize)]
 pub(crate) struct ResolvedPrompt {
+    /// The prompt's stable id — returned so a client can attribute the traffic this resolution
+    /// produces back to the registry entry.
+    id: String,
     name: String,
     version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
+    /// Ready-to-stamp attribution tag, `"<name>@v<version>"`. **The convention:** put this on every
+    /// event produced with this prompt as `metadata.prompt` (exactly like `metadata.customer_id`),
+    /// and `GET /v1/costs/prompts` answers "did v4 cost less than v3 in production?" — without it,
+    /// served versions are never attributed to the traffic they produce.
+    tag: String,
     content: String,
     #[serde(skip_serializing_if = "Value::is_null")]
     config: Value,
@@ -228,6 +236,8 @@ pub(crate) async fn get_prompt(
         .await?
         .ok_or_else(|| ApiError::not_found(format!("'{name}' has no version {version}")))?;
     Ok(Json(ResolvedPrompt {
+        id: prompt.id,
+        tag: format!("{}@v{}", prompt.name, pv.version),
         name: prompt.name,
         version: pv.version,
         label,

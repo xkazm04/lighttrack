@@ -254,6 +254,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/traces/:id", get(traces::get_trace))
         .route("/v1/traces/:id/score", post(traces::score_trace))
         .route("/v1/costs", get(events::get_costs))
+        .route("/v1/costs/prompts", get(events::get_prompt_costs))
         .route("/v1/usecases", get(events::get_usecases))
         .route("/v1/scores", post(scores::post_score).get(scores::get_scores))
         .route("/v1/prices", get(prices::get_prices))
