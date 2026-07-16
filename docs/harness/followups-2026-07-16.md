@@ -1,5 +1,25 @@
 # Follow-ups — perf+feature campaign 2026-07-16
 
+## ✅ DONE (Wave 2 session): money-truth query scans
+
+- cost-forecasting #1 (Critical) + revenue-margin-tracking #2 (High) closed in `7b11ccc` — sargable
+  `project_pred()` across all six SQLite money-path queries, pinned by an EXPLAIN QUERY PLAN test.
+- margin-simulation-fx #1 (Critical, Firestore) closed in `c2d2fd3` — window pushed into
+  `cost_by_dimension`'s query (mirrors `usage_since`'s existing shape; rides the already-required
+  `(project_id, ts)` composite index). **Compile-verified; verify live via the emulator.**
+- event-ingestion-query #1 (Firestore per-ingest aggregation) **REFRAMED, not fixed**: documented
+  design tradeoff in `docs/FIRESTORE.md` (client-side aggregation fine at ≤1k calls/hr; at-scale
+  mitigation = rollup counter docs / EventSink). Revisit only when target load grows; follow the doc's
+  own mitigation plan, not ad-hoc `runAggregationQuery` bolt-ons.
+
+## ⚠ OPEN: UsageCache read-path wiring (budget-limits #1, High — theme T4)
+
+`/v1/limits/status` (`evaluate_project_limits`) recomputes full rolling-window SUM/COUNT under the
+global SQLite mutex on every poll, ignoring the incremental `UsageCache` that only
+`insert_event_checked` maintains. Wiring reads into the cache needs a cache-authority decision (plain
+`insert_event` bypasses it → staleness). Own focused session; touches `sqlite/{usage_cache,events}.rs`
++ `store/src/lib.rs` read path.
+
 ## ✅ DONE (Wave 4 session): score-recording #1 (Critical) + #2 (High)
 
 Closed in `a62b792`. Server-side scoped anti-join: `Store::scored_event_ids` (required, all 3 backends) +
