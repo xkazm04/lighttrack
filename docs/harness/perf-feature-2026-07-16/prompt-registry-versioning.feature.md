@@ -1,0 +1,51 @@
+# Feature Scout — Prompt Registry & Versioning
+
+> Total: 3
+> Critical: 1 | High: 2 | Medium: 0 | Low: 0
+
+## 1. Served prompt versions are never attributed to the traffic they produce
+
+- **Severity**: Critical
+- **Category**: integration
+- **File**: `crates/api/src/prompts.rs:179-238` (`ResolvedPrompt` / `get_prompt`), `crates/core/src/prompt.rs:32-51` (`PromptVersion`)
+- **Scenario**: An operator promotes `support-reply` from v3 to v4 to shorten the system prompt. A week later they ask the question LightTrack exists to answer: "did v4 actually cost less per call and score better than v3 *in production*?" Nothing in the product can answer it. The registry knows it served v4; the event pipeline records cost and the judge records scores — but no record ties the two. The only quality evidence available is the synthetic benchmark dataset, not real traffic.
+- **Root cause**: `get_prompt` resolves a version and returns `ResolvedPrompt { name, version, label, content, config, note }` (`prompts.rs:230-237`) — the resolution is computed and then thrown away. The caller receives no attribution token it can echo back on ingest, and `LlmEvent` (`crates/core/src/event.rs:114-167`) has no prompt/version linkage: it carries `name`, `tags`, `metadata`, but nothing the registry populates. `Score` (`crates/core/src/score.rs:38-62`) anchors only to `event_id`. So the join `prompt version → events → cost/score` has no key at any hop.
+- **Impact**: This is the flagship claim of a versioned registry sitting next to a cost tracker and a judge. Closing it turns LightTrack from "we store prompts" into "we tell you which prompt version is winning on real traffic" — per-version cost/call, p95 latency, mean judge score, error rate. It is also the natural feedback loop for the existing promotion gate: today the gate trusts a synthetic dataset; tomorrow it can consult production.
+- **Fix sketch**:
+  1. `ResolvedPrompt` gains `prompt_id: String` and keeps `version` — together they are the attribution key the SDK caches at fetch time.
+  2. Follow the established metadata convention rather than adding columns: `event.rs` already reads `metadata.customer_id` / `metadata.product_id` via `LlmEvent::customer_id()` / `product_id()` (`event.rs:183-190`), explicitly "so it stays backward-compatible across every store backend". Add `LlmEvent::prompt_ref() -> Option<(&str, u32)>` reading `metadata.prompt_id` + `metadata.prompt_version`. Zero schema change in `crates/store/src/sqlite/prompts.rs` or `crates/store-firestore/src/prompts.rs`.
+  3. SDK: the `track(...)` call that already accepts `name=` stamps the cached `prompt_id`/`prompt_version` into `metadata` automatically after a registry fetch.
+  4. New read endpoint `GET /v1/projects/:id/prompts/:name/stats` → per-version rows `{version, label, n_events, total_cost_usd, mean_cost_per_call, p95_latency_ms, mean_score, n_scored}`, built by scanning the project's events for a matching `prompt_ref` and joining scores on `event_id`.
+  5. `crates/render/src/prompts.rs` gains a `stats(&Value)` table renderer (v / label / calls / $/call / p95 / score) — the module has exactly the `Table` + `short_ts` helpers for it; and an MCP read tool `prompt_stats` alongside `list_prompts`/`get_prompt`.
+- **Trade-offs**: Scanning events per version is a full-range query; needs the same time-window + limit params the other rollups use, and benefits from an index on the metadata key in SQLite (a generated column) — start unindexed and window-bounded. The metadata approach means attribution is best-effort (an SDK that doesn't stamp yields `n_events: 0`), which must be rendered honestly as "no attributed traffic" rather than zero cost.
+
+## 2. The promotion gate consults whichever benchmark run is newest — not the run for the version being promoted
+
+- **Severity**: High
+- **Category**: half-implemented
+- **File**: `crates/api/src/prompts.rs:268-277` (gate), `crates/api/src/prompts.rs:296-315` (`maybe_enqueue`)
+- **Scenario**: An operator cuts v4, which auto-enqueues the linked benchmark. While it is still running, or after a scheduled recurrence re-runs the benchmark (`benchmarks.rs:44-48` — `lt-runner serve` re-runs on an interval), they promote v3 as a rollback. The gate reads the latest run — which evaluated v4 — and either blocks the rollback on v4's regression or waves it through on v4's good score. The verdict is about the wrong version. Equally, `list_versions` can never show "v3 scored 0.91, v4 scored 0.72", the single most useful view a versioned registry next to a judge could offer.
+- **Root cause**: `maybe_enqueue` already tags the job payload with the linkage — `serde_json::json!({ "prompt_id": prompt.id, "version": version })` (`prompts.rs:308`) — but that linkage dies in the job queue. `BenchmarkRun` (`crates/core/src/score.rs:124-154`) has no prompt/version field, so the run written back by the runner is anonymous. The gate then does `let latest = runs.iter().find_map(|r| r.mean_score)` (`prompts.rs:273`): first run in the newest-first list that has *any* mean, with no filter on the version it scored, and no filter on `finished_at` (unlike `decide_gate` in `benchmarks.rs:231`, which correctly requires a finished run). The infrastructure to do this right is one field away.
+- **Impact**: Makes the headline promise ("promotion is a gated, measurable quality step" — `prompts.rs:3-5`) actually true per-version, and unlocks the version scorecard: score + cost per version in `list_versions`, rendered as a history table. This is the comparison the registry exists to enable.
+- **Fix sketch**:
+  1. The runner echoes the job payload it already receives into the run's free-form `report` field: `report.prompt_id`, `report.prompt_version`. `report: Value` (`score.rs:152-153`) is exactly the no-schema-change carrier — the same trick `benchmarks.rs` uses with `RECURRENCE_KEY` inside `target`.
+  2. Gate: filter to the run matching `req.version` and `finished_at.is_some()` before extracting `mean_score`. Extend the pure `gate_promotion` helper (already well-tested, `prompts.rs:330-345`) with a third state: no run *for this version* → block with "version N has not been benchmarked yet" (distinct from today's "no scored run yet").
+  3. `list_versions` response becomes `{version, note, created_at, mean_score, run_status, run_cost_usd}` by joining `list_benchmark_runs` on the version tag.
+  4. `render/prompts.rs` gains a `versions(&Value)` table: `v | Score | Δ vs prev | Cost | Note | Cut`. The `Δ vs prev` column is the whole feature in one glance.
+- **Trade-offs**: Runs predating this carry no version tag; the gate must fall back to today's newest-run behavior for untagged runs rather than hard-blocking every promotion in an existing install — mirroring the legacy-status fallback already in `decide_gate` (`benchmarks.rs:238-243`). Reading `report` for a semantic key is stringly-typed; a `prompt_version: Option<u32>` column on `BenchmarkRun` is the cleaner end state if a schema change is acceptable.
+
+## 3. An agent can promote a version but cannot discover which versions exist
+
+- **Severity**: High
+- **Category**: workflow
+- **File**: `crates/mcp/src/prompts_tools.rs:25-37` (`read_tools`), `crates/mcp/src/prompts_tools.rs:81-90` (`promote_prompt` schema)
+- **Scenario**: The stated goal is "the agent manages prompts, gated by benchmarks" (`prompts_tools.rs:5`). An agent is asked to roll `support-reply` back to the last good version. `promote_prompt` requires `version` as an integer (`prompts_tools.rs:87`) — and the agent has no tool that lists version numbers. `list_prompts` returns registry entries with label pointers; `get_prompt` returns exactly one resolved version's text. The agent's only options are to guess an integer, or to walk `get_prompt?version=1,2,3…` until it 404s. The API endpoint the agent needs exists and is already authorized (`GET /v1/projects/:pid/prompts/:name/versions`, `prompts.rs:160-171`) — it is simply not exposed as a tool, and `render/prompts.rs` has no renderer for it either (only `list` and `resolved`).
+- **Root cause**: The MCP surface is asymmetric. Writes are complete (`create_prompt_version`, `promote_prompt` — `prompts_tools.rs:70-90`), but reads stop at two tools (`prompts_tools.rs:26-36`) while the API exposes three. The version-history read — the one a promote/rollback decision depends on — is the missing one. `create_prompt_version` shows the module is willing to do real work to smooth an agent workflow (it 404-falls-back to create-on-first-use, `prompts_tools.rs:169-188`); the read side got no equivalent care.
+- **Impact**: Completes the agent's read→decide→write loop for the registry's core workflow. Combined with finding #2's per-version scores, one `list_prompt_versions` call gives an agent everything it needs to reason "v4 regressed, roll production back to v3" and then act — which is the demo this whole context is built for. Also gives the human CLI a `versions` view that doesn't exist today.
+- **Fix sketch**:
+  1. Add to `read_tools()`: `rtool("list_prompt_versions", "List a registry prompt's versions newest-first with their change notes and (once linked) benchmark scores — call this before promote_prompt to choose a version.", json!({"type":"object","properties":{"project":{"type":"string"},"name":{"type":"string"}},"required":["project","name"]}))`.
+  2. Route it in `read_dispatch` following the `get_prompt` arm's shape (`prompts_tools.rs:101-104`): `c.get(&format!("/v1/projects/{p}/prompts/{n}/versions"))`.
+  3. Register an output schema in `crates/mcp/src/schemas.rs` — `rtool` picks it up automatically (`prompts_tools.rs:210-215`).
+  4. Add `versions(&Value)` to `render/prompts.rs` (shared with finding #2's table; if #2 lands first this is free).
+  5. Point `promote_prompt`'s `version` description at it: "the version number the label should point at — enumerate with list_prompt_versions".
+- **Trade-offs**: None material — read-only, ungated, reuses an existing authorized endpoint. `list_prompt_versions` returns full `content` per version (`prompts.rs:169`), which is token-heavy for a prompt with many versions; the tool should either project away `content` or the API should accept `?fields=meta`. Worth doing at the same time.

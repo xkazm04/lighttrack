@@ -1,0 +1,34 @@
+# Feature Scout — Revenue & Margin Tracking
+
+> Total: 3
+> Critical: 0 | High: 2 | Medium: 1 | Low: 0
+
+## 1. `Customer` / `BillingProduct` are inert entities — margin views show opaque ids, never names
+- **Severity**: High
+- **Category**: half-implemented
+- **File**: `crates/core/src/customer.rs:1-49` (consumed by `crates/render/src/margin.rs:11-37,178-199`, `crates/api/src/revenue.rs:96-153,378-436`)
+- **Scenario**: An operator opens the "which customers am I losing money on?" table. The money-loser row reads `🔴 cus_9x2aQ7bLpZ  −$43.50` — a raw Stripe id (or an app userId). They cannot tell *who* it is without pasting the id into Stripe. The whole differentiating view is unreadable at a glance.
+- **Root cause**: `Customer` (with `name`/`email`) and `BillingProduct` (with `name`) are fully modeled and re-exported (`core/src/lib.rs:34`), and the doc comment promises "Stripe/Polar sync (Phase 2) upserts these for names/emails" — but grep confirms neither struct is *ever constructed, persisted, or read* anywhere outside its own definition. There is no `insert_customer`/`list_customers` on the `Store` trait, and no margin query joins them. `dim_key` (`margin.rs:113-119`) and every render path key off the raw `customer_id`/`product_id` string. So in the realized workflow, "customer" is **just a string**, not a modeled entity — the struct is a dead capability.
+- **Impact**: The headline "per-customer margin" surface is operationally hard to use; you can rank losses but not name them. Names/emails also unlock the natural next step (email the unprofitable customer, or link out to their billing profile).
+- **Fix sketch**: (1) Add `upsert_customer`/`upsert_product` + `get_customer`/`list_customers` to the `Store` trait with a `customers`/`billing_products` table (schema already has room; add alongside `revenue_events`). (2) Have the Stripe/Polar sync (`crates/billing/*`, `crates/api/src/billing.rs`) upsert the customer/product records it already sees in each webhook. (3) In `get_margin`/`get_customer_margin`, left-join names onto rows and add an optional `label` to `MarginRow`; render `label (id)` when a name is known, falling back to the bare id. Keep the id as the join key so nothing regresses when the customer table is empty.
+- **Trade-offs**: One extra table + upsert per sync; render must tolerate a missing name (already the common case pre-sync). None material.
+
+## 2. `external_id` idempotency is only realized for synced revenue — hand-posted records double-count
+- **Severity**: High
+- **Category**: half-implemented
+- **File**: `crates/core/src/revenue.rs:57-59`, `crates/store/src/sqlite/revenue.rs:15-44`, `crates/store-pg/src/revenue.rs:16-45` (entry point `crates/api/src/revenue.rs:26-37`)
+- **Scenario**: An operator (or an internal script) posts a corrected invoice to `POST /v1/revenue` a second time — same `external_id`, `amount_usd`, `customer_id` — expecting an idempotent upsert, because both the field doc ("provider's own id … for idempotent upsert") and the schema comment (`external_id TEXT -- … (idempotency)`) advertise exactly that. Two revenue rows are created. The customer's recognized revenue doubles and their margin flips green while they may actually be unprofitable.
+- **Root cause**: The only conflict target is the **internal** `id` (`ON CONFLICT(id)` in both stores). `external_id` is *stored but never read* for dedup and carries no unique index (`schema/sqlite/001_init.sql:222-223`, `schema/postgres/001_init.sql:183-184` index only `project_id,ts` and `customer_id`). The webhook path gets away with it because the Stripe/Polar parsers derive a *deterministic* `id` from the provider id (`billing.rs:60-78` — "deterministic `revenue_events.id` upsert, idempotent on its own"). But `post_revenue` (`revenue.rs:26-37`) does no such derivation: when a client omits `id`, serde mints a fresh random `new_id` (`revenue.rs:50`) on every call, so the advertised `external_id` idempotency simply doesn't exist for the manual/hand-posted source the context treats as first-class.
+- **Impact**: Silent revenue double-counting on the exact "posted by hand" path — a money-truth defect in the number the whole product is built to report.
+- **Fix sketch**: Make `(source, external_id)` the idempotency key when `external_id` is present: add a partial unique index `UNIQUE(source, external_id) WHERE external_id IS NOT NULL`, and change the upsert to `ON CONFLICT(source, external_id) DO UPDATE …` for records that carry one (keep the `id` conflict arm for the id-only case). Alternatively, derive the deterministic id from `(source, external_id)` in `post_revenue` the same way the webhook parsers do, so all sources share one dedup rule.
+- **Trade-offs**: Needs a migration for the new index; a genuine amount *change* to the same external_id must go through update semantics (that's the intended behavior). None material beyond the migration.
+
+## 3. No unit economics — margin **per request** is never computed, only aggregate margin
+- **Severity**: Medium
+- **Category**: unit-economics
+- **File**: `crates/core/src/margin.rs:52-111`, rendered at `crates/render/src/margin.rs:18-44`
+- **Scenario**: Two customers both show `+$2.00` total margin. One made 5 calls (structurally healthy); the other made 4,000 calls at near-zero unit margin and is one usage-spike away from underwater. Sorted by total margin they look identical, and the operator has no per-request lens to tell the scaling risk apart. Answering "what's my margin per request for this customer?" requires exporting and dividing by hand.
+- **Root cause**: `MarginRow` carries `revenue_usd`, `llm_cost_usd`, `gross_margin_usd`, `margin_pct`, and `calls` — everything needed for unit economics is present, but the *per-call* derivations (`margin_usd/calls`, `cost_usd/calls`, `revenue_usd/calls`) are never computed or surfaced. The context explicitly names "unit economics (margin per request)" as an expected capability; it stops one division short.
+- **Impact**: The "losing-money customers" analysis can't rank by per-unit economics, which is the metric that actually predicts whether a currently-thin customer becomes a loss as they scale. Cheap to add, directly on-theme with the product's differentiator.
+- **Fix sketch**: Add `margin_per_call` and `cost_per_call` (both `Option<f64>`, `None` when `calls == 0`) to `MarginRow` in `compute_margin` (`margin.rs:93-108`), and a `Margin/call` column in `render/src/margin.rs`. Optionally let `?by`/sort accept a `unit` mode that orders rows by `margin_per_call` ascending so per-request money-losers surface even when their aggregate margin is small-positive.
+- **Trade-offs**: Slightly wider row/response; per-call figures are noisy for very-low-`calls` keys (guard by only ranking on unit margin above a small call floor). None material.
