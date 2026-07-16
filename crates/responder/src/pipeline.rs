@@ -22,7 +22,25 @@ pub(crate) async fn handle_trigger(cfg: Arc<Config>, breaker: Arc<Breaker>, trig
     };
     match &trigger {
         Trigger::Error(spike) => run_error(&cfg, &breaker, entry, spike).await,
-        Trigger::Quality(drop) => run_quality(&cfg, entry, drop).await,
+        Trigger::Quality(drop) => run_quality(&cfg, &breaker, entry, drop).await,
+    }
+}
+
+/// Admission control for the (billable) INVESTIGATE stage: dedup + cooldown + hourly cap + a global
+/// concurrency permit. Returns the RAII guard to hold for the run, or `None` if the run was shed
+/// (already logged). The read stage runs first and always, so this — not the ACT breaker — is what
+/// actually bounds a flapping project's spend.
+fn admit(breaker: &Breaker, cfg: &Config, project: &str) -> Option<crate::breaker::InvestigationGuard> {
+    match breaker.try_admit_investigation(
+        project,
+        Duration::from_secs(cfg.defaults.investigate_cooldown_secs),
+        cfg.defaults.max_investigations_per_hour,
+    ) {
+        Ok(guard) => Some(guard),
+        Err(reason) => {
+            println!("[responder] '{project}': investigation skipped ({reason})");
+            None
+        }
     }
 }
 
@@ -38,6 +56,10 @@ async fn run_error(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, spike:
         }
         Class::Code => {}
     }
+
+    // Gate the paid investigation after classification, so transient errors (which never spawn)
+    // don't consume a permit or the per-project cooldown. Held across investigate + act + deliver.
+    let Some(_guard) = admit(breaker, cfg, project) else { return };
 
     println!(
         "[responder] '{project}': error — investigating in {} (branch={}, model={}, mode={})",
@@ -78,9 +100,13 @@ async fn run_error(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, spike:
     deliver(cfg, &ts, project, "error", &detail, &diag, act_outcome.as_ref()).await;
 }
 
-async fn run_quality(cfg: &Config, entry: &ProjectEntry, drop: &Drop) {
+async fn run_quality(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, drop: &Drop) {
     let project = &drop.project_id;
     let rubric = drop.rubric.as_deref().unwrap_or("?");
+
+    // Same admission gate as the error path — a quality-drop investigation is an equally billable run.
+    let Some(_guard) = admit(breaker, cfg, project) else { return };
+
     println!(
         "[responder] '{project}': quality regression on rubric '{rubric}' — investigating in {}",
         entry.repo

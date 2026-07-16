@@ -60,7 +60,10 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let state = AppState { cfg: cfg.clone(), breaker: Arc::new(Breaker::new()) };
+    let state = AppState {
+        cfg: cfg.clone(),
+        breaker: Arc::new(Breaker::new(cfg.defaults.max_concurrent_investigations)),
+    };
     let app = Router::new()
         .route("/health", get(health))
         .route("/webhook", post(webhook::receive))

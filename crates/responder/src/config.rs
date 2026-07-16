@@ -32,6 +32,15 @@ pub(crate) struct Defaults {
     pub act_cooldown_secs: u64,
     /// Circuit breaker: max auto-fixes applied across all projects per rolling hour.
     pub max_acts_per_hour: u32,
+    /// Admission control (INVESTIGATE stage): minimum seconds between investigations of the same
+    /// project. A flap fires the same spike repeatedly; this stops each one buying a fresh paid run.
+    pub investigate_cooldown_secs: u64,
+    /// Admission control: max investigations spawned across all projects per rolling hour — a hard
+    /// spend ceiling independent of the (remote, in-another-process) alerter cooldown.
+    pub max_investigations_per_hour: u32,
+    /// Admission control: max investigations running concurrently. Shed (log + drop) past this rather
+    /// than queue — a stale spike is not worth a queued paid run.
+    pub max_concurrent_investigations: usize,
 }
 
 /// One mapped project: where its code lives locally, plus optional hints for the investigator.
@@ -80,6 +89,9 @@ struct RawDefaults {
     act_permission_mode: Option<String>,
     act_cooldown_secs: Option<u64>,
     max_acts_per_hour: Option<u32>,
+    investigate_cooldown_secs: Option<u64>,
+    max_investigations_per_hour: Option<u32>,
+    max_concurrent_investigations: Option<usize>,
 }
 
 #[derive(Deserialize, Default)]
@@ -117,6 +129,9 @@ fn load_map(path: &str) -> (Defaults, HashMap<String, ProjectEntry>) {
         act_permission_mode: d.act_permission_mode.unwrap_or_else(|| "acceptEdits".to_string()),
         act_cooldown_secs: d.act_cooldown_secs.unwrap_or(3600),
         max_acts_per_hour: d.max_acts_per_hour.unwrap_or(3),
+        investigate_cooldown_secs: d.investigate_cooldown_secs.unwrap_or(600),
+        max_investigations_per_hour: d.max_investigations_per_hour.unwrap_or(20),
+        max_concurrent_investigations: d.max_concurrent_investigations.unwrap_or(2),
     };
     (defaults, parsed.projects)
 }
@@ -132,6 +147,9 @@ impl Defaults {
             act_permission_mode: "acceptEdits".to_string(),
             act_cooldown_secs: 3600,
             max_acts_per_hour: 3,
+            investigate_cooldown_secs: 600,
+            max_investigations_per_hour: 20,
+            max_concurrent_investigations: 2,
         }
     }
 }
