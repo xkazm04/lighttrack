@@ -53,7 +53,17 @@ pub(crate) struct RejectionStat {
 pub(crate) struct RejectionLedger {
     inner: Mutex<HashMap<RejectionKey, Entry>>,
     ttl: Duration,
+    /// Epoch seconds of the last hot-path prune. `record` runs on the ingest path under the one
+    /// mutex every worker passes through, and its prune is an O(all buckets) `retain` — with a 24h
+    /// TTL, re-walking the whole map microseconds after the last walk can never find anything new,
+    /// so the hot path prunes at most once per [`PRUNE_INTERVAL_SECS`]. `snapshot` (a low-frequency
+    /// operator read) still prunes eagerly, so a stale bucket can never *surface* past its TTL.
+    last_prune: std::sync::atomic::AtomicI64,
 }
+
+/// Minimum seconds between hot-path prunes — far finer than the 24h TTL, so eviction lag is
+/// invisible next to the bucket lifetime.
+const PRUNE_INTERVAL_SECS: i64 = 60;
 
 impl Default for RejectionLedger {
     fn default() -> Self {
@@ -63,7 +73,11 @@ impl Default for RejectionLedger {
 
 impl RejectionLedger {
     pub(crate) fn new() -> Self {
-        Self { inner: Mutex::new(HashMap::new()), ttl: Duration::hours(TTL_HOURS) }
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            ttl: Duration::hours(TTL_HOURS),
+            last_prune: std::sync::atomic::AtomicI64::new(0),
+        }
     }
 
     /// Record one rejected event against `(project, metric, window)` at `now`, folding in its
@@ -81,7 +95,13 @@ impl RejectionLedger {
         now: DateTime<Utc>,
     ) -> u64 {
         let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        Self::prune(&mut map, now, self.ttl);
+        // Amortized prune (see `last_prune`): the map lock is already held, so the relaxed atomic is
+        // only a cheap gate — a racing double-prune is harmless.
+        let now_s = now.timestamp();
+        if now_s - self.last_prune.load(std::sync::atomic::Ordering::Relaxed) >= PRUNE_INTERVAL_SECS {
+            Self::prune(&mut map, now, self.ttl);
+            self.last_prune.store(now_s, std::sync::atomic::Ordering::Relaxed);
+        }
         let e = map.entry((project.to_string(), metric, window, scope)).or_insert(Entry {
             count: 0,
             est_cost_usd: 0.0,
