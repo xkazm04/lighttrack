@@ -94,6 +94,28 @@ pub(crate) async fn touch_key(pool: &PgPool, id: &str, when: DateTime<Utc>) -> R
     Ok(())
 }
 
+pub(crate) async fn list_keys(pool: &PgPool, project: &str) -> Result<Vec<ApiKey>> {
+    let rows = sqlx::query(
+        "SELECT id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked \
+         FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC",
+    )
+    .bind(project.to_string())
+    .fetch_all(pool)
+    .await
+    .map_err(pgerr)?;
+    rows.iter().map(api_key_from_row).collect()
+}
+
+pub(crate) async fn set_key_revoked(pool: &PgPool, id: &str, revoked: bool) -> Result<bool> {
+    let res = sqlx::query("UPDATE api_keys SET revoked = $2 WHERE id = $1")
+        .bind(id.to_string())
+        .bind(revoked as i64)
+        .execute(pool)
+        .await
+        .map_err(pgerr)?;
+    Ok(res.rows_affected() > 0)
+}
+
 // --- limit rules ------------------------------------------------------------
 
 pub(crate) async fn create_limit(pool: &PgPool, r: &LimitRule) -> Result<()> {

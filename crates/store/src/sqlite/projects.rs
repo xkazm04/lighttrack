@@ -99,6 +99,23 @@ pub(super) fn touch_key(conn: &Connection, id: &str, when: DateTime<Utc>) -> Res
     Ok(())
 }
 
+pub(super) fn list_keys(conn: &Connection, project: &str) -> Result<Vec<ApiKey>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked \
+         FROM api_keys WHERE project_id = ?1 ORDER BY created_at DESC",
+    )?;
+    let raws = stmt.query_map(params![project], map_key)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    raws.into_iter().map(key_from_raw).collect()
+}
+
+pub(super) fn set_key_revoked(conn: &Connection, id: &str, revoked: bool) -> Result<bool> {
+    let n = conn.execute(
+        "UPDATE api_keys SET revoked = ?2 WHERE id = ?1",
+        params![id, revoked as i64],
+    )?;
+    Ok(n > 0)
+}
+
 type ApiKeyRaw = (String, String, String, String, String, String, Option<String>, i64);
 
 fn map_key(row: &Row) -> rusqlite::Result<ApiKeyRaw> {

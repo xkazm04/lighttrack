@@ -110,6 +110,12 @@ impl Store for PgStore {
     fn touch_api_key(&self, id: &str, when: DateTime<Utc>) -> Result<()> {
         self.rt.block_on(projects::touch_key(&self.pool, id, when))
     }
+    fn list_api_keys(&self, project: &str) -> Result<Vec<ApiKey>> {
+        self.rt.block_on(projects::list_keys(&self.pool, project))
+    }
+    fn set_api_key_revoked(&self, id: &str, revoked: bool) -> Result<bool> {
+        self.rt.block_on(projects::set_key_revoked(&self.pool, id, revoked))
+    }
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()> {
         self.rt.block_on(projects::create_limit(&self.pool, r))
     }

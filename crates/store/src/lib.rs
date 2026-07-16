@@ -412,6 +412,21 @@ pub trait Store: Send + Sync {
     fn find_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>>;
     /// Best-effort update of `last_used_at`.
     fn touch_api_key(&self, id: &str, when: DateTime<Utc>) -> Result<()>;
+    /// Every key minted for a project (revoked ones included — the caller decides what to show), so an
+    /// operator can list, audit last-use, and pick one to revoke. Default `Ok(vec![])` so unported
+    /// backends compile (matching the `get_limit_rule` precedent). NEVER expose `key_hash` upward.
+    fn list_api_keys(&self, _project: &str) -> Result<Vec<ApiKey>> {
+        Ok(Vec::new())
+    }
+    /// Set a key's `revoked` flag (soft — the row is kept for audit; auth already rejects a revoked
+    /// key at `guards.rs`). Returns `true` when a row changed, `false` when the id is unknown (→ 404).
+    /// Default is a clear unimplemented error rather than a silent no-op, so an operator on an unported
+    /// backend learns the key was NOT revoked instead of believing a leaked key is dead.
+    fn set_api_key_revoked(&self, _id: &str, _revoked: bool) -> Result<bool> {
+        Err(StoreError::Other(
+            "revoking API keys is not supported by this store backend".to_string(),
+        ))
+    }
 
     // --- limit rules ---
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()>;

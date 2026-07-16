@@ -111,7 +111,7 @@ use std::sync::{Arc, RwLock};
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
 };
 
@@ -299,7 +299,11 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/jobs/:id/progress", post(jobs::job_progress))
         .route("/v1/jobs/:id/finish", post(jobs::job_finish))
         .route("/v1/projects", post(projects::create_project).get(projects::list_projects))
-        .route("/v1/projects/:id/keys", post(projects::create_key))
+        .route(
+            "/v1/projects/:id/keys",
+            post(projects::create_key).get(projects::list_keys),
+        )
+        .route("/v1/projects/:id/keys/:kid", delete(projects::revoke_key))
         .route(
             "/v1/projects/:id/limits",
             post(limits::create_limit).get(limits::list_limits),

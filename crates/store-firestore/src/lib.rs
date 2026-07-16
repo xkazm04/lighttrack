@@ -101,6 +101,12 @@ impl Store for FirestoreStore {
     fn find_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>> {
         projects::find_api_key_by_prefix(&self.rest, prefix)
     }
+    fn list_api_keys(&self, project: &str) -> Result<Vec<ApiKey>> {
+        projects::list_api_keys(&self.rest, project)
+    }
+    fn set_api_key_revoked(&self, id: &str, revoked: bool) -> Result<bool> {
+        projects::set_api_key_revoked(&self.rest, id, revoked)
+    }
     fn touch_api_key(&self, id: &str, when: DateTime<Utc>) -> Result<()> {
         projects::touch_api_key(&self.rest, id, when)
     }

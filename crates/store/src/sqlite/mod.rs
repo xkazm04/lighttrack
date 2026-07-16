@@ -310,6 +310,12 @@ impl Store for SqliteStore {
     fn touch_api_key(&self, id: &str, when: DateTime<Utc>) -> Result<()> {
         self.with(|c| projects::touch_key(c, id, when))
     }
+    fn list_api_keys(&self, project: &str) -> Result<Vec<ApiKey>> {
+        self.with(|c| projects::list_keys(c, project))
+    }
+    fn set_api_key_revoked(&self, id: &str, revoked: bool) -> Result<bool> {
+        self.with(|c| projects::set_key_revoked(c, id, revoked))
+    }
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()> {
         self.with(|c| limits::create(c, r))
     }

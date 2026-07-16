@@ -133,6 +133,18 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
     assert!(store.find_api_key_by_prefix("zzzzzzzz")?.is_none(), "unknown prefix None");
     store.touch_api_key(&key.id, Utc::now())?;
 
+    // Key lifecycle: the project's keys are listable (with the last-use we just stamped), and a key
+    // can be revoked — the two fields that were write-only / enforced-but-unsettable before this wave.
+    let keys = store.list_api_keys(pid)?;
+    assert!(keys.iter().any(|k| k.id == key.id), "list_api_keys contains our key");
+    assert!(
+        keys.iter().find(|k| k.id == key.id).unwrap().last_used_at.is_some(),
+        "last_used_at is readable back"
+    );
+    assert!(store.set_api_key_revoked(&key.id, true)?, "revoke reports a row changed");
+    assert!(store.find_api_key_by_prefix(&prefix)?.expect("still present").revoked, "revoked persisted");
+    assert!(!store.set_api_key_revoked(&new_id(), true)?, "revoking an unknown id returns false");
+
     let rule = LimitRule {
         id: new_id(),
         project_id: pid.into(),

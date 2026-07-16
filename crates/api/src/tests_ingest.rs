@@ -593,6 +593,61 @@ async fn duplicate_event_id_returns_409() {
 }
 
 #[tokio::test]
+async fn key_lifecycle_list_shows_use_and_revoke_kills_auth() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    let admin = "admin-secret";
+
+    let send = |method: &str, uri: String, token: &str| {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        app.clone().oneshot(req)
+    };
+    let json_of = |bytes: axum::body::Bytes| -> Value {
+        if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() }
+    };
+
+    // Use the key once so last_used_at is stamped (best-effort/detached — poll briefly).
+    let (s, _) = ingest(&app, &key, json!({
+        "provider": "anthropic", "model": "claude-haiku-4-5", "usage": { "input": 1, "output": 1 }, "cost_usd": 0.0
+    })).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // List keys (admin): the key is there; key_hash is never exposed.
+    let resp = send("GET", "/v1/projects/proj-a/keys".into(), admin).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let list = json_of(to_bytes(resp.into_body(), usize::MAX).await.unwrap());
+    let row = &list.as_array().unwrap()[0];
+    let kid = row["id"].as_str().unwrap().to_string();
+    assert_eq!(row["revoked"], false);
+    assert!(row.get("key_hash").is_none(), "key_hash must never be listed: {row}");
+
+    // A project key can't list (admin-gated).
+    let resp = send("GET", "/v1/projects/proj-a/keys".into(), &key).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // Revoke it (admin). The key still authenticates BEFORE revocation…
+    let resp = send("DELETE", format!("/v1/projects/proj-a/keys/{kid}"), admin).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(json_of(to_bytes(resp.into_body(), usize::MAX).await.unwrap())["revoked"], true);
+
+    // …and is rejected immediately AFTER — auth reads the store per request.
+    let (s2, _) = ingest(&app, &key, json!({
+        "provider": "anthropic", "model": "claude-haiku-4-5", "usage": { "input": 1, "output": 1 }, "cost_usd": 0.0
+    })).await;
+    assert_eq!(s2, StatusCode::UNAUTHORIZED, "a revoked key is dead on the next call");
+
+    // Revoking an unknown key id → 404.
+    let resp = send("DELETE", "/v1/projects/proj-a/keys/nope".into(), admin).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn prompt_tagged_traffic_rolls_up_per_version() {
     let (state, store) = setup(Redactor::off());
     let key = make_key(&store, "proj-a");

@@ -119,3 +119,77 @@ pub(crate) async fn create_key(
         created_at: now,
     }))
 }
+
+/// A key's non-secret metadata — everything an operator needs to audit and rotate, and **never**
+/// `key_hash`. (A bare `ApiKey` derives `Serialize` over the hash, so we project into this instead.)
+#[derive(Serialize)]
+pub(crate) struct KeyInfo {
+    id: String,
+    name: String,
+    prefix: String,
+    created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_used_at: Option<DateTime<Utc>>,
+    revoked: bool,
+}
+
+/// List a project's API keys (admin). Surfaces `last_used_at` (previously write-only) and `revoked`
+/// so an operator can spot stale keys and confirm a rotation drained the old one.
+pub(crate) async fn list_keys(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(pid): Path<String>,
+) -> Result<Json<Vec<KeyInfo>>, ApiError> {
+    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let store = st.store.clone();
+    let pid_check = pid.clone();
+    if spawn_db(move || store.get_project(&pid_check)).await?.is_none() {
+        return Err(ApiError::not_found(format!("project '{pid}' not found")));
+    }
+    let store = st.store.clone();
+    let keys = spawn_db(move || store.list_api_keys(&pid)).await?;
+    Ok(Json(
+        keys.into_iter()
+            .map(|k| KeyInfo {
+                id: k.id,
+                name: k.name,
+                prefix: k.prefix,
+                created_at: k.created_at,
+                last_used_at: k.last_used_at,
+                revoked: k.revoked,
+            })
+            .collect(),
+    ))
+}
+
+/// Revoke an API key (admin, soft — the row is kept for audit). Revocation is immediate: auth reads
+/// the store per request and rejects a revoked key, so a leaked key is dead on the next call. 404 when
+/// the key id is unknown. The key is scoped to the path project so an admin can't revoke across tenants
+/// by id-guessing beyond the projects they can already see.
+pub(crate) async fn revoke_key(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((pid, kid)): Path<(String, String)>,
+) -> Result<Json<KeyInfo>, ApiError> {
+    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let store = st.store.clone();
+    let keys = {
+        let pid = pid.clone();
+        spawn_db(move || store.list_api_keys(&pid)).await?
+    };
+    let key = keys
+        .into_iter()
+        .find(|k| k.id == kid)
+        .ok_or_else(|| ApiError::not_found(format!("key '{kid}' not found on project '{pid}'")))?;
+    let store = st.store.clone();
+    let kid2 = kid.clone();
+    spawn_db(move || store.set_api_key_revoked(&kid2, true)).await?;
+    Ok(Json(KeyInfo {
+        id: key.id,
+        name: key.name,
+        prefix: key.prefix,
+        created_at: key.created_at,
+        last_used_at: key.last_used_at,
+        revoked: true,
+    }))
+}

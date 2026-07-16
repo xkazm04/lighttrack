@@ -54,6 +54,24 @@ pub(crate) fn touch_api_key(rest: &Rest, id: &str, when: DateTime<Utc>) -> Resul
     rest.patch_fields("api_keys", id, &m, &["last_used_at"])
 }
 
+pub(crate) fn list_api_keys(rest: &Rest, project: &str) -> Result<Vec<ApiKey>> {
+    let filters: Vec<(&str, &str, Value)> = vec![("project_id", "EQUAL", json!(project))];
+    let docs = rest.query("api_keys", &filters, Some(("created_at", true)), None)?;
+    docs.iter().map(api_key_from).collect()
+}
+
+pub(crate) fn set_api_key_revoked(rest: &Rest, id: &str, revoked: bool) -> Result<bool> {
+    // No cheap existence probe on a single-doc PATCH; a get_doc first lets us return the honest
+    // "unknown id" (false) the API maps to 404, rather than silently succeeding on a typo.
+    if rest.get_doc("api_keys", id)?.is_none() {
+        return Ok(false);
+    }
+    let mut m = Fields::new();
+    m.insert("revoked".into(), json!(revoked as i64));
+    rest.patch_fields("api_keys", id, &m, &["revoked"])?;
+    Ok(true)
+}
+
 fn project_from(m: &Fields) -> Result<Project> {
     Ok(Project {
         id: freq(m, "id")?,
