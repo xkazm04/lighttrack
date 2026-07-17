@@ -261,9 +261,28 @@ impl<'a> EventBuilder<'a> {
         self.ev.trace_id = Some(id.into());
         self
     }
+    /// This span's own id — the handle a child call parents to. Without it (and `parent_span_id`)
+    /// the server's `build_forest` nests strictly by `parent_span_id`→`span_id`, so every event is
+    /// forced to a root and `GET /v1/traces/:id` renders flat, however many calls share a `trace_id`.
+    /// The sibling Python/TS SDKs set these; this restores the trace-tree waterfall for Rust callers.
+    pub fn span_id(mut self, id: impl Into<String>) -> Self {
+        self.ev.span_id = Some(id.into());
+        self
+    }
+    /// The enclosing span's id — set this to the parent call's `span_id` to nest under it.
+    pub fn parent_span_id(mut self, id: impl Into<String>) -> Self {
+        self.ev.parent_span_id = Some(id.into());
+        self
+    }
     pub fn metadata(mut self, v: Value) -> Self {
         self.ev.metadata = v;
         self
+    }
+
+    /// Finish the event without sending it — for callers who want to inspect or batch it and hand it
+    /// to [`Client::track`] themselves. [`send`](Self::send) is `build` + `track`.
+    pub fn build(self) -> LlmEvent {
+        self.ev
     }
 
     /// Enqueue the event (best-effort, non-blocking).
@@ -413,5 +432,39 @@ mod tests {
             &GuardRules { json_keys: vec!["merchant".into(), "total".into()], max_chars: Some(200), no_pii: true, ..Default::default() },
         );
         assert!(r.ok, "violations: {:?}", r.violations);
+    }
+
+    #[test]
+    fn span_setters_build_a_nestable_tree() {
+        // No network: an unconfigured client just drops events; we only build() them here.
+        let c = Client::new("http://127.0.0.1:0", None, Some("p1".into()));
+
+        // A planner span and a tool call parented to it — the structure a Rust agent instruments for.
+        let plan = c
+            .event(Provider::Anthropic, "claude-sonnet-4-5")
+            .trace_id("req-123")
+            .span_id("s-plan")
+            .name("plan")
+            .usage(10, 5, None)
+            .build();
+        let tool = c
+            .event(Provider::Anthropic, "claude-sonnet-4-5")
+            .trace_id("req-123")
+            .span_id("s-tool")
+            .parent_span_id("s-plan")
+            .name("tool")
+            .usage(10, 5, None)
+            .build();
+
+        assert_eq!(plan.span_id.as_deref(), Some("s-plan"));
+        assert_eq!(tool.parent_span_id.as_deref(), Some("s-plan"));
+
+        // Fed through the server's own forest builder, the tool nests UNDER the planner instead of
+        // both being sibling roots (the flat rendering the missing setters used to force).
+        let trace = lighttrack_core::Trace::from_events(vec![plan, tool]).expect("a trace");
+        assert_eq!(trace.spans.len(), 1, "one root, not two: {:?}", trace.spans.len());
+        assert_eq!(trace.spans[0].event.span_id.as_deref(), Some("s-plan"));
+        assert_eq!(trace.spans[0].children.len(), 1, "tool nested under planner");
+        assert_eq!(trace.spans[0].children[0].event.span_id.as_deref(), Some("s-tool"));
     }
 }
