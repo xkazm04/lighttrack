@@ -3,7 +3,8 @@
 use serde_json::Value;
 
 use crate::md::{
-    commafy, money, opt_f, opt_u, pass_glyph, s, short_ts, status_glyph, trunc, u, Align, Table,
+    commafy, money, opt_f, opt_s, opt_u, pass_glyph, s, short_ts, status_glyph, trunc, u, Align,
+    Table,
 };
 
 pub(crate) fn list(v: &Value) -> Option<String> {
@@ -137,13 +138,32 @@ fn render_node(node: &Value, depth: usize, out: &mut String) {
         let m = s(ev, "model");
         if provider.is_empty() { m.to_string() } else { format!("{provider}/{m}") }
     };
+    // Label = the call-site `name` when set (the only thing that tells one span from another in an
+    // agent run where every call hits the same model), else the provider/model. When a name is
+    // present the model trails as a dim segment so both are visible. A non-`chat` operation is
+    // appended, matching the single-event detail view.
+    let name = s(ev, "name");
+    let label = if name.is_empty() { format!("`{}`", trunc(&model, 30)) } else {
+        format!("`{}` · {}", trunc(name, 30), trunc(&model, 24))
+    };
+    let op = s(ev, "operation");
+    let op_seg = if op.is_empty() || op == "chat" { String::new() } else { format!(" ({op})") };
+    let indent = "  ".repeat(depth);
+    // The short event id is the operator's copy-paste handle into the single-event detail view
+    // (tree → id → payloads). Emitted last so line width stays stable.
+    let id_seg = {
+        let id = s(ev, "id");
+        if id.is_empty() { String::new() } else { format!(" · `{}`", trunc(id, 10)) }
+    };
     out.push_str(&format!(
-        "{}- {glyph} `{}` · @{offset}ms {lat} · {}/{} tok · {cost}\n",
-        "  ".repeat(depth),
-        trunc(&model, 30),
+        "{indent}- {glyph} {label}{op_seg} · @{offset}ms {lat} · {}/{} tok · {cost}{id_seg}\n",
         commafy(in_t),
         commafy(out_t),
     ));
+    // On a failed span, surface WHY as an indented sub-bullet — the message the glyph alone withheld.
+    if let Some(err) = opt_s(ev, "error").filter(|e| !e.is_empty()) {
+        out.push_str(&format!("{indent}  - ⚠ {}\n", trunc(err, 160)));
+    }
     if let Some(children) = node.get("children").and_then(Value::as_array) {
         for child in children {
             render_node(child, depth + 1, out);
@@ -213,5 +233,44 @@ mod tests {
         assert!(md.contains("coherence"));
         // Not an object / no id -> no render.
         assert!(tree(&json!([])).is_none());
+    }
+
+    #[test]
+    fn tree_shows_name_operation_id_and_error() {
+        let v = json!({
+            "trace_id": "tr-9f2", "status": "error",
+            "started_at": "2026-06-21T12:34:56.000000000Z", "duration_ms": 500,
+            "models": ["claude-sonnet-4-5"],
+            "totals": { "spans": 2, "input_tokens": 20, "output_tokens": 10, "cost_usd": 0.01,
+                        "errors": 1, "total_latency_ms": 200 },
+            "spans": [{
+                "offset_ms": 0, "latency_ms": 120,
+                "event": { "id": "e-plan-8fa2c1", "name": "plan-next-step", "operation": "chat",
+                           "provider": "anthropic", "model": "claude-sonnet-4-5", "status": "success",
+                           "usage": { "input": 10, "output": 5 }, "cost_usd": 0.004, "latency_ms": 120 },
+                "children": [{
+                    "offset_ms": 120, "latency_ms": 80,
+                    "event": { "id": "e-rerank-33bd", "name": "rerank-docs", "operation": "embedding",
+                               "provider": "anthropic", "model": "claude-sonnet-4-5", "status": "error",
+                               "error": "provider 529: overloaded, retry after backoff",
+                               "usage": { "input": 10, "output": 5 }, "cost_usd": 0.006, "latency_ms": 80 },
+                    "children": []
+                }]
+            }],
+            "scores": []
+        });
+        let md = tree(&v).unwrap();
+        // Named steps, not anonymized model bullets.
+        assert!(md.contains("`plan-next-step`"), "root labelled by name: {md}");
+        assert!(md.contains("`rerank-docs`"), "child labelled by name: {md}");
+        // Model still visible as a trailing segment.
+        assert!(md.contains("claude-sonnet-4-5"), "model retained alongside the name: {md}");
+        // Non-chat operation surfaced (chat is the silent default).
+        assert!(md.contains("(embedding)"), "non-default operation shown: {md}");
+        assert!(!md.contains("(chat)"), "chat is the silent default: {md}");
+        // Copy-paste drill-down handle.
+        assert!(md.contains("`e-plan-8f…`") || md.contains("e-plan-8f"), "short event id shown: {md}");
+        // The failure reason the glyph alone withheld, on its own sub-bullet.
+        assert!(md.contains("⚠ provider 529: overloaded"), "error message surfaced: {md}");
     }
 }
