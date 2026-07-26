@@ -47,8 +47,11 @@ CREATE TABLE IF NOT EXISTS events (
   output              TEXT,
   tags                TEXT,
   source              TEXT,
-  metadata            TEXT
+  metadata            TEXT,
+  name                TEXT
 );
+-- Existing deployments predate the `name` column (use-case attribution); idempotent on fresh DBs.
+ALTER TABLE events ADD COLUMN IF NOT EXISTS name TEXT;
 CREATE INDEX IF NOT EXISTS idx_events_project_ts ON events(project_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_trace ON events(trace_id);
 

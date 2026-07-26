@@ -29,10 +29,13 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use tokio::runtime::Runtime;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule, LlmEvent,
-    ModelPriceRow, Project, RelayOutcome, RelayTask, RevenueEvent, Rubric, Score,
+    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule,
+    LimitScope, LlmEvent, ModelPriceRow, Project, RelayOutcome, RelayTask, RevenueEvent, Rubric,
+    Score,
 };
-use lighttrack_store::{CostRow, Result, Store, StoreError, Usage};
+use lighttrack_store::{
+    CostRow, EventFilter, EventPage, Result, Store, StoreError, Usage, UseCaseCostRow,
+};
 
 use util::pgerr;
 
@@ -81,11 +84,42 @@ impl Store for PgStore {
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
         self.rt.block_on(events::list(&self.pool, project, limit))
     }
+    fn list_events_filtered(
+        &self,
+        project: Option<&str>,
+        filter: &EventFilter,
+        limit: usize,
+    ) -> Result<EventPage> {
+        self.rt.block_on(events::list_filtered(&self.pool, project, filter, limit))
+    }
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
         self.rt.block_on(events::cost_summary(&self.pool, project))
     }
+    fn cost_summary_windowed(
+        &self,
+        project: Option<&str>,
+        since: Option<DateTime<Utc>>,
+        until: Option<DateTime<Utc>>,
+    ) -> Result<Vec<CostRow>> {
+        self.rt.block_on(events::cost_summary_windowed(&self.pool, project, since, until))
+    }
+    fn usecase_costs(
+        &self,
+        project: Option<&str>,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<UseCaseCostRow>> {
+        self.rt.block_on(events::usecase_costs(&self.pool, project, since))
+    }
     fn usage_since(&self, project: &str, since: DateTime<Utc>) -> Result<Usage> {
         self.rt.block_on(events::usage_since(&self.pool, project, since))
+    }
+    fn usage_since_scoped(
+        &self,
+        project: &str,
+        since: DateTime<Utc>,
+        scope: &LimitScope,
+    ) -> Result<Usage> {
+        self.rt.block_on(events::usage_since_scoped(&self.pool, project, since, scope))
     }
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
         self.rt.block_on(events::get(&self.pool, id))

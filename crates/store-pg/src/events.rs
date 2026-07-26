@@ -4,14 +4,17 @@ use serde_json::Value;
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
-use lighttrack_core::{LlmEvent, Operation, Provider, Status, TokenUsage};
-use lighttrack_store::{CostRow, Result, Usage};
+use lighttrack_core::{LimitScope, LlmEvent, Operation, Provider, Status, TokenUsage};
+use lighttrack_store::codec::{decode_event_cursor, encode_event_cursor};
+use lighttrack_store::{
+    CostRow, EventFilter, EventPage, Result, StoreError, Usage, UseCaseCostRow,
+};
 
 use crate::util::{fmt_ts, parse_enum, parse_ts, pgerr};
 
 const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
     operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
-    latency_ms, status, error, input, output, tags, source, metadata";
+    latency_ms, status, error, input, output, tags, source, metadata, name";
 
 pub(crate) async fn insert(pool: &PgPool, ev: &LlmEvent) -> Result<()> {
     let tags = serde_json::to_string(&ev.tags)?;
@@ -32,8 +35,8 @@ pub(crate) async fn insert(pool: &PgPool, ev: &LlmEvent) -> Result<()> {
         "INSERT INTO events (id, project_id, trace_id, span_id, parent_span_id, ts, \
          provider, model, operation, input_tokens, output_tokens, cached_input_tokens, \
          reasoning_tokens, cost_usd, latency_ms, status, error, input, output, tags, \
-         source, metadata) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)",
+         source, metadata, name) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)",
     )
     .bind(ev.id.clone())
     .bind(ev.project_id.clone())
@@ -57,6 +60,7 @@ pub(crate) async fn insert(pool: &PgPool, ev: &LlmEvent) -> Result<()> {
     .bind(tags)
     .bind(ev.source.clone())
     .bind(metadata)
+    .bind(ev.name.clone())
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -86,32 +90,203 @@ pub(crate) async fn list(pool: &PgPool, project: Option<&str>, limit: usize) -> 
 }
 
 pub(crate) async fn cost_summary(pool: &PgPool, project: Option<&str>) -> Result<Vec<CostRow>> {
+    cost_summary_windowed(pool, project, None, None).await
+}
+
+/// Cost/usage rollup over an optional `[since, until)` window. Same grouping/ordering as
+/// [`cost_summary`]; window bounds compare against the fixed-width `ts` string.
+pub(crate) async fn cost_summary_windowed(
+    pool: &PgPool,
+    project: Option<&str>,
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    until: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<Vec<CostRow>> {
     let cols = "project_id, provider, model, COUNT(*) AS calls, \
         COALESCE(SUM(input_tokens),0)::bigint AS it, COALESCE(SUM(output_tokens),0)::bigint AS ot, \
         COALESCE(SUM(cost_usd),0.0) AS cost";
-    let rows = match project {
-        Some(p) => {
-            sqlx::query(&format!(
-                "SELECT {cols} FROM events WHERE project_id = $1 \
-                 GROUP BY project_id, provider, model ORDER BY cost DESC"
-            ))
-            .bind(p.to_string())
-            .fetch_all(pool)
-            .await
-        }
-        None => {
-            sqlx::query(&format!(
-                "SELECT {cols} FROM events GROUP BY project_id, provider, model ORDER BY cost DESC"
-            ))
-            .fetch_all(pool)
-            .await
-        }
+    let mut conds: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    if let Some(p) = project {
+        binds.push(p.to_string());
+        conds.push(format!("project_id = ${}", binds.len()));
     }
-    .map_err(pgerr)?;
+    if let Some(s) = since {
+        binds.push(fmt_ts(s));
+        conds.push(format!("ts >= ${}", binds.len()));
+    }
+    if let Some(u) = until {
+        binds.push(fmt_ts(u));
+        conds.push(format!("ts < ${}", binds.len()));
+    }
+    let where_clause = if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {} ", conds.join(" AND "))
+    };
+    let sql = format!(
+        "SELECT {cols} FROM events {where_clause}\
+         GROUP BY project_id, provider, model ORDER BY cost DESC"
+    );
+    let mut q = sqlx::query(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    let rows = q.fetch_all(pool).await.map_err(pgerr)?;
     rows.iter()
         .map(|row| {
             Ok(CostRow {
                 project_id: row.try_get(0).map_err(pgerr)?,
+                provider: row.try_get(1).map_err(pgerr)?,
+                model: row.try_get(2).map_err(pgerr)?,
+                calls: row.try_get(3).map_err(pgerr)?,
+                input_tokens: row.try_get(4).map_err(pgerr)?,
+                output_tokens: row.try_get(5).map_err(pgerr)?,
+                cost_usd: row.try_get(6).map_err(pgerr)?,
+            })
+        })
+        .collect()
+}
+
+/// Filtered, keyset-paginated listing (newest first), paging on `(ts, id)` descending — the Postgres
+/// port of the SQLite reference (`sqlite/events.rs::list_filtered`). Over-fetches by one row to
+/// detect a further page; string keyset comparison is chronological thanks to the fixed-width `ts`.
+pub(crate) async fn list_filtered(
+    pool: &PgPool,
+    project: Option<&str>,
+    filter: &EventFilter,
+    limit: usize,
+) -> Result<EventPage> {
+    let mut conds: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    if let Some(p) = project {
+        binds.push(p.to_string());
+        conds.push(format!("project_id = ${}", binds.len()));
+    }
+    if let Some(s) = filter.since {
+        binds.push(fmt_ts(s));
+        conds.push(format!("ts >= ${}", binds.len()));
+    }
+    if let Some(u) = filter.until {
+        binds.push(fmt_ts(u));
+        conds.push(format!("ts < ${}", binds.len()));
+    }
+    for (col, v) in [
+        ("provider", &filter.provider),
+        ("model", &filter.model),
+        ("trace_id", &filter.trace_id),
+        ("name", &filter.name),
+    ] {
+        if let Some(v) = v {
+            binds.push(v.clone());
+            conds.push(format!("{col} = ${}", binds.len()));
+        }
+    }
+    if let Some(cursor) = &filter.cursor {
+        let (cts, cid) = decode_event_cursor(cursor)
+            .ok_or_else(|| StoreError::Other(format!("invalid cursor {cursor:?}")))?;
+        binds.push(cts);
+        let i = binds.len();
+        binds.push(cid);
+        let j = binds.len();
+        // Strictly after (cts, cid) in DESC (ts, id) order.
+        conds.push(format!("(ts < ${i} OR (ts = ${i} AND id < ${j}))"));
+    }
+    let where_clause = if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {} ", conds.join(" AND "))
+    };
+    // Over-fetch by one so we can tell whether another page exists without a second COUNT query.
+    let fetch = (limit as i64).saturating_add(1);
+    let sql = format!(
+        "SELECT {COLS} FROM events {where_clause}ORDER BY ts DESC, id DESC LIMIT ${}",
+        binds.len() + 1
+    );
+    let mut q = sqlx::query(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    let rows = q.bind(fetch).fetch_all(pool).await.map_err(pgerr)?;
+    let mut events = rows.iter().map(from_row).collect::<Result<Vec<LlmEvent>>>()?;
+    let next_cursor = if events.len() as i64 > limit as i64 {
+        events.truncate(limit);
+        events.last().map(|e| encode_event_cursor(&fmt_ts(e.ts), &e.id))
+    } else {
+        None
+    };
+    Ok(EventPage { events, next_cursor })
+}
+
+/// Rolling usage restricted to one scope dimension (provider / model / use-case name). A NULL `name`
+/// never matches a name scope, mirroring the SQLite reference.
+pub(crate) async fn usage_since_scoped(
+    pool: &PgPool,
+    project: &str,
+    since: chrono::DateTime<chrono::Utc>,
+    scope: &LimitScope,
+) -> Result<Usage> {
+    // `column` is a fixed keyword from the enum (never user input) — safe to interpolate.
+    let column = match scope {
+        LimitScope::Provider(_) => "provider",
+        LimitScope::Model(_) => "model",
+        LimitScope::Name(_) => "name",
+    };
+    let sql = format!(
+        "SELECT COALESCE(SUM(cost_usd),0.0), COUNT(*), \
+         COALESCE(SUM(input_tokens + output_tokens),0)::bigint \
+         FROM events WHERE project_id = $1 AND ts >= $2 AND {column} = $3"
+    );
+    let row = sqlx::query(&sql)
+        .bind(project.to_string())
+        .bind(fmt_ts(since))
+        .bind(scope.value().to_string())
+        .fetch_one(pool)
+        .await
+        .map_err(pgerr)?;
+    Ok(Usage {
+        cost_usd: row.try_get(0).map_err(pgerr)?,
+        calls: row.try_get(1).map_err(pgerr)?,
+        tokens: row.try_get(2).map_err(pgerr)?,
+    })
+}
+
+/// Use-case rollup grouped by (name, provider, model), optionally windowed by `since`. Un-named
+/// calls group together per model; ordered by cost, most expensive first.
+pub(crate) async fn usecase_costs(
+    pool: &PgPool,
+    project: Option<&str>,
+    since: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<Vec<UseCaseCostRow>> {
+    let cols = "name, provider, model, COUNT(*) AS calls, \
+        COALESCE(SUM(input_tokens),0)::bigint AS it, COALESCE(SUM(output_tokens),0)::bigint AS ot, \
+        COALESCE(SUM(cost_usd),0.0) AS cost";
+    let mut conds: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    if let Some(p) = project {
+        binds.push(p.to_string());
+        conds.push(format!("project_id = ${}", binds.len()));
+    }
+    if let Some(s) = since {
+        binds.push(fmt_ts(s));
+        conds.push(format!("ts >= ${}", binds.len()));
+    }
+    let where_clause = if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {} ", conds.join(" AND "))
+    };
+    let sql = format!(
+        "SELECT {cols} FROM events {where_clause}GROUP BY name, provider, model ORDER BY cost DESC"
+    );
+    let mut q = sqlx::query(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    let rows = q.fetch_all(pool).await.map_err(pgerr)?;
+    rows.iter()
+        .map(|row| {
+            Ok(UseCaseCostRow {
+                name: row.try_get(0).map_err(pgerr)?,
                 provider: row.try_get(1).map_err(pgerr)?,
                 model: row.try_get(2).map_err(pgerr)?,
                 calls: row.try_get(3).map_err(pgerr)?,
@@ -176,9 +351,7 @@ fn from_row(row: &PgRow) -> Result<LlmEvent> {
         ts: parse_ts(&ts)?,
         provider: parse_enum::<Provider>(&provider),
         model: row.try_get(7).map_err(pgerr)?,
-        // The Postgres backend doesn't carry the `name` column yet (SQLite-only
-        // feature powering LLM-Overview); hydrate as None so it compiles cleanly.
-        name: None,
+        name: row.try_get(22).map_err(pgerr)?,
         operation: parse_enum::<Operation>(&operation),
         usage: TokenUsage {
             input: row.try_get::<i64, _>(9).map_err(pgerr)? as u64,
