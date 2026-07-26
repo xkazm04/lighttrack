@@ -151,6 +151,15 @@ impl Store for FirestoreStore {
     fn list_limit_rules(&self, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
         limits::list_limit_rules(&self.rest, project, only_enabled)
     }
+    fn get_limit_rule(&self, id: &str) -> Result<Option<LimitRule>> {
+        limits::get_limit_rule(&self.rest, id)
+    }
+    fn update_limit_rule(&self, r: &LimitRule) -> Result<bool> {
+        limits::update_limit_rule(&self.rest, r)
+    }
+    fn delete_limit_rule(&self, id: &str) -> Result<bool> {
+        limits::delete_limit_rule(&self.rest, id)
+    }
 
     fn insert_score(&self, s: &Score) -> Result<()> {
         scores::insert_score(&self.rest, s)

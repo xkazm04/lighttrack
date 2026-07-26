@@ -84,6 +84,27 @@ impl Rest {
         json_ok(self.req(Method::PATCH, url).json(&body).send().map_err(re)?).map(|_| ())
     }
 
+    /// DELETE a document by id. Returns `true` when it existed, `false` when it didn't — the
+    /// `exists=true` precondition turns Firestore's silently-idempotent delete into an observable
+    /// outcome (the Store contract maps unknown-id deletes to `false` → API 404).
+    pub(crate) fn delete_doc(&self, collection: &str, id: &str) -> Result<bool> {
+        let url = format!("{}/{}/{}?currentDocument.exists=true", self.base, collection, id);
+        let resp = self.req(Method::DELETE, url).send().map_err(re)?;
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(true);
+        }
+        let text = resp.text().map_err(re)?;
+        if status.as_u16() == 404
+            || status.as_u16() == 409
+            || text.contains("NOT_FOUND")
+            || text.contains("FAILED_PRECONDITION")
+        {
+            return Ok(false);
+        }
+        Err(other(format!("firestore HTTP {}: {text}", status.as_u16())))
+    }
+
     /// `runQuery` returning decoded field maps.
     pub(crate) fn query(
         &self,

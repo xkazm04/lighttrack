@@ -1,14 +1,18 @@
-//! `limit_rules` collection.
+//! `limit_rules` collection: create / list / get / update / delete, with faithful
+//! `warn_at` + `scope` round-trip (a backend that drops scope silently widens a scoped cap
+//! to the whole project).
 
 use serde_json::{json, Value};
 
-use lighttrack_core::LimitRule;
+use lighttrack_core::{LimitRule, LimitScope};
 use lighttrack_store::Result;
 
 use crate::codec::*;
 use crate::rest::Rest;
 
-pub(crate) fn create_limit_rule(rest: &Rest, r: &LimitRule) -> Result<()> {
+const COLL: &str = "limit_rules";
+
+fn limit_fields(r: &LimitRule) -> Result<Fields> {
     let mut m = Fields::new();
     m.insert("id".into(), json!(r.id));
     m.insert("project_id".into(), json!(r.project_id));
@@ -17,7 +21,18 @@ pub(crate) fn create_limit_rule(rest: &Rest, r: &LimitRule) -> Result<()> {
     m.insert("threshold".into(), json!(r.threshold));
     m.insert("action".into(), json!(enum_to_str(&r.action)?));
     m.insert("enabled".into(), json!(r.enabled as i64));
-    rest.put_doc("limit_rules", &r.id, &m)
+    m.insert("warn_at".into(), json!(r.warn_at));
+    let (kind, value) = match &r.scope {
+        None => (Value::Null, Value::Null),
+        Some(s) => (json!(s.kind_str()), json!(s.value())),
+    };
+    m.insert("scope_kind".into(), kind);
+    m.insert("scope_value".into(), value);
+    Ok(m)
+}
+
+pub(crate) fn create_limit_rule(rest: &Rest, r: &LimitRule) -> Result<()> {
+    rest.put_doc(COLL, &r.id, &limit_fields(r)?)
 }
 
 pub(crate) fn list_limit_rules(rest: &Rest, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
@@ -25,8 +40,26 @@ pub(crate) fn list_limit_rules(rest: &Rest, project: &str, only_enabled: bool) -
     if only_enabled {
         filters.push(("enabled", "EQUAL", json!(1_i64)));
     }
-    let docs = rest.query("limit_rules", &filters, None, None)?;
+    let docs = rest.query(COLL, &filters, None, None)?;
     docs.iter().map(limit_from).collect()
+}
+
+pub(crate) fn get_limit_rule(rest: &Rest, id: &str) -> Result<Option<LimitRule>> {
+    rest.get_doc(COLL, id)?.as_ref().map(limit_from).transpose()
+}
+
+/// Full-document replace, but only when the rule exists (the Store contract returns `false` for an
+/// unknown id → API 404 — a plain put would silently create instead).
+pub(crate) fn update_limit_rule(rest: &Rest, r: &LimitRule) -> Result<bool> {
+    if rest.get_doc(COLL, &r.id)?.is_none() {
+        return Ok(false);
+    }
+    rest.put_doc(COLL, &r.id, &limit_fields(r)?)?;
+    Ok(true)
+}
+
+pub(crate) fn delete_limit_rule(rest: &Rest, id: &str) -> Result<bool> {
+    rest.delete_doc(COLL, id)
 }
 
 fn limit_from(m: &Fields) -> Result<LimitRule> {
@@ -38,9 +71,10 @@ fn limit_from(m: &Fields) -> Result<LimitRule> {
         threshold: ff64(m, "threshold").unwrap_or(0.0),
         action: parse_enum(&fstr(m, "action").unwrap_or_default()),
         enabled: fbool(m, "enabled"),
-        // warn_at / scope: not yet persisted by this backend (handoff) — defaulted so the shared
-        // LimitRule constructs; soft-warnings and scoped caps fall back to their Store trait defaults.
-        warn_at: None,
-        scope: None,
+        warn_at: ff64(m, "warn_at"),
+        scope: match (fstr(m, "scope_kind"), fstr(m, "scope_value")) {
+            (Some(kind), Some(value)) => LimitScope::from_parts(&kind, value),
+            _ => None,
+        },
     })
 }
