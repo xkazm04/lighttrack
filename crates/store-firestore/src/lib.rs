@@ -25,10 +25,13 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule, LlmEvent,
-    ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent, Rubric, Score,
+    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule,
+    LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent, Rubric,
+    Score,
 };
-use lighttrack_store::{CostRow, Result, Store, StoreError, Usage};
+use lighttrack_store::{
+    CostRow, EventFilter, EventPage, Result, Store, StoreError, Usage, UseCaseCostRow,
+};
 
 use rest::Rest;
 
@@ -76,11 +79,42 @@ impl Store for FirestoreStore {
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
         events::list_events(&self.rest, project, limit)
     }
+    fn list_events_filtered(
+        &self,
+        project: Option<&str>,
+        filter: &EventFilter,
+        limit: usize,
+    ) -> Result<EventPage> {
+        events::list_events_filtered(&self.rest, project, filter, limit)
+    }
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
         events::cost_summary(&self.rest, project)
     }
+    fn cost_summary_windowed(
+        &self,
+        project: Option<&str>,
+        since: Option<DateTime<Utc>>,
+        until: Option<DateTime<Utc>>,
+    ) -> Result<Vec<CostRow>> {
+        events::cost_summary_windowed(&self.rest, project, since, until)
+    }
+    fn usecase_costs(
+        &self,
+        project: Option<&str>,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<UseCaseCostRow>> {
+        events::usecase_costs(&self.rest, project, since)
+    }
     fn usage_since(&self, project: &str, since: DateTime<Utc>) -> Result<Usage> {
         events::usage_since(&self.rest, project, since)
+    }
+    fn usage_since_scoped(
+        &self,
+        project: &str,
+        since: DateTime<Utc>,
+        scope: &LimitScope,
+    ) -> Result<Usage> {
+        events::usage_since_scoped(&self.rest, project, since, scope)
     }
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
         events::get_event(&self.rest, id)
