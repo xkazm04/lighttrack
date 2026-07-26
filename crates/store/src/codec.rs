@@ -43,6 +43,30 @@ pub fn parse_enum<T: DeserializeOwned + Default>(s: &str) -> T {
     serde_json::from_value(Value::String(s.to_string())).unwrap_or_default()
 }
 
+/// Encode a `(ts, id)` keyset position as an opaque, URL/header-safe cursor (hex of `ts|id`). Both
+/// components are `|`-free by construction (fixed-width RFC3339 ts, UUID id), so decoding is exact.
+/// Shared so every backend mints byte-identical cursors — a page started on one backend's encoding
+/// must decode on another after a migration.
+pub fn encode_event_cursor(ts: &str, id: &str) -> String {
+    let raw = format!("{ts}|{id}");
+    raw.bytes().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Decode a cursor minted by [`encode_event_cursor`] back into `(ts, id)`; `None` if it isn't valid
+/// hex of a `ts|id` pair.
+pub fn decode_event_cursor(s: &str) -> Option<(String, String)> {
+    if s.is_empty() || s.len() % 2 != 0 {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect();
+    let raw = String::from_utf8(bytes?).ok()?;
+    let (ts, id) = raw.split_once('|')?;
+    Some((ts.to_string(), id.to_string()))
+}
+
 /// Serialize a JSON value to a column string, or `None` if it's `Null`.
 pub fn json_or_null(v: &Value) -> Result<Option<String>> {
     if v.is_null() {
@@ -117,6 +141,17 @@ mod tests {
         assert_eq!(parse_enum::<Sample>("beta_two"), Sample::BetaTwo);
         // Unknown / corrupt values fall back to the type default rather than erroring.
         assert_eq!(parse_enum::<Sample>("nonsense"), Sample::Alpha);
+    }
+
+    #[test]
+    fn event_cursor_round_trips_and_rejects_garbage() {
+        let ts = "2026-05-31T00:07:14.110948400Z";
+        let id = "ev-123";
+        let c = encode_event_cursor(ts, id);
+        assert_eq!(decode_event_cursor(&c), Some((ts.to_string(), id.to_string())));
+        assert_eq!(decode_event_cursor(""), None);
+        assert_eq!(decode_event_cursor("zz"), None);
+        assert_eq!(decode_event_cursor("abc"), None); // odd length
     }
 
     #[test]

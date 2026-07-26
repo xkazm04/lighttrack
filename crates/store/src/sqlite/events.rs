@@ -12,7 +12,7 @@ use lighttrack_core::{
 };
 
 use super::usage_cache::UsageCache;
-use crate::codec::{fmt_ts, parse_enum, parse_ts};
+use crate::codec::{decode_event_cursor, encode_event_cursor, fmt_ts, parse_enum, parse_ts};
 use crate::{
     event_contribution, evaluate_admission, Admission, CostRow, EventFilter, EventPage, Result,
     StoreError, TraceFilter, TracePage, Usage, UseCaseCostRow,
@@ -178,7 +178,7 @@ pub(super) fn list_filtered(
         args.push(Box::new(n.clone()));
     }
     if let Some(cursor) = &filter.cursor {
-        let (cts, cid) = decode_cursor(cursor)
+        let (cts, cid) = decode_event_cursor(cursor)
             .ok_or_else(|| StoreError::Other(format!("invalid cursor {cursor:?}")))?;
         // Strictly after (cts, cid) in DESC (ts, id) order.
         conds.push("(ts < ? OR (ts = ? AND id < ?))");
@@ -208,33 +208,11 @@ pub(super) fn list_filtered(
         events.truncate(limit);
         events
             .last()
-            .map(|e| encode_cursor(&fmt_ts(e.ts), &e.id))
+            .map(|e| encode_event_cursor(&fmt_ts(e.ts), &e.id))
     } else {
         None
     };
     Ok(EventPage { events, next_cursor })
-}
-
-/// Encode a `(ts, id)` keyset position as an opaque, URL/header-safe cursor (hex of `ts|id`). Both
-/// components are `|`-free by construction (fixed-width RFC3339 ts, UUID id), so decoding is exact.
-fn encode_cursor(ts: &str, id: &str) -> String {
-    let raw = format!("{ts}|{id}");
-    raw.bytes().map(|b| format!("{b:02x}")).collect()
-}
-
-/// Decode a cursor minted by [`encode_cursor`] back into `(ts, id)`; `None` if it isn't valid hex of a
-/// `ts|id` pair.
-fn decode_cursor(s: &str) -> Option<(String, String)> {
-    if s.is_empty() || s.len() % 2 != 0 {
-        return None;
-    }
-    let bytes: Option<Vec<u8>> = (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
-        .collect();
-    let raw = String::from_utf8(bytes?).ok()?;
-    let (ts, id) = raw.split_once('|')?;
-    Some((ts.to_string(), id.to_string()))
 }
 
 pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LlmEvent>> {
@@ -320,7 +298,7 @@ pub(super) fn list_trace_summaries_filtered(
         args.push(Box::new(mc));
     }
     if let Some(cursor) = &filter.cursor {
-        let (cts, cid) = decode_cursor(cursor)
+        let (cts, cid) = decode_event_cursor(cursor)
             .ok_or_else(|| StoreError::Other(format!("invalid cursor {cursor:?}")))?;
         // Strictly after (ended, trace_id) in DESC order.
         having.push("(MAX(ts) < ? OR (MAX(ts) = ? AND trace_id < ?))");
@@ -354,7 +332,7 @@ pub(super) fn list_trace_summaries_filtered(
         summaries.truncate(limit);
         summaries
             .last()
-            .map(|t| encode_cursor(&fmt_ts(t.ended_at), &t.trace_id))
+            .map(|t| encode_event_cursor(&fmt_ts(t.ended_at), &t.trace_id))
     } else {
         None
     };
