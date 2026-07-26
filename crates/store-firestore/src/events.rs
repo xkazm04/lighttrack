@@ -15,7 +15,8 @@ use crate::rest::Rest;
 const COLL: &str = "events";
 
 pub(crate) fn insert_event(rest: &Rest, ev: &LlmEvent) -> Result<()> {
-    rest.put_doc(COLL, &ev.id, &to_fields(ev)?)
+    // Create, not upsert: a duplicate id is a Conflict (API 409), never a silent overwrite.
+    rest.create_doc(COLL, &ev.id, &to_fields(ev)?)
 }
 
 pub(crate) fn get_event(rest: &Rest, id: &str) -> Result<Option<LlmEvent>> {

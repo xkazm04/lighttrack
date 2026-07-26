@@ -16,6 +16,18 @@ const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provi
     operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
     latency_ms, status, error, input, output, tags, source, metadata, name";
 
+/// Map a failed event insert to a typed error: SQLSTATE 23505 (unique violation — a duplicate
+/// event `id`) becomes [`StoreError::Conflict`] so the API returns 409, not an opaque 500.
+/// Mirrors the SQLite backend's `insert_err`.
+fn insert_err(e: sqlx::Error, id: &str) -> StoreError {
+    if let sqlx::Error::Database(db) = &e {
+        if db.code().as_deref() == Some("23505") {
+            return StoreError::Conflict(format!("event '{id}' already exists"));
+        }
+    }
+    pgerr(e)
+}
+
 pub(crate) async fn insert(pool: &PgPool, ev: &LlmEvent) -> Result<()> {
     let tags = serde_json::to_string(&ev.tags)?;
     let metadata = if ev.metadata.is_null() {
@@ -63,7 +75,7 @@ pub(crate) async fn insert(pool: &PgPool, ev: &LlmEvent) -> Result<()> {
     .bind(ev.name.clone())
     .execute(pool)
     .await
-    .map_err(pgerr)?;
+    .map_err(|e| insert_err(e, &ev.id))?;
     Ok(())
 }
 

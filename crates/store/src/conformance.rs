@@ -85,6 +85,15 @@ fn events(store: &dyn Store, pid: &str) -> Result<()> {
     assert_eq!(one.id, listed[0].id);
     assert!(store.get_event(&new_id())?.is_none(), "get_event None for unknown id");
 
+    // Re-inserting an existing id must be a typed Conflict on every backend — not an opaque
+    // error (Postgres pre-23505-mapping) and never a silent overwrite (Firestore pre-precondition
+    // upsert). The API's 409 / idempotency contract rides this variant.
+    match store.insert_event(&one) {
+        Err(crate::StoreError::Conflict(_)) => {}
+        other => panic!("duplicate insert_event must be Err(Conflict), got {other:?}"),
+    }
+    assert_eq!(store.list_events(Some(pid), 10)?.len(), 2, "duplicate insert persisted nothing");
+
     let costs = store.cost_summary(Some(pid))?;
     assert_eq!(costs.len(), 1, "one (provider,model) group");
     assert_eq!(costs[0].calls, 2);

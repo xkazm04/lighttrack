@@ -49,6 +49,27 @@ impl Rest {
         json_ok(self.req(Method::PATCH, url).json(&body).send().map_err(re)?).map(|_| ())
     }
 
+    /// Create a document by id, failing with [`StoreError::Conflict`] if it already exists. Uses
+    /// the `currentDocument.exists=false` precondition — [`Rest::put_doc`]'s plain PATCH is an
+    /// upsert that would silently overwrite, which is data loss on an insert path.
+    pub(crate) fn create_doc(&self, collection: &str, id: &str, fields: &Fields) -> Result<()> {
+        let url = format!("{}/{}/{}?currentDocument.exists=false", self.base, collection, id);
+        let body = json!({ "fields": encode_fields(fields) });
+        let resp = self.req(Method::PATCH, url).json(&body).send().map_err(re)?;
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let text = resp.text().map_err(re)?;
+        if status.as_u16() == 409
+            || text.contains("ALREADY_EXISTS")
+            || text.contains("FAILED_PRECONDITION")
+        {
+            return Err(StoreError::Conflict(format!("'{collection}/{id}' already exists")));
+        }
+        Err(other(format!("firestore HTTP {}: {text}", status.as_u16())))
+    }
+
     /// PATCH only the named fields (the rest of the doc is untouched).
     pub(crate) fn patch_fields(
         &self,
