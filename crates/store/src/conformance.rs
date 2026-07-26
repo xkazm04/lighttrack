@@ -258,6 +258,35 @@ fn parity_gap_methods(store: &dyn Store) -> Result<()> {
         .expect("summarize use-case group present (default returns an empty rollup)");
     assert_eq!(summarize.calls, 1);
     assert!((summarize.cost_usd - 2.0).abs() < 1e-9);
+
+    // Keyset paging: 3 events, page size 2 → one continuation page, then exhaustion. No event may
+    // be duplicated or skipped across the page boundary (the default mints no cursor at all).
+    let page1 = store.list_events_filtered(Some(&pid), &EventFilter::default(), 2)?;
+    assert_eq!(page1.events.len(), 2, "first page fills to the limit");
+    let cursor = page1.next_cursor.clone().expect("more rows exist -> next_cursor is minted");
+    let page2 = store.list_events_filtered(
+        Some(&pid),
+        &EventFilter { cursor: Some(cursor), ..Default::default() },
+        2,
+    )?;
+    assert_eq!(page2.events.len(), 1, "second page holds the remaining event");
+    assert!(page2.next_cursor.is_none(), "exhausted -> no further cursor");
+    let mut ids: Vec<&str> =
+        page1.events.iter().chain(page2.events.iter()).map(|e| e.id.as_str()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 3, "no duplicate or skipped events across the page boundary");
+
+    // Predicates AND-combine: model + name + window jointly isolate the single recent m-a event.
+    let filter = EventFilter {
+        model: Some("m-a".into()),
+        name: Some("gen".into()),
+        since: Some(since),
+        ..Default::default()
+    };
+    let anded = store.list_events_filtered(Some(&pid), &filter, 50)?;
+    assert_eq!(anded.events.len(), 1, "model+name+since AND together (not OR / not ignored)");
+    assert_eq!(anded.events[0].model, "m-a");
     Ok(())
 }
 
