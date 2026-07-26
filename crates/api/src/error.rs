@@ -40,6 +40,12 @@ pub(crate) enum ErrorCode {
     RateLimited,
     /// An unexpected server-side failure (store, serialization, I/O). HTTP 500.
     Internal,
+    /// The configured store backend has not ported the capability behind this endpoint. HTTP 501.
+    ///
+    /// Distinct from `internal` so a client (or an operator reading logs) can tell a permanent
+    /// capability gap — "this deploy's backend doesn't do traces" — from a transient outage, and
+    /// never confuses it with an empty-but-authoritative result.
+    Unsupported,
 }
 
 impl ErrorCode {
@@ -53,6 +59,7 @@ impl ErrorCode {
             ErrorCode::Conflict => StatusCode::CONFLICT,
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::Unsupported => StatusCode::NOT_IMPLEMENTED,
         }
     }
 
@@ -66,6 +73,7 @@ impl ErrorCode {
             ErrorCode::Conflict => "conflict",
             ErrorCode::RateLimited => "rate_limited",
             ErrorCode::Internal => "internal",
+            ErrorCode::Unsupported => "unsupported",
         }
     }
 }
@@ -118,6 +126,11 @@ impl From<StoreError> for ApiError {
             // one: surface it as a stable `conflict`/409 so a client can distinguish an idempotency
             // collision from a real outage instead of seeing an opaque 500.
             StoreError::Conflict(m) => ApiError::conflict(m),
+            // A capability the configured backend hasn't ported: 501 `unsupported`, so "this
+            // deploy can't answer" is never presented as an empty result or a generic outage.
+            e @ StoreError::Unsupported(_) => {
+                ApiError::new(ErrorCode::Unsupported, e.to_string())
+            }
             // Every remaining store-layer failure (sqlite/json/io, and the catch-all `Other`) is a
             // server-side fault from a client's perspective: collapse to a single stable `internal`
             // code. Clients must not branch on store internals; the message carries the detail.
@@ -140,6 +153,19 @@ mod tests {
     use super::*;
     use axum::body::to_bytes;
 
+    #[tokio::test]
+    async fn unsupported_store_error_maps_to_501() {
+        // A backend capability gap must surface as a stable `unsupported`/501 — never a 500
+        // (looks like an outage) and never a 200-with-empty (looks like data).
+        let api: ApiError = StoreError::Unsupported("traces").into();
+        let resp = api.into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"]["code"], "unsupported");
+        assert_eq!(v["error"]["message"], "traces is not supported by this store backend");
+    }
+
     #[test]
     fn code_status_mapping_is_canonical() {
         assert_eq!(ErrorCode::BadRequest.status(), StatusCode::BAD_REQUEST);
@@ -149,6 +175,7 @@ mod tests {
         assert_eq!(ErrorCode::Conflict.status(), StatusCode::CONFLICT);
         assert_eq!(ErrorCode::RateLimited.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(ErrorCode::Internal.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(ErrorCode::Unsupported.status(), StatusCode::NOT_IMPLEMENTED);
     }
 
     #[test]
@@ -160,6 +187,7 @@ mod tests {
         assert_eq!(ErrorCode::Conflict.as_str(), "conflict");
         assert_eq!(ErrorCode::RateLimited.as_str(), "rate_limited");
         assert_eq!(ErrorCode::Internal.as_str(), "internal");
+        assert_eq!(ErrorCode::Unsupported.as_str(), "unsupported");
         // Serialize matches as_str (the enum and the wire string can't drift).
         let s = serde_json::to_string(&ErrorCode::NotFound).unwrap();
         assert_eq!(s, "\"not_found\"");

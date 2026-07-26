@@ -191,7 +191,7 @@ pub(crate) struct MarginSimulateResponse {
 /// replaced by `price_per_mtok * tokens/1e6 + flat_monthly` (flat prorated to the window vs 30d); cost
 /// is the real windowed cost. Each row carries the actual margin alongside, so the operator sees the
 /// per-key uplift. Read-only: at least one of the two price params is required (else 400). SQLite fills
-/// the token usage; other backends return an empty simulation until they port `tokens_by_dimension`.
+/// the token usage; a backend that has not ported `tokens_by_dimension` answers 501 `unsupported`.
 pub(crate) async fn get_margin_simulate(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -373,8 +373,8 @@ pub(crate) struct CustomerMarginResponse {
 }
 
 /// `GET /v1/margin/customer/:id` — one customer's window revenue + cost, with the cost split by model
-/// and by use-case name. Answers "which models drive customer X's cost". SQLite-backed; other backends
-/// return empty breakdowns (see docs/MARGIN.md).
+/// and by use-case name. Answers "which models drive customer X's cost". SQLite-backed; unported
+/// backends answer 501 `unsupported` (see docs/MARGIN.md).
 pub(crate) async fn get_customer_margin(
     State(st): State<AppState>,
     headers: HeaderMap,
