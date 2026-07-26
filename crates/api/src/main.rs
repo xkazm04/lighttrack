@@ -115,7 +115,7 @@ use axum::{
     Router,
 };
 
-use lighttrack_core::PriceBook;
+use lighttrack_core::{PriceBook, Redaction};
 use lighttrack_store::{SqliteStore, Store};
 
 use auth::AuthMode;
@@ -150,8 +150,10 @@ async fn main() -> anyhow::Result<()> {
 
     // The Postgres store calls `block_on` internally, which panics if run on the async main thread.
     // Do the connect + seeding on a blocking thread; the request handlers already use spawn_blocking.
-    let (store, book) = tokio::task::spawn_blocking(
-        move || -> anyhow::Result<(Arc<dyn Store + Send + Sync>, PriceBook)> {
+    type StartupState =
+        (Arc<dyn Store + Send + Sync>, PriceBook, std::collections::HashMap<String, Redaction>);
+    let (store, book, redaction_policies) = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<StartupState> {
             let store: Arc<dyn Store + Send + Sync> = match &database_url {
                 Some(url) if url.starts_with("postgres") => {
                     Arc::new(lighttrack_store_pg::PgStore::connect(url)?)
@@ -180,7 +182,17 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!("seeded {} model prices into the DB", seed.len());
             }
             let book = PriceBook::from_rows(&store.list_prices()?);
-            Ok((store, book))
+            // Warm the per-project persistence-policy cache here too: this closure is the one
+            // startup context allowed to call the store synchronously (Postgres `block_on`s
+            // internally and panics on the async main thread — created-after-startup projects
+            // are added on create / first sight).
+            let redaction_policies: std::collections::HashMap<_, _> = store
+                .list_projects()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| (p.id, p.redaction))
+                .collect();
+            Ok((store, book, redaction_policies))
         },
     )
     .await??;
@@ -196,14 +208,6 @@ async fn main() -> anyhow::Result<()> {
     let collective_desc = collective.describe();
     let seen_webhooks = Arc::new(idempotency::SeenWebhooks::new(idempotency::DEFAULT_CAPACITY));
     let rejections = Arc::new(rejections::RejectionLedger::new());
-    // Warm the per-project persistence-policy cache so the ingest hot path never pays a store read
-    // for a known project (created-after-startup projects are added on create / first sight).
-    let redaction_policies: std::collections::HashMap<_, _> = store
-        .list_projects()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|p| (p.id, p.redaction))
-        .collect();
     let state = AppState {
         store,
         prices: Arc::new(RwLock::new(book)),
