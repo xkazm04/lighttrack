@@ -156,6 +156,15 @@ impl Store for PgStore {
     fn list_limit_rules(&self, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
         self.rt.block_on(projects::list_limits(&self.pool, project, only_enabled))
     }
+    fn get_limit_rule(&self, id: &str) -> Result<Option<LimitRule>> {
+        self.rt.block_on(projects::get_limit(&self.pool, id))
+    }
+    fn update_limit_rule(&self, r: &LimitRule) -> Result<bool> {
+        self.rt.block_on(projects::update_limit(&self.pool, r))
+    }
+    fn delete_limit_rule(&self, id: &str) -> Result<bool> {
+        self.rt.block_on(projects::delete_limit(&self.pool, id))
+    }
 
     // --- scores ---
     fn insert_score(&self, s: &Score) -> Result<()> {

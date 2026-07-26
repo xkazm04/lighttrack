@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
-use lighttrack_core::{ApiKey, LimitRule, Project, Redaction};
+use lighttrack_core::{ApiKey, LimitRule, LimitScope, Project, Redaction};
 use lighttrack_store::Result;
 
 use crate::util::{enum_to_str, fmt_ts, parse_enum, parse_ts, pgerr};
@@ -118,10 +118,24 @@ pub(crate) async fn set_key_revoked(pool: &PgPool, id: &str, revoked: bool) -> R
 
 // --- limit rules ------------------------------------------------------------
 
+/// The columns a rule row exposes, in the order [`limit_rule_from_row`] reads them.
+const LIMIT_COLS: &str =
+    "id, project_id, metric, \"window\", threshold, action, enabled, warn_at, scope_kind, scope_value";
+
+/// Split an optional scope into its `(kind, value)` column pair (both `None` when unscoped).
+fn scope_parts(scope: &Option<LimitScope>) -> (Option<&'static str>, Option<String>) {
+    match scope {
+        None => (None, None),
+        Some(s) => (Some(s.kind_str()), Some(s.value().to_string())),
+    }
+}
+
 pub(crate) async fn create_limit(pool: &PgPool, r: &LimitRule) -> Result<()> {
+    let (scope_kind, scope_value) = scope_parts(&r.scope);
     sqlx::query(
-        "INSERT INTO limit_rules (id, project_id, metric, \"window\", threshold, action, enabled) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        "INSERT INTO limit_rules \
+         (id, project_id, metric, \"window\", threshold, action, enabled, warn_at, scope_kind, scope_value) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
     )
     .bind(r.id.clone())
     .bind(r.project_id.clone())
@@ -130,6 +144,9 @@ pub(crate) async fn create_limit(pool: &PgPool, r: &LimitRule) -> Result<()> {
     .bind(r.threshold)
     .bind(enum_to_str(&r.action)?)
     .bind(r.enabled as i64)
+    .bind(r.warn_at)
+    .bind(scope_kind)
+    .bind(scope_value)
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -138,14 +155,52 @@ pub(crate) async fn create_limit(pool: &PgPool, r: &LimitRule) -> Result<()> {
 
 pub(crate) async fn list_limits(pool: &PgPool, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
     let sql = if only_enabled {
-        "SELECT id, project_id, metric, \"window\", threshold, action, enabled \
-         FROM limit_rules WHERE project_id = $1 AND enabled = 1"
+        format!("SELECT {LIMIT_COLS} FROM limit_rules WHERE project_id = $1 AND enabled = 1")
     } else {
-        "SELECT id, project_id, metric, \"window\", threshold, action, enabled \
-         FROM limit_rules WHERE project_id = $1"
+        format!("SELECT {LIMIT_COLS} FROM limit_rules WHERE project_id = $1")
     };
-    let rows = sqlx::query(sql).bind(project.to_string()).fetch_all(pool).await.map_err(pgerr)?;
+    let rows = sqlx::query(&sql).bind(project.to_string()).fetch_all(pool).await.map_err(pgerr)?;
     rows.iter().map(limit_rule_from_row).collect()
+}
+
+pub(crate) async fn get_limit(pool: &PgPool, id: &str) -> Result<Option<LimitRule>> {
+    let sql = format!("SELECT {LIMIT_COLS} FROM limit_rules WHERE id = $1");
+    let row = sqlx::query(&sql).bind(id.to_string()).fetch_optional(pool).await.map_err(pgerr)?;
+    row.as_ref().map(limit_rule_from_row).transpose()
+}
+
+/// Update a rule's mutable columns in place (matched by id); `project_id` is left untouched.
+/// Returns whether a row matched.
+pub(crate) async fn update_limit(pool: &PgPool, r: &LimitRule) -> Result<bool> {
+    let (scope_kind, scope_value) = scope_parts(&r.scope);
+    let res = sqlx::query(
+        "UPDATE limit_rules \
+         SET metric = $2, \"window\" = $3, threshold = $4, action = $5, enabled = $6, \
+             warn_at = $7, scope_kind = $8, scope_value = $9 \
+         WHERE id = $1",
+    )
+    .bind(r.id.clone())
+    .bind(enum_to_str(&r.metric)?)
+    .bind(enum_to_str(&r.window)?)
+    .bind(r.threshold)
+    .bind(enum_to_str(&r.action)?)
+    .bind(r.enabled as i64)
+    .bind(r.warn_at)
+    .bind(scope_kind)
+    .bind(scope_value)
+    .execute(pool)
+    .await
+    .map_err(pgerr)?;
+    Ok(res.rows_affected() > 0)
+}
+
+pub(crate) async fn delete_limit(pool: &PgPool, id: &str) -> Result<bool> {
+    let res = sqlx::query("DELETE FROM limit_rules WHERE id = $1")
+        .bind(id.to_string())
+        .execute(pool)
+        .await
+        .map_err(pgerr)?;
+    Ok(res.rows_affected() > 0)
 }
 
 // --- row converters ---------------------------------------------------------
@@ -193,9 +248,13 @@ fn limit_rule_from_row(row: &PgRow) -> Result<LimitRule> {
         threshold: row.try_get(4).map_err(pgerr)?,
         action: parse_enum(&action),
         enabled: row.try_get::<i64, _>(6).map_err(pgerr)? != 0,
-        // warn_at / scope: not yet persisted by this backend (handoff) — defaulted so the shared
-        // LimitRule constructs; soft-warnings and scoped caps fall back to their Store trait defaults.
-        warn_at: None,
-        scope: None,
+        warn_at: row.try_get(7).map_err(pgerr)?,
+        scope: match (
+            row.try_get::<Option<String>, _>(8).map_err(pgerr)?,
+            row.try_get::<Option<String>, _>(9).map_err(pgerr)?,
+        ) {
+            (Some(kind), Some(value)) => LimitScope::from_parts(&kind, value),
+            _ => None,
+        },
     })
 }

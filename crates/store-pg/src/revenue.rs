@@ -75,7 +75,13 @@ pub(crate) async fn cost_by_dimension(
     since: DateTime<Utc>,
     until: DateTime<Utc>,
 ) -> Result<Vec<CostByDimension>> {
-    let key = if dim == "product" { "product_id" } else { "customer_id" };
+    // Mirror the SQLite reference's dim map exactly — an unknown dim must never silently fall
+    // through to customer data (a "prompt" margin query answering with customers is wrong data).
+    let key = match dim {
+        "product" => "product_id",
+        "prompt" => "prompt",
+        _ => "customer_id",
+    };
     let sql = format!(
         "SELECT (metadata::jsonb)->>'{key}' AS k, COUNT(*)::bigint AS calls, \
          COALESCE(SUM(cost_usd),0.0) AS cost FROM events \

@@ -62,8 +62,15 @@ CREATE TABLE IF NOT EXISTS limit_rules (
   "window"    TEXT NOT NULL,
   threshold   DOUBLE PRECISION NOT NULL,
   action      TEXT NOT NULL,
-  enabled     BIGINT NOT NULL DEFAULT 1
+  enabled     BIGINT NOT NULL DEFAULT 1,
+  warn_at     DOUBLE PRECISION,
+  scope_kind  TEXT,
+  scope_value TEXT
 );
+-- Existing deployments predate warn_at/scope (soft warnings + scoped caps); idempotent on fresh DBs.
+ALTER TABLE limit_rules ADD COLUMN IF NOT EXISTS warn_at DOUBLE PRECISION;
+ALTER TABLE limit_rules ADD COLUMN IF NOT EXISTS scope_kind TEXT;
+ALTER TABLE limit_rules ADD COLUMN IF NOT EXISTS scope_value TEXT;
 
 CREATE TABLE IF NOT EXISTS scores (
   id          TEXT PRIMARY KEY,
