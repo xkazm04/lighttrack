@@ -171,6 +171,39 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
     assert_eq!(enabled[0].metric, LimitMetric::CostUsd);
     let u = store.usage_since(pid, Utc::now() - chrono::Duration::hours(1))?;
     assert!(rule.evaluate(u.cost_usd).breached, "0.003 cost should breach 0.0015 threshold");
+
+    // Scoped-rule lifecycle round-trip: `warn_at` + `scope` must persist faithfully — a backend
+    // that drops them turns "cap gpt-4o at $X" into an unscoped project-wide cap (a semantic
+    // inversion, not an absence) — and get/update/delete must work wherever create does.
+    let scoped = LimitRule {
+        id: new_id(),
+        project_id: pid.into(),
+        metric: LimitMetric::CostUsd,
+        window: LimitWindow::Day,
+        threshold: 50.0,
+        action: LimitAction::Throttle,
+        enabled: true,
+        warn_at: Some(0.8),
+        scope: Some(LimitScope::Model("conf-scoped-model".into())),
+    };
+    store.create_limit_rule(&scoped)?;
+    let got = store.get_limit_rule(&scoped.id)?.expect("get_limit_rule finds the rule");
+    assert_eq!(got.warn_at, Some(0.8), "warn_at round-trips");
+    assert_eq!(
+        got.scope,
+        Some(LimitScope::Model("conf-scoped-model".into())),
+        "scope round-trips (dropping it silently widens a scoped cap to the whole project)"
+    );
+    let mut updated = got.clone();
+    updated.threshold = 75.0;
+    updated.scope = Some(LimitScope::Provider("conf-prov".into()));
+    assert!(store.update_limit_rule(&updated)?, "update matches the row");
+    let after = store.get_limit_rule(&scoped.id)?.expect("rule still present after update");
+    assert!((after.threshold - 75.0).abs() < 1e-9, "threshold update persists");
+    assert_eq!(after.scope, Some(LimitScope::Provider("conf-prov".into())), "scope update persists");
+    assert!(store.delete_limit_rule(&scoped.id)?, "delete removes the rule");
+    assert!(store.get_limit_rule(&scoped.id)?.is_none(), "deleted rule is gone");
+    assert!(!store.delete_limit_rule(&new_id())?, "deleting an unknown id returns false");
     Ok(())
 }
 
