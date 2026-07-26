@@ -41,6 +41,13 @@ pub enum StoreError {
     /// as `Sqlite`/`Other`, i.e. current behavior) — SQLite detects and raises it.
     #[error("conflict: {0}")]
     Conflict(String),
+    /// The backend has not ported this capability. Distinct from `Other` so the API can answer 501
+    /// (`unsupported`) instead of an opaque 500 — and so a permanent capability gap is never
+    /// mistaken for a transient outage (or, worse, for "no data": trait defaults used to return
+    /// empty results here, which read as authoritative zeros on unported backends). The payload
+    /// names the capability; the full message is stable enough to log but not to parse.
+    #[error("{0} is not supported by this store backend")]
+    Unsupported(&'static str),
     #[error("{0}")]
     Other(String),
 }
@@ -354,7 +361,7 @@ pub trait Store: Send + Sync {
         _project: Option<&str>,
         _since: Option<DateTime<Utc>>,
     ) -> Result<Vec<UseCaseCostRow>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("the use-case cost rollup"))
     }
 
     /// Aggregate usage for one project since `since` (inclusive). Used by limit evaluation.
@@ -387,7 +394,7 @@ pub trait Store: Send + Sync {
         _since: DateTime<Utc>,
         _until: DateTime<Utc>,
     ) -> Result<Vec<DailyUsage>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("the daily usage series"))
     }
     /// Daily (UTC) LLM cost per billing-dimension value (`customer` | `product`, from event
     /// metadata) over `[since, until)`, for per-customer/product margin-trend forecasting.
@@ -398,7 +405,7 @@ pub trait Store: Send + Sync {
         _since: DateTime<Utc>,
         _until: DateTime<Utc>,
     ) -> Result<Vec<DailyDimCost>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("the daily cost series"))
     }
 
     // --- projects ---
@@ -416,16 +423,14 @@ pub trait Store: Send + Sync {
     /// operator can list, audit last-use, and pick one to revoke. Default `Ok(vec![])` so unported
     /// backends compile (matching the `get_limit_rule` precedent). NEVER expose `key_hash` upward.
     fn list_api_keys(&self, _project: &str) -> Result<Vec<ApiKey>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("listing API keys"))
     }
     /// Set a key's `revoked` flag (soft — the row is kept for audit; auth already rejects a revoked
     /// key at `guards.rs`). Returns `true` when a row changed, `false` when the id is unknown (→ 404).
     /// Default is a clear unimplemented error rather than a silent no-op, so an operator on an unported
     /// backend learns the key was NOT revoked instead of believing a leaked key is dead.
     fn set_api_key_revoked(&self, _id: &str, _revoked: bool) -> Result<bool> {
-        Err(StoreError::Other(
-            "revoking API keys is not supported by this store backend".to_string(),
-        ))
+        Err(StoreError::Unsupported("revoking API keys"))
     }
 
     // --- limit rules ---
@@ -434,7 +439,7 @@ pub trait Store: Send + Sync {
     /// Fetch one rule by id (across projects — the caller is admin-gated). Default `None` so
     /// backends that haven't ported the lifecycle read compile unchanged.
     fn get_limit_rule(&self, _id: &str) -> Result<Option<LimitRule>> {
-        Ok(None)
+        Err(StoreError::Unsupported("limit-rule lookup"))
     }
     /// Replace a rule's mutable fields (metric/window/threshold/action/enabled — and, once ported,
     /// `warn_at`/`scope`), matched by `r.id`; `project_id` is immutable. Returns `true` when a row
@@ -442,16 +447,12 @@ pub trait Store: Send + Sync {
     /// unimplemented error rather than a silent no-op, so an operator on an unported backend learns
     /// the rule was *not* changed instead of believing a cap was tightened.
     fn update_limit_rule(&self, _r: &LimitRule) -> Result<bool> {
-        Err(StoreError::Other(
-            "updating limit rules is not supported by this store backend".to_string(),
-        ))
+        Err(StoreError::Unsupported("updating limit rules"))
     }
     /// Delete a rule by id. Returns `true` when a row was removed, `false` when the id is unknown
     /// (the API maps that to 404). Default is a clear unimplemented error (see `update_limit_rule`).
     fn delete_limit_rule(&self, _id: &str) -> Result<bool> {
-        Err(StoreError::Other(
-            "deleting limit rules is not supported by this store backend".to_string(),
-        ))
+        Err(StoreError::Unsupported("deleting limit rules"))
     }
 
     // --- single event lookup + scores (Phase 3) ---
@@ -484,7 +485,7 @@ pub trait Store: Send + Sync {
     // events gets a correct rollup for free, from the pure `Trace::from_events`).
     /// Compact summaries of the most recent traces (grouped by `trace_id`), newest activity first.
     fn list_traces(&self, _project: Option<&str>, _limit: usize) -> Result<Vec<TraceSummary>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("traces"))
     }
     /// Filtered, keyset-paginated trace listing (newest `ended` first). Applies the [`TraceFilter`]
     /// and pages on `(ended, trace_id)` descending, returning up to `limit` summaries plus a
@@ -507,11 +508,11 @@ pub trait Store: Send + Sync {
     }
     /// All events of one trace, regardless of project (the caller authorizes against the result).
     fn list_trace_events(&self, _trace_id: &str) -> Result<Vec<LlmEvent>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("traces"))
     }
     /// Scores attached to any event within a trace (i.e. `scores.event_id` ∈ the trace's events).
     fn list_trace_scores(&self, _trace_id: &str) -> Result<Vec<Score>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("traces"))
     }
     /// Full rollup (totals + span tree) for one trace, or `None` if it has no events.
     fn get_trace(&self, trace_id: &str) -> Result<Option<Trace>> {
@@ -556,38 +557,32 @@ pub trait Store: Send + Sync {
     // clear error rather than a silent drop, and reads are empty/None.
     /// Register a new named prompt (with its initial labels/benchmark link).
     fn create_prompt(&self, _p: &Prompt) -> Result<()> {
-        Err(StoreError::Other(
-            "prompt registry is not supported by this store backend".to_string(),
-        ))
+        Err(StoreError::Unsupported("the prompt registry"))
     }
     /// Update a prompt's mutable fields (label pointers, linked benchmark, `updated_at`).
     fn update_prompt(&self, _p: &Prompt) -> Result<()> {
-        Err(StoreError::Other(
-            "prompt registry is not supported by this store backend".to_string(),
-        ))
+        Err(StoreError::Unsupported("the prompt registry"))
     }
     /// Look up a prompt by its registry name within a project (the runtime fetch path).
     fn get_prompt(&self, _project: &str, _name: &str) -> Result<Option<Prompt>> {
-        Ok(None)
+        Err(StoreError::Unsupported("the prompt registry"))
     }
     fn get_prompt_by_id(&self, _id: &str) -> Result<Option<Prompt>> {
-        Ok(None)
+        Err(StoreError::Unsupported("the prompt registry"))
     }
     fn list_prompts(&self, _project: &str) -> Result<Vec<Prompt>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("the prompt registry"))
     }
     /// Append an immutable version to a prompt.
     fn create_prompt_version(&self, _v: &PromptVersion) -> Result<()> {
-        Err(StoreError::Other(
-            "prompt registry is not supported by this store backend".to_string(),
-        ))
+        Err(StoreError::Unsupported("the prompt registry"))
     }
     fn get_prompt_version(&self, _prompt_id: &str, _version: u32) -> Result<Option<PromptVersion>> {
-        Ok(None)
+        Err(StoreError::Unsupported("the prompt registry"))
     }
     /// All versions of a prompt, newest version first.
     fn list_prompt_versions(&self, _prompt_id: &str) -> Result<Vec<PromptVersion>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("the prompt registry"))
     }
 
     // --- revenue + margin (Phase 1 profit tracking) ---
@@ -595,9 +590,7 @@ pub trait Store: Send + Sync {
     // no-op (empty), and inserting revenue is a clear error rather than a silent drop.
     /// Persist one normalized revenue record.
     fn insert_revenue_event(&self, _ev: &RevenueEvent) -> Result<()> {
-        Err(StoreError::Other(
-            "revenue tracking is not supported by this store backend".to_string(),
-        ))
+        Err(StoreError::Unsupported("revenue tracking"))
     }
     /// Persist a batch of revenue records **atomically** — all-or-nothing. A webhook delivery carries
     /// many events; if one fails a constraint mid-batch, none may be committed, or the provider's
@@ -618,7 +611,7 @@ pub trait Store: Send + Sync {
         _since: DateTime<Utc>,
         _until: DateTime<Utc>,
     ) -> Result<Vec<RevenueEvent>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("revenue tracking"))
     }
     /// LLM cost grouped by a billing dimension (`customer` | `product`, from event metadata) over
     /// `[since, until)`.
@@ -629,7 +622,7 @@ pub trait Store: Send + Sync {
         _since: DateTime<Utc>,
         _until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("cost by dimension"))
     }
     /// Prompt+completion tokens grouped by a billing dimension (`customer` | `product`, from event
     /// metadata) over `[since, until)` — the usage side of the pricing what-if simulator. Default empty
@@ -641,7 +634,7 @@ pub trait Store: Send + Sync {
         _since: DateTime<Utc>,
         _until: DateTime<Utc>,
     ) -> Result<Vec<TokensByDimension>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("token usage by dimension"))
     }
     /// One customer's LLM cost broken down **by model** (`provider/model`) over `[since, until)`,
     /// scoped by `json_extract(metadata,'$.customer_id') = customer`. Default empty so unported
@@ -653,7 +646,7 @@ pub trait Store: Send + Sync {
         _since: DateTime<Utc>,
         _until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("customer cost breakdown"))
     }
     /// One customer's LLM cost broken down **by use-case `name`** over `[since, until)`, scoped by the
     /// same `metadata.customer_id`. Default empty (see [`Store::customer_cost_by_model`]).
@@ -664,7 +657,7 @@ pub trait Store: Send + Sync {
         _since: DateTime<Utc>,
         _until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("customer cost breakdown"))
     }
 
     // --- cloud→device relay queue (docs/RELAY.md) ---
@@ -672,16 +665,14 @@ pub trait Store: Send + Sync {
     // clear error rather than a silent drop, and reads/leases are empty/None.
     /// Enqueue one device task.
     fn create_relay_task(&self, _t: &RelayTask) -> Result<()> {
-        Err(StoreError::Other(
-            "relay queue is not supported by this store backend".to_string(),
-        ))
+        Err(StoreError::Unsupported("the relay queue"))
     }
     fn get_relay_task(&self, _id: &str) -> Result<Option<RelayTask>> {
-        Ok(None)
+        Err(StoreError::Unsupported("the relay queue"))
     }
     /// Dedupe lookup for idempotent enqueue: the task holding `key` within `project`, if any.
     fn find_relay_task_by_key(&self, _project: &str, _key: &str) -> Result<Option<RelayTask>> {
-        Ok(None)
+        Err(StoreError::Unsupported("the relay queue"))
     }
     fn list_relay_tasks(
         &self,
@@ -689,7 +680,7 @@ pub trait Store: Send + Sync {
         _status: Option<&str>,
         _limit: usize,
     ) -> Result<Vec<RelayTask>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("the relay queue"))
     }
     /// Atomically lease up to `max` due tasks for `device`: queued tasks past `next_attempt_at`
     /// plus expired leases with attempts to spare (each lease consumes an attempt).
@@ -699,20 +690,18 @@ pub trait Store: Send + Sync {
         _lease_secs: i64,
         _max: usize,
     ) -> Result<Vec<RelayTask>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("the relay queue"))
     }
     /// Dead-letter expired leases with exhausted attempts, returning the newly-dead tasks (for
     /// alerting). The API runs this before each lease.
     fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("the relay queue"))
     }
     /// Settle a leased task with the device's outcome; returns the updated row (`None` if the id is
     /// unknown). Settling a task that is no longer leased returns it unchanged, so a duplicate
     /// result report is harmless.
     fn settle_relay_task(&self, _id: &str, _outcome: &RelayOutcome) -> Result<Option<RelayTask>> {
-        Err(StoreError::Other(
-            "relay queue is not supported by this store backend".to_string(),
-        ))
+        Err(StoreError::Unsupported("the relay queue"))
     }
 
     // --- collective model intelligence (network effect) ---
@@ -721,16 +710,14 @@ pub trait Store: Send + Sync {
     /// Upsert one privacy-safe digest entry received from a contributor (keyed on
     /// contributor_id + provider + model + task_type).
     fn upsert_collective_entry(&self, _e: &CollectiveEntry) -> Result<()> {
-        Err(StoreError::Other(
-            "collective leaderboard is not supported by this store backend".to_string(),
-        ))
+        Err(StoreError::Unsupported("the collective leaderboard"))
     }
     /// Drop all of a contributor's entries (so a re-contribution replaces, never accretes, its set).
     fn delete_collective_entries(&self, _contributor_id: &str) -> Result<u64> {
-        Ok(0)
+        Err(StoreError::Unsupported("the collective leaderboard"))
     }
     /// All stored digest entries, for merging into the public leaderboard.
     fn list_collective_entries(&self) -> Result<Vec<CollectiveEntry>> {
-        Ok(Vec::new())
+        Err(StoreError::Unsupported("the collective leaderboard"))
     }
 }

@@ -653,7 +653,9 @@ fn relay(store: &dyn Store, pid: &str) -> Result<()> {
     let mut t = task(pid, 2);
     t.idempotency_key = Some(new_id());
     match store.create_relay_task(&t) {
-        Err(e) if e.to_string().contains("not supported") => {
+        // Typed capability gap (never matched on the message — error.rs forbids parsing prose):
+        // a backend without the relay queue skips this section instead of failing it.
+        Err(e @ crate::StoreError::Unsupported(_)) => {
             eprintln!("skipping relay conformance: {e}");
             return Ok(());
         }
