@@ -11,6 +11,7 @@
 //!   GET  /v1/events?project=&limit=&since=&until=&provider=&model=&trace_id=&name=&cursor=
 //!                                        keyset pagination: next page cursor in `X-Next-Cursor`
 //!   GET  /v1/events/:id
+//!   POST /v1/traces                      OTLP/HTTP JSON export: OTel GenAI spans -> events (see `otlp`)
 //!   GET  /v1/traces?project=&limit=     list traces (rollups grouped by trace_id)
 //!   GET  /v1/traces/:id                 one trace: totals + span tree + scores within it
 //!   POST /v1/traces/:id/score           score a whole trace (anchored to its root span)
@@ -84,6 +85,7 @@ mod guards;
 mod idempotency;
 mod jobs;
 mod limits;
+mod otlp;
 mod prices;
 mod projects;
 mod prompts;
@@ -254,7 +256,12 @@ pub(crate) fn build_router(state: AppState) -> Router {
             post(events_batch::post_batch).layer(DefaultBodyLimit::max(batch_body_limit)),
         )
         .route("/v1/events/:id", get(events::get_event_by_id))
-        .route("/v1/traces", get(traces::list_traces))
+        .route(
+            "/v1/traces",
+            get(traces::list_traces)
+                .post(otlp::post_traces)
+                .layer(DefaultBodyLimit::max(batch_body_limit)),
+        )
         .route("/v1/traces/:id", get(traces::get_trace))
         .route("/v1/traces/:id/score", post(traces::score_trace))
         .route("/v1/costs", get(events::get_costs))

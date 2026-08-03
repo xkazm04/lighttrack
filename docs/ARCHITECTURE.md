@@ -46,8 +46,12 @@ tracking LightTrack's own internal calls.
 Apps send a **normalized event** (see `docs/DATA_MODEL.md`). Two front doors, same internal model:
 1. **`POST /v1/events`** — simple JSON, the default. A ~30-line client snippet per language wraps each
    provider call (record model, usage, latency, status) and posts the event. Cost is computed server-side.
-2. **OTel GenAI** (later) — accept OTLP/HTTP using the GenAI semantic conventions and map spans → events.
-   Keeps us vendor-neutral (the anti-lock-in lever vs Langfuse).
+2. **`POST /v1/traces`** — OTLP/HTTP **JSON** using the OTel GenAI semantic conventions; spans are
+   mapped → events (see `docs/OTLP.md`). Keeps us vendor-neutral (the anti-lock-in lever vs Langfuse):
+   an app already instrumented with OpenTelemetry needs no LightTrack SDK, just an exporter endpoint.
+   Mapping is *all* this door does — the mapped events go through the same batch handler as (1), so
+   validation, redaction, pricing and limit admission are identical. gRPC/protobuf OTLP and the
+   metrics/logs signals are not accepted.
 
 Provider SDKs already return token usage; the client just forwards it. Prompts/outputs are **optional**
 and **redactable** per project (store nothing, hashes, or full text).
