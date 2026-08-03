@@ -120,6 +120,40 @@ tiers: **Alert** (notify only — the event is still recorded), **Throttle** (gr
 readable via `GET /v1/limits/status` and MCP. Inline *pre-call* blocking (before the provider spend)
 still requires gateway mode. The scoring/benchmark engine is **not** subject to limits.
 
+### 7a0. Scoped rules and per-key budgets
+A rule's optional `scope` narrows it to one value of one dimension:
+`{"provider":…}` · `{"model":…}` · `{"name":…}` (use-case) · `{"api_key":…}` · `{"customer":…}`.
+An unscoped rule is project-wide (the original behavior). A scoped rule *only applies to* matching
+traffic: a non-matching event never counts toward it and can never be rejected by it, and its rolling
+usage is read over its own dimension slice. A row carrying no value on the dimension (an unnamed call,
+an untagged customer) matches no scope on it.
+
+**Per-key budgets.** `{"api_key": "<key-id>"}` is what lets ten keys of one project have ten different
+budgets — staging at $5/day, production at $500. The value is the opaque `api_keys.id`: never the key
+material, never its prefix, never a hash of the secret. Ingest stamps it onto the event as
+`metadata.api_key_id`, server-side from the authenticated principal, **overwriting or removing whatever
+the body contained** — same trust rule as `received_at`. Without that strip, a caller could bill its
+spend to another key or dodge its own cap by claiming a different id. Admin/dev principals are not keys,
+so their traffic is deliberately *unattributed* rather than borrowing an identity. Events written before
+this existed carry no `api_key_id` and fall into the unattributed bucket.
+
+The linkage rides in `metadata` (like `customer_id` / `cost_source`) rather than a column, so it needed
+no migration on any backend; SQLite/Postgres read it with `json_extract` / `->>`, Firestore parses the
+stored JSON string client-side.
+
+**Who is spending — `GET /v1/limits/usage?project=&by=&window=&limit=`.** Rolling usage grouped by one
+dimension (`api_key` default, or `customer`/`model`/`provider`/`name`), ranked by cost, each row
+carrying the scoped rules that bind *that* value evaluated against *that* value's usage. This answers
+"which key is burning the budget" **before** any rule exists (the sizing question) and "which key drove
+this breach" after — over the authenticated API, not only inside an alert payload. Untagged traffic is a
+`null`-valued row, so the parts sum to the project total. Admin callers additionally get a `label`
+(key name + non-secret prefix); a project key gets ids only — a key is not handed a roster of its
+siblings. Backends without the grouped query answer **501 `unsupported`**, never an empty breakdown.
+
+Alert payloads deliberately do *not* enumerate key/customer contributors: a webhook fans out further
+than the API does. A key- or customer-scoped breach alert states the operator's own rule scope and
+points at `/v1/limits/usage`. The dimension is not exposed over MCP.
+
 ### 7a. Unpriced traffic under a cost cap
 An event whose model is absent from the price book stores `cost_usd = NULL` — never a phantom zero,
 because that invariant is what makes margin/analytics honest. But `SUM(cost_usd)` reads `NULL` as

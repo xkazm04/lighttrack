@@ -75,15 +75,14 @@ async fn usage_in_tx(
                 .await
         }
         Some(s) => {
-            // A fixed keyword from the enum (never user input) — safe to interpolate.
-            let column = match s {
-                LimitScope::Provider(_) => "provider",
-                LimitScope::Model(_) => "model",
-                LimitScope::Name(_) => "name",
-            };
+            // A fixed literal chosen by the enum discriminant (never user input) — safe to
+            // interpolate. Shared with the pooled read path via `scope_expr` so a new scope
+            // dimension cannot be taught to one and not the other: `api_key` and `customer` are
+            // metadata extractions rather than columns.
+            let expr = crate::events::scope_expr(s.kind_str()).unwrap_or("NULL");
             let sql = format!(
                 "SELECT {USAGE_COLS} FROM events \
-                 WHERE project_id = $1 AND {RECEIVED} >= $2 AND {column} = $3"
+                 WHERE project_id = $1 AND {RECEIVED} >= $2 AND {expr} = $3"
             );
             sqlx::query(&sql)
                 .bind(project.to_string())
@@ -113,7 +112,7 @@ async fn admit_one(
     let now = Utc::now();
     let mut usages: HashMap<(LimitWindow, Option<LimitScope>), Usage> = HashMap::new();
     for r in rules {
-        if !scope_matches(r.scope.as_ref(), ev.provider.as_str(), &ev.model, ev.name.as_deref()) {
+        if !scope_matches(r.scope.as_ref(), &ev.scope_dims()) {
             continue;
         }
         let key = (r.window, r.scope.clone());

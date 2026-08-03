@@ -107,7 +107,7 @@ pub(crate) async fn get_task(
     let task = spawn_db(move || store.get_relay_task(&id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("relay task '{id}' not found")))?;
-    if let Principal::Project(pid) = &p {
+    if let Principal::Project { project_id: pid, .. } = &p {
         if *pid != task.project_id {
             return Err(ApiError::forbidden("key not authorized for that project"));
         }

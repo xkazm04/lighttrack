@@ -7,7 +7,7 @@ use sqlx::Row;
 use lighttrack_core::{LimitScope, LlmEvent, Operation, Provider, Status, TokenUsage};
 use lighttrack_store::codec::{decode_event_cursor, encode_event_cursor};
 use lighttrack_store::{
-    CostRow, EventFilter, EventPage, Result, StoreError, Usage, UseCaseCostRow,
+    CostRow, EventFilter, EventPage, Result, ScopeUsage, StoreError, Usage, UseCaseCostRow,
 };
 
 use crate::util::{fmt_ts, parse_enum, parse_ts, pgerr};
@@ -277,23 +277,39 @@ pub(crate) async fn list_filtered(
     Ok(EventPage { events, next_cursor, total: None })
 }
 
-/// Rolling usage restricted to one scope dimension (provider / model / use-case name). A NULL `name`
-/// never matches a name scope, mirroring the SQLite reference.
+/// The SQL expression yielding one scope dimension's value for a row — columns for the three
+/// original dimensions, a `jsonb` extraction for the two that ride in `metadata` (`api_key_id` is
+/// server-stamped at ingest, `customer_id` is the billing linkage). The `NULLIF(metadata,'')::jsonb`
+/// cast is the same one [`USAGE_COLS`] uses; see the note there.
+///
+/// Fixed literals chosen by the enum discriminant — never user input, so safe to interpolate. Values
+/// are always bound.
+pub(crate) fn scope_expr(kind: &str) -> Option<&'static str> {
+    match kind {
+        "provider" => Some("provider"),
+        "model" => Some("model"),
+        "name" => Some("name"),
+        "api_key" => Some("(NULLIF(metadata,'')::jsonb)->>'api_key_id'"),
+        "customer" => Some("(NULLIF(metadata,'')::jsonb)->>'customer_id'"),
+        _ => None,
+    }
+}
+
+/// Rolling usage restricted to one scope dimension (provider / model / use-case name / API key /
+/// billing customer). A NULL dimension never matches, mirroring the SQLite reference.
 pub(crate) async fn usage_since_scoped(
     pool: &PgPool,
     project: &str,
     since: chrono::DateTime<chrono::Utc>,
     scope: &LimitScope,
 ) -> Result<Usage> {
-    // `column` is a fixed keyword from the enum (never user input) — safe to interpolate.
-    let column = match scope {
-        LimitScope::Provider(_) => "provider",
-        LimitScope::Model(_) => "model",
-        LimitScope::Name(_) => "name",
-    };
+    let expr = scope_expr(scope.kind_str()).unwrap_or("NULL");
     let sql = format!(
+        // `{RECEIVED}`, not `ts`: a scoped window is still a window, and a backdated client clock
+        // must not slide spend out of it. `{expr}` generalizes the dimension to the two that ride
+        // in `metadata` as well as the three that are columns.
         "SELECT {USAGE_COLS} FROM events \
-         WHERE project_id = $1 AND {RECEIVED} >= $2 AND {column} = $3"
+         WHERE project_id = $1 AND {RECEIVED} >= $2 AND {expr} = $3"
     );
     let row = sqlx::query(&sql)
         .bind(project.to_string())
@@ -303,6 +319,43 @@ pub(crate) async fn usage_since_scoped(
         .await
         .map_err(pgerr)?;
     map_usage(&row)
+}
+
+/// Rolling usage since `since` grouped by every distinct value of one scope dimension — the
+/// pre-breach "who is spending" view. Rows carrying no value on the dimension fold into a single
+/// `NULL` bucket rather than being dropped, so the parts still sum to the project total.
+pub(crate) async fn usage_by_scope(
+    pool: &PgPool,
+    project: &str,
+    since: chrono::DateTime<chrono::Utc>,
+    kind: &str,
+) -> Result<Vec<ScopeUsage>> {
+    let expr = scope_expr(kind)
+        .ok_or_else(|| StoreError::Other(format!("unknown scope dimension '{kind}'")))?;
+    let sql = format!(
+        "SELECT {expr} AS k, {USAGE_COLS} FROM events \
+         WHERE project_id = $1 AND ts >= $2 GROUP BY k ORDER BY 2 DESC"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(project.to_string())
+        .bind(fmt_ts(since))
+        .fetch_all(pool)
+        .await
+        .map_err(pgerr)?;
+    rows.iter()
+        .map(|r| {
+            Ok(ScopeUsage {
+                value: r.try_get(0).map_err(pgerr)?,
+                usage: Usage {
+                    cost_usd: r.try_get(1).map_err(pgerr)?,
+                    calls: r.try_get(2).map_err(pgerr)?,
+                    tokens: r.try_get(3).map_err(pgerr)?,
+                    unpriced_calls: r.try_get(4).map_err(pgerr)?,
+                    client_cost_usd: r.try_get(5).map_err(pgerr)?,
+                },
+            })
+        })
+        .collect()
 }
 
 /// Use-case rollup grouped by (name, provider, model), optionally windowed by `since`. Un-named

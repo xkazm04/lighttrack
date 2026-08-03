@@ -43,6 +43,13 @@
 //!                                        best-effort and process-local: it lives in memory, resets on
 //!                                        restart, and rolls entries off after 24h (rejected events are
 //!                                        never stored — that would corrupt the usage/cost rollups).
+//!   GET  /v1/limits/usage?project=&by=&window=&limit=
+//!                                        rolling usage grouped by ONE scope dimension
+//!                                        (api_key | customer | model | provider | name), each row
+//!                                        carrying the scoped rules that bind it. Answers "which key
+//!                                        is spending" BEFORE a cap trips, and "which key drove this
+//!                                        breach" after — over the API, not only via an alert channel.
+//!                                        501 `unsupported` on backends without the grouped query.
 //!   POST /v1/relay/tasks                 enqueue a device task (GET ?project=&status=&limit= lists)
 //!   GET  /v1/relay/tasks/:id             task status/result (the originating app polls this)
 //!   POST /v1/relay/lease                 device: lease due tasks (device key; outbound-only)
@@ -103,6 +110,7 @@ mod guards;
 mod idempotency;
 mod jobs;
 mod limits;
+mod limits_usage;
 mod otlp;
 mod prices;
 mod projects;
@@ -123,6 +131,8 @@ mod tests_collective;
 mod tests_forecast;
 #[cfg(test)]
 mod tests_ingest;
+#[cfg(test)]
+mod tests_limit_scope;
 #[cfg(test)]
 mod tests_relay;
 #[cfg(test)]
@@ -361,6 +371,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
             put(limits::update_limit).delete(limits::delete_limit),
         )
         .route("/v1/limits/status", get(limits::limits_status))
+        .route("/v1/limits/usage", get(limits_usage::usage_by_scope))
         .route("/v1/relay/tasks", post(relay::enqueue_task).get(relay::list_tasks))
         .route("/v1/relay/tasks/:id", get(relay::get_task))
         .route("/v1/relay/tasks/:id/result", post(relay::post_result))

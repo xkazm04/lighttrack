@@ -49,7 +49,7 @@ pub(crate) async fn authenticate(st: &AppState, headers: &HeaderMap) -> Result<P
                         tokio::task::spawn_blocking(move || store2.touch_api_key(&id, Utc::now()))
                             .await;
                 });
-                return Ok(Principal::Project(k.project_id));
+                return Ok(Principal::Project { project_id: k.project_id, key_id: k.id });
             }
         }
     }
@@ -63,14 +63,14 @@ pub(crate) async fn authenticate(st: &AppState, headers: &HeaderMap) -> Result<P
 pub(crate) fn ensure_can_admin(p: &Principal) -> Result<(), ApiError> {
     match p {
         Principal::Admin | Principal::Dev => Ok(()),
-        Principal::Project(_) => Err(ApiError::forbidden("admin privileges required")),
+        Principal::Project { .. } => Err(ApiError::forbidden("admin privileges required")),
     }
 }
 
 /// Which project an ingested event belongs to. A project key forces its own project.
 pub(crate) fn resolve_ingest_project(p: &Principal, body_project: &str) -> Result<String, ApiError> {
     match p {
-        Principal::Project(pid) => Ok(pid.clone()),
+        Principal::Project { project_id, .. } => Ok(project_id.clone()),
         Principal::Admin | Principal::Dev => {
             if body_project.trim().is_empty() {
                 Err(ApiError::bad_request("project_id is required"))
@@ -87,7 +87,7 @@ pub(crate) fn resolve_read_project(
     requested: Option<&str>,
 ) -> Result<Option<String>, ApiError> {
     match p {
-        Principal::Project(pid) => {
+        Principal::Project { project_id: pid, .. } => {
             if let Some(r) = requested {
                 if r != pid {
                     return Err(ApiError::forbidden("key not authorized for that project"));

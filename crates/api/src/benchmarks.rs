@@ -156,7 +156,7 @@ pub(crate) async fn load_benchmark_authorized(
     let bench = spawn_db(move || store.get_benchmark(&id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("benchmark '{id}' not found")))?;
-    if let Principal::Project(pid) = p {
+    if let Principal::Project { project_id: pid, .. } = p {
         if &bench.project_id != pid {
             return Err(ApiError::forbidden("key not authorized for that benchmark"));
         }

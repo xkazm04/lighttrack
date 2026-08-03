@@ -619,7 +619,14 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
         Some(LimitScope::Provider("openai".into())),
         Some(LimitScope::Name("x".into())),
         Some(LimitScope::Name("y".into())),
+        // The two metadata-borne dimensions: they read through `json_extract` in the reference and
+        // through the loaded row in the cache, so they are exactly where the two could drift.
+        Some(LimitScope::ApiKey("k-1".into())),
+        Some(LimitScope::ApiKey("k-2".into())),
+        Some(LimitScope::Customer("cus-a".into())),
     ];
+    let keys: [Option<&str>; 3] = [Some("k-1"), Some("k-2"), None];
+    let customers: [Option<&str>; 2] = [Some("cus-a"), None];
 
     let mut id_counter = 0u64;
     let mut now = base;
@@ -638,11 +645,25 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
             // all three kinds: unpriced (no price-book entry → NULL cost), client-self-reported, and
             // book-priced. Otherwise the cache could diverge from the reference exactly where the
             // limit path leans hardest.
+            let mut meta = serde_json::Map::new();
             match rng() % 4 {
                 0 => e.cost_usd = None,
-                1 => e.metadata = serde_json::json!({ "cost_source": "client" }),
-                2 => e.metadata = serde_json::json!({ "cost_source": "book" }),
+                1 => {
+                    meta.insert("cost_source".into(), "client".into());
+                }
+                2 => {
+                    meta.insert("cost_source".into(), "book".into());
+                }
                 _ => {}
+            }
+            if let Some(k) = keys[(rng() % 3) as usize] {
+                meta.insert("api_key_id".into(), k.into());
+            }
+            if let Some(c) = customers[(rng() % 2) as usize] {
+                meta.insert("customer_id".into(), c.into());
+            }
+            if !meta.is_empty() {
+                e.metadata = serde_json::Value::Object(meta);
             }
             super::events::insert(&conn, &e).unwrap();
         }
@@ -1138,6 +1159,116 @@ fn scoped_cap_rejects_only_matching_dimension() {
         .usage_since_scoped("p1", LimitWindow::Hour.since(Utc::now()), &LimitScope::Model("gpt-4o".into()))
         .unwrap();
     assert_eq!(scoped.calls, 1, "only the one admitted gpt-4o row counts toward the model scope");
+}
+
+#[test]
+fn a_per_key_cap_binds_only_its_own_key_and_usage_is_visible_before_it_breaches() {
+    use lighttrack_core::LimitScope;
+    let s = SqliteStore::open_in_memory().unwrap();
+    let keyed = |key: &str, cost: f64| {
+        let mut e = ev("p1", "claude-haiku-4-5", 1, 1, cost);
+        e.metadata = serde_json::json!({ "api_key_id": key });
+        e
+    };
+
+    // No rule yet: per-key usage must already be answerable — the whole point is to size a budget
+    // BEFORE writing one.
+    for _ in 0..3 {
+        assert!(s.insert_event_checked(&keyed("k-staging", 1.0)).unwrap().admitted);
+    }
+    assert!(s.insert_event_checked(&keyed("k-prod", 1.0)).unwrap().admitted);
+    // An event with no key at all folds into the `None` bucket rather than vanishing — including a
+    // row whose `metadata` is NULL outright, which is what every event predating key attribution
+    // looks like. `json_extract` over a NULL column must not error or drop the row.
+    assert!(s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 4.0)).unwrap().admitted);
+    let mut legacy = ev("p1", "claude-haiku-4-5", 1, 1, 1.0);
+    legacy.metadata = serde_json::Value::Null;
+    assert!(s.insert_event_checked(&legacy).unwrap().admitted);
+
+    let since = LimitWindow::Hour.since(Utc::now());
+    let by_key = s.usage_by_scope("p1", since, "api_key").unwrap();
+    let find = |v: Option<&str>| {
+        by_key.iter().find(|r| r.value.as_deref() == v).unwrap_or_else(|| panic!("{v:?} missing"))
+    };
+    assert_eq!(find(Some("k-staging")).usage.calls, 3);
+    assert_eq!(find(Some("k-staging")).usage.cost_usd, 3.0);
+    assert_eq!(find(Some("k-prod")).usage.calls, 1);
+    assert_eq!(find(None).usage.cost_usd, 5.0, "unattributed traffic keeps its own bucket");
+    assert_eq!(find(None).usage.calls, 2, "a NULL-metadata legacy row is counted, not dropped");
+    // The parts sum to the project total — a breakdown that silently drops rows is a lie.
+    let total = s.usage_since("p1", since).unwrap();
+    assert_eq!(by_key.iter().map(|r| r.usage.calls).sum::<i64>(), total.calls);
+    assert_eq!(by_key.iter().map(|r| r.usage.cost_usd).sum::<f64>(), total.cost_usd);
+
+    // Now the cap: $5/hour on the staging key only.
+    s.create_limit_rule(&LimitRule {
+        id: "r-key".into(),
+        project_id: "p1".into(),
+        metric: LimitMetric::CostUsd,
+        window: LimitWindow::Hour,
+        threshold: 5.0,
+        action: LimitAction::Block,
+        enabled: true,
+        warn_at: None,
+        scope: Some(LimitScope::ApiKey("k-staging".into())),
+    })
+    .unwrap();
+    assert_eq!(
+        s.get_limit_rule("r-key").unwrap().unwrap().scope,
+        Some(LimitScope::ApiKey("k-staging".into())),
+        "the api_key scope round-trips through the store"
+    );
+
+    // The production key is untouched by staging's cap, however much it spends...
+    assert!(s.insert_event_checked(&keyed("k-prod", 500.0)).unwrap().admitted);
+    // ...and so is un-keyed traffic (it matches no key scope).
+    assert!(s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 99.0)).unwrap().admitted);
+    // Staging is at $3; +$1 admits, the next $1 reaches $5 and is refused.
+    assert!(s.insert_event_checked(&keyed("k-staging", 1.0)).unwrap().admitted);
+    let blocked = s.insert_event_checked(&keyed("k-staging", 1.0)).unwrap();
+    assert!(!blocked.admitted, "the staging key hit its own $5 cap");
+    assert_eq!(blocked.statuses.len(), 1, "only the matching scoped rule is evaluated");
+}
+
+#[test]
+fn a_customer_scoped_cap_reads_the_billing_linkage() {
+    use lighttrack_core::LimitScope;
+    let s = SqliteStore::open_in_memory().unwrap();
+    s.create_limit_rule(&LimitRule {
+        id: "r-cus".into(),
+        project_id: "p1".into(),
+        metric: LimitMetric::Calls,
+        window: LimitWindow::Hour,
+        threshold: 2.0,
+        action: LimitAction::Block,
+        enabled: true,
+        warn_at: None,
+        scope: Some(LimitScope::Customer("acme".into())),
+    })
+    .unwrap();
+    let for_customer = |c: &str| {
+        let mut e = ev("p1", "claude-haiku-4-5", 1, 1, 0.0);
+        e.metadata = serde_json::json!({ "customer_id": c });
+        e
+    };
+    assert!(s.insert_event_checked(&for_customer("acme")).unwrap().admitted);
+    assert!(!s.insert_event_checked(&for_customer("acme")).unwrap().admitted);
+    assert!(s.insert_event_checked(&for_customer("other")).unwrap().admitted);
+    assert!(
+        s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 0.0)).unwrap().admitted,
+        "untagged traffic is not charged to a customer cap"
+    );
+}
+
+#[test]
+fn usage_by_scope_rejects_an_unknown_dimension() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    assert!(s.usage_by_scope("p1", LimitWindow::Hour.since(Utc::now()), "nope").is_err());
+    // Every advertised kind is queryable.
+    for k in lighttrack_core::LimitScope::KINDS {
+        s.usage_by_scope("p1", LimitWindow::Hour.since(Utc::now()), k)
+            .unwrap_or_else(|e| panic!("kind {k} failed: {e}"));
+    }
 }
 
 #[test]

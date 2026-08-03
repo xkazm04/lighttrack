@@ -105,10 +105,47 @@ fn events(store: &dyn Store, pid: &str) -> Result<()> {
     assert_eq!(costs[0].output_tokens, 130);
     assert!((costs[0].cost_usd - 0.003).abs() < 1e-9, "cost sum");
 
-    let u = store.usage_since(pid, Utc::now() - chrono::Duration::hours(1))?;
+    let since = Utc::now() - chrono::Duration::hours(1);
+    let u = store.usage_since(pid, since)?;
     assert_eq!(u.calls, 2);
     assert_eq!(u.tokens, 430);
     assert!((u.cost_usd - 0.003).abs() < 1e-9, "usage cost");
+
+    // Per-key attribution. `metadata.api_key_id` is server-stamped at ingest and is the dimension a
+    // per-key budget scopes to, so a backend that can't read it turns "cap the staging key" into a
+    // cap on nothing (or, if it fell back to project-wide, a cap on everything). Both readings —
+    // one key's total and the grouped breakdown — are part of the contract.
+    let mut keyed = sample_event(pid, "claude-haiku-4-5", 7, 3, 0.004);
+    keyed.metadata = json!({ "api_key_id": "conf-key-1" });
+    store.insert_event(&keyed)?;
+
+    let k = store.usage_since_scoped(pid, since, &LimitScope::ApiKey("conf-key-1".into()))?;
+    assert_eq!(k.calls, 1, "only the keyed event counts toward that key");
+    assert!((k.cost_usd - 0.004).abs() < 1e-9);
+    let none =
+        store.usage_since_scoped(pid, since, &LimitScope::ApiKey("conf-key-absent".into()))?;
+    assert_eq!(none.calls, 0, "an unknown key has no usage (never the project-wide total)");
+
+    let by_key = store.usage_by_scope(pid, since, "api_key")?;
+    let keyed_row = by_key
+        .iter()
+        .find(|r| r.value.as_deref() == Some("conf-key-1"))
+        .expect("the keyed row is present in the breakdown");
+    assert_eq!(keyed_row.usage.calls, 1);
+    let unattributed = by_key
+        .iter()
+        .find(|r| r.value.is_none())
+        .expect("events with no key fold into one unattributed bucket, they are not dropped");
+    assert_eq!(unattributed.usage.calls, 2);
+    assert_eq!(
+        by_key.iter().map(|r| r.usage.calls).sum::<i64>(),
+        3,
+        "the breakdown's parts sum to the window's total"
+    );
+    assert!(
+        store.usage_by_scope(pid, since, "not-a-dimension").is_err(),
+        "an unknown dimension is an error, not an empty (authoritative-looking) breakdown"
+    );
     Ok(())
 }
 
@@ -205,6 +242,19 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
     let after = store.get_limit_rule(&scoped.id)?.expect("rule still present after update");
     assert!((after.threshold - 75.0).abs() < 1e-9, "threshold update persists");
     assert_eq!(after.scope, Some(LimitScope::Provider("conf-prov".into())), "scope update persists");
+    // The key/customer dimensions must survive the same round-trip — a backend that dropped an
+    // unknown `scope_kind` would silently promote a $5 staging cap to a project-wide one.
+    for s in [LimitScope::ApiKey("conf-key-1".into()), LimitScope::Customer("conf-cus".into())] {
+        let mut r = after.clone();
+        r.scope = Some(s.clone());
+        assert!(store.update_limit_rule(&r)?);
+        assert_eq!(
+            store.get_limit_rule(&scoped.id)?.and_then(|g| g.scope),
+            Some(s.clone()),
+            "{} scope round-trips",
+            s.kind_str()
+        );
+    }
     assert!(store.delete_limit_rule(&scoped.id)?, "delete removes the rule");
     assert!(store.get_limit_rule(&scoped.id)?.is_none(), "deleted rule is gone");
     assert!(!store.delete_limit_rule(&new_id())?, "deleting an unknown id returns false");

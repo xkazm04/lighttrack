@@ -35,7 +35,8 @@ use lighttrack_core::{
     Score,
 };
 use lighttrack_store::{
-    Admission, CostRow, EventFilter, EventPage, Result, Store, StoreError, Usage, UseCaseCostRow,
+    Admission, CostRow, EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, Usage,
+    UseCaseCostRow,
 };
 
 use util::pgerr;
@@ -132,6 +133,14 @@ impl Store for PgStore {
         scope: &LimitScope,
     ) -> Result<Usage> {
         self.rt.block_on(events::usage_since_scoped(&self.pool, project, since, scope))
+    }
+    fn usage_by_scope(
+        &self,
+        project: &str,
+        since: DateTime<Utc>,
+        kind: &str,
+    ) -> Result<Vec<ScopeUsage>> {
+        self.rt.block_on(events::usage_by_scope(&self.pool, project, since, kind))
     }
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
         self.rt.block_on(events::get(&self.pool, id))

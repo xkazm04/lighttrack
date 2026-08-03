@@ -104,6 +104,26 @@ pub(crate) fn make_key_with_redaction(
     g.full_key
 }
 
+/// Mint an additional named key on an **existing** project, returning `(key_id, full_key)`. The id
+/// is what per-key budgets scope to and what ingest stamps onto the event.
+pub(crate) fn add_key(store: &SqliteStore, project_id: &str, name: &str) -> (String, String) {
+    let g = auth::generate_key();
+    let id = new_id();
+    store
+        .create_api_key(&ApiKey {
+            id: id.clone(),
+            project_id: project_id.into(),
+            name: name.into(),
+            prefix: g.prefix.clone(),
+            key_hash: g.key_hash,
+            created_at: Utc::now(),
+            last_used_at: None,
+            revoked: false,
+        })
+        .unwrap();
+    (id, g.full_key)
+}
+
 /// POST one event through the real router with a bearer token; returns the status and parsed JSON.
 pub(crate) async fn ingest(app: &Router, token: &str, body: Value) -> (StatusCode, Value) {
     let req = Request::builder()

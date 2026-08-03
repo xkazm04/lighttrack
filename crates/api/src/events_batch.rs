@@ -133,7 +133,7 @@ pub(crate) async fn post_batch(
                 continue;
             }
         };
-        match prepare_event(&st, &mut ev, &pid, persistence) {
+        match prepare_event(&st, &mut ev, &pid, principal.key_id(), persistence) {
             Ok(()) => {
                 valid_idx.push(i);
                 valid.push(ev);

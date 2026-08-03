@@ -217,6 +217,29 @@ impl LlmEvent {
         self.metadata.get("product_id").and_then(Value::as_str)
     }
 
+    /// The **id** of the API key that wrote this call, read from `metadata.api_key_id`.
+    ///
+    /// Rides in `metadata` (not a column) for the same reason `customer_id` does: every store backend
+    /// carries it unchanged, with no cross-backend migration. It is *server-owned* — the ingest path
+    /// stamps it from the authenticated principal and strips whatever the client sent — so a caller
+    /// cannot forge attribution or dodge a per-key cap by claiming to be another key.
+    ///
+    /// The value is the opaque `api_keys.id`, never the key material or a hash of it.
+    pub fn api_key_id(&self) -> Option<&str> {
+        self.metadata.get("api_key_id").and_then(Value::as_str)
+    }
+
+    /// The dimensions limit scopes are matched against.
+    pub fn scope_dims(&self) -> crate::limits::ScopeDims<'_> {
+        crate::limits::ScopeDims {
+            provider: self.provider.as_str(),
+            model: &self.model,
+            name: self.name.as_deref(),
+            api_key_id: self.api_key_id(),
+            customer_id: self.customer_id(),
+        }
+    }
+
     /// The pricing lane for this call: an explicit `metadata.pricing_mode`, else a `batch` / `flex`
     /// (or `priority`) tag, else standard.
     fn pricing_mode(&self) -> PricingMode {

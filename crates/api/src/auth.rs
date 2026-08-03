@@ -36,8 +36,25 @@ pub enum Principal {
     Dev,
     /// The admin key was presented.
     Admin,
-    /// A valid project key was presented; carries its project id.
-    Project(String),
+    /// A valid project key was presented; carries its project id **and the key's row id**.
+    ///
+    /// `key_id` is the opaque `api_keys.id` — never the presented token, its prefix, or any hash of
+    /// it. Ingest stamps it onto the event so a budget can be scoped to one key and a breach can name
+    /// which key drove it; nothing derived from the secret ever leaves this function.
+    Project { project_id: String, key_id: String },
+}
+
+impl Principal {
+    /// The id of the API key behind this request, when one was presented. `None` for admin/dev
+    /// principals: those are not keys in the `api_keys` table, so there is nothing honest to
+    /// attribute their traffic to — it lands in the "unattributed" bucket rather than borrowing
+    /// someone else's identity.
+    pub(crate) fn key_id(&self) -> Option<&str> {
+        match self {
+            Principal::Project { key_id, .. } => Some(key_id),
+            Principal::Admin | Principal::Dev => None,
+        }
+    }
 }
 
 /// A freshly minted key. `full_key` is returned to the caller once and never stored.

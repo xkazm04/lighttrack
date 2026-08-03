@@ -38,7 +38,7 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Row};
 
-use lighttrack_core::{LimitScope, LimitWindow};
+use lighttrack_core::{LimitScope, LimitWindow, ScopeDims};
 
 use crate::codec::fmt_ts;
 use crate::{Result, Usage};
@@ -98,7 +98,8 @@ impl Bucket {
     fn load_new(&mut self, conn: &Connection, project: &str, scope: Option<&LimitScope>) -> Result<()> {
         let mut stmt = conn.prepare(
             "SELECT rowid, project_id, provider, model, name, COALESCE(received_at, ts), cost_usd, \
-             (input_tokens + output_tokens), json_extract(metadata,'$.cost_source') \
+             (input_tokens + output_tokens), json_extract(metadata,'$.cost_source'), \
+             json_extract(metadata,'$.api_key_id'), json_extract(metadata,'$.customer_id') \
              FROM events WHERE rowid > ?1 ORDER BY rowid",
         )?;
         let rows = stmt
@@ -113,7 +114,13 @@ impl Bucket {
                 continue;
             }
             if let Some(s) = scope {
-                if !s.matches(&r.provider, &r.model, r.name.as_deref()) {
+                if !s.matches(&ScopeDims {
+                    provider: &r.provider,
+                    model: &r.model,
+                    name: r.name.as_deref(),
+                    api_key_id: r.api_key_id.as_deref(),
+                    customer_id: r.customer_id.as_deref(),
+                }) {
                     continue;
                 }
             }
@@ -168,6 +175,10 @@ struct NewRow {
     tokens: i64,
     /// `metadata.cost_source` — `client` when the caller reported the cost itself.
     cost_source: Option<String>,
+    /// `metadata.api_key_id` — the server-stamped id of the key that wrote the event.
+    api_key_id: Option<String>,
+    /// `metadata.customer_id` — the billing linkage.
+    customer_id: Option<String>,
 }
 
 impl NewRow {
@@ -182,6 +193,8 @@ impl NewRow {
             cost: row.get(6)?,
             tokens: row.get(7)?,
             cost_source: row.get(8)?,
+            api_key_id: row.get(9)?,
+            customer_id: row.get(10)?,
         })
     }
 }

@@ -66,7 +66,7 @@ async fn load_dataset_authorized(
     let d = spawn_db(move || store.get_dataset(&id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("dataset '{id}' not found")))?;
-    if let Principal::Project(pid) = p {
+    if let Principal::Project { project_id: pid, .. } = p {
         if &d.project_id != pid {
             return Err(ApiError::forbidden("key not authorized for that dataset"));
         }

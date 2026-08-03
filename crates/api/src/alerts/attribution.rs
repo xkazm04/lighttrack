@@ -118,6 +118,20 @@ pub(crate) fn compose(
             let items = group_by(rows.iter().map(|r| (r.model.clone(), r.cost_usd)));
             scoped(rank(items, total), s)
         }
+        Some(s @ (LimitScope::ApiKey(_) | LimitScope::Customer(_))) => {
+            // Deliberately NOT attributed inside the alert. The cost rollups this module reads are
+            // grouped by model/use-case and cannot be filtered to one key or customer, and an alert
+            // channel is the wrong place to enumerate key identifiers anyway — it fans out to
+            // whoever holds the webhook. The operator gets the scope (their own rule) plus a pointer
+            // to the authenticated, project-scoped surface that does answer it.
+            Attribution {
+                contributors: Vec::new(),
+                scope_note: Some(format!(
+                    "scope {}: per-key/customer breakdown at GET /v1/limits/usage",
+                    s.label()
+                )),
+            }
+        }
     }
 }
 

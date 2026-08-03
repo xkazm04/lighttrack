@@ -291,6 +291,20 @@ impl Usage {
     }
 }
 
+/// Rolling usage for one *value* of a scope dimension — one API key, one customer, one model…
+///
+/// This is the pre-breach view of a scoped cap: it answers "how much has each key spent so far",
+/// which is exactly the question `/v1/limits/status` could not answer until a rule already existed
+/// and had already tripped.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScopeUsage {
+    /// The dimension value, or `None` for traffic that carries no value on this dimension (unnamed
+    /// calls, untagged customers, events written before key attribution existed).
+    pub value: Option<String>,
+    #[serde(flatten)]
+    pub usage: Usage,
+}
+
 /// Evaluate one rule against a usage snapshot — the single place a [`LimitStatus`] is built from a
 /// [`Usage`], shared by ingest admission (`evaluate_admission`) and the read-only
 /// `/v1/limits/status` surface so the two can never disagree about what a cap currently says.
@@ -382,13 +396,13 @@ pub fn evaluate_admission<F>(
 where
     F: FnMut(LimitWindow, Option<&LimitScope>) -> Result<Usage>,
 {
-    let (provider, model, name) = (ev.provider.as_str(), ev.model.as_str(), ev.name.as_deref());
+    let dims = ev.scope_dims();
     // Usage cache now keys by (window, scope): a scoped cap and a project-wide cap over the same
     // window read different rolling totals.
     let mut prospective: HashMap<(LimitWindow, Option<LimitScope>), Usage> = HashMap::new();
     let mut statuses = Vec::new();
     for r in rules {
-        if !scope_matches(r.scope.as_ref(), provider, model, name) {
+        if !scope_matches(r.scope.as_ref(), &dims) {
             continue; // a scoped rule the candidate doesn't match can neither count it nor reject it
         }
         let key = (r.window, r.scope.clone());
@@ -570,6 +584,26 @@ pub trait Store: Send + Sync {
         _scope: &LimitScope,
     ) -> Result<Usage> {
         self.usage_since(project, since)
+    }
+
+    /// Rolling usage for one project since `since`, **grouped by** every distinct value of one scope
+    /// dimension (`kind` is a [`LimitScope::kind_str`]: `provider` | `model` | `name` | `api_key` |
+    /// `customer`), newest-window totals per value.
+    ///
+    /// The pre-breach counterpart to [`Store::usage_since_scoped`]: that one answers "how much has
+    /// *this* key spent", this one answers "how much has *each* key spent" — the question an operator
+    /// needs answered **before** writing a per-key budget, and the one a breach makes urgent.
+    ///
+    /// No conservative fallback is possible here (there is no safe way to guess a grouping), so the
+    /// default is an honest [`StoreError::Unsupported`] → HTTP 501 rather than an empty list that
+    /// would read as "nobody spent anything".
+    fn usage_by_scope(
+        &self,
+        _project: &str,
+        _since: DateTime<Utc>,
+        _kind: &str,
+    ) -> Result<Vec<ScopeUsage>> {
+        Err(StoreError::Unsupported("per-dimension usage breakdown"))
     }
 
     // --- daily time-series for predictive cost/margin forecasting ---

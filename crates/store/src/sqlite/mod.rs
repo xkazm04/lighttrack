@@ -48,7 +48,7 @@ use lighttrack_core::{
 
 use crate::{
     Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, EventFilter, EventPage, Result,
-    Store, StoreError, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    ScopeUsage, Store, StoreError, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 /// A **sargable** project predicate for `?1`-bound project queries. When a project is given this is an
@@ -288,6 +288,14 @@ impl Store for SqliteStore {
         scope: &LimitScope,
     ) -> Result<Usage> {
         self.read(|c| events::usage_since_scoped(c, project, since, scope))
+    }
+    fn usage_by_scope(
+        &self,
+        project: &str,
+        since: DateTime<Utc>,
+        kind: &str,
+    ) -> Result<Vec<ScopeUsage>> {
+        self.read(|c| events::usage_by_scope(c, project, since, kind))
     }
     fn daily_usage(
         &self,

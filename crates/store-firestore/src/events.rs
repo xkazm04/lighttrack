@@ -7,7 +7,9 @@ use serde_json::{json, Value};
 
 use lighttrack_core::{LimitScope, LlmEvent, TokenUsage};
 use lighttrack_store::codec::{decode_event_cursor, encode_event_cursor};
-use lighttrack_store::{CostRow, EventFilter, EventPage, Result, StoreError, Usage, UseCaseCostRow};
+use lighttrack_store::{
+    CostRow, EventFilter, EventPage, Result, ScopeUsage, StoreError, Usage, UseCaseCostRow,
+};
 
 use crate::codec::*;
 use crate::rest::Rest;
@@ -180,20 +182,60 @@ pub(crate) fn usage_since_scoped(
         ("project_id", "EQUAL", json!(project)),
         ("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))),
     ];
-    let field = match scope {
-        LimitScope::Provider(_) => "provider",
-        LimitScope::Model(_) => "model",
-        LimitScope::Name(_) => "name",
-    };
     let docs = rest.query(COLL, &filters, None, None)?;
     let mut u = Usage::default();
     for m in &docs {
-        if fstr(m, field).as_deref() != Some(scope.value()) {
+        if scope_value(m, scope.kind_str()).as_deref() != Some(scope.value()) {
             continue;
         }
         fold_usage(&mut u, m);
     }
     Ok(u)
+}
+
+/// One document's value on a scope dimension. The three original dimensions are top-level fields;
+/// `api_key` and `customer` ride inside the JSON-encoded `metadata` string, exactly as the SQL
+/// backends read them out of `metadata` (`api_key_id` is server-stamped at ingest). `None` means the
+/// document carries no value on that dimension — it then matches no scope on it.
+fn scope_value(m: &serde_json::Map<String, serde_json::Value>, kind: &str) -> Option<String> {
+    let meta_key = match kind {
+        "provider" | "model" | "name" => return fstr(m, kind),
+        "api_key" => "api_key_id",
+        "customer" => "customer_id",
+        _ => return None,
+    };
+    fstr(m, "metadata")
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get(meta_key).and_then(|x| x.as_str()).map(str::to_string))
+}
+
+/// Rolling usage since `since` grouped by every distinct value of one scope dimension. Same
+/// server-side project+window slice as [`usage_since`]; the grouping is client-side, like every other
+/// aggregate on this backend. Documents with no value on the dimension fold into the `None` bucket.
+pub(crate) fn usage_by_scope(
+    rest: &Rest,
+    project: &str,
+    since: DateTime<Utc>,
+    kind: &str,
+) -> Result<Vec<ScopeUsage>> {
+    if !LimitScope::KINDS.contains(&kind) {
+        return Err(StoreError::Other(format!("unknown scope dimension '{kind}'")));
+    }
+    let filters = vec![
+        ("project_id", "EQUAL", json!(project)),
+        ("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))),
+    ];
+    let docs = rest.query(COLL, &filters, None, None)?;
+    let mut agg: BTreeMap<Option<String>, Usage> = BTreeMap::new();
+    for m in &docs {
+        fold_usage(agg.entry(scope_value(m, kind)).or_default(), m);
+    }
+    let mut rows: Vec<ScopeUsage> =
+        agg.into_iter().map(|(value, usage)| ScopeUsage { value, usage }).collect();
+    rows.sort_by(|a, b| {
+        b.usage.cost_usd.partial_cmp(&a.usage.cost_usd).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(rows)
 }
 
 /// Use-case rollup grouped by (name, provider, model), optionally windowed by `since`. Un-named

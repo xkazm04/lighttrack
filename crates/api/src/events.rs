@@ -24,18 +24,21 @@ use crate::state::{spawn_db, AppState};
 /// admission step. On a validation failure returns a coded [`Rejection`] (the batch path records its
 /// code per item; the single path turns it into the matching HTTP error).
 ///
-/// This is also where server trust is established: `received_at` is stamped from the server clock,
-/// overwriting anything that reached the struct, so the timestamp every rolling window is measured on
-/// is the one instant the client cannot influence.
+/// This is also where server trust is established: `received_at` is stamped from the server clock and
+/// `metadata.api_key_id` from the authenticated principal, both overwriting anything that reached the
+/// struct — so neither the timestamp every rolling window is measured on nor the identity a per-key
+/// budget is charged against is something the client can influence.
 pub(crate) fn prepare_event(
     st: &AppState,
     ev: &mut LlmEvent,
     pid: &str,
+    key_id: Option<&str>,
     persistence: lighttrack_core::Redaction,
 ) -> Result<(), Rejection> {
     let now = Utc::now();
     ev.project_id = pid.to_string();
     ev.received_at = now;
+    stamp_api_key(ev, key_id);
     policy().validate(ev, now)?;
     // 1. The project's stored persistence policy (hash/drop) — the setting the projects API accepts
     // and the operator table displays, now actually enforced. Applied before the PII scrub: `drop`
@@ -55,6 +58,37 @@ pub(crate) fn prepare_event(
     }
     mark_cost_source(ev, client_supplied);
     Ok(())
+}
+
+/// Stamp the authenticated API key's **id** onto the event as `metadata.api_key_id`, and — this is
+/// the load-bearing half — **remove** any `api_key_id` the client sent when there is no key behind
+/// the request (admin/dev principals, or a keyless dev-mode call).
+///
+/// Without the removal a caller could simply write `{"api_key_id": "<the-other-key>"}` and either
+/// launder its spend onto another key's budget or dodge its own per-key cap; attribution would name
+/// whoever the attacker chose. The field is therefore server-owned in exactly the way `received_at`
+/// is: read from the principal, never from the body.
+///
+/// What is persisted is the opaque `api_keys.id`. Not the presented token, not its prefix, not a
+/// hash of it — nothing that could be replayed or reversed if an event row leaks. Rows written before
+/// this existed simply carry no `api_key_id` and fall into the unattributed bucket.
+fn stamp_api_key(ev: &mut LlmEvent, key_id: Option<&str>) {
+    match (&mut ev.metadata, key_id) {
+        (Value::Object(m), Some(id)) => {
+            m.insert("api_key_id".to_string(), Value::String(id.to_string()));
+        }
+        (Value::Object(m), None) => {
+            m.remove("api_key_id");
+        }
+        (v, Some(id)) if v.is_null() => {
+            *v = Value::Object(
+                [("api_key_id".to_string(), Value::String(id.to_string()))].into_iter().collect(),
+            );
+        }
+        // Null metadata with no key, or non-object metadata (client-owned scalar/array — it can hold
+        // no `api_key_id` to forge): nothing to do.
+        _ => {}
+    }
 }
 
 /// Record how an event's `cost_usd` was determined so downstream margin/forecast can trust or discount
@@ -270,7 +304,7 @@ pub(crate) async fn post_event(
     let principal = authenticate(&st, &headers).await?;
     let pid = resolve_ingest_project(&principal, &ev.project_id)?;
     let persistence = crate::state::redaction_policy_for(&st, &pid).await?;
-    prepare_event(&st, &mut ev, &pid, persistence)?;
+    prepare_event(&st, &mut ev, &pid, principal.key_id(), persistence)?;
 
     // Admission control: evaluate the project's limits and insert in one atomic store step. An
     // enforcing (Throttle/Block) breach rejects the event — it is NOT recorded and we return 429 so
@@ -544,7 +578,7 @@ pub(crate) async fn get_event_by_id(
     let ev = spawn_db(move || store.get_event(&id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("event '{id}' not found")))?;
-    if let Principal::Project(pid) = &p {
+    if let Principal::Project { project_id: pid, .. } = &p {
         if &ev.project_id != pid {
             return Err(ApiError::forbidden("key not authorized for that event's project"));
         }

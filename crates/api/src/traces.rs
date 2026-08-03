@@ -188,7 +188,7 @@ async fn load_trace(st: &AppState, id: &str) -> Result<Trace, ApiError> {
 
 /// A project key may only touch traces in its own project; admin/dev may touch any.
 fn authorize_trace(p: &Principal, project_id: &str) -> Result<(), ApiError> {
-    if let Principal::Project(pid) = p {
+    if let Principal::Project { project_id: pid, .. } = p {
         if pid != project_id {
             return Err(ApiError::forbidden("key not authorized for that trace's project"));
         }

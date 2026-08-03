@@ -15,7 +15,7 @@ use super::usage_cache::UsageCache;
 use crate::codec::{decode_event_cursor, encode_event_cursor, fmt_ts, parse_enum, parse_ts};
 use crate::{
     event_contribution, evaluate_admission, Admission, CostRow, EventFilter, EventPage, Result,
-    StoreError, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    ScopeUsage, StoreError, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 /// Map a failed event insert to a typed error: a primary-key / uniqueness violation (a duplicate
@@ -609,30 +609,76 @@ pub(super) fn usage_since(conn: &Connection, project: &str, since: DateTime<Utc>
     Ok(usage)
 }
 
+/// The SQL expression that yields one scope dimension's value for a row. Columns for the three
+/// original dimensions; `json_extract` over `metadata` for the two that ride there (`api_key_id` is
+/// server-stamped at ingest, `customer_id` is the same linkage margin analytics group on).
+///
+/// The returned string is a fixed literal chosen by the enum variant — never user input — so it is
+/// safe to interpolate into a statement; the *value* is always bound as a parameter.
+pub(super) fn scope_expr(kind: &str) -> Option<&'static str> {
+    match kind {
+        "provider" => Some("provider"),
+        "model" => Some("model"),
+        "name" => Some("name"),
+        "api_key" => Some("json_extract(metadata,'$.api_key_id')"),
+        "customer" => Some("json_extract(metadata,'$.customer_id')"),
+        _ => None,
+    }
+}
+
 /// Rolling usage for one project since `since`, restricted to a single scope dimension. The scoped
-/// column (`provider` / `model` / `name`) is chosen by the [`LimitScope`] variant; the `name` case
-/// matches only rows whose use-case equals the value (a NULL `name` never matches a name scope). The
-/// window is measured on `received_at` for the same trust reason as [`usage_since`];
-/// `idx_events_project_received` covers the project+window filter.
+/// expression is chosen by the [`LimitScope`] variant (see [`scope_expr`]); a row whose dimension is
+/// NULL never matches (an unnamed call can't satisfy a name cap, an untagged one can't satisfy a
+/// customer cap). The window is measured on `received_at` for the same trust reason as
+/// [`usage_since`]; `idx_events_project_received` covers the project+window filter.
 pub(super) fn usage_since_scoped(
     conn: &Connection,
     project: &str,
     since: DateTime<Utc>,
     scope: &LimitScope,
 ) -> Result<Usage> {
-    // `column` is a fixed keyword from the enum (never user input) — safe to interpolate.
-    let column = match scope {
-        LimitScope::Provider(_) => "provider",
-        LimitScope::Model(_) => "model",
-        LimitScope::Name(_) => "name",
-    };
+    let expr = scope_expr(scope.kind_str()).unwrap_or("NULL");
     let sql = format!(
         "SELECT {USAGE_COLS} FROM events \
-         WHERE project_id = ?1 AND COALESCE(received_at, ts) >= ?2 AND {column} = ?3"
+         WHERE project_id = ?1 AND COALESCE(received_at, ts) >= ?2 AND {expr} = ?3"
     );
     let mut stmt = conn.prepare(&sql)?;
     let usage = stmt.query_row(params![project, fmt_ts(since), scope.value()], map_usage)?;
     Ok(usage)
+}
+
+/// Rolling usage since `since` grouped by every distinct value of one scope dimension — the
+/// pre-breach "who is spending" view. Rows carrying no value on the dimension fold into a single
+/// `None` bucket rather than being dropped, so the parts still sum to the project total.
+pub(super) fn usage_by_scope(
+    conn: &Connection,
+    project: &str,
+    since: DateTime<Utc>,
+    kind: &str,
+) -> Result<Vec<ScopeUsage>> {
+    let expr = scope_expr(kind)
+        .ok_or_else(|| StoreError::Other(format!("unknown scope dimension '{kind}'")))?;
+    let sql = format!(
+        "SELECT {expr} AS k, {USAGE_COLS} FROM events \
+         WHERE project_id = ?1 AND COALESCE(received_at, ts) >= ?2 \
+         GROUP BY k ORDER BY 2 DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![project, fmt_ts(since)], |row: &Row| {
+            Ok(ScopeUsage {
+                value: row.get(0)?,
+                usage: Usage {
+                    cost_usd: row.get(1)?,
+                    calls: row.get(2)?,
+                    tokens: row.get(3)?,
+                    unpriced_calls: row.get(4)?,
+                    client_cost_usd: row.get(5)?,
+                },
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 /// Raw column values as stored, before reconstructing an `LlmEvent`.

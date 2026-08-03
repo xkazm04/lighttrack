@@ -31,7 +31,7 @@ use lighttrack_core::{
 };
 use lighttrack_store::{
     insert_event_checked_nonatomic, insert_events_checked_nonatomic, Admission, CostRow,
-    EventFilter, EventPage, Result, Store, StoreError, Usage, UseCaseCostRow,
+    EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, Usage, UseCaseCostRow,
 };
 
 use rest::Rest;
@@ -138,6 +138,14 @@ impl Store for FirestoreStore {
         scope: &LimitScope,
     ) -> Result<Usage> {
         events::usage_since_scoped(&self.rest, project, since, scope)
+    }
+    fn usage_by_scope(
+        &self,
+        project: &str,
+        since: DateTime<Utc>,
+        kind: &str,
+    ) -> Result<Vec<ScopeUsage>> {
+        events::usage_by_scope(&self.rest, project, since, kind)
     }
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
         events::get_event(&self.rest, id)

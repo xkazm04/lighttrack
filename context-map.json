@@ -684,7 +684,7 @@
       ]
     },
     {
-      "api_surface": "POST /v1/projects/:id/limits, GET /v1/projects/:id/limits, PUT /v1/limits/:id, DELETE /v1/limits/:id, GET /v1/limits/status",
+      "api_surface": "POST /v1/projects/:id/limits, GET /v1/projects/:id/limits, PUT /v1/limits/:id, DELETE /v1/limits/:id, GET /v1/limits/status, GET /v1/limits/usage",
       "business_feature": "Usage Limit Enforcement",
       "category": "api",
       "cross_refs": [
@@ -697,13 +697,14 @@
         "limit_rules",
         "events"
       ],
-      "description": "Per-project usage caps that can throttle or block ingest traffic when cost, call-count, or token thresholds are exceeded within configurable rolling windows (hour/day/month). Rules support fine-grained scoping by provider, model, or operation name. An in-memory usage cache makes admission O(1) and TOCTOU-safe. Rejected ingest attempts are tracked in-memory for attribution reporting.",
+      "description": "Per-project usage caps that can throttle or block ingest traffic when cost, call-count, or token thresholds are exceeded within configurable rolling windows (hour/day/month). Rules support fine-grained scoping by provider, model, operation name, API key, or billing customer — so ten keys of one project can carry ten different budgets. An in-memory usage cache makes admission O(1) and TOCTOU-safe. GET /v1/limits/usage breaks rolling usage down by one scope dimension (who is spending) both before and after a cap trips. Rejected ingest attempts are tracked in-memory for attribution reporting.",
       "entry_points": [
         "crates/api/src/limits.rs",
         "crates/core/src/limits.rs"
       ],
       "file_paths": [
         "crates/api/src/limits.rs",
+        "crates/api/src/limits_usage.rs",
         "crates/api/src/rejections.rs",
         "crates/core/src/limits.rs"
       ],
@@ -722,7 +723,10 @@
         "alert",
         "admission",
         "scope",
-        "warn_at"
+        "warn_at",
+        "api_key",
+        "customer",
+        "per-key budget"
       ],
       "last_written_at": "2026-08-03T19:08:52.785898800+00:00",
       "name": "limit-enforcement",
