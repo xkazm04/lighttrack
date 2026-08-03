@@ -15,8 +15,9 @@
 //! Two honest residuals, both stamped on the outcome as [`Determinism::BestEffort`]:
 //! - **The Anthropic API exposes no `seed`.** `temperature: 0` is the only sampling control there
 //!   is, so a verdict is reproducible by convention, not by contract (OpenAI and Gemini take both).
-//! - **Newer models reject `temperature` outright** (a 400). We detect that and retry once without
-//!   it rather than hard-failing or silently dropping the schema.
+//! - **Some model/parameter combinations reject `temperature`** (a 400). We detect that response and
+//!   retry once without it rather than hard-failing or silently dropping the schema. The trigger is
+//!   the API's answer, never a hard-coded model list.
 
 use std::time::Instant;
 
@@ -64,8 +65,9 @@ pub(crate) fn generate(
     let resolved = resolve_model(model);
 
     match send(&key, resolved, model, system_prompt, input, schema, deterministic) {
-        // Opus/Sonnet-5-class models removed the sampling parameters and answer a `temperature`
-        // with a 400. Retry once *keeping the schema* — dropping to a schema-less prose call here
+        // Some model/parameter combinations answer a `temperature` with a 400 (extended-thinking
+        // configurations in particular). Detect it from the response rather than from a model
+        // allowlist. Retry once *keeping the schema* — dropping to a schema-less prose call here
         // would trade a determinism residual for a structured-output regression.
         Err(EngineError::BadRequest { status, body, .. })
             if deterministic && body.contains("temperature") =>

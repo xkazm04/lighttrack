@@ -145,8 +145,10 @@ our schema as `input_schema`) — stricter than parsing JSON out of prose. CLI-s
 through its OAuth and have no key to give us; removing it would break them.
 
 *Two residuals, recorded rather than glossed.* The Anthropic API **has no `seed`** — `temperature: 0` is
-its entire sampling surface — and newer Anthropic models **reject `temperature` outright** with a 400
-(we detect that and retry once *keeping the schema*, rather than degrading to a schema-less prose call).
+its entire sampling surface — and **some model/parameter combinations reject `temperature` with a 400**
+(we detect that response and retry once *keeping the schema*, rather than degrading to a schema-less
+prose call). We do not assume which models those are: the retry is driven by the API's answer, not by a
+hard-coded model list, so it stays correct as the model lineup changes.
 So every outcome carries a `determinism` stamp, surfaced in run reports and in the score detail (D11):
 - **`exact`** — every sampling control the provider exposes was pinned, seed included (OpenAI, Gemini).
 - **`best-effort`** — no seed available (Anthropic API), no knobs at all (`claude -p`), or the params
