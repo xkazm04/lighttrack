@@ -46,6 +46,20 @@ pub(crate) enum ErrorCode {
     /// event is rejected and not recorded so a cooperating client backs off (see
     /// `docs/ARCHITECTURE.md` §7).
     RateLimited,
+    /// The server is shedding load: too many ingest requests are already in flight, so this one was
+    /// refused immediately rather than queued. HTTP 503, with `Retry-After`.
+    ///
+    /// **Never confuse this with `rate_limited`.** `rate_limited` (429) means the *caller* exceeded a
+    /// configured usage budget and the event was deliberately not recorded; retrying is pointless
+    /// until the window rolls. `overloaded` means the *server* is momentarily saturated and the very
+    /// same request will succeed shortly. See `shed.rs`.
+    Overloaded,
+    /// An ingest request outlived the server's deadline and was cut. HTTP 504.
+    ///
+    /// The write may or may not have landed (the store call is not cancelled when the response
+    /// future is dropped) — resending the same event id is the safe way to find out: a replay is
+    /// acknowledged, never double-counted.
+    Timeout,
     /// An unexpected server-side failure (store, serialization, I/O). HTTP 500.
     Internal,
     /// The configured store backend has not ported the capability behind this endpoint. HTTP 501.
@@ -68,6 +82,8 @@ impl ErrorCode {
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::Conflict => StatusCode::CONFLICT,
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            ErrorCode::Overloaded => StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::Timeout => StatusCode::GATEWAY_TIMEOUT,
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             ErrorCode::Unsupported => StatusCode::NOT_IMPLEMENTED,
         }
@@ -84,6 +100,8 @@ impl ErrorCode {
             ErrorCode::NotFound => "not_found",
             ErrorCode::Conflict => "conflict",
             ErrorCode::RateLimited => "rate_limited",
+            ErrorCode::Overloaded => "overloaded",
+            ErrorCode::Timeout => "timeout",
             ErrorCode::Internal => "internal",
             ErrorCode::Unsupported => "unsupported",
         }
@@ -186,6 +204,8 @@ mod tests {
         assert_eq!(ErrorCode::NotFound.status(), StatusCode::NOT_FOUND);
         assert_eq!(ErrorCode::Conflict.status(), StatusCode::CONFLICT);
         assert_eq!(ErrorCode::RateLimited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(ErrorCode::Overloaded.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(ErrorCode::Timeout.status(), StatusCode::GATEWAY_TIMEOUT);
         assert_eq!(ErrorCode::Internal.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(ErrorCode::Unsupported.status(), StatusCode::NOT_IMPLEMENTED);
     }
@@ -198,6 +218,8 @@ mod tests {
         assert_eq!(ErrorCode::NotFound.as_str(), "not_found");
         assert_eq!(ErrorCode::Conflict.as_str(), "conflict");
         assert_eq!(ErrorCode::RateLimited.as_str(), "rate_limited");
+        assert_eq!(ErrorCode::Overloaded.as_str(), "overloaded");
+        assert_eq!(ErrorCode::Timeout.as_str(), "timeout");
         assert_eq!(ErrorCode::Internal.as_str(), "internal");
         assert_eq!(ErrorCode::Unsupported.as_str(), "unsupported");
         // Serialize matches as_str (the enum and the wire string can't drift).

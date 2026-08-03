@@ -57,6 +57,7 @@ pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
             crate::idempotency::DEFAULT_CAPACITY,
         )),
         rejections: Arc::new(crate::rejections::RejectionLedger::new()),
+        ingest_guard: Arc::new(crate::shed::IngestGuard::from_env()),
         // Empty cache: policies are back-filled lazily from the store on first sight, which is also
         // the path these tests exercise.
         redaction_policies: Arc::new(crate::state::RedactionCache::new(HashMap::new())),
@@ -157,6 +158,192 @@ async fn project_persistence_policy_is_enforced_on_ingest() {
     let digest = rows[0].input.as_ref().and_then(|v| v.get("sha256")).and_then(Value::as_str);
     assert_eq!(digest.map(str::len), Some(64), "input replaced by a sha256 digest");
     assert!(rows[0].output.as_ref().and_then(|v| v.get("sha256")).is_some());
+}
+
+/// GET a JSON endpoint through the router; returns (status, parsed body).
+async fn get_json(app: &Router, token: &str, uri: &str) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn saturated_ingest_sheds_with_503_and_retry_after_never_a_budget_429() {
+    // Saturation must be a fast, honest rejection that a client cannot mistake for "you're over
+    // budget" — and it must be visible to an operator, not just felt as latency.
+    let (mut state, store) = setup(Redactor::off());
+    state.ingest_guard = Arc::new(crate::shed::IngestGuard::with_limits(1, None));
+    let key = make_key(&store, "proj-a");
+    let guard = state.ingest_guard.clone();
+    let app = crate::build_router(state);
+
+    let body = json!({
+        "provider": "anthropic", "model": "claude-haiku-4-5",
+        "usage": { "input": 1, "output": 1 }, "cost_usd": 0.0
+    });
+
+    // Baseline: with the gate free, ingest works and the counters move.
+    let (ok, _) = ingest(&app, &key, body.clone()).await;
+    assert_eq!(ok, StatusCode::OK);
+
+    // Now hold the only permit — the server is, by construction, saturated.
+    let held = guard.take_permit().expect("the gate hands out permits");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {key}"))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "overload sheds, it does not queue");
+    assert_eq!(resp.headers().get("retry-after").unwrap(), "1", "a shed must say when to come back");
+    let v: Value =
+        serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(v["error"]["code"], "overloaded", "{v}");
+    assert_ne!(v["error"]["code"], "rate_limited", "shedding must never read as a usage limit");
+
+    // The batch route is gated too — a big write is exactly what you don't want queueing.
+    let breq = Request::builder()
+        .method("POST")
+        .uri("/v1/events/batch")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {key}"))
+        .body(Body::from(json!([body]).to_string()))
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(breq).await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+
+    // Nothing over-cap was written, and the operator can see the saturation while it is happening —
+    // reads stay answerable precisely because only the write path is gated.
+    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
+    let (s, st) = get_json(&app, &key, "/v1/ingest/status").await;
+    assert_eq!(s, StatusCode::OK, "{st}");
+    assert_eq!(st["max_in_flight"], 1, "{st}");
+    assert_eq!(st["in_flight"], 1, "the held permit is visible as live depth: {st}");
+    assert_eq!(st["shed_total"], 2, "both sheds counted: {st}");
+    assert_eq!(st["admitted_total"], 1, "{st}");
+
+    // Release: the gate reopens immediately, so shedding is a momentary state, not a latched one.
+    drop(held);
+    let (after, _) = ingest(&app, &key, body).await;
+    assert_eq!(after, StatusCode::OK);
+    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn ingest_past_its_deadline_is_cut_with_504_not_left_hanging() {
+    // A zero deadline: the handler yields at its first blocking store call and the deadline is
+    // already past, so this exercises the real timeout path rather than a mocked one.
+    let (mut state, store) = setup(Redactor::off());
+    state.ingest_guard =
+        Arc::new(crate::shed::IngestGuard::with_limits(8, Some(std::time::Duration::ZERO)));
+    let key = make_key(&store, "proj-a");
+    let guard = state.ingest_guard.clone();
+    let app = crate::build_router(state);
+
+    let (status, body) = ingest(
+        &app,
+        &key,
+        json!({ "provider": "anthropic", "model": "claude-haiku-4-5",
+                "usage": { "input": 1, "output": 1 }, "cost_usd": 0.0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{body}");
+    assert_eq!(body["error"]["code"], "timeout", "{body}");
+    // A timeout is a distinct condition from shedding, and counted as one.
+    let (_, st) = get_json(&app, &key, "/v1/ingest/status").await;
+    assert_eq!(st["timeout_total"], 1, "{st}");
+    assert_eq!(st["shed_total"], 0, "a deadline is not a shed: {st}");
+    assert!(guard.describe().contains("max_inflight=8"));
+}
+
+/// Saturation experiment, run on demand (`cargo test -p lighttrack-api -- --ignored --nocapture
+/// shedding_bounds_latency_under_saturation`). It is `#[ignore]`d because it asserts on *timing*,
+/// which is exactly the thing a shared CI runner cannot promise — but it is the evidence that this
+/// direction did what it claims, so it lives with the code rather than in a scratch file.
+///
+/// Fires far more concurrent ingest requests than the gate allows and reports the served-latency
+/// distribution with the gate bounded vs. unbounded. Unbounded, every request joins a queue behind
+/// the store's single lock and tail latency grows with offered load; bounded, the overflow is
+/// rejected in microseconds and the requests that *are* served keep a flat tail.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore]
+async fn shedding_bounds_latency_under_saturation() {
+    async fn run(cap: usize, load: usize) -> (Vec<u128>, Vec<u128>) {
+        let (mut state, store) = setup(Redactor::off());
+        state.ingest_guard = Arc::new(crate::shed::IngestGuard::with_limits(cap, None));
+        let key = make_key(&store, "proj-a");
+        let app = crate::build_router(state);
+
+        let mut tasks = Vec::with_capacity(load);
+        for i in 0..load {
+            let app = app.clone();
+            let key = key.clone();
+            tasks.push(tokio::spawn(async move {
+                let body = json!({
+                    "id": format!("load-{i}"), "provider": "anthropic",
+                    "model": "claude-haiku-4-5", "usage": { "input": 10, "output": 5 },
+                    "cost_usd": 0.001, "input": { "q": "x".repeat(512) }
+                });
+                let req = Request::builder()
+                    .method("POST")
+                    .uri("/v1/events")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {key}"))
+                    .body(Body::from(body.to_string()))
+                    .unwrap();
+                let t0 = std::time::Instant::now();
+                let resp = app.oneshot(req).await.unwrap();
+                (resp.status(), t0.elapsed().as_micros())
+            }));
+        }
+        let (mut served, mut shed) = (Vec::new(), Vec::new());
+        for t in tasks {
+            let (status, us) = t.await.unwrap();
+            if status == StatusCode::SERVICE_UNAVAILABLE {
+                shed.push(us);
+            } else {
+                served.push(us);
+            }
+        }
+        served.sort_unstable();
+        shed.sort_unstable();
+        (served, shed)
+    }
+
+    let pct = |v: &[u128], p: f64| -> f64 {
+        if v.is_empty() {
+            return 0.0;
+        }
+        v[((v.len() as f64 * p) as usize).min(v.len() - 1)] as f64 / 1000.0
+    };
+    // Sweeping the offered load is the point: unbounded, p95 tracks it upward; bounded, it doesn't.
+    for (cap, load) in [(0usize, 300), (0, 600), (0, 1200), (16, 300), (16, 600), (16, 1200)] {
+        let (served, shed) = run(cap, load).await;
+        println!(
+            "cap={:<9} offered={load:<5} served={:<5} shed={:<5} | served p50={:>6.1}ms \
+             p95={:>6.1}ms p99={:>6.1}ms max={:>6.1}ms | shed p95={:>6.2}ms",
+            if cap == 0 { "unbounded".into() } else { cap.to_string() },
+            served.len(),
+            shed.len(),
+            pct(&served, 0.50),
+            pct(&served, 0.95),
+            pct(&served, 0.99),
+            pct(&served, 1.0),
+            pct(&shed, 0.95),
+        );
+    }
 }
 
 #[tokio::test]

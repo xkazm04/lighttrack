@@ -95,6 +95,38 @@ event is rejected with **429 `rate_limited`** and *not* recorded, so a cooperati
 breach is also readable via `GET /v1/limits/status` and MCP). Inline *pre-call* blocking (before the
 provider spend) still requires gateway mode. The scoring/benchmark engine is **not** subject to limits.
 
+### 7b. Load shedding (admission control for *load*, not spend)
+Limit rules cap what a project may **spend**; nothing capped what the process may **attempt at once**.
+Ingest requests queued behind the store's single lock with tokio's 512-thread blocking pool as the only
+bound, so past saturation latency grew without limit and an operator could not tell a busy server from
+a hung one. Ingest **POST** routes are now gated:
+
+- at most `LIGHTTRACK_INGEST_MAX_INFLIGHT` (default 64, `0` = unbounded) requests run at once; one past
+  that is rejected immediately — never queued — with **503 `overloaded`** and a `Retry-After`
+  (`LIGHTTRACK_INGEST_RETRY_AFTER_SECS`, default 1);
+- a request outliving `LIGHTTRACK_INGEST_TIMEOUT_SECS` (default 10, `0` = off) is cut with
+  **504 `timeout`**;
+- `GET /v1/ingest/status` reports live in-flight depth plus shed/timeout/admitted counters
+  (process-local, reset on restart — the same honesty as the rejection ledger).
+
+**`overloaded` (503) is never `rate_limited` (429).** 429 means *you* exceeded a configured budget and
+the event was deliberately refused; 503 means the *server* is momentarily saturated and the identical
+request will succeed shortly. A client confusing them would hammer a struggling server, or drop events
+it was entitled to send.
+
+Only the write path is gated, so an operator's reads — including `/v1/ingest/status` itself — stay
+answerable while shedding. Shedding happens before the handler runs, so a shed request has touched no
+store state. A *timeout* can fire while a handler awaits its blocking store call; dropping that future
+does not cancel the `spawn_blocking` work, so the transaction still resolves on its own terms and the
+client simply learns nothing about it — which is why ingest is replay-safe (resend the same event id;
+a replay is acknowledged, never double-counted).
+
+Measured on the in-process saturation harness
+(`cargo test -p lighttrack-api -- --ignored shedding_bounds_latency_under_saturation`), offered load
+300 → 600 → 1200 concurrent ingests: **unbounded**, served p95 157 → 182 → 741 ms (tracks offered
+load); **cap=16**, served p95 24 → 65 → 91 ms, with shed responses at a flat p95 of ~0.13 ms whatever
+the load.
+
 ## 8. Scoring & benchmarking engine
 - **Online scoring:** sample events → enqueue → runner runs a rubric prompt via
   `claude -p --output-format json --json-schema <JudgeVerdict>` → store `Score`.

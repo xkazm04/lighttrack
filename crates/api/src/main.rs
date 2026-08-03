@@ -7,6 +7,7 @@
 //! Routes:
 //!   GET  /health
 //!   POST /v1/events                      ingest one event (cost computed; limits evaluated)
+//!   GET  /v1/ingest/status               load-shedding view: in-flight depth + shed/timeout counts
 //!   POST /v1/events/batch                ingest an array; per-item accepted|rejected|invalid (HTTP 200)
 //!   GET  /v1/events?project=&limit=&since=&until=&provider=&model=&trace_id=&name=&cursor=
 //!                                        keyset pagination: next page cursor in `X-Next-Cursor`
@@ -62,6 +63,11 @@
 //!      LIGHTTRACK_MAX_BODY_BYTES (single-event ingest body cap → 413; default 2 MiB),
 //!      LIGHTTRACK_MAX_BATCH (max items per POST /v1/events/batch; default 500),
 //!      LIGHTTRACK_MAX_BATCH_BODY_BYTES (batch ingest body cap → 413; default 8 MiB),
+//!      LIGHTTRACK_INGEST_MAX_INFLIGHT (bounded in-flight ingest; over it → 503 `overloaded` +
+//!        Retry-After, distinct from the 429 `rate_limited` that means "over budget"; default 64,
+//!        0 = unbounded),
+//!      LIGHTTRACK_INGEST_TIMEOUT_SECS (ingest deadline → 504 `timeout`; default 10, 0 = off),
+//!      LIGHTTRACK_INGEST_RETRY_AFTER_SECS (Retry-After advertised when shedding; default 1),
 //!      LIGHTTRACK_AUTH_MODE (dev|enforced), LIGHTTRACK_ADMIN_KEY,
 //!      LIGHTTRACK_RELAY_DEVICE_KEY (bearer key of the enrolled local device — relay lease/result),
 //!      LIGHTTRACK_RELAY_FLAT_COST_USD (fixed cost stamped per relay run event; default 1.0),
@@ -102,6 +108,7 @@ mod relay;
 mod revenue;
 mod rubrics;
 mod scores;
+mod shed;
 mod state;
 mod traces;
 
@@ -217,6 +224,8 @@ async fn main() -> anyhow::Result<()> {
     let collective_desc = collective.describe();
     let seen_webhooks = Arc::new(idempotency::SeenWebhooks::new(idempotency::DEFAULT_CAPACITY));
     let rejections = Arc::new(rejections::RejectionLedger::new());
+    let ingest_guard = Arc::new(shed::IngestGuard::from_env());
+    let shed_desc = ingest_guard.describe();
     let state = AppState {
         store,
         prices: Arc::new(RwLock::new(book)),
@@ -230,11 +239,12 @@ async fn main() -> anyhow::Result<()> {
         collective,
         seen_webhooks,
         rejections,
+        ingest_guard,
         redaction_policies: Arc::new(state::RedactionCache::new(redaction_policies)),
     };
 
     println!(
-        "lighttrack-api v{} on http://{bind}  (store={backend}, {n_prices} priced models, auth={:?}, admin_key={}, alerts={alerts_desc}, redact={redact_desc}, billing={billing_desc}, collective={collective_desc})",
+        "lighttrack-api v{} on http://{bind}  (store={backend}, {n_prices} priced models, auth={:?}, admin_key={}, alerts={alerts_desc}, ingest={shed_desc}, redact={redact_desc}, billing={billing_desc}, collective={collective_desc})",
         env!("CARGO_PKG_VERSION"),
         state.auth_mode,
         if state.admin_key.is_some() { "set" } else { "unset" },
@@ -250,18 +260,27 @@ async fn main() -> anyhow::Result<()> {
 pub(crate) fn build_router(state: AppState) -> Router {
     let body_limit = events_validate::body_limit_bytes();
     let batch_body_limit = events_validate::batch_body_limit_bytes();
+    // Load shedding is layered onto the ingest POST *methods* only: a bounded write path is what
+    // keeps the server responsive under overload, while the operator's own reads (including
+    // `/v1/ingest/status`, the surface that says whether we ARE shedding) stay answerable.
+    let shed_ingest =
+        axum::middleware::from_fn_with_state(state.clone(), shed::ingest_admission);
     Router::new()
         .route("/health", get(health))
         .route(
             "/v1/events",
             post(events::post_event)
+                .layer(shed_ingest.clone())
                 .get(events::get_events)
                 .layer(DefaultBodyLimit::max(body_limit)),
         )
         .route(
             "/v1/events/batch",
-            post(events_batch::post_batch).layer(DefaultBodyLimit::max(batch_body_limit)),
+            post(events_batch::post_batch)
+                .layer(DefaultBodyLimit::max(batch_body_limit))
+                .layer(shed_ingest),
         )
+        .route("/v1/ingest/status", get(shed::get_ingest_status))
         .route("/v1/events/:id", get(events::get_event_by_id))
         .route(
             "/v1/traces",

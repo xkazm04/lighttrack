@@ -51,6 +51,10 @@ pub(crate) struct AppState {
     /// events are deliberately never stored (they'd corrupt usage/cost), so this counts them out-of-band
     /// so history isn't blind exactly when a cap bites. Resets on restart; entries roll off after 24h.
     pub(crate) rejections: Arc<RejectionLedger>,
+    /// Bounded-concurrency gate + deadline for the ingest routes, and the shed/timeout counters
+    /// behind `GET /v1/ingest/status`. Admission control for *load*, orthogonal to the spend limits
+    /// above — see [`crate::shed`].
+    pub(crate) ingest_guard: Arc<crate::shed::IngestGuard>,
 }
 
 /// Env: how long a cached redaction policy may be served before it is re-read from the store.
