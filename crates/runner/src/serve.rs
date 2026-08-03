@@ -1,17 +1,20 @@
-//! `serve`: the job-queue worker loop — claim a job, run it, finish it (with retry up to max_attempts).
+//! `serve`: the job-queue worker loop — claim a job, run it (watching for cancellation and
+//! publishing live progress), finish it, and retry only what actually failed.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde_json::{json, Value};
 
-use lighttrack_core::Job;
+use lighttrack_core::{Job, JOB_ERROR_PREFIX_FAILURE};
 use lighttrack_engine::EngineConfig;
 
 use crate::bench::run_benchmark;
 use crate::cli::Cli;
 use crate::http::post;
 use crate::recurrence;
+use crate::runctl::{RunControl, CANCEL_POLL_INTERVAL};
 use crate::util::short;
 
 #[allow(clippy::too_many_arguments)]
@@ -42,27 +45,15 @@ pub(crate) fn serve(
         match claim(cli, http, stale_secs)? {
             Some(job) => {
                 println!(
-                    "claimed job {} type={} (attempt {}/{})",
+                    "claimed job {} type={} (attempt {}/{}, failures {}, worker deaths {})",
                     short(&job.id),
                     job.job_type,
                     job.attempts,
-                    job.max_attempts
+                    job.max_attempts,
+                    job.failures,
+                    job.stale_reclaims,
                 );
-                match process_job(cli, http, engine, &job) {
-                    Ok(result) => {
-                        finish(cli, http, &job.id, "done", &result, None)?;
-                        println!("  -> done");
-                    }
-                    Err(e) => {
-                        let status = if job.attempts < job.max_attempts {
-                            "queued" // retry
-                        } else {
-                            "failed"
-                        };
-                        finish(cli, http, &job.id, status, &Value::Null, Some(&e.to_string()))?;
-                        eprintln!("  -> {status}: {e}");
-                    }
-                }
+                run_claimed_job(cli, http, engine, &job)?;
             }
             None => {
                 if !once {
@@ -75,6 +66,73 @@ pub(crate) fn serve(
         }
     }
     Ok(())
+}
+
+/// Execute one claimed job with a cancel watcher alongside it, then finish it honestly.
+///
+/// The retry decision uses `failures` — runs that actually failed — not `attempts`, which the claim
+/// bumps for a crashed worker too. Three crashes used to permanently fail a job and record the crash
+/// as its error, hiding whether the benchmark had ever failed at all.
+fn run_claimed_job(
+    cli: &Cli,
+    http: &reqwest::blocking::Client,
+    engine: &EngineConfig,
+    job: &Job,
+) -> Result<()> {
+    let ctl = RunControl::for_job(cli, http, &job.id);
+    ctl.note("starting");
+    let finished = AtomicBool::new(false);
+
+    let outcome = std::thread::scope(|scope| {
+        // Watcher: ask the API whether an operator cancelled this job. The run itself notices at its
+        // next case boundary — nothing is ever interrupted mid-call.
+        scope.spawn(|| {
+            while !finished.load(Ordering::Relaxed) {
+                std::thread::sleep(CANCEL_POLL_INTERVAL);
+                if finished.load(Ordering::Relaxed) {
+                    break;
+                }
+                if ctl.poll_cancelled() {
+                    eprintln!("  cancel requested — stopping at the next case boundary");
+                    ctl.cancel();
+                    break;
+                }
+            }
+        });
+        let outcome = process_job(cli, http, engine, job, &ctl);
+        finished.store(true, Ordering::Relaxed);
+        outcome
+    });
+
+    match outcome {
+        Ok(result) => {
+            // A cancelled run's partial results are already recorded (and marked partial) by the
+            // benchmark itself; the job says so too, and carries no error — cancelling is not a
+            // failure, so it must not consume a retry.
+            let status = if ctl.cancelled() { "cancelled" } else { "done" };
+            finish(cli, http, &job.id, status, &result, None)?;
+            println!("  -> {status}");
+        }
+        Err(e) => {
+            let (status, note) = retry_decision(job.failures, job.max_attempts);
+            let error = format!("{JOB_ERROR_PREFIX_FAILURE}{e}");
+            finish(cli, http, &job.id, status, &Value::Null, Some(&error))?;
+            eprintln!("  -> {status} ({note}): {e}");
+        }
+    }
+    Ok(())
+}
+
+/// Whether a *reported* failure retries, given how many real failures the job has already had.
+/// Returns the next status and a human note. Pure, so the accounting is testable.
+fn retry_decision(failures: u32, max_attempts: u32) -> (&'static str, String) {
+    // `failures` is the count BEFORE this one; finishing with an error records it.
+    let after = failures + 1;
+    if after < max_attempts {
+        ("queued", format!("failure {after}/{max_attempts}, retrying"))
+    } else {
+        ("failed", format!("failure {after}/{max_attempts}, giving up"))
+    }
 }
 
 /// Whether a recurrence sweep is due: always on the first iteration (`None`), then no more often than
@@ -117,6 +175,7 @@ fn process_job(
     http: &reqwest::blocking::Client,
     engine: &EngineConfig,
     job: &Job,
+    ctl: &RunControl,
 ) -> Result<Value> {
     match job.job_type.as_str() {
         "bench_run" => {
@@ -132,12 +191,7 @@ fn process_job(
             let pairwise = job.payload.get("pairwise").and_then(|v| v.as_bool()).unwrap_or(false);
             // Bounded parallelism for queued bench jobs; defaults to the CLI's --jobs (4).
             let jobs = job.payload.get("jobs").and_then(|v| v.as_u64()).unwrap_or(cli.jobs as u64) as usize;
-            let _ = post(
-                cli,
-                http,
-                &format!("/v1/jobs/{}/progress", job.id),
-                &json!({ "progress": format!("running benchmark {bid}") }),
-            );
+            ctl.note(&format!("running benchmark {bid}"));
             // Provenance passthrough: a version-triggered enqueue (prompts::maybe_enqueue) tags its
             // job payload with the prompt + version being scored; stamp them into the run report so
             // the promotion gate can find the run that scored THAT version.
@@ -151,12 +205,36 @@ fn process_job(
                 }
                 (!m.is_empty()).then_some(Value::Object(m))
             };
-            run_benchmark(
+            let status = run_benchmark(
                 cli, http, engine, bid, samples, gen_samples, heal, pairwise, jobs,
-                extra.as_ref(),
+                extra.as_ref(), ctl,
             )?;
-            Ok(json!({ "benchmark_id": bid, "status": "completed" }))
+            Ok(json!({
+                "benchmark_id": bid,
+                "status": status,
+                "cancelled": ctl.cancelled(),
+                "partial": ctl.cancelled(),
+            }))
         }
         other => Err(anyhow::anyhow!("unknown job type: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_decision;
+
+    #[test]
+    fn only_reported_failures_consume_the_retry_budget() {
+        // First real failure of three → retry.
+        assert_eq!(retry_decision(0, 3).0, "queued");
+        assert_eq!(retry_decision(1, 3).0, "queued");
+        // Third → give up, and say which failure it was.
+        let (status, note) = retry_decision(2, 3);
+        assert_eq!(status, "failed");
+        assert!(note.contains("3/3"), "{note}");
+        // The regression this replaces: a job whose worker was killed twice (attempts=3) but which
+        // never actually failed still gets its full retry budget, because `failures` is what counts.
+        assert_eq!(retry_decision(0, 3).0, "queued");
     }
 }

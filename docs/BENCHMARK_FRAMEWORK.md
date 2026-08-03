@@ -247,6 +247,27 @@ Benchmark runs must never block ingestion. A **jobs** table + a worker loop in `
 - States: `queued → running → done|failed`; heartbeat + `attempts` for retry; concurrency cap so judge
   calls don't stampede. **Cloud:** swap the jobs table for Pub/Sub; same worker.
 
+### 4b. Run control: cancel, live progress, honest failure accounting
+A queued benchmark is paid, long-running work, so it is stoppable and observable:
+
+- **`POST /v1/jobs/:id/cancel`** (admin). A `queued` job becomes `cancelled` outright; a `running`
+  one becomes **`cancelling`** and its worker stops at the **next case boundary** — never mid-LLM-call.
+  Cancelling something already terminal is a **409**, not a silent success. Backends that cannot do
+  this atomically return `Unsupported` (501) rather than pretending.
+- **`cancelling` is outside the claimable set**, which is what makes cancellation race-safe: the
+  stale-claim reclaim path (`status='running' AND claimed_at < stale`) can never hand a cancelled
+  runaway to the next worker. The claim itself stays ONE atomic statement.
+- Partial results are **kept and marked**: the run report carries `cancelled` / `partial` /
+  `cases_planned`, the run's status is `cancelled`, and both `--gate` and `GET /v1/benchmarks/:id/gate`
+  treat it as unverified (never `pass`).
+- **Live progress**: the worker publishes `12/60 cases (20%), eta ~39s` as it goes (throttled to one
+  write every 2s), instead of the single "running benchmark <id>" string written at claim time.
+- **Failure accounting** separates three things a job row used to conflate:
+  `attempts` (claims, crashes included) · `stale_reclaims` (worker deaths — the claim also stamps a
+  `worker lost: …` error) · `failures` (runs that actually reported an error). **`failures` is the
+  retry budget**, so three crashes no longer permanently fail a job with the crash recorded as its
+  error; and `benchmark failure: …` vs `worker lost: …` tells an operator which one happened.
+
 ### 4a. Self-running benchmarks (opt-in recurrence)
 By default a benchmark runs **only** on a manual enqueue (`POST /v1/benchmarks/:id/enqueue`) or a
 prompt-version cut (the registry auto-enqueues) — there is no cron in the benchmark path. Turn a

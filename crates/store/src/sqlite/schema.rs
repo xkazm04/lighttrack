@@ -39,6 +39,12 @@ const ADDED_COLUMNS: &[&str] = &[
     // see the ordering note in [`apply`].
     "ALTER TABLE scores ADD COLUMN run_id TEXT",
     "ALTER TABLE scores ADD COLUMN case_index INTEGER",
+    // Honest failure accounting on the job queue: `failures` (runs that actually failed — the retry
+    // budget) apart from `attempts` (claims, which a crash also burns), and `stale_reclaims` (worker
+    // deaths). Both are read by the claim/finish statements, so a database created before they
+    // existed must be widened here, before the batch.
+    "ALTER TABLE jobs ADD COLUMN failures INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE jobs ADD COLUMN stale_reclaims INTEGER NOT NULL DEFAULT 0",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.

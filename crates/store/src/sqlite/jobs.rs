@@ -4,21 +4,22 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::Value;
 
-use lighttrack_core::Job;
+use lighttrack_core::{Job, JobCancel, JOB_ERROR_WORKER_LOST};
 
 use crate::codec::{fmt_ts, json_or_null, parse_ts, val_or_null};
 use crate::Result;
 
 const COLS: &str = "id, type, payload, status, attempts, max_attempts, progress, error, \
-    result, claimed_at, created_at, updated_at";
+    result, claimed_at, created_at, updated_at, failures, stale_reclaims";
 
 pub(super) fn create(conn: &Connection, j: &Job) -> Result<()> {
     let payload = json_or_null(&j.payload)?;
     let result = json_or_null(&j.result)?;
     conn.execute(
         "INSERT INTO jobs \
-         (id, type, payload, status, attempts, max_attempts, progress, error, result, claimed_at, created_at, updated_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+         (id, type, payload, status, attempts, max_attempts, progress, error, result, claimed_at, \
+          created_at, updated_at, failures, stale_reclaims) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
         params![
             j.id,
             j.job_type,
@@ -32,24 +33,62 @@ pub(super) fn create(conn: &Connection, j: &Job) -> Result<()> {
             j.claimed_at.map(fmt_ts),
             fmt_ts(j.created_at),
             fmt_ts(j.updated_at),
+            j.failures as i64,
+            j.stale_reclaims as i64,
         ],
     )?;
     Ok(())
 }
 
+/// Ask for a job to stop. One conditional statement, so it cannot race a concurrent claim into an
+/// inconsistent state:
+/// - `queued` → `cancelled` outright (nothing ever ran).
+/// - `running` → `cancelling`, which is **not** in the claimable set — so the stale-claim reclaim
+///   path can never restart a cancelled run, no matter which of the two statements lands first.
+/// - anything terminal → untouched, and reported as already finished.
+pub(super) fn cancel(conn: &Connection, id: &str) -> Result<Option<JobCancel>> {
+    let now = fmt_ts(Utc::now());
+    let mut stmt = conn.prepare(
+        "UPDATE jobs SET status = CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END, \
+         updated_at = ?2 \
+         WHERE id = ?1 AND status IN ('queued','running') \
+         RETURNING status",
+    )?;
+    let new_status: Option<String> =
+        stmt.query_row(params![id, now], |r| r.get(0)).optional()?;
+    match new_status.as_deref() {
+        Some("cancelled") => return Ok(Some(JobCancel::Cancelled)),
+        Some(_) => return Ok(Some(JobCancel::Cancelling)),
+        None => {}
+    }
+    // Nothing to cancel: either it's already terminal, or there is no such job.
+    let existing: Option<String> = conn
+        .query_row("SELECT status FROM jobs WHERE id = ?1", params![id], |r| r.get(0))
+        .optional()?;
+    Ok(existing.map(|status| JobCancel::AlreadyFinished { status }))
+}
+
 pub(super) fn claim(conn: &Connection, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
     let now = fmt_ts(Utc::now());
     let stale = fmt_ts(stale_before);
-    // Atomic: pick the oldest queued (or stale-running) job and flip it to running.
+    // Atomic: pick the oldest queued (or stale-running) job and flip it to running. Still ONE
+    // statement — the load-bearing property of this queue.
+    //
+    // Reclaiming a `running` job means the worker that held it never finished: that is a WORKER
+    // DEATH, not a benchmark failure, so it is counted in `stale_reclaims` (never in `failures`,
+    // which is the retry budget) and stamped into `error` so the job row says which one happened.
+    // `cancelling`/`cancelled` are outside the matched set: a cancelled run is never restarted.
     let sql = format!(
-        "UPDATE jobs SET status='running', claimed_at=?1, updated_at=?1, attempts=attempts+1 \
+        "UPDATE jobs SET status='running', claimed_at=?1, updated_at=?1, attempts=attempts+1, \
+                stale_reclaims = stale_reclaims + (status='running'), \
+                error = CASE WHEN status='running' THEN ?3 ELSE error END \
          WHERE id = (SELECT id FROM jobs \
                      WHERE status='queued' OR (status='running' AND claimed_at < ?2) \
                      ORDER BY created_at LIMIT 1) \
          RETURNING {COLS}"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![now, stale], map_raw).optional()?;
+    let raw = stmt.query_row(params![now, stale, JOB_ERROR_WORKER_LOST], map_raw).optional()?;
     raw.map(from_raw).transpose()
 }
 
@@ -61,10 +100,15 @@ pub(super) fn update_progress(conn: &Connection, id: &str, progress: &str) -> Re
     Ok(())
 }
 
+/// Finish a job. An error means the job RAN and the work failed, so it increments `failures` — the
+/// retry budget. A clean finish (including a cancellation, which carries no error) never does, so a
+/// crash-and-reclaim cycle can't consume a job's chances without the benchmark ever failing.
 pub(super) fn finish(conn: &Connection, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()> {
     let result_s = json_or_null(result)?;
     conn.execute(
-        "UPDATE jobs SET status = ?2, result = ?3, error = ?4, updated_at = ?5 WHERE id = ?1",
+        "UPDATE jobs SET status = ?2, result = ?3, error = ?4, updated_at = ?5, \
+                failures = failures + (?4 IS NOT NULL) \
+         WHERE id = ?1",
         params![id, status, result_s, error, fmt_ts(Utc::now())],
     )?;
     Ok(())
@@ -110,6 +154,8 @@ type JobRaw = (
     Option<String>,
     String,
     String,
+    i64,
+    i64,
 );
 
 fn map_raw(row: &Row) -> rusqlite::Result<JobRaw> {
@@ -126,6 +172,8 @@ fn map_raw(row: &Row) -> rusqlite::Result<JobRaw> {
         row.get(9)?,
         row.get(10)?,
         row.get(11)?,
+        row.get(12)?,
+        row.get(13)?,
     ))
 }
 
@@ -146,5 +194,7 @@ fn from_raw(r: JobRaw) -> Result<Job> {
         },
         created_at: parse_ts(&r.10)?,
         updated_at: parse_ts(&r.11)?,
+        failures: r.12 as u32,
+        stale_reclaims: r.13 as u32,
     })
 }

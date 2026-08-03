@@ -25,7 +25,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule,
+    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, JobCancel, LimitRule,
     LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent, Rubric,
     Score,
 };
@@ -265,6 +265,9 @@ impl Store for FirestoreStore {
     }
     fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
         jobs::claim_job(&self.rest, stale_before)
+    }
+    fn cancel_job(&self, id: &str) -> Result<Option<JobCancel>> {
+        jobs::cancel_job(&self.rest, id)
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
         jobs::update_job_progress(&self.rest, id, progress)

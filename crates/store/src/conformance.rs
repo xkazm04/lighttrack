@@ -11,13 +11,13 @@ use serde_json::{json, Value};
 
 use lighttrack_core::{
     compute_margin, new_id, ApiKey, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem,
-    DimensionCheck, DimensionKind, Job, LimitAction, LimitMetric, LimitRule, LimitScope,
+    DimensionCheck, DimensionKind, Job, JobCancel, LimitAction, LimitMetric, LimitRule, LimitScope,
     LimitWindow, LlmEvent, MarginDimension, ModelPriceRow, Operation, Project, Provider, Redaction,
     RelayOutcome, RelayTask, RevenueEvent, RevenueKind, Rubric, RubricDimension, Score, ScoreDetail,
     ScoreDim, Status, TokenUsage,
 };
 
-use crate::{Admission, EventFilter, Result, Store};
+use crate::{Admission, EventFilter, Result, Store, StoreError};
 
 /// Run the full conformance suite against `store` (assumed already schema-initialized by its
 /// constructor). Panics on a failed assertion; returns `Err` on a backend error.
@@ -919,22 +919,29 @@ fn revenue(store: &dyn Store) -> Result<()> {
     Ok(())
 }
 
-fn jobs(store: &dyn Store) -> Result<()> {
+fn new_job() -> Job {
     let now = Utc::now();
-    let j = Job {
+    Job {
         id: new_id(),
         job_type: "conf".into(),
         payload: json!({ "k": "v" }),
         status: "queued".into(),
         attempts: 0,
         max_attempts: 3,
+        failures: 0,
+        stale_reclaims: 0,
         progress: None,
         error: None,
         result: Value::Null,
         claimed_at: None,
         created_at: now,
         updated_at: now,
-    };
+    }
+}
+
+fn jobs(store: &dyn Store) -> Result<()> {
+    let now = Utc::now();
+    let j = new_job();
     store.create_job(&j)?;
     assert_eq!(store.get_job(&j.id)?.expect("get_job Some").status, "queued");
 
@@ -951,6 +958,106 @@ fn jobs(store: &dyn Store) -> Result<()> {
     assert_eq!(done.status, "done");
     assert_eq!(done.result, json!({ "ok": true }), "job result round-trip");
     assert!(store.list_jobs(Some("done"), 100)?.iter().any(|x| x.id == j.id));
+    job_cancellation(store)?;
+    job_failure_accounting(store)?;
+    Ok(())
+}
+
+/// Claim until the queue is empty (bounded), returning every id claimed. Lets the cancellation
+/// checks below reason about a queue whose head they control, on a store whose claim is global.
+fn drain_jobs(store: &dyn Store) -> Result<Vec<String>> {
+    let mut ids = Vec::new();
+    for _ in 0..50 {
+        match store.claim_job(Utc::now())? {
+            Some(j) => ids.push(j.id),
+            None => break,
+        }
+    }
+    Ok(ids)
+}
+
+/// Cancellation, and the property that matters most about it: a cancelled run is **never restarted
+/// by the stale-claim reclaim path**. A backend that can't cancel must say so (`Unsupported` → 501),
+/// never quietly do nothing.
+fn job_cancellation(store: &dyn Store) -> Result<()> {
+    let queued = new_job();
+    store.create_job(&queued)?;
+    match store.cancel_job(&queued.id) {
+        Err(StoreError::Unsupported(_)) => {
+            eprintln!("conformance: backend does not support cancel_job (501) — skipping");
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+        Ok(outcome) => assert_eq!(
+            outcome,
+            Some(JobCancel::Cancelled),
+            "a queued job is cancelled outright — nothing ran"
+        ),
+    }
+    assert_eq!(store.get_job(&queued.id)?.expect("get").status, "cancelled");
+    // Cancelling an unknown job is None (→ 404), not a fabricated success.
+    assert_eq!(store.cancel_job(&new_id())?, None);
+    // Cancelling something terminal reports that nothing was stopped.
+    assert!(
+        matches!(store.cancel_job(&queued.id)?, Some(JobCancel::AlreadyFinished { .. })),
+        "re-cancelling a cancelled job must not claim to have stopped it"
+    );
+
+    // A RUNNING job: cancel marks it `cancelling`, and the reclaim path must not resurrect it even
+    // though its claim is (deliberately) already stale.
+    drain_jobs(store)?;
+    let running = new_job();
+    store.create_job(&running)?;
+    let claimed = store.claim_job(Utc::now())?.expect("claim the job just enqueued");
+    assert_eq!(claimed.id, running.id, "the drained queue's only job is ours");
+    assert_eq!(store.cancel_job(&running.id)?, Some(JobCancel::Cancelling));
+    assert_eq!(store.get_job(&running.id)?.expect("get").status, "cancelling");
+    // `Utc::now()` as the staleness cutoff makes every claim in existence stale. The cancelled job
+    // must STILL not come back — this is the race the reclaim path used to lose.
+    for id in drain_jobs(store)? {
+        assert_ne!(id, running.id, "a cancelled run must never be reclaimed as stale");
+    }
+    assert_eq!(
+        store.get_job(&running.id)?.expect("get").status,
+        "cancelling",
+        "reclaim must not have touched the cancelled job"
+    );
+    Ok(())
+}
+
+/// A worker that dies is not a benchmark that failed. `attempts` counts claims (crashes included),
+/// `stale_reclaims` counts worker deaths, and `failures` — the retry budget — counts only runs that
+/// actually reported an error.
+fn job_failure_accounting(store: &dyn Store) -> Result<()> {
+    drain_jobs(store)?;
+    let j = new_job();
+    store.create_job(&j)?;
+    let first = store.claim_job(Utc::now())?.expect("claim");
+    assert_eq!(first.id, j.id);
+    assert_eq!((first.attempts, first.failures, first.stale_reclaims), (1, 0, 0));
+
+    // Simulate the worker being killed: never finish, let the claim go stale, reclaim it.
+    let second = store.claim_job(Utc::now())?.expect("reclaim the stale job");
+    assert_eq!(second.id, j.id);
+    assert_eq!(second.attempts, 2, "a claim is a claim, crash or not");
+    assert_eq!(second.failures, 0, "a dead worker must not burn a retry");
+    assert_eq!(second.stale_reclaims, 1, "…it is counted as a worker death instead");
+    assert!(
+        second.error.as_deref().unwrap_or_default().contains("worker lost"),
+        "the stored error must say the worker died, not invent a benchmark failure: {:?}",
+        second.error
+    );
+
+    // Now the benchmark itself fails: that IS a retry.
+    store.finish_job(&j.id, "queued", &Value::Null, Some("benchmark failure: judge failed"))?;
+    let after = store.get_job(&j.id)?.expect("get");
+    assert_eq!(after.failures, 1, "a reported error consumes the retry budget");
+    assert_eq!(after.stale_reclaims, 1, "…and is not confused with a worker death");
+    assert!(after.error.as_deref().unwrap_or_default().contains("judge failed"));
+
+    // A clean finish never consumes the budget.
+    store.finish_job(&j.id, "done", &json!({ "ok": true }), None)?;
+    assert_eq!(store.get_job(&j.id)?.expect("get").failures, 1);
     Ok(())
 }
 

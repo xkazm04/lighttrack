@@ -41,6 +41,7 @@ pub(crate) fn run_rubric_benchmark(
     heal: bool,
     jobs: usize,
     report_extra: Option<&serde_json::Value>,
+    ctl: &crate::runctl::RunControl,
 ) -> Result<String> {
     let rubric: Rubric = get(cli, http, &format!("/v1/rubrics/{rubric_id}"))?;
     // Minted before judging so every posted case is run-scoped even if the run post later fails.
@@ -85,20 +86,34 @@ pub(crate) fn run_rubric_benchmark(
     // Judge every case with up to `jobs` concurrency (jobs=1 for the engine's per-case sample loop, so
     // total concurrency stays bounded at --jobs). Fold the outcomes in case order so the printed log,
     // posted scores, and scorecard are byte-identical at any `jobs`.
-    let results: Vec<CaseResult> = parallel_map(cases.len(), jobs, |i| match &cases[i].output {
-        None => CaseResult::NoOutput,
-        Some(output) => match run_rubric_judge(
-            engine, &jp, &jm, &rubric, &cases[i].input, cases[i].expected.as_deref(), output, samples, 1,
-        ) {
-            Ok(o) => CaseResult::Judged(Box::new(o)),
-            Err(e) => CaseResult::Errored(e.to_string()),
-        },
+    // A cancellation stops the run at a case boundary: not-yet-started cases are skipped (never
+    // interrupted mid-call), and what was judged is kept and marked partial.
+    let n_cases = cases.len();
+    let results: Vec<CaseResult> = parallel_map(n_cases, jobs, |i| {
+        if ctl.cancelled() {
+            return CaseResult::NoOutput;
+        }
+        let r = match &cases[i].output {
+            None => CaseResult::NoOutput,
+            Some(output) => match run_rubric_judge(
+                engine, &jp, &jm, &rubric, &cases[i].input, cases[i].expected.as_deref(), output, samples, 1,
+            ) {
+                Ok(o) => CaseResult::Judged(Box::new(o)),
+                Err(e) => CaseResult::Errored(e.to_string()),
+            },
+        };
+        ctl.tick(n_cases);
+        r
     });
+    let cancelled = ctl.cancelled();
 
     for (i, result) in results.into_iter().enumerate() {
         let o = match result {
             CaseResult::NoOutput => {
-                println!("  case {} skipped (no output)", i + 1);
+                // A case that HAS an output but produced no verdict was skipped by the
+                // cancellation, not by missing data — don't blame the dataset for an operator stop.
+                let why = if cancelled && cases[i].output.is_some() { "run cancelled" } else { "no output" };
+                println!("  case {} skipped ({why})", i + 1);
                 continue;
             }
             // Don't abort the whole run (or record a phantom 0.0) on one garbage judge response —
@@ -288,7 +303,9 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
 
     // Significance-aware verdict (CI-excludes-baseline for n≥2, scalar fallback otherwise).
     let summary = Summary::of(&scores);
-    let (status, scalar_fallback) = significance_verdict(bench.baseline_score, &summary);
+    let (verdict_status, scalar_fallback) = significance_verdict(bench.baseline_score, &summary);
+    // A cancelled run judged only part of its dataset — it never reads as a finished one.
+    let status = if cancelled { "cancelled" } else { verdict_status };
 
     let mut report = json!({
         "rubric": rubric.name, "threshold": rubric.threshold, "samples": samples,
@@ -296,6 +313,7 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
         "weakest_dimension": weakest, "recommendations": recs,
         "unparseable_cases": errored, "dropped_samples": sample_failures,
         "injection_suspected_cases": injected, "score_post_failures": score_post_failures,
+        "cancelled": cancelled, "partial": cancelled, "cases_planned": n_cases,
     });
     // Rubric mode judges outputs the caller supplied — it generates nothing, so the generation half
     // of the stamp is `null` rather than a claim. The headline `determinism` is unchanged for this

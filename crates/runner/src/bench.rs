@@ -18,6 +18,7 @@ use crate::compare::run_compare;
 use crate::http::{get, post};
 use crate::provenance::{freeform_detail, rubric_detail};
 use crate::rubric::run_rubric_benchmark;
+use crate::runctl::RunControl;
 use crate::stats::{annotate_significance, significance_verdict, Summary};
 use crate::util::{add_price_warnings, cost_or_book, join_csv, now_ts, parallel_map, percentiles};
 
@@ -112,6 +113,7 @@ pub(crate) fn run_benchmark(
     pairwise: bool,
     jobs: usize,
     report_extra: Option<&Value>,
+    ctl: &RunControl,
 ) -> Result<String> {
     let bench: Benchmark = get(cli, http, &format!("/v1/benchmarks/{benchmark_id}"))?;
 
@@ -155,15 +157,15 @@ pub(crate) fn run_benchmark(
     if !targets.is_empty() {
         return run_compare(
             cli, http, engine, &bench, &cases, &targets, samples, gen_samples, pairwise, jobs,
-            report_extra,
+            report_extra, ctl,
         );
     }
     if let Some(rid) = bench.rubric_id.clone() {
         return run_rubric_benchmark(
-            cli, http, engine, &bench, &cases, &rid, samples, heal, jobs, report_extra,
+            cli, http, engine, &bench, &cases, &rid, samples, heal, jobs, report_extra, ctl,
         );
     }
-    run_simple(cli, http, engine, &bench, &cases, jobs, report_extra)
+    run_simple(cli, http, engine, &bench, &cases, jobs, report_extra, ctl)
 }
 
 /// Simple mode: judge each provided output with a freeform rubric and a single overall score. Cases
@@ -176,6 +178,7 @@ fn run_simple(
     cases: &[BenchmarkCase],
     jobs: usize,
     report_extra: Option<&Value>,
+    ctl: &RunControl,
 ) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
@@ -194,16 +197,25 @@ fn run_simple(
 
     // Judge each case with output in parallel; `None` marks a skipped (no-output) case so the
     // sequential fold below prints/aggregates exactly as the old in-order loop did.
-    let judged: Vec<Result<Option<JudgeOutcome>>> = parallel_map(cases.len(), jobs, |i| {
-        match &cases[i].output {
+    // A cancelled run stops at a case boundary: cases not yet started are skipped (`None`, counted
+    // below), never abandoned mid-call, and whatever was judged is kept and marked partial.
+    let n_cases = cases.len();
+    let judged: Vec<Result<Option<JudgeOutcome>>> = parallel_map(n_cases, jobs, |i| {
+        if ctl.cancelled() {
+            return Ok(None);
+        }
+        let out = match &cases[i].output {
             None => Ok(None),
             Some(output) => {
                 let prompt =
                     build_eval_prompt(&bench.rubric, &cases[i].input, cases[i].expected.as_deref(), output);
                 run_judge(engine, &jp, &jm, &prompt).context("judge failed").map(Some)
             }
-        }
+        };
+        ctl.tick(n_cases);
+        out
     });
+    let cancelled = ctl.cancelled();
 
     let (mut sum, mut n, mut passes, mut cost) = (0.0_f64, 0u32, 0u32, 0.0_f64);
     let mut latencies: Vec<u64> = Vec::new();
@@ -219,7 +231,14 @@ fn run_simple(
         let outcome = match outcome? {
             Some(o) => o,
             None => {
-                println!("  case {}: skipped (no output)", i + 1);
+                // A case with an output that produced no verdict was skipped by the cancellation,
+                // not by missing data — the log must not blame the dataset for an operator's stop.
+                let why = if cancelled && cases[i].output.is_some() {
+                    "run cancelled"
+                } else {
+                    "no output"
+                };
+                println!("  case {}: skipped ({why})", i + 1);
                 continue;
             }
         };
@@ -278,7 +297,10 @@ fn run_simple(
     // Significance-aware verdict: a regression needs the whole ~95% CI below baseline (n≥2), else a
     // scalar fallback. Same regressed/passed/no_baseline vocabulary as the other modes.
     let summary = Summary::of(&scores);
-    let (status, scalar_fallback) = significance_verdict(bench.baseline_score, &summary);
+    let (verdict_status, scalar_fallback) = significance_verdict(bench.baseline_score, &summary);
+    // A cancelled run judged only part of its dataset — it must never be published under a verdict
+    // that reads as a finished one.
+    let status = if cancelled { "cancelled" } else { verdict_status };
     println!(
         "\nscorecard: mean={mean:.3}±{:.3} (n={})  pass_rate={:.0}%  cost=${cost:.5}  p50={}ms p95={}ms  tokens={total_tokens}  status={status}",
         summary.stderr,
@@ -295,7 +317,17 @@ fn run_simple(
         println!("warning: no price book entry for {} — judge cost undercounted", join_csv(&price_warnings));
     }
 
-    let mut report = json!({ "mode": "simple", "score_post_failures": score_post_failures });
+    if cancelled {
+        println!(
+            "\nCANCELLED: stopped at a case boundary after {n} of {n_cases} case(s); the results \
+             above are PARTIAL.",
+            n = summary.n,
+        );
+    }
+    let mut report = json!({
+        "mode": "simple", "score_post_failures": score_post_failures,
+        "cancelled": cancelled, "partial": cancelled, "cases_planned": n_cases,
+    });
     attach_cases(&mut report, "cases", case_reports);
     annotate_significance(&mut report, &summary, scalar_fallback);
     add_price_warnings(&mut report, &price_warnings);

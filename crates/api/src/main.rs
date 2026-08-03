@@ -366,6 +366,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/jobs", get(jobs::list_jobs))
         .route("/v1/jobs/claim", post(jobs::claim_job))
         .route("/v1/jobs/:id", get(jobs::get_job))
+        .route("/v1/jobs/:id/cancel", post(jobs::cancel_job))
         .route("/v1/jobs/:id/progress", post(jobs::job_progress))
         .route("/v1/jobs/:id/finish", post(jobs::job_finish))
         .route("/v1/projects", post(projects::create_project).get(projects::list_projects))

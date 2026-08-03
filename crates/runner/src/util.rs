@@ -89,8 +89,9 @@ pub(crate) fn dim_mean(sums: &HashMap<String, f64>, key: &str, n: u32) -> f64 {
 }
 
 /// Roll several per-target verdicts up to one run-level verdict: `regressed` if any target
-/// regressed, else `partial` if any target's cases were cut short (budget halt), else `passed` if
-/// any held against a baseline, else `no_baseline`. Used by compare mode so the whole comparison has
+/// regressed, else `cancelled`/`partial` if any target's cases were cut short (an operator stopped
+/// the run, or its budget ceiling did), else `passed` if any held against a baseline, else
+/// `no_baseline`. Used by compare mode so the whole comparison has
 /// a single honest headline status, not just per-target rows.
 ///
 /// A real regression outranks partiality on purpose: a target that regressed on the cases it *did*
@@ -99,6 +100,8 @@ pub(crate) fn dim_mean(sums: &HashMap<String, f64>, key: &str, n: u32) -> f64 {
 pub(crate) fn aggregate_status(statuses: &[&str]) -> &'static str {
     if statuses.contains(&"regressed") {
         "regressed"
+    } else if statuses.contains(&"cancelled") {
+        "cancelled"
     } else if statuses.contains(&"partial") {
         "partial"
     } else if statuses.contains(&"passed") {
@@ -282,6 +285,7 @@ mod tests {
         assert_eq!(aggregate_status(&["passed", "no_baseline"]), "passed");
         // A budget-halted target can never let the comparison roll up to `passed`.
         assert_eq!(aggregate_status(&["passed", "partial"]), "partial");
+        assert_eq!(aggregate_status(&["passed", "cancelled"]), "cancelled");
         assert_eq!(aggregate_status(&["partial", "no_baseline"]), "partial");
         // …but a real regression on the cases that did run still outranks it.
         assert_eq!(aggregate_status(&["partial", "regressed"]), "regressed");

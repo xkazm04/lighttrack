@@ -20,7 +20,7 @@ use thiserror::Error;
 
 use lighttrack_core::{
     scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, CostEvidence,
-    Dataset, DatasetItem, Job, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow,
+    Dataset, DatasetItem, Job, JobCancel, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow,
     LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome, RelayTask, RevenueEvent,
     Rubric, Score, TokensByDimension, Trace, TraceSummary,
 };
@@ -803,7 +803,19 @@ pub trait Store: Send + Sync {
     // --- job queue (Phase 3.6d) ---
     fn create_job(&self, j: &Job) -> Result<()>;
     /// Atomically claim the oldest queued (or stale-running) job: sets it `running`, bumps attempts.
+    /// Reclaiming a stale `running` job counts a **worker death** (`stale_reclaims` + the
+    /// `JOB_ERROR_WORKER_LOST` marker), never a benchmark failure. `cancelling`/`cancelled` jobs are
+    /// outside the claimable set, so a cancelled run can never be restarted by the reclaim path.
     fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>>;
+    /// Ask a queued/running job to stop. `queued` → `cancelled` outright; `running` → `cancelling`,
+    /// which the worker notices at its next case boundary. `Ok(None)` = no such job.
+    ///
+    /// Backends that cannot do this atomically must return [`StoreError::Unsupported`] (→ 501)
+    /// rather than a quiet default: a cancel that silently did nothing is worse than a 501, because
+    /// the operator walks away believing the spend stopped.
+    fn cancel_job(&self, _id: &str) -> Result<Option<JobCancel>> {
+        Err(StoreError::Unsupported("cancelling a job"))
+    }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()>;
     fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()>;
     fn get_job(&self, id: &str) -> Result<Option<Job>>;

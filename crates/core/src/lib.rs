@@ -35,7 +35,9 @@ pub use customer::{BillingProduct, Customer};
 pub use dataset::{Dataset, DatasetItem};
 pub use error::LtError;
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
-pub use job::Job;
+pub use job::{
+    job_is_terminal, Job, JobCancel, JOB_ERROR_PREFIX_FAILURE, JOB_ERROR_WORKER_LOST,
+};
 pub use margin::{compute_margin, CostByDimension, MarginDimension, MarginRow};
 pub use margin_sim::{
     compute_margin_simulation, SimAssumptions, SimRow, TokensByDimension,

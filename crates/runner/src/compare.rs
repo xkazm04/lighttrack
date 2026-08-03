@@ -21,6 +21,7 @@ use crate::cli::Cli;
 use crate::http::{get, post};
 use crate::history::previous_case_scores;
 use crate::provenance::{merge_details, weakest_reasoning};
+use crate::runctl::RunControl;
 use crate::stats::{
     annotate_significance, annotate_verdict, paired_deltas, stability, superiority, verdict, Summary,
 };
@@ -75,6 +76,7 @@ fn compute_cell(
     samples: u32,
     prices: &[ModelPriceRow],
     budget: &Budget,
+    ctl: &RunControl,
 ) -> Cell {
     let mut cell = Cell {
         cand_scores: Vec::new(),
@@ -93,11 +95,14 @@ fn compute_cell(
         error_msg: None,
         skipped: false,
     };
-    // The ceiling is checked HERE — at a case boundary, before the first paid call of this cell —
-    // so a run that outruns its estimate stops instead of finishing the invoice. Which cells get
-    // skipped depends on scheduling; that the run is partial does not, and that is what's reported.
-    if budget.exhausted() {
-        budget.halt();
+    // Both stop conditions are checked HERE — at a case boundary, before the first paid call of this
+    // cell: the operator's dollar ceiling, and an operator-requested cancellation. Neither ever
+    // interrupts a call in flight; which cells get skipped depends on scheduling, that the run is
+    // partial does not, and that is what's reported.
+    if budget.exhausted() || ctl.cancelled() {
+        if budget.exhausted() {
+            budget.halt();
+        }
         cell.skipped = true;
         return cell;
     }
@@ -161,6 +166,16 @@ fn compute_cell(
     // errored part-way: those calls were paid for too.
     budget.spend(cell.gen_cost + cell.judge_cost);
     cell
+}
+
+/// Whether a run stopped early, and why — the honest status a partial run carries instead of a
+/// verdict it did not earn.
+fn halt_status(cancelled: bool, skipped: u32, verdict_status: &'static str) -> &'static str {
+    match (cancelled, skipped) {
+        (true, _) => "cancelled",
+        (false, s) if s > 0 => "partial",
+        _ => verdict_status,
+    }
 }
 
 /// One target's leaderboard row: (label, mean, pass_rate, gen_cost, judge_cost, p50_ms, errored, agreement).
@@ -236,6 +251,7 @@ pub(crate) fn run_compare(
     pairwise: bool,
     jobs: usize,
     report_extra: Option<&Value>,
+    ctl: &RunControl,
 ) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let ng = gen_samples.max(1);
@@ -312,13 +328,19 @@ pub(crate) fn run_compare(
     // (target, case) order, so aggregation is byte-identical at any `--jobs`; see
     // `cell_matrix_is_order_independent`.
     let n_c = cases.len();
-    let cells: Vec<Cell> = parallel_map(targets.len() * n_c, jobs, |idx| {
+    let total_cells = targets.len() * n_c;
+    let cells: Vec<Cell> = parallel_map(total_cells, jobs, |idx| {
         let (ti, ci) = (idx / n_c.max(1), idx % n_c.max(1));
-        compute_cell(
+        let cell = compute_cell(
             engine, &targets[ti], &jp, &jm, &rubric, bench, &cases[ci], ng, samples, &prices,
-            &budget,
-        )
+            &budget, ctl,
+        );
+        // Live progress: the job's status line used to be written once at claim time and never
+        // again, so a 500-case run looked identical at second 1 and minute 40.
+        ctl.tick(total_cells);
+        cell
     });
+    let cancelled = ctl.cancelled();
     let mut cells = cells.into_iter();
 
     for t in targets {
@@ -493,8 +515,13 @@ pub(crate) fn run_compare(
         // the money reached — it must never be published under a verdict vocabulary that reads as a
         // completed run. `partial` is that honest status (the `--gate` contract treats it as
         // unverified, like `no_baseline`).
-        let status = if skipped > 0 { "partial" } else { sig.status };
-        if skipped > 0 {
+        let status = halt_status(cancelled, skipped, sig.status);
+        if skipped > 0 && cancelled {
+            println!(
+                "  CANCELLED: {skipped} of {n_c} case(s) were never run — an operator stopped this \
+                 run. Results below are PARTIAL."
+            );
+        } else if skipped > 0 {
             println!(
                 "  BUDGET HALT: {skipped} of {n_c} case(s) were never run — the run's ${:.4} spend \
                  reached --max-cost ${:.2}. Results below are PARTIAL.",
@@ -533,7 +560,8 @@ pub(crate) fn run_compare(
             // Spend control, recorded on the run so "why does this only have 40 cases?" is
             // answerable from the run alone.
             "partial": skipped > 0,
-            "budget_halted": skipped > 0,
+            "cancelled": cancelled,
+            "budget_halted": skipped > 0 && !cancelled,
             "skipped_cases": skipped,
             "cases_planned": n_c,
             "budget_limit_usd": budget.limit_usd(),
@@ -563,6 +591,12 @@ pub(crate) fn run_compare(
 
     // One honest headline status for the whole comparison: regressed if any target regressed.
     let overall = aggregate_status(&statuses.iter().map(String::as_str).collect::<Vec<_>>());
+    if cancelled {
+        println!(
+            "\nCANCELLED RUN: an operator stopped this comparison at a case boundary. The table \
+             below is partial — it is not a finished comparison."
+        );
+    }
     if budget.halted() {
         println!(
             "\nPARTIAL RUN: the ${:.4} spend reached --max-cost ${:.2}; some cases were never run. \
@@ -596,6 +630,7 @@ pub(crate) fn run_compare(
         "best": best_claim(&per_target),
         // Run-level spend facts, beside the leaderboard rather than buried per target.
         "budget_halted": budget.halted(),
+        "cancelled": cancelled,
         "spend_usd": budget.spent_usd(),
         "budget_limit_usd": budget.limit_usd(),
         // Unpriced models make every $ figure above a LOWER bound. This is the aggregate view of

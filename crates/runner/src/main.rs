@@ -22,6 +22,7 @@ mod pairwise;
 mod provenance;
 mod recurrence;
 mod rubric;
+mod runctl;
 mod schedule;
 mod score;
 mod score_traces;
@@ -102,7 +103,7 @@ fn main() -> Result<()> {
         } => {
             let status = bench::run_benchmark(
                 &cli, &http, &engine, benchmark, *samples, *gen_samples, *heal, *pairwise, cli.jobs,
-                None,
+                None, &runctl::RunControl::inert(),
             )?;
             if *gate {
                 let code = gate::gate_exit_code(&status);

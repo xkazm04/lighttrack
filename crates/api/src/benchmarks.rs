@@ -238,7 +238,7 @@ pub(crate) fn decide_gate(runs: &[BenchmarkRun], baseline: Option<f64>) -> GateR
         // A run the operator's cost ceiling cut short (or refused to start) judged only part of its
         // dataset. Its mean is a mean over whatever the money reached, so it is UNVERIFIED — it must
         // never fall through to the scalar compare below and come back out as `pass`.
-        "partial" | "aborted" => "partial",
+        "partial" | "aborted" | "cancelled" => "partial",
         // Legacy status (e.g. "completed"/"compared") → scalar compare of mean vs baseline.
         _ => match (run.mean_score, baseline) {
             (Some(m), Some(b)) if m + 1e-9 < b => "regressed",

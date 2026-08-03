@@ -42,7 +42,7 @@ use serde_json::Value;
 
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
-    LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome,
+    JobCancel, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome,
     RelayTask, RevenueEvent, Rubric, Score, TokensByDimension, TraceSummary,
 };
 
@@ -462,6 +462,9 @@ impl Store for SqliteStore {
     }
     fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
         self.with(|c| jobs::claim(c, stale_before))
+    }
+    fn cancel_job(&self, id: &str) -> Result<Option<JobCancel>> {
+        self.with(|c| jobs::cancel(c, id))
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
         self.with(|c| jobs::update_progress(c, id, progress))

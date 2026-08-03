@@ -1305,6 +1305,8 @@ fn job_queue_claim_finish() {
         status: "queued".into(),
         attempts: 0,
         max_attempts: 3,
+        failures: 0,
+        stale_reclaims: 0,
         progress: None,
         error: None,
         result: Value::Null,
@@ -1671,6 +1673,106 @@ fn a_database_predating_run_scoped_cases_migrates_on_open() {
     // Re-opening an already-migrated database is a no-op, not a duplicate-column failure.
     drop(s);
     SqliteStore::open(&path).expect("migrations are idempotent");
+}
+
+/// A database created BEFORE `jobs.failures` / `jobs.stale_reclaims` existed must still open,
+/// migrate, and run the claim/finish statements that read those columns — with the jobs already in
+/// the old file surviving.
+#[test]
+fn a_database_predating_job_failure_accounting_migrates_on_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy-jobs.db");
+
+    // The original `jobs` shape and its index, exactly as a pre-upgrade deployment has it.
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE jobs (
+               id TEXT PRIMARY KEY, type TEXT NOT NULL, payload TEXT,
+               status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0,
+               max_attempts INTEGER NOT NULL DEFAULT 3, progress TEXT, error TEXT, result TEXT,
+               claimed_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+             CREATE INDEX idx_jobs_status ON jobs(status, created_at);
+             INSERT INTO jobs (id, type, payload, status, created_at, updated_at)
+             VALUES ('old-1', 'bench_run', '{\"benchmark_id\":\"b1\"}', 'queued',
+                     '2026-01-01T00:00:00.000000000Z', '2026-01-01T00:00:00.000000000Z');",
+        )
+        .unwrap();
+    }
+
+    let s = SqliteStore::open(&path).expect("an old database must survive the upgrade");
+
+    // The pre-existing job reads back, with the new counters defaulted rather than missing.
+    let old = s.get_job("old-1").unwrap().expect("legacy job survives");
+    assert_eq!((old.status.as_str(), old.failures, old.stale_reclaims), ("queued", 0, 0));
+
+    // …and the widened table serves the statements that now reference the new columns.
+    let claimed = s.claim_job(Utc::now()).unwrap().expect("claim the legacy job");
+    assert_eq!(claimed.id, "old-1");
+    assert_eq!((claimed.attempts, claimed.failures, claimed.stale_reclaims), (1, 0, 0));
+    s.finish_job("old-1", "failed", &Value::Null, Some("boom")).unwrap();
+    assert_eq!(s.get_job("old-1").unwrap().unwrap().failures, 1);
+    assert_eq!(s.cancel_job("old-1").unwrap().unwrap(), lighttrack_core::JobCancel::AlreadyFinished {
+        status: "failed".into(),
+    });
+
+    // Re-opening an already-migrated database is a no-op, not a duplicate-column failure.
+    drop(s);
+    SqliteStore::open(&path).expect("migrations are idempotent");
+}
+
+/// Cancelling races the stale-claim reclaim path, and must win in BOTH orders: a cancelled job is
+/// never restarted, and a job claimed a microsecond before the cancel still stops.
+#[test]
+fn cancel_is_race_safe_against_stale_reclaim() {
+    use lighttrack_core::JobCancel;
+    let s = SqliteStore::open_in_memory().unwrap();
+    let now = Utc::now();
+    let mk = |id: &str| Job {
+        id: id.into(),
+        job_type: "bench_run".into(),
+        payload: serde_json::json!({ "benchmark_id": "b1" }),
+        status: "queued".into(),
+        attempts: 0,
+        max_attempts: 3,
+        failures: 0,
+        stale_reclaims: 0,
+        progress: None,
+        error: None,
+        result: Value::Null,
+        claimed_at: None,
+        created_at: now,
+        updated_at: now,
+    };
+
+    // Order A — cancel BEFORE any claim: the job is cancelled outright and never becomes claimable,
+    // no matter how stale the cutoff.
+    s.create_job(&mk("a")).unwrap();
+    assert_eq!(s.cancel_job("a").unwrap(), Some(JobCancel::Cancelled));
+    assert!(s.claim_job(Utc::now()).unwrap().is_none(), "a cancelled job is not claimable");
+
+    // Order B — claim first, then cancel: the job goes to `cancelling`, which the reclaim path (with
+    // a cutoff that makes EVERY claim stale) must not pick up. Before this change the claim matched
+    // `status='running' AND claimed_at < stale`, so a cancelled runaway was handed straight back to
+    // the next worker and kept spending.
+    s.create_job(&mk("b")).unwrap();
+    let claimed = s.claim_job(Utc::now()).unwrap().expect("claim b");
+    assert_eq!(claimed.id, "b");
+    assert_eq!(s.cancel_job("b").unwrap(), Some(JobCancel::Cancelling));
+    assert!(
+        s.claim_job(Utc::now() + chrono::Duration::seconds(1)).unwrap().is_none(),
+        "a cancelling job must never be reclaimed as stale"
+    );
+    let after = s.get_job("b").unwrap().unwrap();
+    assert_eq!(after.status, "cancelling");
+    assert_eq!(after.attempts, 1, "the reclaim never touched it");
+    assert_eq!(after.stale_reclaims, 0);
+
+    // The worker notices and finishes it as cancelled — with no error, so no retry is consumed.
+    s.finish_job("b", "cancelled", &serde_json::json!({ "partial": true }), None).unwrap();
+    let done = s.get_job("b").unwrap().unwrap();
+    assert_eq!((done.status.as_str(), done.failures), ("cancelled", 0));
+    assert!(s.claim_job(Utc::now() + chrono::Duration::seconds(1)).unwrap().is_none());
 }
 
 /// Build a project + one enforcing cost cap, for the unpriced-traffic admission tests.

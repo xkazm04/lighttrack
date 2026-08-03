@@ -31,8 +31,8 @@ use tokio::runtime::Runtime;
 
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule,
-    LimitScope, LlmEvent, ModelPriceRow, Project, RelayOutcome, RelayTask, RevenueEvent, Rubric,
-    Score,
+    JobCancel, LimitScope, LlmEvent, ModelPriceRow, Project, RelayOutcome, RelayTask, RevenueEvent,
+    Rubric, Score,
 };
 use lighttrack_store::{
     Admission, CostRow, EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, Usage,
@@ -268,6 +268,9 @@ impl Store for PgStore {
     }
     fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
         self.rt.block_on(jobs::claim(&self.pool, stale_before))
+    }
+    fn cancel_job(&self, id: &str) -> Result<Option<JobCancel>> {
+        self.rt.block_on(jobs::cancel(&self.pool, id))
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
         self.rt.block_on(jobs::update_progress(&self.pool, id, progress))

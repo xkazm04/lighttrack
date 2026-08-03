@@ -10,13 +10,13 @@ pub(crate) const EXIT_NO_BASELINE: i32 = 4;
 
 /// Map a run's final status to a `--gate` exit code. `passed` (and anything else) → 0.
 ///
-/// `partial` (a run halted by `--max-cost`) and `aborted` (a run the cost pre-flight refused to
-/// start) are **unverified**, not passing: they gate exactly like `no_baseline`, so a CI step can
+/// `partial` (a run halted by `--max-cost`), `cancelled` (a run an operator stopped) and `aborted`
+/// (a run the cost pre-flight refused to start) are **unverified**, not passing: they gate exactly like `no_baseline`, so a CI step can
 /// never read a run that judged 30% of its cases as a green build.
 pub(crate) fn gate_exit_code(status: &str) -> i32 {
     match status {
         "regressed" => EXIT_REGRESSED,
-        "no_baseline" | "partial" | "aborted" => EXIT_NO_BASELINE,
+        "no_baseline" | "partial" | "aborted" | "cancelled" => EXIT_NO_BASELINE,
         _ => 0,
     }
 }
@@ -33,6 +33,7 @@ mod tests {
         // A cost-halted or cost-refused run is unverified — never a green build.
         assert_eq!(gate_exit_code("partial"), EXIT_NO_BASELINE);
         assert_eq!(gate_exit_code("aborted"), EXIT_NO_BASELINE);
+        assert_eq!(gate_exit_code("cancelled"), EXIT_NO_BASELINE);
         // Any unrecognized/legacy status is treated as non-blocking.
         assert_eq!(gate_exit_code("completed"), 0);
         assert_eq!(gate_exit_code(""), 0);

@@ -143,8 +143,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   type         TEXT NOT NULL,
   payload      TEXT,           -- JSON
   status       TEXT NOT NULL DEFAULT 'queued',
-  attempts     INTEGER NOT NULL DEFAULT 0,
+  attempts     INTEGER NOT NULL DEFAULT 0,   -- claims, including ones a crash ended
   max_attempts INTEGER NOT NULL DEFAULT 3,
+  failures       INTEGER NOT NULL DEFAULT 0, -- runs that actually failed (the retry budget)
+  stale_reclaims INTEGER NOT NULL DEFAULT 0, -- worker deaths (claim held past the stale window)
   progress     TEXT,
   error        TEXT,
   result       TEXT,           -- JSON

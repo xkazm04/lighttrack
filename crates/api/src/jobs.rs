@@ -8,7 +8,7 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 
-use lighttrack_core::{new_id, Job};
+use lighttrack_core::{new_id, Job, JobCancel};
 
 use crate::benchmarks::load_benchmark_authorized;
 use crate::error::ApiError;
@@ -66,6 +66,8 @@ pub(crate) async fn enqueue_bench_run(
         status: "queued".to_string(),
         attempts: 0,
         max_attempts: 3,
+        failures: 0,
+        stale_reclaims: 0,
         progress: None,
         error: None,
         result: serde_json::Value::Null,
@@ -132,6 +134,29 @@ pub(crate) async fn claim_job(
     let store = st.store.clone();
     let job = spawn_db(move || store.claim_job(stale_before)).await?;
     Ok(Json(job))
+}
+
+/// Stop a queued or running benchmark job. A queued job is cancelled outright; a running one is
+/// marked `cancelling` and its worker stops at the next case boundary, keeping (and marking) the
+/// partial results it already produced. Cancelling a job that already finished is a **409**, not a
+/// silent success: the operator needs to know their spend was not stopped by this call.
+pub(crate) async fn cancel_job(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<JobCancel>, ApiError> {
+    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let store = st.store.clone();
+    let id2 = id.clone();
+    let outcome = spawn_db(move || store.cancel_job(&id2))
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("job '{id}' not found")))?;
+    if let JobCancel::AlreadyFinished { status } = &outcome {
+        return Err(ApiError::conflict(format!(
+            "job '{id}' is already {status}; nothing was cancelled"
+        )));
+    }
+    Ok(Json(outcome))
 }
 
 #[derive(Deserialize)]

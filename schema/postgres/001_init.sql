@@ -149,8 +149,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   type         TEXT NOT NULL,
   payload      TEXT,
   status       TEXT NOT NULL DEFAULT 'queued',
-  attempts     BIGINT NOT NULL DEFAULT 0,
+  attempts     BIGINT NOT NULL DEFAULT 0,   -- claims, including ones a crash ended
   max_attempts BIGINT NOT NULL DEFAULT 3,
+  failures       BIGINT NOT NULL DEFAULT 0, -- runs that actually failed (the retry budget)
+  stale_reclaims BIGINT NOT NULL DEFAULT 0, -- worker deaths (claim held past the stale window)
   progress     TEXT,
   error        TEXT,
   result       TEXT,
@@ -158,6 +160,11 @@ CREATE TABLE IF NOT EXISTS jobs (
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );
+-- Databases created before honest failure accounting existed. ADD COLUMN IF NOT EXISTS must stay
+-- above the index below (same rule as the scores columns): an index over a column an old table
+-- does not have yet is a hard error.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS failures BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS stale_reclaims BIGINT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
 
 CREATE TABLE IF NOT EXISTS benchmark_runs (
