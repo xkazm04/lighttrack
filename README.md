@@ -102,6 +102,10 @@ Point each provider's webhook at `…/v1/billing/<provider>/webhook?project=<id>
 | Postgres | `postgres://…` — Neon, Supabase, RDS, Cloud SQL, Azure DB | cross-cloud default |
 | Firestore | `firestore://<project-id>` | GCP-native |
 
+SQLite runs in WAL mode, so the database is three files (`lt.db`, `lt.db-wal`, `lt.db-shm`) — back up
+and mount the **directory**, not the single file. Reads come from a connection pool
+(`LIGHTTRACK_SQLITE_READ_POOL`, default 4) so dashboard queries don't queue behind ingest.
+
 ### Deploy targets
 | Target | How |
 |---|---|

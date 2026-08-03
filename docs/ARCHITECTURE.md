@@ -64,6 +64,14 @@ and **redactable** per project (store nothing, hashes, or full text).
 ## 5. Storage — local→cloud parity
 A `Store` trait abstracts persistence. Two backends:
 - **Local (`v0`): SQLite** via `rusqlite` (bundled) — rock-solid on Windows, zero external services.
+  Runs in **WAL** mode (asserted at open; an existing pre-WAL file is upgraded in place). Writes
+  serialize behind one connection — admission control's check-then-insert depends on that — while
+  reads are served from a small pool of read-only connections (`LIGHTTRACK_SQLITE_READ_POOL`,
+  default 4, `0` disables), so a dashboard query no longer stalls ingest. WAL means the database is
+  **three files**: `lt.db`, `lt.db-wal`, `lt.db-shm`. Back up or mount the *directory*, not the
+  single file (or checkpoint first with `PRAGMA wal_checkpoint(TRUNCATE)`); the shipped Docker/Helm
+  deployments already mount `/data` as a directory. If WAL can't engage (some network filesystems)
+  the store logs a warning and falls back to routing reads through the write connection.
 - **Cloud: BigQuery** for events/scores (the "do anything with the data" analytical store; 10 GB + 1 TB/mo
   query free) + **Firestore** for hot config (projects, keys, limit rules, counters).
 

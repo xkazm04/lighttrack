@@ -12,3 +12,7 @@ serde_json.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+# File-backed scratch databases: the read pool and WAL only exist off `:memory:`.
+tempfile = "3"

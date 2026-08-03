@@ -387,7 +387,7 @@ fn trace_queries_use_indexes_not_full_scan() {
     // Prove (via EXPLAIN QUERY PLAN) the trace read paths hit an index rather than scanning the
     // whole events table. Runs against a raw connection seeded with the shipped schema.
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conn.execute_batch(super::SCHEMA).unwrap();
+    conn.execute_batch(super::schema::SCHEMA).unwrap();
 
     let plan = |sql: &str| -> String {
         let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
@@ -877,7 +877,7 @@ fn high_cardinality_event_filters_seek_an_index_instead_of_scanning() {
     // Complexity evidence. Before the composites, a provider/model/status-only predicate fell back to
     // a residual scan of the whole project-ts range — every row of the project read and discarded.
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conn.execute_batch(super::SCHEMA).unwrap();
+    conn.execute_batch(super::schema::SCHEMA).unwrap();
     let plan_of = |sql: &str| -> String {
         let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
         let rows = stmt
@@ -926,7 +926,7 @@ fn usage_cache_load_uses_rowid_range_not_full_scan() {
     // Complexity evidence: the per-ingest load rides the integer primary key as a range scan
     // (`rowid > seen`), so its cost is O(events since the last check) — never a full window SCAN.
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conn.execute_batch(super::SCHEMA).unwrap();
+    conn.execute_batch(super::schema::SCHEMA).unwrap();
     let mut stmt = conn
         .prepare(
             "EXPLAIN QUERY PLAN SELECT rowid, project_id, provider, model, name, ts, cost_usd, \
