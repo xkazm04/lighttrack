@@ -50,13 +50,18 @@ those for *what* and *why*; this file is *how we write the code*.
 - The remote (`github.com/xkazm04/lighttrack`) is **public**.
 
 ## Parallel-session coordination
-- A second session works in this **same working tree** on Phase 5 (packaging) and the **Postgres**
-  backend (`crates/store-pg`, `LIGHTTRACK_DATABASE_URL`, API on `Arc<dyn Store>`).
-- **Leave Postgres-adjacent code to them**: `crates/store-pg/**` and the store-selection block in
-  `crates/api/src/main.rs`. Don't refactor those without coordinating.
-- Their commits land in shared local history. Before pushing: `git fetch origin` then
-  `git rev-list --left-right --count origin/main...HEAD`; push fast-forwards, rebase only if diverged.
-- Commit only your own files; leave their untracked work (`store-pg/`, `Cargo.lock` churn) alone.
+- **`crates/store-pg/**` is no longer reserved** (cleared 2026-08-03). The Postgres backend landed and
+  now carries production traffic (Neon), so it is ordinary in-scope code: change it like any other
+  crate, with the same test/conformance bar. The old "leave it to the other session" rule is retired.
+- The store-selection block in `crates/api/src/main.rs` is still delicate — it decides which backend a
+  deployment gets. Change it deliberately, not as a drive-by.
+- Multiple sessions still share this working tree. Commit only your own files, stage explicit paths
+  rather than `-A`, and leave another session's untracked work alone.
+- Before pushing: `git fetch origin` then `git rev-list --left-right --count origin/main...HEAD`;
+  push fast-forwards, rebase only if diverged.
+- **Backend parity is a correctness property, not a nicety**: a `Store` method that SQLite implements
+  and another backend silently defaults is how caps and filters become advisory. Prefer implementing
+  it, or returning `StoreError::Unsupported` (→ 501), over a quiet default.
 
 ## Key invariants (don't regress)
 - The judge/scoring engine is **unbudgeted**; limits apply only to monitored ingest traffic.
