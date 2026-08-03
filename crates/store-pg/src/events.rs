@@ -24,7 +24,14 @@ const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provi
 const USAGE_COLS: &str = "COALESCE(SUM(cost_usd),0.0), COUNT(*), \
      COALESCE(SUM(input_tokens + output_tokens),0)::bigint, \
      COUNT(*) FILTER (WHERE cost_usd IS NULL)::bigint, \
-     COALESCE(SUM(cost_usd) FILTER (WHERE (metadata::jsonb)->>'cost_source' = 'client'),0.0)";
+     COALESCE(SUM(cost_usd) FILTER (WHERE (NULLIF(metadata,'')::jsonb)->>'cost_source' = 'client'),0.0)";
+// NOTE on the cast: `metadata` is TEXT and `::jsonb` RAISES on invalid JSON — and this query is on
+// the admission path, so one bad row would stop ingest for the whole project, not just skew a
+// provenance number. Every row we write is serde-serialized JSON or NULL, and `NULLIF` covers the
+// empty string (the one malformed value a hand-edited or legacy row realistically carries). It is
+// not a total guarantee: arbitrary non-JSON text in `metadata` would still raise. If that ever
+// becomes reachable, move the provenance sum out of the admission query rather than widening the
+// cast — enforcement must never depend on parsing a free-form column.
 
 fn map_usage(row: &PgRow) -> Result<Usage> {
     Ok(Usage {
