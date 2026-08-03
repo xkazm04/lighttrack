@@ -47,7 +47,8 @@ pub use revenue::{RevenueEvent, RevenueKind};
 pub use rubric::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
 pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
 pub use limits::{
-    scope_matches, LimitAction, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow,
+    scope_matches, CostEvidence, LimitAction, LimitMetric, LimitRule, LimitScope, LimitStatus,
+    LimitWindow,
 };
 pub use pricing::{ModelPrice, ModelPriceRow, PriceBook, PricingMode};
 pub use project::{ApiKey, Project, Redaction};

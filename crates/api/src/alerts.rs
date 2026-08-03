@@ -535,6 +535,7 @@ mod tests {
             warn_at: None,
             warning: false,
             scope: None,
+            cost_evidence: None,
         }
     }
 
@@ -552,6 +553,7 @@ mod tests {
             warn_at: Some(0.8),
             warning: true,
             scope: None,
+            cost_evidence: None,
         }
     }
 

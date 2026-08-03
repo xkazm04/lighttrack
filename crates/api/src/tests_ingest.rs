@@ -1212,3 +1212,132 @@ async fn cost_source_is_marked_client_vs_book() {
     assert_eq!(by_id("c1").metadata["cost_source"], "client");
     assert_eq!(by_id("c2").metadata["cost_source"], "book");
 }
+
+#[tokio::test]
+async fn an_unpriced_model_cannot_spend_freely_under_a_cost_cap() {
+    // End-to-end version of the direction-(1) invariant. The test price book knows exactly one
+    // model, so `mystery-model-9` is genuinely unpriceable — the shape of every "we just shipped a
+    // new model" incident.
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    store
+        .create_limit_rule(&LimitRule {
+            id: new_id(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::CostUsd,
+            window: LimitWindow::Hour,
+            threshold: 1.0,
+            action: LimitAction::Block,
+            enabled: true,
+            warn_at: None,
+            scope: None,
+        })
+        .unwrap();
+    let app = crate::build_router(state.clone());
+
+    let unpriced = json!({
+        "provider": "anthropic",
+        "model": "mystery-model-9",
+        "usage": { "input": 100_000, "output": 100_000 }
+    });
+
+    // With nothing priced in the window the cap cannot be measured at all: refuse, and say why.
+    let (status, body) = ingest(&app, &key, unpriced.clone()).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["error"]["code"], "rate_limited", "{body}");
+    let msg = body["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("price book"), "the reason must name the actual problem: {msg}");
+    assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty());
+
+    // Once there is priced traffic to learn from, unpriced calls are charged the window's mean
+    // priced cost rather than $0.00 — so they fill the cap instead of walking past it.
+    for _ in 0..2 {
+        let (s, _) = ingest(
+            &app,
+            &key,
+            json!({
+                "provider": "anthropic",
+                "model": "claude-haiku-4-5",
+                "usage": { "input": 10, "output": 5 },
+                "cost_usd": 0.40
+            }),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+    }
+    // Rolling cost is $0.80 stored; one unpriced call is imputed at the $0.40 mean → $1.20 >= $1.00.
+    let (s, body) = ingest(&app, &key, unpriced).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "imputed cost must trip the cap: {body}");
+    assert!(
+        body["error"]["message"].as_str().unwrap().contains("imputed"),
+        "a cap tripped on estimated cost must say so: {body}"
+    );
+
+    // And the operator surface exposes the weak evidence rather than hiding it behind a number.
+    let (s, body) = get_limits_status(&app, &key, "proj-a").await;
+    assert_eq!(s, StatusCode::OK);
+    let basis = &body["cost_basis"];
+    assert_eq!(basis["unpriced_calls"], 0, "no unpriced call was ever admitted: {body}");
+    assert!(basis["notes"].as_array().unwrap().len() >= 3, "the caveats are stated: {body}");
+    assert!(
+        basis["notes"].as_array().unwrap().iter().any(|n| n
+            .as_str()
+            .unwrap()
+            .contains("no repricing of history")),
+        "the absence of a repricing path must be stated in the response: {body}"
+    );
+    // The cost status carries its provenance so a client can tell measured from inferred.
+    assert!(body["statuses"][0]["cost_evidence"].is_object(), "{body}");
+    assert_eq!(body["statuses"][0]["cost_evidence"]["priced_calls"], 2, "{body}");
+}
+
+#[tokio::test]
+async fn client_reported_cost_is_distinguishable_from_our_own_estimate() {
+    // A cap breached on a number the caller supplied is a different fact from one breached on our
+    // arithmetic. `/v1/limits/status` must let an operator tell them apart.
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    store
+        .create_limit_rule(&LimitRule {
+            id: new_id(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::CostUsd,
+            window: LimitWindow::Hour,
+            threshold: 100.0,
+            action: LimitAction::Alert,
+            enabled: true,
+            warn_at: None,
+            scope: None,
+        })
+        .unwrap();
+    let app = crate::build_router(state);
+
+    // One client-reported cost, one priced from the book (no `cost_usd` on the wire).
+    let (s, _) = ingest(
+        &app,
+        &key,
+        json!({
+            "provider": "anthropic", "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 }, "cost_usd": 2.50
+        }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = ingest(
+        &app,
+        &key,
+        json!({
+            "provider": "anthropic", "model": "claude-haiku-4-5",
+            "usage": { "input": 1_000_000, "output": 1_000_000 }
+        }),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+
+    let (s, body) = get_limits_status(&app, &key, "proj-a").await;
+    assert_eq!(s, StatusCode::OK);
+    let client = body["cost_basis"]["client_reported_cost_usd"].as_f64().unwrap();
+    assert!((client - 2.50).abs() < 1e-9, "only the client-supplied cost counts here: {body}");
+    let total = body["statuses"][0]["current"].as_f64().unwrap();
+    assert!(total > client, "the book-priced call is in the total but not the client share: {body}");
+}

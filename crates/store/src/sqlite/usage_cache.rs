@@ -98,7 +98,8 @@ impl Bucket {
     fn load_new(&mut self, conn: &Connection, project: &str, scope: Option<&LimitScope>) -> Result<()> {
         let mut stmt = conn.prepare(
             "SELECT rowid, project_id, provider, model, name, COALESCE(received_at, ts), cost_usd, \
-             (input_tokens + output_tokens) FROM events WHERE rowid > ?1 ORDER BY rowid",
+             (input_tokens + output_tokens), json_extract(metadata,'$.cost_source') \
+             FROM events WHERE rowid > ?1 ORDER BY rowid",
         )?;
         let rows = stmt
             .query_map(params![self.seen_rowid], NewRow::from_row)?
@@ -116,7 +117,16 @@ impl Bucket {
                     continue;
                 }
             }
-            let contrib = Usage { cost_usd: r.cost.unwrap_or(0.0), calls: 1, tokens: r.tokens };
+            // Mirrors `events::USAGE_COLS` exactly, per row: an unpriced event adds no stored cost
+            // but is counted, so the limit path can impute a charge for it instead of reading $0.00.
+            let cost = r.cost.unwrap_or(0.0);
+            let contrib = Usage {
+                cost_usd: cost,
+                calls: 1,
+                tokens: r.tokens,
+                unpriced_calls: i64::from(r.cost.is_none()),
+                client_cost_usd: if r.cost_source.as_deref() == Some("client") { cost } else { 0.0 },
+            };
             self.total = self.total.plus(contrib);
             self.items.insert((r.received_at, r.rowid), contrib);
         }
@@ -156,6 +166,8 @@ struct NewRow {
     received_at: String,
     cost: Option<f64>,
     tokens: i64,
+    /// `metadata.cost_source` — `client` when the caller reported the cost itself.
+    cost_source: Option<String>,
 }
 
 impl NewRow {
@@ -169,6 +181,7 @@ impl NewRow {
             received_at: row.get(5)?,
             cost: row.get(6)?,
             tokens: row.get(7)?,
+            cost_source: row.get(8)?,
         })
     }
 }

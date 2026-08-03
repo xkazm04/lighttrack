@@ -103,6 +103,34 @@ event is rejected with **429 `rate_limited`** and *not* recorded, so a cooperati
 breach is also readable via `GET /v1/limits/status` and MCP). Inline *pre-call* blocking (before the
 provider spend) still requires gateway mode. The scoring/benchmark engine is **not** subject to limits.
 
+### 7a. Unpriced traffic under a cost cap
+An event whose model is absent from the price book stores `cost_usd = NULL` — never a phantom zero,
+because that invariant is what makes margin/analytics honest. But `SUM(cost_usd)` reads `NULL` as
+`0.00`, so a **cost cap used to be free to walk past on exactly the newest, least-vetted traffic**
+(`cost_usd` is also the *default* limit metric). Fixed **inside the limit path only** — nothing is
+written onto the event row, and there is no price discovery from providers:
+
+- **Imputation.** Each unpriced call in a window is charged the mean cost of a *priced* call in the
+  same window (`SUM(cost_usd) / priced_calls`). It uses only evidence already inside the window, and
+  it self-corrects: as an operator adds the missing price, new traffic moves the mean.
+- **Marked as estimated.** Every `cost_usd` status carries `cost_evidence`
+  (`priced_calls`, `unpriced_calls`, `imputed_cost_usd`, `client_reported_cost_usd`, `unpriceable`).
+  `current` includes the imputation — subtract `imputed_cost_usd` for the hard-evidence sum. A 429
+  tripped on an imputed total says so in its message.
+- **Unpriceable = refuse.** A window with unpriced calls and *no* priced call has nothing to impute
+  from, so the cap cannot be measured at all. An **enforcing** rule rejects ingest in that state
+  (429 `rate_limited`, message naming the price book), because a cap that cannot be measured is not a
+  cap. `Alert` rules stay observe-only. `calls`/`tokens` caps are untouched by any of this.
+- **No repricing of history.** `cost_usd` is stamped once at ingest, so correcting a *wrong* price-book
+  entry does not restate spend already inside a window — the cap stays wrong until the window rolls.
+  Only *unpriced* traffic self-corrects (its charge is computed at evaluation time). This absence is
+  stated in `GET /v1/limits/status` → `cost_basis.notes`, not left to be discovered during an incident.
+- **Client-reported cost** (`metadata.cost_source = "client"`) is summed separately and reported in
+  `cost_evidence` / `cost_basis`, so an operator can see when a cap rests on the caller's own number.
+
+Backend parity: SQLite and Postgres compute the provenance in SQL; Firestore folds it client-side.
+Firestore reads `cost_source` out of the stored `metadata` JSON string.
+
 ### 7b. Load shedding (admission control for *load*, not spend)
 Limit rules cap what a project may **spend**; nothing capped what the process may **attempt at once**.
 Ingest requests queued behind the store's single lock with tokio's 512-thread blocking pool as the only

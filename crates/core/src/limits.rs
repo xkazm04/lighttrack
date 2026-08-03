@@ -170,6 +170,44 @@ fn default_true() -> bool {
     true
 }
 
+/// Provenance of the cost figure a [`LimitMetric::CostUsd`] rule was evaluated against — how much of
+/// it is hard evidence and how much is inference.
+///
+/// **Why this exists.** An event whose model is absent from the price book stores `cost_usd = NULL`
+/// (never a phantom zero — that invariant is load-bearing for margin honesty), and a `SUM` reads that
+/// `NULL` as `0.00`. A cost cap therefore used to be free to walk past on exactly the newest,
+/// least-vetted traffic. The limit path now *imputes* a cost for those calls from the window's own
+/// priced traffic — the mean cost of a priced call in the same window, times the number of unpriced
+/// calls — and reports the imputation here rather than hiding it inside `current`.
+///
+/// The degenerate case is [`CostEvidence::unpriceable`]: a window with unpriced calls and **no**
+/// priced call has nothing to impute from, so the cap has no evidence at all. An enforcing rule
+/// refuses ingest in that state (see [`LimitStatus::rejects_ingest`]) — a cap that cannot be measured
+/// is not a cap.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CostEvidence {
+    /// Calls in the window that carry a resolved `cost_usd`.
+    pub priced_calls: i64,
+    /// Calls in the window whose model was absent from the price book. They contribute `$0.00` of
+    /// *stored* cost; `imputed_cost_usd` is what the limit path charged them instead.
+    pub unpriced_calls: i64,
+    /// Cost attributed to `unpriced_calls` by imputation. **Already included in
+    /// [`LimitStatus::current`]** — subtract it to get the stored (hard-evidence) sum.
+    pub imputed_cost_usd: f64,
+    /// The part of the stored cost the *client* self-reported (`metadata.cost_source = "client"`)
+    /// rather than our own price-book estimate. Not less valid, but not our arithmetic either.
+    pub client_reported_cost_usd: f64,
+    /// The window holds unpriced calls and no priced call to impute from: the cap is unevaluable.
+    pub unpriceable: bool,
+}
+
+impl CostEvidence {
+    /// Whether any part of `current` is inferred rather than stored.
+    pub fn estimated(&self) -> bool {
+        self.unpriced_calls > 0
+    }
+}
+
 /// Result of evaluating a rule against a current rolling value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LimitStatus {
@@ -193,13 +231,33 @@ pub struct LimitStatus {
     /// The rule's dimension scope, echoed for the status surface / alerts (`None` = project-wide).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<LimitScope>,
+    /// For a `cost_usd` rule: how much of `current` is stored cost, how much is imputed for unpriced
+    /// traffic, and how much was client-self-reported. `None` for `calls`/`tokens` rules (nothing to
+    /// qualify) and for evaluations made without a usage snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_evidence: Option<CostEvidence>,
 }
 
 impl LimitStatus {
-    /// True when this breach must reject ingest: a breached rule whose action is enforced
-    /// (`Throttle`/`Block`). The ingest path returns HTTP 429 when any status reports this.
+    /// True when this status must reject ingest. Two conditions, both requiring an enforcing action
+    /// (`Throttle`/`Block`):
+    /// - the rule is **breached** — usage reached the threshold; or
+    /// - the cost cap is **unpriceable** — the window's traffic cannot be priced at all, so the cap
+    ///   cannot be measured (see [`CostEvidence::unpriceable`]).
+    ///
+    /// The ingest path returns HTTP 429 when any status reports this.
     pub fn rejects_ingest(&self) -> bool {
-        self.breached && self.action.enforces()
+        self.action.enforces() && (self.breached || self.unpriceable())
+    }
+
+    /// Whether this status is a cost cap with no priceable evidence behind it.
+    pub fn unpriceable(&self) -> bool {
+        self.cost_evidence.as_ref().is_some_and(|e| e.unpriceable)
+    }
+
+    /// Whether any part of `current` is inferred (imputed for unpriced traffic).
+    pub fn estimated(&self) -> bool {
+        self.cost_evidence.as_ref().is_some_and(CostEvidence::estimated)
     }
 
     /// A compact scope tag for keys/labels: `all` when project-wide, else `kind=value`.
@@ -243,6 +301,18 @@ impl LimitRule {
     /// Pure evaluation: given the project's current value for this rule's metric+window,
     /// decide whether the limit is breached. The caller computes `current` from the store.
     pub fn evaluate(&self, current: f64) -> LimitStatus {
+        self.evaluate_with_evidence(current, None)
+    }
+
+    /// [`LimitRule::evaluate`] carrying the cost provenance of `current` (see [`CostEvidence`]). The
+    /// store passes `Some(..)` for `cost_usd` rules so an operator — and the enforcement decision —
+    /// can tell a cap breached on measured spend from one resting on imputation, and so a cap with no
+    /// priceable evidence at all rejects instead of reading as a comfortable `$0.00`.
+    pub fn evaluate_with_evidence(
+        &self,
+        current: f64,
+        cost_evidence: Option<CostEvidence>,
+    ) -> LimitStatus {
         let ratio = if self.threshold > 0.0 {
             current / self.threshold
         } else {
@@ -265,6 +335,7 @@ impl LimitRule {
             warn_at: self.warn_at,
             warning,
             scope: self.scope.clone(),
+            cost_evidence,
         }
     }
 }
@@ -370,6 +441,47 @@ mod tests {
         assert!(r.validate().is_err(), "NaN threshold is invalid");
         r.threshold = 0.0001;
         assert!(r.validate().is_ok(), "small positive threshold is valid");
+    }
+
+    #[test]
+    fn an_unpriceable_cost_cap_rejects_even_though_nothing_breached() {
+        // The whole point of direction (1): a window whose traffic cannot be priced reads as
+        // `$0.00` of spend. That must NOT look like headroom under an enforcing cap.
+        let mut r = rule();
+        r.action = LimitAction::Block;
+        let ev = CostEvidence {
+            priced_calls: 0,
+            unpriced_calls: 3,
+            imputed_cost_usd: 0.0,
+            client_reported_cost_usd: 0.0,
+            unpriceable: true,
+        };
+        let s = r.evaluate_with_evidence(0.0, Some(ev.clone()));
+        assert!(!s.breached, "nothing was actually measured, so nothing breached");
+        assert!(s.unpriceable() && s.rejects_ingest(), "an unmeasurable cap must still refuse ingest");
+        // Alert-only rules are observe-only in every state, unpriceable included.
+        r.action = LimitAction::Alert;
+        assert!(!r.evaluate_with_evidence(0.0, Some(ev)).rejects_ingest());
+    }
+
+    #[test]
+    fn evidence_marks_a_status_as_estimated() {
+        let r = rule();
+        let s = r.evaluate_with_evidence(
+            6.0,
+            Some(CostEvidence {
+                priced_calls: 4,
+                unpriced_calls: 2,
+                imputed_cost_usd: 2.0,
+                client_reported_cost_usd: 1.5,
+                unpriceable: false,
+            }),
+        );
+        assert!(s.estimated(), "a status carrying imputed cost is marked estimated");
+        assert!(!s.unpriceable());
+        // A plain evaluate (calls/tokens rules, or evidence-free callers) carries none of this.
+        assert!(!rule().evaluate(6.0).estimated());
+        assert!(rule().evaluate(6.0).cost_evidence.is_none());
     }
 
     #[test]

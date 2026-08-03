@@ -47,7 +47,9 @@ pub(crate) async fn evaluate_project_limits(
                     u
                 }
             };
-            out.push(r.evaluate(u.metric_value(r.metric)));
+            // Same evaluator the ingest admission path uses, so the status surface and the 429 can
+            // never disagree — including the cost-provenance qualification of a `cost_usd` cap.
+            out.push(lighttrack_store::evaluate_rule(r, &u));
         }
         Ok::<_, StoreError>(out)
     })
@@ -206,6 +208,60 @@ pub(crate) struct LimitStatusResp {
     /// rejected recently.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     rejected: Vec<RejectionStat>,
+    /// How much of this project's cost caps rests on weak evidence, and what this deployment does
+    /// *not* do about it. Always present, so an operator meets these caveats on a calm afternoon
+    /// rather than mid-incident.
+    cost_basis: CostBasis,
+}
+
+/// The honesty block on `/v1/limits/status`: the aggregate cost provenance behind the returned
+/// statuses plus the two standing caveats of ingest-time cost stamping.
+#[derive(Serialize)]
+pub(crate) struct CostBasis {
+    /// Calls, across the returned `cost_usd` statuses' windows, whose model was absent from the price
+    /// book. They store `$0.00`; the limit path charges them by imputation instead.
+    unpriced_calls: i64,
+    /// Total imputed (estimated) cost currently folded into those statuses' `current` values.
+    imputed_cost_usd: f64,
+    /// Of the stored cost in those windows, how much the *client* self-reported rather than us
+    /// pricing it from the book.
+    client_reported_cost_usd: f64,
+    /// `true` when at least one enforcing cost cap has no priced traffic to measure at all, so it is
+    /// currently refusing ingest for want of evidence rather than for spend.
+    unpriceable: bool,
+    /// Standing caveats, in prose, because their absence is the thing an operator would otherwise
+    /// discover during an incident.
+    notes: Vec<&'static str>,
+}
+
+/// Cost provenance rolled up across the `cost_usd` statuses of one project.
+fn cost_basis(statuses: &[LimitStatus]) -> CostBasis {
+    let mut b = CostBasis {
+        unpriced_calls: 0,
+        imputed_cost_usd: 0.0,
+        client_reported_cost_usd: 0.0,
+        unpriceable: false,
+        notes: vec![
+            "Unpriced calls (model absent from the price book) are charged against a cost cap at the \
+             mean cost of a priced call in the same window; the estimate is reported per rule in \
+             `cost_evidence`, never written onto the event.",
+            "An enforcing cost cap whose window contains no priced call at all is unpriceable and \
+             refuses ingest — add a price for the model, or cap on `calls`/`tokens` instead.",
+            "There is no repricing of history: an event's `cost_usd` is stamped once at ingest, so \
+             correcting a WRONG price-book entry does not restate spend already inside a window. \
+             The cap stays wrong until the window rolls. Only *unpriced* traffic self-corrects, \
+             because its charge is imputed at evaluation time.",
+        ],
+    };
+    for s in statuses {
+        if let Some(e) = &s.cost_evidence {
+            b.unpriced_calls += e.unpriced_calls;
+            b.imputed_cost_usd += e.imputed_cost_usd;
+            b.client_reported_cost_usd += e.client_reported_cost_usd;
+            b.unpriceable |= e.unpriceable && s.action.enforces();
+        }
+    }
+    b
 }
 
 pub(crate) async fn limits_status(
@@ -219,10 +275,12 @@ pub(crate) async fn limits_status(
     let statuses = evaluate_project_limits(&st, &project).await?;
     let throttled = statuses.iter().any(|s| s.rejects_ingest());
     let rejected = st.rejections.snapshot(&project, chrono::Utc::now());
+    let cost_basis = cost_basis(&statuses);
     Ok(Json(LimitStatusResp {
         project_id: project,
         throttled,
         statuses,
         rejected,
+        cost_basis,
     }))
 }

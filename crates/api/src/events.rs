@@ -90,10 +90,13 @@ pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) 
     // A rejected event is never stored (that would corrupt usage/cost), so count it out-of-band in the
     // best-effort rejection ledger — the running per-key count then rides along on the breach alert.
     // Its estimated cost is the priced `cost_usd` if we resolved one, else $0 (unpriced).
+    // Rejection is not always a breach: an enforcing cost cap whose window cannot be priced at all
+    // refuses ingest without any status reading "breached", so the ledger is fed from every status
+    // that rejects, not just the breached ones.
     let rej_counts = if admission.admitted {
         std::collections::HashMap::new()
     } else {
-        record_rejection(st, ev, &breached)
+        record_rejection(st, ev, &admission.statuses)
     };
     // Best-effort, off the request path: deliver breaches to webhook/ntfy (deduped per cooldown).
     st.alerts.notify(&breached, &rej_counts);
@@ -121,12 +124,12 @@ pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) 
 fn record_rejection(
     st: &AppState,
     ev: &LlmEvent,
-    breached: &[LimitStatus],
+    statuses: &[LimitStatus],
 ) -> std::collections::HashMap<String, u64> {
     let cost = ev.cost_usd.unwrap_or(0.0);
     let now = Utc::now();
     let mut counts = std::collections::HashMap::new();
-    for b in breached.iter().filter(|s| s.rejects_ingest()) {
+    for b in statuses.iter().filter(|s| s.rejects_ingest()) {
         let count =
             st.rejections.record(&b.project_id, b.metric, b.window, b.scope.clone(), cost, now);
         counts.insert(b.alert_key(), count);
@@ -134,19 +137,32 @@ fn record_rejection(
     counts
 }
 
-/// Human-facing reason an admission was rejected (the enforcing breach that caused the 429).
-pub(crate) fn breach_reason(breached: &[LimitStatus]) -> String {
-    breached
+/// Human-facing reason an admission was rejected — pass the full status set, since an unpriceable
+/// cost cap rejects without breaching.
+pub(crate) fn breach_reason(statuses: &[LimitStatus]) -> String {
+    statuses
         .iter()
-        .find(|s| s.action.enforces())
+        .find(|s| s.rejects_ingest())
         .map(|s| {
             let scope = match &s.scope {
                 Some(sc) => format!(" [scope {}]", sc.label()),
                 None => String::new(),
             };
+            if s.unpriceable() && !s.breached {
+                // The distinct, visible condition: we are not over budget, we simply cannot measure
+                // the budget. Say exactly that, and how to fix it.
+                return format!(
+                    "ingest blocked: project '{}'{scope} has an enforcing {:?}/{:?} cost limit but \
+                     no priced traffic in the window — this model is absent from the price book, so \
+                     the cap cannot be measured. Add a price for it (POST /v1/prices) or cap on \
+                     calls/tokens instead.",
+                    s.project_id, s.metric, s.window
+                );
+            }
+            let estimated = if s.estimated() { " (includes imputed cost for unpriced calls)" } else { "" };
             format!(
                 "ingest blocked: project '{}'{scope} is over its {:?}/{:?} limit \
-                 ({:.4} >= {:.4}, action={:?})",
+                 ({:.4} >= {:.4}, action={:?}){estimated}",
                 s.project_id, s.metric, s.window, s.current, s.threshold, s.action
             )
         })
@@ -237,7 +253,7 @@ pub(crate) async fn post_event(
 
     let breached = on_admission(&st, &ev, &admission);
     if !admission.admitted {
-        return Err(ApiError::rate_limited(breach_reason(&breached)));
+        return Err(ApiError::rate_limited(breach_reason(&admission.statuses)));
     }
 
     // Admitted: any remaining breaches are Alert-only (enforcing ones would have 429'd above).

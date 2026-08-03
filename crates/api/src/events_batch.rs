@@ -172,7 +172,7 @@ pub(crate) async fn post_batch(
                         index,
                         id: ev.id.clone(),
                         code: "rate_limited",
-                        reason: breach_reason(&breached),
+                        reason: breach_reason(&a.statuses),
                         breached,
                     }
                 }

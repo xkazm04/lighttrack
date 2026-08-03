@@ -16,6 +16,26 @@ const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provi
     operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
     latency_ms, status, error, input, output, tags, source, metadata, name";
 
+/// Rolling-usage aggregates, mirroring the SQLite reference (`sqlite/events.rs::USAGE_COLS`). Beyond
+/// the three totals it reports cost *provenance*: how many calls carried no price at all (the price
+/// book had no entry — we never write a phantom zero onto the row) and how much of the sum the client
+/// self-reported. The limit path charges unpriced calls by imputation instead of letting them cost
+/// `$0.00`, and surfaces the client-reported share.
+const USAGE_COLS: &str = "COALESCE(SUM(cost_usd),0.0), COUNT(*), \
+     COALESCE(SUM(input_tokens + output_tokens),0)::bigint, \
+     COUNT(*) FILTER (WHERE cost_usd IS NULL)::bigint, \
+     COALESCE(SUM(cost_usd) FILTER (WHERE (metadata::jsonb)->>'cost_source' = 'client'),0.0)";
+
+fn map_usage(row: &PgRow) -> Result<Usage> {
+    Ok(Usage {
+        cost_usd: row.try_get(0).map_err(pgerr)?,
+        calls: row.try_get(1).map_err(pgerr)?,
+        tokens: row.try_get(2).map_err(pgerr)?,
+        unpriced_calls: row.try_get(3).map_err(pgerr)?,
+        client_cost_usd: row.try_get(4).map_err(pgerr)?,
+    })
+}
+
 /// Map a failed event insert to a typed error: SQLSTATE 23505 (unique violation — a duplicate
 /// event `id`) becomes [`StoreError::Conflict`] so the API returns 409, not an opaque 500.
 /// Mirrors the SQLite backend's `insert_err`.
@@ -250,9 +270,7 @@ pub(crate) async fn usage_since_scoped(
         LimitScope::Name(_) => "name",
     };
     let sql = format!(
-        "SELECT COALESCE(SUM(cost_usd),0.0), COUNT(*), \
-         COALESCE(SUM(input_tokens + output_tokens),0)::bigint \
-         FROM events WHERE project_id = $1 AND ts >= $2 AND {column} = $3"
+        "SELECT {USAGE_COLS} FROM events WHERE project_id = $1 AND ts >= $2 AND {column} = $3"
     );
     let row = sqlx::query(&sql)
         .bind(project.to_string())
@@ -261,11 +279,7 @@ pub(crate) async fn usage_since_scoped(
         .fetch_one(pool)
         .await
         .map_err(pgerr)?;
-    Ok(Usage {
-        cost_usd: row.try_get(0).map_err(pgerr)?,
-        calls: row.try_get(1).map_err(pgerr)?,
-        tokens: row.try_get(2).map_err(pgerr)?,
-    })
+    map_usage(&row)
 }
 
 /// Use-case rollup grouped by (name, provider, model), optionally windowed by `since`. Un-named
@@ -321,21 +335,15 @@ pub(crate) async fn usage_since(
     project: &str,
     since: chrono::DateTime<chrono::Utc>,
 ) -> Result<Usage> {
-    let row = sqlx::query(
-        "SELECT COALESCE(SUM(cost_usd),0.0), COUNT(*), \
-         COALESCE(SUM(input_tokens + output_tokens),0)::bigint \
-         FROM events WHERE project_id = $1 AND ts >= $2",
-    )
+    let row = sqlx::query(&format!(
+        "SELECT {USAGE_COLS} FROM events WHERE project_id = $1 AND ts >= $2"
+    ))
     .bind(project.to_string())
     .bind(fmt_ts(since))
     .fetch_one(pool)
     .await
     .map_err(pgerr)?;
-    Ok(Usage {
-        cost_usd: row.try_get(0).map_err(pgerr)?,
-        calls: row.try_get(1).map_err(pgerr)?,
-        tokens: row.try_get(2).map_err(pgerr)?,
-    })
+    map_usage(&row)
 }
 
 pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<LlmEvent>> {

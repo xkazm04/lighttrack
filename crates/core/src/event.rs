@@ -197,6 +197,21 @@ impl LlmEvent {
         self.metadata.get("customer_id").and_then(Value::as_str)
     }
 
+    /// How this call's `cost_usd` was determined, read from `metadata.cost_source`: `"client"` when
+    /// the caller reported it verbatim, `"book"` when we priced it from the DB price book. `None`
+    /// when the cost was never resolved (the model is absent from the book — the deliberate
+    /// "unpriced means `None`, never a phantom zero" invariant) or the event predates the stamp.
+    pub fn cost_source(&self) -> Option<&str> {
+        self.metadata.get("cost_source").and_then(Value::as_str)
+    }
+
+    /// Whether this call's cost is the client's own number rather than our arithmetic. Limit
+    /// evaluation reports the client-reported share so an operator can see when a cap is resting on
+    /// self-reported spend.
+    pub fn cost_is_client_reported(&self) -> bool {
+        self.cost_source() == Some("client")
+    }
+
     /// Billing product/feature this call is attributed to, read from `metadata.product_id`.
     pub fn product_id(&self) -> Option<&str> {
         self.metadata.get("product_id").and_then(Value::as_str)

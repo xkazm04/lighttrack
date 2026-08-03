@@ -577,19 +577,35 @@ pub(super) fn cost_summary_windowed(
 /// a caller with a skewed clock (or a deliberately backdated event) must not be able to slide its
 /// spend outside the window a cap is evaluated over. `COALESCE(received_at, ts)` keeps pre-migration
 /// rows counted (the backfill sets them equal anyway).
+/// The cost/usage aggregates every rolling window is measured from. Beyond the three totals it also
+/// reports the *provenance* of the cost: how many calls carried no price at all (`cost_usd IS NULL` —
+/// the price book had no entry, and we never write a phantom zero onto the row) and how much of the
+/// sum the client self-reported. The limit path needs both: unpriced calls are charged by imputation
+/// rather than silently costing `$0.00`, and the client-reported share is surfaced so an operator can
+/// see when a cap rests on someone else's arithmetic.
+const USAGE_COLS: &str = "COALESCE(SUM(cost_usd),0.0), COUNT(*), \
+     COALESCE(SUM(input_tokens + output_tokens),0), \
+     COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),0), \
+     COALESCE(SUM(CASE WHEN json_extract(metadata,'$.cost_source') = 'client' \
+                       THEN cost_usd ELSE 0 END),0.0)";
+
+fn map_usage(row: &Row) -> rusqlite::Result<Usage> {
+    Ok(Usage {
+        cost_usd: row.get(0)?,
+        calls: row.get(1)?,
+        tokens: row.get(2)?,
+        unpriced_calls: row.get(3)?,
+        client_cost_usd: row.get(4)?,
+    })
+}
+
 pub(super) fn usage_since(conn: &Connection, project: &str, since: DateTime<Utc>) -> Result<Usage> {
-    let mut stmt = conn.prepare(
-        "SELECT COALESCE(SUM(cost_usd),0.0), COUNT(*), \
-         COALESCE(SUM(input_tokens + output_tokens),0) \
-         FROM events WHERE project_id = ?1 AND COALESCE(received_at, ts) >= ?2",
-    )?;
-    let usage = stmt.query_row(params![project, fmt_ts(since)], |row| {
-        Ok(Usage {
-            cost_usd: row.get(0)?,
-            calls: row.get(1)?,
-            tokens: row.get(2)?,
-        })
-    })?;
+    let sql = format!(
+        "SELECT {USAGE_COLS} FROM events \
+         WHERE project_id = ?1 AND COALESCE(received_at, ts) >= ?2"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let usage = stmt.query_row(params![project, fmt_ts(since)], map_usage)?;
     Ok(usage)
 }
 
@@ -611,18 +627,11 @@ pub(super) fn usage_since_scoped(
         LimitScope::Name(_) => "name",
     };
     let sql = format!(
-        "SELECT COALESCE(SUM(cost_usd),0.0), COUNT(*), \
-         COALESCE(SUM(input_tokens + output_tokens),0) \
-         FROM events WHERE project_id = ?1 AND COALESCE(received_at, ts) >= ?2 AND {column} = ?3"
+        "SELECT {USAGE_COLS} FROM events \
+         WHERE project_id = ?1 AND COALESCE(received_at, ts) >= ?2 AND {column} = ?3"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let usage = stmt.query_row(params![project, fmt_ts(since), scope.value()], |row| {
-        Ok(Usage {
-            cost_usd: row.get(0)?,
-            calls: row.get(1)?,
-            tokens: row.get(2)?,
-        })
-    })?;
+    let usage = stmt.query_row(params![project, fmt_ts(since), scope.value()], map_usage)?;
     Ok(usage)
 }
 

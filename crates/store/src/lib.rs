@@ -19,10 +19,10 @@ use serde_json::Value;
 use thiserror::Error;
 
 use lighttrack_core::{
-    scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset,
-    DatasetItem, Job, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow, LlmEvent,
-    ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome, RelayTask, RevenueEvent, Rubric,
-    Score, TokensByDimension, Trace, TraceSummary,
+    scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, CostEvidence,
+    Dataset, DatasetItem, Job, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow,
+    LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome, RelayTask, RevenueEvent,
+    Rubric, Score, TokensByDimension, Trace, TraceSummary,
 };
 
 pub use sqlite::SqliteStore;
@@ -204,21 +204,66 @@ pub struct DailyDimCost {
 }
 
 /// Aggregate usage for a project over a time window — used to evaluate limits.
+///
+/// `cost_usd` is the **stored** sum and stays exactly that: what a `SUM(cost_usd)` sees, with
+/// unpriced events contributing nothing. `unpriced_calls` and `client_cost_usd` qualify it, and the
+/// limit path reads [`Usage::cost_for_limits`] (stored + imputed) rather than the bare sum.
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct Usage {
     pub cost_usd: f64,
     pub calls: i64,
     pub tokens: i64,
+    /// Calls in this snapshot whose model was absent from the price book, so `cost_usd` is `NULL` on
+    /// the row and they add `$0.00` to `cost_usd`. Counted (never priced) on the event itself; the
+    /// limit path charges them via imputation instead.
+    #[serde(default)]
+    pub unpriced_calls: i64,
+    /// The part of `cost_usd` that came from a client-supplied number (`metadata.cost_source =
+    /// "client"`) rather than our own price-book arithmetic.
+    #[serde(default)]
+    pub client_cost_usd: f64,
 }
 
 impl Usage {
-    /// The value of `metric` in this snapshot, as the comparable `f64` limits evaluate against.
+    /// The value of `metric` in this snapshot, as the comparable `f64` limits evaluate against. For
+    /// `cost_usd` this is [`Usage::cost_for_limits`] — the stored sum **plus** the imputed cost of
+    /// unpriced traffic — so a model missing from the price book can't be spent for free.
     pub fn metric_value(&self, metric: LimitMetric) -> f64 {
         match metric {
-            LimitMetric::CostUsd => self.cost_usd,
+            LimitMetric::CostUsd => self.cost_for_limits(),
             LimitMetric::Calls => self.calls as f64,
             LimitMetric::Tokens => self.tokens as f64,
         }
+    }
+
+    /// Provenance of this snapshot's cost: priced vs unpriced calls, the imputed charge for the
+    /// unpriced ones, the client-self-reported share, and whether the window is unpriceable.
+    ///
+    /// **Imputation rule:** each unpriced call is charged the mean cost of a *priced* call in the
+    /// same window (`cost_usd / priced_calls`). It uses only evidence already inside the window —
+    /// no provider lookups, no writes to the event row — and it self-corrects: as an operator adds
+    /// the missing price, newly-priced traffic moves the mean the estimate is drawn from. With no
+    /// priced call in the window there is nothing to learn from, and the snapshot is *unpriceable*.
+    pub fn cost_evidence(&self) -> CostEvidence {
+        let priced = self.calls - self.unpriced_calls;
+        let imputed = if priced > 0 && self.unpriced_calls > 0 {
+            (self.cost_usd / priced as f64) * self.unpriced_calls as f64
+        } else {
+            0.0
+        };
+        CostEvidence {
+            priced_calls: priced.max(0),
+            unpriced_calls: self.unpriced_calls,
+            imputed_cost_usd: imputed,
+            client_reported_cost_usd: self.client_cost_usd,
+            unpriceable: self.unpriced_calls > 0 && priced <= 0,
+        }
+    }
+
+    /// The cost figure a `cost_usd` limit is evaluated against: stored cost plus the imputed charge
+    /// for unpriced traffic.
+    pub fn cost_for_limits(&self) -> f64 {
+        self.cost_usd + self.cost_evidence().imputed_cost_usd
     }
 
     /// Sum two usage snapshots (e.g. rolling usage plus one candidate event's contribution).
@@ -227,6 +272,8 @@ impl Usage {
             cost_usd: self.cost_usd + other.cost_usd,
             calls: self.calls + other.calls,
             tokens: self.tokens + other.tokens,
+            unpriced_calls: self.unpriced_calls + other.unpriced_calls,
+            client_cost_usd: self.client_cost_usd + other.client_cost_usd,
         }
     }
 
@@ -238,8 +285,21 @@ impl Usage {
             cost_usd: self.cost_usd - other.cost_usd,
             calls: self.calls - other.calls,
             tokens: self.tokens - other.tokens,
+            unpriced_calls: self.unpriced_calls - other.unpriced_calls,
+            client_cost_usd: self.client_cost_usd - other.client_cost_usd,
         }
     }
+}
+
+/// Evaluate one rule against a usage snapshot — the single place a [`LimitStatus`] is built from a
+/// [`Usage`], shared by ingest admission (`evaluate_admission`) and the read-only
+/// `/v1/limits/status` surface so the two can never disagree about what a cap currently says.
+///
+/// `cost_usd` rules carry their [`CostEvidence`]; `calls`/`tokens` rules don't (there is nothing to
+/// qualify — a call is a call).
+pub fn evaluate_rule(rule: &LimitRule, usage: &Usage) -> LimitStatus {
+    let evidence = matches!(rule.metric, LimitMetric::CostUsd).then(|| usage.cost_evidence());
+    rule.evaluate_with_evidence(usage.metric_value(rule.metric), evidence)
 }
 
 /// Outcome of an admission-controlled ingest ([`Store::insert_event_checked`]).
@@ -262,11 +322,18 @@ impl Admission {
 
 /// One event's contribution to rolling usage: one call, its cost, and its prompt+completion tokens
 /// (matching `usage_since`, which sums `input + output`).
+///
+/// An event with no resolved cost still contributes `$0.00` of *stored* cost — the price book had no
+/// entry and we refuse to invent one on the row — but it is now counted in `unpriced_calls`, so the
+/// limit path can charge it by imputation instead of letting it ride for free.
 pub(crate) fn event_contribution(ev: &LlmEvent) -> Usage {
+    let cost = ev.cost_usd.unwrap_or(0.0);
     Usage {
-        cost_usd: ev.cost_usd.unwrap_or(0.0),
+        cost_usd: cost,
         calls: 1,
         tokens: (ev.usage.input + ev.usage.output) as i64,
+        unpriced_calls: i64::from(ev.cost_usd.is_none()),
+        client_cost_usd: if ev.cost_is_client_reported() { cost } else { 0.0 },
     }
 }
 
@@ -281,6 +348,10 @@ pub(crate) fn event_contribution(ev: &LlmEvent) -> Usage {
 /// (unscoped, or scoped-and-matching) folds the candidate into its own `(window, scope)` usage, then
 /// breaches when that usage reaches its threshold; the event is admitted only if no applied enforcing
 /// rule breaches.
+///
+/// **Unpriced traffic:** a `cost_usd` rule evaluates against [`Usage::cost_for_limits`], which charges
+/// calls the price book couldn't price at the window's own mean priced cost. When the window has *no*
+/// priced call at all the cap is unpriceable and an enforcing rule rejects — see [`CostEvidence`].
 pub(crate) fn evaluate_admission<F>(
     rules: &[LimitRule],
     ev: &LlmEvent,
@@ -309,7 +380,7 @@ where
                 u
             }
         };
-        statuses.push(r.evaluate(usage.metric_value(r.metric)));
+        statuses.push(evaluate_rule(r, &usage));
     }
     Ok(Admission::from_statuses(statuses))
 }

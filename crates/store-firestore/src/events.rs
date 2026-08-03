@@ -75,6 +75,28 @@ pub(crate) fn cost_summary_windowed(
     Ok(rows)
 }
 
+/// Fold one event document into a rolling-usage total, mirroring the SQLite reference
+/// (`sqlite/events.rs::USAGE_COLS`). A document with no `cost_usd` field is *unpriced*: it adds no
+/// stored cost (we never invent one) but is counted, so the limit path can charge it by imputation
+/// rather than reading it as `$0.00` of spend. `metadata` is stored as a JSON string here, so the
+/// client-reported share is read by parsing it.
+fn fold_usage(u: &mut Usage, m: &serde_json::Map<String, serde_json::Value>) {
+    let cost = ff64(m, "cost_usd");
+    u.cost_usd += cost.unwrap_or(0.0);
+    u.calls += 1;
+    u.tokens += fi64(m, "input_tokens").unwrap_or(0) + fi64(m, "output_tokens").unwrap_or(0);
+    if cost.is_none() {
+        u.unpriced_calls += 1;
+    }
+    let client_reported = fstr(m, "metadata")
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("cost_source").and_then(|c| c.as_str()).map(|c| c == "client"))
+        .unwrap_or(false);
+    if client_reported {
+        u.client_cost_usd += cost.unwrap_or(0.0);
+    }
+}
+
 pub(crate) fn usage_since(rest: &Rest, project: &str, since: DateTime<Utc>) -> Result<Usage> {
     let filters = vec![
         ("project_id", "EQUAL", json!(project)),
@@ -83,9 +105,7 @@ pub(crate) fn usage_since(rest: &Rest, project: &str, since: DateTime<Utc>) -> R
     let docs = rest.query(COLL, &filters, None, None)?;
     let mut u = Usage::default();
     for m in &docs {
-        u.cost_usd += ff64(m, "cost_usd").unwrap_or(0.0);
-        u.calls += 1;
-        u.tokens += fi64(m, "input_tokens").unwrap_or(0) + fi64(m, "output_tokens").unwrap_or(0);
+        fold_usage(&mut u, m);
     }
     Ok(u)
 }
@@ -171,9 +191,7 @@ pub(crate) fn usage_since_scoped(
         if fstr(m, field).as_deref() != Some(scope.value()) {
             continue;
         }
-        u.cost_usd += ff64(m, "cost_usd").unwrap_or(0.0);
-        u.calls += 1;
-        u.tokens += fi64(m, "input_tokens").unwrap_or(0) + fi64(m, "output_tokens").unwrap_or(0);
+        fold_usage(&mut u, m);
     }
     Ok(u)
 }

@@ -634,6 +634,16 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
             e.provider = providers[(rng() % 2) as usize];
             e.name = names[(rng() % 3) as usize].map(|s| s.to_string());
             e.ts = base + Duration::seconds(offset);
+            // Cost provenance is part of the cached total now, so the randomized set has to contain
+            // all three kinds: unpriced (no price-book entry → NULL cost), client-self-reported, and
+            // book-priced. Otherwise the cache could diverge from the reference exactly where the
+            // limit path leans hardest.
+            match rng() % 4 {
+                0 => e.cost_usd = None,
+                1 => e.metadata = serde_json::json!({ "cost_source": "client" }),
+                2 => e.metadata = serde_json::json!({ "cost_source": "book" }),
+                _ => {}
+            }
             super::events::insert(&conn, &e).unwrap();
         }
         // Advance `now` forward (monotonic) by up to 2 days, so windows advance and evict.
@@ -651,6 +661,14 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
                 assert_eq!(got.calls, want.calls, "calls: round {round} {w:?} {sc:?}");
                 assert_eq!(got.tokens, want.tokens, "tokens: round {round} {w:?} {sc:?}");
                 assert_eq!(got.cost_usd, want.cost_usd, "cost: round {round} {w:?} {sc:?}");
+                assert_eq!(
+                    got.unpriced_calls, want.unpriced_calls,
+                    "unpriced: round {round} {w:?} {sc:?}"
+                );
+                assert_eq!(
+                    got.client_cost_usd, want.client_cost_usd,
+                    "client cost: round {round} {w:?} {sc:?}"
+                );
             }
         }
     }
@@ -1522,4 +1540,128 @@ fn a_database_predating_run_scoped_cases_migrates_on_open() {
     // Re-opening an already-migrated database is a no-op, not a duplicate-column failure.
     drop(s);
     SqliteStore::open(&path).expect("migrations are idempotent");
+}
+
+/// Build a project + one enforcing cost cap, for the unpriced-traffic admission tests.
+#[cfg(test)]
+fn cost_capped_store(threshold: f64) -> SqliteStore {
+    let s = SqliteStore::open_in_memory().unwrap();
+    s.create_project(&Project {
+        id: "p1".into(),
+        name: "p1".into(),
+        created_at: Utc::now(),
+        enabled: true,
+        redaction: Redaction::None,
+        collective_opt_in: false,
+    })
+    .unwrap();
+    s.create_limit_rule(&LimitRule {
+        id: "r-cost".into(),
+        project_id: "p1".into(),
+        metric: LimitMetric::CostUsd,
+        window: LimitWindow::Hour,
+        threshold,
+        action: LimitAction::Block,
+        enabled: true,
+        warn_at: None,
+        scope: None,
+    })
+    .unwrap();
+    s
+}
+
+#[test]
+fn an_unpriced_model_cannot_walk_past_a_cost_cap() {
+    // The bug: a model absent from the price book stores cost_usd = NULL, SUM() reads it as $0.00,
+    // and unlimited traffic sails under a cost cap. Two halves of the fix are exercised here.
+    let s = cost_capped_store(1.0);
+
+    // (a) No priced traffic at all → the cap is unmeasurable, and an enforcing rule refuses rather
+    // than reporting a comfortable $0.00 of spend.
+    let mut e = ev("p1", "brand-new-model", 1000, 1000, 0.0);
+    e.cost_usd = None;
+    let a = s.insert_event_checked(&e).unwrap();
+    assert!(!a.admitted, "unpriceable traffic must not be admitted under an enforcing cost cap");
+    assert!(a.statuses.iter().any(|st| st.unpriceable() && st.rejects_ingest()));
+    assert!(!a.statuses.iter().any(|st| st.breached), "it is unmeasurable, not over budget");
+    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 0, "and it was not recorded");
+
+    // (b) With priced traffic in the window, an unpriced call is charged the mean priced cost
+    // ($0.20/call here) instead of $0.00 — so the cap fills and eventually bites.
+    for _ in 0..4 {
+        assert!(s.insert_event_checked(&ev("p1", "priced", 10, 10, 0.20)).unwrap().admitted);
+    }
+    let mut admitted_unpriced = 0;
+    let mut rejected_unpriced = 0;
+    for _ in 0..20 {
+        let mut u = ev("p1", "brand-new-model", 10, 10, 0.0);
+        u.cost_usd = None;
+        if s.insert_event_checked(&u).unwrap().admitted {
+            admitted_unpriced += 1;
+        } else {
+            rejected_unpriced += 1;
+        }
+    }
+    assert!(rejected_unpriced > 0, "unpriced traffic must eventually trip the $1.00 cap");
+    assert!(admitted_unpriced < 20, "it cannot all be free");
+    // Sanity: the stored cost never grew (we never wrote a phantom price onto an event row).
+    let u = s.usage_since("p1", LimitWindow::Hour.since(Utc::now())).unwrap();
+    assert!((u.cost_usd - 0.80).abs() < 1e-9, "stored cost is only the four priced calls");
+    assert_eq!(u.unpriced_calls, admitted_unpriced, "unpriced calls are counted, not priced");
+}
+
+#[test]
+fn cost_evidence_reports_imputation_and_the_client_reported_share() {
+    let s = cost_capped_store(100.0); // high cap: nothing breaches, we only inspect the evidence
+    // Two priced calls ($0.50 total) and one client-self-reported ($0.25), plus one unpriced.
+    s.insert_event_checked(&ev("p1", "m", 10, 10, 0.25)).unwrap();
+    s.insert_event_checked(&ev("p1", "m", 10, 10, 0.25)).unwrap();
+    let mut c = ev("p1", "m", 10, 10, 0.25);
+    c.metadata = serde_json::json!({ "cost_source": "client" });
+    s.insert_event_checked(&c).unwrap();
+    let mut un = ev("p1", "unknown-model", 10, 10, 0.0);
+    un.cost_usd = None;
+    let a = s.insert_event_checked(&un).unwrap();
+    assert!(a.admitted);
+
+    let e = s
+        .usage_since("p1", LimitWindow::Hour.since(Utc::now()))
+        .unwrap()
+        .cost_evidence();
+    assert_eq!(e.priced_calls, 3);
+    assert_eq!(e.unpriced_calls, 1);
+    assert!(!e.unpriceable);
+    // Mean priced cost = 0.75 / 3 = 0.25, charged once for the single unpriced call.
+    assert!((e.imputed_cost_usd - 0.25).abs() < 1e-9);
+    assert!((e.client_reported_cost_usd - 0.25).abs() < 1e-9, "the self-reported share is visible");
+    // The stored sum is untouched; only the limit view adds the imputation.
+    let u = s.usage_since("p1", LimitWindow::Hour.since(Utc::now())).unwrap();
+    assert!((u.cost_usd - 0.75).abs() < 1e-9);
+    assert!((u.cost_for_limits() - 1.00).abs() < 1e-9);
+}
+
+#[test]
+fn calls_and_tokens_caps_are_untouched_by_unpriced_traffic() {
+    // The fix must not leak into the other metrics: an unpriced call is still exactly one call and
+    // its tokens, and a calls/tokens rule carries no cost evidence to reason about.
+    let s = SqliteStore::open_in_memory().unwrap();
+    s.create_limit_rule(&LimitRule {
+        id: "r-calls".into(),
+        project_id: "p1".into(),
+        metric: LimitMetric::Calls,
+        window: LimitWindow::Hour,
+        threshold: 3.0,
+        action: LimitAction::Block,
+        enabled: true,
+        warn_at: None,
+        scope: None,
+    })
+    .unwrap();
+    for i in 0..4 {
+        let mut e = ev("p1", "unknown-model", 10, 10, 0.0);
+        e.cost_usd = None;
+        let a = s.insert_event_checked(&e).unwrap();
+        assert_eq!(a.admitted, i < 2, "the calls cap bites at 3, unaffected by pricing");
+        assert!(a.statuses.iter().all(|st| st.cost_evidence.is_none()));
+    }
 }
