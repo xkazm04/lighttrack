@@ -342,6 +342,10 @@ pub(crate) struct GateEvidence {
     ci_upper: Option<f64>,
     /// `true` when the runner's verdict for that run was `regressed`.
     runner_regressed: bool,
+    /// The run never covered its whole case set — cancelled by an operator, or halted by the
+    /// per-run budget ceiling. Its mean is over the subset that happened to finish, which is not
+    /// evidence about the version.
+    incomplete: Option<&'static str>,
 }
 
 /// The regression gate that turns promotion into a measurable quality step. Returns `Some(reason)`
@@ -385,6 +389,17 @@ fn gate_promotion(latest: Option<GateEvidence>, baseline: Option<f64>, force: bo
              'regressed' (mean {mean:.3} vs baseline {baseline:.3}) (pass force=true to override)"
         ));
     }
+    // A cancelled or budget-halted run only scored the cases that finished before it stopped, and
+    // WHICH cases those were is scheduling-dependent. Its mean is a fact about a subset, not about
+    // the version — a favourable subset must never be able to promote. Block on the run's own
+    // partiality rather than on its number.
+    if let Some(why) = ev.incomplete {
+        return Some(format!(
+            "promotion blocked: the benchmark run that scored this version is incomplete ({why}) — \
+             its mean {mean:.3} covers only the cases that ran (pass force=true to override, or \
+             re-run the benchmark to completion)"
+        ));
+    }
     match ev.ci_upper {
         Some(upper) if upper + EPS < baseline => Some(format!(
             "promotion blocked: benchmark mean {mean:.3} (95% CI upper {upper:.3}) is significantly \
@@ -413,6 +428,14 @@ fn evidence_of(run: &BenchmarkRun) -> GateEvidence {
             .and_then(|a| a.get(1))
             .and_then(Value::as_f64),
         runner_regressed: run.status == "regressed",
+        // `cancelled` / `partial` are the run-control and budget-ceiling statuses; `aborted` is a
+        // pre-flight refusal. None of them cover the full case set.
+        incomplete: match run.status.as_str() {
+            "cancelled" => Some("cancelled"),
+            "partial" => Some("halted by the run budget ceiling"),
+            "aborted" => Some("aborted"),
+            _ => None,
+        },
     }
 }
 
@@ -481,7 +504,7 @@ mod tests {
 
     /// Legacy-shaped evidence: a bare mean with no recorded interval (the scalar-compare path).
     fn scalar(mean: f64) -> Option<GateEvidence> {
-        Some(GateEvidence { mean: Some(mean), ci_upper: None, runner_regressed: false })
+        Some(GateEvidence { mean: Some(mean), ci_upper: None, runner_regressed: false, incomplete: None })
     }
 
     #[test]
@@ -526,7 +549,7 @@ mod tests {
         assert!(gate_promotion(scalar(0.8), Some(0.8), false).is_none(), "meeting baseline → allow");
         assert!(gate_promotion(scalar(0.95), Some(0.8), false).is_none(), "above baseline → allow");
         // A run whose mean is missing entirely reads as "no scored run yet", not as a pass.
-        let no_mean = Some(GateEvidence { mean: None, ci_upper: None, runner_regressed: false });
+        let no_mean = Some(GateEvidence { mean: None, ci_upper: None, runner_regressed: false, incomplete: None });
         assert!(gate_promotion(no_mean, Some(0.8), false).is_some());
     }
 
@@ -535,15 +558,11 @@ mod tests {
         // The false positive the old scalar gate produced: mean 0.79 vs baseline 0.80 on a noisy
         // run whose 95% interval reaches 0.88. That 0.01 dip is inside the run's own uncertainty,
         // so it is not evidence of a regression and must not block a deploy.
-        let noisy = Some(GateEvidence {
-            mean: Some(0.79), ci_upper: Some(0.88), runner_regressed: false,
-        });
+        let noisy = Some(GateEvidence { mean: Some(0.79), ci_upper: Some(0.88), runner_regressed: false, incomplete: None });
         assert!(gate_promotion(noisy, Some(0.80), false).is_none(), "a dip inside the noise");
         // A REAL regression — the whole interval below baseline — still blocks. The gate is not
         // disarmed, only made to require evidence.
-        let real = Some(GateEvidence {
-            mean: Some(0.50), ci_upper: Some(0.56), runner_regressed: false,
-        });
+        let real = Some(GateEvidence { mean: Some(0.50), ci_upper: Some(0.56), runner_regressed: false, incomplete: None });
         let reason = gate_promotion(real, Some(0.80), false).expect("must block");
         assert!(reason.contains("significantly below"), "got: {reason}");
         assert!(reason.contains("0.560"), "the interval is quoted so the operator can check it");
@@ -554,12 +573,34 @@ mod tests {
         // The runner's verdict is the significance-aware one (paired per-case, family-wise
         // corrected). If it says regressed, the gate blocks even where the raw mean looks fine —
         // one definition of "regressed", not two.
-        let ev = Some(GateEvidence {
-            mean: Some(0.85), ci_upper: Some(0.92), runner_regressed: true,
-        });
+        let ev = Some(GateEvidence { mean: Some(0.85), ci_upper: Some(0.92), runner_regressed: true, incomplete: None });
         let reason = gate_promotion(ev, Some(0.80), false).expect("must block");
         assert!(reason.contains("'regressed'"), "got: {reason}");
         // …and force still overrides it.
         assert!(gate_promotion(ev, Some(0.80), true).is_none());
+    }
+
+    #[test]
+    fn an_incomplete_run_cannot_promote_however_good_its_mean_looks() {
+        // A cancelled or budget-halted run scored only the cases that finished, and which ones
+        // those were is scheduling-dependent — so a favourable subset must not become a promotion.
+        // The mean here (0.95) beats the baseline comfortably; partiality still blocks.
+        for (status, needle) in
+            [("cancelled", "cancelled"), ("partial", "budget"), ("aborted", "aborted")]
+        {
+            let mut run = run_with(serde_json::json!({}), Some(0.95), 1);
+            run.status = status.to_string();
+            let reason = gate_promotion(Some(evidence_of(&run)), Some(0.80), false)
+                .unwrap_or_else(|| panic!("{status} must not promote"));
+            assert!(reason.contains("incomplete"), "got: {reason}");
+            assert!(reason.contains(needle), "reason must name why: {reason}");
+            // Force remains the operator's escape hatch, as everywhere else in this gate.
+            assert!(gate_promotion(Some(evidence_of(&run)), Some(0.80), true).is_none());
+        }
+
+        // A finished run with the same numbers is unaffected — this blocks on partiality, not on
+        // the score.
+        let ok = run_with(serde_json::json!({}), Some(0.95), 1);
+        assert!(gate_promotion(Some(evidence_of(&ok)), Some(0.80), false).is_none());
     }
 }
