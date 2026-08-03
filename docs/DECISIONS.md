@@ -129,3 +129,40 @@ implied. An unreadable `detail` blob degrades to `None` instead of failing the l
 *Honest failure accounting.* Compare mode's swallowed `let _ = post(...)` now logs the failure and counts
 it into the run report as `score_post_failures`, alongside `injection_suspected_cases`; rubric mode reports
 `injection_suspected_cases` and raises a recommendation.
+
+## D12 — The default judge is a measurement, not a sample (2026-08-03)
+Deterministic judging shipped for OpenAI and Gemini (`temperature: 0` + a fixed `JUDGE_SEED`), but the
+**default** provider is `anthropic` via `claude -p`, which exposes no sampling knobs at all — so out of
+the box, cross-sample "agreement" partly measured sampling noise rather than genuine ambiguity. Each CLI
+call also drags the auto-loaded ~40k-token context D9 measured, billed as cache creation.
+
+**When `ANTHROPIC_API_KEY` is set, the `anthropic` judge path is now the bare Messages API**
+(`POST /v1/messages`) instead of the CLI: no auto-loaded context, `temperature: 0` requested, and
+structured output enforced by a **forced tool call** (`tool_choice: {type: "tool", name: "verdict"}` with
+our schema as `input_schema`) — stricter than parsing JSON out of prose. CLI-style model aliases
+(`haiku`/`sonnet`/`opus`) are mapped to API model ids, since those aliases only exist in the CLI. **The
+`claude -p` path is unchanged and remains the fallback with no key** — subscription users authenticate
+through its OAuth and have no key to give us; removing it would break them.
+
+*Two residuals, recorded rather than glossed.* The Anthropic API **has no `seed`** — `temperature: 0` is
+its entire sampling surface — and newer Anthropic models **reject `temperature` outright** with a 400
+(we detect that and retry once *keeping the schema*, rather than degrading to a schema-less prose call).
+So every outcome carries a `determinism` stamp, surfaced in run reports and in the score detail (D11):
+- **`exact`** — every sampling control the provider exposes was pinned, seed included (OpenAI, Gemini).
+- **`best-effort`** — no seed available (Anthropic API), no knobs at all (`claude -p`), or the params
+  were rejected and we retried without them. A run is stamped with its *weakest* call, and rubric mode
+  raises a recommendation explaining that some of the measured disagreement is sampling noise.
+
+**Self-preference is now enforced code, not just a doc claim.** `BENCHMARK_FRAMEWORK.md` has listed
+"judge family ≠ generator family" among the four bias controls since it was written, and nothing
+implemented it. `engine::model_family` / `same_family` give a coarse lab label (model name outranks the
+provider, so a gateway serving Claude is still the Anthropic family); compare and pairwise modes warn on
+a same-family judge/target pairing and record it on the run (`self_preference` / `self_preference_targets`).
+**Never fatal** — a same-family run is sometimes exactly what the operator means to measure.
+
+*Cost, honestly.* D9 measured the CLI path live at **$0.02–0.10 per judge call regardless of payload**,
+dominated by cache creation for the auto-loaded context; the bare API path sends only the prompt, so it
+avoids that fixed floor entirely and is billed purely on the judge payload's tokens. **We have not
+re-measured either number for this change** — doing so costs real money against a live key, and no
+figure here is from a run we performed. Treat D9's range as the CLI baseline and price the API path from
+the DB price book by tokens (the Messages API returns no `$`, same as Gemini/OpenAI).

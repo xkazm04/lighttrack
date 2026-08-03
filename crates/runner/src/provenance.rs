@@ -31,6 +31,7 @@ pub(crate) fn rubric_detail(o: &RubricOutcome) -> ScoreDetail {
         parse_failures: Some(o.parse_failures),
         position_bias: None,
         injection_suspected: Some(o.injection_suspected),
+        determinism: Some(o.determinism.as_str().to_string()),
         notes: Vec::new(),
     }
     .capped()
@@ -49,6 +50,7 @@ pub(crate) fn freeform_detail(o: &JudgeOutcome) -> ScoreDetail {
         samples_parsed: Some(1),
         parse_failures: Some(0),
         injection_suspected: Some(o.injection_suspected),
+        determinism: Some(o.determinism.as_str().to_string()),
         notes,
         ..Default::default()
     }
@@ -103,6 +105,7 @@ pub(crate) fn merge_details(details: &[ScoreDetail]) -> ScoreDetail {
         out.parse_failures = add(out.parse_failures, d.parse_failures);
         out.position_bias = or(out.position_bias, d.position_bias);
         out.injection_suspected = or(out.injection_suspected, d.injection_suspected);
+        out.determinism = weakest_determinism(out.determinism.take(), d.determinism.as_deref());
         out.notes.extend(d.notes.iter().cloned());
     }
     for (dim, n) in acc.iter_mut().zip(&counts) {
@@ -117,6 +120,21 @@ fn add(a: Option<u32>, b: Option<u32>) -> Option<u32> {
     match (a, b) {
         (None, None) => None,
         _ => Some(a.unwrap_or(0) + b.unwrap_or(0)),
+    }
+}
+
+/// A merged cell is only as reproducible as its least reproducible candidate — any `best-effort`
+/// makes the whole cell best-effort. Mirrors `Determinism::weakest` on the engine side.
+fn weakest_determinism(a: Option<String>, b: Option<&str>) -> Option<String> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b.to_string()),
+        (Some(a), Some(b)) => Some(if a == "exact" && b == "exact" {
+            "exact".to_string()
+        } else {
+            "best-effort".to_string()
+        }),
     }
 }
 
@@ -189,6 +207,7 @@ mod tests {
         let mut dirty = detail(vec![dim("x", 0.0, &["spoofed"])], 1.0);
         dirty.injection_suspected = Some(true);
         dirty.position_bias = Some(true);
+        dirty.determinism = Some("best-effort".into());
         let m = merge_details(&[clean, dirty]);
         assert_eq!(m.injection_suspected, Some(true), "one dirty candidate taints the cell");
         assert_eq!(m.position_bias, Some(true));
@@ -214,5 +233,30 @@ mod tests {
         assert_eq!(r.len(), lighttrack_core::MAX_REASONINGS_PER_DIM);
         assert_eq!(r[0].chars().count(), lighttrack_core::MAX_REASONING_CHARS);
         assert!(r[0].ends_with('…'), "truncation is visible to a reader");
+    }
+}
+
+#[cfg(test)]
+mod determinism_tests {
+    use super::*;
+
+    #[test]
+    fn one_best_effort_candidate_downgrades_the_cell() {
+        let exact = ScoreDetail { determinism: Some("exact".into()), ..Default::default() };
+        let best = ScoreDetail { determinism: Some("best-effort".into()), ..Default::default() };
+        assert_eq!(
+            merge_details(&[exact.clone(), exact.clone()]).determinism.as_deref(),
+            Some("exact")
+        );
+        assert_eq!(
+            merge_details(&[exact, best]).determinism.as_deref(),
+            Some("best-effort"),
+            "a cell is only as reproducible as its weakest candidate"
+        );
+    }
+
+    #[test]
+    fn absent_stamps_do_not_invent_one() {
+        assert!(merge_details(&[ScoreDetail::default(), ScoreDetail::default()]).determinism.is_none());
     }
 }

@@ -36,8 +36,10 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
 - **Provider abstraction** (`Generator` trait): `anthropic` (via `claude -p` or API), `openai`, `google`.
   Each needs credentials; see *Open decisions*.
 - **Generation vs judging are separated.** The judge model should differ in family from the generator to
-  avoid **self-preference bias** (§3). Default judge = Claude Haiku via `claude -p`; when judging Claude
-  outputs, prefer pairwise + randomized order, or a neutral judge.
+  avoid **self-preference bias** (§3) — now detected and recorded per run, not just advised. Default
+  judge = Claude Haiku, via the bare Anthropic Messages API when `ANTHROPIC_API_KEY` is set and via
+  `claude -p` otherwise (D12); when judging Claude outputs, prefer pairwise + randomized order, or a
+  neutral judge.
 - **Output:** a comparison table — for each dimension and overall: score, pass-rate, **p50/p95 latency**,
   **tokens**, **$ cost** — so "best" is a quality/latency/cost trade-off, not just quality.
 
@@ -85,6 +87,21 @@ it, other backends read it back as `None`.
 **Bias controls (the four):** position → randomize/shuffle A/B and aggregate; verbosity → rubric explicitly
 penalizes unnecessary length; self-preference → judge family ≠ generator family (or pairwise+neutral);
 authority → strip provider/model identity from what the judge sees.
+
+*Self-preference is enforced (D12), not just recommended.* `engine::same_family` compares the coarse lab
+family of judge and target (the model name outranks the provider, so a gateway serving Claude is still
+the Anthropic family). Compare and pairwise modes warn on a same-family pairing and record it on the run
+(`self_preference` / `self_preference_targets`). It is a warning, never a failure — a same-family run is
+sometimes exactly what you mean to measure.
+
+**Determinism stamp (D12).** A verdict should be a measurement, so every outcome records how reproducible
+it actually was: `exact` when every sampling control the provider exposes was pinned including a seed
+(OpenAI, Gemini), `best-effort` otherwise — the Anthropic Messages API has no `seed`, and `claude -p` has
+no sampling knobs at all. The stamp appears in run reports and in each score's `detail`; a run takes its
+weakest call's stamp. **On a `best-effort` run, part of the measured self-consistency disagreement is
+sampling noise rather than genuine ambiguity**, so read `agreement` accordingly. Setting
+`ANTHROPIC_API_KEY` moves the default judge off the CLI onto the bare Messages API (temperature pinned,
+no ~40k-token auto-loaded context); without a key the CLI remains the path, for subscription users.
 
 **Report & "healing":** per-target × per-dimension scorecard; **failure clustering** (group low-scoring
 cases by dimension/pattern); **recommendations** — concrete, actionable: e.g. "completeness lowest on

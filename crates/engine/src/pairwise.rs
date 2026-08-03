@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use crate::parse::{extract_json_object, sample_parsed, Parsed};
 use crate::prompts::{build_pairwise_prompt, build_pairwise_schema};
-use crate::{EngineConfig, EngineError, GenOutcome, Result};
+use crate::{Determinism, EngineConfig, EngineError, GenOutcome, Result};
 
 /// Which answer a pairwise judgement preferred. `A`/`B` are in the *caller's* order (A = first arg).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -44,6 +44,8 @@ pub struct PairwiseOutcome {
     /// An answer (or the input/reference) imitated a prompt boundary and was neutralized — the pair
     /// tried to talk to the judge. See [`crate::fence`].
     pub injection_suspected: bool,
+    /// The weaker determinism stamp of the two order calls.
+    pub determinism: Determinism,
 }
 
 /// Map a second-order verdict (where the judge saw the answers swapped) back to the caller's order.
@@ -101,9 +103,11 @@ fn assemble(
     let output_tokens = r1.output_tokens + r2.output_tokens;
     let injection_suspected =
         injection_suspected || r1.injection_suspected || r2.injection_suspected;
+    let determinism = r1.determinism.weakest(r2.determinism);
     let model = if !r2.model.is_empty() { r2.model } else { r1.model };
     Ok(PairwiseOutcome {
         injection_suspected,
+        determinism,
         winner,
         position_bias,
         reasoning,
@@ -198,6 +202,7 @@ mod tests {
                 latency_ms: Some(1),
                 input_tokens: Some(3),
                 output_tokens: Some(2),
+                determinism: Determinism::Exact,
             })
         }
     }

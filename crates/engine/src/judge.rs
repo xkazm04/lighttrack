@@ -13,7 +13,8 @@ use crate::parse::{extract_json_object, extract_json_value, sample_parsed, Parse
 use crate::pool;
 use crate::prompts::{build_rubric_prompt, build_rubric_schema, Prompt};
 use crate::{
-    DimScore, EngineConfig, EngineError, GenOutcome, JudgeOutcome, Result, RubricOutcome, TextOutcome,
+    Determinism, DimScore, EngineConfig, EngineError, GenOutcome, JudgeOutcome, Result,
+    RubricOutcome, TextOutcome,
 };
 
 /// A seam over candidate generation. Production dispatches each judge sample to the configured
@@ -155,6 +156,7 @@ pub fn run_judge(
         input_tokens: Some(parsed.input_tokens),
         output_tokens: Some(parsed.output_tokens),
         injection_suspected: prompt.injection_suspected || parsed.injection_suspected,
+        determinism: parsed.determinism,
     })
 }
 
@@ -222,8 +224,13 @@ fn judge_with(
     });
     let results = results.into_iter().collect::<Result<Vec<_>>>()?;
     let injection_suspected = any_injection(prompt, &results);
+    // A case is only as reproducible as its least reproducible sample.
+    let determinism = results
+        .iter()
+        .fold(Determinism::Exact, |acc, r| acc.weakest(r.determinism));
     let mut outcome = aggregate(&results, rubric, model, k as u32)?;
     outcome.injection_suspected = injection_suspected;
+    outcome.determinism = determinism;
     Ok(outcome)
 }
 
@@ -340,7 +347,9 @@ fn aggregate(results: &[Parsed<SampleDims>], rubric: &Rubric, model: &str, k: u3
         samples_parsed: overalls.len() as u32,
         agreement,
         parse_failures,
-        injection_suspected: false, // set by judge_with, which owns the prompt's fence signal
+        // Both set by judge_with, which owns the prompt's fence signal and the per-sample stamps.
+        injection_suspected: false,
+        determinism: Determinism::BestEffort,
     })
 }
 

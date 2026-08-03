@@ -7,7 +7,7 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, ModelPriceRow, Rubric};
-use lighttrack_engine::{generate, run_pairwise, EngineConfig, PairwiseWinner};
+use lighttrack_engine::{generate, run_pairwise, same_family, Determinism, EngineConfig, PairwiseWinner};
 
 use crate::cli::Cli;
 use crate::http::post;
@@ -82,6 +82,21 @@ pub(crate) fn run_pairwise_matrix(
         return Ok(());
     }
     let labels: Vec<String> = targets.iter().map(label_of).collect();
+    // Self-preference control (BENCHMARK_FRAMEWORK §3): targets judged by their own model family.
+    // Warned and recorded on the run, never fatal — pairwise with a neutral judge is the documented
+    // remedy, and this is what tells an operator they don't have one.
+    let self_preference: Vec<String> = targets
+        .iter()
+        .zip(&labels)
+        .filter(|(t, _)| same_family(jp, jm, &t.provider, &t.model))
+        .map(|(_, l)| l.clone())
+        .collect();
+    if !self_preference.is_empty() {
+        eprintln!(
+            "  warning: SELF-PREFERENCE — judge {jp}/{jm} shares a model family with {}; their              win-rates are biased upward. Use a judge from a different family before publishing.",
+            self_preference.join(", ")
+        );
+    }
     let criteria = criteria_of(rubric, bench);
     let (n_t, n_c) = (targets.len(), cases.len());
     println!("\nPAIRWISE (round-robin, order-debiased): {n_t} targets × {n_c} case(s), judge={jp}/{jm}");
@@ -167,6 +182,7 @@ pub(crate) fn run_pairwise_matrix(
     // every game and then thrown away — a ranking with no recorded "why" is an unauditable verdict.
     let mut game_log: Vec<Value> = Vec::new();
     let (mut judge_errors, mut injected) = (0u32, 0u32);
+    let mut determinism = Determinism::Exact;
     for (&g, outcome) in games.iter().zip(outcomes) {
         match outcome {
             Ok(o) => {
@@ -174,6 +190,7 @@ pub(crate) fn run_pairwise_matrix(
                     price_gen_cost(prices, jp, jm, Some(o.input_tokens), Some(o.output_tokens))
                 });
                 judge_tokens += o.tokens;
+                determinism = determinism.weakest(o.determinism);
                 let (ci, i, j) = g;
                 if o.injection_suspected {
                     injected += 1;
@@ -212,7 +229,8 @@ pub(crate) fn run_pairwise_matrix(
 
     post_run(
         cli, http, bench, &labels, &standings, &beats, played.len(), judge_errors, bias_count,
-        injected, game_log, gen_cost, judge_cost, gen_tokens + judge_tokens,
+        injected, determinism, &self_preference, game_log, gen_cost, judge_cost,
+        gen_tokens + judge_tokens,
     )
 }
 
@@ -327,6 +345,8 @@ fn post_run(
     judge_errors: u32,
     bias_count: u32,
     injected: u32,
+    determinism: Determinism,
+    self_preference: &[String],
     game_log: Vec<Value>,
     gen_cost: f64,
     judge_cost: f64,
@@ -346,6 +366,7 @@ fn post_run(
         "mode": "pairwise", "targets": labels, "ranking": ranking,
         "beats_matrix": beats, "n_games": n_games, "judge_errors": judge_errors,
         "positional_bias_ties": bias_count, "injection_suspected_games": injected,
+        "determinism": determinism.as_str(), "self_preference_targets": self_preference,
         "games_logged": game_log.len(), "games": game_log,
         "gen_cost_usd": gen_cost, "judge_cost_usd": judge_cost,
     });

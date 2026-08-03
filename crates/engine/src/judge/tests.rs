@@ -55,6 +55,7 @@ fn gen_outcome(output: String) -> GenOutcome {
         latency_ms: Some(1),
         input_tokens: Some(0),
         output_tokens: Some(0),
+        determinism: Determinism::Exact,
     }
 }
 
@@ -253,6 +254,47 @@ fn repair_reask_rescues_a_bad_first_response() {
     let out = judge_with(&gen, &r, &Prompt::plain("prompt"), "fake-model", 1, 1).unwrap();
     assert_eq!(out.parse_failures, 0, "a repaired sample is not a failure");
     assert!((dim_score(&out, "x") - 0.9).abs() < 1e-9, "repaired score {}", dim_score(&out, "x"));
+}
+
+/// A generator whose sample 1 came back from a best-effort path (e.g. the Claude CLI, or a model
+/// that rejected `temperature`), while the rest were exact.
+struct MixedDeterminismGen;
+
+impl Generator for MixedDeterminismGen {
+    fn generate(&self, index: usize, _prompt: &str) -> Result<GenOutcome> {
+        let mut g = gen_outcome(r#"{"x":{"score":0.5}}"#.into());
+        if index == 1 {
+            g.determinism = Determinism::BestEffort;
+        }
+        Ok(g)
+    }
+}
+
+#[test]
+fn one_best_effort_sample_downgrades_the_whole_case() {
+    let r = rubric(serde_json::json!({
+        "name": "t",
+        "threshold": 0.0,
+        "dimensions": [ { "key": "x", "description": "", "weight": 1.0 } ]
+    }));
+    // All-exact stays exact…
+    let clean = judge(&r, &[r#"{"x":{"score":0.5}}"#], 3);
+    assert_eq!(clean.determinism, Determinism::Exact);
+    // …and a single best-effort sample makes the case's stamp honest about the whole run.
+    let mixed =
+        judge_with(&MixedDeterminismGen, &r, &Prompt::plain("p"), "fake-model", 3, 2).unwrap();
+    assert_eq!(mixed.determinism, Determinism::BestEffort);
+}
+
+#[test]
+fn determinism_weakest_is_pessimistic() {
+    use Determinism::{BestEffort, Exact};
+    assert_eq!(Exact.weakest(Exact), Exact);
+    assert_eq!(Exact.weakest(BestEffort), BestEffort);
+    assert_eq!(BestEffort.weakest(Exact), BestEffort);
+    assert_eq!(BestEffort.weakest(BestEffort), BestEffort);
+    assert_eq!(Exact.as_str(), "exact");
+    assert_eq!(BestEffort.as_str(), "best-effort");
 }
 
 #[test]

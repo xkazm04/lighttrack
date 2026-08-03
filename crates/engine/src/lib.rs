@@ -7,10 +7,14 @@
 //! - `providers`  — [`generate`] across `anthropic` / `google` / `openai` (schema-enforced + retried).
 //! - `parse`      — JSON extraction + the one-shot repair re-ask around a single judge sample.
 //! - `fence`      — per-call nonce delimiters around untrusted content (judge-prompt injection defense).
+//! - `anthropic_api` — the bare Messages API judge path (used when `ANTHROPIC_API_KEY` is set).
+//! - `family`     — coarse model families, for the self-preference bias control.
 //! - `retry`      — bounded exponential backoff for transient (429/5xx/timeout) provider failures.
 //! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_text`], [`parse_judge_spec`].
 
+mod anthropic_api;
 mod claude;
+mod family;
 mod fence;
 mod judge;
 mod pairwise;
@@ -30,6 +34,7 @@ pub use prompts::{
     build_eval_prompt, build_judge_prompt, build_pairwise_prompt, build_rubric_prompt,
     build_rubric_schema, Prompt,
 };
+pub use family::{model_family, same_family};
 pub use providers::generate;
 
 /// Errors from the scoring engine. Transport failures carry a typed classification (not string
@@ -76,6 +81,49 @@ pub enum EngineError {
 
 pub type Result<T> = std::result::Result<T, EngineError>;
 
+/// How reproducible a judge call actually was — stamped on every outcome so a score's determinism
+/// is a recorded fact rather than an assumption about the provider.
+///
+/// A verdict is a measurement, so agreement between self-consistency samples should signal a
+/// genuinely ambiguous case, not sampling noise. Whether that holds depends on which knobs the
+/// provider exposes, so we record what we got instead of claiming what we wanted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Determinism {
+    /// **Every** sampling control the provider exposes was pinned, including a fixed seed —
+    /// re-running the eval reproduces the verdict by contract. OpenAI and Gemini (`temperature: 0`
+    /// + `JUDGE_SEED`).
+    Exact,
+    /// Reproducibility is convention, not contract: the path exposed no seed (the Anthropic
+    /// Messages API has none — `temperature: 0` is its whole sampling surface), exposed no sampling
+    /// knobs at all (the `claude -p` CLI), or rejected the ones we asked for and we retried without
+    /// them. Agreement on such a run partly measures sampling noise.
+    BestEffort,
+}
+
+impl Determinism {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Determinism::Exact => "exact",
+            Determinism::BestEffort => "best-effort",
+        }
+    }
+
+    /// The weaker of two stamps — a run is only as deterministic as its least deterministic call.
+    pub fn weakest(self, other: Determinism) -> Determinism {
+        if self == Determinism::Exact && other == Determinism::Exact {
+            Determinism::Exact
+        } else {
+            Determinism::BestEffort
+        }
+    }
+}
+
+impl std::fmt::Display for Determinism {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// How to invoke the engine (provider+model are passed per call; this holds the Claude CLI config).
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -110,6 +158,8 @@ pub struct JudgeOutcome {
     /// it (see [`fence`]). Not a verdict on the content — a signal that this case tried to talk to
     /// the judge, worth surfacing next to the score it produced.
     pub injection_suspected: bool,
+    /// Whether this verdict is reproducible by contract or only by convention.
+    pub determinism: Determinism,
 }
 
 /// The result of a free-form text call (e.g. LLM-based anonymization / healing).
@@ -169,6 +219,8 @@ pub struct RubricOutcome {
     /// The judged content (input/reference/output, or model text echoed on a repair re-ask) imitated
     /// a prompt boundary and was neutralized. See [`JudgeOutcome::injection_suspected`].
     pub injection_suspected: bool,
+    /// The weakest determinism stamp across this case's samples (including repair re-asks).
+    pub determinism: Determinism,
 }
 
 /// The result of generating one candidate output from a target.
@@ -180,4 +232,7 @@ pub struct GenOutcome {
     pub latency_ms: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    /// How reproducible this call was — see [`Determinism`]. Candidate *generation* is not a
+    /// measurement and is not asked to be deterministic, so it reports `BestEffort`.
+    pub determinism: Determinism,
 }

@@ -9,7 +9,7 @@ use anyhow::Result;
 use serde_json::{json, Map, Value};
 
 use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, ModelPriceRow, Rubric, ScoreDetail};
-use lighttrack_engine::{generate, parse_judge_spec, EngineConfig};
+use lighttrack_engine::{generate, parse_judge_spec, same_family, EngineConfig};
 
 use crate::bench::judge_output;
 use crate::cli::Cli;
@@ -177,6 +177,21 @@ pub(crate) fn run_compare(
         // Verdicts the API refused/couldn't take, and cases whose content imitated a judge-prompt
         // boundary. Both land in the run report instead of scrolling past on stderr.
         let (mut score_post_failures, mut injected) = (0u32, 0u32);
+        // Weakest determinism stamp across this target's judged cells. `None` until something was
+        // actually judged — a target with no verdicts claims nothing.
+        let mut target_determinism: Option<&'static str> = None;
+
+        // Self-preference (BENCHMARK_FRAMEWORK §3, "the four bias controls"): a judge from the same
+        // lab as the target it grades tends to favour it. Documented as a control since the
+        // framework was written and, until now, enforced by nothing. Warn and RECORD — never fail a
+        // run: a same-family pairing is sometimes exactly what the operator wants to measure.
+        let self_preference = same_family(&jp, &jm, &t.provider, &t.model);
+        if self_preference {
+            eprintln!(
+                "  warning: SELF-PREFERENCE — judge {jp}/{jm} and target {}/{} are the same model                  family; this target's scores are biased upward. Judge on a different family (or                  use pairwise with a neutral judge) before publishing them.",
+                t.provider, t.model
+            );
+        }
 
         // Generate + judge every case for this target with up to `jobs` concurrency; fold the cells in
         // case order so cost/latency/agreement aggregation is identical to the sequential path.
@@ -246,6 +261,12 @@ pub(crate) fn run_compare(
             // carrying the merged provenance of every candidate judged for this cell rather than a
             // free-text "k=0.82 …" restatement of numbers already in `value`.
             let detail = merge_details(&cell.cand_details);
+            if let Some(d) = detail.determinism.as_deref() {
+                target_determinism = Some(match (target_determinism, d) {
+                    (Some("best-effort"), _) | (_, "best-effort") => "best-effort",
+                    _ => "exact",
+                });
+            }
             if detail.injection_suspected == Some(true) {
                 injected += 1;
                 eprintln!(
@@ -303,6 +324,8 @@ pub(crate) fn run_compare(
             "errored_cases": errored, "gen_samples": ng, "judge_samples": samples,
             "score_post_failures": score_post_failures,
             "injection_suspected_cases": injected,
+            "self_preference": self_preference,
+            "determinism": target_determinism,
             "agreement": r3(mean_agree), "dimensions": Value::Object(dim_means), "cases": case_reports,
             "verdict": status, "baseline": bench.baseline_score,
         });

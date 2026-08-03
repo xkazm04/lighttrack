@@ -6,7 +6,9 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use lighttrack_core::{Benchmark, BenchmarkCase, ModelPriceRow, Rubric};
-use lighttrack_engine::{parse_judge_spec, run_rubric_judge, run_text, EngineConfig, RubricOutcome};
+use lighttrack_engine::{
+    parse_judge_spec, run_rubric_judge, run_text, Determinism, EngineConfig, RubricOutcome,
+};
 
 use std::collections::BTreeSet;
 
@@ -62,6 +64,9 @@ pub(crate) fn run_rubric_benchmark(
     // Cases whose judged content tried to imitate a prompt boundary (neutralized by the engine's
     // fence) — recorded so an operator can see which scores are attacker-adjacent.
     let mut injected = 0u32;
+    // The weakest determinism stamp across every judged case — a run's reproducibility claim is
+    // only as strong as its least reproducible verdict.
+    let mut determinism = Determinism::Exact;
     let mut price_warnings: BTreeSet<String> = BTreeSet::new();
 
     // Judge every case with up to `jobs` concurrency (jobs=1 for the engine's per-case sample loop, so
@@ -115,6 +120,7 @@ pub(crate) fn run_rubric_benchmark(
         }
         total_tokens += o.tokens.unwrap_or(0);
         min_agreement = min_agreement.min(o.agreement);
+        determinism = determinism.weakest(o.determinism);
         for d in &o.dimensions {
             *dim_sums.entry(d.key.clone()).or_insert(0.0) += d.score;
         }
@@ -190,6 +196,12 @@ pub(crate) fn run_rubric_benchmark(
             "Judge agreement dipped to {min_agreement:.2}; tighten anchors or raise --samples."
         ));
     }
+    if samples > 1 && determinism == Determinism::BestEffort {
+        recs.push(
+            "Judge sampling was best-effort (the provider exposes no seed, or none at all), so part of the measured disagreement is sampling noise rather than genuine ambiguity. Set ANTHROPIC_API_KEY for the bare Messages API, or judge on an OpenAI/Gemini model for exact determinism."
+                .to_string(),
+        );
+    }
     if errored > 0 || sample_failures > 0 {
         recs.push(format!(
             "Judge emitted unparseable output: {errored} case(s) skipped, {sample_failures} sample(s) \
@@ -249,6 +261,7 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
         "weakest_dimension": weakest, "failing_cases": failing, "recommendations": recs,
         "unparseable_cases": errored, "dropped_samples": sample_failures,
         "injection_suspected_cases": injected,
+        "determinism": determinism.as_str(),
     });
     if let Some(h) = &healing {
         report["healing"] = json!(h);

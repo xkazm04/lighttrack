@@ -6,7 +6,7 @@
 use serde_json::Value;
 
 use crate::prompts::build_repair_prompt;
-use crate::{GenOutcome, Result};
+use crate::{Determinism, GenOutcome, Result};
 
 /// Extract the outermost `{...}` from a string (handles stray prose / code fences).
 pub(crate) fn extract_json_object(s: &str) -> Option<String> {
@@ -31,6 +31,9 @@ pub(crate) struct Parsed<T> {
     pub(crate) raw_failure: Option<String>,
     /// The repair re-ask re-embedded model text that imitated a prompt boundary (see [`crate::fence`]).
     pub(crate) injection_suspected: bool,
+    /// The weakest determinism across this sample's calls — a repaired sample is only as
+    /// reproducible as its least reproducible attempt.
+    pub(crate) determinism: Determinism,
     pub(crate) cost_usd: Option<f64>,
     pub(crate) latency_ms: u64,
     pub(crate) input_tokens: u64,
@@ -44,6 +47,7 @@ impl<T> Parsed<T> {
             value: None,
             raw_failure: None,
             injection_suspected: false,
+            determinism: Determinism::Exact,
             cost_usd: None,
             latency_ms: 0,
             input_tokens: 0,
@@ -61,6 +65,7 @@ impl<T> Parsed<T> {
         self.latency_ms = self.latency_ms.max(g.latency_ms.unwrap_or(0));
         self.input_tokens += g.input_tokens.unwrap_or(0);
         self.output_tokens += g.output_tokens.unwrap_or(0);
+        self.determinism = self.determinism.weakest(g.determinism);
         self.model = g.model.clone();
     }
 }

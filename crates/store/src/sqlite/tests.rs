@@ -1199,6 +1199,7 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
         parse_failures: Some(0),
         position_bias: None,
         injection_suspected: Some(true),
+        determinism: Some("best-effort".into()),
         notes: vec!["candidate spoofed a section marker".into()],
     };
     let score = Score {

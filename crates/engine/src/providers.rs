@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::retry::with_retry;
-use crate::{claude, EngineConfig, EngineError, GenOutcome, Result};
+use crate::{anthropic_api, claude, Determinism, EngineConfig, EngineError, GenOutcome, Result};
 
 /// Outbound provider calls are bounded so a black-holed/overloaded endpoint can't hang an
 /// (unbudgeted) benchmark worker forever, and a pathological body can't be buffered into memory.
@@ -26,7 +26,7 @@ const MAX_BODY_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Process-wide blocking client, built once with bounded connect/request timeouts. reqwest pools and
 /// reuses connections, so every provider call shares it.
-fn http_client() -> Result<&'static reqwest::blocking::Client> {
+pub(crate) fn http_client() -> Result<&'static reqwest::blocking::Client> {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     if let Some(client) = CLIENT.get() {
         return Ok(client);
@@ -41,7 +41,7 @@ fn http_client() -> Result<&'static reqwest::blocking::Client> {
 
 /// Map an HTTP status + body to a typed error (retryability is decided by the variant, never by
 /// string-matching the message).
-fn http_error(who: &str, status: reqwest::StatusCode, body: String) -> EngineError {
+pub(crate) fn http_error(who: &str, status: reqwest::StatusCode, body: String) -> EngineError {
     let s = status.as_u16();
     match s {
         429 => EngineError::RateLimited { who: who.to_string() },
@@ -52,7 +52,7 @@ fn http_error(who: &str, status: reqwest::StatusCode, body: String) -> EngineErr
 }
 
 /// Map a reqwest transport error to a typed error: timeouts/connect failures are retryable.
-fn send_error(who: &str, e: reqwest::Error) -> EngineError {
+pub(crate) fn send_error(who: &str, e: reqwest::Error) -> EngineError {
     if e.is_timeout() || e.is_connect() {
         EngineError::Timeout { who: who.to_string() }
     } else {
@@ -62,7 +62,7 @@ fn send_error(who: &str, e: reqwest::Error) -> EngineError {
 
 /// Read a response body with a hard size cap, erroring out if the provider streams past it instead
 /// of buffering an unbounded amount into memory.
-fn read_bounded(resp: reqwest::blocking::Response, who: &str) -> Result<String> {
+pub(crate) fn read_bounded(resp: reqwest::blocking::Response, who: &str) -> Result<String> {
     let mut buf = Vec::new();
     resp.take(MAX_BODY_BYTES + 1)
         .read_to_end(&mut buf)
@@ -104,11 +104,20 @@ pub fn generate(
 /// the same rubric over the same candidate can flip between runs, which both undermines
 /// reproducibility ("re-run the eval, get the ranking you published") and confounds the
 /// self-consistency agreement metric (disagreement should signal a genuinely ambiguous case, not
-/// sampling noise). Best-effort per provider: OpenAI gets `temperature`+`seed`, Gemini gets
-/// `generationConfig.temperature`+`seed`; the Claude CLI exposes no sampling knobs, so that path is
-/// unchanged (documented residual). A provider that rejects either strict feature (schema or the
-/// sampling params — some reasoning models refuse `temperature`) falls back once to a plain,
-/// non-deterministic schema-less call with a loud log, so judging degrades rather than hard-fails.
+/// sampling noise).
+///
+/// What each provider actually gives us — recorded on the outcome as
+/// [`Determinism`](crate::Determinism), not assumed:
+/// - **OpenAI / Gemini** — `temperature: 0` + the fixed [`JUDGE_SEED`] ⇒ `exact`.
+/// - **Anthropic with `ANTHROPIC_API_KEY`** — the bare Messages API with `temperature: 0`; the API
+///   exposes no `seed`, so `best-effort`. Still strictly better than the CLI: no ~40k-token
+///   auto-loaded context and temperature is pinned.
+/// - **Anthropic without a key** — `claude -p`, which exposes no sampling knobs at all ⇒
+///   `best-effort`, and the residual the API path exists to shrink.
+///
+/// A provider that rejects either strict feature (schema or the sampling params — some reasoning
+/// models refuse `temperature`) falls back once to a plain, non-deterministic schema-less call with
+/// a loud log, so judging degrades rather than hard-fails.
 pub fn generate_deterministic(
     cfg: &EngineConfig,
     provider: &str,
@@ -153,6 +162,12 @@ fn generate_once(
     deterministic: bool,
 ) -> Result<GenOutcome> {
     match provider {
+        // Prefer the bare Messages API when a key is present: no ~40k-token auto-loaded CLI context
+        // (DECISIONS D9) and `temperature: 0` is at least askable. Without a key the only way in is
+        // the CLI's subscription OAuth, and that path has no sampling knobs at all.
+        "anthropic" if anthropic_api::available() => {
+            anthropic_api::generate(model, system_prompt, input, schema, deterministic)
+        }
         // The Claude CLI has no sampling knobs to pass; the deterministic request is best-effort.
         "anthropic" => generate_anthropic(cfg, model, system_prompt, input, schema),
         "google" => generate_gemini(model, system_prompt, input, schema, deterministic),
@@ -186,6 +201,9 @@ fn generate_anthropic(
         latency_ms,
         input_tokens,
         output_tokens,
+        // The CLI exposes neither temperature nor seed — this is the residual the bare API path
+        // exists to shrink, and it is now stamped on the outcome instead of living in a comment.
+        determinism: Determinism::BestEffort,
     })
 }
 
@@ -273,6 +291,8 @@ fn generate_gemini(
         output_tokens: usage
             .and_then(|u| u.get("candidatesTokenCount"))
             .and_then(Value::as_u64),
+        // temperature 0 + a fixed seed were both accepted: reproducible by contract.
+        determinism: if deterministic { Determinism::Exact } else { Determinism::BestEffort },
     })
 }
 
@@ -343,6 +363,7 @@ fn generate_openai(
         output_tokens: usage
             .and_then(|u| u.get("completion_tokens"))
             .and_then(Value::as_u64),
+        determinism: if deterministic { Determinism::Exact } else { Determinism::BestEffort },
     })
 }
 

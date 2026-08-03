@@ -87,6 +87,12 @@ pub struct ScoreDetail {
     /// The judged content imitated a prompt boundary and was neutralized (see engine `fence`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub injection_suspected: Option<bool>,
+    /// `"exact"` when every sampling control the judge provider exposes was pinned (temperature 0 +
+    /// a fixed seed); `"best-effort"` when the path exposed no seed, no knobs at all, or rejected
+    /// the ones we asked for. On a best-effort verdict, cross-sample agreement partly measures
+    /// sampling noise rather than genuine ambiguity — so the number means less.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub determinism: Option<String>,
     /// Judge text not tied to a dimension (a freeform verdict's rationale, a pairwise rationale).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
