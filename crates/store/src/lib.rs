@@ -347,7 +347,7 @@ impl Admission {
 /// An event with no resolved cost still contributes `$0.00` of *stored* cost — the price book had no
 /// entry and we refuse to invent one on the row — but it is now counted in `unpriced_calls`, so the
 /// limit path can charge it by imputation instead of letting it ride for free.
-pub(crate) fn event_contribution(ev: &LlmEvent) -> Usage {
+pub fn event_contribution(ev: &LlmEvent) -> Usage {
     let cost = ev.cost_usd.unwrap_or(0.0);
     Usage {
         cost_usd: cost,
@@ -373,7 +373,7 @@ pub(crate) fn event_contribution(ev: &LlmEvent) -> Usage {
 /// **Unpriced traffic:** a `cost_usd` rule evaluates against [`Usage::cost_for_limits`], which charges
 /// calls the price book couldn't price at the window's own mean priced cost. When the window has *no*
 /// priced call at all the cap is unpriceable and an enforcing rule rejects — see [`CostEvidence`].
-pub(crate) fn evaluate_admission<F>(
+pub fn evaluate_admission<F>(
     rules: &[LimitRule],
     ev: &LlmEvent,
     contribution: Usage,
@@ -411,6 +411,42 @@ where
     Ok(Admission::from_statuses(statuses))
 }
 
+/// **Non-atomic** admission: `list_limit_rules` → `usage_since` → `insert_event` as three separate
+/// store calls with no lock spanning them.
+///
+/// This is a last resort for a backend that cannot express a check-then-insert as one critical
+/// section, and it is *named* rather than hidden inside a trait default so nobody mistakes it for an
+/// implementation: between the usage read and the insert, any concurrent ingest can insert too, so a
+/// burst can all read the same pre-burst usage and sail past the cap (check-then-act TOCTOU). A
+/// backend using it must report [`Store::admission_is_atomic`] `= false` and say so at startup — an
+/// advisory cap that reads as enforced is the bug; an honest refusal is not.
+pub fn insert_event_checked_nonatomic<S: Store + ?Sized>(
+    store: &S,
+    ev: &LlmEvent,
+) -> Result<Admission> {
+    let rules = store.list_limit_rules(&ev.project_id, true)?;
+    let now = Utc::now();
+    let admission =
+        evaluate_admission(&rules, ev, event_contribution(ev), |w, scope| match scope {
+            None => store.usage_since(&ev.project_id, w.since(now)),
+            Some(s) => store.usage_since_scoped(&ev.project_id, w.since(now), s),
+        })?;
+    if admission.admitted {
+        store.insert_event(ev)?;
+    }
+    Ok(admission)
+}
+
+/// Batch form of [`insert_event_checked_nonatomic`]: one independent (and individually non-atomic)
+/// admission per item. Cap-honest *within* the batch only because each accepted insert is committed
+/// before the next item's usage read.
+pub fn insert_events_checked_nonatomic<S: Store + ?Sized>(
+    store: &S,
+    evs: &[LlmEvent],
+) -> Vec<Result<Admission>> {
+    evs.iter().map(|e| insert_event_checked_nonatomic(store, e)).collect()
+}
+
 /// Backend-agnostic persistence interface.
 pub trait Store: Send + Sync {
     /// Create tables if they don't exist.
@@ -423,24 +459,30 @@ pub trait Store: Send + Sync {
     /// usage *including this event* and persist the event only if no enforcing (`Throttle`/`Block`)
     /// rule would be breached. Returns whether the event was admitted plus the evaluated statuses.
     ///
-    /// This is the path ingest must use so a configured cap actually caps. The default
-    /// implementation composes `list_limit_rules` + `usage_since` + `insert_event` and is **not**
-    /// atomic against concurrent ingest. Backends whose store call is a single critical section
-    /// (e.g. SQLite, which serializes all access through one locked connection) override it to make
-    /// the check-and-insert one atomic step, so a concurrent burst cannot all read pre-burst usage
-    /// and sail past the cap (check-then-act TOCTOU).
+    /// This is the path ingest must use so a configured cap actually caps. Every backend that can
+    /// express the check-and-insert as one critical section **must** override this — SQLite (one
+    /// locked connection) and Postgres (one transaction under a per-project lock) do — so a
+    /// concurrent burst cannot all read pre-burst usage and sail past the cap (check-then-act
+    /// TOCTOU).
+    ///
+    /// The default is the documented, deliberately-named last resort
+    /// [`insert_event_checked_nonatomic`]: it caps on average and leaks under contention. A backend
+    /// that inherits it must leave [`Store::admission_is_atomic`] `false` so the conformance suite,
+    /// the operator, and the startup log all agree the cap is advisory there.
     fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
-        let rules = self.list_limit_rules(&ev.project_id, true)?;
-        let now = Utc::now();
-        let admission = evaluate_admission(&rules, ev, event_contribution(ev), |w, scope| match scope
-        {
-            None => self.usage_since(&ev.project_id, w.since(now)),
-            Some(s) => self.usage_since_scoped(&ev.project_id, w.since(now), s),
-        })?;
-        if admission.admitted {
-            self.insert_event(ev)?;
-        }
-        Ok(admission)
+        insert_event_checked_nonatomic(self, ev)
+    }
+
+    /// Whether [`Store::insert_event_checked`] / [`Store::insert_events_checked`] evaluate and
+    /// persist in **one atomic step** on this backend, i.e. whether a configured cap is genuinely
+    /// enforced under concurrent ingest rather than enforced-on-average.
+    ///
+    /// Defaults to `false`: a backend is advisory until it proves otherwise, so a newly-added
+    /// backend can never inherit a claim it doesn't honor. The conformance suite reads this to
+    /// decide whether to *require* that a concurrent burst stayed under the cap or merely to report
+    /// the leak, and the API/startup surfaces it to the operator.
+    fn admission_is_atomic(&self) -> bool {
+        false
     }
 
     /// Admission-controlled **batch** ingest: evaluate + insert each event in `evs`, in order,
@@ -449,14 +491,13 @@ pub trait Store: Send + Sync {
     /// packing many events into one request. Per-item errors (e.g. a duplicate id → `Conflict`) are
     /// returned in that item's slot rather than aborting the whole batch.
     ///
-    /// The default loops [`Store::insert_event_checked`] and is **not** one critical section (each
-    /// item is its own transaction); it is nonetheless cap-honest for backends that commit each
-    /// insert before the next admission read (Postgres/Firestore stance — a single-transaction port
-    /// is a handoff). SQLite overrides it to hold its one connection lock for the whole batch so the
-    /// entire check-and-insert sequence is atomic (previously-accepted items are already visible to
-    /// the next item's usage read).
+    /// The default ([`insert_events_checked_nonatomic`]) loops the per-item non-atomic path and is
+    /// **not** one critical section; it inherits that path's TOCTOU leak against *concurrent*
+    /// ingest, and is only cap-honest within its own batch. SQLite (one connection lock + one
+    /// transaction) and Postgres (one transaction under a per-project lock) override it so the whole
+    /// sequence is atomic and each accepted item is visible to the next item's usage read.
     fn insert_events_checked(&self, evs: &[LlmEvent]) -> Vec<Result<Admission>> {
-        evs.iter().map(|e| self.insert_event_checked(e)).collect()
+        insert_events_checked_nonatomic(self, evs)
     }
 
     /// Most recent events, newest first, optionally filtered by project.

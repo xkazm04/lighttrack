@@ -14,14 +14,21 @@ use crate::util::{fmt_ts, parse_enum, parse_ts, pgerr};
 
 const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
     operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
-    latency_ms, status, error, input, output, tags, source, metadata, name";
+    latency_ms, status, error, input, output, tags, source, metadata, name, \
+    COALESCE(received_at, ts) AS received_at";
+
+/// Windowed accounting keys on **`received_at`** (server arrival), never the client's `ts`, so a
+/// skewed or deliberately backdated clock cannot slide spend outside the window a cap is evaluated
+/// over. `COALESCE` keeps rows written before the column existed (backfilled by the schema, but the
+/// coalesce also covers a row inserted by an older binary mid-deploy) counted at their `ts`.
+pub(crate) const RECEIVED: &str = "COALESCE(received_at, ts)";
 
 /// Rolling-usage aggregates, mirroring the SQLite reference (`sqlite/events.rs::USAGE_COLS`). Beyond
 /// the three totals it reports cost *provenance*: how many calls carried no price at all (the price
 /// book had no entry — we never write a phantom zero onto the row) and how much of the sum the client
 /// self-reported. The limit path charges unpriced calls by imputation instead of letting them cost
 /// `$0.00`, and surfaces the client-reported share.
-const USAGE_COLS: &str = "COALESCE(SUM(cost_usd),0.0), COUNT(*), \
+pub(crate) const USAGE_COLS: &str = "COALESCE(SUM(cost_usd),0.0), COUNT(*), \
      COALESCE(SUM(input_tokens + output_tokens),0)::bigint, \
      COUNT(*) FILTER (WHERE cost_usd IS NULL)::bigint, \
      COALESCE(SUM(cost_usd) FILTER (WHERE (NULLIF(metadata,'')::jsonb)->>'cost_source' = 'client'),0.0)";
@@ -33,7 +40,7 @@ const USAGE_COLS: &str = "COALESCE(SUM(cost_usd),0.0), COUNT(*), \
 // becomes reachable, move the provenance sum out of the admission query rather than widening the
 // cast — enforcement must never depend on parsing a free-form column.
 
-fn map_usage(row: &PgRow) -> Result<Usage> {
+pub(crate) fn map_usage(row: &PgRow) -> Result<Usage> {
     Ok(Usage {
         cost_usd: row.try_get(0).map_err(pgerr)?,
         calls: row.try_get(1).map_err(pgerr)?,
@@ -46,7 +53,7 @@ fn map_usage(row: &PgRow) -> Result<Usage> {
 /// Map a failed event insert to a typed error: SQLSTATE 23505 (unique violation — a duplicate
 /// event `id`) becomes [`StoreError::Conflict`] so the API returns 409, not an opaque 500.
 /// Mirrors the SQLite backend's `insert_err`.
-fn insert_err(e: sqlx::Error, id: &str) -> StoreError {
+pub(crate) fn insert_err(e: sqlx::Error, id: &str) -> StoreError {
     if let sqlx::Error::Database(db) = &e {
         if db.code().as_deref() == Some("23505") {
             return StoreError::Conflict(format!("event '{id}' already exists"));
@@ -56,6 +63,17 @@ fn insert_err(e: sqlx::Error, id: &str) -> StoreError {
 }
 
 pub(crate) async fn insert(pool: &PgPool, ev: &LlmEvent) -> Result<()> {
+    insert_query(ev)?.execute(pool).await.map_err(|e| insert_err(e, &ev.id))?;
+    Ok(())
+}
+
+/// The event INSERT as a *value*, so the same statement (and the same column list) serves both the
+/// pooled write above and the admission transaction in [`crate::admission`] — the alternative,
+/// a second hand-maintained INSERT, is how a column ends up written on one path and not the other.
+/// Every bind is owned, hence `'static`.
+pub(crate) fn insert_query(
+    ev: &LlmEvent,
+) -> Result<sqlx::query::Query<'static, sqlx::Postgres, sqlx::postgres::PgArguments>> {
     let tags = serde_json::to_string(&ev.tags)?;
     let metadata = if ev.metadata.is_null() {
         None
@@ -70,12 +88,12 @@ pub(crate) async fn insert(pool: &PgPool, ev: &LlmEvent) -> Result<()> {
         Some(v) => Some(serde_json::to_string(v)?),
         None => None,
     };
-    sqlx::query(
+    Ok(sqlx::query(
         "INSERT INTO events (id, project_id, trace_id, span_id, parent_span_id, ts, \
          provider, model, operation, input_tokens, output_tokens, cached_input_tokens, \
          reasoning_tokens, cost_usd, latency_ms, status, error, input, output, tags, \
-         source, metadata, name) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)",
+         source, metadata, name, received_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)",
     )
     .bind(ev.id.clone())
     .bind(ev.project_id.clone())
@@ -100,10 +118,7 @@ pub(crate) async fn insert(pool: &PgPool, ev: &LlmEvent) -> Result<()> {
     .bind(ev.source.clone())
     .bind(metadata)
     .bind(ev.name.clone())
-    .execute(pool)
-    .await
-    .map_err(|e| insert_err(e, &ev.id))?;
-    Ok(())
+    .bind(fmt_ts(ev.received_at)))
 }
 
 pub(crate) async fn list(pool: &PgPool, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
@@ -277,7 +292,8 @@ pub(crate) async fn usage_since_scoped(
         LimitScope::Name(_) => "name",
     };
     let sql = format!(
-        "SELECT {USAGE_COLS} FROM events WHERE project_id = $1 AND ts >= $2 AND {column} = $3"
+        "SELECT {USAGE_COLS} FROM events \
+         WHERE project_id = $1 AND {RECEIVED} >= $2 AND {column} = $3"
     );
     let row = sqlx::query(&sql)
         .bind(project.to_string())
@@ -343,7 +359,7 @@ pub(crate) async fn usage_since(
     since: chrono::DateTime<chrono::Utc>,
 ) -> Result<Usage> {
     let row = sqlx::query(&format!(
-        "SELECT {USAGE_COLS} FROM events WHERE project_id = $1 AND ts >= $2"
+        "SELECT {USAGE_COLS} FROM events WHERE project_id = $1 AND {RECEIVED} >= $2"
     ))
     .bind(project.to_string())
     .bind(fmt_ts(since))
@@ -374,6 +390,7 @@ fn from_row(row: &PgRow) -> Result<LlmEvent> {
     let output: Option<String> = row.try_get(18).map_err(pgerr)?;
     let tags: Option<String> = row.try_get(19).map_err(pgerr)?;
     let metadata: Option<String> = row.try_get(21).map_err(pgerr)?;
+    let received_at: String = row.try_get(23).map_err(pgerr)?;
 
     Ok(LlmEvent {
         id: row.try_get(0).map_err(pgerr)?,
@@ -382,10 +399,7 @@ fn from_row(row: &PgRow) -> Result<LlmEvent> {
         span_id: row.try_get(3).map_err(pgerr)?,
         parent_span_id: row.try_get(4).map_err(pgerr)?,
         ts: parse_ts(&ts)?,
-        // This backend has no `received_at` column yet: mirror the SQLite migration's backfill
-        // (arrival time == event time) so the shared type is populated honestly. Mechanical only —
-        // the Postgres owner ports the column + the windowed-accounting switch.
-        received_at: parse_ts(&ts)?,
+        received_at: parse_ts(&received_at)?,
         provider: parse_enum::<Provider>(&provider),
         model: row.try_get(7).map_err(pgerr)?,
         name: row.try_get(22).map_err(pgerr)?,

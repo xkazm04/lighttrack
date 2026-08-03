@@ -11,6 +11,7 @@
 //! `relay`), mirroring the SQLite backend's layout. `claim_job` and the relay `lease` use
 //! `FOR UPDATE SKIP LOCKED … RETURNING` for concurrency-safe atomic dequeues.
 
+mod admission;
 mod benchmarks;
 mod datasets;
 mod events;
@@ -34,7 +35,7 @@ use lighttrack_core::{
     Score,
 };
 use lighttrack_store::{
-    CostRow, EventFilter, EventPage, Result, Store, StoreError, Usage, UseCaseCostRow,
+    Admission, CostRow, EventFilter, EventPage, Result, Store, StoreError, Usage, UseCaseCostRow,
 };
 
 use util::pgerr;
@@ -80,6 +81,17 @@ impl Store for PgStore {
     // --- events ---
     fn insert_event(&self, ev: &LlmEvent) -> Result<()> {
         self.rt.block_on(events::insert(&self.pool, ev))
+    }
+    fn admission_is_atomic(&self) -> bool {
+        // Check-and-insert is one transaction, serialized per project by a transaction-scoped
+        // advisory lock — across every API process sharing the database. See `admission`.
+        true
+    }
+    fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
+        self.rt.block_on(admission::insert_event_checked(&self.pool, ev))
+    }
+    fn insert_events_checked(&self, evs: &[LlmEvent]) -> Vec<Result<Admission>> {
+        self.rt.block_on(admission::insert_events_checked(&self.pool, evs))
     }
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
         self.rt.block_on(events::list(&self.pool, project, limit))

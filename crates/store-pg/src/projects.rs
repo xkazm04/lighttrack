@@ -119,7 +119,7 @@ pub(crate) async fn set_key_revoked(pool: &PgPool, id: &str, revoked: bool) -> R
 // --- limit rules ------------------------------------------------------------
 
 /// The columns a rule row exposes, in the order [`limit_rule_from_row`] reads them.
-const LIMIT_COLS: &str =
+pub(crate) const LIMIT_COLS: &str =
     "id, project_id, metric, \"window\", threshold, action, enabled, warn_at, scope_kind, scope_value";
 
 /// Split an optional scope into its `(kind, value)` column pair (both `None` when unscoped).
@@ -236,7 +236,7 @@ fn api_key_from_row(row: &PgRow) -> Result<ApiKey> {
     })
 }
 
-fn limit_rule_from_row(row: &PgRow) -> Result<LimitRule> {
+pub(crate) fn limit_rule_from_row(row: &PgRow) -> Result<LimitRule> {
     let metric: String = row.try_get(2).map_err(pgerr)?;
     let window: String = row.try_get(3).map_err(pgerr)?;
     let action: String = row.try_get(5).map_err(pgerr)?;

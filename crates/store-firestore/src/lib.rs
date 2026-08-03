@@ -30,7 +30,8 @@ use lighttrack_core::{
     Score,
 };
 use lighttrack_store::{
-    CostRow, EventFilter, EventPage, Result, Store, StoreError, Usage, UseCaseCostRow,
+    insert_event_checked_nonatomic, insert_events_checked_nonatomic, Admission, CostRow,
+    EventFilter, EventPage, Result, Store, StoreError, Usage, UseCaseCostRow,
 };
 
 use rest::Rest;
@@ -61,6 +62,15 @@ impl FirestoreStore {
             ),
         };
         let base = format!("{host}/v1/projects/{project}/databases/(default)/documents");
+        // Say it out loud, once, where an operator configuring caps will see it. Firestore has no
+        // server-side aggregate this backend can evaluate and write inside one transaction (usage is
+        // summed client-side from a document scan), so admission here is check-then-act. An advisory
+        // cap that reads as enforced is the failure mode we refuse; an honest warning is not.
+        eprintln!(
+            "lighttrack-store-firestore: usage caps are ADVISORY on this backend — admission is not \
+             atomic, so a concurrent burst can exceed a cap before it takes effect. Postgres \
+             (LIGHTTRACK_DATABASE_URL=postgres://…) enforces caps atomically."
+        );
         Ok(Self {
             rest: Rest::new(base, token),
         })
@@ -75,6 +85,19 @@ impl Store for FirestoreStore {
 
     fn insert_event(&self, ev: &LlmEvent) -> Result<()> {
         events::insert_event(&self.rest, ev)
+    }
+    /// Left `false` deliberately (see the warning in [`FirestoreStore::connect`]): admission here is
+    /// check-then-act, so the conformance suite reports the leak instead of pretending it enforces.
+    fn admission_is_atomic(&self) -> bool {
+        false
+    }
+    /// Spelled out rather than inherited, so the non-atomic path is a visible choice in this backend
+    /// rather than a trait default nobody remembered was there.
+    fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
+        insert_event_checked_nonatomic(self, ev)
+    }
+    fn insert_events_checked(&self, evs: &[LlmEvent]) -> Vec<Result<Admission>> {
+        insert_events_checked_nonatomic(self, evs)
     }
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
         events::list_events(&self.rest, project, limit)

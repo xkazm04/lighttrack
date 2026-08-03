@@ -48,11 +48,29 @@ CREATE TABLE IF NOT EXISTS events (
   tags                TEXT,
   source              TEXT,
   metadata            TEXT,
-  name                TEXT
+  name                TEXT,
+  -- Server-stamped arrival time (fixed-width RFC3339 UTC, like `ts`). `ts` is CLIENT event time and
+  -- may be skewed or deliberately backdated; every rolling-window accounting read (limit admission)
+  -- keys on `received_at` so one wrong clock cannot move a budget window.
+  received_at         TEXT
 );
 -- Existing deployments predate the `name` column (use-case attribution); idempotent on fresh DBs.
 ALTER TABLE events ADD COLUMN IF NOT EXISTS name TEXT;
+-- …and predate `received_at`. ADD COLUMN must come BEFORE any index over the column: an index on a
+-- not-yet-added column fails the whole schema batch on every existing deployment.
+ALTER TABLE events ADD COLUMN IF NOT EXISTS received_at TEXT;
+-- Backfill arrival time to event time for pre-migration rows (the reads COALESCE too, so the two
+-- agree either way). The partial index makes the backfill index-driven and, once it has run, empty —
+-- so re-running the schema batch on every boot costs a lookup instead of a seq scan over `events`.
+CREATE INDEX IF NOT EXISTS idx_events_received_backfill ON events(id) WHERE received_at IS NULL;
+UPDATE events SET received_at = ts WHERE received_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_events_project_ts ON events(project_id, ts);
+-- Windowed accounting (admission's usage_since / usage_since_scoped) filters on server arrival time,
+-- not client `ts`. It is indexed on the *expression the queries use* — a plain (project_id,
+-- received_at) index cannot serve `COALESCE(received_at, ts) >= $2`, and admission runs this query
+-- on every ingested event, inside the per-project admission lock.
+CREATE INDEX IF NOT EXISTS idx_events_project_received
+  ON events(project_id, COALESCE(received_at, ts));
 CREATE INDEX IF NOT EXISTS idx_events_trace ON events(trace_id);
 
 CREATE TABLE IF NOT EXISTS limit_rules (

@@ -93,11 +93,27 @@ window a cap is evaluated over. The client's `ts` is preserved verbatim (and sti
 and the cost rollups are windowed by); it is merely validated against a skew bound
 (`LIGHTTRACK_MAX_TS_SKEW_FUTURE_SECS`, default 5 min; `LIGHTTRACK_MAX_TS_SKEW_PAST_SECS`, default 7 days;
 `LIGHTTRACK_MAX_TS_SKEW_SECS=0` disables both), which rejects with the distinct codes `ts_too_new` /
-`ts_too_old`. Postgres and Firestore have not ported the column yet: there `received_at` reads back equal
-to `ts` and their windowed accounting is still ts-keyed.
+`ts_too_old`. SQLite and Postgres both carry the column (Postgres via an additive migration that
+backfills `received_at = ts`, with the reads coalescing either way). **Firestore** has not ported it:
+there `received_at` reads back equal to `ts` and its windowed accounting is still ts-keyed.
 
 The check and the insert are **one atomic store step**, so a concurrent burst can't all read the same
-pre-burst usage and race past the cap (check-then-act TOCTOU). Actions are three genuinely different
+pre-burst usage and race past the cap (check-then-act TOCTOU). How each backend gets there — and where
+it doesn't — is reported by `Store::admission_is_atomic()` and pinned by a conformance check that fires
+eight simultaneous admissions at one cap:
+
+| backend | mechanism | atomic |
+|---|---|---|
+| SQLite | one locked write connection + the usage cache held across check-count-insert; one transaction per batch | yes (single process per database file) |
+| Postgres | one transaction per admission (per batch for the batch path), serialized per project by a transaction-scoped advisory lock taken as its first statement; each batch item in its own SAVEPOINT so a per-item `Conflict` can't abort the transaction | yes (across every API process sharing the database) |
+| Firestore | usage is summed client-side from a document scan, which it cannot evaluate-and-write in one transaction — it uses the trait's explicitly-named `insert_event_checked_nonatomic` | **no — caps are advisory**, warned at startup and reported by the conformance suite |
+
+Postgres takes a per-project advisory lock rather than `SERIALIZABLE` because admission is the ingest
+hot path: under `SERIALIZABLE` a burst on one project would abort and retry itself repeatedly (each
+retry re-reading the whole window), whereas the lock makes the waiters queue — the cost of contention
+is latency on one project, never lost enforcement, and other projects are unaffected.
+
+Actions are three genuinely different
 tiers: **Alert** (notify only — the event is still recorded), **Throttle** (graduated — see §7c), and
 **Block** (an unambiguous hard stop at the threshold). Both enforcing tiers reject with **429
 `rate_limited`** and do *not* record the event, so a cooperating client backs off; the breach is also

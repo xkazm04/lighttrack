@@ -186,6 +186,11 @@ impl Store for SqliteStore {
     fn insert_event(&self, ev: &LlmEvent) -> Result<()> {
         self.with(|c| events::insert(c, ev))
     }
+    fn admission_is_atomic(&self) -> bool {
+        // One locked write connection (+ the usage-cache lock) spans check-count-insert, within a
+        // single process. The multi-process caveat is documented in docs/ARCHITECTURE.md.
+        true
+    }
     fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
         // Lock the usage cache *before* the connection (consistent order in both admission methods,
         // so no deadlock) and hold both across the check-count-insert — one atomic critical section.
