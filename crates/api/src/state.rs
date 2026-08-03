@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use lighttrack_billing::BillingRegistry;
 use lighttrack_core::{PriceBook, Redaction};
@@ -34,11 +35,10 @@ pub(crate) struct AppState {
     /// Optional PII redaction of captured input/output on ingest, configured from env.
     pub(crate) redact: Arc<Redactor>,
     /// Per-project payload-persistence policies (the stored `Project.redaction` field), cached so the
-    /// ingest hot path doesn't pay a store read per event. Warmed from `list_projects()` at startup,
-    /// updated on project create, and back-filled lazily on first sight of an unknown project (see
-    /// [`redaction_policy_for`]). Single-API-instance authoritative — matching the store's
-    /// one-writer architecture; a multi-replica deploy would need a TTL or invalidation bus.
-    pub(crate) redaction_policies: Arc<RwLock<HashMap<String, Redaction>>>,
+    /// ingest hot path doesn't pay a store read per event. See [`RedactionCache`] for the freshness
+    /// contract — this used to be a plain map that never invalidated, which meant *tightening* a
+    /// project's redaction for compliance did nothing until the process restarted.
+    pub(crate) redaction_policies: Arc<RedactionCache>,
     /// Configured billing-webhook sources (Stripe/Polar), keyed by provider.
     pub(crate) billing: Arc<BillingRegistry>,
     /// In-process idempotency for webhook deliveries — collapses provider retries / duplicate
@@ -53,13 +53,71 @@ pub(crate) struct AppState {
     pub(crate) rejections: Arc<RejectionLedger>,
 }
 
-/// The payload-persistence policy for `pid`, from the cache — falling back to one store read on the
-/// first sight of a project the cache doesn't know (then remembered, including the "no project row"
-/// default, so the miss is paid once per project per process). This is what makes the stored
-/// `Project.redaction` field an *enforced* policy on ingest instead of a decorative column.
+/// Env: how long a cached redaction policy may be served before it is re-read from the store.
+/// `0` disables caching entirely (every ingest re-reads the project). Default [`DEFAULT_POLICY_TTL`].
+const ENV_POLICY_TTL: &str = "LIGHTTRACK_REDACTION_CACHE_TTL_SECS";
+const DEFAULT_POLICY_TTL: Duration = Duration::from_secs(60);
+
+/// Read-through cache of per-project payload-persistence policies, with two independent freshness
+/// guarantees — a redaction policy is a *compliance* control, so "eventually, after a restart" is not
+/// an acceptable propagation story:
+///
+/// 1. **Explicit invalidation.** `PUT /v1/projects/:id` drops the entry, so a tightening made through
+///    this instance takes effect on the very next event (see [`RedactionCache::invalidate`]).
+/// 2. **A TTL bound.** Entries expire after [`ENV_POLICY_TTL`], which bounds staleness for changes
+///    this instance did *not* make — another replica's write, or a direct DB edit. This is the slice:
+///    a bounded window, not a cross-replica invalidation bus.
+pub(crate) struct RedactionCache {
+    entries: RwLock<HashMap<String, (Redaction, Instant)>>,
+    ttl: Duration,
+}
+
+impl RedactionCache {
+    /// Build a cache pre-warmed with the policies read at startup, with the TTL resolved from env.
+    pub(crate) fn new(warm: HashMap<String, Redaction>) -> Self {
+        let ttl = std::env::var(ENV_POLICY_TTL)
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_POLICY_TTL);
+        let now = Instant::now();
+        let entries = warm.into_iter().map(|(k, v)| (k, (v, now))).collect();
+        Self { entries: RwLock::new(entries), ttl }
+    }
+
+    /// The cached policy for `pid`, or `None` when absent or expired.
+    fn get_fresh(&self, pid: &str) -> Option<Redaction> {
+        if self.ttl.is_zero() {
+            return None;
+        }
+        let entries = self.entries.read().ok()?;
+        let (policy, stamped) = entries.get(pid)?;
+        (stamped.elapsed() < self.ttl).then_some(*policy)
+    }
+
+    /// Remember `policy` for `pid`, restamping its freshness clock.
+    pub(crate) fn put(&self, pid: &str, policy: Redaction) {
+        if let Ok(mut e) = self.entries.write() {
+            e.insert(pid.to_string(), (policy, Instant::now()));
+        }
+    }
+
+    /// Forget `pid` so the next ingest re-reads it from the store. Called when a project is updated
+    /// through this instance — the path that makes a tightening effective *immediately*.
+    pub(crate) fn invalidate(&self, pid: &str) {
+        if let Ok(mut e) = self.entries.write() {
+            e.remove(pid);
+        }
+    }
+}
+
+/// The payload-persistence policy for `pid`, from the cache — falling back to one store read when the
+/// cache has no fresh answer (then remembered, including the "no project row" default, so a hot
+/// project costs at most one read per TTL). This is what makes the stored `Project.redaction` field an
+/// *enforced* policy on ingest instead of a decorative column.
 pub(crate) async fn redaction_policy_for(st: &AppState, pid: &str) -> Result<Redaction, ApiError> {
-    if let Some(p) = st.redaction_policies.read().unwrap().get(pid) {
-        return Ok(*p);
+    if let Some(p) = st.redaction_policies.get_fresh(pid) {
+        return Ok(p);
     }
     let store = st.store.clone();
     let id = pid.to_string();
@@ -67,7 +125,7 @@ pub(crate) async fn redaction_policy_for(st: &AppState, pid: &str) -> Result<Red
         .await?
         .map(|p| p.redaction)
         .unwrap_or_default();
-    st.redaction_policies.write().unwrap().insert(pid.to_string(), policy);
+    st.redaction_policies.put(pid, policy);
     Ok(policy)
 }
 

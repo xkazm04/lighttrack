@@ -254,6 +254,9 @@ fn from_fields(m: &Fields) -> Result<LlmEvent> {
         span_id: fstr(m, "span_id"),
         parent_span_id: fstr(m, "parent_span_id"),
         ts: parse_ts(&freq(m, "ts")?)?,
+        // No `received_at` field on this backend yet: mirror the SQLite migration's backfill
+        // (arrival time == event time). Mechanical only — the Firestore owner ports the real field.
+        received_at: parse_ts(&fstr(m, "received_at").unwrap_or(freq(m, "ts")?))?,
         provider: parse_enum(&freq(m, "provider")?),
         model: freq(m, "model")?,
         name: fstr(m, "name"),

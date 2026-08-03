@@ -26,6 +26,23 @@ pub(super) fn create(conn: &Connection, p: &Project) -> Result<()> {
     Ok(())
 }
 
+/// Replace a project's mutable fields. `id` and `created_at` are immutable, so they are the match key
+/// and are never written.
+pub(super) fn update(conn: &Connection, p: &Project) -> Result<bool> {
+    let n = conn.execute(
+        "UPDATE projects SET name = ?2, enabled = ?3, redaction = ?4, collective_opt_in = ?5 \
+         WHERE id = ?1",
+        params![
+            p.id,
+            p.name,
+            p.enabled as i64,
+            enum_to_str(&p.redaction)?,
+            p.collective_opt_in as i64,
+        ],
+    )?;
+    Ok(n > 0)
+}
+
 pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Project>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, enabled, redaction, collective_opt_in, created_at \

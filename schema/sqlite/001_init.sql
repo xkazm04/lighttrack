@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS events (
   span_id             TEXT,
   parent_span_id      TEXT,
   ts                  TEXT NOT NULL,
+  -- Server-stamped arrival time (fixed-width RFC3339 UTC, like `ts`). `ts` is CLIENT event time and
+  -- may be skewed/backdated; every rolling-window accounting read (limit admission, forecast series)
+  -- keys on `received_at` so one wrong clock cannot move a budget window. Backfilled to `ts` for
+  -- rows written before the column existed (see SqliteStore::init_schema).
+  received_at         TEXT,
   provider            TEXT NOT NULL,
   model               TEXT NOT NULL,
   operation           TEXT NOT NULL DEFAULT 'chat',
@@ -50,6 +55,9 @@ CREATE TABLE IF NOT EXISTS events (
   metadata            TEXT         -- JSON
 );
 CREATE INDEX IF NOT EXISTS idx_events_project_ts ON events(project_id, ts);
+-- Windowed accounting (usage_since / usage_since_scoped / the daily forecast series) filters on
+-- server arrival time, not client `ts`, so it needs its own composite.
+CREATE INDEX IF NOT EXISTS idx_events_project_received ON events(project_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_events_trace ON events(trace_id);
 -- Composite for the project-scoped trace rollup (list_trace_summaries): filter project_id + group
 -- by trace_id without a full scan. Single-column idx_events_trace still serves the project-agnostic

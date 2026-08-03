@@ -1,8 +1,11 @@
 //! Daily (UTC) usage/cost time-series for predictive forecasting.
 //!
-//! The day bucket is `substr(ts, 1, 10)` — the `YYYY-MM-DD` prefix of the fixed-width RFC3339
-//! timestamp. Because every backend stores `ts` in UTC via [`crate::codec::fmt_ts`], that prefix is
-//! the UTC calendar day, and grouping by it is correct without any date-math in SQL. Cost is summed
+//! The day bucket is `substr(received_at, 1, 10)` — the `YYYY-MM-DD` prefix of the fixed-width
+//! RFC3339 timestamp. Because every backend stores timestamps in UTC via [`crate::codec::fmt_ts`],
+//! that prefix is the UTC calendar day, and grouping by it is correct without any date-math in SQL.
+//! The series buckets on **server arrival time**, not the client-supplied `ts`: a forecast that a
+//! caller could reshape by backdating its own events would not be worth acting on (and it feeds the
+//! same budget-breach math admission enforces). Cost is summed
 //! straight off `events`, so it's COGS-correct by construction (judge/benchmark spend lives in
 //! `scores`, never `events`) — the same property the margin rollups rely on.
 
@@ -19,9 +22,11 @@ pub(super) fn daily_usage(
     since: DateTime<Utc>,
     until: DateTime<Utc>,
 ) -> Result<Vec<DailyUsage>> {
-    let sql = "SELECT substr(ts,1,10) AS day, COALESCE(SUM(cost_usd),0.0) AS cost, \
-               COUNT(*) AS calls, COALESCE(SUM(input_tokens + output_tokens),0) AS tokens \
-               FROM events WHERE project_id = ?1 AND ts >= ?2 AND ts < ?3 \
+    let sql = "SELECT substr(COALESCE(received_at, ts),1,10) AS day, \
+               COALESCE(SUM(cost_usd),0.0) AS cost, COUNT(*) AS calls, \
+               COALESCE(SUM(input_tokens + output_tokens),0) AS tokens \
+               FROM events WHERE project_id = ?1 \
+               AND COALESCE(received_at, ts) >= ?2 AND COALESCE(received_at, ts) < ?3 \
                GROUP BY day ORDER BY day ASC";
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt
@@ -52,9 +57,11 @@ pub(super) fn daily_cost_by_dimension(
         _ => "$.customer_id",
     };
     let sql = format!(
-        "SELECT substr(ts,1,10) AS day, json_extract(metadata, '{path}') AS k, \
+        "SELECT substr(COALESCE(received_at, ts),1,10) AS day, \
+         json_extract(metadata, '{path}') AS k, \
          COALESCE(SUM(cost_usd),0.0) AS cost, COUNT(*) AS calls \
-         FROM events WHERE {proj} AND ts >= ?2 AND ts < ?3 \
+         FROM events WHERE {proj} \
+         AND COALESCE(received_at, ts) >= ?2 AND COALESCE(received_at, ts) < ?3 \
          GROUP BY day, k ORDER BY day ASC",
         proj = super::project_pred(project),
     );
@@ -86,14 +93,18 @@ mod tests {
         c
     }
 
+    /// The series buckets on server arrival time, so a fixture event's `received_at` is what places
+    /// it in a day — set both to `ts` here (the migration's backfill semantics).
     fn ev(customer: &str, cost: f64, ts: &str) -> LlmEvent {
-        serde_json::from_value(json!({
+        let mut e: LlmEvent = serde_json::from_value(json!({
             "id": format!("e-{customer}-{ts}"), "project_id": "p1",
             "provider": "anthropic", "model": "claude-haiku-4-5",
             "ts": ts, "cost_usd": cost, "usage": { "input": 10, "output": 5 },
             "metadata": { "customer_id": customer }
         }))
-        .unwrap()
+        .unwrap();
+        e.received_at = e.ts;
+        e
     }
 
     #[test]

@@ -13,7 +13,8 @@ The heart of the system. Emitted by monitored apps, normalized + costed by `api`
 | `trace_id` | string? | groups multiple calls in one logical operation (OTel-aligned) |
 | `span_id` | string? | this call's span |
 | `parent_span_id` | string? | parent span, for nested agent calls |
-| `ts` | timestamp | when the call happened |
+| `ts` | timestamp | when the call happened, **as the client reports it**. Queryable/orderable; drives `since`/`until` on `GET /v1/events`, traces, and the cost/use-case rollups. Rejected on ingest when it is further than the configured skew window from server time (`ts_too_old` / `ts_too_new`, HTTP 400). |
+| `received_at` | timestamp | when the API accepted the call — **server-stamped, never read from the request body**. Every rolling-window accounting read keys on this: limit admission, `GET /v1/limits/status`, and the daily forecast series. That split is deliberate: a client owns its `ts`, so if budgets were measured on it a single wrong clock would silently corrupt enforcement. Rows written before this column existed are backfilled to `received_at = ts`. |
 | `provider` | string | `openai` \| `anthropic` \| `google` \| `unknown` |
 | `model` | string | e.g. `gpt-4.1`, `claude-opus-4-8`, `gemini-2.5-pro` |
 | `operation` | string | `chat` \| `completion` \| `embedding` \| `other` |
@@ -60,7 +61,14 @@ through the same `event_id → trace_id` path the read side joins on — no per-
 | `name` | string | |
 | `enabled` | bool | |
 | `redaction` | string | `none` \| `hash` \| `drop` — how to store prompts/outputs |
-| `created_at` | timestamp | |
+| `created_at` | timestamp | immutable |
+
+Mutable fields are editable via `PUT /v1/projects/:id` (admin; omitted fields are left as-is). The
+ingest path caches `redaction` per project so it doesn't pay a store read per event; because that field
+is a *compliance* control, the cache has two freshness guarantees: an update through this API
+invalidates the entry, so a tightening binds the **next** event with no restart, and every entry expires
+after `LIGHTTRACK_REDACTION_CACHE_TTL_SECS` (default 60; `0` disables caching), which bounds staleness
+for changes made by another replica or directly in the DB.
 
 ## `api_keys`
 | Field | Type | Notes |

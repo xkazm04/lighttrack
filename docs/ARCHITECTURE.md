@@ -79,8 +79,17 @@ against provider pricing pages** before trusting cost dashboards.
 ## 7. Limits (incoming traffic trips them; judge is exempt)
 `LimitRule { project_id, metric: cost|calls|tokens, window: hour|day|month, threshold, action }`.
 Ingest is **admission-controlled**: `POST /v1/events` evaluates the matching rules against rolling usage
-*including the candidate event* and inserts it in **one atomic store step**, so a concurrent burst can't
-all read the same pre-burst usage and race past the cap (check-then-act TOCTOU). Actions: **Alert**
+*including the candidate event*. Every rolling window is measured on the server-stamped `received_at`,
+never on the client's `ts` — otherwise one caller with a skewed clock could slide its spend outside the
+window a cap is evaluated over. The client's `ts` is preserved verbatim (and still what listings, traces
+and the cost rollups are windowed by); it is merely validated against a skew bound
+(`LIGHTTRACK_MAX_TS_SKEW_FUTURE_SECS`, default 5 min; `LIGHTTRACK_MAX_TS_SKEW_PAST_SECS`, default 7 days;
+`LIGHTTRACK_MAX_TS_SKEW_SECS=0` disables both), which rejects with the distinct codes `ts_too_new` /
+`ts_too_old`. Postgres and Firestore have not ported the column yet: there `received_at` reads back equal
+to `ts` and their windowed accounting is still ts-keyed.
+
+The check and the insert are **one atomic store step**, so a concurrent burst can't all read the same
+pre-burst usage and race past the cap (check-then-act TOCTOU). Actions: **Alert**
 (notify only — the event is still recorded), **Throttle** and **Block** (both **enforced** — a breaching
 event is rejected with **429 `rate_limited`** and *not* recorded, so a cooperating client backs off; the
 breach is also readable via `GET /v1/limits/status` and MCP). Inline *pre-call* blocking (before the

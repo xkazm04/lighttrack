@@ -59,7 +59,7 @@ pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
         rejections: Arc::new(crate::rejections::RejectionLedger::new()),
         // Empty cache: policies are back-filled lazily from the store on first sight, which is also
         // the path these tests exercise.
-        redaction_policies: Arc::new(RwLock::new(HashMap::new())),
+        redaction_policies: Arc::new(crate::state::RedactionCache::new(HashMap::new())),
     };
     (state, store)
 }
@@ -157,6 +157,90 @@ async fn project_persistence_policy_is_enforced_on_ingest() {
     let digest = rows[0].input.as_ref().and_then(|v| v.get("sha256")).and_then(Value::as_str);
     assert_eq!(digest.map(str::len), Some(64), "input replaced by a sha256 digest");
     assert!(rows[0].output.as_ref().and_then(|v| v.get("sha256")).is_some());
+}
+
+#[tokio::test]
+async fn tightening_redaction_takes_effect_on_the_next_event_without_a_restart() {
+    // The compliance hole this closes: the ingest-path policy cache used to be warmed once and never
+    // invalidated, so turning payload persistence OFF for a project did nothing until the process was
+    // restarted — the window in which you most need it to work is exactly the window it didn't.
+    let (state, store) = setup(Redactor::off());
+    let key = make_key_with_redaction(&store, "proj-a", Redaction::None);
+    let app = crate::build_router(state);
+
+    let payload = |id: &str| {
+        json!({
+            "id": id, "provider": "anthropic", "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 }, "cost_usd": 0.0,
+            "input": { "q": "the secret prompt" }
+        })
+    };
+
+    // Before: `none` → the payload is persisted verbatim, and the policy is now cached.
+    let (s1, _) = ingest(&app, &key, payload("before")).await;
+    assert_eq!(s1, StatusCode::OK);
+    let before = store.get_event("before").unwrap().unwrap();
+    assert!(before.input.is_some(), "baseline: `none` persists the payload");
+
+    // Tighten it through the API (admin).
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/v1/projects/proj-a")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer admin-secret")
+        .body(Body::from(json!({ "redaction": "drop" }).to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let updated: Value =
+        serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(updated["redaction"], "drop");
+    assert_eq!(updated["name"], "proj-a", "omitted fields are left alone");
+
+    // After: the very NEXT event obeys the new policy — no restart, no TTL wait.
+    let (s2, _) = ingest(&app, &key, payload("after")).await;
+    assert_eq!(s2, StatusCode::OK);
+    let after = store.get_event("after").unwrap().unwrap();
+    assert!(after.input.is_none(), "a tightened policy must bind the next event, not the next boot");
+    assert_eq!(after.usage.input, 10, "metering is untouched by the persistence policy");
+}
+
+#[tokio::test]
+async fn client_ts_skew_is_rejected_with_distinct_codes_and_cannot_move_a_window() {
+    // Two halves of the same invariant: a wildly-skewed `ts` is refused outright with a code a client
+    // can act on, and a `ts` skewed *within* tolerance still lands in the live accounting window,
+    // because the window is measured on server arrival — not on anything the caller sends.
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let ev = |id: &str, ts: chrono::DateTime<Utc>| {
+        json!({
+            "id": id, "ts": ts.to_rfc3339(), "provider": "anthropic",
+            "model": "claude-haiku-4-5", "usage": { "input": 10, "output": 5 }, "cost_usd": 1.0
+        })
+    };
+
+    // Beyond the default bounds → refused, with the direction named.
+    let (s_old, b_old) = ingest(&app, &key, ev("old", Utc::now() - chrono::Duration::days(400))).await;
+    assert_eq!(s_old, StatusCode::BAD_REQUEST, "{b_old}");
+    assert_eq!(b_old["error"]["code"], "ts_too_old", "{b_old}");
+    let (s_new, b_new) = ingest(&app, &key, ev("new", Utc::now() + chrono::Duration::hours(3))).await;
+    assert_eq!(s_new, StatusCode::BAD_REQUEST, "{b_new}");
+    assert_eq!(b_new["error"]["code"], "ts_too_new", "{b_new}");
+    assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty(), "neither was stored");
+
+    // Within tolerance but backdated a full day: accepted, and it counts against the *hour* window it
+    // actually arrived in. Under the old ts-keyed accounting this call was invisible to an hourly cap.
+    let (s_ok, b_ok) =
+        ingest(&app, &key, ev("backdated", Utc::now() - chrono::Duration::days(1))).await;
+    assert_eq!(s_ok, StatusCode::OK, "{b_ok}");
+    let usage = store.usage_since("proj-a", Utc::now() - chrono::Duration::hours(1)).unwrap();
+    assert_eq!(usage.calls, 1, "a backdated event still consumes the live budget window");
+    assert_eq!(usage.cost_usd, 1.0);
+    // Its client-supplied `ts` is preserved and returned unchanged — we reject skew, we don't rewrite it.
+    let stored = store.get_event("backdated").unwrap().unwrap();
+    assert!(stored.ts < stored.received_at, "client ts preserved, arrival stamped separately");
 }
 
 #[tokio::test]
@@ -710,10 +794,12 @@ async fn replayed_ingest_is_acknowledged_not_conflicted() {
     let key = make_key(&store, "proj-a");
     let app = crate::build_router(state);
 
-    // A full SDK-shaped event: client-generated id AND ts (what the shipped SDKs send).
+    // A full SDK-shaped event: client-generated id AND ts (what the shipped SDKs send). The ts is
+    // relative to now so the fixture stays inside the default client-clock skew window as time passes.
+    let ts = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
     let body = json!({
         "id": "retry-1",
-        "ts": "2026-07-16T10:00:00Z",
+        "ts": ts,
         "provider": "anthropic",
         "model": "claude-haiku-4-5",
         "usage": { "input": 10, "output": 5 },
@@ -746,10 +832,12 @@ async fn replayed_batch_is_acknowledged_per_item() {
     let key = make_key(&store, "proj-a");
     let app = crate::build_router(state);
 
+    let t1 = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+    let t2 = (Utc::now() - chrono::Duration::minutes(4)).to_rfc3339();
     let batch = json!([
-        { "id": "b-1", "ts": "2026-07-16T10:00:00Z", "provider": "anthropic",
+        { "id": "b-1", "ts": t1, "provider": "anthropic",
           "model": "claude-haiku-4-5", "usage": { "input": 10, "output": 5 }, "cost_usd": 0.0 },
-        { "id": "b-2", "ts": "2026-07-16T10:00:01Z", "provider": "anthropic",
+        { "id": "b-2", "ts": t2, "provider": "anthropic",
           "model": "claude-haiku-4-5", "usage": { "input": 20, "output": 5 }, "cost_usd": 0.0 },
     ]);
     let post = |body: Value| {

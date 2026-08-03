@@ -27,6 +27,8 @@
 //!   POST /v1/projects/:id/prompts/:name/versions                         new version (auto-benchmarks)
 //!   POST /v1/projects/:id/prompts/:name/promote                          label promote (regression-gated)
 //!   POST /v1/projects  GET /v1/projects   POST /v1/projects/:id/keys
+//!   PUT  /v1/projects/:id                update name/enabled/redaction/collective_opt_in (admin);
+//!                                        a redaction change is enforced on the NEXT ingested event
 //!   POST /v1/projects/:id/limits  GET /v1/projects/:id/limits
 //!   PUT  /v1/limits/:id  DELETE /v1/limits/:id   update (incl. enable/disable) or remove a rule
 //!   GET  /v1/limits/status?project=      evaluate limits -> throttle flag + per-rule status, plus a
@@ -51,7 +53,12 @@
 //!   GET  /v1/collective/leaderboard?task_type=&provider=&judge=   merged real-world model leaderboard
 //!
 //! Env: LIGHTTRACK_BIND, LIGHTTRACK_DB, LIGHTTRACK_DATABASE_URL, LIGHTTRACK_PRICING,
-//!      LIGHTTRACK_MAX_TS_SKEW_SECS (reject events dated > N s from now; 0/unset = off),
+//!      LIGHTTRACK_MAX_TS_SKEW_SECS (symmetric client-`ts` skew bound in seconds; 0 = disable the
+//!        check entirely; unset = the asymmetric defaults below),
+//!      LIGHTTRACK_MAX_TS_SKEW_FUTURE_SECS (max seconds `ts` may lead server time; default 300),
+//!      LIGHTTRACK_MAX_TS_SKEW_PAST_SECS (max seconds `ts` may lag server time; default 7 days),
+//!      LIGHTTRACK_REDACTION_CACHE_TTL_SECS (staleness bound on the per-project redaction-policy
+//!        cache; default 60, 0 = never cache),
 //!      LIGHTTRACK_MAX_BODY_BYTES (single-event ingest body cap → 413; default 2 MiB),
 //!      LIGHTTRACK_MAX_BATCH (max items per POST /v1/events/batch; default 500),
 //!      LIGHTTRACK_MAX_BATCH_BODY_BYTES (batch ingest body cap → 413; default 8 MiB),
@@ -223,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
         collective,
         seen_webhooks,
         rejections,
-        redaction_policies: Arc::new(RwLock::new(redaction_policies)),
+        redaction_policies: Arc::new(state::RedactionCache::new(redaction_policies)),
     };
 
     println!(
@@ -310,6 +317,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/jobs/:id/progress", post(jobs::job_progress))
         .route("/v1/jobs/:id/finish", post(jobs::job_finish))
         .route("/v1/projects", post(projects::create_project).get(projects::list_projects))
+        .route("/v1/projects/:id", put(projects::update_project))
         .route(
             "/v1/projects/:id/keys",
             post(projects::create_key).get(projects::list_keys),

@@ -15,22 +15,28 @@ use lighttrack_store::{Admission, CostRow, EventFilter, StoreError, UseCaseCostR
 
 use crate::auth::Principal;
 use crate::error::ApiError;
-use crate::events_validate::policy;
+use crate::events_validate::{policy, Rejection};
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
 use crate::state::{spawn_db, AppState};
 
 /// Scope one event to its project, validate it, enforce the project's payload-persistence policy,
 /// scrub PII, and fill/mark its cost — everything the single- and batch-ingest paths share up to the
-/// admission step. On a validation failure returns the human-facing 400 message (the batch path
-/// records it per item; the single path maps it to a 400).
+/// admission step. On a validation failure returns a coded [`Rejection`] (the batch path records its
+/// code per item; the single path turns it into the matching HTTP error).
+///
+/// This is also where server trust is established: `received_at` is stamped from the server clock,
+/// overwriting anything that reached the struct, so the timestamp every rolling window is measured on
+/// is the one instant the client cannot influence.
 pub(crate) fn prepare_event(
     st: &AppState,
     ev: &mut LlmEvent,
     pid: &str,
     persistence: lighttrack_core::Redaction,
-) -> Result<(), String> {
+) -> Result<(), Rejection> {
+    let now = Utc::now();
     ev.project_id = pid.to_string();
-    policy().validate(ev, Utc::now())?;
+    ev.received_at = now;
+    policy().validate(ev, now)?;
     // 1. The project's stored persistence policy (hash/drop) — the setting the projects API accepts
     // and the operator table displays, now actually enforced. Applied before the PII scrub: `drop`
     // removes the payloads outright; `hash` leaves nothing scrubbable.
@@ -189,7 +195,7 @@ pub(crate) async fn post_event(
     let principal = authenticate(&st, &headers).await?;
     let pid = resolve_ingest_project(&principal, &ev.project_id)?;
     let persistence = crate::state::redaction_policy_for(&st, &pid).await?;
-    prepare_event(&st, &mut ev, &pid, persistence).map_err(ApiError::bad_request)?;
+    prepare_event(&st, &mut ev, &pid, persistence)?;
 
     // Admission control: evaluate the project's limits and insert in one atomic store step. An
     // enforcing (Throttle/Block) breach rejects the event — it is NOT recorded and we return 429 so

@@ -275,6 +275,7 @@ fn relay_run_event(st: &AppState, task: &RelayTask, req: &ResultReq) -> LlmEvent
         span_id: None,
         parent_span_id: None,
         ts: Utc::now(),
+        received_at: Utc::now(),
         provider: Provider::Anthropic,
         model: req.model.clone().unwrap_or_else(|| "claude-code".to_string()),
         name: Some("relay-run".to_string()),

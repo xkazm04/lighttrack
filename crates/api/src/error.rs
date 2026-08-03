@@ -24,6 +24,14 @@ use lighttrack_store::StoreError;
 pub(crate) enum ErrorCode {
     /// Malformed or semantically invalid request (validation failure). HTTP 400.
     BadRequest,
+    /// An ingested event's client `ts` is further in the **past** than the configured skew window
+    /// allows. HTTP 400. Split out of `bad_request` so an SDK can react specifically (drop the stale
+    /// buffer, or widen `LIGHTTRACK_MAX_TS_SKEW_PAST_SECS`) instead of retrying a payload that will
+    /// never be accepted.
+    TsTooOld,
+    /// An ingested event's client `ts` is further in the **future** than the configured skew window
+    /// allows — nearly always a wrong client clock. HTTP 400.
+    TsTooNew,
     /// Missing or invalid credentials. HTTP 401.
     Unauthorized,
     /// Authenticated, but not permitted to act on the resource. HTTP 403.
@@ -52,7 +60,9 @@ impl ErrorCode {
     /// The canonical HTTP status for this code.
     pub(crate) fn status(self) -> StatusCode {
         match self {
-            ErrorCode::BadRequest => StatusCode::BAD_REQUEST,
+            ErrorCode::BadRequest | ErrorCode::TsTooOld | ErrorCode::TsTooNew => {
+                StatusCode::BAD_REQUEST
+            }
             ErrorCode::Unauthorized => StatusCode::UNAUTHORIZED,
             ErrorCode::Forbidden => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
@@ -67,6 +77,8 @@ impl ErrorCode {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             ErrorCode::BadRequest => "bad_request",
+            ErrorCode::TsTooOld => "ts_too_old",
+            ErrorCode::TsTooNew => "ts_too_new",
             ErrorCode::Unauthorized => "unauthorized",
             ErrorCode::Forbidden => "forbidden",
             ErrorCode::NotFound => "not_found",

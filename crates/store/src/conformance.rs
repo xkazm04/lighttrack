@@ -45,6 +45,7 @@ fn sample_event(pid: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEve
         span_id: None,
         parent_span_id: None,
         ts: Utc::now(),
+        received_at: Utc::now(),
         provider: Provider::Anthropic,
         model: model.into(),
         name: None,

@@ -44,7 +44,61 @@ pub(crate) async fn create_project(
     spawn_db(move || store.create_project(&pc)).await?;
     // Keep the ingest-path policy cache current, so the new project's persistence policy (hash/drop)
     // is enforced from its very first event.
-    st.redaction_policies.write().unwrap().insert(proj.id.clone(), proj.redaction);
+    st.redaction_policies.put(&proj.id, proj.redaction);
+    Ok(Json(proj))
+}
+
+/// Mutable fields of a project. Every field is optional: an omitted one is left as-is, so a caller
+/// tightening `redaction` cannot accidentally reset a name or revoke collective consent.
+#[derive(Deserialize)]
+pub(crate) struct UpdateProjectReq {
+    name: Option<String>,
+    enabled: Option<bool>,
+    redaction: Option<Redaction>,
+    collective_opt_in: Option<bool>,
+}
+
+/// Update a project (admin). The reason this endpoint exists at all is `redaction`: it is the one
+/// project field that is a *compliance control*, and until now it could only be set at creation —
+/// a team that needed to start hashing or dropping payloads had to recreate the project.
+///
+/// Applying it invalidates the ingest-path policy cache for this project, so the tightened policy is
+/// enforced on the **next** event with no restart and no TTL wait.
+pub(crate) async fn update_project(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(pid): Path<String>,
+    Json(req): Json<UpdateProjectReq>,
+) -> Result<Json<Project>, ApiError> {
+    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+
+    let store = st.store.clone();
+    let id = pid.clone();
+    let mut proj = spawn_db(move || store.get_project(&id))
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("project '{pid}' not found")))?;
+    if let Some(n) = req.name {
+        proj.name = n;
+    }
+    if let Some(e) = req.enabled {
+        proj.enabled = e;
+    }
+    if let Some(r) = req.redaction {
+        proj.redaction = r;
+    }
+    if let Some(c) = req.collective_opt_in {
+        proj.collective_opt_in = c;
+    }
+
+    let store = st.store.clone();
+    let pc = proj.clone();
+    let changed = spawn_db(move || store.update_project(&pc)).await?;
+    if !changed {
+        return Err(ApiError::not_found(format!("project '{pid}' not found")));
+    }
+    // Invalidate rather than overwrite: the next ingest re-reads the committed row, so the cache can
+    // never disagree with what the store actually persisted.
+    st.redaction_policies.invalidate(&proj.id);
     Ok(Json(proj))
 }
 

@@ -114,6 +114,22 @@ impl Store for SqliteStore {
                     return Err(e.into());
                 }
             }
+            // Additive migration for DBs created before server-stamped arrival time existed. The
+            // backfill (`received_at = ts`) runs ONLY in the branch where the ALTER just succeeded,
+            // so an already-migrated database never pays a full-table UPDATE on every startup, and
+            // pre-existing rows stay valid (their arrival time is their event time — the best
+            // information the old schema carried).
+            match c.execute("ALTER TABLE events ADD COLUMN received_at TEXT", []) {
+                Ok(_) => {
+                    c.execute("UPDATE events SET received_at = ts WHERE received_at IS NULL", [])?;
+                }
+                Err(e) if e.to_string().contains("duplicate column name") => {}
+                Err(e) => return Err(e.into()),
+            }
+            c.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_events_project_received \
+                 ON events(project_id, received_at)",
+            )?;
             // Additive migrations for limit rules created before the soft-warning tier and
             // dimension scoping existed. Each tolerates "duplicate column name" (already applied).
             for stmt in [
@@ -296,6 +312,9 @@ impl Store for SqliteStore {
     // --- projects / api keys / limits ---
     fn create_project(&self, p: &Project) -> Result<()> {
         self.with(|c| projects::create(c, p))
+    }
+    fn update_project(&self, p: &Project) -> Result<bool> {
+        self.with(|c| projects::update(c, p))
     }
     fn get_project(&self, id: &str) -> Result<Option<Project>> {
         self.with(|c| projects::get(c, id))

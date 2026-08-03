@@ -410,6 +410,16 @@ pub trait Store: Send + Sync {
 
     // --- projects ---
     fn create_project(&self, p: &Project) -> Result<()>;
+    /// Replace a project's mutable fields (name / enabled / redaction / collective opt-in), matched by
+    /// `p.id`; `id` and `created_at` are immutable. Returns `true` when a row changed, `false` when the
+    /// id is unknown (the API maps that to 404).
+    ///
+    /// Default is a clear unimplemented error rather than a silent no-op: `redaction` is a compliance
+    /// control, and an operator who tightened it must never be told "done" by a backend that dropped
+    /// the write (the same stance as `update_limit_rule`).
+    fn update_project(&self, _p: &Project) -> Result<bool> {
+        Err(StoreError::Unsupported("updating projects"))
+    }
     fn get_project(&self, id: &str) -> Result<Option<Project>>;
     fn list_projects(&self) -> Result<Vec<Project>>;
 

@@ -19,7 +19,7 @@ use lighttrack_core::{
 use lighttrack_store::Store;
 
 use crate::redact::Redactor;
-use crate::tests_ingest::{ingest, make_key, setup};
+use crate::tests_ingest::{make_key, setup};
 
 async fn get(app: &Router, token: &str, path: &str) -> (StatusCode, Value) {
     let req = Request::builder()
@@ -80,24 +80,27 @@ async fn forecast_projects_budget_breach_and_margin_erosion() {
     let app = crate::build_router(state);
 
     // Ten days of rising daily cost for acme: $1/day nine days ago … $10/day today.
+    //
+    // Seeded straight into the store rather than POSTed with a backdated `ts`, because the daily
+    // series buckets on **server arrival time** — a forecast a caller could reshape by backdating its
+    // own events would not be worth alerting on. So "ten real days of traffic" is exactly what this
+    // writes: each event's arrival stamped on its own day.
     let now = Utc::now();
     for i in 0..10u32 {
-        let ts = (now - Duration::days((9 - i) as i64)).to_rfc3339();
-        let cost = (i + 1) as f64;
-        let (status, v) = ingest(
-            &app,
-            &key,
-            json!({
-                "provider": "anthropic",
-                "model": "claude-haiku-4-5",
-                "usage": { "input": 10, "output": 5 },
-                "cost_usd": cost,
-                "ts": ts,
-                "metadata": { "customer_id": "acme" }
-            }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "ingest day {i} failed: {v}");
+        let day = now - Duration::days((9 - i) as i64);
+        let mut e: lighttrack_core::LlmEvent = serde_json::from_value(json!({
+            "id": new_id(),
+            "project_id": "proj-a",
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 },
+            "cost_usd": (i + 1) as f64,
+            "ts": day.to_rfc3339(),
+            "metadata": { "customer_id": "acme" }
+        }))
+        .unwrap();
+        e.received_at = day;
+        store.insert_event(&e).unwrap();
     }
 
     let (status, f) = get(

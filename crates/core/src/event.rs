@@ -128,6 +128,19 @@ pub struct LlmEvent {
 
     #[serde(default = "Utc::now")]
     pub ts: DateTime<Utc>,
+    /// Server-stamped arrival time — when this API instance accepted the call for accounting.
+    ///
+    /// Distinct from [`LlmEvent::ts`], which is *client* event time: the client owns it, may backdate
+    /// or future-date it, and a single skewed clock keying rolling windows would silently corrupt
+    /// budget enforcement. So every windowed accounting read (limit admission, `/v1/limits/status`,
+    /// the forecast daily series) keys on `received_at`, while `ts` stays the queryable/orderable
+    /// event time users debug with.
+    ///
+    /// Never read from a request body (`skip_deserializing`) — the server always stamps it — but
+    /// always serialized on reads. Rows written before the column existed carry `received_at = ts`
+    /// (the migration's backfill).
+    #[serde(skip_deserializing, default = "Utc::now")]
+    pub received_at: DateTime<Utc>,
     pub provider: Provider,
     pub model: String,
     /// Optional use-case / call-site name (e.g. "summarize-email"). The unit the
@@ -207,6 +220,7 @@ impl LlmEvent {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Datelike;
     use serde_json::json;
 
     use super::*;
@@ -223,6 +237,23 @@ mod tests {
         let e = ev(json!({ "customer_id": "cus_123", "product_id": "chat" }));
         assert_eq!(e.customer_id(), Some("cus_123"));
         assert_eq!(e.product_id(), Some("chat"));
+    }
+
+    #[test]
+    fn received_at_is_server_owned_and_ignores_the_client() {
+        // A client may set `ts` freely, but `received_at` is never taken from the body — otherwise
+        // the trust fix would be one JSON field away from being bypassed.
+        let e: LlmEvent = serde_json::from_value(json!({
+            "provider": "anthropic", "model": "m",
+            "ts": "2000-01-01T00:00:00Z",
+            "received_at": "2000-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        assert_eq!(e.ts.to_rfc3339(), "2000-01-01T00:00:00+00:00");
+        assert!(e.received_at.year() > 2020, "received_at must be server-stamped, not client-supplied");
+        // …and it still round-trips out on reads.
+        let v = serde_json::to_value(&e).unwrap();
+        assert!(v.get("received_at").is_some());
     }
 
     #[test]

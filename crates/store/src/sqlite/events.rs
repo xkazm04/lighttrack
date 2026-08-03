@@ -32,7 +32,8 @@ fn insert_err(e: rusqlite::Error, id: &str) -> StoreError {
 
 const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
     operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
-    latency_ms, status, error, input, output, tags, source, metadata, name";
+    latency_ms, status, error, input, output, tags, source, metadata, name, \
+    COALESCE(received_at, ts) AS received_at";
 
 pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
     let tags = serde_json::to_string(&ev.tags)?;
@@ -47,8 +48,8 @@ pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
         "INSERT INTO events \
          (id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, operation, \
           input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
-          latency_ms, status, error, input, output, tags, source, metadata, name) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)",
+          latency_ms, status, error, input, output, tags, source, metadata, name, received_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
         params![
             ev.id,
             ev.project_id,
@@ -73,6 +74,7 @@ pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
             ev.source,
             metadata,
             ev.name,
+            fmt_ts(ev.received_at),
         ],
     )
     .map_err(|e| insert_err(e, &ev.id))?;
@@ -507,11 +509,16 @@ pub(super) fn cost_summary_windowed(
     Ok(rows)
 }
 
+/// Rolling usage for one project since `since` — the reference the admission cache is checked
+/// against. The window is measured on **`received_at`** (server arrival), never on the client's `ts`:
+/// a caller with a skewed clock (or a deliberately backdated event) must not be able to slide its
+/// spend outside the window a cap is evaluated over. `COALESCE(received_at, ts)` keeps pre-migration
+/// rows counted (the backfill sets them equal anyway).
 pub(super) fn usage_since(conn: &Connection, project: &str, since: DateTime<Utc>) -> Result<Usage> {
     let mut stmt = conn.prepare(
         "SELECT COALESCE(SUM(cost_usd),0.0), COUNT(*), \
          COALESCE(SUM(input_tokens + output_tokens),0) \
-         FROM events WHERE project_id = ?1 AND ts >= ?2",
+         FROM events WHERE project_id = ?1 AND COALESCE(received_at, ts) >= ?2",
     )?;
     let usage = stmt.query_row(params![project, fmt_ts(since)], |row| {
         Ok(Usage {
@@ -526,7 +533,8 @@ pub(super) fn usage_since(conn: &Connection, project: &str, since: DateTime<Utc>
 /// Rolling usage for one project since `since`, restricted to a single scope dimension. The scoped
 /// column (`provider` / `model` / `name`) is chosen by the [`LimitScope`] variant; the `name` case
 /// matches only rows whose use-case equals the value (a NULL `name` never matches a name scope). The
-/// `(project_id, ts)` and `(project_id, name, ts)` indexes cover the project+window filter.
+/// window is measured on `received_at` for the same trust reason as [`usage_since`];
+/// `idx_events_project_received` covers the project+window filter.
 pub(super) fn usage_since_scoped(
     conn: &Connection,
     project: &str,
@@ -542,7 +550,7 @@ pub(super) fn usage_since_scoped(
     let sql = format!(
         "SELECT COALESCE(SUM(cost_usd),0.0), COUNT(*), \
          COALESCE(SUM(input_tokens + output_tokens),0) \
-         FROM events WHERE project_id = ?1 AND ts >= ?2 AND {column} = ?3"
+         FROM events WHERE project_id = ?1 AND COALESCE(received_at, ts) >= ?2 AND {column} = ?3"
     );
     let mut stmt = conn.prepare(&sql)?;
     let usage = stmt.query_row(params![project, fmt_ts(since), scope.value()], |row| {
@@ -580,6 +588,7 @@ struct RawEvent {
     source: Option<String>,
     metadata: Option<String>,
     name: Option<String>,
+    received_at: String,
 }
 
 fn map_raw(row: &Row) -> rusqlite::Result<RawEvent> {
@@ -607,11 +616,13 @@ fn map_raw(row: &Row) -> rusqlite::Result<RawEvent> {
         source: row.get(20)?,
         metadata: row.get(21)?,
         name: row.get(22)?,
+        received_at: row.get(23)?,
     })
 }
 
 fn from_raw(r: RawEvent) -> Result<LlmEvent> {
     let ts = parse_ts(&r.ts)?;
+    let received_at = parse_ts(&r.received_at)?;
     let input = match r.input {
         Some(s) => Some(serde_json::from_str(&s)?),
         None => None,
@@ -635,6 +646,7 @@ fn from_raw(r: RawEvent) -> Result<LlmEvent> {
         span_id: r.span_id,
         parent_span_id: r.parent_span_id,
         ts,
+        received_at,
         provider: parse_enum::<Provider>(&r.provider),
         model: r.model,
         name: r.name,

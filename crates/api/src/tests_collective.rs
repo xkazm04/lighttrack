@@ -66,7 +66,7 @@ fn setup_k(
             crate::idempotency::DEFAULT_CAPACITY,
         )),
         rejections: Arc::new(crate::rejections::RejectionLedger::new()),
-        redaction_policies: Arc::new(RwLock::new(HashMap::new())),
+        redaction_policies: Arc::new(crate::state::RedactionCache::new(HashMap::new())),
     };
     (state, store)
 }

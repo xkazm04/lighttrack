@@ -361,6 +361,10 @@ fn from_row(row: &PgRow) -> Result<LlmEvent> {
         span_id: row.try_get(3).map_err(pgerr)?,
         parent_span_id: row.try_get(4).map_err(pgerr)?,
         ts: parse_ts(&ts)?,
+        // This backend has no `received_at` column yet: mirror the SQLite migration's backfill
+        // (arrival time == event time) so the shared type is populated honestly. Mechanical only —
+        // the Postgres owner ports the column + the windowed-accounting switch.
+        received_at: parse_ts(&ts)?,
         provider: parse_enum::<Provider>(&provider),
         model: row.try_get(7).map_err(pgerr)?,
         name: row.try_get(22).map_err(pgerr)?,

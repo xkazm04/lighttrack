@@ -253,6 +253,7 @@ mod tests {
             span_id: Some(span.into()),
             parent_span_id: parent.map(str::to_string),
             ts: Utc::now() + Duration::seconds(secs),
+            received_at: Utc::now(),
             provider: Provider::Anthropic,
             model: format!("m-{span}"),
             name: None,

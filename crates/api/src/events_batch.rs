@@ -31,8 +31,8 @@ use crate::state::{spawn_db, AppState};
 /// Every variant carries `index` (the item's position in the request array), so positional
 /// correlation is explicit rather than load-bearing-but-unstated, and non-accepted variants carry a
 /// stable machine-readable `code` (the same taxonomy the single-event path returns:
-/// `bad_request` | `conflict` | `rate_limited` | `internal`) so a client can branch without
-/// substring-matching English prose.
+/// `bad_request` | `ts_too_old` | `ts_too_new` | `conflict` | `rate_limited` | `internal`) so a
+/// client can branch without substring-matching English prose.
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub(crate) enum BatchItem {
@@ -130,11 +130,11 @@ pub(crate) async fn post_batch(
                 valid.push(ev);
                 results.push(None); // filled after admission
             }
-            Err(msg) => results.push(Some(BatchItem::Invalid {
+            Err(r) => results.push(Some(BatchItem::Invalid {
                 index: i,
                 id: item_id,
-                code: "bad_request",
-                reason: msg,
+                code: r.code.as_str(),
+                reason: r.message,
             })),
         }
     }

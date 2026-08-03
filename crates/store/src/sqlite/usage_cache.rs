@@ -79,8 +79,10 @@ impl UsageCache {
 struct Bucket {
     /// Running usage of the events currently inside the window.
     total: Usage,
-    /// In-window per-event contributions keyed by `(ts, rowid)`: `ts` orders eviction chronologically
-    /// (fixed-width RFC3339 strings compare correctly), `rowid` disambiguates equal timestamps.
+    /// In-window per-event contributions keyed by `(received_at, rowid)`: server arrival time orders
+    /// eviction chronologically (fixed-width RFC3339 strings compare correctly) and `rowid`
+    /// disambiguates ties. Deliberately NOT the client's `ts` — that would let a backdated event fall
+    /// straight out of the window it just consumed, which is exactly the cap bypass this keys away.
     items: BTreeMap<(String, i64), Usage>,
     /// Highest `rowid` folded in so far; the next load pulls only `rowid > seen_rowid`, so an event
     /// is counted exactly once regardless of timestamp ties or out-of-order arrival.
@@ -95,7 +97,7 @@ impl Bucket {
     /// can't fall back to the `(project_id, ts)` index and scan the whole project instead.
     fn load_new(&mut self, conn: &Connection, project: &str, scope: Option<&LimitScope>) -> Result<()> {
         let mut stmt = conn.prepare(
-            "SELECT rowid, project_id, provider, model, name, ts, cost_usd, \
+            "SELECT rowid, project_id, provider, model, name, COALESCE(received_at, ts), cost_usd, \
              (input_tokens + output_tokens) FROM events WHERE rowid > ?1 ORDER BY rowid",
         )?;
         let rows = stmt
@@ -116,7 +118,7 @@ impl Bucket {
             }
             let contrib = Usage { cost_usd: r.cost.unwrap_or(0.0), calls: 1, tokens: r.tokens };
             self.total = self.total.plus(contrib);
-            self.items.insert((r.ts, r.rowid), contrib);
+            self.items.insert((r.received_at, r.rowid), contrib);
         }
         Ok(())
     }
@@ -150,7 +152,8 @@ struct NewRow {
     provider: String,
     model: String,
     name: Option<String>,
-    ts: String,
+    /// Server arrival time (`COALESCE(received_at, ts)`) — the window axis, see [`Bucket::items`].
+    received_at: String,
     cost: Option<f64>,
     tokens: i64,
 }
@@ -163,7 +166,7 @@ impl NewRow {
             provider: row.get(2)?,
             model: row.get(3)?,
             name: row.get(4)?,
-            ts: row.get(5)?,
+            received_at: row.get(5)?,
             cost: row.get(6)?,
             tokens: row.get(7)?,
         })

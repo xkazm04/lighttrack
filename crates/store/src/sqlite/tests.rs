@@ -19,6 +19,7 @@ fn ev(project: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEvent {
         span_id: None,
         parent_span_id: None,
         ts: Utc::now(),
+        received_at: Utc::now(),
         provider: Provider::Anthropic,
         model: model.into(),
         name: None,
@@ -668,6 +669,8 @@ fn usage_cache_evicts_events_leaving_the_window() {
         let mut e = ev("p", "m", 10, 10, 1.0);
         e.id = id.into();
         e.ts = base + Duration::hours(h);
+        // The window axis is server arrival time, so that is what has to march forward here.
+        e.received_at = e.ts;
         super::events::insert(&conn, &e).unwrap();
     }
     let win = LimitWindow::Hour;
@@ -683,6 +686,47 @@ fn usage_cache_evicts_events_leaving_the_window() {
     // Cross-check the reference agrees at both points.
     let want = super::events::usage_since(&conn, "p", win.since(base + Duration::hours(5))).unwrap();
     assert_eq!(want.calls, 0);
+}
+
+#[test]
+fn a_skewed_client_ts_cannot_move_a_budget_window() {
+    use chrono::{Duration, TimeZone, Utc as CU};
+    // The trust invariant. A client controls `ts`; it must not control which rolling window its spend
+    // lands in. Two events arrive NOW but claim to be a year old and a year in the future — both must
+    // still be counted by an Hour cap, and neither may be counted twice or dodge it.
+    let s = SqliteStore::open_in_memory().unwrap();
+    let now = CU.with_ymd_and_hms(2026, 4, 1, 12, 0, 0).unwrap();
+    for (id, ts) in [
+        ("backdated", now - Duration::days(365)),
+        ("future", now + Duration::days(365)),
+        ("honest", now),
+    ] {
+        let mut e = ev("p1", "m", 10, 10, 1.0);
+        e.id = id.into();
+        e.ts = ts;
+        e.received_at = now; // every one of them actually arrived now
+        s.insert_event(&e).unwrap();
+    }
+
+    // Hour window ending at `now`: all three arrived inside it, whatever they claim about themselves.
+    let u = s.usage_since("p1", now - Duration::hours(1)).unwrap();
+    assert_eq!(u.calls, 3, "a backdated or future-dated event must not escape the live window");
+    assert_eq!(u.cost_usd, 3.0);
+
+    // And the old, exploitable reading — "window it by the client's ts" — would have seen exactly one
+    // call, which is the bypass this keys away from.
+    let by_client_ts = s
+        .list_events(Some("p1"), 50)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.ts >= now - Duration::hours(1) && e.ts <= now)
+        .count();
+    assert_eq!(by_client_ts, 1, "sanity: the client-ts view really is the corruptible one");
+
+    // Once the window has moved past arrival time, all three age out together — no straggler pinned
+    // in place by a future `ts`.
+    let later = s.usage_since("p1", now + Duration::hours(2)).unwrap();
+    assert_eq!(later.calls, 0);
 }
 
 #[test]
