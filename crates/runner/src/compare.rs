@@ -8,12 +8,13 @@ use std::collections::{BTreeSet, HashMap};
 use anyhow::Result;
 use serde_json::{json, Map, Value};
 
-use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, ModelPriceRow, Rubric};
+use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, ModelPriceRow, Rubric, ScoreDetail};
 use lighttrack_engine::{generate, parse_judge_spec, EngineConfig};
 
 use crate::bench::judge_output;
 use crate::cli::Cli;
 use crate::http::{get, post};
+use crate::provenance::{merge_details, weakest_reasoning};
 use crate::stats::{annotate_significance, significance_verdict, stability, Summary};
 use crate::util::{
     add_price_warnings, aggregate_status, cost_or_book, join_csv, now_ts, parallel_map, percentiles,
@@ -27,6 +28,9 @@ struct Cell {
     judge_agrees: Vec<f64>,
     cand_passes: u32,
     case_dim_sums: HashMap<String, f64>,
+    /// One entry per judged candidate: the judge's full provenance for that candidate. Merged (not
+    /// discarded) when the cell's mean score is posted.
+    cand_details: Vec<ScoreDetail>,
     case_judge_cost: f64,
     gen_cost: f64,
     gen_tokens: u64,
@@ -60,6 +64,7 @@ fn compute_cell(
         judge_agrees: Vec::new(),
         cand_passes: 0,
         case_dim_sums: HashMap::new(),
+        cand_details: Vec::new(),
         case_judge_cost: 0.0,
         gen_cost: 0.0,
         gen_tokens: 0,
@@ -104,6 +109,7 @@ fn compute_cell(
         cell.case_judge_cost += jr.cost;
         cell.cand_scores.push(jr.overall);
         cell.judge_agrees.push(jr.agreement);
+        cell.cand_details.push(jr.detail);
         if jr.pass {
             cell.cand_passes += 1;
         }
@@ -168,6 +174,9 @@ pub(crate) fn run_compare(
         let (mut gen_tokens, mut judge_tokens) = (0u64, 0u64);
         let mut price_warnings: BTreeSet<String> = BTreeSet::new();
         let mut case_scores: Vec<f64> = Vec::new();
+        // Verdicts the API refused/couldn't take, and cases whose content imitated a judge-prompt
+        // boundary. Both land in the run report instead of scrolling past on stderr.
+        let (mut score_post_failures, mut injected) = (0u32, 0u32);
 
         // Generate + judge every case for this target with up to `jobs` concurrency; fold the cells in
         // case order so cost/latency/agreement aggregation is identical to the sequential path.
@@ -233,16 +242,34 @@ pub(crate) fn run_compare(
                 judge_agree,
                 cell.cand_scores.len(),
             );
-            // Per-case judge verdict → /v1/scores (queryable per case, not just the run aggregate).
-            // Best-effort: a transient post failure must not abort a long comparison run.
+            // Per-case judge verdict → /v1/scores (queryable per case, not just the run aggregate),
+            // carrying the merged provenance of every candidate judged for this cell rather than a
+            // free-text "k=0.82 …" restatement of numbers already in `value`.
+            let detail = merge_details(&cell.cand_details);
+            if detail.injection_suspected == Some(true) {
+                injected += 1;
+                eprintln!(
+                    "  case {}: judged content imitated a prompt boundary (neutralized) — treat this \
+                     score as attacker-adjacent",
+                    i + 1
+                );
+            }
             let score = json!({
                 "project_id": bench.project_id,
                 "rubric": format!("{}:{label}#case{}", bench.name, i + 1),
                 "value": r3(case_score), "max": 1.0, "pass": case_pass,
-                "reasoning": dim_str, "scored_by": format!("{jp}/{jm}"),
+                "reasoning": weakest_reasoning(&detail),
+                "detail": detail,
+                "scored_by": format!("{jp}/{jm}"),
                 "cost_usd": cell.case_judge_cost,
             });
-            let _ = post(cli, http, "/v1/scores", &score);
+            // Best-effort: a transient post failure must not abort a long comparison run — but it
+            // must not vanish either. Log it and count it into the run report, so "the scores are
+            // missing" is a recorded fact rather than something an operator has to infer.
+            if let Err(e) = post(cli, http, "/v1/scores", &score) {
+                eprintln!("  case {}: score post failed (verdict not persisted): {e}", i + 1);
+                score_post_failures += 1;
+            }
         }
 
         let mean = if judged > 0 { overall_sum / judged as f64 } else { 0.0 };
@@ -274,6 +301,8 @@ pub(crate) fn run_compare(
             "prompt_label": t.label, "gen_cost_usd": gen_cost, "judge_cost_usd": judge_cost,
             "gen_tokens": gen_tokens, "judge_tokens": judge_tokens,
             "errored_cases": errored, "gen_samples": ng, "judge_samples": samples,
+            "score_post_failures": score_post_failures,
+            "injection_suspected_cases": injected,
             "agreement": r3(mean_agree), "dimensions": Value::Object(dim_means), "cases": case_reports,
             "verdict": status, "baseline": bench.baseline_score,
         });

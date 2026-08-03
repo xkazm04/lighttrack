@@ -243,7 +243,10 @@ fn judge_one(engine: &EngineConfig, judge: &Judge, input: &str, output: &str) ->
                 value: o.overall,
                 max: 1.0,
                 pass: o.pass,
-                reasoning: format!("rubric '{}' overall over {} dims", r.name, o.dimensions.len()),
+                // The judge's own words for the weakest dimension — a template restating the
+                // rubric's shape tells a reader nothing they couldn't already compute.
+                reasoning: crate::provenance::weakest_reasoning(&crate::provenance::rubric_detail(&o))
+                    .unwrap_or_else(|| format!("rubric '{}' ({} dims)", r.name, o.dimensions.len())),
                 scored_by: o.model,
                 cost_usd: o.cost_usd,
             })

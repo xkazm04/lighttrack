@@ -457,6 +457,12 @@ pub trait Store: Send + Sync {
 
     // --- single event lookup + scores (Phase 3) ---
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>>;
+    /// Persist a judge verdict. `Score::detail` (structured verdict provenance: per-dimension
+    /// breakdown, agreement, sample accounting, bias/injection flags) is **SQLite-first** — the
+    /// SQLite backend stores and returns it; other backends persist the scalar score and read
+    /// `detail` back as `None`, matching the precedent set by the trace view and forecasting. The
+    /// scalar verdict is never lost on any backend; the provenance is, so a deployment that needs
+    /// auditable verdicts should run SQLite until the other backends port the column.
     fn insert_score(&self, s: &Score) -> Result<()>;
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>>;
     /// Of the given event ids, which already carry at least one score. Scoped to **exactly these ids**

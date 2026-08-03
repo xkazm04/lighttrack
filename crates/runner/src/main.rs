@@ -17,6 +17,7 @@ mod dataset;
 mod gate;
 mod http;
 mod pairwise;
+mod provenance;
 mod recurrence;
 mod rubric;
 mod schedule;

@@ -126,8 +126,22 @@ pub struct TextOutcome {
 pub struct DimScore {
     pub key: String,
     pub score: f64,
-    pub reasoning: String,
+    /// The judge's reasoning for this dimension, **one entry per sample that parsed**, in sample
+    /// order. Every sample is kept: a k-sample run bills k sets of reasoning tokens, and keeping
+    /// only the first made samples 2..k pure waste.
+    pub reasonings: Vec<String>,
     pub weight: f64,
+    /// The rubric's gating floor for this dimension, when it has one.
+    pub floor: Option<f64>,
+    /// `score` fell below `floor` — the reason a passing overall can still fail.
+    pub floor_hit: bool,
+}
+
+impl DimScore {
+    /// The representative (first-sample) reasoning, for callers that want one line.
+    pub fn reasoning(&self) -> &str {
+        self.reasonings.first().map(String::as_str).unwrap_or("")
+    }
 }
 
 /// The result of judging one case against a rubric (possibly averaged over k samples).
@@ -143,6 +157,8 @@ pub struct RubricOutcome {
     pub output_tokens: Option<u64>,
     pub model: String,
     pub samples: u32,
+    /// How many of the requested `samples` produced a usable verdict (`samples - parse_failures`).
+    pub samples_parsed: u32,
     /// Cross-sample agreement on the overall score (1.0 = identical; lower = judge disagreed).
     pub agreement: f64,
     /// How many of the `samples` judge responses were unparseable (no JSON, truncated/invalid JSON,

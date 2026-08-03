@@ -255,6 +255,66 @@ fn repair_reask_rescues_a_bad_first_response() {
     assert!((dim_score(&out, "x") - 0.9).abs() < 1e-9, "repaired score {}", dim_score(&out, "x"));
 }
 
+#[test]
+fn every_sample_reasoning_is_retained_in_order() {
+    let r = rubric(serde_json::json!({
+        "name": "t",
+        "threshold": 0.0,
+        "dimensions": [ { "key": "x", "description": "", "weight": 1.0 } ]
+    }));
+    let out = judge(
+        &r,
+        &[
+            r#"{"x":{"score":0.8,"reasoning":"first take"}}"#,
+            r#"{"x":{"score":0.6,"reasoning":"second take"}}"#,
+            r#"{"x":{"score":0.4,"reasoning":"third take"}}"#,
+        ],
+        3,
+    );
+    let d = out.dimensions.iter().find(|d| d.key == "x").unwrap();
+    assert_eq!(d.reasonings, vec!["first take", "second take", "third take"]);
+    assert_eq!(d.reasoning(), "first take", "the one-liner is still the first sample's");
+    assert_eq!(out.samples_parsed, 3);
+    // Reasoning retention must not disturb the arithmetic: mean of 0.8/0.6/0.4.
+    assert!((d.score - 0.6).abs() < 1e-9);
+}
+
+#[test]
+fn dropped_samples_are_absent_from_reasoning_and_parsed_count() {
+    let r = rubric(serde_json::json!({
+        "name": "t",
+        "threshold": 0.0,
+        "dimensions": [ { "key": "x", "description": "", "weight": 1.0 } ]
+    }));
+    let out = try_judge(&r, &[r#"{"x":{"score":0.8,"reasoning":"good"}}"#, "not json"], 2).unwrap();
+    let d = &out.dimensions[0];
+    assert_eq!(d.reasonings, vec!["good"], "a dropped sample contributes no reasoning");
+    assert_eq!(out.samples, 2);
+    assert_eq!(out.samples_parsed, 1);
+    assert_eq!(out.parse_failures, 1);
+}
+
+#[test]
+fn floors_are_reported_per_dimension() {
+    let r = rubric(serde_json::json!({
+        "name": "t",
+        "threshold": 0.7,
+        "dimensions": [
+            { "key": "safety", "description": "", "weight": 1.0, "floor": 0.5 },
+            { "key": "quality", "description": "", "weight": 9.0 }
+        ]
+    }));
+    let out = judge(&r, &[r#"{"safety":{"score":0.2},"quality":{"score":1.0}}"#], 1);
+    let safety = out.dimensions.iter().find(|d| d.key == "safety").unwrap();
+    let quality = out.dimensions.iter().find(|d| d.key == "quality").unwrap();
+    assert_eq!(safety.floor, Some(0.5));
+    assert!(safety.floor_hit, "0.2 is below the 0.5 floor");
+    assert_eq!(quality.floor, None);
+    assert!(!quality.floor_hit);
+    // The gate still reads off exactly this, unchanged.
+    assert!(!out.pass);
+}
+
 /// A judge that *honors the boundary contract*: it obeys only what reaches its instruction channel
 /// (the prompt minus every nonce-fenced block). If an injected payload escapes the fence, this judge
 /// hands back the payload's verdict; otherwise it scores honestly.

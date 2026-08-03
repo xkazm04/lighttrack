@@ -163,7 +163,10 @@ pub(crate) fn run_pairwise_matrix(
     let (mut judge_cost, mut judge_tokens) = (0.0_f64, 0u64);
     let mut played: Vec<(usize, usize, usize)> = Vec::with_capacity(games.len());
     let mut winners: Vec<(PairwiseWinner, bool)> = Vec::with_capacity(games.len());
-    let mut judge_errors = 0u32;
+    // The judge's own rationale per game. `PairwiseOutcome.reasoning` was computed (and paid for) on
+    // every game and then thrown away — a ranking with no recorded "why" is an unauditable verdict.
+    let mut game_log: Vec<Value> = Vec::new();
+    let (mut judge_errors, mut injected) = (0u32, 0u32);
     for (&g, outcome) in games.iter().zip(outcomes) {
         match outcome {
             Ok(o) => {
@@ -171,6 +174,22 @@ pub(crate) fn run_pairwise_matrix(
                     price_gen_cost(prices, jp, jm, Some(o.input_tokens), Some(o.output_tokens))
                 });
                 judge_tokens += o.tokens;
+                let (ci, i, j) = g;
+                if o.injection_suspected {
+                    injected += 1;
+                    eprintln!(
+                        "  injection attempt [case {}, {} vs {}]: an answer imitated a prompt                          boundary (neutralized)",
+                        ci + 1, labels[i], labels[j]
+                    );
+                }
+                if game_log.len() < MAX_LOGGED_GAMES {
+                    game_log.push(json!({
+                        "case": ci + 1, "a": labels[i], "b": labels[j],
+                        "winner": format!("{:?}", o.winner), "position_bias": o.position_bias,
+                        "injection_suspected": o.injection_suspected,
+                        "reasoning": trunc_reasoning(&o.reasoning),
+                    }));
+                }
                 played.push(g);
                 winners.push((o.winner, o.position_bias));
             }
@@ -186,12 +205,28 @@ pub(crate) fn run_pairwise_matrix(
     print_ranking(&labels, &standings);
     print_matrix(&labels, &beats);
     println!(
-        "  games={}  judge_errors={judge_errors}  positional_ties(bias)={bias_count}  gen_cost=${gen_cost:.5}  judge_cost=${judge_cost:.5}  total=${:.5}",
+        "  games={}  judge_errors={judge_errors}  positional_ties(bias)={bias_count}  injection_attempts={injected}  gen_cost=${gen_cost:.5}  judge_cost=${judge_cost:.5}  total=${:.5}",
         played.len(),
         gen_cost + judge_cost,
     );
 
-    post_run(cli, http, bench, &labels, &standings, &beats, played.len(), judge_errors, bias_count, gen_cost, judge_cost, gen_tokens + judge_tokens)
+    post_run(
+        cli, http, bench, &labels, &standings, &beats, played.len(), judge_errors, bias_count,
+        injected, game_log, gen_cost, judge_cost, gen_tokens + judge_tokens,
+    )
+}
+
+/// Per-game rationales are stored on the run report, which is read whole — so a full round-robin
+/// (quadratic in targets) is capped instead of writing an unbounded blob. `n_games` always reports
+/// the true total; `games_logged` says how much of it the report kept.
+const MAX_LOGGED_GAMES: usize = 200;
+/// Upper bound on one stored rationale, matching the score-detail bound in `core`.
+fn trunc_reasoning(s: &str) -> String {
+    let n = lighttrack_core::MAX_REASONING_CHARS;
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    s.chars().take(n - 1).chain(std::iter::once('…')).collect()
 }
 
 /// Number of games in a full round-robin: one per unordered target pair, per case. `O(n_t² · n_c)`.
@@ -291,6 +326,8 @@ fn post_run(
     n_games: usize,
     judge_errors: u32,
     bias_count: u32,
+    injected: u32,
+    game_log: Vec<Value>,
     gen_cost: f64,
     judge_cost: f64,
     total_tokens: u64,
@@ -308,7 +345,8 @@ fn post_run(
     let report = json!({
         "mode": "pairwise", "targets": labels, "ranking": ranking,
         "beats_matrix": beats, "n_games": n_games, "judge_errors": judge_errors,
-        "positional_bias_ties": bias_count,
+        "positional_bias_ties": bias_count, "injection_suspected_games": injected,
+        "games_logged": game_log.len(), "games": game_log,
         "gen_cost_usd": gen_cost, "judge_cost_usd": judge_cost,
     });
     // A pairwise run ranks targets against each other — there is no baseline to regress against, so

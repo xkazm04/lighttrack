@@ -34,6 +34,98 @@ pub fn judge_verdict_schema() -> Value {
     })
 }
 
+/// Storage bounds for [`ScoreDetail`]. A score row is hot (listed, joined, alerted on), so the
+/// provenance it carries is capped rather than unbounded: at most [`MAX_REASONING_CHARS`] per
+/// reasoning string, [`MAX_REASONINGS_PER_DIM`] retained per dimension (the first k samples, in
+/// sample order), [`MAX_DIMENSIONS`] dimensions and [`MAX_NOTES`] notes. Truncated strings end in `…`
+/// so a reader can tell. Worst case ≈ 32 × 8 × 600 B ≈ 150 KB of JSON, and typical rubrics
+/// (4 dims × 3 samples) land near 5 KB.
+pub const MAX_REASONING_CHARS: usize = 600;
+pub const MAX_REASONINGS_PER_DIM: usize = 8;
+pub const MAX_DIMENSIONS: usize = 32;
+pub const MAX_NOTES: usize = 8;
+
+/// One dimension's contribution to a judged verdict, kept so a stored score can answer *why*.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScoreDim {
+    pub key: String,
+    /// The aggregated (mean-over-samples) dimension score.
+    pub value: f64,
+    pub weight: f64,
+    /// The rubric's gating floor for this dimension, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<f64>,
+    /// True when `value` fell below `floor` — the reason a high overall can still fail.
+    #[serde(default)]
+    pub floor_hit: bool,
+    /// The judge's reasoning, one entry per sample that parsed (sample order). Every sample is kept:
+    /// its reasoning tokens were paid for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning: Vec<String>,
+}
+
+/// Structured provenance for a judged verdict: the per-dimension breakdown plus the reliability
+/// signals (agreement, sample accounting, bias/injection flags) that produced the scalar `value` on
+/// [`Score`]. Additive and nullable — a score posted without it is still a valid score.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScoreDetail {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dimensions: Vec<ScoreDim>,
+    /// Cross-sample agreement on the overall score (1.0 = the samples agreed exactly).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agreement: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samples_requested: Option<u32>,
+    /// How many of the requested samples yielded a usable verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub samples_parsed: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parse_failures: Option<u32>,
+    /// Pairwise only: swapping A/B flipped the winner, so the verdict collapsed to a tie.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_bias: Option<bool>,
+    /// The judged content imitated a prompt boundary and was neutralized (see engine `fence`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub injection_suspected: Option<bool>,
+    /// Judge text not tied to a dimension (a freeform verdict's rationale, a pairwise rationale).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+/// Truncate on a char boundary, marking that it happened.
+fn cap_str(s: &str) -> String {
+    if s.chars().count() <= MAX_REASONING_CHARS {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(MAX_REASONING_CHARS - 1).collect();
+    out.push('…');
+    out
+}
+
+impl ScoreDetail {
+    /// Enforce the storage bounds. Applied by the API on every insert, so a client that posts an
+    /// unbounded detail cannot balloon a hot score row.
+    pub fn capped(mut self) -> Self {
+        self.dimensions.truncate(MAX_DIMENSIONS);
+        for d in &mut self.dimensions {
+            d.reasoning.truncate(MAX_REASONINGS_PER_DIM);
+            for r in &mut d.reasoning {
+                *r = cap_str(r);
+            }
+        }
+        self.notes.truncate(MAX_NOTES);
+        for n in &mut self.notes {
+            *n = cap_str(n);
+        }
+        self
+    }
+
+    /// True when nothing meaningful is recorded (so callers can store `None` instead of `{}`).
+    pub fn is_empty(&self) -> bool {
+        *self == ScoreDetail::default()
+    }
+}
+
 /// A stored judge result, optionally tied to the event it scored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Score {
@@ -52,6 +144,11 @@ pub struct Score {
     pub pass: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    /// Structured provenance for this verdict (per-dimension breakdown, agreement, sample
+    /// accounting, bias flags). Additive and nullable: pre-existing clients that never send or read
+    /// it keep working. Persisted by the SQLite backend; other backends default it to `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<ScoreDetail>,
     /// Judge model, e.g. `claude-haiku-4-5`.
     pub scored_by: String,
     /// Cost of the judge call. Recorded for visibility (Agent SDK credit burn); never throttled.

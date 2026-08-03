@@ -217,6 +217,8 @@ fn scores(store: &dyn Store, pid: &str) -> Result<()> {
         max: 1.0,
         pass: Some(true),
         reasoning: Some("ok".into()),
+        // Detail round-trip is backend-specific (SQLite-first), so the shared suite stays scalar.
+        detail: None,
         scored_by: "judge".into(),
         cost_usd: Some(0.01),
         created_at: Utc::now(),

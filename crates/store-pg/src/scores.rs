@@ -82,6 +82,8 @@ fn from_row(row: &PgRow) -> Result<Score> {
         max: row.try_get(5).map_err(pgerr)?,
         pass: row.try_get::<Option<i64>, _>(6).map_err(pgerr)?.map(|v| v != 0),
         reasoning: row.try_get(7).map_err(pgerr)?,
+        // Verdict provenance is SQLite-first (see Store::insert_score); this backend has no column.
+        detail: None,
         scored_by: row.try_get(8).map_err(pgerr)?,
         cost_usd: row.try_get(9).map_err(pgerr)?,
         created_at: parse_ts(&created_at)?,

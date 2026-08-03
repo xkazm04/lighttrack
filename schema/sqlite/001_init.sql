@@ -79,6 +79,10 @@ CREATE TABLE IF NOT EXISTS scores (
   max         REAL NOT NULL DEFAULT 1.0,
   pass        INTEGER,
   reasoning   TEXT,
+  -- Structured verdict provenance (core::ScoreDetail) as JSON: per-dimension {value, weight,
+  -- floor_hit, reasoning[]}, agreement, sample accounting, bias/injection flags. NULL for scores
+  -- posted without it. Bounded by ScoreDetail::capped() at the API boundary.
+  detail      TEXT,
   scored_by   TEXT NOT NULL,
   cost_usd    REAL,
   created_at  TEXT NOT NULL

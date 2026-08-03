@@ -98,3 +98,34 @@ judge, next to the score it produced. Applies to `build_judge_prompt` / `build_e
 *Non-goals:* not a content scanner, not PII redaction (that is `anon`). The nonce is mixed from clock +
 counter + address, not a CSPRNG — sufficient because the threat model is content authored **before** the
 call, which cannot know the nonce.
+
+## D11 — Verdicts persist their provenance (2026-08-03)
+A judge run computed per-dimension scores, per-sample reasoning, agreement and parse-failure counts, and
+persisted almost none of it: the engine kept only the **first** parseable sample's reasoning (samples 2..k
+were billed then discarded), `lt-runner rubric` posted the template `"rubric '<x>' overall over N dims"`,
+compare mode stuffed dimensions into a free-text string, and the pairwise judge's rationale was computed
+and never printed or stored. Users paid for reasoning tokens that were deleted, and a `Score` row was an
+unauditable scalar.
+
+**Every persisted verdict now answers "why did this score happen?".** `Score` gains a nullable
+`detail: ScoreDetail` — per-dimension `{value, weight, floor, floor_hit, reasoning[]}` (one reasoning per
+sample that parsed, in sample order), plus `agreement`, `samples_requested`, `samples_parsed`,
+`parse_failures`, `position_bias` and `injection_suspected` (D10). `GET /v1/scores` returns it;
+`Score.reasoning` now quotes the judge's weakest-dimension text instead of a template. The engine's
+`DimScore.reasoning: String` became `reasonings: Vec<String>` (with a `.reasoning()` accessor for the
+one-liner); aggregation arithmetic is unchanged and still order-independent at any `--jobs`.
+
+*Bounds (a score row is hot).* `ScoreDetail::capped()` — applied by the API on every insert, so no client
+can balloon a row — keeps ≤ 600 chars per reasoning (truncated with `…`), ≤ 8 reasonings per dimension,
+≤ 32 dimensions, ≤ 8 notes. Worst case ≈ 150 KB; a typical 4-dim × 3-sample verdict ≈ 5 KB. The pairwise
+run report caps stored per-game rationales at 200 games (`games_logged` says how many were kept;
+`n_games` stays the true total).
+
+*Backends.* SQLite stores `detail` as a JSON column (additive `ALTER TABLE scores ADD COLUMN detail TEXT`);
+Postgres/Firestore/BigQuery persist the scalar verdict as before and read `detail` back as `None` — the
+SQLite-first precedent set by the trace view and forecasting, stated on `Store::insert_score` rather than
+implied. An unreadable `detail` blob degrades to `None` instead of failing the listing.
+
+*Honest failure accounting.* Compare mode's swallowed `let _ = post(...)` now logs the failure and counts
+it into the run report as `score_post_failures`, alongside `injection_suspected_cases`; rubric mode reports
+`injection_suspected_cases` and raises a recommendation.

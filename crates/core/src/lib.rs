@@ -57,6 +57,7 @@ pub use relay::{
 };
 pub use score::{
     judge_verdict_schema, Benchmark, BenchmarkCase, BenchmarkRun, BenchTarget, JudgeVerdict, Score,
+    ScoreDetail, ScoreDim, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM, MAX_REASONING_CHARS,
 };
 pub use trace::{Trace, TraceSpan, TraceSummary, TraceTotals};
 

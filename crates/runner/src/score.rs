@@ -150,6 +150,7 @@ fn build_score(
         "max": outcome.verdict.max,
         "pass": outcome.verdict.pass,
         "reasoning": outcome.verdict.reasoning,
+        "detail": crate::provenance::freeform_detail(outcome),
         "scored_by": outcome.model,
         "cost_usd": outcome.cost_usd,
     })

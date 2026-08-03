@@ -6,7 +6,9 @@ use std::collections::BTreeSet;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, DatasetItem, ModelPriceRow, Rubric};
+use lighttrack_core::{
+    BenchTarget, Benchmark, BenchmarkCase, DatasetItem, ModelPriceRow, Rubric, ScoreDetail,
+};
 use lighttrack_engine::{
     build_eval_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig, JudgeOutcome,
 };
@@ -14,6 +16,7 @@ use lighttrack_engine::{
 use crate::cli::Cli;
 use crate::compare::run_compare;
 use crate::http::{get, post};
+use crate::provenance::{freeform_detail, rubric_detail};
 use crate::rubric::run_rubric_benchmark;
 use crate::stats::{annotate_significance, significance_verdict, Summary};
 use crate::util::{add_price_warnings, cost_or_book, join_csv, now_ts, parallel_map, percentiles};
@@ -189,6 +192,7 @@ fn run_simple(
             "rubric": format!("bench:{}", bench.name),
             "value": outcome.verdict.score, "max": outcome.verdict.max, "pass": outcome.verdict.pass,
             "reasoning": outcome.verdict.reasoning, "scored_by": outcome.model, "cost_usd": outcome.cost_usd,
+            "detail": freeform_detail(&outcome),
         });
         post(cli, http, "/v1/scores", &score)?;
     }
@@ -245,6 +249,9 @@ pub(crate) struct JudgeResult {
     pub(crate) judge_priced: bool,
     /// (dimension key, mean score) pairs; empty for freeform-rubric judging.
     pub(crate) dimensions: Vec<(String, f64)>,
+    /// Structured provenance for this verdict — per-dimension values/floors, every sample's
+    /// reasoning, agreement and sample accounting. Posted with the score instead of being dropped.
+    pub(crate) detail: ScoreDetail,
 }
 
 /// Judge one generated/candidate output via the rubric (if any) or the freeform rubric text, using
@@ -279,6 +286,7 @@ pub(crate) fn judge_output(
             agreement: o.agreement,
             judge_priced: priced,
             dimensions: o.dimensions.iter().map(|d| (d.key.clone(), d.score)).collect(),
+            detail: rubric_detail(&o),
         })
     } else {
         let prompt = build_eval_prompt(&bench.rubric, &case.input, case.expected.as_deref(), output);
@@ -297,6 +305,7 @@ pub(crate) fn judge_output(
             tokens: v.input_tokens.unwrap_or(0) + v.output_tokens.unwrap_or(0),
             agreement: 1.0,
             judge_priced: priced,
+            detail: freeform_detail(&v),
             dimensions: Vec::new(),
         })
     }

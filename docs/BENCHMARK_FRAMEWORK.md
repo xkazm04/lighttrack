@@ -75,6 +75,13 @@ score" is a reportable fact, not an invisible one.
   and a TRUSTED/NOT-TRUSTED verdict against `--kappa-bar` (default 0.6). Judge-only (no generation),
   self-contained (no Store/schema changes). Agreement math lives in `core::calibration` (unit-tested).
 
+**Verdict provenance (D11).** Every posted score carries a nullable `detail`: per-dimension
+`{value, weight, floor, floor_hit, reasoning[]}` with **one reasoning per sample that parsed** (all k
+retained — they were billed), plus agreement, `samples_requested`/`samples_parsed`/`parse_failures`,
+`position_bias` and `injection_suspected`. `GET /v1/scores` returns it. Stored provenance is bounded by
+`ScoreDetail::capped()` (≤600 chars/reasoning, ≤8 reasonings/dimension, ≤32 dimensions); SQLite persists
+it, other backends read it back as `None`.
+
 **Bias controls (the four):** position → randomize/shuffle A/B and aggregate; verbosity → rubric explicitly
 penalizes unnecessary length; self-preference → judge family ≠ generator family (or pairwise+neutral);
 authority → strip provider/model identity from what the judge sees.

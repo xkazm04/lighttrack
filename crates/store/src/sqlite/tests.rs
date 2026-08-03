@@ -344,6 +344,7 @@ fn trace_rollup_groups_events_and_scores() {
         max: 1.0,
         pass: Some(true),
         reasoning: None,
+        detail: None,
         scored_by: "judge".into(),
         cost_usd: Some(0.0001),
         created_at: Utc::now(),
@@ -1161,4 +1162,73 @@ fn relay_idempotency_key_is_unique_per_project() {
     assert_eq!(s.list_relay_tasks(Some("p1"), None, 10).unwrap().len(), 1);
     assert_eq!(s.list_relay_tasks(Some("p1"), Some("queued"), 10).unwrap().len(), 1);
     assert_eq!(s.list_relay_tasks(Some("p1"), Some("dead"), 10).unwrap().len(), 0);
+}
+
+/// Verdict provenance survives a write/read cycle intact: a multi-dimension, multi-sample rubric
+/// verdict must come back with every dimension, every sample's reasoning, the floor that gated it,
+/// and the reliability counters — otherwise a stored score is an unauditable scalar again.
+#[test]
+fn score_detail_round_trips_multi_dimension_multi_sample() {
+    use lighttrack_core::{Score, ScoreDetail, ScoreDim};
+
+    let s = SqliteStore::open_in_memory().unwrap();
+    s.init_schema().unwrap();
+
+    let detail = ScoreDetail {
+        dimensions: vec![
+            ScoreDim {
+                key: "correctness".into(),
+                value: 0.7,
+                weight: 3.0,
+                floor: Some(0.5),
+                floor_hit: false,
+                reasoning: vec!["sample one".into(), "sample two".into(), "sample three".into()],
+            },
+            ScoreDim {
+                key: "safety".into(),
+                value: 0.2,
+                weight: 1.0,
+                floor: Some(0.5),
+                floor_hit: true,
+                reasoning: vec!["unsafe advice".into(), "still unsafe".into()],
+            },
+        ],
+        agreement: Some(0.8),
+        samples_requested: Some(3),
+        samples_parsed: Some(3),
+        parse_failures: Some(0),
+        position_bias: None,
+        injection_suspected: Some(true),
+        notes: vec!["candidate spoofed a section marker".into()],
+    };
+    let score = Score {
+        id: new_id(),
+        project_id: "p1".into(),
+        event_id: None,
+        rubric: "bench:x".into(),
+        value: 0.575,
+        max: 1.0,
+        pass: Some(false),
+        reasoning: Some("safety: unsafe advice".into()),
+        detail: Some(detail.clone()),
+        scored_by: "google/gemini".into(),
+        cost_usd: Some(0.002),
+        created_at: Utc::now(),
+    };
+    s.insert_score(&score).unwrap();
+
+    let listed = s.list_scores(Some("p1"), 10).unwrap();
+    assert_eq!(listed.len(), 1);
+    let got = listed[0].detail.as_ref().expect("detail must round-trip");
+    assert_eq!(got, &detail, "every field survives the JSON column");
+    assert_eq!(got.dimensions[0].reasoning.len(), 3, "all k samples' reasoning kept");
+    assert!(got.dimensions[1].floor_hit, "the gating floor is auditable after the fact");
+
+    // A score posted without provenance still stores and reads back cleanly (additive, nullable).
+    let mut bare = score.clone();
+    bare.id = new_id();
+    bare.detail = None;
+    s.insert_score(&bare).unwrap();
+    let listed = s.list_scores(Some("p1"), 10).unwrap();
+    assert!(listed.iter().any(|x| x.id == bare.id && x.detail.is_none()));
 }

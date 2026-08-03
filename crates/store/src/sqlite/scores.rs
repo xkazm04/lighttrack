@@ -2,19 +2,25 @@
 
 use rusqlite::{params, Connection, Row};
 
-use lighttrack_core::Score;
+use lighttrack_core::{Score, ScoreDetail};
 
 use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
 
-const COLS: &str = "id, project_id, event_id, rubric, value, max, pass, reasoning, \
+const COLS: &str = "id, project_id, event_id, rubric, value, max, pass, reasoning, detail, \
     scored_by, cost_usd, created_at";
 
 pub(super) fn insert(conn: &Connection, s: &Score) -> Result<()> {
+    // Verdict provenance rides as JSON in one column: it is read back whole with the score and never
+    // filtered on, so a per-dimension table would buy nothing but joins.
+    let detail = match &s.detail {
+        Some(d) if !d.is_empty() => Some(serde_json::to_string(d)?),
+        _ => None,
+    };
     conn.execute(
         "INSERT INTO scores \
-         (id, project_id, event_id, rubric, value, max, pass, reasoning, scored_by, cost_usd, created_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+         (id, project_id, event_id, rubric, value, max, pass, reasoning, detail, scored_by, cost_usd, created_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         params![
             s.id,
             s.project_id,
@@ -24,6 +30,7 @@ pub(super) fn insert(conn: &Connection, s: &Score) -> Result<()> {
             s.max,
             s.pass.map(|b| b as i64),
             s.reasoning,
+            detail,
             s.scored_by,
             s.cost_usd,
             fmt_ts(s.created_at),
@@ -100,6 +107,7 @@ type ScoreRaw = (
     f64,
     Option<i64>,
     Option<String>,
+    Option<String>,
     String,
     Option<f64>,
     String,
@@ -118,10 +126,17 @@ fn map_raw(row: &Row) -> rusqlite::Result<ScoreRaw> {
         row.get(8)?,
         row.get(9)?,
         row.get(10)?,
+        row.get(11)?,
     ))
 }
 
 fn from_raw(r: ScoreRaw) -> Result<Score> {
+    // A detail blob written by a newer/other writer must not sink the whole listing: an unreadable
+    // one degrades to `None` (the score's scalar is still true) rather than erroring the query.
+    let detail = r
+        .8
+        .as_deref()
+        .and_then(|j| serde_json::from_str::<ScoreDetail>(j).ok());
     Ok(Score {
         id: r.0,
         project_id: r.1,
@@ -131,8 +146,9 @@ fn from_raw(r: ScoreRaw) -> Result<Score> {
         max: r.5,
         pass: r.6.map(|v| v != 0),
         reasoning: r.7,
-        scored_by: r.8,
-        cost_usd: r.9,
-        created_at: parse_ts(&r.10)?,
+        detail,
+        scored_by: r.9,
+        cost_usd: r.10,
+        created_at: parse_ts(&r.11)?,
     })
 }

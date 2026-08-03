@@ -161,6 +161,7 @@ pub(crate) async fn score_trace(
         max: body.max,
         pass: body.pass,
         reasoning: body.reasoning,
+        detail: None,
         scored_by: body.scored_by,
         cost_usd: body.cost_usd,
         created_at: Utc::now(),

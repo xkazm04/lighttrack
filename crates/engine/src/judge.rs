@@ -231,14 +231,15 @@ fn judge_with(
 /// the floor-gated pass/fail, cross-sample agreement, and honest cost/latency/failure accounting.
 fn aggregate(results: &[Parsed<SampleDims>], rubric: &Rubric, model: &str, k: u32) -> Result<RubricOutcome> {
     let mut per_dim: HashMap<String, Vec<f64>> = HashMap::new();
-    let mut reasonings: HashMap<String, String> = HashMap::new();
+    // Every sample's reasoning, in index order — not just the first. Samples 2..k were billed; their
+    // justification is the audit trail for the mean they moved.
+    let mut reasonings: HashMap<String, Vec<String>> = HashMap::new();
     let mut overalls: Vec<f64> = Vec::new();
     let (mut total_cost, mut any_cost, mut max_latency, mut in_tok, mut out_tok) =
         (0.0_f64, false, 0_u64, 0_u64, 0_u64);
     let mut model_used = model.to_string();
     let mut parse_failures = 0_u32;
     let mut first_raw_failure: Option<String> = None;
-    let mut have_reasonings = false;
 
     for r in results {
         // Account cost/latency/tokens even for a dropped sample — the call still burned real tokens
@@ -258,12 +259,11 @@ fn aggregate(results: &[Parsed<SampleDims>], rubric: &Rubric, model: &str, k: u3
                 let mut sample: Vec<(String, f64)> = Vec::with_capacity(dims.len());
                 for (key, score, reasoning) in dims {
                     per_dim.entry(key.clone()).or_default().push(*score);
-                    if !have_reasonings {
-                        reasonings.insert(key.clone(), reasoning.clone());
+                    if !reasoning.is_empty() {
+                        reasonings.entry(key.clone()).or_default().push(reasoning.clone());
                     }
                     sample.push((key.clone(), *score));
                 }
-                have_reasonings = true;
                 overalls.push(weighted(&sample, rubric));
             }
             None => {
@@ -298,8 +298,10 @@ fn aggregate(results: &[Parsed<SampleDims>], rubric: &Rubric, model: &str, k: u3
             DimScore {
                 key: d.key.clone(),
                 score: mean,
-                reasoning: reasonings.get(&d.key).cloned().unwrap_or_default(),
+                reasonings: reasonings.get(&d.key).cloned().unwrap_or_default(),
                 weight: d.weight,
+                floor: d.floor,
+                floor_hit: d.floor.is_some_and(|f| mean < f),
             }
         })
         .collect();
@@ -312,15 +314,8 @@ fn aggregate(results: &[Parsed<SampleDims>], rubric: &Rubric, model: &str, k: u3
             0.0
         }
     };
-    let pass = overall >= rubric.threshold
-        && rubric.dimensions.iter().all(|d| {
-            let s = dimensions
-                .iter()
-                .find(|x| x.key == d.key)
-                .map(|x| x.score)
-                .unwrap_or(0.0);
-            d.floor.is_none_or(|f| s >= f)
-        });
+    // Identical gating to before, now read off the per-dimension `floor_hit` the outcome carries.
+    let pass = overall >= rubric.threshold && dimensions.iter().all(|d| !d.floor_hit);
     // Agreement is measured over the samples that actually scored, not the requested count — a lone
     // surviving sample has nothing to disagree with, so it reports full agreement.
     let agreement = if overalls.len() > 1 {
@@ -342,6 +337,7 @@ fn aggregate(results: &[Parsed<SampleDims>], rubric: &Rubric, model: &str, k: u3
         output_tokens: Some(out_tok),
         model: model_used,
         samples: k,
+        samples_parsed: overalls.len() as u32,
         agreement,
         parse_failures,
         injection_suspected: false, // set by judge_with, which owns the prompt's fence signal

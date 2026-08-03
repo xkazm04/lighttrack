@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 
 use crate::cli::Cli;
 use crate::http::{get, post};
+use crate::provenance::{rubric_detail, weakest_reasoning};
 use crate::stats::{annotate_significance, significance_verdict, Summary};
 use crate::util::{
     add_price_warnings, cost_or_book, dim_mean, join_csv, now_ts, parallel_map, percentiles,
@@ -58,6 +59,9 @@ pub(crate) fn run_rubric_benchmark(
     // of individual self-consistency samples dropped from scored cases — kept out of the means so a
     // flaky judge response never silently records a 0.0.
     let (mut errored, mut sample_failures) = (0u32, 0u32);
+    // Cases whose judged content tried to imitate a prompt boundary (neutralized by the engine's
+    // fence) — recorded so an operator can see which scores are attacker-adjacent.
+    let mut injected = 0u32;
     let mut price_warnings: BTreeSet<String> = BTreeSet::new();
 
     // Judge every case with up to `jobs` concurrency (jobs=1 for the engine's per-case sample loop, so
@@ -121,18 +125,31 @@ pub(crate) fn run_rubric_benchmark(
             .collect::<Vec<_>>()
             .join(" ");
         println!("  case {}: overall={:.2} pass={} [{dim_str}]", i + 1, o.overall, o.pass);
+        if o.injection_suspected {
+            injected += 1;
+            eprintln!(
+                "  case {}: judged content imitated a prompt boundary (neutralized) — treat this \
+                 score as attacker-adjacent",
+                i + 1
+            );
+        }
         if !o.pass {
             if let Some(w) = o.dimensions.iter().min_by(|a, b| a.score.total_cmp(&b.score)) {
                 failing.push(json!({
-                    "index": i + 1, "overall": o.overall, "weakest": w.key, "reasoning": w.reasoning
+                    "index": i + 1, "overall": o.overall, "weakest": w.key, "reasoning": w.reasoning()
                 }));
             }
         }
+        // Post the verdict WITH its provenance: per-dimension values/weights/floors and every
+        // sample's reasoning, plus agreement and sample accounting. The one-line `reasoning` quotes
+        // the judge's weakest-dimension text instead of restating the rubric's shape.
+        let detail = rubric_detail(&o);
         let score = json!({
             "project_id": bench.project_id,
             "rubric": format!("bench:{}", bench.name),
             "value": o.overall, "max": 1.0, "pass": o.pass,
-            "reasoning": format!("rubric '{}' overall over {} dims", rubric.name, o.dimensions.len()),
+            "reasoning": weakest_reasoning(&detail),
+            "detail": detail,
             "scored_by": o.model, "cost_usd": o.cost_usd,
         });
         post(cli, http, "/v1/scores", &score)?;
@@ -177,6 +194,12 @@ pub(crate) fn run_rubric_benchmark(
         recs.push(format!(
             "Judge emitted unparseable output: {errored} case(s) skipped, {sample_failures} sample(s) \
 dropped. Check the judge model/prompt — these scores are absent, not failing."
+        ));
+    }
+    if injected > 0 {
+        recs.push(format!(
+            "{injected} case(s) contained content imitating a judge-prompt boundary (neutralized). \
+Review those candidates — their scores are attacker-adjacent."
         ));
     }
     if !price_warnings.is_empty() {
@@ -225,6 +248,7 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
         "overall_mean": mean, "pass_rate": pass_rate, "dimensions": dim_means,
         "weakest_dimension": weakest, "failing_cases": failing, "recommendations": recs,
         "unparseable_cases": errored, "dropped_samples": sample_failures,
+        "injection_suspected_cases": injected,
     });
     if let Some(h) = &healing {
         report["healing"] = json!(h);

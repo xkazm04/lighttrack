@@ -59,6 +59,8 @@ fn score_from(m: &Fields) -> Result<Score> {
         max: ff64(m, "max").unwrap_or(1.0),
         pass: fi64(m, "pass").map(|v| v != 0),
         reasoning: fstr(m, "reasoning"),
+        // Verdict provenance is SQLite-first (see Store::insert_score); this backend has no field.
+        detail: None,
         scored_by: freq(m, "scored_by")?,
         cost_usd: ff64(m, "cost_usd"),
         created_at: parse_ts(&freq(m, "created_at")?)?,
