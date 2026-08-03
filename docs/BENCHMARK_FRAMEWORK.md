@@ -148,6 +148,35 @@ sampling noise rather than genuine ambiguity**, so read `agreement` accordingly.
 `ANTHROPIC_API_KEY` moves the default judge off the CLI onto the bare Messages API (temperature pinned,
 no ~40k-token auto-loaded context); without a key the CLI remains the path, for subscription users.
 
+**The stamp covers generation *and* judging (D13).** Pinning only the judge was never enough: compare and
+pairwise **generate** the candidate they grade, and a candidate redrawn on every run makes the run
+irreproducible however deterministic the grading was. So candidate generation now goes through the same
+pinned path as the judge (`temperature: 0` + the fixed seed, where the provider takes them), and the run
+report carries **two facts instead of one**:
+
+```json
+"determinism": "best-effort",
+"determinism_detail": { "generation": "best-effort", "judging": "exact" }
+```
+
+- `determinism` is the **weaker** of the two halves, so it can never overstate; `determinism_detail`
+  names which half is the limit. A `null` half means that half did not happen — rubric and simple modes
+  judge outputs the caller supplied and generate nothing.
+- Ordering, weakest first: `sampled` < `best-effort` < `exact`.
+- `sampled` is a *third*, deliberately-unpinned state: with `--gen-samples > 1` the operator is drawing a
+  distribution of candidates on purpose (generation self-consistency). Pinning there would collapse every
+  draw onto one output and silently delete the feature, so we sample — and say so — rather than claim
+  reproducibility. A `--gen-samples 1` run over a seeded provider reads `exact` on both halves and does
+  reproduce its candidates.
+- No provider regresses: one with no sampling knobs (`claude -p`) still runs, degraded to `best-effort`,
+  and is stamped as such rather than silently included in an `exact` claim.
+
+**Dataset content pin.** `dataset_ref` pins an **id**, not content, and freezing is opt-in — so two runs
+citing the same ref can have been scored on different cases. Every run over a referenced dataset now also
+records `dataset_frozen` and `dataset_version` **as of run time**, and prints a note when the dataset is
+not frozen. This records the truth; it deliberately does **not** change the policy — an unfrozen dataset
+still runs, it just no longer *reads* as pinned.
+
 **Report & "healing":** per-target × per-dimension scorecard; **failure clustering** (group low-scoring
 cases by dimension/pattern); **recommendations** — concrete, actionable: e.g. "completeness lowest on
 multi-part questions → add a checklist step to prompt v2", "switch judge off same-family to cut

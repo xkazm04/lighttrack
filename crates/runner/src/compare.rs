@@ -9,7 +9,9 @@ use anyhow::Result;
 use serde_json::{json, Map, Value};
 
 use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, ModelPriceRow, Rubric, ScoreDetail};
-use lighttrack_engine::{generate, parse_judge_spec, same_family, EngineConfig};
+use lighttrack_engine::{
+    generate, generate_deterministic, parse_judge_spec, same_family, Determinism, EngineConfig,
+};
 
 use crate::bench::judge_output;
 use crate::cli::Cli;
@@ -18,6 +20,7 @@ use crate::provenance::{merge_details, weakest_reasoning};
 use crate::stats::{annotate_significance, significance_verdict, stability, Summary};
 use crate::util::{
     add_price_warnings, aggregate_status, cost_or_book, join_csv, now_ts, parallel_map, percentiles,
+    stamp_determinism,
 };
 
 /// One `(target, case)` cell's independent result: the candidate scores/agreements plus this cell's
@@ -37,6 +40,9 @@ struct Cell {
     judge_cost: f64,
     judge_tokens: u64,
     latencies: Vec<u64>,
+    /// Weakest reproducibility stamp across this cell's *generation* calls. `None` when nothing
+    /// generated (the cell errored before its first candidate).
+    gen_determinism: Option<Determinism>,
     /// Models with no price-book entry seen while pricing this cell (cost undercounted).
     price_warnings: BTreeSet<String>,
     /// First generation/judge error hit while sampling this cell (printed in the sequential fold).
@@ -71,17 +77,31 @@ fn compute_cell(
         judge_cost: 0.0,
         judge_tokens: 0,
         latencies: Vec::new(),
+        gen_determinism: None,
         price_warnings: BTreeSet::new(),
         error_msg: None,
     };
+    // Pin the candidate exactly as the judge is pinned — but only when one candidate per case was
+    // asked for. With `--gen-samples > 1` the operator is deliberately drawing a distribution;
+    // temperature 0 would collapse every draw onto the same output and silently delete the feature,
+    // so we sample and stamp the run `sampled` rather than quietly claiming reproducibility.
+    let pin = ng == 1;
     for _ in 0..ng {
-        let gen = match generate(engine, &t.provider, &t.model, t.system_prompt.as_deref(), &case.input, None) {
+        let gen_call = if pin { generate_deterministic } else { generate };
+        let gen = match gen_call(engine, &t.provider, &t.model, t.system_prompt.as_deref(), &case.input, None) {
             Ok(g) => g,
             Err(e) => {
                 cell.error_msg = Some(format!("generation error — {e}"));
                 break;
             }
         };
+        // A pinned call reports what the provider actually honoured (`exact` only with a real seed);
+        // an unpinned multi-draw is `sampled` regardless of what the provider could have offered.
+        let stamp = if pin { gen.determinism } else { Determinism::Sampled };
+        cell.gen_determinism = Some(match cell.gen_determinism {
+            Some(prev) => prev.weakest(stamp),
+            None => stamp,
+        });
         let (gc, gpriced) =
             cost_or_book(gen.cost_usd, prices, &t.provider, &t.model, gen.input_tokens, gen.output_tokens);
         if !gpriced {
@@ -181,8 +201,11 @@ pub(crate) fn run_compare(
         // boundary. Both land in the run report instead of scrolling past on stderr.
         let (mut score_post_failures, mut injected) = (0u32, 0u32);
         // Weakest determinism stamp across this target's judged cells. `None` until something was
-        // actually judged — a target with no verdicts claims nothing.
-        let mut target_determinism: Option<&'static str> = None;
+        // actually judged — a target with no verdicts claims nothing. Generation and judging are
+        // tracked SEPARATELY: a pinned judge over a redrawn candidate is not a reproducible run, and
+        // the old single stamp reported only the judge half.
+        let mut target_determinism: Option<Determinism> = None;
+        let mut target_gen_determinism: Option<Determinism> = None;
 
         // Self-preference (BENCHMARK_FRAMEWORK §3, "the four bias controls"): a judge from the same
         // lab as the target it grades tends to favour it. Documented as a control since the
@@ -207,6 +230,10 @@ pub(crate) fn run_compare(
                 println!("  case {}: {msg}", i + 1);
             }
             price_warnings.extend(cell.price_warnings);
+            if let Some(g) = cell.gen_determinism {
+                target_gen_determinism =
+                    Some(target_gen_determinism.map_or(g, |prev| prev.weakest(g)));
+            }
             // Costs/latency/tokens accrue even for an errored (no-candidate) case — the calls still
             // burned tokens and $ before the sampling loop broke.
             gen_cost += cell.gen_cost;
@@ -265,10 +292,10 @@ pub(crate) fn run_compare(
             // free-text "k=0.82 …" restatement of numbers already in `value`.
             let detail = merge_details(&cell.cand_details);
             if let Some(d) = detail.determinism.as_deref() {
-                target_determinism = Some(match (target_determinism, d) {
-                    (Some("best-effort"), _) | (_, "best-effort") => "best-effort",
-                    _ => "exact",
-                });
+                let stamp =
+                    if d == "exact" { Determinism::Exact } else { Determinism::BestEffort };
+                target_determinism =
+                    Some(target_determinism.map_or(stamp, |prev| prev.weakest(stamp)));
             }
             if detail.injection_suspected == Some(true) {
                 injected += 1;
@@ -329,10 +356,12 @@ pub(crate) fn run_compare(
             "score_post_failures": score_post_failures,
             "injection_suspected_cases": injected,
             "self_preference": self_preference,
-            "determinism": target_determinism,
             "agreement": r3(mean_agree), "dimensions": Value::Object(dim_means),
             "verdict": status, "baseline": bench.baseline_score,
         });
+        // The headline `determinism` is the weaker of generation and judging, with both halves
+        // recorded beside it — a run whose candidates were resampled must not read as exact.
+        stamp_determinism(&mut report, target_gen_determinism, target_determinism);
         // `cases` was unbounded — a big dataset wrote a report blob that grew with it. It is now a
         // bounded preview carrying its own truncation signal; the complete per-case record is the
         // run's scores (`GET /v1/scores?run=<id>`).

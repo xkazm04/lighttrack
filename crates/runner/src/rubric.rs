@@ -18,6 +18,7 @@ use crate::provenance::{rubric_detail, weakest_reasoning};
 use crate::stats::{annotate_significance, significance_verdict, Summary};
 use crate::util::{
     add_price_warnings, cost_or_book, dim_mean, join_csv, now_ts, parallel_map, percentiles,
+    stamp_determinism,
 };
 
 /// One case's judged result: no candidate output, a judged rubric outcome, or an unparseable judge
@@ -295,8 +296,11 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
         "weakest_dimension": weakest, "recommendations": recs,
         "unparseable_cases": errored, "dropped_samples": sample_failures,
         "injection_suspected_cases": injected, "score_post_failures": score_post_failures,
-        "determinism": determinism.as_str(),
     });
+    // Rubric mode judges outputs the caller supplied — it generates nothing, so the generation half
+    // of the stamp is `null` rather than a claim. The headline `determinism` is unchanged for this
+    // mode; only its shape is now shared with compare/pairwise.
+    stamp_determinism(&mut report, None, (judged > 0).then_some(determinism));
     // Bounded, with the truncation signal beside it — an unbounded array here is a report blob that
     // grows with the dataset. The complete per-case record is the run's scores.
     crate::bench::attach_cases(&mut report, "failing_cases", failing);

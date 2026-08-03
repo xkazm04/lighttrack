@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use lighttrack_core::{
-    BenchTarget, Benchmark, BenchmarkCase, DatasetItem, ModelPriceRow, Rubric, ScoreDetail,
+    BenchTarget, Benchmark, BenchmarkCase, Dataset, DatasetItem, ModelPriceRow, Rubric, ScoreDetail,
 };
 use lighttrack_engine::{
     build_eval_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig, JudgeOutcome,
@@ -58,6 +58,21 @@ pub(crate) fn attach_cases(report: &mut Value, key: &str, mut all: Vec<Value>) {
     }
 }
 
+/// Merge the dataset's **content pin** into a run's `report_extra`: `dataset_frozen` and
+/// `dataset_version` as of run time. `dataset_ref` alone pins an *id*, and a dataset is mutable
+/// until someone freezes it (freezing is opt-in — see `api::datasets::freeze_dataset`), so two runs
+/// citing the same ref can have been scored on different cases. Recording the truth is not the same
+/// as changing the policy: an unfrozen dataset still runs, it just no longer *reads* as pinned.
+pub(crate) fn dataset_pin(extra: Option<&Value>, ds: &Dataset) -> Value {
+    let mut m = match extra {
+        Some(Value::Object(o)) => o.clone(),
+        _ => serde_json::Map::new(),
+    };
+    m.insert("dataset_frozen".into(), json!(ds.frozen));
+    m.insert("dataset_version".into(), json!(ds.version));
+    Value::Object(m)
+}
+
 /// Stamp reproducibility pins into a run report: what judged (`judge_model`), against what
 /// (`rubric_id` / `dataset_ref`, when the benchmark has them), plus caller-supplied provenance —
 /// e.g. the `{prompt_id, prompt_version}` a version-triggered run was scoring, which is what makes
@@ -100,10 +115,29 @@ pub(crate) fn run_benchmark(
 ) -> Result<String> {
     let bench: Benchmark = get(cli, http, &format!("/v1/benchmarks/{benchmark_id}"))?;
 
+    // A referenced dataset also contributes its frozen-state + version to the run's provenance, so
+    // "which cases was this scored on?" is answerable from the run alone.
+    let mut extra_owned: Option<Value> = None;
     let cases: Vec<BenchmarkCase> = if !bench.dataset.is_empty() {
         bench.dataset.clone()
     } else if let Some(ds) = bench.dataset_ref.as_deref() {
         let items: Vec<DatasetItem> = get(cli, http, &format!("/v1/datasets/{ds}/items"))?;
+        match get::<Dataset>(cli, http, &format!("/v1/datasets/{ds}")) {
+            Ok(d) => {
+                if !d.frozen {
+                    println!(
+                        "  note: dataset {ds} (v{}) is NOT frozen — its cases can change between \
+                         runs, so this run is not exactly reproducible from its ref alone.",
+                        d.version
+                    );
+                }
+                extra_owned = Some(dataset_pin(report_extra, &d));
+            }
+            // The items already loaded; a missing/forbidden dataset head is a provenance gap, not a
+            // reason to abandon a paid run. Say so instead of silently claiming a pin.
+            Err(e) => eprintln!("  warning: could not read dataset {ds} metadata ({e}); the run \
+                                 will not record its frozen-state/version"),
+        }
         items
             .into_iter()
             .map(|it| BenchmarkCase {
@@ -115,6 +149,7 @@ pub(crate) fn run_benchmark(
     } else {
         Vec::new()
     };
+    let report_extra = extra_owned.as_ref().or(report_extra);
 
     let targets = parse_targets(&bench.target)?;
     if !targets.is_empty() {
@@ -355,10 +390,42 @@ pub(crate) fn judge_output(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_targets;
+    use super::{dataset_pin, parse_targets, stamp_pins};
     use crate::util::{add_price_warnings, join_csv};
+    use lighttrack_core::Dataset;
     use serde_json::json;
     use std::collections::BTreeSet;
+
+    fn dataset(version: u32, frozen: bool) -> Dataset {
+        serde_json::from_value(json!({ "name": "d", "version": version, "frozen": frozen })).unwrap()
+    }
+
+    #[test]
+    fn dataset_pin_records_frozen_state_and_version() {
+        // No caller provenance → the pin alone.
+        let p = dataset_pin(None, &dataset(3, true));
+        assert_eq!(p["dataset_frozen"], json!(true));
+        assert_eq!(p["dataset_version"], json!(3));
+        // Caller provenance (the prompt version a gated run scores) survives the merge.
+        let extra = json!({ "prompt_id": "p1", "prompt_version": 9 });
+        let p = dataset_pin(Some(&extra), &dataset(1, false));
+        assert_eq!(p["prompt_id"], json!("p1"));
+        assert_eq!(p["prompt_version"], json!(9));
+        assert_eq!(p["dataset_frozen"], json!(false), "an unfrozen dataset is recorded, not hidden");
+    }
+
+    #[test]
+    fn stamp_pins_carries_the_dataset_pin_into_the_report() {
+        let bench: lighttrack_core::Benchmark =
+            serde_json::from_value(json!({ "name": "b", "rubric": "r", "dataset_ref": "ds1" }))
+                .unwrap();
+        let mut report = json!({ "mode": "compare" });
+        let extra = dataset_pin(None, &dataset(2, false));
+        stamp_pins(&mut report, &bench, Some(&extra));
+        assert_eq!(report["dataset_ref"], json!("ds1"), "the id is still pinned");
+        assert_eq!(report["dataset_version"], json!(2), "…and now so is the content it named");
+        assert_eq!(report["dataset_frozen"], json!(false));
+    }
 
     #[test]
     fn parse_targets_null_and_object_are_no_matrix() {

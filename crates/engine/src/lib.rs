@@ -37,7 +37,7 @@ pub use prompts::{
     build_rubric_schema, Prompt,
 };
 pub use family::{model_family, same_family};
-pub use providers::generate;
+pub use providers::{generate, generate_deterministic};
 
 /// Errors from the scoring engine. Transport failures carry a typed classification (not string
 /// matches) so [`retry`](crate::retry) can retry only the transient ones and the judge can tell an
@@ -83,8 +83,8 @@ pub enum EngineError {
 
 pub type Result<T> = std::result::Result<T, EngineError>;
 
-/// How reproducible a judge call actually was — stamped on every outcome so a score's determinism
-/// is a recorded fact rather than an assumption about the provider.
+/// How reproducible a call actually was — stamped on every outcome so a run's determinism is a
+/// recorded fact rather than an assumption about the provider.
 ///
 /// A verdict is a measurement, so agreement between self-consistency samples should signal a
 /// genuinely ambiguous case, not sampling noise. Whether that holds depends on which knobs the
@@ -92,14 +92,20 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Determinism {
     /// **Every** sampling control the provider exposes was pinned, including a fixed seed —
-    /// re-running the eval reproduces the verdict by contract. OpenAI and Gemini (`temperature: 0`
-    /// + `JUDGE_SEED`).
+    /// re-running reproduces the output by contract. OpenAI and Gemini (`temperature: 0`
+    /// + [`PINNED_SEED`](crate::PINNED_SEED)).
     Exact,
     /// Reproducibility is convention, not contract: the path exposed no seed (the Anthropic
     /// Messages API has none — `temperature: 0` is its whole sampling surface), exposed no sampling
     /// knobs at all (the `claude -p` CLI), or rejected the ones we asked for and we retried without
     /// them. Agreement on such a run partly measures sampling noise.
     BestEffort,
+    /// **Deliberately** unpinned: the caller asked for several draws of the same call (candidate
+    /// self-consistency, `--gen-samples > 1`), where variation is the measurement rather than a
+    /// defect. Pinning here would collapse every draw onto one output and silently delete the
+    /// feature — so we sample and say so. Weaker than `BestEffort`: re-running is *known* not to
+    /// reproduce.
+    Sampled,
 }
 
 impl Determinism {
@@ -107,15 +113,25 @@ impl Determinism {
         match self {
             Determinism::Exact => "exact",
             Determinism::BestEffort => "best-effort",
+            Determinism::Sampled => "sampled",
+        }
+    }
+
+    /// Rank, strongest first — the ordering `weakest` folds over.
+    fn rank(self) -> u8 {
+        match self {
+            Determinism::Exact => 2,
+            Determinism::BestEffort => 1,
+            Determinism::Sampled => 0,
         }
     }
 
     /// The weaker of two stamps — a run is only as deterministic as its least deterministic call.
     pub fn weakest(self, other: Determinism) -> Determinism {
-        if self == Determinism::Exact && other == Determinism::Exact {
-            Determinism::Exact
+        if self.rank() <= other.rank() {
+            self
         } else {
-            Determinism::BestEffort
+            other
         }
     }
 }
@@ -239,7 +255,9 @@ pub struct GenOutcome {
     pub latency_ms: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    /// How reproducible this call was — see [`Determinism`]. Candidate *generation* is not a
-    /// measurement and is not asked to be deterministic, so it reports `BestEffort`.
+    /// How reproducible this call was — see [`Determinism`]. Candidate *generation* is judged, so
+    /// it is pinned like the judge is ([`generate_deterministic`]) whenever the caller wants one
+    /// candidate per case; a plain [`generate`] reports `BestEffort` (or `Sampled`, when the caller
+    /// is deliberately drawing several candidates).
     pub determinism: Determinism,
 }

@@ -295,6 +295,14 @@ fn determinism_weakest_is_pessimistic() {
     assert_eq!(BestEffort.weakest(BestEffort), BestEffort);
     assert_eq!(Exact.as_str(), "exact");
     assert_eq!(BestEffort.as_str(), "best-effort");
+    // `Sampled` (a deliberate multi-draw) is weaker than both: re-running is *known* not to reproduce.
+    use Determinism::Sampled;
+    assert_eq!(Sampled.as_str(), "sampled");
+    assert_eq!(Exact.weakest(Sampled), Sampled);
+    assert_eq!(Sampled.weakest(Exact), Sampled);
+    assert_eq!(BestEffort.weakest(Sampled), Sampled);
+    assert_eq!(Sampled.weakest(BestEffort), Sampled);
+    assert_eq!(Sampled.weakest(Sampled), Sampled);
 }
 
 #[test]

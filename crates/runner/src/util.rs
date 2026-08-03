@@ -149,6 +149,37 @@ pub(crate) fn cost_or_book(
     }
 }
 
+/// Stamp a run report's reproducibility as **two separate facts**: how pinned the candidate
+/// *generation* was, and how pinned the *judging* of it was. A single stamp could only ever be as
+/// honest as its weakest half, and until generation was pinned at all the reported `exact` described
+/// the judge while the thing being judged was redrawn on every run. `determinism` stays the
+/// (unchanged-shape) headline and is now the **weaker** of the two — so it can never overstate — with
+/// `determinism_detail` naming which half is the limit. A `None` half means that half didn't happen
+/// (rubric/simple modes judge outputs supplied by the caller, and generate nothing).
+pub(crate) fn stamp_determinism(
+    report: &mut Value,
+    generation: Option<lighttrack_engine::Determinism>,
+    judging: Option<lighttrack_engine::Determinism>,
+) {
+    let overall = match (generation, judging) {
+        (Some(g), Some(j)) => Some(g.weakest(j)),
+        (Some(g), None) => Some(g),
+        (None, Some(j)) => Some(j),
+        (None, None) => None,
+    };
+    let Some(obj) = report.as_object_mut() else {
+        return;
+    };
+    obj.insert("determinism".into(), json!(overall.map(|d| d.as_str())));
+    obj.insert(
+        "determinism_detail".into(),
+        json!({
+            "generation": generation.map(|d| d.as_str()),
+            "judging": judging.map(|d| d.as_str()),
+        }),
+    );
+}
+
 /// Render a JSON value as plain text (strings as-is; everything else compact JSON).
 pub(crate) fn value_to_text(v: &Value) -> String {
     match v.as_str() {
@@ -277,6 +308,34 @@ mod tests {
         // No provider cost, model absent → 0 cost and a warning flag.
         let (cost, priced) = cost_or_book(None, &prices, "x", "y", Some(1), Some(1));
         assert!(approx(cost, 0.0) && !priced);
+    }
+
+    #[test]
+    fn determinism_stamp_never_overstates_the_weaker_half() {
+        use lighttrack_engine::Determinism::{BestEffort, Exact, Sampled};
+        // An exactly-pinned judge over a best-effort candidate is NOT an exactly reproducible run.
+        let mut r = json!({});
+        stamp_determinism(&mut r, Some(BestEffort), Some(Exact));
+        assert_eq!(r["determinism"], json!("best-effort"));
+        assert_eq!(r["determinism_detail"]["generation"], json!("best-effort"));
+        assert_eq!(r["determinism_detail"]["judging"], json!("exact"));
+        // Both pinned → exact.
+        let mut r = json!({});
+        stamp_determinism(&mut r, Some(Exact), Some(Exact));
+        assert_eq!(r["determinism"], json!("exact"));
+        // Deliberate multi-draw generation is the weakest claim of all.
+        let mut r = json!({});
+        stamp_determinism(&mut r, Some(Sampled), Some(Exact));
+        assert_eq!(r["determinism"], json!("sampled"));
+        // Judge-only modes (no generation) keep the judge's stamp verbatim.
+        let mut r = json!({});
+        stamp_determinism(&mut r, None, Some(Exact));
+        assert_eq!(r["determinism"], json!("exact"));
+        assert_eq!(r["determinism_detail"]["generation"], json!(null));
+        // Nothing measured → claims nothing.
+        let mut r = json!({});
+        stamp_determinism(&mut r, None, None);
+        assert_eq!(r["determinism"], json!(null));
     }
 
     #[test]

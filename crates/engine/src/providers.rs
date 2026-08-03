@@ -99,16 +99,21 @@ pub fn generate(
     }
 }
 
-/// [`generate`] with **deterministic sampling requested** — the judge path. A verdict should be a
-/// measurement, not a sample: without `temperature: 0` (+ a fixed `seed` where the API takes one)
-/// the same rubric over the same candidate can flip between runs, which both undermines
-/// reproducibility ("re-run the eval, get the ranking you published") and confounds the
-/// self-consistency agreement metric (disagreement should signal a genuinely ambiguous case, not
-/// sampling noise).
+/// [`generate`] with **deterministic sampling requested** — used for both halves of a benchmark:
+/// the judge call *and* the candidate generation it grades. A verdict should be a measurement, not
+/// a sample: without `temperature: 0` (+ a fixed `seed` where the API takes one) the same rubric
+/// over the same candidate can flip between runs, which both undermines reproducibility ("re-run
+/// the eval, get the ranking you published") and confounds the self-consistency agreement metric
+/// (disagreement should signal a genuinely ambiguous case, not sampling noise).
+///
+/// Pinning the judge alone was never enough: a freshly-sampled candidate makes the *whole* run
+/// irreproducible however deterministic the grading of it was. So compare/pairwise pin generation
+/// here too — except when the operator explicitly asked for several candidate draws, where the
+/// variation is the measurement (stamped [`Determinism::Sampled`] by the caller).
 ///
 /// What each provider actually gives us — recorded on the outcome as
 /// [`Determinism`](crate::Determinism), not assumed:
-/// - **OpenAI / Gemini** — `temperature: 0` + the fixed [`JUDGE_SEED`] ⇒ `exact`.
+/// - **OpenAI / Gemini** — `temperature: 0` + the fixed [`PINNED_SEED`] ⇒ `exact`.
 /// - **Anthropic with `ANTHROPIC_API_KEY`** — the bare Messages API with `temperature: 0`; the API
 ///   exposes no `seed`, so `best-effort`. Still strictly better than the CLI: no ~40k-token
 ///   auto-loaded context and temperature is pinned.
@@ -129,7 +134,7 @@ pub fn generate_deterministic(
     match generate_retrying(cfg, provider, model, system_prompt, input, schema, true) {
         Err(EngineError::BadRequest { who, status, body }) => {
             eprintln!(
-                "[judge] {who} rejected the strict judge request (HTTP {status}: {}); retrying \
+                "[engine] {who} rejected the pinned request (HTTP {status}: {}); retrying \
                  schema-less and non-deterministic",
                 body.chars().take(200).collect::<String>()
             );
@@ -176,8 +181,9 @@ fn generate_once(
     }
 }
 
-/// Fixed seed for deterministic judge calls — any constant works; what matters is that it never varies.
-const JUDGE_SEED: u64 = 42;
+/// Fixed seed for pinned calls (judge *and* candidate generation) — any constant works; what
+/// matters is that it never varies, so two runs of the same benchmark ask for the same draw.
+pub const PINNED_SEED: u64 = 42;
 
 /// Anthropic via `claude -p`, passing the schema through `--json-schema` (serialized).
 fn generate_anthropic(
@@ -248,7 +254,7 @@ fn generate_gemini(
     }
     if deterministic {
         gen_config.insert("temperature".into(), serde_json::json!(0.0));
-        gen_config.insert("seed".into(), serde_json::json!(JUDGE_SEED));
+        gen_config.insert("seed".into(), serde_json::json!(PINNED_SEED));
     }
     if !gen_config.is_empty() {
         body["generationConfig"] = Value::Object(gen_config);
@@ -321,7 +327,7 @@ fn generate_openai(
     if deterministic {
         // Some reasoning models reject `temperature`; generate_deterministic's fallback strips it.
         body["temperature"] = serde_json::json!(0.0);
-        body["seed"] = serde_json::json!(JUDGE_SEED);
+        body["seed"] = serde_json::json!(PINNED_SEED);
     }
 
     let started = Instant::now();

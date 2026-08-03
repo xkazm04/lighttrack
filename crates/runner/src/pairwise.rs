@@ -7,11 +7,13 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, ModelPriceRow, Rubric};
-use lighttrack_engine::{generate, run_pairwise, same_family, Determinism, EngineConfig, PairwiseWinner};
+use lighttrack_engine::{
+    generate_deterministic, run_pairwise, same_family, Determinism, EngineConfig, PairwiseWinner,
+};
 
 use crate::cli::Cli;
 use crate::http::post;
-use crate::util::{parallel_map, price_gen_cost};
+use crate::util::{parallel_map, price_gen_cost, stamp_determinism};
 
 /// A target's round-robin standing.
 #[derive(Clone, Default)]
@@ -41,6 +43,8 @@ struct GenCell {
     output: Option<String>,
     cost: f64,
     tokens: u64,
+    /// How reproducible this candidate was. `None` when generation failed.
+    determinism: Option<Determinism>,
 }
 
 /// Judge criteria for the pairwise prompt: the structured rubric's dimensions, else the freeform text.
@@ -123,29 +127,39 @@ pub(crate) fn run_pairwise_matrix(
         return Ok(());
     }
 
-    // 1. Generate one candidate per (target, case) cell, in parallel.
+    // 1. Generate one candidate per (target, case) cell, in parallel — PINNED (temperature 0 + the
+    // fixed seed) exactly like the judge. Pairwise's whole output is "B beats A"; if the candidates
+    // are redrawn every run, that verdict cannot be reproduced no matter how deterministic the
+    // judging of it was.
     let cells: Vec<GenCell> = parallel_map(n_t * n_c, jobs, |idx| {
         let (ti, ci) = (idx / n_c, idx % n_c);
         let t = &targets[ti];
-        match generate(engine, &t.provider, &t.model, t.system_prompt.as_deref(), &cases[ci].input, None) {
+        match generate_deterministic(
+            engine, &t.provider, &t.model, t.system_prompt.as_deref(), &cases[ci].input, None,
+        ) {
             Ok(g) => GenCell {
                 cost: g.cost_usd.unwrap_or_else(|| {
                     price_gen_cost(prices, &t.provider, &t.model, g.input_tokens, g.output_tokens)
                 }),
                 tokens: g.input_tokens.unwrap_or(0) + g.output_tokens.unwrap_or(0),
+                determinism: Some(g.determinism),
                 output: Some(g.output),
             },
             Err(e) => {
                 eprintln!("  gen error [{}, case {}]: {e}", labels[ti], ci + 1);
-                GenCell { output: None, cost: 0.0, tokens: 0 }
+                GenCell { output: None, cost: 0.0, tokens: 0, determinism: None }
             }
         }
     });
     let mut gen_cost = 0.0;
     let mut gen_tokens = 0u64;
+    let mut gen_determinism: Option<Determinism> = None;
     for c in &cells {
         gen_cost += c.cost;
         gen_tokens += c.tokens;
+        if let Some(d) = c.determinism {
+            gen_determinism = Some(gen_determinism.map_or(d, |prev| prev.weakest(d)));
+        }
     }
     let output = |ti: usize, ci: usize| cells[ti * n_c + ci].output.as_deref();
 
@@ -184,7 +198,8 @@ pub(crate) fn run_pairwise_matrix(
     // every game and then thrown away — a ranking with no recorded "why" is an unauditable verdict.
     let mut game_log: Vec<Value> = Vec::new();
     let (mut judge_errors, mut injected, mut score_post_failures) = (0u32, 0u32, 0u32);
-    let mut determinism = Determinism::Exact;
+    // `None` until a game is actually judged — a matrix with no verdicts claims nothing.
+    let mut judge_determinism: Option<Determinism> = None;
     for (&g, outcome) in games.iter().zip(outcomes) {
         match outcome {
             Ok(o) => {
@@ -193,7 +208,8 @@ pub(crate) fn run_pairwise_matrix(
                 });
                 judge_cost += game_cost;
                 judge_tokens += o.tokens;
-                determinism = determinism.weakest(o.determinism);
+                judge_determinism =
+                    Some(judge_determinism.map_or(o.determinism, |p| p.weakest(o.determinism)));
                 let (ci, i, j) = g;
                 if o.injection_suspected {
                     injected += 1;
@@ -255,8 +271,8 @@ pub(crate) fn run_pairwise_matrix(
 
     post_run(
         cli, http, bench, &run_id, &labels, &standings, &beats, played.len(), judge_errors,
-        bias_count, injected, score_post_failures, determinism, &self_preference, game_log,
-        gen_cost, judge_cost, gen_tokens + judge_tokens,
+        bias_count, injected, score_post_failures, gen_determinism, judge_determinism,
+        &self_preference, game_log, gen_cost, judge_cost, gen_tokens + judge_tokens,
     )
 }
 
@@ -373,7 +389,8 @@ fn post_run(
     bias_count: u32,
     injected: u32,
     score_post_failures: u32,
-    determinism: Determinism,
+    gen_determinism: Option<Determinism>,
+    judge_determinism: Option<Determinism>,
     self_preference: &[String],
     game_log: Vec<Value>,
     gen_cost: f64,
@@ -390,11 +407,11 @@ fn post_run(
             })
         })
         .collect();
-    let report = json!({
+    let mut report = json!({
         "mode": "pairwise", "targets": labels, "ranking": ranking,
         "beats_matrix": beats, "n_games": n_games, "judge_errors": judge_errors,
         "positional_bias_ties": bias_count, "injection_suspected_games": injected,
-        "determinism": determinism.as_str(), "self_preference_targets": self_preference,
+        "self_preference_targets": self_preference,
         // `games` is a bounded preview of `n_games`; `games_truncated` says so outright, so a reader
         // can never mistake the clipped list for the full round-robin. Every game — logged or not —
         // is a run-scoped case result in `scores` (`GET /v1/scores?run=<id>`).
@@ -403,6 +420,7 @@ fn post_run(
         "score_post_failures": score_post_failures,
         "gen_cost_usd": gen_cost, "judge_cost_usd": judge_cost,
     });
+    stamp_determinism(&mut report, gen_determinism, judge_determinism);
     // A pairwise run ranks targets against each other — there is no baseline to regress against, so
     // its honest status in the unified vocabulary is `no_baseline` (never gates a build).
     let run = json!({
