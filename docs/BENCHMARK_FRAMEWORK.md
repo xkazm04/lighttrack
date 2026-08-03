@@ -43,6 +43,61 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
 - **Output:** a comparison table — for each dimension and overall: score, pass-rate, **p50/p95 latency**,
   **tokens**, **$ cost** — so "best" is a quality/latency/cost trade-off, not just quality.
 
+### 2a. Earning the words "B beats A" — the statistical contract
+A benchmark tool's entire value is a verdict you can act on, so every claim it prints is now backed by a
+test, and every test that could not be run is disclosed. Four rules:
+
+**1. Paired, per case.** The same cases are judged in both runs, so the per-case *difference* removes
+between-case variance entirely — an unpaired comparison of two means over hard-and-easy cases mostly
+measures how hard the cases are. Each target's verdict pairs this run's per-case scores against **its own
+previous comparable run** (same mode, same target, same case count and — when both recorded it — same
+`dataset_version`), and reports `mean_delta_vs_previous` with a two-sided p. Where no comparable run
+exists the report says so and falls back to the unpaired CI test, flagged `method: "unpaired-ci"`.
+
+**2. Family-wise correction, disclosed by name.** Compare mode runs one test per target against the same
+baseline. At six targets, an uncorrected 95% test has a `1 − 0.95⁶ ≈ 26%` chance of showing at least one
+spurious `regressed` — a quarter of clean runs would look red. Per-target tests are therefore
+**Bonferroni**-corrected (per-comparison `α = 0.05/m`), and the run report names the method and the
+surviving α in `significance.family_wise_correction`. Bonferroni is the conservative choice on purpose:
+a false `regressed` blocks a deploy. It **costs power**, the report says so in `caveats`, and the way to
+buy the power back is more cases — the trade-off is surfaced, not chosen silently for the operator.
+
+**3. Superiority is tested, never asserted.** The leaderboard's winner line used to be a bare argmax:
+two targets 0.01 apart with wide overlapping intervals still got a bold "Best mean". Now the top target
+is tested **paired** against the runner-up, at α corrected across all `m·(m−1)/2` pairs the "best" claim
+implicitly chose between (the pair is selected after seeing the means, so the whole family counts). Only
+a real separation prints `**Best: X — significantly ahead of Y (p=…; Bonferroni …)**`. Otherwise the line
+reads *"Highest mean: X — no significant difference from the runner-up"*, which is a fact about the
+sample rather than a claim about the models. A caller that supplies no tested claim (CLI/MCP rendering a
+stored table) gets "Highest mean … not tested for significance" — the render layer never re-derives
+statistics, it only refuses to print a stronger sentence than the claim it was handed.
+
+**4. Composition can only add detection.** A target is `regressed` if **either** the absolute-floor test
+(the whole corrected CI below `baseline_score`) **or** the paired test (a significantly negative mean
+delta) fires. The correction can trade a false alarm for a real detection; it cannot disarm the gate. A
+benchmark with no `baseline_score` has opted out of gating: its paired statistics are still reported, and
+its status stays `no_baseline`.
+
+**Baseline uncertainty.** `baseline_score` is a bare scalar with no recorded stderr, so the absolute-floor
+test treats it as a known constant — which it is not; it came from a run with its own sampling error.
+Every run that uses it carries the caveat verbatim in `significance.caveats`. The paired test is the fix
+(it compares two runs each carrying their own noise); where it can't run, the limitation is stated rather
+than hidden.
+
+**The promotion gate is significance-aware.** `POST …/prompts/:name/promote` is the one gate that blocks a
+deploy, and it used to compare `latest_mean + ε < baseline` — the weakest math in the system, sitting
+next to all of the above. It now reads the runner's own numbers rather than re-deriving them, so there is
+**one** definition of "regressed" in the product:
+- the run's `status == "regressed"` (the runner's paired, corrected verdict) → block, quoting it;
+- else, when the run recorded a `ci95`, block only if the whole interval sits below the baseline;
+- else (legacy runs, or `n < 2`) the plain scalar compare, labelled as such — the `scalar_fallback`
+  honesty of the small-n path is preserved, not silently upgraded.
+
+This is **deliberately weaker than the old rule in one direction**: a 0.001 dip inside the noise of a
+3-case run no longer blocks, because that was a false positive on the most expensive gate in the product.
+It is **not weaker for real regressions** — a drop larger than the run's own uncertainty still blocks, and
+so does a run the runner itself called regressed. `force=true` still overrides everything.
+
 ## 3. Golden-standard LLM-as-judge methodology  (#3)  ← the core
 A clear, defensible scoring system. Defaults encode current best practice (see Sources).
 

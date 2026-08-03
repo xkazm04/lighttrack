@@ -2,8 +2,17 @@
 //! confidence-interval regression test against a baseline, and a stdev-based stability measure. No
 //! I/O — every function is a deterministic transform, unit-tested beside it, so the runner's
 //! quality gate rests on math that can't silently drift.
+//!
+//! - [`normal`] — the standard-normal CDF/quantile and the Bonferroni critical value.
+//! - [`paired`] — the paired per-case test, the composed run verdict, and the superiority test
+//!   behind any "B beats A" claim.
+
+mod normal;
+mod paired;
 
 use serde_json::{json, Value};
+
+pub(crate) use paired::{annotate_verdict, paired_deltas, superiority, verdict};
 
 /// z for a ~95% two-sided normal confidence interval.
 pub(crate) const Z_95: f64 = 1.959_963_984_540_054;
@@ -54,20 +63,13 @@ impl Summary {
 /// 3-case run can't trip it as easily as a 3000-case run. When `n < 2` there is no stderr, so we
 /// fall back to the plain scalar compare the simple/rubric modes have always used (with the same
 /// 1e-9 slack) and report `scalar_fallback = true` so the run can annotate itself.
+///
+/// Single-comparison shorthand for [`verdict`] — the simple/rubric modes test one hypothesis, so
+/// there is no family to correct over and the critical z is the uncorrected 1.96. Kept as the
+/// callers' entry point rather than forking a second statistics path.
 pub(crate) fn significance_verdict(baseline: Option<f64>, s: &Summary) -> (&'static str, bool) {
-    let Some(b) = baseline else {
-        return ("no_baseline", false);
-    };
-    if s.n < 2 {
-        let status = if s.mean + EPS < b { "regressed" } else { "passed" };
-        return (status, true);
-    }
-    let (_, upper) = s.ci95();
-    if upper + EPS < b {
-        ("regressed", false)
-    } else {
-        ("passed", false)
-    }
+    let v = verdict(baseline, s, None, 1);
+    (v.status, v.scalar_fallback)
 }
 
 /// Stability of a set of scores as a 0..1 agreement: `1 − min(1, 2·σ)`, where σ is the *population*

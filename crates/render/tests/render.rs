@@ -163,8 +163,34 @@ fn compare_leaderboard_picks_best() {
     println!("\n=== compare ===\n{md}");
     assert!(md.contains("### Comparison — 3 case(s)"));
     assert!(md.contains("| claude/concise"));
-    // all-errored target is excluded from "best"; concise (0.93) wins over verbose
-    assert!(md.contains("**Best mean: claude/concise (0.93)**"));
+    // The all-errored target is excluded, so concise (0.93) tops the table — but with no tested
+    // `best` claim supplied, the table may only report the sample fact, not crown a winner.
+    assert!(md.contains("**Highest mean: claude/concise (0.93)**"));
+    assert!(md.contains("not tested for significance"));
+
+    // With the runner's tested claim attached, the winner is named — and so is the correction.
+    let mut with_claim = v.clone();
+    with_claim["best"] = json!({
+        "label": "claude/concise", "mean": 0.93, "significant": true,
+        "runner_up": "claude/verbose", "p_value": 0.0004,
+        "correction": "Bonferroni over 3 target pair(s), family-wise α=0.05",
+    });
+    let md = render("compare", &with_claim).expect("renders");
+    assert!(md.contains("**Best: claude/concise (0.93)**"));
+    assert!(md.contains("significantly ahead of claude/verbose"));
+    assert!(md.contains("Bonferroni"));
+
+    // A gap that isn't significant never gets bolded as a winner.
+    let mut no_sep = v.clone();
+    no_sep["best"] = json!({
+        "label": "claude/concise", "mean": 0.93, "significant": false,
+        "runner_up": "claude/verbose", "p_value": 0.41,
+        "note": "no significant difference from the runner-up at the corrected α",
+        "correction": "Bonferroni over 3 target pair(s), family-wise α=0.05",
+    });
+    let md = render("compare", &no_sep).expect("renders");
+    assert!(!md.contains("**Best:"));
+    assert!(md.contains("no significant difference"));
 }
 
 #[test]

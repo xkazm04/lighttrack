@@ -15,6 +15,7 @@ mod cli;
 mod compare;
 mod dataset;
 mod gate;
+mod history;
 mod http;
 mod pairwise;
 mod provenance;

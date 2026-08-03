@@ -8,7 +8,9 @@ use std::collections::{BTreeSet, HashMap};
 use anyhow::Result;
 use serde_json::{json, Map, Value};
 
-use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, ModelPriceRow, Rubric, ScoreDetail};
+use lighttrack_core::{
+    BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, ModelPriceRow, Rubric, ScoreDetail,
+};
 use lighttrack_engine::{
     generate, generate_deterministic, parse_judge_spec, same_family, Determinism, EngineConfig,
 };
@@ -16,8 +18,11 @@ use lighttrack_engine::{
 use crate::bench::judge_output;
 use crate::cli::Cli;
 use crate::http::{get, post};
+use crate::history::previous_case_scores;
 use crate::provenance::{merge_details, weakest_reasoning};
-use crate::stats::{annotate_significance, significance_verdict, stability, Summary};
+use crate::stats::{
+    annotate_significance, annotate_verdict, paired_deltas, stability, superiority, verdict, Summary,
+};
 use crate::util::{
     add_price_warnings, aggregate_status, cost_or_book, join_csv, now_ts, parallel_map, percentiles,
     stamp_determinism,
@@ -146,6 +151,60 @@ fn r3(x: f64) -> f64 {
     (x * 1000.0).round() / 1000.0
 }
 
+/// Decide whether the leaderboard may name a **winner**, from `(label, mean, per-case scores)`.
+///
+/// A bare argmax over means is not a finding: two targets 0.01 apart with wide overlapping intervals
+/// used to get a bold "Best mean" line. The top target is tested against the runner-up **paired**, on
+/// the cases both were scored on, at α corrected across every pair a "best" claim implicitly chose
+/// between (`m·(m−1)/2`, since the pair was picked *after* seeing the means). When the separation
+/// isn't real the claim is downgraded to "highest mean, not significantly ahead" — a fact about the
+/// sample, not about the models.
+fn best_claim(per_target: &[(String, f64, Vec<f64>)]) -> Value {
+    let mut ranked: Vec<&(String, f64, Vec<f64>)> =
+        per_target.iter().filter(|(_, _, cs)| !cs.is_empty()).collect();
+    if ranked.is_empty() {
+        return Value::Null;
+    }
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let top = ranked[0];
+    let n = per_target.len();
+    let mut claim = json!({
+        "label": top.0, "mean": r3(top.1), "significant": false,
+        "correction": format!(
+            "Bonferroni over {} target pair(s), family-wise α=0.05", (n * n.saturating_sub(1) / 2).max(1)
+        ),
+    });
+    match ranked.get(1) {
+        None => {
+            claim["note"] = json!("only one target produced scores — nothing to be better than");
+        }
+        Some(second) => {
+            claim["runner_up"] = json!(second.0);
+            claim["runner_up_mean"] = json!(r3(second.1));
+            match superiority(&top.2, &second.2, n) {
+                Some((delta, p, significant)) => {
+                    claim["mean_delta"] = json!(r3(delta));
+                    claim["p_value"] = json!((p * 1e6).round() / 1e6);
+                    claim["significant"] = json!(significant);
+                    if !significant {
+                        claim["note"] = json!(
+                            "no significant difference from the runner-up at the corrected α — the \
+                             ranking is not decidable at this sample size"
+                        );
+                    }
+                }
+                None => {
+                    claim["note"] = json!(
+                        "the top two targets were not scored on the same cases, so their gap cannot \
+                         be tested"
+                    );
+                }
+            }
+        }
+    }
+    claim
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_compare(
     cli: &Cli,
@@ -175,10 +234,26 @@ pub(crate) fn run_compare(
     // For providers whose API doesn't return a $ cost (e.g. Gemini/OpenAI), price by tokens from the DB.
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
 
+    // Prior runs of this benchmark, for the PAIRED per-case test: the same cases are judged in both
+    // runs, so per-case deltas remove between-case variance and have far more power than comparing
+    // this run's mean to a bare scalar. Best-effort — a benchmark with no readable history simply
+    // falls back to the unpaired test (and the report says which one decided).
+    let history: Vec<BenchmarkRun> = get(cli, http, &format!("/v1/benchmarks/{}/runs", bench.id))
+        .unwrap_or_default();
+    let dsv = report_extra
+        .and_then(|e| e.get("dataset_version"))
+        .and_then(Value::as_u64);
+    // Every target is an independent hypothesis test against the same baseline, so the family-wise
+    // error rate — not the per-test one — is what an operator actually experiences.
+    let m = targets.len().max(1);
+
     // (label, mean, pass_rate, gen_cost, judge_cost, p50_ms, errored, agreement)
     let mut rows: Vec<(String, f64, f64, f64, f64, u64, u32, f64)> = Vec::new();
     // Per-target verdicts vs the benchmark baseline, rolled up into one honest run-level status below.
     let mut statuses: Vec<String> = Vec::new();
+    // Per-target case scores, kept so the leaderboard's "best" claim can be tested — paired, on the
+    // cases both targets were actually scored on — instead of asserted by argmax.
+    let mut per_target: Vec<(String, f64, Vec<f64>)> = Vec::new();
     for t in targets {
         let label = t
             .label
@@ -330,16 +405,29 @@ pub(crate) fn run_compare(
         let (p50, p95) = percentiles(&mut latencies);
         rows.push((label.clone(), mean, pass_rate, gen_cost, judge_cost, p50.unwrap_or(0), errored, mean_agree));
 
-        // Per-target verdict vs the benchmark baseline — the flagship multi-target mode now detects
-        // regressions (significance-aware) instead of stamping every run "compared". No baseline ⇒
-        // "no_baseline"; the CI must exclude the baseline below before a target counts as regressed.
+        // Per-target verdict vs the benchmark baseline: the absolute-floor CI test (now at the
+        // family-wise-corrected critical z) composed with a paired per-case test against this
+        // target's previous comparable run. Either firing means `regressed`, so the correction can
+        // only trade a false alarm for a real detection — never disarm the gate.
         let summary = Summary::of(&case_scores);
-        let (status, scalar_fallback) = if judged > 0 {
-            significance_verdict(bench.baseline_score, &summary)
-        } else {
-            ("no_baseline", false)
-        };
+        let prev = previous_case_scores(&history, &label, case_scores.len(), dsv);
+        let deltas = prev.as_ref().and_then(|p| paired_deltas(&case_scores, p));
+        let sig = verdict(
+            if judged > 0 { bench.baseline_score } else { None },
+            &summary,
+            deltas.as_deref(),
+            m,
+        );
+        let (status, scalar_fallback) = (sig.status, sig.scalar_fallback);
+        if let (Some(d), Some(p)) = (sig.mean_delta, sig.p_value) {
+            println!(
+                "  vs previous run (paired, n={}): mean Δ={d:+.3}, p={p:.4} (α={:.4} after {} \
+                 -target correction)",
+                summary.n, sig.alpha, m
+            );
+        }
         statuses.push(status.to_string());
+        per_target.push((label.clone(), mean, case_scores.clone()));
         if !price_warnings.is_empty() {
             println!("  warning: no price book entry for {} — cost undercounted", join_csv(&price_warnings));
         }
@@ -367,6 +455,7 @@ pub(crate) fn run_compare(
         // run's scores (`GET /v1/scores?run=<id>`).
         crate::bench::attach_cases(&mut report, "cases", case_reports);
         annotate_significance(&mut report, &summary, scalar_fallback);
+        annotate_verdict(&mut report, &sig);
         add_price_warnings(&mut report, &price_warnings);
         crate::bench::stamp_pins(&mut report, bench, report_extra);
         let run = json!({
@@ -395,7 +484,10 @@ pub(crate) fn run_compare(
             })
         })
         .collect();
-    let summary = json!({ "n_cases": cases.len(), "targets": target_rows, "status": overall });
+    let summary = json!({
+        "n_cases": cases.len(), "targets": target_rows, "status": overall,
+        "best": best_claim(&per_target),
+    });
     match lighttrack_render::render("compare", &summary) {
         Some(md) => println!("\n{md}"),
         None => println!("\n{}", serde_json::to_string_pretty(&summary)?),
