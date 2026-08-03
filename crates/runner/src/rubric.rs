@@ -44,9 +44,17 @@ pub(crate) fn run_rubric_benchmark(
     let rubric: Rubric = get(cli, http, &format!("/v1/rubrics/{rubric_id}"))?;
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    // Deterministic dimensions are checked locally: they cost no tokens and are never sampled, so
+    // say how many of the rubric's dimensions the judge model is actually paid to score.
+    let mechanical = rubric.dimensions.iter().filter(|d| !d.kind.is_llm()).count();
+    let dims_note = if mechanical > 0 {
+        format!("{} dims, {mechanical} deterministic", rubric.dimensions.len())
+    } else {
+        format!("{} dims", rubric.dimensions.len())
+    };
     println!(
-        "benchmark '{}' — {} case(s), rubric '{}' ({} dims, threshold {:.2}), judge={jp}/{jm}, samples={}",
-        bench.name, cases.len(), rubric.name, rubric.dimensions.len(), rubric.threshold, samples
+        "benchmark '{}' — {} case(s), rubric '{}' ({dims_note}, threshold {:.2}), judge={jp}/{jm}, samples={}",
+        bench.name, cases.len(), rubric.name, rubric.threshold, samples
     );
 
     let mut dim_sums: HashMap<String, f64> = HashMap::new();
@@ -168,7 +176,10 @@ pub(crate) fn run_rubric_benchmark(
     let dim_means: Vec<Value> = rubric
         .dimensions
         .iter()
-        .map(|d| json!({ "key": d.key, "mean": dim_mean(&dim_sums, &d.key, judged), "weight": d.weight }))
+        .map(|d| json!({
+            "key": d.key, "mean": dim_mean(&dim_sums, &d.key, judged),
+            "weight": d.weight, "kind": d.kind.as_str(),
+        }))
         .collect();
     let weakest = rubric
         .dimensions
@@ -190,6 +201,19 @@ pub(crate) fn run_rubric_benchmark(
         if m < 0.6 {
             recs.push(format!("Improve '{}' ({}): mean {m:.2} below 0.6.", d.key, d.description));
         }
+    }
+    if mechanical == rubric.dimensions.len() && mechanical > 0 {
+        recs.push(
+            "Every dimension is deterministic: no judge model was called, so this run spent no \
+tokens and its scores are exactly reproducible."
+                .to_string(),
+        );
+    } else if mechanical > 0 && samples > 1 {
+        recs.push(format!(
+            "{mechanical} of {} dimensions are deterministic (checked locally, zero tokens); \
+`agreement` describes only the LLM-judged dimensions.",
+            rubric.dimensions.len()
+        ));
     }
     if samples > 1 && min_agreement < 0.8 {
         recs.push(format!(

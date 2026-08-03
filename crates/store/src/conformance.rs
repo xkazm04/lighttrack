@@ -11,9 +11,10 @@ use serde_json::{json, Value};
 
 use lighttrack_core::{
     compute_margin, new_id, ApiKey, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem,
-    Job, LimitAction, LimitMetric, LimitRule, LimitScope, LimitWindow, LlmEvent, MarginDimension,
-    ModelPriceRow, Operation, Project, Provider, Redaction, RelayOutcome, RelayTask, RevenueEvent,
-    RevenueKind, Rubric, RubricDimension, Score, Status, TokenUsage,
+    DimensionCheck, DimensionKind, Job, LimitAction, LimitMetric, LimitRule, LimitScope,
+    LimitWindow, LlmEvent, MarginDimension, ModelPriceRow, Operation, Project, Provider, Redaction,
+    RelayOutcome, RelayTask, RevenueEvent, RevenueKind, Rubric, RubricDimension, Score, Status,
+    TokenUsage,
 };
 
 use crate::{EventFilter, Result, Store};
@@ -453,21 +454,44 @@ fn rubrics(store: &dyn Store, pid: &str) -> Result<()> {
         id: new_id(),
         project_id: pid.into(),
         name: "rub".into(),
-        dimensions: vec![RubricDimension {
-            key: "correct".into(),
-            description: "is it right".into(),
-            weight: 1.0,
-            anchors: vec!["1.0 = yes".into()],
-            floor: Some(0.5),
-        }],
+        dimensions: vec![
+            RubricDimension {
+                key: "correct".into(),
+                description: "is it right".into(),
+                weight: 1.0,
+                anchors: vec!["1.0 = yes".into()],
+                floor: Some(0.5),
+                kind: DimensionKind::Llm,
+                check: DimensionCheck::default(),
+            },
+            // A deterministic dimension: its kind + config must survive the round-trip on every
+            // backend, or a mixed rubric would silently degrade to all-LLM after a reload.
+            RubricDimension {
+                key: "answer".into(),
+                description: "exact answer".into(),
+                weight: 2.0,
+                anchors: vec![],
+                floor: Some(1.0),
+                kind: DimensionKind::Numeric,
+                check: DimensionCheck {
+                    expect: Some("42".into()),
+                    tolerance: Some(0.1),
+                    ..Default::default()
+                },
+            },
+        ],
         threshold: 0.7,
         created_at: Utc::now(),
     };
     store.create_rubric(&r)?;
     let got = store.get_rubric(&r.id)?.expect("get_rubric Some");
-    assert_eq!(got.dimensions.len(), 1);
+    assert_eq!(got.dimensions.len(), 2);
     assert_eq!(got.dimensions[0].key, "correct");
     assert_eq!(got.dimensions[0].floor, Some(0.5));
+    assert_eq!(got.dimensions[0].kind, DimensionKind::Llm);
+    assert_eq!(got.dimensions[1].kind, DimensionKind::Numeric);
+    assert_eq!(got.dimensions[1].check.expect.as_deref(), Some("42"));
+    assert_eq!(got.dimensions[1].check.tolerance, Some(0.1));
     assert!(store.list_rubrics(pid)?.iter().any(|x| x.id == r.id));
     Ok(())
 }

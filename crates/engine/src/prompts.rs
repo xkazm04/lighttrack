@@ -113,11 +113,13 @@ schema — no prose, no code fences, no commentary before or after.",
     Prompt::fenced(text, &fence)
 }
 
-/// Build a JSON schema keyed by dimension: each dimension yields `{score, reasoning}`.
+/// Build a JSON schema keyed by dimension: each dimension yields `{score, reasoning}`. Only
+/// LLM-judged dimensions appear — a deterministic dimension is checked locally, so asking the model
+/// for it would both waste tokens and let its opinion double-count against the mechanical verdict.
 pub fn build_rubric_schema(rubric: &Rubric) -> Value {
     let mut props = Map::new();
     let mut required = Vec::new();
-    for d in &rubric.dimensions {
+    for d in rubric.dimensions.iter().filter(|d| d.kind.is_llm()) {
         props.insert(
             d.key.clone(),
             json!({
@@ -190,6 +192,10 @@ pub(crate) fn build_pairwise_schema() -> Value {
 }
 
 /// RCAF judge prompt for a rubric: Role, Context (dimensions+anchors+reference), Action, Format.
+///
+/// Only the rubric's LLM-judged dimensions are narrated. Deterministic dimensions
+/// ([`lighttrack_core::DimensionKind`]) are evaluated locally and are deliberately invisible here, so
+/// the model never scores — and so never double-counts — a check the engine already decided.
 pub fn build_rubric_prompt(
     rubric: &Rubric,
     input: &str,
@@ -199,6 +205,7 @@ pub fn build_rubric_prompt(
     let dims = rubric
         .dimensions
         .iter()
+        .filter(|d| d.kind.is_llm())
         .map(|d| {
             let anchors = if d.anchors.is_empty() {
                 String::new()

@@ -10,6 +10,7 @@
 //! - `anthropic_api` — the bare Messages API judge path (used when `ANTHROPIC_API_KEY` is set).
 //! - `family`     — coarse model families, for the self-preference bias control.
 //! - `retry`      — bounded exponential backoff for transient (429/5xx/timeout) provider failures.
+//! - `scorers`   — deterministic (non-LLM) rubric dimensions: exact/regex/numeric/json_valid/contains.
 //! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_text`], [`parse_judge_spec`].
 
 mod anthropic_api;
@@ -23,6 +24,7 @@ mod pool;
 mod prompts;
 mod providers;
 mod retry;
+mod scorers;
 
 use lighttrack_core::JudgeVerdict;
 use thiserror::Error;
@@ -205,11 +207,16 @@ pub struct RubricOutcome {
     pub tokens: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    /// The judge model, or `"deterministic"` when the rubric needed no model call at all.
     pub model: String,
+    /// Judge samples requested (`0` for an all-deterministic rubric — nothing was sampled).
     pub samples: u32,
     /// How many of the requested `samples` produced a usable verdict (`samples - parse_failures`).
     pub samples_parsed: u32,
     /// Cross-sample agreement on the overall score (1.0 = identical; lower = judge disagreed).
+    /// Measured over the **LLM dimensions only**: a deterministic dimension is scored once and is
+    /// exactly reproducible, so including it would inflate a number that is meant to describe the
+    /// judge model's stability. An all-deterministic rubric reports `1.0` over zero samples.
     pub agreement: f64,
     /// How many of the `samples` judge responses were unparseable (no JSON, truncated/invalid JSON,
     /// or a dimension whose score was missing/non-numeric) and so were dropped from the means rather

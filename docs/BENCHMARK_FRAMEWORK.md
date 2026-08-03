@@ -51,6 +51,51 @@ concision 0.1*). Each dimension scores on a **narrow anchored scale** normalized
 level descriptions ("1.0 = fully correct & verifiable; 0.5 = minor error; 0 = wrong/unsupported"). Overall
 = weighted sum. Pass = overall ≥ threshold AND no gating dimension below its floor.
 
+**Dimension kinds — deterministic scorers in the same pipeline.** Not every dimension needs an
+opinion. A dimension carries a `kind`, defaulting to `llm`; every other kind is a **mechanical check
+the engine runs locally, at zero tokens and zero cost**, whose 1.0/0.0 verdict then flows through the
+*same* weighting, floors, threshold and aggregation as an LLM dimension. The field is additive and
+defaulted, so a rubric written before kinds existed deserializes — and re-serializes — unchanged as
+all-`llm`.
+
+| `kind` | passes (1.0) when | `check` fields |
+|---|---|---|
+| `llm` *(default)* | the judge model says so | — |
+| `exact` | the output equals the target | `expect` (defaults to the case's `expected`), `case_sensitive`, `trim`, `path` |
+| `contains` | the target occurs in the output | same as `exact` |
+| `regex` | `pattern` matches anywhere in the output | `pattern` *(required)*, `case_sensitive`, `trim`, `path` |
+| `numeric` | the output's number is within `tolerance` of the target | `expect`, `tolerance` (absolute, default 0), `path` |
+| `json_valid` | the output parses as JSON (and, with `expect`, carries that value at `path`) | `expect`, `path`, `case_sensitive` |
+
+`check.path` is a JSON Pointer (e.g. `/data/city`) narrowing a JSON output before the check; `numeric`
+falls back to the first numeric token in the text, so *"The total is 41.95 dollars."* is comparable.
+
+```json
+{ "name": "extraction", "threshold": 0.8, "dimensions": [
+  { "key": "city",     "description": "the extracted city", "weight": 3.0, "floor": 1.0,
+    "kind": "exact",      "check": { "path": "/city" } },
+  { "key": "wellformed","description": "valid JSON envelope", "weight": 1.0,
+    "kind": "json_valid" },
+  { "key": "total",    "description": "the summed amount", "weight": 2.0,
+    "kind": "numeric",    "check": { "expect": "42", "tolerance": 0.1, "path": "/total" } },
+  { "key": "tone",     "description": "professional, no filler", "weight": 1.0 }
+] }
+```
+
+Rules that make a mixed rubric honest:
+- **Not narrated, not double-counted.** The judge prompt and its JSON schema list *only* the `llm`
+  dimensions, so the model never re-scores something already decided mechanically.
+- **Agreement is an LLM-only statement.** A deterministic dimension is evaluated once and is exactly
+  reproducible; folding it into cross-sample `agreement` would drag every rubric toward 1.0 and hide
+  the judge's real instability. So `agreement` (and `samples_parsed` / `parse_failures`) covers the
+  sampled LLM dimensions alone — while the `overall` covers every dimension.
+- **Auditable.** Each mechanical dimension records *why* in its `detail.reasoning`, e.g.
+  ``numeric: expected `42`, got `41.6`, tolerance 0.1 → fail``.
+- **Operator errors are loud.** A `regex` with no pattern, or an `exact` with neither `check.expect`
+  nor a case `expected`, is a hard error naming the dimension — never a candidate silently scored 0.
+- **An all-deterministic rubric makes no provider call at all**: `samples = 0`, `cost_usd = null`,
+  `scored_by = "deterministic"`, determinism `exact`.
+
 **Modes** (pick per goal):
 - **Pointwise** (analytic, per-item) — monitoring, dashboards, regression tracking. *(shipped)*
 - **Reference-guided** — when `expected` exists, anchor the score to the golden answer. *(shipped: eval prompt)*
@@ -241,7 +286,8 @@ prompt_variants(id, project_id, name, label, system_prompt)
 targets(id, benchmark_id, provider, model, prompt_variant_id?)   -- the matrix
 benchmark_runs(... + target_id?, p50_latency_ms, p95_latency_ms, total_tokens, total_cost_usd, report)
 case_results(id, run_id, dataset_item_id, target_id, output, latency_ms, tokens, cost_usd, scores_json)
-rubrics(id, project_id, name, dimensions_json, threshold)        -- weighted anchored dimensions
+rubrics(id, project_id, name, dimensions_json, threshold)        -- weighted anchored dimensions;
+                 -- each dimension: {key, description, weight, anchors?, floor?, kind?, check?}
 model_prices(provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok, effective_date, source_url)
 jobs(id, type, payload_json, status, attempts, progress, error, claimed_at, created_at)
 collective_entries(contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd,
