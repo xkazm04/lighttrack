@@ -29,6 +29,8 @@ pub(crate) struct Parsed<T> {
     pub(crate) value: Option<T>,
     /// The last unparseable raw output, kept so an all-failed run can report *why*.
     pub(crate) raw_failure: Option<String>,
+    /// The repair re-ask re-embedded model text that imitated a prompt boundary (see [`crate::fence`]).
+    pub(crate) injection_suspected: bool,
     pub(crate) cost_usd: Option<f64>,
     pub(crate) latency_ms: u64,
     pub(crate) input_tokens: u64,
@@ -41,6 +43,7 @@ impl<T> Parsed<T> {
         Parsed {
             value: None,
             raw_failure: None,
+            injection_suspected: false,
             cost_usd: None,
             latency_ms: 0,
             input_tokens: 0,
@@ -91,9 +94,12 @@ pub(crate) fn sample_parsed<T>(
         Err(e) => return Err(e),
     };
 
-    // Repair re-ask: hand the bad output back and demand strict JSON, exactly once.
+    // Repair re-ask: hand the bad output back and demand strict JSON, exactly once. The malformed
+    // text is fenced under a fresh nonce, so a candidate that talked the judge into echoing an
+    // injection cannot widen the surface on the second pass.
     let repair = build_repair_prompt(prompt, &malformed);
-    match gen(index, &repair) {
+    acc.injection_suspected |= repair.injection_suspected;
+    match gen(index, &repair.text) {
         Ok(g) => {
             acc.record(&g);
             match parse(&g.output) {

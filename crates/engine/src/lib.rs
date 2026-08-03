@@ -6,10 +6,12 @@
 //! - `claude`     — the `claude -p` subprocess caller + envelope helpers.
 //! - `providers`  — [`generate`] across `anthropic` / `google` / `openai` (schema-enforced + retried).
 //! - `parse`      — JSON extraction + the one-shot repair re-ask around a single judge sample.
+//! - `fence`      — per-call nonce delimiters around untrusted content (judge-prompt injection defense).
 //! - `retry`      — bounded exponential backoff for transient (429/5xx/timeout) provider failures.
 //! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_text`], [`parse_judge_spec`].
 
 mod claude;
+mod fence;
 mod judge;
 mod pairwise;
 mod parse;
@@ -26,7 +28,7 @@ pub use judge::{parse_judge_spec, run_judge, run_rubric_judge, run_text};
 pub use pairwise::{run_pairwise, PairwiseOutcome, PairwiseVerdict, PairwiseWinner};
 pub use prompts::{
     build_eval_prompt, build_judge_prompt, build_pairwise_prompt, build_rubric_prompt,
-    build_rubric_schema,
+    build_rubric_schema, Prompt,
 };
 pub use providers::generate;
 
@@ -104,6 +106,10 @@ pub struct JudgeOutcome {
     pub latency_ms: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    /// Content under evaluation imitated a prompt boundary and was neutralized before the judge saw
+    /// it (see [`fence`]). Not a verdict on the content — a signal that this case tried to talk to
+    /// the judge, worth surfacing next to the score it produced.
+    pub injection_suspected: bool,
 }
 
 /// The result of a free-form text call (e.g. LLM-based anonymization / healing).
@@ -144,6 +150,9 @@ pub struct RubricOutcome {
     /// than scored 0.0. If *every* sample fails, the judge returns [`EngineError::Parse`] instead of
     /// emitting a phantom zero. Surfaced as an audit trail for self-consistency runs.
     pub parse_failures: u32,
+    /// The judged content (input/reference/output, or model text echoed on a repair re-ask) imitated
+    /// a prompt boundary and was neutralized. See [`JudgeOutcome::injection_suspected`].
+    pub injection_suspected: bool,
 }
 
 /// The result of generating one candidate output from a target.

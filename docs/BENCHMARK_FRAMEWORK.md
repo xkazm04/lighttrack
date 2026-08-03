@@ -58,6 +58,12 @@ level descriptions ("1.0 = fully correct & verifiable; 0.5 = minor error; 0 = wr
 **Judge prompt = RCAF:** Role (impartial judge) · Context (rubric + reference) · Action (score each
 dimension with reasoning, then overall) · Format (strict JSON schema). We already use `--json-schema`.
 
+**Prompt-injection defense (D10).** The candidate output is untrusted by construction, so every judge
+prompt fences input/reference/output behind **per-call nonce delimiters** and states that only those
+boundaries are authoritative. Content imitating a marker is neutralized (`[lt-escaped]`) rather than
+passed through, and raises `injection_suspected` on the outcome — so "this case tried to dictate its own
+score" is a reportable fact, not an invisible one.
+
 **Calibration & reliability:**
 - Narrow anchored scales; few-shot anchor examples (low/med/high) per rubric when available.
 - **Self-consistency:** sample the judge k times (or k judges), report mean + agreement; low agreement →
