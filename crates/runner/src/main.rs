@@ -9,6 +9,7 @@
 
 mod bench;
 mod billing;
+mod budget;
 mod calibrate;
 mod calibrate_watch;
 mod cli;

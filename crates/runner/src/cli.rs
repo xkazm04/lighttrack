@@ -30,6 +30,13 @@ pub(crate) struct Cli {
     /// value to pass to proceed. Defaults to 500 games (~1000 judge calls).
     #[arg(long, default_value_t = 500)]
     pub(crate) max_games: usize,
+    /// Compare cost guard, in US dollars, applied per run. Two things at once: a PRE-FLIGHT abort
+    /// when the estimated matrix cost (targets × cases × gen-samples × judge-samples) exceeds it,
+    /// before a single paid call goes out; and a LIVE ceiling that halts the run at a case boundary
+    /// if the real spend reaches it — whatever ran is kept and reported as `partial`, never as a
+    /// finished run. `0` disables both. Defaults to $25.
+    #[arg(long, default_value_t = 25.0)]
+    pub(crate) max_cost: f64,
     #[command(subcommand)]
     pub(crate) cmd: Cmd,
 }

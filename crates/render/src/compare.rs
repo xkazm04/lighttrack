@@ -79,6 +79,27 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
         ]);
     }
     let mut out = format!("### Comparison — {n_cases} case(s)\n\n{}", t.render());
+    // A cost-halted comparison is announced ABOVE the winner line: the table is over whatever cases
+    // the money reached, so the ranking must not be read as a finished result.
+    if v.get("budget_halted").and_then(Value::as_bool) == Some(true) {
+        let spent = f(v, "spend_usd");
+        let limit = v.get("budget_limit_usd").and_then(Value::as_f64);
+        let cap = limit.map(|l| format!(" (limit {})", money(l))).unwrap_or_default();
+        out.push_str(&format!(
+            "\n**PARTIAL — the run was halted at its spend ceiling after {}{cap}; some cases were \
+             never judged.**\n",
+            money(spent)
+        ));
+    }
+    // Unpriced models make every $ column a lower bound. Surfaced here rather than only inside each
+    // run report's nested array, which nobody reading the table ever opens.
+    if let Some(w) = v.get("price_warnings").and_then(Value::as_array).filter(|w| !w.is_empty()) {
+        let models: Vec<&str> = w.iter().filter_map(Value::as_str).collect();
+        out.push_str(&format!(
+            "\n_No price book entry for {} — the $ columns are a lower bound._\n",
+            models.join(", ")
+        ));
+    }
     if let Some(line) = winner_line(v.get("best"), best) {
         out.push_str(&line);
     }
@@ -87,8 +108,32 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::winner_line;
+    use super::{leaderboard, winner_line};
     use serde_json::json;
+
+    #[test]
+    fn a_halted_run_says_partial_and_names_the_unpriced_models() {
+        let md = leaderboard(&json!({
+            "n_cases": 10,
+            "targets": [{ "label": "a", "mean": 0.9, "errored": 0 }],
+            "budget_halted": true, "spend_usd": 12.5, "budget_limit_usd": 12.0,
+            "price_warnings": ["zz/yy"],
+        }))
+        .unwrap();
+        assert!(md.contains("**PARTIAL"), "a halted run must not read as a finished one");
+        assert!(md.contains("$12.50") && md.contains("$12.00"), "spend and ceiling are both shown");
+        assert!(md.contains("zz/yy") && md.contains("lower bound"));
+    }
+
+    #[test]
+    fn a_complete_run_carries_no_partial_banner() {
+        let md = leaderboard(&json!({
+            "n_cases": 10, "targets": [{ "label": "a", "mean": 0.9, "errored": 0 }],
+            "budget_halted": false, "price_warnings": [],
+        }))
+        .unwrap();
+        assert!(!md.contains("PARTIAL") && !md.contains("lower bound"));
+    }
 
     #[test]
     fn a_tested_win_is_the_only_thing_called_best() {

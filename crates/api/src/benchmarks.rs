@@ -235,6 +235,10 @@ pub(crate) fn decide_gate(runs: &[BenchmarkRun], baseline: Option<f64>) -> GateR
         "passed" => "pass",
         "regressed" => "regressed",
         "no_baseline" => "no_baseline",
+        // A run the operator's cost ceiling cut short (or refused to start) judged only part of its
+        // dataset. Its mean is a mean over whatever the money reached, so it is UNVERIFIED — it must
+        // never fall through to the scalar compare below and come back out as `pass`.
+        "partial" | "aborted" => "partial",
         // Legacy status (e.g. "completed"/"compared") → scalar compare of mean vs baseline.
         _ => match (run.mean_score, baseline) {
             (Some(m), Some(b)) if m + 1e-9 < b => "regressed",
@@ -304,6 +308,16 @@ mod tests {
 
         assert_eq!(decide_gate(&[run("regressed", true, Some(0.5), json!(null))], Some(0.8)).status, "regressed");
         assert_eq!(decide_gate(&[run("no_baseline", true, Some(0.5), json!(null))], None).status, "no_baseline");
+    }
+
+    #[test]
+    fn gate_never_passes_a_cost_halted_run() {
+        // The trap: a halted run whose partial mean happens to clear the baseline. If `partial` fell
+        // through to the legacy scalar compare it would come back `pass` on 30% of the dataset.
+        let g = decide_gate(&[run("partial", true, Some(0.95), json!(null))], Some(0.8));
+        assert_eq!(g.status, "partial");
+        let g = decide_gate(&[run("aborted", true, Some(0.95), json!(null))], Some(0.8));
+        assert_eq!(g.status, "partial");
     }
 
     #[test]

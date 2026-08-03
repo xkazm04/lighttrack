@@ -294,6 +294,26 @@ curl -sX POST "$LIGHTTRACK_URL/v1/projects/$PID/benchmarks" -H "authorization: B
   (`<model>@in>N`, `<model>@batch`, `<model>@flex`) — no schema change; see `docs/PRICING.md`.
 - API: `GET /v1/prices`, `PUT /v1/prices/:provider/:model` (admin) so prices update without redeploys.
 
+### 5a. Spending is asked for, not discovered afterwards (`--max-cost`)
+A compare run costs `targets × cases × gen_samples × (1 generation + judge_samples judge calls)`. That
+number is quadratic-feeling in practice — an extra target and a `--gen-samples 10` multiply — and used to
+be knowable only from the invoice. Compare mode now has the same contract pairwise has had:
+
+- **Pre-flight**, printed before the first paid call: the generation/judge call counts and a dollar
+  estimate priced from the book at nominal token counts. Unpriced models are named there (their share is
+  `$0`, so the figure is a *lower bound* and the line says `≥$` rather than `~$`).
+- **`--max-cost <usd>`** (default `$25`, `0` disables) aborts the run at pre-flight when the estimate
+  exceeds it, printing the exact value to pass to proceed.
+- The same ceiling is **live during the run**. Cells check it at a case boundary before spending, so a run
+  whose real cost outruns the nominal estimate stops instead of finishing the invoice.
+- A halted run is **`partial`**, never `passed`: per-target reports carry `partial` / `budget_halted` /
+  `skipped_cases` / `cases_planned` / `budget_spent_usd`, the leaderboard prints a `PARTIAL` banner, and
+  both `lt-runner bench --gate` and `GET /v1/benchmarks/:id/gate` treat `partial`/`aborted` as
+  **unverified** (gate exit 4) — a run that judged 30% of its dataset can never be a green build.
+
+This is a per-run **operator ceiling on benchmark spend**, deliberately unrelated to the ingest limit
+engine: the judge/scoring engine stays unbudgeted (§0), and nothing here reads or writes `limit_rules`.
+
 ## 6. Collective Model Intelligence Network (opt-in network effect)  (#6)
 Every instance benchmarks models on *its own real tasks*. The network turns those private scorecards into
 a **shared, real-world model leaderboard** — quality × cost × latency per `(provider, model, task_type)` —

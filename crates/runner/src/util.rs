@@ -89,12 +89,19 @@ pub(crate) fn dim_mean(sums: &HashMap<String, f64>, key: &str, n: u32) -> f64 {
 }
 
 /// Roll several per-target verdicts up to one run-level verdict: `regressed` if any target
-/// regressed, else `passed` if any held against a baseline, else `no_baseline`. Used by compare mode
-/// so the whole comparison has a single honest headline status, not just per-target rows.
+/// regressed, else `partial` if any target's cases were cut short (budget halt), else `passed` if
+/// any held against a baseline, else `no_baseline`. Used by compare mode so the whole comparison has
+/// a single honest headline status, not just per-target rows.
+///
+/// A real regression outranks partiality on purpose: a target that regressed on the cases it *did*
+/// run is an actionable finding, and the halt is still recorded per target and on the run summary.
+/// But a halted comparison can never roll up to `passed` — that is the claim it hasn't earned.
 pub(crate) fn aggregate_status(statuses: &[&str]) -> &'static str {
-    if statuses.iter().any(|s| *s == "regressed") {
+    if statuses.contains(&"regressed") {
         "regressed"
-    } else if statuses.iter().any(|s| *s == "passed") {
+    } else if statuses.contains(&"partial") {
+        "partial"
+    } else if statuses.contains(&"passed") {
         "passed"
     } else {
         "no_baseline"
@@ -273,6 +280,11 @@ mod tests {
     fn aggregate_status_prioritizes_regression() {
         assert_eq!(aggregate_status(&["passed", "regressed", "no_baseline"]), "regressed");
         assert_eq!(aggregate_status(&["passed", "no_baseline"]), "passed");
+        // A budget-halted target can never let the comparison roll up to `passed`.
+        assert_eq!(aggregate_status(&["passed", "partial"]), "partial");
+        assert_eq!(aggregate_status(&["partial", "no_baseline"]), "partial");
+        // …but a real regression on the cases that did run still outranks it.
+        assert_eq!(aggregate_status(&["partial", "regressed"]), "regressed");
         assert_eq!(aggregate_status(&["no_baseline", "no_baseline"]), "no_baseline");
         assert_eq!(aggregate_status(&[]), "no_baseline");
     }

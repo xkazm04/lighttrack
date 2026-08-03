@@ -16,6 +16,7 @@ use lighttrack_engine::{
 };
 
 use crate::bench::judge_output;
+use crate::budget::{estimate_compare, Budget};
 use crate::cli::Cli;
 use crate::http::{get, post};
 use crate::history::previous_case_scores;
@@ -52,6 +53,10 @@ struct Cell {
     price_warnings: BTreeSet<String>,
     /// First generation/judge error hit while sampling this cell (printed in the sequential fold).
     error_msg: Option<String>,
+    /// True when the cell was never run because the run's dollar ceiling was already reached. A
+    /// skipped cell is NOT an errored one: nothing failed, the operator's budget ran out — and the
+    /// difference is what keeps a halted run from reading like a run that judged everything badly.
+    skipped: bool,
 }
 
 /// Generate `ng` candidates for one case from one target and judge each; pure (no printing/posting)
@@ -69,6 +74,7 @@ fn compute_cell(
     ng: u32,
     samples: u32,
     prices: &[ModelPriceRow],
+    budget: &Budget,
 ) -> Cell {
     let mut cell = Cell {
         cand_scores: Vec::new(),
@@ -85,7 +91,16 @@ fn compute_cell(
         gen_determinism: None,
         price_warnings: BTreeSet::new(),
         error_msg: None,
+        skipped: false,
     };
+    // The ceiling is checked HERE — at a case boundary, before the first paid call of this cell —
+    // so a run that outruns its estimate stops instead of finishing the invoice. Which cells get
+    // skipped depends on scheduling; that the run is partial does not, and that is what's reported.
+    if budget.exhausted() {
+        budget.halt();
+        cell.skipped = true;
+        return cell;
+    }
     // Pin the candidate exactly as the judge is pinned — but only when one candidate per case was
     // asked for. With `--gen-samples > 1` the operator is deliberately drawing a distribution;
     // temperature 0 would collapse every draw onto the same output and silently delete the feature,
@@ -142,6 +157,9 @@ fn compute_cell(
             *cell.case_dim_sums.entry(k.clone()).or_insert(0.0) += v;
         }
     }
+    // Charge the run's ledger with what this cell actually cost, including the spend of a cell that
+    // errored part-way: those calls were paid for too.
+    budget.spend(cell.gen_cost + cell.judge_cost);
     cell
 }
 
@@ -234,6 +252,35 @@ pub(crate) fn run_compare(
     // For providers whose API doesn't return a $ cost (e.g. Gemini/OpenAI), price by tokens from the DB.
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
 
+    // Cost pre-flight, matching pairwise's contract: print the call count and a dollar estimate
+    // BEFORE the first paid call, and refuse to start a matrix that blows past `--max-cost`. A
+    // compare run costs `targets × cases × gen_samples × (1 generation + judge_samples judge calls)`;
+    // until now a fat-fingered `--gen-samples` was discovered only after it had been spent.
+    let estimate = estimate_compare(&prices, targets, cases.len(), ng, samples, &jp, &jm);
+    println!("  {}", estimate.line());
+    if !estimate.unpriced.is_empty() {
+        println!(
+            "  warning: no price book entry for {} — the estimate below excludes them and the \
+             run's recorded cost will be undercounted",
+            join_csv(&estimate.unpriced)
+        );
+    }
+    if cli.max_cost > 0.0 && estimate.usd > cli.max_cost {
+        println!(
+            "  ABORT (compare): estimated ${:.2} exceeds --max-cost ${:.2}. Re-run with \
+             --max-cost {:.2} to proceed, or reduce targets/cases/--gen-samples.",
+            estimate.usd,
+            cli.max_cost,
+            // 10% headroom: the estimate is nominal, so a ceiling set to exactly it would halt the
+            // very run the operator just approved.
+            (estimate.usd * 1.1).max(0.01),
+        );
+        return Ok("aborted".to_string());
+    }
+    // The live ceiling. The pre-flight is an estimate over nominal token counts; this is the real
+    // money, checked at every case boundary.
+    let budget = Budget::new(cli.max_cost);
+
     // Prior runs of this benchmark, for the PAIRED per-case test: the same cases are judged in both
     // runs, so per-case deltas remove between-case variance and have far more power than comparing
     // this run's mean to a bare scalar. Best-effort — a benchmark with no readable history simply
@@ -254,6 +301,26 @@ pub(crate) fn run_compare(
     // Per-target case scores, kept so the leaderboard's "best" claim can be tested — paired, on the
     // cases both targets were actually scored on — instead of asserted by argmax.
     let mut per_target: Vec<(String, f64, Vec<f64>)> = Vec::new();
+    // Every unpriced model seen anywhere in the matrix, so the run-level output can say the totals
+    // are undercounted instead of hiding it in each target's nested `price_warnings` array.
+    let mut all_price_warnings: BTreeSet<String> = estimate.unpriced.clone();
+
+    // Generate + judge the WHOLE (target, case) matrix with up to `jobs` concurrency. Targets used
+    // to be an outer sequential loop with only cases parallelized inside, so wall-clock was
+    // `n_targets × ceil(n_cases / jobs)` rounds instead of `ceil(n_targets · n_cases / jobs)` — the
+    // job budget sat idle whenever a target had fewer cases than workers. Cells are folded below in
+    // (target, case) order, so aggregation is byte-identical at any `--jobs`; see
+    // `cell_matrix_is_order_independent`.
+    let n_c = cases.len();
+    let cells: Vec<Cell> = parallel_map(targets.len() * n_c, jobs, |idx| {
+        let (ti, ci) = (idx / n_c.max(1), idx % n_c.max(1));
+        compute_cell(
+            engine, &targets[ti], &jp, &jm, &rubric, bench, &cases[ci], ng, samples, &prices,
+            &budget,
+        )
+    });
+    let mut cells = cells.into_iter();
+
     for t in targets {
         let label = t
             .label
@@ -294,13 +361,16 @@ pub(crate) fn run_compare(
             );
         }
 
-        // Generate + judge every case for this target with up to `jobs` concurrency; fold the cells in
-        // case order so cost/latency/agreement aggregation is identical to the sequential path.
-        let cells: Vec<Cell> = parallel_map(cases.len(), jobs, |i| {
-            compute_cell(engine, t, &jp, &jm, &rubric, bench, &cases[i], ng, samples, &prices)
-        });
+        // This target's slice of the matrix, folded in case order so cost/latency/agreement
+        // aggregation is identical to the old sequential path.
+        let target_cells: Vec<Cell> = cells.by_ref().take(n_c).collect();
+        let mut skipped = 0u32;
 
-        for (i, cell) in cells.into_iter().enumerate() {
+        for (i, cell) in target_cells.into_iter().enumerate() {
+            if cell.skipped {
+                skipped += 1;
+                continue;
+            }
             if let Some(msg) = &cell.error_msg {
                 println!("  case {}: {msg}", i + 1);
             }
@@ -418,7 +488,20 @@ pub(crate) fn run_compare(
             deltas.as_deref(),
             m,
         );
-        let (status, scalar_fallback) = (sig.status, sig.scalar_fallback);
+        let scalar_fallback = sig.scalar_fallback;
+        // A budget-halted target judged only part of its cases, so its mean is a mean over whatever
+        // the money reached — it must never be published under a verdict vocabulary that reads as a
+        // completed run. `partial` is that honest status (the `--gate` contract treats it as
+        // unverified, like `no_baseline`).
+        let status = if skipped > 0 { "partial" } else { sig.status };
+        if skipped > 0 {
+            println!(
+                "  BUDGET HALT: {skipped} of {n_c} case(s) were never run — the run's ${:.4} spend \
+                 reached --max-cost ${:.2}. Results below are PARTIAL.",
+                budget.spent_usd(),
+                cli.max_cost,
+            );
+        }
         if let (Some(d), Some(p)) = (sig.mean_delta, sig.p_value) {
             println!(
                 "  vs previous run (paired, n={}): mean Δ={d:+.3}, p={p:.4} (α={:.4} after {} \
@@ -431,6 +514,7 @@ pub(crate) fn run_compare(
         if !price_warnings.is_empty() {
             println!("  warning: no price book entry for {} — cost undercounted", join_csv(&price_warnings));
         }
+        all_price_warnings.extend(price_warnings.iter().cloned());
 
         let dim_means: Map<String, Value> = dim_sums
             .iter()
@@ -446,6 +530,15 @@ pub(crate) fn run_compare(
             "self_preference": self_preference,
             "agreement": r3(mean_agree), "dimensions": Value::Object(dim_means),
             "verdict": status, "baseline": bench.baseline_score,
+            // Spend control, recorded on the run so "why does this only have 40 cases?" is
+            // answerable from the run alone.
+            "partial": skipped > 0,
+            "budget_halted": skipped > 0,
+            "skipped_cases": skipped,
+            "cases_planned": n_c,
+            "budget_limit_usd": budget.limit_usd(),
+            "budget_spent_usd": budget.spent_usd(),
+            "estimated_cost_usd": estimate.usd,
         });
         // The headline `determinism` is the weaker of generation and judging, with both halves
         // recorded beside it — a run whose candidates were resampled must not read as exact.
@@ -470,6 +563,20 @@ pub(crate) fn run_compare(
 
     // One honest headline status for the whole comparison: regressed if any target regressed.
     let overall = aggregate_status(&statuses.iter().map(String::as_str).collect::<Vec<_>>());
+    if budget.halted() {
+        println!(
+            "\nPARTIAL RUN: the ${:.4} spend reached --max-cost ${:.2}; some cases were never run. \
+             Treat the table below as a partial comparison, not a finished one.",
+            budget.spent_usd(),
+            cli.max_cost,
+        );
+    }
+    if !all_price_warnings.is_empty() {
+        println!(
+            "\nwarning: no price book entry for {} — every $ figure below is a LOWER bound",
+            join_csv(&all_price_warnings)
+        );
+    }
     if bench.baseline_score.is_some() {
         println!("\ncompare verdict vs baseline {:.3}: {overall}", bench.baseline_score.unwrap_or(0.0));
     }
@@ -487,6 +594,13 @@ pub(crate) fn run_compare(
     let summary = json!({
         "n_cases": cases.len(), "targets": target_rows, "status": overall,
         "best": best_claim(&per_target),
+        // Run-level spend facts, beside the leaderboard rather than buried per target.
+        "budget_halted": budget.halted(),
+        "spend_usd": budget.spent_usd(),
+        "budget_limit_usd": budget.limit_usd(),
+        // Unpriced models make every $ figure above a LOWER bound. This is the aggregate view of
+        // the per-target `price_warnings` arrays, which no reader of the table ever opened.
+        "price_warnings": all_price_warnings.iter().cloned().collect::<Vec<_>>(),
     });
     match lighttrack_render::render("compare", &summary) {
         Some(md) => println!("\n{md}"),
@@ -505,9 +619,77 @@ pub(crate) fn run_compare(
 #[cfg(test)]
 mod tests {
     use super::r3;
+    use crate::util::parallel_map;
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
+    }
+
+    /// The (target, case) → flat index mapping the run uses, exercised without live model calls.
+    fn cell_at(idx: usize, n_c: usize) -> (usize, usize) {
+        (idx / n_c, idx % n_c)
+    }
+
+    /// The compare matrix is now scheduled as ONE parallel_map over `n_targets × n_cases` instead of
+    /// a sequential per-target loop. Aggregation must be unaffected: the same cells, in the same
+    /// (target, case) order, folded into the same per-target totals at any `--jobs`. This is the
+    /// compare-mode analogue of the k-sample judging order-independence test.
+    #[test]
+    fn cell_matrix_is_order_independent() {
+        let (n_t, n_c) = (4, 7);
+        // Deterministic stand-in for `compute_cell`: a cell's value depends only on its coordinates.
+        let work = |ti: usize, ci: usize| (ti * 31 + ci * 7) as f64 / 10.0;
+
+        let seq: Vec<f64> = parallel_map(n_t * n_c, 1, |i| {
+            let (ti, ci) = cell_at(i, n_c);
+            work(ti, ci)
+        });
+        let par: Vec<f64> = parallel_map(n_t * n_c, 16, |i| {
+            let (ti, ci) = cell_at(i, n_c);
+            work(ti, ci)
+        });
+        assert_eq!(seq, par, "the matrix schedule must be byte-identical at any --jobs");
+
+        // Each target's fold — the thing that becomes its leaderboard row — matches the old
+        // outer-loop-per-target computation exactly.
+        for ti in 0..n_t {
+            let old: f64 = (0..n_c).map(|ci| work(ti, ci)).sum();
+            let new: f64 = par[ti * n_c..(ti + 1) * n_c].iter().sum();
+            assert!(approx(old, new), "target {ti}: {old} != {new}");
+        }
+        // …and the slice each target consumes is exactly its own cells, in case order.
+        let mut it = par.iter();
+        for ti in 0..n_t {
+            let mine: Vec<f64> = it.by_ref().take(n_c).copied().collect();
+            assert_eq!(mine, (0..n_c).map(|ci| work(ti, ci)).collect::<Vec<_>>());
+        }
+    }
+
+    /// Cross-target parallelism inside the SAME `--jobs` budget: the old shape spent
+    /// `n_targets × ceil(n_cases / jobs)` rounds because targets were an outer sequential loop, so a
+    /// matrix with fewer cases than workers left most of the budget idle.
+    #[test]
+    fn cross_target_parallelism_cuts_wall_clock() {
+        use std::time::{Duration, Instant};
+        let (n_t, n_c, jobs, unit) = (3usize, 4usize, 8usize, Duration::from_millis(50));
+
+        // Old: one parallel_map per target, targets sequential.
+        let t0 = Instant::now();
+        for _ in 0..n_t {
+            parallel_map(n_c, jobs, |_| std::thread::sleep(unit));
+        }
+        let old = t0.elapsed();
+
+        // New: one parallel_map over the whole matrix.
+        let t1 = Instant::now();
+        parallel_map(n_t * n_c, jobs, |_| std::thread::sleep(unit));
+        let new = t1.elapsed();
+
+        eprintln!("wall-clock {n_t}×{n_c} at --jobs {jobs}: per-target={old:?} matrix={new:?}");
+        // 3 rounds of 50ms vs ceil(12/8) = 2 rounds. Only the *direction* is asserted: an absolute
+        // millisecond bound would flake on a loaded machine, while the round count is structural —
+        // identical total work, fewer scheduling rounds.
+        assert!(new < old, "matrix scheduling must not be slower (old={old:?} new={new:?})");
     }
 
     #[test]
