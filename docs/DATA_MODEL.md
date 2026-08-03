@@ -32,6 +32,21 @@ The heart of the system. Emitted by monitored apps, normalized + costed by `api`
 | `source` | string? | host / app instance |
 | `metadata` | json | arbitrary app-supplied fields |
 
+### Querying `events`
+`GET /v1/events` AND-combines: `project`, `since`/`until` (client `ts`), `provider`, `model`,
+`trace_id`, `name`, `status` (`success|error|timeout`), `tag` (array **membership**, not substring),
+`meta` (`key` or `key=value` over `metadata` — how per-customer/product questions are asked, since that
+linkage rides in metadata rather than a column) and `min_cost`. `count=1` additionally returns
+`X-Total-Count`: the size of the whole matching set, independent of the cursor and page limit, so a
+client can render "n of N" without paging to count. Paging is keyset (`X-Next-Cursor`) and the cursor
+predicate is independent of the content predicates, so traversal is exact under every filter
+combination.
+
+Composite indexes `(project_id, provider|model|status, ts)` serve each equality **and** the
+`ORDER BY ts DESC` in one seek; `min_cost`, `tag` and `meta` are residual within that range. Backends
+that have not ported the extended predicates answer **501 `unsupported`** naming the filter — never an
+unfiltered page presented as if the filter had been honored.
+
 ## traces — a derived end-to-end view (no table)
 A *trace* is every `event` sharing a `trace_id`, rolled up into one view of a multi-step / agentic
 request. There is **no `traces` table**: the rollup is computed on read (`core::trace::Trace::from_events`)

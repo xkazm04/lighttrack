@@ -139,56 +139,119 @@ pub(super) fn list(conn: &Connection, project: Option<&str>, limit: usize) -> Re
     raws.into_iter().map(from_raw).collect()
 }
 
+/// The predicates of an [`EventFilter`] as SQL, split so the cursor can be added for the page query
+/// and left out of the total-count query (a total is over the whole matching set, not "the rest").
+struct Predicates {
+    conds: Vec<String>,
+    args: Vec<Box<dyn ToSql>>,
+}
+
+impl Predicates {
+    fn where_clause(&self) -> String {
+        if self.conds.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {} ", self.conds.join(" AND "))
+        }
+    }
+}
+
+/// Build the non-cursor predicates. Every value is bound, never interpolated — including the JSON
+/// path for a metadata key, which is why an arbitrary key name is safe here.
+fn build_predicates(project: Option<&str>, filter: &EventFilter) -> Predicates {
+    let mut conds: Vec<String> = Vec::new();
+    let mut args: Vec<Box<dyn ToSql>> = Vec::new();
+    let eq = |col: &str, v: &str, conds: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql>>| {
+        conds.push(format!("{col} = ?"));
+        args.push(Box::new(v.to_string()));
+    };
+    if let Some(p) = project {
+        eq("project_id", p, &mut conds, &mut args);
+    }
+    if let Some(s) = filter.since {
+        conds.push("ts >= ?".into());
+        args.push(Box::new(fmt_ts(s)));
+    }
+    if let Some(u) = filter.until {
+        conds.push("ts < ?".into());
+        args.push(Box::new(fmt_ts(u)));
+    }
+    for (col, v) in [
+        ("provider", &filter.provider),
+        ("model", &filter.model),
+        ("trace_id", &filter.trace_id),
+        ("name", &filter.name),
+        ("status", &filter.status),
+    ] {
+        if let Some(v) = v {
+            eq(col, v, &mut conds, &mut args);
+        }
+    }
+    if let Some(mc) = filter.min_cost {
+        conds.push("cost_usd >= ?".into());
+        args.push(Box::new(mc));
+    }
+    if let Some(t) = &filter.tag {
+        // Membership in the stored JSON array — not `tags LIKE '%x%'`, which would match "prod"
+        // inside "production" and quietly answer a different question than the one asked.
+        conds.push("EXISTS (SELECT 1 FROM json_each(events.tags) WHERE json_each.value = ?)".into());
+        args.push(Box::new(t.clone()));
+    }
+    if let Some(k) = &filter.metadata_key {
+        // The path is a *bound parameter*, so an arbitrary key can't escape into the SQL text.
+        let path = format!("$.\"{}\"", k.replace('"', "\"\""));
+        match &filter.metadata_value {
+            Some(v) => {
+                conds.push("json_extract(metadata, ?) = ?".into());
+                args.push(Box::new(path));
+                args.push(Box::new(v.clone()));
+            }
+            None => {
+                conds.push("json_extract(metadata, ?) IS NOT NULL".into());
+                args.push(Box::new(path));
+            }
+        }
+    }
+    Predicates { conds, args }
+}
+
 /// Filtered, keyset-paginated listing (newest first), paging on `(ts, id)` descending. Fetches
 /// `limit + 1` rows to detect whether a further page exists; when it does, the extra row is dropped and
 /// a `next_cursor` encoding the last returned row's `(ts, id)` is returned. String comparison on `ts`
 /// is chronological because the stored format is fixed-width (see `codec::fmt_ts`).
+///
+/// The keyset predicate is appended *after* every content predicate and is independent of them, so
+/// paging semantics are identical under any filter combination: each page is the newest `limit` rows
+/// strictly below the cursor that also match the filter. `with_total` runs one extra `COUNT(*)` over
+/// the same predicates **minus** the cursor — the total is the size of the whole matching set, not of
+/// what remains after the current position.
 pub(super) fn list_filtered(
     conn: &Connection,
     project: Option<&str>,
     filter: &EventFilter,
     limit: usize,
 ) -> Result<EventPage> {
-    let mut conds: Vec<&str> = Vec::new();
-    let mut args: Vec<Box<dyn ToSql>> = Vec::new();
-    if let Some(p) = project {
-        conds.push("project_id = ?");
-        args.push(Box::new(p.to_string()));
-    }
-    if let Some(s) = filter.since {
-        conds.push("ts >= ?");
-        args.push(Box::new(fmt_ts(s)));
-    }
-    if let Some(u) = filter.until {
-        conds.push("ts < ?");
-        args.push(Box::new(fmt_ts(u)));
-    }
-    if let Some(p) = &filter.provider {
-        conds.push("provider = ?");
-        args.push(Box::new(p.clone()));
-    }
-    if let Some(m) = &filter.model {
-        conds.push("model = ?");
-        args.push(Box::new(m.clone()));
-    }
-    if let Some(t) = &filter.trace_id {
-        conds.push("trace_id = ?");
-        args.push(Box::new(t.clone()));
-    }
-    if let Some(n) = &filter.name {
-        conds.push("name = ?");
-        args.push(Box::new(n.clone()));
-    }
+    let base = build_predicates(project, filter);
+
+    let total = if filter.with_total {
+        let sql = format!("SELECT COUNT(*) FROM events {}", base.where_clause());
+        let mut stmt = conn.prepare(&sql)?;
+        let n: i64 = stmt.query_row(params_from_iter(base.args.iter()), |r| r.get(0))?;
+        Some(n.max(0) as u64)
+    } else {
+        None
+    };
+
+    let Predicates { mut conds, mut args } = base;
     if let Some(cursor) = &filter.cursor {
         let (cts, cid) = decode_event_cursor(cursor)
             .ok_or_else(|| StoreError::Other(format!("invalid cursor {cursor:?}")))?;
         // Strictly after (cts, cid) in DESC (ts, id) order.
-        conds.push("(ts < ? OR (ts = ? AND id < ?))");
+        conds.push("(ts < ? OR (ts = ? AND id < ?))".into());
         args.push(Box::new(cts.clone()));
         args.push(Box::new(cts));
         args.push(Box::new(cid));
     }
-
     let where_clause = if conds.is_empty() {
         String::new()
     } else {
@@ -214,7 +277,7 @@ pub(super) fn list_filtered(
     } else {
         None
     };
-    Ok(EventPage { events, next_cursor })
+    Ok(EventPage { events, next_cursor, total })
 }
 
 pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LlmEvent>> {

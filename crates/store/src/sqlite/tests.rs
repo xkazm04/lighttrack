@@ -729,6 +729,198 @@ fn a_skewed_client_ts_cannot_move_a_budget_window() {
     assert_eq!(later.calls, 0);
 }
 
+/// Build `n` events in project `p1` alternating over provider / status / tag / customer / cost, with
+/// strictly increasing `ts` so DESC order is deterministic (`e{n}` … `e1`).
+#[cfg(test)]
+fn seed_query_corpus(s: &SqliteStore, n: u32) {
+    use chrono::{TimeZone, Utc as CU};
+    for i in 1..=n {
+        let mut e = ev("p1", if i % 2 == 0 { "gpt-4o" } else { "claude-haiku-4-5" }, 1, 1, 0.0);
+        e.id = format!("e{i}");
+        e.ts = CU.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap() + chrono::Duration::seconds(i as i64);
+        e.received_at = e.ts;
+        e.provider = if i % 2 == 0 { Provider::OpenAi } else { Provider::Anthropic };
+        e.status = if i % 3 == 0 { Status::Error } else { Status::Success };
+        e.tags = if i % 4 == 0 { vec!["prod".into()] } else { vec!["production".into()] };
+        e.cost_usd = Some(i as f64 * 0.01);
+        e.metadata = serde_json::json!({ "customer_id": if i % 5 == 0 { "acme" } else { "other" } });
+        s.insert_event(&e).unwrap();
+    }
+}
+
+#[test]
+fn extended_event_filters_answer_the_operator_questions() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    seed_query_corpus(&s, 20);
+    let f = |mk: crate::EventFilter| s.list_events_filtered(Some("p1"), &mk, 100).unwrap();
+
+    // "Which calls errored?" — every 3rd of 20.
+    let errored = f(crate::EventFilter { status: Some("error".into()), ..Default::default() });
+    assert_eq!(errored.events.len(), 6);
+    assert!(errored.events.iter().all(|e| e.status == Status::Error));
+
+    // "Which belong to this customer?" — the metadata linkage, not a column.
+    let acme = f(crate::EventFilter {
+        metadata_key: Some("customer_id".into()),
+        metadata_value: Some("acme".into()),
+        ..Default::default()
+    });
+    assert_eq!(acme.events.len(), 4);
+    // Key-presence alone matches everything that carries it.
+    let any_customer =
+        f(crate::EventFilter { metadata_key: Some("customer_id".into()), ..Default::default() });
+    assert_eq!(any_customer.events.len(), 20);
+    assert!(f(crate::EventFilter { metadata_key: Some("nope".into()), ..Default::default() })
+        .events
+        .is_empty());
+
+    // "Which cost more than $0.155?" — inclusive lower bound. (Off a round tenth on purpose: the
+    // costs here are i*0.01 in f64, so a threshold that lands exactly on a stored value would be
+    // testing float representation rather than the filter.)
+    let pricey = f(crate::EventFilter { min_cost: Some(0.155), ..Default::default() });
+    assert_eq!(pricey.events.len(), 5, "e16..e20 at $0.16..$0.20");
+    assert!(pricey.events.iter().all(|e| e.cost_usd.unwrap() >= 0.155));
+
+    // Tag matching is array MEMBERSHIP: "prod" must not match the event tagged "production".
+    let prod = f(crate::EventFilter { tag: Some("prod".into()), ..Default::default() });
+    assert_eq!(prod.events.len(), 5, "every 4th");
+    assert!(prod.events.iter().all(|e| e.tags == vec!["prod".to_string()]));
+
+    // "How many match at all?" without paging the whole set: the total is over the MATCH SET, and is
+    // independent of the page limit.
+    let counted = s
+        .list_events_filtered(
+            Some("p1"),
+            &crate::EventFilter {
+                status: Some("error".into()),
+                with_total: true,
+                ..Default::default()
+            },
+            2,
+        )
+        .unwrap();
+    assert_eq!(counted.events.len(), 2, "page respects the limit");
+    assert_eq!(counted.total, Some(6), "total counts the whole match set, not the page");
+    // Not asked for → not computed.
+    assert_eq!(errored.total, None);
+
+    // Predicates AND together, and a contradiction is empty rather than "everything".
+    let anded = f(crate::EventFilter {
+        provider: Some("openai".into()),
+        status: Some("error".into()),
+        ..Default::default()
+    });
+    assert!(anded.events.iter().all(|e| e.provider == Provider::OpenAi
+        && e.status == Status::Error));
+    assert_eq!(anded.events.len(), 3, "even AND divisible-by-3 within 1..=20: 6,12,18");
+}
+
+#[test]
+fn keyset_paging_is_exact_under_every_new_filter_combination() {
+    // The risk with new predicates is a cursor that drifts: skipping or repeating rows once a filter
+    // is applied. Page every combination end to end at limit 2 and require the concatenation to equal
+    // the unpaged result exactly — same rows, same order, no duplicates, no gaps.
+    let s = SqliteStore::open_in_memory().unwrap();
+    seed_query_corpus(&s, 20);
+
+    let combos: Vec<crate::EventFilter> = vec![
+        crate::EventFilter { status: Some("error".into()), ..Default::default() },
+        crate::EventFilter { tag: Some("prod".into()), ..Default::default() },
+        crate::EventFilter { min_cost: Some(0.05), ..Default::default() },
+        crate::EventFilter {
+            metadata_key: Some("customer_id".into()),
+            metadata_value: Some("acme".into()),
+            ..Default::default()
+        },
+        crate::EventFilter {
+            status: Some("success".into()),
+            provider: Some("openai".into()),
+            min_cost: Some(0.02),
+            ..Default::default()
+        },
+        crate::EventFilter {
+            status: Some("error".into()),
+            metadata_key: Some("customer_id".into()),
+            tag: Some("production".into()),
+            with_total: true,
+            ..Default::default()
+        },
+    ];
+
+    for (i, base) in combos.into_iter().enumerate() {
+        let all = s.list_events_filtered(Some("p1"), &base, 1000).unwrap();
+        let want: Vec<String> = all.events.iter().map(|e| e.id.clone()).collect();
+
+        let mut got: Vec<String> = Vec::new();
+        let mut cursor = None;
+        loop {
+            let f = crate::EventFilter { cursor: cursor.clone(), ..base.clone() };
+            let page = s.list_events_filtered(Some("p1"), &f, 2).unwrap();
+            assert!(page.events.len() <= 2, "combo {i}: page over limit");
+            if base.with_total {
+                assert_eq!(page.total, Some(want.len() as u64), "combo {i}: total is cursor-independent");
+            }
+            got.extend(page.events.iter().map(|e| e.id.clone()));
+            match page.next_cursor {
+                Some(c) => cursor = Some(c),
+                None => break,
+            }
+        }
+        assert_eq!(got, want, "combo {i}: paged traversal must equal the unpaged result");
+        let uniq: std::collections::HashSet<_> = got.iter().collect();
+        assert_eq!(uniq.len(), got.len(), "combo {i}: a row was served twice");
+    }
+}
+
+#[test]
+fn high_cardinality_event_filters_seek_an_index_instead_of_scanning() {
+    // Complexity evidence. Before the composites, a provider/model/status-only predicate fell back to
+    // a residual scan of the whole project-ts range — every row of the project read and discarded.
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(super::SCHEMA).unwrap();
+    let plan_of = |sql: &str| -> String {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        rows.join(" | ")
+    };
+    for (col, idx) in [
+        ("provider", "idx_events_project_provider_ts"),
+        ("model", "idx_events_project_model_ts"),
+        ("status", "idx_events_project_status_ts"),
+    ] {
+        let plan = plan_of(&format!(
+            "SELECT id FROM events WHERE project_id = 'p1' AND {col} = 'x' \
+             ORDER BY ts DESC, id DESC LIMIT 51"
+        ));
+        assert!(plan.contains(idx), "{col} filter should seek {idx}, plan was: {plan}");
+        assert!(
+            plan.contains("SEARCH"),
+            "{col} filter should be an index SEARCH, not a SCAN: {plan}"
+        );
+        assert!(!plan.contains("SCAN events"), "{col} filter fell back to a table scan: {plan}");
+    }
+}
+
+#[test]
+fn unported_backends_refuse_extended_filters_rather_than_answering_wrongly() {
+    // The trait default must never hand back an unfiltered page as if it had honored the predicate.
+    let plain = crate::EventFilter { model: Some("m".into()), ..Default::default() };
+    assert_eq!(plain.unsupported_extension(), None, "the original fields stay universally supported");
+    for f in [
+        crate::EventFilter { status: Some("error".into()), ..Default::default() },
+        crate::EventFilter { tag: Some("prod".into()), ..Default::default() },
+        crate::EventFilter { metadata_key: Some("customer_id".into()), ..Default::default() },
+        crate::EventFilter { min_cost: Some(1.0), ..Default::default() },
+        crate::EventFilter { with_total: true, ..Default::default() },
+    ] {
+        assert!(f.unsupported_extension().is_some(), "{f:?} must be flagged as an extension");
+    }
+}
+
 #[test]
 fn usage_cache_load_uses_rowid_range_not_full_scan() {
     // Complexity evidence: the per-ingest load rides the integer primary key as a range scan

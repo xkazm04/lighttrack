@@ -9,8 +9,13 @@
 //!   POST /v1/events                      ingest one event (cost computed; limits evaluated)
 //!   GET  /v1/ingest/status               load-shedding view: in-flight depth + shed/timeout counts
 //!   POST /v1/events/batch                ingest an array; per-item accepted|rejected|invalid (HTTP 200)
-//!   GET  /v1/events?project=&limit=&since=&until=&provider=&model=&trace_id=&name=&cursor=
-//!                                        keyset pagination: next page cursor in `X-Next-Cursor`
+//!   GET  /v1/events?project=&limit=&since=&until=&provider=&model=&trace_id=&name=
+//!                  &status=&tag=&meta=&min_cost=&count=&cursor=
+//!                                        keyset pagination: next page cursor in `X-Next-Cursor`;
+//!                                        `count=1` also returns `X-Total-Count` (whole match set).
+//!                                        `meta` is `key` or `key=value` (metadata predicate).
+//!                                        Backends without the extended predicates answer 501
+//!                                        `unsupported` rather than silently ignoring a filter.
 //!   GET  /v1/events/:id
 //!   POST /v1/traces                      OTLP/HTTP JSON export: OTel GenAI spans -> events (see `otlp`)
 //!   GET  /v1/traces?project=&limit=     list traces (rollups grouped by trace_id)

@@ -168,6 +168,12 @@ pub(crate) async fn list_filtered(
     filter: &EventFilter,
     limit: usize,
 ) -> Result<EventPage> {
+    // The extended predicates (status / tag / metadata / min_cost / total count) are not ported to
+    // this backend. Answer 501 `unsupported` rather than returning a page that silently ignored the
+    // filter — an operator asking "show me the errored calls" must never be handed successful ones.
+    if let Some(what) = filter.unsupported_extension() {
+        return Err(StoreError::Unsupported(what));
+    }
     let mut conds: Vec<String> = Vec::new();
     let mut binds: Vec<String> = Vec::new();
     if let Some(p) = project {
@@ -226,7 +232,7 @@ pub(crate) async fn list_filtered(
     } else {
         None
     };
-    Ok(EventPage { events, next_cursor })
+    Ok(EventPage { events, next_cursor, total: None })
 }
 
 /// Rolling usage restricted to one scope dimension (provider / model / use-case name). A NULL `name`

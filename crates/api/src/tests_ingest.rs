@@ -836,6 +836,102 @@ async fn get_events_paginates_by_cursor_and_filters() {
     assert_eq!(arr[0]["provider"], "openai");
 }
 
+/// GET /v1/events returning (status, next-cursor, total-count, body).
+async fn query_events(
+    app: &Router,
+    token: &str,
+    query: &str,
+) -> (StatusCode, Option<String>, Option<String>, Value) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/v1/events?{query}"))
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let hdr = |n: &str| resp.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let (cursor, total) = (hdr("x-next-cursor"), hdr("x-total-count"));
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+    (status, cursor, total, v)
+}
+
+#[tokio::test]
+async fn events_can_be_asked_the_questions_that_matter_over_http() {
+    // The debugging questions that previously had no answer on the flat event list: which errored,
+    // which belong to this customer, which cost more than X, and how many match at all.
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    for (id, status, cost, customer, tag) in [
+        ("q1", "success", 0.01, "acme", "prod"),
+        ("q2", "error", 0.30, "acme", "production"),
+        ("q3", "error", 0.02, "globex", "prod"),
+        ("q4", "success", 0.50, "globex", "prod"),
+    ] {
+        let (s, b) = ingest(
+            &app,
+            &key,
+            json!({
+                "id": id, "provider": "anthropic", "model": "claude-haiku-4-5",
+                "usage": { "input": 1, "output": 1 }, "cost_usd": cost, "status": status,
+                "tags": [tag], "metadata": { "customer_id": customer }
+            }),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+    }
+    let ids = |v: &Value| {
+        let mut out: Vec<String> =
+            v.as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap().to_string()).collect();
+        out.sort();
+        out
+    };
+
+    let (s, _, _, v) = query_events(&app, &key, "status=error").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(ids(&v), ["q2", "q3"]);
+
+    let (_, _, _, v) = query_events(&app, &key, "meta=customer_id%3Dacme").await;
+    assert_eq!(ids(&v), ["q1", "q2"]);
+    let (_, _, _, v) = query_events(&app, &key, "meta=customer_id").await;
+    assert_eq!(ids(&v).len(), 4, "key-presence matches every tagged call");
+
+    let (_, _, _, v) = query_events(&app, &key, "min_cost=0.25").await;
+    assert_eq!(ids(&v), ["q2", "q4"]);
+
+    // Membership, not substring: "prod" must not sweep up the one tagged "production".
+    let (_, _, _, v) = query_events(&app, &key, "tag=prod").await;
+    assert_eq!(ids(&v), ["q1", "q3", "q4"]);
+
+    // Opt-in total travels beside a limited page, and counts the whole match set.
+    let (_, cursor, total, v) = query_events(&app, &key, "status=error&count=1&limit=1").await;
+    assert_eq!(v.as_array().unwrap().len(), 1);
+    assert_eq!(total.as_deref(), Some("2"), "X-Total-Count is the match set, not the page");
+    assert!(cursor.is_some(), "a further page remains");
+    // …and is absent unless asked for.
+    let (_, _, no_total, _) = query_events(&app, &key, "status=error").await;
+    assert!(no_total.is_none());
+
+    // Cursor semantics survive the new predicates end to end.
+    let (_, _, _, page2) =
+        query_events(&app, &key, &format!("status=error&limit=1&cursor={}", cursor.unwrap())).await;
+    let mut seen = ids(&v);
+    seen.extend(ids(&page2));
+    seen.sort();
+    assert_eq!(seen, ["q2", "q3"], "paging under a filter yields each match exactly once");
+
+    // Combined predicates AND; a nonsense status is a 400, never a misleading empty page.
+    let (_, _, _, v) = query_events(&app, &key, "status=error&min_cost=0.25").await;
+    assert_eq!(ids(&v), ["q2"]);
+    let (s, _, _, b) = query_events(&app, &key, "status=nonsense").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{b}");
+    assert_eq!(b["error"]["code"], "bad_request", "{b}");
+}
+
 #[tokio::test]
 async fn duplicate_event_id_returns_409() {
     let (state, store) = setup(Redactor::off());

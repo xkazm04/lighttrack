@@ -77,7 +77,51 @@ pub struct EventFilter {
     pub model: Option<String>,
     pub trace_id: Option<String>,
     pub name: Option<String>,
+    /// Call outcome: `success` | `error` | `timeout`. The first question asked when debugging.
+    pub status: Option<String>,
+    /// Match events carrying this tag (membership in the `tags` array, not a substring).
+    pub tag: Option<String>,
+    /// Match events whose `metadata` has this key. Combined with [`EventFilter::metadata_value`] it
+    /// becomes an equality test — which is how you ask "everything for this customer", since the
+    /// billing linkage rides in metadata rather than a column.
+    pub metadata_key: Option<String>,
+    pub metadata_value: Option<String>,
+    /// Minimum resolved `cost_usd` (inclusive). Trace listing already had this; the flat event list
+    /// did not, so "which individual calls are expensive" had no answer.
+    pub min_cost: Option<f64>,
+    /// Also compute the total number of matching events (ignoring the cursor and page limit), so a
+    /// client can render "n of N" without paging the whole result set to count it. Opt-in: it costs a
+    /// second aggregate query, which a plain "give me the latest 50" should not pay for.
+    pub with_total: bool,
     pub cursor: Option<String>,
+}
+
+impl EventFilter {
+    /// The first predicate set here that a backend without the extended event-query support can't
+    /// honor, or `None` when this filter only uses the original fields.
+    ///
+    /// Backends call this and return [`StoreError::Unsupported`] → HTTP 501 instead of quietly
+    /// ignoring the predicate. Silently ignoring it is the dangerous option: an operator asking
+    /// "show me the errored calls" would get a page of successful ones and believe it, and a
+    /// filter that returns *more* than asked reads as authoritative rather than broken.
+    pub fn unsupported_extension(&self) -> Option<&'static str> {
+        if self.status.is_some() {
+            return Some("the `status` event filter");
+        }
+        if self.tag.is_some() {
+            return Some("the `tag` event filter");
+        }
+        if self.metadata_key.is_some() {
+            return Some("the metadata event filter");
+        }
+        if self.min_cost.is_some() {
+            return Some("the `min_cost` event filter");
+        }
+        if self.with_total {
+            return Some("the event total count");
+        }
+        None
+    }
 }
 
 /// One page of events plus the cursor to fetch the next page (newest-first). `next_cursor` is `Some`
@@ -86,6 +130,9 @@ pub struct EventFilter {
 pub struct EventPage {
     pub events: Vec<LlmEvent>,
     pub next_cursor: Option<String>,
+    /// Total matching events, ignoring the cursor and page limit — `Some` only when the filter asked
+    /// for it ([`EventFilter::with_total`]).
+    pub total: Option<u64>,
 }
 
 /// Optional filters + keyset cursor for [`Store::list_traces_filtered`]. All fields AND-combine;
@@ -328,12 +375,16 @@ pub trait Store: Send + Sync {
     fn list_events_filtered(
         &self,
         project: Option<&str>,
-        _filter: &EventFilter,
+        filter: &EventFilter,
         limit: usize,
     ) -> Result<EventPage> {
+        if let Some(what) = filter.unsupported_extension() {
+            return Err(StoreError::Unsupported(what));
+        }
         Ok(EventPage {
             events: self.list_events(project, limit)?,
             next_cursor: None,
+            total: None,
         })
     }
 

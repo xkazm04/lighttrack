@@ -264,12 +264,31 @@ pub(crate) struct EventsParams {
     model: Option<String>,
     trace_id: Option<String>,
     name: Option<String>,
+    /// Call outcome: `success` | `error` | `timeout`.
+    status: Option<String>,
+    /// Match events carrying this tag (array membership, not substring).
+    tag: Option<String>,
+    /// A metadata predicate: `key` (the key is present) or `key=value` (it equals `value`). This is
+    /// how per-customer / per-product questions are asked, since that linkage rides in `metadata`
+    /// rather than a column. Split on the FIRST `=`, so values may contain `=`.
+    meta: Option<String>,
+    /// Minimum resolved `cost_usd`, inclusive.
+    min_cost: Option<f64>,
+    /// When `1`/`true`, also return the total number of matching events in `X-Total-Count`. Opt-in:
+    /// it costs a second aggregate query. Taken as a string because a query string carries `1`/`0`
+    /// as often as `true`/`false`, and a strict bool parse would 400 on the common form.
+    count: Option<String>,
     /// Opaque keyset cursor from a prior page's `X-Next-Cursor` header.
     cursor: Option<String>,
     /// When `1`/`true`, return only the most recent events that do not yet have a score (the online
     /// scorer's work list). Uses a scoped anti-join, so it stays correct however large `scores` grows;
     /// ignores the filter/cursor params (project + limit only).
     unscored: Option<bool>,
+}
+
+/// Whether a query-string flag reads as set: `1` / `true` / `yes` (case-insensitive).
+fn is_truthy(v: Option<&str>) -> bool {
+    matches!(v.map(str::trim), Some("1") | Some("true") | Some("TRUE") | Some("yes"))
 }
 
 /// Parse an optional RFC3339 query param into a UTC instant, 400 on malformed input.
@@ -293,6 +312,23 @@ pub(crate) async fn get_events(
 ) -> Result<Response, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
+    let (metadata_key, metadata_value) = match q.meta.as_deref() {
+        None => (None, None),
+        Some(m) => match m.split_once('=') {
+            Some((k, v)) if !k.is_empty() => (Some(k.to_string()), Some(v.to_string())),
+            _ if !m.is_empty() => (Some(m.to_string()), None),
+            _ => return Err(ApiError::bad_request("'meta' must be `key` or `key=value`")),
+        },
+    };
+    if let Some(s) = q.status.as_deref() {
+        // Reject an unknown outcome rather than answering with an empty page: "no errored calls"
+        // and "you spelled the status wrong" must not look identical.
+        if !["success", "error", "timeout"].contains(&s) {
+            return Err(ApiError::bad_request(format!(
+                "invalid 'status' {s:?}: expected success | error | timeout"
+            )));
+        }
+    }
     let filter = EventFilter {
         since: parse_opt_ts("since", q.since.as_deref())?,
         until: parse_opt_ts("until", q.until.as_deref())?,
@@ -300,6 +336,12 @@ pub(crate) async fn get_events(
         model: q.model.clone(),
         trace_id: q.trace_id.clone(),
         name: q.name.clone(),
+        status: q.status.clone(),
+        tag: q.tag.clone(),
+        metadata_key,
+        metadata_value,
+        min_cost: q.min_cost,
+        with_total: is_truthy(q.count.as_deref()),
         cursor: q.cursor.clone(),
     };
     let store = st.store.clone();
@@ -316,10 +358,18 @@ pub(crate) async fn get_events(
     let page =
         spawn_db(move || store.list_events_filtered(project.as_deref(), &filter, limit)).await?;
 
+    // The body stays a bare array (the render/CLI shape is a contract), so pagination metadata rides
+    // in headers: the next keyset cursor, and — when asked for — the size of the whole matching set.
+    let total = page.total;
     let mut resp = Json(page.events).into_response();
     if let Some(cursor) = page.next_cursor {
         if let Ok(v) = HeaderValue::from_str(&cursor) {
             resp.headers_mut().insert("x-next-cursor", v);
+        }
+    }
+    if let Some(n) = total {
+        if let Ok(v) = HeaderValue::from_str(&n.to_string()) {
+            resp.headers_mut().insert("x-total-count", v);
         }
     }
     Ok(resp)

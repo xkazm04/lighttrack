@@ -64,6 +64,12 @@ CREATE INDEX IF NOT EXISTS idx_events_trace ON events(trace_id);
 -- per-trace fetch (list_by_trace: WHERE trace_id = ?).
 CREATE INDEX IF NOT EXISTS idx_events_project_trace ON events(project_id, trace_id);
 CREATE INDEX IF NOT EXISTS idx_events_project_name_ts ON events(project_id, name, ts);
+-- Composites for the high-cardinality event-list predicates. Each puts the filtered column ahead of
+-- `ts` so one index serves BOTH the equality seek and the `ORDER BY ts DESC` keyset paging; without
+-- them a provider/model/status-only query degraded to a residual scan of the whole project-ts range.
+CREATE INDEX IF NOT EXISTS idx_events_project_provider_ts ON events(project_id, provider, ts);
+CREATE INDEX IF NOT EXISTS idx_events_project_model_ts ON events(project_id, model, ts);
+CREATE INDEX IF NOT EXISTS idx_events_project_status_ts ON events(project_id, status, ts);
 
 CREATE TABLE IF NOT EXISTS limit_rules (
   id          TEXT PRIMARY KEY,
