@@ -30,7 +30,7 @@ use chrono::Utc;
 use lighttrack_core::{LimitStatus, LlmEvent, RelayTask, Score};
 use lighttrack_store::SqliteStore;
 
-use crate::forecast::ForecastAlert;
+use crate::forecast_alerts::ForecastAlert;
 
 mod attribution;
 mod channels;
@@ -436,7 +436,7 @@ impl Alerter {
     }
 
     /// Cooldown gate keyed by an arbitrary dedup string (records the send time on success).
-    fn should_send_key(&self, key: &str) -> bool {
+    pub(crate) fn should_send_key(&self, key: &str) -> bool {
         let now = Instant::now();
         let mut map = self.last_sent.lock().unwrap();
         match map.get(key) {

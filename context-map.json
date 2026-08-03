@@ -946,7 +946,7 @@
         "events",
         "revenue_events"
       ],
-      "description": "Projects future spend and margin using EWMA and linear trend models over daily counter series. Emits pre-emptive budget-breach and margin-erosion alerts before limits are actually hit. Configurable horizon and lookback window; daily usage bucketing requires no extra schema columns.",
+      "description": "Projects future spend and margin using EWMA and linear trend models over daily counter series. Emits pre-emptive budget-breach and margin-erosion alerts before limits are actually hit. Configurable horizon and lookback window; daily usage bucketing requires no extra schema columns. Budget-ETA and margin-erosion alerts also fire on a schedule from a detached sweep in the API process (LIGHTTRACK_FORECAST_SWEEP_SECS, off by default), sharing the request path's cooldown keys.",
       "entry_points": [
         "crates/api/src/forecast.rs",
         "crates/core/src/forecast.rs"
@@ -954,7 +954,9 @@
       "file_paths": [
         "crates/api/src/forecast.rs",
         "crates/api/src/tests_forecast.rs",
-        "crates/core/src/forecast.rs"
+        "crates/core/src/forecast.rs",
+        "crates/api/src/forecast_alerts.rs",
+        "crates/api/src/forecast_sweep.rs"
       ],
       "group": "Usage Governance",
       "group_id": "ed6eab63-a4bf-4e3e-9b23-3baba606597a",

@@ -60,6 +60,8 @@
 //!   GET  /v1/margin/customer/:id?since=&until=   one customer's revenue+cost by model & use-case
 //!   GET  /v1/margin/simulate?by=&price_per_mtok=&flat_monthly=&since=&until=   pricing what-if (read-only)
 //!   GET  /v1/forecast?project=&by=&horizon=&lookback=   projected spend/budget-breach + margin-erosion + pre-emptive alerts
+//!        The same alerts also fire on a schedule with no request involved when
+//!        LIGHTTRACK_FORECAST_SWEEP_SECS is set (off by default; see `forecast_sweep`).
 //!   POST /v1/billing/:provider/webhook?project=   signed Stripe/Polar webhook → revenue (unauth; HMAC)
 //!   GET  /v1/collective/digest?min_cases=     build this instance's privacy-safe model digest (admin)
 //!   POST /v1/collective/ingest                hub: accept a contributor's digest (gated; off default)
@@ -84,6 +86,9 @@
 //!      LIGHTTRACK_RELAY_DEVICE_KEY (bearer key of the enrolled local device — relay lease/result),
 //!      LIGHTTRACK_RELAY_FLAT_COST_USD (fixed cost stamped per relay run event; default 1.0),
 //!      LIGHTTRACK_ALERT_WEBHOOK / LIGHTTRACK_ALERT_NTFY / LIGHTTRACK_ALERT_COOLDOWN_SECS (see alerts),
+//!      LIGHTTRACK_FORECAST_SWEEP_SECS (cadence of the scheduled budget-ETA / margin-erosion alert
+//!        sweep; unset or 0 = off, floor 60s), LIGHTTRACK_FORECAST_SWEEP_HORIZON /
+//!        LIGHTTRACK_FORECAST_SWEEP_LOOKBACK (projection shape; default 14/14 days),
 //!      LIGHTTRACK_BENCH_WEBHOOK (benchmark-run completion webhook; falls back to LIGHTTRACK_ALERT_WEBHOOK),
 //!      LIGHTTRACK_REDACT_INGEST (off | all | csv of project_ids — scrub PII from input/output; see redact),
 //!      LIGHTTRACK_COLLECTIVE_ID (opaque source id — hashed before contribution),
@@ -106,6 +111,8 @@ mod events;
 mod events_batch;
 mod events_validate;
 mod forecast;
+mod forecast_alerts;
+mod forecast_sweep;
 mod guards;
 mod idempotency;
 mod jobs;
@@ -258,12 +265,18 @@ async fn main() -> anyhow::Result<()> {
         redaction_policies: Arc::new(state::RedactionCache::new(redaction_policies)),
     };
 
+    let sweep = forecast_sweep::SweepConfig::from_env();
+    let sweep_desc = forecast_sweep::describe(sweep);
     println!(
-        "lighttrack-api v{} on http://{bind}  (store={backend}, {n_prices} priced models, auth={:?}, admin_key={}, alerts={alerts_desc}, ingest={shed_desc}, redact={redact_desc}, billing={billing_desc}, collective={collective_desc})",
+        "lighttrack-api v{} on http://{bind}  (store={backend}, {n_prices} priced models, auth={:?}, admin_key={}, alerts={alerts_desc}, forecast-sweep={sweep_desc}, ingest={shed_desc}, redact={redact_desc}, billing={billing_desc}, collective={collective_desc})",
         env!("CARGO_PKG_VERSION"),
         state.auth_mode,
         if state.admin_key.is_some() { "set" } else { "unset" },
     );
+
+    // Pre-emptive forecast alerts on a timer (off unless configured). Detached: it never shares a
+    // task with a request, and its store reads go to the blocking pool like any handler's.
+    forecast_sweep::spawn(state.clone(), sweep);
 
     let app = build_router(state);
 

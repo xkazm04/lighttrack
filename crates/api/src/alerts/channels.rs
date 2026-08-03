@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 use super::attribution::Attribution;
 use super::{AlertConfig, BenchRunAlert, ErrorSpike, ScoreDrop};
-use crate::forecast::ForecastAlert;
+use crate::forecast_alerts::ForecastAlert;
 
 /// POST a finished benchmark run to the bench-completion webhook. Standalone (its own URL, not the
 /// shared `AlertConfig` webhook) so a CI receiver can subscribe to run completions specifically.

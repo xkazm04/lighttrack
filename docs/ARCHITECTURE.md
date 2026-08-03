@@ -290,6 +290,33 @@ Cloud Scheduler (3 free jobs) fires periodic checks (rolling cost, score regress
 Function → email (SendGrid/Gmail) / Slack webhook / ntfy. Plus inline limit-breach alerts from `api`, and
 native GCP budget alerts for infra spend.
 
+### 10a. Pre-emptive forecast alerts fire on a schedule
+`GET /v1/forecast` projects the daily counters forward: budget-breach ETAs ("you cross this cap in ~2
+days") and margin erosion. That math was only ever reached from inside the handler, so a warning about
+next week reached an operator only if they happened to look this week.
+
+`forecast_sweep` closes it: a detached task in the **API process** walks the enabled projects on a
+timer and hands the alerts to the same `Alerter`, with no HTTP request anywhere in the path
+(`forecast::compute_forecast` takes no principal, no `Query`, no `Json` — the handler and the sweep
+call the identical function).
+
+- **API, not runner.** The runner's `recurrence` sweep is the right *shape* and this borrows it, but
+  the alert cooldown map, the channel config and the `Store` handle all live in `AppState`, and the
+  runner is an optional companion — a Cloud Run deployment ships the API alone. Hosting it there would
+  mean the alerts silently don't fire in the deployment that most needs them, and would give it a
+  second cooldown map that can't see the handler's.
+- **Off by default.** `LIGHTTRACK_FORECAST_SWEEP_SECS` unset or `0` ⇒ no sweep; pull-only remains a
+  supported stance, and turning a self-hosted process into an outbound notifier is a decision, not an
+  inheritance. Floor 60s (a multi-day projection resampled faster than that is pure waste).
+  `LIGHTTRACK_FORECAST_SWEEP_HORIZON` / `_LOOKBACK` shape the projection (default 14/14 days). The
+  startup banner states which of these is in force.
+- **No new dedup surface.** Alerts carry the existing `forecast:<project>:<kind>:<subject>` key, which
+  says nothing about what triggered the forecast — so a sweep shares its cooldown with the handler and
+  enabling it cannot double an operator's volume.
+- **It cannot reach the ingest hot path.** Detached task; every store read on the blocking pool via
+  `spawn_db`; yields between projects; a project that errors is logged and skipped rather than ending
+  the loop.
+
 ## 11. Deployment
 - **Phase A (now): local.** `cargo run` for `api` + `runner`; SQLite file; `claude -p` on this machine.
 - **Phase B: GCP.** `api`→Cloud Run (container, scales to zero), `runner`→e2-micro (orchestrates remote
