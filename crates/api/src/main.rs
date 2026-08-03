@@ -283,14 +283,19 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/events/batch",
             post(events_batch::post_batch)
                 .layer(DefaultBodyLimit::max(batch_body_limit))
-                .layer(shed_ingest),
+                .layer(shed_ingest.clone()),
         )
         .route("/v1/ingest/status", get(shed::get_ingest_status))
         .route("/v1/events/:id", get(events::get_event_by_id))
         .route(
             "/v1/traces",
-            get(traces::list_traces)
-                .post(otlp::post_traces)
+            // The OTLP door is an ingest door: one export fans a whole batch into the same write
+            // path, so it takes a shed permit exactly like `/v1/events/batch`. Same ordering trick
+            // as the routes above — the layer wraps only the methods added before it, so the GET
+            // added afterwards stays unguarded: an operator's reads must answer while we shed.
+            post(otlp::post_traces)
+                .layer(shed_ingest)
+                .get(traces::list_traces)
                 .layer(DefaultBodyLimit::max(batch_body_limit)),
         )
         .route("/v1/traces/:id", get(traces::get_trace))

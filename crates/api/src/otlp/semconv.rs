@@ -128,6 +128,10 @@ pub(crate) fn map_span(fs: &FlatSpan<'_>, default_project: Option<&str>) -> Resu
         span_id: nonempty(fs.span.span_id.as_deref()),
         parent_span_id: nonempty(fs.span.parent_span_id.as_deref()),
         ts: start.unwrap_or_else(Utc::now),
+        // Placeholder only: `prepare_event` re-stamps `received_at` from the server clock for every
+        // event, this door included. An OTLP export's spans carry their own (client) start times,
+        // which is exactly the clock windowed accounting must not trust.
+        received_at: Utc::now(),
         provider: provider_of(fs),
         model,
         name: fs
