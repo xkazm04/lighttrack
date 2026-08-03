@@ -42,6 +42,8 @@ pub(crate) fn run_rubric_benchmark(
     report_extra: Option<&serde_json::Value>,
 ) -> Result<String> {
     let rubric: Rubric = get(cli, http, &format!("/v1/rubrics/{rubric_id}"))?;
+    // Minted before judging so every posted case is run-scoped even if the run post later fails.
+    let run_id = lighttrack_core::new_id();
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
     // Deterministic dimensions are checked locally: they cost no tokens and are never sampled, so
@@ -69,6 +71,8 @@ pub(crate) fn run_rubric_benchmark(
     // of individual self-consistency samples dropped from scored cases — kept out of the means so a
     // flaky judge response never silently records a 0.0.
     let (mut errored, mut sample_failures) = (0u32, 0u32);
+    // Verdicts the API refused/couldn't take — recorded on the run instead of scrolling past on stderr.
+    let mut score_post_failures = 0u32;
     // Cases whose judged content tried to imitate a prompt boundary (neutralized by the engine's
     // fence) — recorded so an operator can see which scores are attacker-adjacent.
     let mut injected = 0u32;
@@ -161,12 +165,18 @@ pub(crate) fn run_rubric_benchmark(
         let score = json!({
             "project_id": bench.project_id,
             "rubric": format!("bench:{}", bench.name),
+            "run_id": run_id, "case_index": i as u32 + 1,
             "value": o.overall, "max": 1.0, "pass": o.pass,
             "reasoning": weakest_reasoning(&detail),
             "detail": detail,
             "scored_by": o.model, "cost_usd": o.cost_usd,
         });
-        post(cli, http, "/v1/scores", &score)?;
+        // Best-effort (as in compare/simple): a transient post failure is counted, not fatal, and
+        // never silent.
+        if let Err(e) = post(cli, http, "/v1/scores", &score) {
+            eprintln!("  case {}: score post failed (verdict not persisted): {e}", i + 1);
+            score_post_failures += 1;
+        }
     }
 
     let mean = if judged > 0 { overall_sum / judged as f64 } else { 0.0 };
@@ -282,11 +292,14 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
     let mut report = json!({
         "rubric": rubric.name, "threshold": rubric.threshold, "samples": samples,
         "overall_mean": mean, "pass_rate": pass_rate, "dimensions": dim_means,
-        "weakest_dimension": weakest, "failing_cases": failing, "recommendations": recs,
+        "weakest_dimension": weakest, "recommendations": recs,
         "unparseable_cases": errored, "dropped_samples": sample_failures,
-        "injection_suspected_cases": injected,
+        "injection_suspected_cases": injected, "score_post_failures": score_post_failures,
         "determinism": determinism.as_str(),
     });
+    // Bounded, with the truncation signal beside it — an unbounded array here is a report blob that
+    // grows with the dataset. The complete per-case record is the run's scores.
+    crate::bench::attach_cases(&mut report, "failing_cases", failing);
     if let Some(h) = &healing {
         report["healing"] = json!(h);
     }
@@ -318,6 +331,7 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
 
     crate::bench::stamp_pins(&mut report, bench, report_extra);
     let run = json!({
+        "id": run_id,
         "benchmark_id": bench.id, "n_cases": judged, "mean_score": mean, "pass_rate": pass_rate,
         "cost_usd": cost, "status": status, "finished_at": now_ts(),
         "p50_latency_ms": p50, "p95_latency_ms": p95, "total_tokens": total_tokens, "report": report,

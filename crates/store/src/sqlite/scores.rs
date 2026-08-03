@@ -8,7 +8,7 @@ use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
 
 const COLS: &str = "id, project_id, event_id, rubric, value, max, pass, reasoning, detail, \
-    scored_by, cost_usd, created_at";
+    run_id, case_index, scored_by, cost_usd, created_at";
 
 pub(super) fn insert(conn: &Connection, s: &Score) -> Result<()> {
     // Verdict provenance rides as JSON in one column: it is read back whole with the score and never
@@ -19,8 +19,9 @@ pub(super) fn insert(conn: &Connection, s: &Score) -> Result<()> {
     };
     conn.execute(
         "INSERT INTO scores \
-         (id, project_id, event_id, rubric, value, max, pass, reasoning, detail, scored_by, cost_usd, created_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+         (id, project_id, event_id, rubric, value, max, pass, reasoning, detail, run_id, \
+          case_index, scored_by, cost_usd, created_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
         params![
             s.id,
             s.project_id,
@@ -31,12 +32,36 @@ pub(super) fn insert(conn: &Connection, s: &Score) -> Result<()> {
             s.pass.map(|b| b as i64),
             s.reasoning,
             detail,
+            s.run_id,
+            s.case_index.map(|i| i as i64),
             s.scored_by,
             s.cost_usd,
             fmt_ts(s.created_at),
         ],
     )?;
     Ok(())
+}
+
+/// Every case result recorded for one benchmark run, in case order. Rides `idx_scores_run`.
+/// `project` is the caller's authorization scope (`None` = admin, all projects); passing it here
+/// rather than filtering afterwards keeps a project key from reading another project's run.
+pub(super) fn list_by_run(
+    conn: &Connection,
+    run_id: &str,
+    project: Option<&str>,
+    limit: usize,
+) -> Result<Vec<Score>> {
+    // `case_index IS NULL` first in the ORDER BY pins NULL placement identically on every backend
+    // (SQLite sorts NULLs first, Postgres last), so the conformance suite can assert one order.
+    let sql = format!(
+        "SELECT {COLS} FROM scores WHERE run_id = ?1 AND (?2 IS NULL OR project_id = ?2) \
+         ORDER BY (case_index IS NULL), case_index, created_at LIMIT ?3"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let raws = stmt
+        .query_map(params![run_id, project, limit as i64], map_raw)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    raws.into_iter().map(from_raw).collect()
 }
 
 /// Scores attached to any event within a trace, newest first. A score links to a trace transitively
@@ -108,6 +133,8 @@ type ScoreRaw = (
     Option<i64>,
     Option<String>,
     Option<String>,
+    Option<String>,
+    Option<i64>,
     String,
     Option<f64>,
     String,
@@ -127,6 +154,8 @@ fn map_raw(row: &Row) -> rusqlite::Result<ScoreRaw> {
         row.get(9)?,
         row.get(10)?,
         row.get(11)?,
+        row.get(12)?,
+        row.get(13)?,
     ))
 }
 
@@ -147,8 +176,10 @@ fn from_raw(r: ScoreRaw) -> Result<Score> {
         pass: r.6.map(|v| v != 0),
         reasoning: r.7,
         detail,
-        scored_by: r.9,
-        cost_usd: r.10,
-        created_at: parse_ts(&r.11)?,
+        run_id: r.9,
+        case_index: r.10.map(|i| i as u32),
+        scored_by: r.11,
+        cost_usd: r.12,
+        created_at: parse_ts(&r.13)?,
     })
 }

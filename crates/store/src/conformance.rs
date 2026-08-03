@@ -13,8 +13,8 @@ use lighttrack_core::{
     compute_margin, new_id, ApiKey, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem,
     DimensionCheck, DimensionKind, Job, LimitAction, LimitMetric, LimitRule, LimitScope,
     LimitWindow, LlmEvent, MarginDimension, ModelPriceRow, Operation, Project, Provider, Redaction,
-    RelayOutcome, RelayTask, RevenueEvent, RevenueKind, Rubric, RubricDimension, Score, Status,
-    TokenUsage,
+    RelayOutcome, RelayTask, RevenueEvent, RevenueKind, Rubric, RubricDimension, Score, ScoreDetail,
+    ScoreDim, Status, TokenUsage,
 };
 
 use crate::{EventFilter, Result, Store};
@@ -219,8 +219,9 @@ fn scores(store: &dyn Store, pid: &str) -> Result<()> {
         max: 1.0,
         pass: Some(true),
         reasoning: Some("ok".into()),
-        // Detail round-trip is backend-specific (SQLite-first), so the shared suite stays scalar.
         detail: None,
+        run_id: None,
+        case_index: None,
         scored_by: "judge".into(),
         cost_usd: Some(0.01),
         created_at: Utc::now(),
@@ -256,6 +257,76 @@ fn scores(store: &dyn Store, pid: &str) -> Result<()> {
         !unscored.iter().any(|e| e.id == scored_ev.id),
         "scored event is excluded from the work list",
     );
+    run_scoped_cases(store, pid)?;
+    Ok(())
+}
+
+/// Run-scoped case results: a benchmark case knows which run produced it, carries the judge's
+/// structured provenance, and "every case result for run X" is one ordered query. Pinned here because
+/// a backend that quietly dropped `run_id`/`detail` would still pass every scalar assertion above —
+/// and would answer "why did run 47 fail?" with an empty list that reads like "nothing went wrong".
+fn run_scoped_cases(store: &dyn Store, pid: &str) -> Result<()> {
+    let run_id = new_id();
+    let other_run = new_id();
+    let detail = ScoreDetail {
+        dimensions: vec![ScoreDim {
+            key: "safety".into(),
+            value: 0.25,
+            weight: 1.0,
+            floor: Some(0.5),
+            floor_hit: true,
+            reasoning: vec!["unsafe advice".into()],
+        }],
+        agreement: Some(0.75),
+        samples_requested: Some(3),
+        samples_parsed: Some(2),
+        parse_failures: Some(1),
+        injection_suspected: Some(false),
+        determinism: Some("exact".into()),
+        ..Default::default()
+    };
+    let case = |run: &str, idx: Option<u32>, value: f64| Score {
+        id: new_id(),
+        project_id: pid.into(),
+        event_id: None,
+        rubric: "bench:conformance".into(),
+        value,
+        max: 1.0,
+        pass: Some(value >= 0.5),
+        reasoning: Some("safety: unsafe advice".into()),
+        detail: Some(detail.clone()),
+        run_id: Some(run.into()),
+        case_index: idx,
+        scored_by: "judge".into(),
+        cost_usd: Some(0.002),
+        created_at: Utc::now(),
+    };
+    // Inserted out of case order, plus one unindexed case and one belonging to a different run.
+    store.insert_score(&case(&run_id, Some(2), 0.4))?;
+    store.insert_score(&case(&run_id, None, 0.6))?;
+    store.insert_score(&case(&run_id, Some(1), 0.9))?;
+    store.insert_score(&case(&other_run, Some(1), 0.1))?;
+
+    let cases = store.list_run_scores(&run_id, Some(pid), 100)?;
+    assert_eq!(cases.len(), 3, "exactly this run's cases, never another run's");
+    assert_eq!(
+        cases.iter().map(|c| c.case_index).collect::<Vec<_>>(),
+        vec![Some(1), Some(2), None],
+        "case order, with unindexed cases last on every backend"
+    );
+    assert_eq!(cases[0].run_id.as_deref(), Some(run_id.as_str()), "run scoping round-trips");
+    assert_eq!(
+        cases[0].detail.as_ref(),
+        Some(&detail),
+        "the per-case provenance rides the case instead of being dropped"
+    );
+    // Authorization scope is applied in the query, not by the caller.
+    assert!(
+        store.list_run_scores(&run_id, Some(&new_id()), 100)?.is_empty(),
+        "another project's key sees none of this run's cases"
+    );
+    assert!(store.list_run_scores(&new_id(), None, 100)?.is_empty(), "unknown run -> no cases");
+    assert_eq!(store.list_run_scores(&run_id, None, 2)?.len(), 2, "limit is honored");
     Ok(())
 }
 

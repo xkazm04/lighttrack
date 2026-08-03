@@ -97,6 +97,11 @@ CREATE TABLE IF NOT EXISTS scores (
   -- floor_hit, reasoning[]}, agreement, sample accounting, bias/injection flags. NULL for scores
   -- posted without it. Bounded by ScoreDetail::capped() at the API boundary.
   detail      TEXT,
+  -- The benchmark run that produced this verdict (NULL for online/ad-hoc scores), and the 1-based
+  -- case position within that run. Together they make "every case result for run X" a query instead
+  -- of a created_at guess.
+  run_id      TEXT,
+  case_index  INTEGER,
   scored_by   TEXT NOT NULL,
   cost_usd    REAL,
   created_at  TEXT NOT NULL
@@ -105,6 +110,8 @@ CREATE INDEX IF NOT EXISTS idx_scores_project ON scores(project_id, created_at);
 -- Probe scores by the event they judged: powers the trace-scores join and the online scorer's
 -- unscored-events anti-join (WHERE event_id IN / LEFT JOIN scores). Without it both full-scan `scores`.
 CREATE INDEX IF NOT EXISTS idx_scores_event ON scores(event_id);
+-- Run-scoped case results, already in the listing's (case_index, created_at) order.
+CREATE INDEX IF NOT EXISTS idx_scores_run ON scores(run_id, case_index, created_at);
 
 CREATE TABLE IF NOT EXISTS benchmarks (
   id             TEXT PRIMARY KEY,

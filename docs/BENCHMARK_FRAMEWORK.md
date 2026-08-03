@@ -278,14 +278,26 @@ LightTrack, the better the data for everyone (the moat).
   GET own digest → POST to the hub); the `get_collective_leaderboard` MCP read tool; a rendered
   leaderboard table shared by CLI + MCP.
 
-## Data model additions (SQLite ↔ BigQuery, behind the Store trait)
+## Data model additions (SQLite ↔ Postgres ↔ Firestore, behind the Store trait)
+This is what the schema actually contains — not a plan. Tables that were once aspirational here
+(`targets`, `prompt_variants`, `case_results`) do **not** exist and are marked as such below.
 ```
 datasets(id, project_id, name, version, frozen, source, created_at)
 dataset_items(id, dataset_id, input, expected?, context?, tags, source_event_id?, anonymization)
-prompt_variants(id, project_id, name, label, system_prompt)
-targets(id, benchmark_id, provider, model, prompt_variant_id?)   -- the matrix
-benchmark_runs(... + target_id?, p50_latency_ms, p95_latency_ms, total_tokens, total_cost_usd, report)
-case_results(id, run_id, dataset_item_id, target_id, output, latency_ms, tokens, cost_usd, scores_json)
+-- NOT TABLES: the comparison matrix (provider × model × system_prompt variant) is stored inline as a
+-- JSON array in benchmarks.target; there is no `targets` or `prompt_variants` table. Prompt variants
+-- live in the prompt registry (prompts / prompt_versions).
+benchmark_runs(... + p50_latency_ms, p95_latency_ms, total_tokens, cost_usd, report)
+-- Case results are NOT a separate table: a case result IS a score row, run-scoped.
+scores(id, project_id, event_id?, rubric, value, max, pass?, reasoning?, detail?,
+       run_id?, case_index?, scored_by, cost_usd?, created_at)
+       -- detail    = core::ScoreDetail as JSON: per-dimension {value, weight, floor, floor_hit,
+       --             reasoning[]}, agreement, sample accounting, position-bias / injection flags,
+       --             determinism. Bounded by ScoreDetail::capped() at the API boundary.
+       -- run_id    = the benchmark run that produced this verdict (NULL for online/ad-hoc scores);
+       --             case_index = its 1-based position in the run's dataset.
+       -- Indexed by (run_id, case_index, created_at) → "every case result for run X" is one query:
+       --   GET /v1/scores?run=<benchmark_run_id>
 rubrics(id, project_id, name, dimensions_json, threshold)        -- weighted anchored dimensions;
                  -- each dimension: {key, description, weight, anchors?, floor?, kind?, check?}
 model_prices(provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok, effective_date, source_url)
@@ -294,6 +306,29 @@ collective_entries(contributor_id, provider, model, task_type, quality, pass_rat
                    p50_latency_ms?, p95_latency_ms?, n_runs, n_cases, quality_variance?,
                    judge_provider?, rubric_fingerprint?, received_at)  -- hub side; PK=(contributor_id,provider,model,task_type)
 ```
+
+### Run-scoped case results
+"Why did run 47 fail?" is a query, in **every** mode:
+
+- The runner **mints the run id before judging** and stamps `run_id` + `case_index` on each verdict it
+  posts. A case is therefore recorded even if the run row itself never lands — the opposite order
+  would orphan a whole run's cases on one failed POST.
+- Each mode posts one case result per unit of work: **simple** and **rubric** one per case,
+  **compare** one per (target, case) — compare writes one run *per target*, so `case_index` is unique
+  within a run — and **pairwise** one per game (`value` = A's outcome: win 1.0 / tie 0.5 / loss 0.0;
+  `case_index` is the case the game was played on, so it repeats across that case's games).
+- Every case carries its `ScoreDetail`: per-dimension values/floors, every sample's reasoning,
+  agreement, sample accounting, position-bias / injection flags, determinism.
+- Read them with `GET /v1/scores?run=<benchmark_run_id>` — ordered by `case_index`, then `created_at`,
+  with unindexed cases last. Implemented on SQLite, Postgres and Firestore; a backend that has not
+  ported it answers **501**, never an empty list (an empty list would read as "no failures").
+
+**Inline report arrays are bounded and say so.** `cases` (simple, compare), `failing_cases` (rubric)
+and `games` (pairwise) are previews of at most 200 entries, each accompanied by `<key>_total`,
+`<key>_logged` and `<key>_truncated` (pairwise: `n_games` / `games_logged` / `games_truncated`). A
+consumer can never mistake a clipped list for a complete one; the complete record is the run's scores.
+Each mode also reports `score_post_failures` — cases whose verdict the API refused, so "the cases are
+missing" is a recorded fact rather than something an operator has to infer.
 
 ## Phased plan
 - **3.6a — Cost foundation:** `model_prices` table (seed from researched prices) + `GET/PUT /v1/prices`;

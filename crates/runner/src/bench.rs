@@ -36,6 +36,28 @@ pub(crate) fn parse_targets(target: &Value) -> Result<Vec<BenchTarget>> {
     }
 }
 
+/// Upper bound on an inline per-case array in a run report. A run report is read whole (and stored
+/// in one column), so a 5000-case benchmark must not write a 5000-element blob into it. The full
+/// per-case record is not lost — it lives in the run's scores (`GET /v1/scores?run=<id>`); the
+/// report keeps the first `MAX_LOGGED_CASES` as a preview, and [`attach_cases`] says so explicitly.
+pub(crate) const MAX_LOGGED_CASES: usize = 200;
+
+/// Attach a bounded per-case array to a run report under `key`, with the truncation signal beside
+/// it: `{key}_total` (how many there were), `{key}_logged` (how many are here) and
+/// `{key}_truncated`. A consumer must never be able to mistake a clipped list for a complete one —
+/// which is exactly what an unbounded-then-silently-capped array would do.
+pub(crate) fn attach_cases(report: &mut Value, key: &str, mut all: Vec<Value>) {
+    let total = all.len();
+    let truncated = total > MAX_LOGGED_CASES;
+    all.truncate(MAX_LOGGED_CASES);
+    if let Value::Object(m) = report {
+        m.insert(format!("{key}_total"), json!(total));
+        m.insert(format!("{key}_logged"), json!(all.len()));
+        m.insert(format!("{key}_truncated"), json!(truncated));
+        m.insert(key.to_string(), Value::Array(all));
+    }
+}
+
 /// Stamp reproducibility pins into a run report: what judged (`judge_model`), against what
 /// (`rubric_id` / `dataset_ref`, when the benchmark has them), plus caller-supplied provenance —
 /// e.g. the `{prompt_id, prompt_version}` a version-triggered run was scoring, which is what makes
@@ -122,6 +144,9 @@ fn run_simple(
 ) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    // Mint the run id BEFORE judging so every case posted below is already run-scoped. Deriving it
+    // afterwards from the stored run would leave the cases orphaned whenever the run post fails.
+    let run_id = lighttrack_core::new_id();
     println!(
         "benchmark '{}' — {} case(s), judge={jp}/{jm}, baseline={}",
         bench.name,
@@ -150,6 +175,11 @@ fn run_simple(
     let mut total_tokens: u64 = 0;
     let mut price_warnings: BTreeSet<String> = BTreeSet::new();
     let mut scores: Vec<f64> = Vec::new();
+    // Simple mode used to persist nothing per case beyond a run aggregate — the per-case detail
+    // existed only in stdout. It now records both: a bounded preview in the report, and the full
+    // run-scoped verdicts in `scores` (queryable via `GET /v1/scores?run=`).
+    let mut case_reports: Vec<Value> = Vec::new();
+    let mut score_post_failures = 0u32;
     for (i, outcome) in judged.into_iter().enumerate() {
         let outcome = match outcome? {
             Some(o) => o,
@@ -187,14 +217,24 @@ fn run_simple(
             outcome.latency_ms.unwrap_or(0),
             outcome.verdict.reasoning
         );
+        case_reports.push(json!({
+            "case": i + 1, "score": norm, "pass": outcome.verdict.pass,
+            "latency_ms": outcome.latency_ms,
+        }));
         let score = json!({
             "project_id": bench.project_id,
             "rubric": format!("bench:{}", bench.name),
+            "run_id": run_id, "case_index": i as u32 + 1,
             "value": outcome.verdict.score, "max": outcome.verdict.max, "pass": outcome.verdict.pass,
             "reasoning": outcome.verdict.reasoning, "scored_by": outcome.model, "cost_usd": outcome.cost_usd,
             "detail": freeform_detail(&outcome),
         });
-        post(cli, http, "/v1/scores", &score)?;
+        // Best-effort, as in compare mode: a transient post failure must neither abort a long run nor
+        // vanish — it is counted into the report so "the cases are missing" is a recorded fact.
+        if let Err(e) = post(cli, http, "/v1/scores", &score) {
+            eprintln!("  case {}: score post failed (verdict not persisted): {e}", i + 1);
+            score_post_failures += 1;
+        }
     }
 
     let mean = if n > 0 { sum / n as f64 } else { 0.0 };
@@ -220,11 +260,13 @@ fn run_simple(
         println!("warning: no price book entry for {} — judge cost undercounted", join_csv(&price_warnings));
     }
 
-    let mut report = json!({ "mode": "simple" });
+    let mut report = json!({ "mode": "simple", "score_post_failures": score_post_failures });
+    attach_cases(&mut report, "cases", case_reports);
     annotate_significance(&mut report, &summary, scalar_fallback);
     add_price_warnings(&mut report, &price_warnings);
     stamp_pins(&mut report, bench, report_extra);
     let run = json!({
+        "id": run_id,
         "benchmark_id": bench.id, "n_cases": n, "mean_score": mean, "pass_rate": pass_rate,
         "cost_usd": cost, "status": status, "finished_at": now_ts(),
         "p50_latency_ms": p50, "p95_latency_ms": p95, "total_tokens": total_tokens,
@@ -342,6 +384,29 @@ mod tests {
         // An array is unambiguously a matrix; a bad element must fail loudly, not silently degrade.
         assert!(parse_targets(&json!([{ "model": "no-provider" }])).is_err());
         assert!(parse_targets(&json!(["just-a-string"])).is_err());
+    }
+
+    #[test]
+    fn attach_cases_signals_truncation_explicitly() {
+        use super::{attach_cases, MAX_LOGGED_CASES};
+        // A short list is complete, and says so.
+        let mut r = json!({ "mode": "simple" });
+        attach_cases(&mut r, "cases", vec![json!({ "case": 1 }), json!({ "case": 2 })]);
+        assert_eq!(r["cases"].as_array().unwrap().len(), 2);
+        assert_eq!(r["cases_total"], json!(2));
+        assert_eq!(r["cases_logged"], json!(2));
+        assert_eq!(r["cases_truncated"], json!(false));
+
+        // A long one is clipped — and a consumer can tell, which is the whole point.
+        let many: Vec<serde_json::Value> =
+            (0..MAX_LOGGED_CASES + 50).map(|i| json!({ "case": i })).collect();
+        let mut r = json!({ "mode": "compare" });
+        attach_cases(&mut r, "cases", many);
+        assert_eq!(r["cases"].as_array().unwrap().len(), MAX_LOGGED_CASES);
+        assert_eq!(r["cases_total"], json!(MAX_LOGGED_CASES + 50));
+        assert_eq!(r["cases_logged"], json!(MAX_LOGGED_CASES));
+        assert_eq!(r["cases_truncated"], json!(true), "a clipped list must never look complete");
+        assert_eq!(r["cases"][0]["case"], json!(0), "the preview is the first k, in case order");
     }
 
     #[test]

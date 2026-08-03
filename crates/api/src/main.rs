@@ -23,7 +23,7 @@
 //!   POST /v1/traces/:id/score           score a whole trace (anchored to its root span)
 //!   GET  /v1/costs?project=&since=&until=
 //!   GET  /v1/usecases?project=&since=   use-case rollup: usage+cost by name×provider×model, windowed
-//!   POST /v1/scores  GET /v1/scores?project=&limit=
+//!   POST /v1/scores  GET /v1/scores?project=&limit=[&run=]   (`run` = one benchmark run's cases)
 //!   GET  /v1/prices  PUT /v1/prices/:provider/:model
 //!   .../datasets .../rubrics .../benchmarks .../jobs            (see modules)
 //!   GET  /v1/benchmarks/:id/gate         CI-gate verdict from the latest finished run

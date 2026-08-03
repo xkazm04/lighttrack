@@ -34,6 +34,11 @@ const ADDED_COLUMNS: &[&str] = &[
     "ALTER TABLE projects ADD COLUMN collective_opt_in INTEGER NOT NULL DEFAULT 0",
     // Verdict provenance: structured judge detail (core::ScoreDetail) as JSON.
     "ALTER TABLE scores ADD COLUMN detail TEXT",
+    // Run-scoped case results: which benchmark run produced this verdict, and where in its dataset.
+    // `idx_scores_run` in [`SCHEMA`] indexes both, so these ALTERs MUST run before the batch —
+    // see the ordering note in [`apply`].
+    "ALTER TABLE scores ADD COLUMN run_id TEXT",
+    "ALTER TABLE scores ADD COLUMN case_index INTEGER",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.

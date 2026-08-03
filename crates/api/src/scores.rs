@@ -3,6 +3,10 @@
 //! `GET /v1/scores` returns each score's structured `detail` (per-dimension breakdown, agreement,
 //! sample accounting, bias/injection flags) when the backend stored one. Additive and nullable, so
 //! clients that ignore the field are unaffected.
+//!
+//! `GET /v1/scores?run=<benchmark_run_id>` narrows to one benchmark run's case results, in case
+//! order — every mode stamps `run_id`/`case_index` on the verdicts it posts. A backend that hasn't
+//! ported run scoping answers 501 rather than an empty list that would read as "no failures".
 
 use axum::{
     extract::{Query, State},
@@ -40,6 +44,11 @@ pub(crate) async fn post_score(
 pub(crate) struct ScoresParams {
     project: Option<String>,
     limit: Option<usize>,
+    /// Return only the case results of this benchmark run, in case order — the answer to "why did
+    /// run 47 fail?". Every mode (simple, rubric, compare, pairwise) stamps its run id on the
+    /// verdicts it posts, so this works for all of them, not just the ones that inline case JSON in
+    /// the run report.
+    run: Option<String>,
 }
 
 pub(crate) async fn get_scores(
@@ -50,7 +59,19 @@ pub(crate) async fn get_scores(
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
     let store = st.store.clone();
-    let limit = q.limit.unwrap_or(50).min(1000);
-    let scores = spawn_db(move || store.list_scores(project.as_deref(), limit)).await?;
+    // A run's cases are one dataset pass, so the run-scoped read allows a bigger page than the
+    // "latest N scores" firehose — a 500-case benchmark should come back in one request.
+    let scores = match q.run {
+        Some(run) => {
+            let limit = q.limit.unwrap_or(5000).min(10_000);
+            // The project scope goes into the query, not a post-filter: a project key must not be
+            // able to read another project's run by guessing its id.
+            spawn_db(move || store.list_run_scores(&run, project.as_deref(), limit)).await?
+        }
+        None => {
+            let limit = q.limit.unwrap_or(50).min(1000);
+            spawn_db(move || store.list_scores(project.as_deref(), limit)).await?
+        }
+    };
     Ok(Json(scores))
 }

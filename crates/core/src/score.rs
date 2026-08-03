@@ -155,6 +155,16 @@ pub struct Score {
     /// it keep working. Persisted by the SQLite backend; other backends default it to `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<ScoreDetail>,
+    /// The [`BenchmarkRun`] this verdict belongs to, when it came from a benchmark. Without it, two
+    /// runs of the same benchmark are distinguishable only by `created_at` ordering, so "why did run
+    /// 47 fail?" has no query. The runner mints the run id **before** judging and stamps it on every
+    /// case it posts, so the run's cases exist even if the run row is never written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// 1-based position of the case within the run's dataset (pairwise: the case a game was played
+    /// on, so it repeats across that case's games). Ordering key for the run's case listing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case_index: Option<u32>,
     /// Judge model, e.g. `claude-haiku-4-5`.
     pub scored_by: String,
     /// Cost of the judge call. Recorded for visibility (Agent SDK credit burn); never throttled.

@@ -162,6 +162,9 @@ pub(crate) async fn score_trace(
         pass: body.pass,
         reasoning: body.reasoning,
         detail: None,
+        // A trace score is an ad-hoc human/API verdict, not a benchmark case.
+        run_id: None,
+        case_index: None,
         scored_by: body.scored_by,
         cost_usd: body.cost_usd,
         created_at: Utc::now(),

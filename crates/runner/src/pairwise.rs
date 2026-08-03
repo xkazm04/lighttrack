@@ -97,6 +97,8 @@ pub(crate) fn run_pairwise_matrix(
             self_preference.join(", ")
         );
     }
+    // Minted before any judging so every game posted below is run-scoped even if the run post fails.
+    let run_id = lighttrack_core::new_id();
     let criteria = criteria_of(rubric, bench);
     let (n_t, n_c) = (targets.len(), cases.len());
     println!("\nPAIRWISE (round-robin, order-debiased): {n_t} targets × {n_c} case(s), judge={jp}/{jm}");
@@ -181,14 +183,15 @@ pub(crate) fn run_pairwise_matrix(
     // The judge's own rationale per game. `PairwiseOutcome.reasoning` was computed (and paid for) on
     // every game and then thrown away — a ranking with no recorded "why" is an unauditable verdict.
     let mut game_log: Vec<Value> = Vec::new();
-    let (mut judge_errors, mut injected) = (0u32, 0u32);
+    let (mut judge_errors, mut injected, mut score_post_failures) = (0u32, 0u32, 0u32);
     let mut determinism = Determinism::Exact;
     for (&g, outcome) in games.iter().zip(outcomes) {
         match outcome {
             Ok(o) => {
-                judge_cost += o.cost_usd.unwrap_or_else(|| {
+                let game_cost = o.cost_usd.unwrap_or_else(|| {
                     price_gen_cost(prices, jp, jm, Some(o.input_tokens), Some(o.output_tokens))
                 });
+                judge_cost += game_cost;
                 judge_tokens += o.tokens;
                 determinism = determinism.weakest(o.determinism);
                 let (ci, i, j) = g;
@@ -206,6 +209,29 @@ pub(crate) fn run_pairwise_matrix(
                         "injection_suspected": o.injection_suspected,
                         "reasoning": trunc_reasoning(&o.reasoning),
                     }));
+                }
+                // Every game is a case result, posted run-scoped so pairwise stops being the one mode
+                // whose per-case verdicts existed only inside a capped report array. The score is A's
+                // outcome (win 1.0 / tie 0.5 / loss 0.0) — pairwise has no absolute scale.
+                let (value, a_won) = match o.winner {
+                    PairwiseWinner::A => (1.0, true),
+                    PairwiseWinner::Tie => (0.5, false),
+                    PairwiseWinner::B => (0.0, false),
+                };
+                let score = json!({
+                    "project_id": bench.project_id,
+                    "rubric": format!("{}:{} vs {}", bench.name, labels[i], labels[j]),
+                    "run_id": run_id, "case_index": ci as u32 + 1,
+                    "value": value, "max": 1.0, "pass": a_won,
+                    "reasoning": trunc_reasoning(&o.reasoning),
+                    "detail": crate::provenance::pairwise_detail(&o),
+                    "scored_by": format!("{jp}/{jm}"), "cost_usd": game_cost,
+                });
+                // Best-effort: a transient post failure must not discard a paid-for round-robin, but
+                // it is counted into the run report rather than silently dropped.
+                if let Err(e) = post(cli, http, "/v1/scores", &score) {
+                    eprintln!("  case {}: game score post failed (verdict not persisted): {e}", ci + 1);
+                    score_post_failures += 1;
                 }
                 played.push(g);
                 winners.push((o.winner, o.position_bias));
@@ -228,9 +254,9 @@ pub(crate) fn run_pairwise_matrix(
     );
 
     post_run(
-        cli, http, bench, &labels, &standings, &beats, played.len(), judge_errors, bias_count,
-        injected, determinism, &self_preference, game_log, gen_cost, judge_cost,
-        gen_tokens + judge_tokens,
+        cli, http, bench, &run_id, &labels, &standings, &beats, played.len(), judge_errors,
+        bias_count, injected, score_post_failures, determinism, &self_preference, game_log,
+        gen_cost, judge_cost, gen_tokens + judge_tokens,
     )
 }
 
@@ -338,6 +364,7 @@ fn post_run(
     cli: &Cli,
     http: &reqwest::blocking::Client,
     bench: &Benchmark,
+    run_id: &str,
     labels: &[String],
     standings: &[Standing],
     beats: &[Vec<u32>],
@@ -345,6 +372,7 @@ fn post_run(
     judge_errors: u32,
     bias_count: u32,
     injected: u32,
+    score_post_failures: u32,
     determinism: Determinism,
     self_preference: &[String],
     game_log: Vec<Value>,
@@ -367,12 +395,18 @@ fn post_run(
         "beats_matrix": beats, "n_games": n_games, "judge_errors": judge_errors,
         "positional_bias_ties": bias_count, "injection_suspected_games": injected,
         "determinism": determinism.as_str(), "self_preference_targets": self_preference,
-        "games_logged": game_log.len(), "games": game_log,
+        // `games` is a bounded preview of `n_games`; `games_truncated` says so outright, so a reader
+        // can never mistake the clipped list for the full round-robin. Every game — logged or not —
+        // is a run-scoped case result in `scores` (`GET /v1/scores?run=<id>`).
+        "games_logged": game_log.len(), "games_truncated": game_log.len() < n_games,
+        "games": game_log,
+        "score_post_failures": score_post_failures,
         "gen_cost_usd": gen_cost, "judge_cost_usd": judge_cost,
     });
     // A pairwise run ranks targets against each other — there is no baseline to regress against, so
     // its honest status in the unified vocabulary is `no_baseline` (never gates a build).
     let run = json!({
+        "id": run_id,
         "benchmark_id": bench.id, "n_cases": n_games as u32, "cost_usd": gen_cost + judge_cost,
         "status": "no_baseline", "finished_at": crate::util::now_ts(),
         "total_tokens": total_tokens, "report": report,

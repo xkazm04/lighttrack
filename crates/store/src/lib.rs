@@ -518,14 +518,32 @@ pub trait Store: Send + Sync {
 
     // --- single event lookup + scores (Phase 3) ---
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>>;
-    /// Persist a judge verdict. `Score::detail` (structured verdict provenance: per-dimension
-    /// breakdown, agreement, sample accounting, bias/injection flags) is **SQLite-first** — the
-    /// SQLite backend stores and returns it; other backends persist the scalar score and read
-    /// `detail` back as `None`, matching the precedent set by the trace view and forecasting. The
-    /// scalar verdict is never lost on any backend; the provenance is, so a deployment that needs
-    /// auditable verdicts should run SQLite until the other backends port the column.
+    /// Persist a judge verdict, including its structured provenance (`Score::detail`: per-dimension
+    /// breakdown, agreement, sample accounting, bias/injection flags) and its benchmark-run scoping
+    /// (`Score::run_id` / `Score::case_index`). Every shipped backend persists all three — a verdict
+    /// that reads back without its provenance, or a case that can't say which run produced it, is a
+    /// silently degraded record rather than an obviously missing one.
     fn insert_score(&self, s: &Score) -> Result<()>;
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>>;
+    /// Every case result recorded for one benchmark run, in case order (`case_index`, then
+    /// `created_at`; cases without an index sort last). This is the answer to "why did run 47 fail?"
+    /// — the per-case verdicts, with the provenance that produced each one.
+    ///
+    /// `project` is the caller's authorization scope: `Some(p)` restricts to that project (a
+    /// project-scoped API key), `None` reads across projects (admin). Backends apply it in the
+    /// query, so it can't be forgotten by a caller.
+    ///
+    /// Default is a clear [`StoreError::Unsupported`] (→ 501) rather than an empty list: "this
+    /// backend never stored run scoping" and "this run had no cases" are different facts, and only
+    /// one of them means the run passed.
+    fn list_run_scores(
+        &self,
+        _run_id: &str,
+        _project: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<Score>> {
+        Err(StoreError::Unsupported("run-scoped case results"))
+    }
     /// Of the given event ids, which already carry at least one score. Scoped to **exactly these ids**
     /// — never a blind top-N of the `scores` table — so the online scorer's "skip already-scored"
     /// stays correct however large the scores table grows. Required (no default): a wrong answer here

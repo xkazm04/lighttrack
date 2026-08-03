@@ -165,6 +165,9 @@ pub(crate) fn run_compare(
             .clone()
             .unwrap_or_else(|| format!("{}/{}", t.provider, t.model));
         println!("\n-- target {label} --");
+        // One run per target, so the run id is minted per target — before judging, so every case
+        // posted below is run-scoped even if this target's run post later fails.
+        let run_id = lighttrack_core::new_id();
         let (mut overall_sum, mut passes, mut judged, mut gen_cost, mut judge_cost, mut errored) =
             (0.0_f64, 0u32, 0u32, 0.0_f64, 0.0_f64, 0u32);
         let mut latencies: Vec<u64> = Vec::new();
@@ -278,6 +281,7 @@ pub(crate) fn run_compare(
             let score = json!({
                 "project_id": bench.project_id,
                 "rubric": format!("{}:{label}#case{}", bench.name, i + 1),
+                "run_id": run_id, "case_index": i as u32 + 1,
                 "value": r3(case_score), "max": 1.0, "pass": case_pass,
                 "reasoning": weakest_reasoning(&detail),
                 "detail": detail,
@@ -326,13 +330,18 @@ pub(crate) fn run_compare(
             "injection_suspected_cases": injected,
             "self_preference": self_preference,
             "determinism": target_determinism,
-            "agreement": r3(mean_agree), "dimensions": Value::Object(dim_means), "cases": case_reports,
+            "agreement": r3(mean_agree), "dimensions": Value::Object(dim_means),
             "verdict": status, "baseline": bench.baseline_score,
         });
+        // `cases` was unbounded — a big dataset wrote a report blob that grew with it. It is now a
+        // bounded preview carrying its own truncation signal; the complete per-case record is the
+        // run's scores (`GET /v1/scores?run=<id>`).
+        crate::bench::attach_cases(&mut report, "cases", case_reports);
         annotate_significance(&mut report, &summary, scalar_fallback);
         add_price_warnings(&mut report, &price_warnings);
         crate::bench::stamp_pins(&mut report, bench, report_extra);
         let run = json!({
+            "id": run_id,
             "benchmark_id": bench.id, "n_cases": judged, "mean_score": mean, "pass_rate": pass_rate,
             "cost_usd": gen_cost + judge_cost, "status": status, "finished_at": now_ts(),
             "p50_latency_ms": p50, "p95_latency_ms": p95, "total_tokens": gen_tokens + judge_tokens,

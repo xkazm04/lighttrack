@@ -167,6 +167,14 @@ impl Store for FirestoreStore {
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
         scores::list_scores(&self.rest, project, limit)
     }
+    fn list_run_scores(
+        &self,
+        run_id: &str,
+        project: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Score>> {
+        scores::list_run_scores(&self.rest, run_id, project, limit)
+    }
     fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
         scores::scored_event_ids(&self.rest, event_ids)
     }

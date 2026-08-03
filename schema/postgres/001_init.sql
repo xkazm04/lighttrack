@@ -81,14 +81,27 @@ CREATE TABLE IF NOT EXISTS scores (
   max         DOUBLE PRECISION NOT NULL DEFAULT 1.0,
   pass        BIGINT,
   reasoning   TEXT,
+  -- Structured verdict provenance (core::ScoreDetail) as JSON; NULL when posted without it.
+  detail      TEXT,
+  -- The benchmark run that produced this verdict (NULL for online/ad-hoc scores) and the 1-based
+  -- case position within it: "every case result for run X" as a query, not a created_at guess.
+  run_id      TEXT,
+  case_index  BIGINT,
   scored_by   TEXT NOT NULL,
   cost_usd    DOUBLE PRECISION,
   created_at  TEXT NOT NULL
 );
+-- Existing deployments predate verdict provenance and run-scoped case results; idempotent on fresh DBs.
+ALTER TABLE scores ADD COLUMN IF NOT EXISTS detail TEXT;
+ALTER TABLE scores ADD COLUMN IF NOT EXISTS run_id TEXT;
+ALTER TABLE scores ADD COLUMN IF NOT EXISTS case_index BIGINT;
 CREATE INDEX IF NOT EXISTS idx_scores_project ON scores(project_id, created_at);
 -- Probe scores by the event they judged: powers the trace-scores join and the online scorer's
 -- unscored-events anti-join (WHERE event_id IN / LEFT JOIN scores). Without it both full-scan scores.
 CREATE INDEX IF NOT EXISTS idx_scores_event ON scores(event_id);
+-- Run-scoped case results, already in the listing's (case_index, created_at) order. Declared after
+-- the ALTERs above so it never indexes a column an older deployment hasn't been widened with yet.
+CREATE INDEX IF NOT EXISTS idx_scores_run ON scores(run_id, case_index, created_at);
 
 CREATE TABLE IF NOT EXISTS benchmarks (
   id             TEXT PRIMARY KEY,

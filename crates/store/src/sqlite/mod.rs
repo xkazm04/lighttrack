@@ -331,6 +331,14 @@ impl Store for SqliteStore {
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
         self.read(|c| scores::list(c, project, limit))
     }
+    fn list_run_scores(
+        &self,
+        run_id: &str,
+        project: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Score>> {
+        self.read(|c| scores::list_by_run(c, run_id, project, limit))
+    }
     fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
         self.read(|c| scores::scored_event_ids(c, event_ids))
     }

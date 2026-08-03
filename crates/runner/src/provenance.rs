@@ -57,6 +57,28 @@ pub(crate) fn freeform_detail(o: &JudgeOutcome) -> ScoreDetail {
     .capped()
 }
 
+/// Provenance for one pairwise game: no dimensions (a preference verdict has none), but the judge's
+/// rationale, the order-debias signal and the injection flag are exactly what makes a win auditable.
+pub(crate) fn pairwise_detail(o: &lighttrack_engine::PairwiseOutcome) -> ScoreDetail {
+    let notes = if o.reasoning.is_empty() {
+        Vec::new()
+    } else {
+        vec![o.reasoning.clone()]
+    };
+    ScoreDetail {
+        // Two judge calls per game (both A/B orders); a positional flip collapses to a tie.
+        samples_requested: Some(2),
+        samples_parsed: Some(2),
+        parse_failures: Some(0),
+        position_bias: Some(o.position_bias),
+        injection_suspected: Some(o.injection_suspected),
+        determinism: Some(o.determinism.as_str().to_string()),
+        notes,
+        ..Default::default()
+    }
+    .capped()
+}
+
 /// A one-line human summary drawn from the judge's *own words*: the weakest dimension's first
 /// reasoning. Never a template — a `Score.reasoning` that says "rubric 'x' overall over 4 dims"
 /// tells a reader nothing they couldn't compute. `None` when the judge returned no prose.

@@ -346,6 +346,8 @@ fn trace_rollup_groups_events_and_scores() {
         pass: Some(true),
         reasoning: None,
         detail: None,
+        run_id: None,
+        case_index: None,
         scored_by: "judge".into(),
         cost_usd: Some(0.0001),
         created_at: Utc::now(),
@@ -1448,6 +1450,8 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
         pass: Some(false),
         reasoning: Some("safety: unsafe advice".into()),
         detail: Some(detail.clone()),
+        run_id: None,
+        case_index: None,
         scored_by: "google/gemini".into(),
         cost_usd: Some(0.002),
         created_at: Utc::now(),
@@ -1468,4 +1472,54 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
     s.insert_score(&bare).unwrap();
     let listed = s.list_scores(Some("p1"), 10).unwrap();
     assert!(listed.iter().any(|x| x.id == bare.id && x.detail.is_none()));
+}
+
+/// A database created BEFORE `scores.run_id` / `scores.case_index` existed must still open, migrate,
+/// and serve the new run-scoped query. `schema/sqlite/001_init.sql` indexes both columns
+/// (`idx_scores_run`), and an index over a column an old table lacks is a hard SQLite error — so this
+/// pins the ordering in `schema::apply` (ALTERs first, batch second) that a previous round broke.
+#[test]
+fn a_database_predating_run_scoped_cases_migrates_on_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.db");
+
+    // The original `scores` shape: no detail, no run_id, no case_index — and the indexes that
+    // shipped with it, so the file looks exactly like a pre-upgrade deployment.
+    {
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE scores (
+               id TEXT PRIMARY KEY, project_id TEXT NOT NULL, event_id TEXT, rubric TEXT NOT NULL,
+               value REAL NOT NULL, max REAL NOT NULL DEFAULT 1.0, pass INTEGER, reasoning TEXT,
+               scored_by TEXT NOT NULL, cost_usd REAL, created_at TEXT NOT NULL);
+             CREATE INDEX idx_scores_project ON scores(project_id, created_at);
+             CREATE INDEX idx_scores_event ON scores(event_id);
+             INSERT INTO scores (id, project_id, rubric, value, max, scored_by, created_at)
+             VALUES ('legacy-1', 'p1', 'bench:old', 0.5, 1.0, 'judge',
+                     '2026-01-01T00:00:00.000000000Z');",
+        )
+        .unwrap();
+    }
+
+    let s = SqliteStore::open(&path).expect("an old database must survive the upgrade");
+
+    // The pre-existing row is intact and reads back with the new fields empty.
+    let legacy = s.list_scores(Some("p1"), 10).unwrap();
+    assert_eq!(legacy.len(), 1);
+    assert_eq!(legacy[0].id, "legacy-1");
+    assert!(legacy[0].run_id.is_none() && legacy[0].case_index.is_none() && legacy[0].detail.is_none());
+
+    // And the widened table serves the new query.
+    let mut fresh = legacy[0].clone();
+    fresh.id = new_id();
+    fresh.run_id = Some("run-47".into());
+    fresh.case_index = Some(1);
+    s.insert_score(&fresh).unwrap();
+    let cases = s.list_run_scores("run-47", Some("p1"), 10).unwrap();
+    assert_eq!(cases.len(), 1, "only the run's case, not the legacy row");
+    assert_eq!(cases[0].case_index, Some(1));
+
+    // Re-opening an already-migrated database is a no-op, not a duplicate-column failure.
+    drop(s);
+    SqliteStore::open(&path).expect("migrations are idempotent");
 }
