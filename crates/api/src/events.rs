@@ -98,6 +98,18 @@ pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) 
     } else {
         record_rejection(st, ev, &admission.statuses)
     };
+    for s in admission.statuses.iter().filter(|s| s.shedding) {
+        eprintln!(
+            "[THROTTLE] project={} metric={:?} window={:?} ratio={:.3} shedding={:.0}% event={} \
+             (graduated back-pressure, not a breach)",
+            s.project_id,
+            s.metric,
+            s.window,
+            s.ratio,
+            s.shed_fraction * 100.0,
+            ev.id
+        );
+    }
     // Best-effort, off the request path: deliver breaches to webhook/ntfy (deduped per cooldown).
     st.alerts.notify(&breached, &rej_counts);
     // Soft-warning tier: for an *admitted* event, alert on any rule that crossed its warn_at without
@@ -129,7 +141,9 @@ fn record_rejection(
     let cost = ev.cost_usd.unwrap_or(0.0);
     let now = Utc::now();
     let mut counts = std::collections::HashMap::new();
-    for b in statuses.iter().filter(|s| s.rejects_ingest()) {
+    // Every status that turned this event away, hard stop or graduated shed alike — otherwise the
+    // ledger would go blind exactly while throttling is doing its job.
+    for b in statuses.iter().filter(|s| s.rejects_ingest() || s.shedding) {
         let count =
             st.rejections.record(&b.project_id, b.metric, b.window, b.scope.clone(), cost, now);
         counts.insert(b.alert_key(), count);
@@ -137,9 +151,32 @@ fn record_rejection(
     counts
 }
 
-/// Human-facing reason an admission was rejected — pass the full status set, since an unpriceable
-/// cost cap rejects without breaching.
+/// Human-facing reason an admission was rejected — pass the full status set, since neither an
+/// unpriceable cost cap nor a graduated throttle shed reads as "breached".
 pub(crate) fn breach_reason(statuses: &[LimitStatus]) -> String {
+    // A graduated shed is not a breach and must not be described as one: nothing is over budget, the
+    // caller is being asked to slow down on the approach. Only reported when no hard stop applies.
+    if !statuses.iter().any(|s| s.rejects_ingest()) {
+        if let Some(s) = statuses.iter().find(|s| s.shedding) {
+            let scope = match &s.scope {
+                Some(sc) => format!(" [scope {}]", sc.label()),
+                None => String::new(),
+            };
+            return format!(
+                "ingest throttled: project '{}'{scope} is at {:.0}% of its {:?}/{:?} limit \
+                 ({:.4} of {:.4}); {:.0}% of ingest is being shed on the approach. Not over budget — \
+                 slow down and retry in {}s.",
+                s.project_id,
+                s.ratio * 100.0,
+                s.metric,
+                s.window,
+                s.current,
+                s.threshold,
+                s.shed_fraction * 100.0,
+                s.retry_after_secs()
+            );
+        }
+    }
     statuses
         .iter()
         .find(|s| s.rejects_ingest())
@@ -183,6 +220,28 @@ pub(crate) struct IngestResponse {
     /// retry a timed-out POST safely. Omitted (false) on first-time writes.
     #[serde(skip_serializing_if = "is_false")]
     duplicate: bool,
+    /// **Proximity signal.** The highest usage ratio among the limits that applied to this event
+    /// (`1.0` == at the cap). Returned on *accepted* writes so a well-behaved client can see the wall
+    /// coming without polling `/v1/limits/status`. `None` when the project has no limits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage_ratio: Option<f64>,
+    /// Share of ingest currently being shed by graduated throttling, `0.0`–`1.0`. Omitted when
+    /// nothing is throttling. A client seeing this rise should slow down: at `1.0` the cap is reached
+    /// and everything is refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shed_fraction: Option<f64>,
+}
+
+/// The proximity pair returned on an accepted write: the worst usage ratio across the rules that
+/// applied, and the strongest shedding pressure among them.
+fn proximity(statuses: &[LimitStatus]) -> (Option<f64>, Option<f64>) {
+    let ratio = statuses.iter().map(|s| s.ratio).fold(None::<f64>, |a, r| Some(a.map_or(r, |a| a.max(r))));
+    let shed = statuses
+        .iter()
+        .map(|s| s.shed_fraction)
+        .fold(None::<f64>, |a, r| Some(a.map_or(r, |a: f64| a.max(r))))
+        .filter(|f| *f > 0.0);
+    (ratio, shed)
 }
 
 fn is_false(b: &bool) -> bool {
@@ -241,6 +300,8 @@ pub(crate) async fn post_event(
                     breached: Vec::new(),
                     throttled: false,
                     duplicate: true,
+                    usage_ratio: None,
+                    shed_fraction: None,
                 })),
                 _ => Err(ApiError::conflict(format!(
                     "event '{}' already exists with a different payload",
@@ -253,11 +314,15 @@ pub(crate) async fn post_event(
 
     let breached = on_admission(&st, &ev, &admission);
     if !admission.admitted {
-        return Err(ApiError::rate_limited(breach_reason(&admission.statuses)));
+        // 429 for both tiers, but with a retry schedule the client can actually honor: seconds for a
+        // graduated shed, the window's own back-off for a hard cap.
+        return Err(ApiError::rate_limited(breach_reason(&admission.statuses))
+            .retry_after(admission.retry_after_secs));
     }
 
     // Admitted: any remaining breaches are Alert-only (enforcing ones would have 429'd above).
     let throttled = breached.iter().any(|s| s.rejects_ingest());
+    let (usage_ratio, shed_fraction) = proximity(&admission.statuses);
     Ok(Json(IngestResponse {
         id: ev.id,
         project_id: pid,
@@ -266,6 +331,8 @@ pub(crate) async fn post_event(
         breached,
         throttled,
         duplicate: false,
+        usage_ratio,
+        shed_fraction,
     }))
 }
 

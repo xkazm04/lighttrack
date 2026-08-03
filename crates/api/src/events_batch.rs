@@ -53,6 +53,15 @@ pub(crate) enum BatchItem {
         code: &'static str,
         reason: String,
         breached: Vec<LimitStatus>,
+        /// Seconds to wait before retrying this item — short for a graduated throttle shed,
+        /// window-scaled for a hard cap. Mirrors the single-event path's `Retry-After` header, which
+        /// a multi-status batch response has no way to carry per item.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        retry_after_secs: Option<u64>,
+        /// `true` when this item was shed by graduated throttling rather than stopped by a breached
+        /// cap: nothing is over budget, and siblings in the same batch were still accepted.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        shed: bool,
     },
     Invalid {
         index: usize,
@@ -174,6 +183,8 @@ pub(crate) async fn post_batch(
                         code: "rate_limited",
                         reason: breach_reason(&a.statuses),
                         breached,
+                        retry_after_secs: a.retry_after_secs,
+                        shed: a.shed,
                     }
                 }
             }

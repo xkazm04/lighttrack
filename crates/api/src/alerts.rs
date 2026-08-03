@@ -536,6 +536,8 @@ mod tests {
             warning: false,
             scope: None,
             cost_evidence: None,
+            shed_fraction: 0.0,
+            shedding: false,
         }
     }
 
@@ -554,6 +556,8 @@ mod tests {
             warning: true,
             scope: None,
             cost_evidence: None,
+            shed_fraction: 0.0,
+            shedding: false,
         }
     }
 

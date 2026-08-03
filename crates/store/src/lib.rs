@@ -305,18 +305,39 @@ pub fn evaluate_rule(rule: &LimitRule, usage: &Usage) -> LimitStatus {
 /// Outcome of an admission-controlled ingest ([`Store::insert_event_checked`]).
 #[derive(Debug, Clone)]
 pub struct Admission {
-    /// Whether the event was persisted. `false` means a breached enforcing limit
-    /// (`Throttle`/`Block`) rejected it — the API surfaces this as HTTP 429.
+    /// Whether the event was persisted. `false` means a limit turned it away — either a hard stop
+    /// (a breached `Throttle`/`Block` rule, or an unpriceable cost cap) or a graduated `Throttle`
+    /// shed. The API surfaces both as HTTP 429; [`Admission::shed`] tells them apart.
     pub admitted: bool,
-    /// Limit statuses evaluated against rolling usage *including* the candidate event.
+    /// Limit statuses evaluated against rolling usage *including* the candidate event. On a shed,
+    /// the rule(s) that shed this event carry `shedding = true`.
     pub statuses: Vec<LimitStatus>,
+    /// `true` when the rejection was graduated back-pressure (a `Throttle` rule shedding below its
+    /// threshold) rather than a hard stop. Nothing is over budget yet: the same event may be
+    /// accepted on a later attempt with a fresh id, and other traffic is still flowing.
+    pub shed: bool,
+    /// How long the client should wait before retrying, when rejected. Short for a shed, window-
+    /// scaled for a hard stop. `None` when admitted.
+    pub retry_after_secs: Option<u64>,
 }
 
 impl Admission {
-    /// Admit unless a breached enforcing rule is present.
+    /// Decide the outcome from the evaluated statuses. Rejects on a hard stop
+    /// ([`LimitStatus::rejects_ingest`]) or a graduated shed, and derives the retry hint from
+    /// whichever rejection is in force — a hard stop outranks a shed, since it is the longer wait.
     pub(crate) fn from_statuses(statuses: Vec<LimitStatus>) -> Self {
-        let admitted = !statuses.iter().any(|s| s.rejects_ingest());
-        Admission { admitted, statuses }
+        let hard = statuses.iter().any(|s| s.rejects_ingest());
+        let shed = !hard && statuses.iter().any(|s| s.shedding);
+        let admitted = !hard && !shed;
+        let retry_after_secs = statuses
+            .iter()
+            .filter(|s| s.rejects_ingest())
+            .map(|s| s.retry_after_secs())
+            .max()
+            .or_else(|| {
+                statuses.iter().filter(|s| s.shedding).map(|s| s.retry_after_secs()).max()
+            });
+        Admission { admitted, statuses, shed, retry_after_secs }
     }
 }
 
@@ -380,7 +401,12 @@ where
                 u
             }
         };
-        statuses.push(evaluate_rule(r, &usage));
+        let mut st = evaluate_rule(r, &usage);
+        // Graduated throttling is decided here, where the candidate event is known: a `Throttle`
+        // rule past its ramp start sheds a proportional, deterministic share of traffic. Recorded on
+        // the status so the rejection ledger and the alerts attribute the shed to the right rule.
+        st.shedding = st.sheds(&ev.id);
+        statuses.push(st);
     }
     Ok(Admission::from_statuses(statuses))
 }

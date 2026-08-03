@@ -101,6 +101,18 @@ impl Default for LimitWindow {
 }
 
 impl LimitWindow {
+    /// How long a client should wait before retrying an ingest a **hard** cap turned away. Nothing
+    /// frees capacity until usage ages out of the rolling window, so polling faster than this is
+    /// pure waste; it is deliberately far shorter than the window itself, because usage leaves the
+    /// window continuously rather than all at once. Advisory — the server does not enforce it.
+    pub fn retry_after_secs(&self) -> u64 {
+        match self {
+            LimitWindow::Hour => 30,
+            LimitWindow::Day => 300,
+            LimitWindow::Month => 900,
+        }
+    }
+
     /// Rolling look-back duration for this window (Month is treated as 30 days for now).
     pub fn lookback(&self) -> Duration {
         match self {
@@ -116,9 +128,19 @@ impl LimitWindow {
     }
 }
 
-/// What happens when a limit is breached. `Alert` only notifies; `Throttle` and `Block` are
-/// **enforced at ingest admission** — a breaching event is rejected with HTTP 429 and not recorded.
-/// (Inline *pre-call* blocking still requires the future gateway/proxy mode.)
+/// What happens as a limit is approached and breached. Three genuinely distinct tiers:
+///
+/// - **`Alert`** — observe-only. Notifies; never rejects anything.
+/// - **`Throttle`** — *graduated*. Below [`LimitRule::throttle_start`] nothing happens. Between that
+///   ratio and the threshold a proportionally growing share of ingest is shed (HTTP 429 with a short
+///   `Retry-After`), so a client feels back-pressure and slows down *before* the wall instead of
+///   going from fully accepted to fully rejected between two consecutive events. At and above the
+///   threshold it is a hard stop, identical to `Block`.
+/// - **`Block`** — an unambiguous hard stop at the threshold, with no shedding beforehand. A strict
+///   cap stays strict.
+///
+/// Both enforcing tiers reject at ingest admission (the event is not recorded). Inline *pre-call*
+/// blocking still requires the future gateway/proxy mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LimitAction {
@@ -140,6 +162,41 @@ impl LimitAction {
     pub fn enforces(self) -> bool {
         matches!(self, LimitAction::Throttle | LimitAction::Block)
     }
+
+    /// Whether this action sheds traffic *before* the threshold. Only `Throttle` does — that is what
+    /// makes it a different tier from `Block` rather than a synonym for it.
+    pub fn sheds(self) -> bool {
+        matches!(self, LimitAction::Throttle)
+    }
+}
+
+/// Ratio at which a `Throttle` rule starts shedding when it sets no [`LimitRule::warn_at`]. Chosen
+/// to coincide with the default "you're approaching the cap" intuition: the last fifth of the budget
+/// is the ramp.
+pub const DEFAULT_THROTTLE_START: f64 = 0.8;
+
+/// Map `(rule, event)` to a stable point in `[0, 1)` — the throttle's shed lottery ticket.
+///
+/// Deliberately **not** a random draw. A given event always gets the same verdict from a given rule
+/// at a given pressure, so behavior is reproducible, testable, and free of flapping: re-evaluating
+/// the same event never changes its answer, and raising the shed fraction only ever *adds* events to
+/// the shed set (it never un-sheds one, which is what makes the ramp monotone). FNV-1a rather than
+/// `DefaultHasher` so the mapping is pinned to this code, not to a std implementation detail.
+fn shed_ticket(rule_id: &str, event_id: &str) -> f64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in rule_id.as_bytes().iter().chain(b"\x1f").chain(event_id.as_bytes()) {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    // FNV mixes its low bits well but its high ones poorly on short inputs, and we want the *top*
+    // 53. Finish with the SplitMix64 avalanche so the shed set is evenly spread across ids.
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94d0_49bb_1331_11eb);
+    h ^= h >> 31;
+    // Top 53 bits → the exactly-representable [0, 1) grid.
+    (h >> 11) as f64 / (1u64 << 53) as f64
 }
 
 /// A per-project limit. Tripped by **monitored traffic only** — the scoring engine is exempt.
@@ -236,6 +293,16 @@ pub struct LimitStatus {
     /// qualify) and for evaluations made without a usage snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_evidence: Option<CostEvidence>,
+    /// Share of ingest this rule is currently shedding, in `[0, 1]`. Non-zero only for `Throttle`
+    /// rules past their [`LimitRule::throttle_start`]; `1.0` once the threshold is reached (where
+    /// throttling has become a hard stop). This is the proximity signal a well-behaved client backs
+    /// off on — it is returned on *accepted* ingest responses too, not only on rejections.
+    #[serde(default)]
+    pub shed_fraction: f64,
+    /// Set during admission when this rule shed *the specific event* being evaluated. Always `false`
+    /// on the read-only status surface, which has no candidate event.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shedding: bool,
 }
 
 impl LimitStatus {
@@ -258,6 +325,28 @@ impl LimitStatus {
     /// Whether any part of `current` is inferred (imputed for unpriced traffic).
     pub fn estimated(&self) -> bool {
         self.cost_evidence.as_ref().is_some_and(CostEvidence::estimated)
+    }
+
+    /// Whether graduated throttling sheds the event identified by `event_id`.
+    ///
+    /// Only meaningful *before* the threshold — at or past it the rule is breached and
+    /// [`LimitStatus::rejects_ingest`] is the hard stop. Deterministic (see [`shed_ticket`]): the
+    /// same event always gets the same answer, and the shed set only grows as pressure rises.
+    pub fn sheds(&self, event_id: &str) -> bool {
+        !self.breached
+            && self.shed_fraction > 0.0
+            && shed_ticket(&self.rule_id, event_id) < self.shed_fraction
+    }
+
+    /// Seconds a client should wait after this status turned an event away. A hard stop waits for the
+    /// window to age out ([`LimitWindow::retry_after_secs`]); a graduated shed is transient
+    /// back-pressure, so it asks for a short pause that grows with the pressure (1–15s).
+    pub fn retry_after_secs(&self) -> u64 {
+        if self.breached {
+            self.window.retry_after_secs()
+        } else {
+            1 + (14.0 * self.shed_fraction.clamp(0.0, 1.0)).ceil() as u64
+        }
     }
 
     /// A compact scope tag for keys/labels: `all` when project-wide, else `kind=value`.
@@ -298,6 +387,14 @@ impl LimitRule {
         Ok(())
     }
 
+    /// The usage ratio at which a `Throttle` rule begins shedding: its [`LimitRule::warn_at`] when
+    /// set (the operator already told us where "approaching" starts — reusing it avoids a second
+    /// knob that could contradict the first), else [`DEFAULT_THROTTLE_START`]. Meaningless for the
+    /// other actions.
+    pub fn throttle_start(&self) -> f64 {
+        self.warn_at.filter(|w| w.is_finite() && *w > 0.0 && *w < 1.0).unwrap_or(DEFAULT_THROTTLE_START)
+    }
+
     /// Pure evaluation: given the project's current value for this rule's metric+window,
     /// decide whether the limit is breached. The caller computes `current` from the store.
     pub fn evaluate(&self, current: f64) -> LimitStatus {
@@ -322,6 +419,17 @@ impl LimitRule {
         // Warning tier: approaching the cap (ratio past warn_at) but not yet breached. A breached
         // rule is never "warning" — it has already crossed into enforcement/breach alerting.
         let warning = !breached && self.warn_at.is_some_and(|w| ratio >= w);
+        // Graduated throttling: linear from `throttle_start` (0% shed) to the threshold (100%). At
+        // the threshold and beyond the rule is breached and shedding is moot — reported as 1.0 so the
+        // signal is continuous rather than snapping back to zero. `Block` and `Alert` never shed.
+        let shed_fraction = if !self.action.sheds() {
+            0.0
+        } else if breached {
+            1.0
+        } else {
+            let start = self.throttle_start();
+            ((ratio - start) / (1.0 - start)).clamp(0.0, 1.0)
+        };
         LimitStatus {
             rule_id: self.id.clone(),
             project_id: self.project_id.clone(),
@@ -336,6 +444,8 @@ impl LimitRule {
             warning,
             scope: self.scope.clone(),
             cost_evidence,
+            shed_fraction,
+            shedding: false, // set by the admission path, which knows the candidate event
         }
     }
 }
@@ -482,6 +592,93 @@ mod tests {
         // A plain evaluate (calls/tokens rules, or evidence-free callers) carries none of this.
         assert!(!rule().evaluate(6.0).estimated());
         assert!(rule().evaluate(6.0).cost_evidence.is_none());
+    }
+
+    /// How many of `n` synthetic event ids a status sheds.
+    fn shed_count(st: &LimitStatus, n: usize) -> usize {
+        (0..n).filter(|i| st.sheds(&format!("ev-{i}"))).count()
+    }
+
+    #[test]
+    fn throttle_ramps_where_block_is_a_cliff() {
+        let mut t = rule();
+        t.action = LimitAction::Throttle;
+        let mut b = rule();
+        b.action = LimitAction::Block;
+
+        // Below the ramp start (0.8 of a threshold of 10) neither sheds anything.
+        assert_eq!(t.evaluate(7.9).shed_fraction, 0.0);
+        assert_eq!(shed_count(&t.evaluate(7.9), 400), 0);
+        // Exactly AT the start is still zero — the boundary is deterministic, not a coin flip.
+        assert_eq!(t.evaluate(8.0).shed_fraction, 0.0);
+        assert_eq!(shed_count(&t.evaluate(8.0), 400), 0);
+
+        // Halfway up the ramp (ratio 0.9) sheds about half; Block still sheds nothing at all.
+        let mid = t.evaluate(9.0);
+        assert!((mid.shed_fraction - 0.5).abs() < 1e-9, "{}", mid.shed_fraction);
+        let shed = shed_count(&mid, 400);
+        assert!((150..=250).contains(&shed), "proportional shedding, got {shed}/400");
+        assert_eq!(b.evaluate(9.0).shed_fraction, 0.0, "Block never sheds before its threshold");
+        assert_eq!(shed_count(&b.evaluate(9.0), 400), 0);
+
+        // At the threshold both are a hard stop; shedding is no longer the mechanism.
+        assert!(t.evaluate(10.0).rejects_ingest() && b.evaluate(10.0).rejects_ingest());
+        assert!(!t.evaluate(10.0).sheds("ev-1"), "a breached rule rejects outright, it doesn't shed");
+    }
+
+    #[test]
+    fn shedding_is_deterministic_and_monotone_so_it_cannot_flap() {
+        let mut t = rule();
+        t.action = LimitAction::Throttle;
+        // Same event, same pressure, same answer — every time.
+        let st = t.evaluate(9.0);
+        let first = st.sheds("event-abc");
+        for _ in 0..50 {
+            assert_eq!(t.evaluate(9.0).sheds("event-abc"), first);
+        }
+        // Rising pressure only ever ADDS events to the shed set; nothing is ever un-shed. That is
+        // what keeps traffic from oscillating as usage creeps up. (Walked up to — not past — the
+        // threshold: at the threshold the rule stops shedding and becomes a hard stop instead.)
+        let ids: Vec<String> = (0..500).map(|i| format!("e{i}")).collect();
+        let mut previous: Vec<&String> = Vec::new();
+        for step in 0..10 {
+            let st = t.evaluate(8.0 + 0.2 * step as f64);
+            let now: Vec<&String> = ids.iter().filter(|id| st.sheds(id)).collect();
+            for id in &previous {
+                assert!(now.contains(id), "event {id} was un-shed as pressure rose");
+            }
+            assert!(now.len() >= previous.len());
+            previous = now;
+        }
+    }
+
+    #[test]
+    fn warn_at_doubles_as_the_throttle_ramp_start() {
+        let mut t = rule();
+        t.action = LimitAction::Throttle;
+        t.warn_at = Some(0.5);
+        assert_eq!(t.throttle_start(), 0.5);
+        assert_eq!(t.evaluate(5.0).shed_fraction, 0.0, "ramp starts at warn_at");
+        assert!((t.evaluate(7.5).shed_fraction - 0.5).abs() < 1e-9);
+        // Unset warn_at falls back to the default ramp.
+        t.warn_at = None;
+        assert_eq!(t.throttle_start(), DEFAULT_THROTTLE_START);
+    }
+
+    #[test]
+    fn retry_hint_separates_transient_back_pressure_from_a_hard_wall() {
+        let mut t = rule();
+        t.action = LimitAction::Throttle;
+        // A shed is a short pause that grows with pressure.
+        let light = t.evaluate(8.2).retry_after_secs();
+        let heavy = t.evaluate(9.8).retry_after_secs();
+        assert!((1..=15).contains(&light) && (1..=15).contains(&heavy));
+        assert!(heavy > light, "harder shedding asks for a longer pause");
+        // A breach waits for the window to age out — much longer, and window-dependent.
+        assert_eq!(t.evaluate(10.0).retry_after_secs(), LimitWindow::Day.retry_after_secs());
+        let mut hourly = t.clone();
+        hourly.window = LimitWindow::Hour;
+        assert!(hourly.evaluate(10.0).retry_after_secs() < t.evaluate(10.0).retry_after_secs());
     }
 
     #[test]

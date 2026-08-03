@@ -97,11 +97,12 @@ and the cost rollups are windowed by); it is merely validated against a skew bou
 to `ts` and their windowed accounting is still ts-keyed.
 
 The check and the insert are **one atomic store step**, so a concurrent burst can't all read the same
-pre-burst usage and race past the cap (check-then-act TOCTOU). Actions: **Alert**
-(notify only — the event is still recorded), **Throttle** and **Block** (both **enforced** — a breaching
-event is rejected with **429 `rate_limited`** and *not* recorded, so a cooperating client backs off; the
-breach is also readable via `GET /v1/limits/status` and MCP). Inline *pre-call* blocking (before the
-provider spend) still requires gateway mode. The scoring/benchmark engine is **not** subject to limits.
+pre-burst usage and race past the cap (check-then-act TOCTOU). Actions are three genuinely different
+tiers: **Alert** (notify only — the event is still recorded), **Throttle** (graduated — see §7c), and
+**Block** (an unambiguous hard stop at the threshold). Both enforcing tiers reject with **429
+`rate_limited`** and do *not* record the event, so a cooperating client backs off; the breach is also
+readable via `GET /v1/limits/status` and MCP. Inline *pre-call* blocking (before the provider spend)
+still requires gateway mode. The scoring/benchmark engine is **not** subject to limits.
 
 ### 7a. Unpriced traffic under a cost cap
 An event whose model is absent from the price book stores `cost_usd = NULL` — never a phantom zero,
@@ -162,6 +163,39 @@ Measured on the in-process saturation harness
 300 → 600 → 1200 concurrent ingests: **unbounded**, served p95 157 → 182 → 741 ms (tracks offered
 load); **cap=16**, served p95 24 → 65 → 91 ms, with shed responses at a flat p95 of ~0.13 ms whatever
 the load.
+
+### 7c. Throttle is a ramp, Block is a cliff
+`Throttle` and `Block` used to be the same behavior under two names — both hard-rejected at the
+threshold, nothing anywhere delayed or degraded. With a hard threshold and no hysteresis, traffic went
+from fully accepted to fully rejected between two consecutive events, and the client's only warning
+was a `ratio` it had to poll a second endpoint to see. `Throttle` is now **proportional shedding**:
+
+- **Ramp.** Shedding starts at the rule's `warn_at` (reusing the operator's own "approaching" mark
+  rather than adding a second knob that could contradict it), or `0.8` when unset, and rises linearly
+  to 100% at the threshold. `shed_fraction` is reported on every status.
+- **Per-event decision, deterministic.** An event is shed iff `FNV1a+splitmix64(rule_id, event_id)`
+  lands under `shed_fraction`. No RNG: the same event always gets the same verdict, so behavior is
+  reproducible and testable, and raising the pressure only ever *adds* events to the shed set — the
+  ramp is monotone, so there is no flapping at the boundary. At exactly `throttle_start` the shed
+  fraction is `0.0` and nothing is shed.
+- **Why shedding rather than a delay or a queue.** Delaying holds a request (and a blocking-pool slot)
+  open, which is how a budget control turns into a *load* problem — precisely what §7b exists to
+  prevent. Shedding is O(1), keeps the server's own back-pressure independent of the client's, and a
+  429 with `Retry-After` is a schedule a well-behaved client can honor without us holding state.
+- **Block is untouched.** It sheds nothing before the threshold and is a hard stop at it.
+- **Retry schedule.** Every limit 429 now carries `Retry-After`: 1–15s for a graduated shed (transient,
+  grows with pressure), and the window's own back-off for a hard stop (`hour` 30s / `day` 300s /
+  `month` 900s — nothing frees up faster than usage ages out). The batch path, which cannot carry a
+  per-item header, returns `retry_after_secs` and `shed` on each rejected item.
+- **Proximity on accepted writes.** `POST /v1/events` returns `usage_ratio` (worst ratio among the
+  rules that applied) and `shed_fraction`, so a client learns it is approaching a cap from the response
+  it already gets, not from a separate poll.
+- **Attribution.** A shed event is recorded in the rejection ledger exactly like a hard rejection
+  (`shedding` on the status names the rule), so `/v1/limits/status` → `rejected` stays complete.
+
+**Budget shedding (429 `rate_limited`) is never load shedding (503 `overloaded`).** See §7b: 429 means
+*you* are near or over a configured budget; 503 means the *server* is saturated and the identical
+request will succeed shortly.
 
 ## 8. Scoring & benchmarking engine
 - **Online scoring:** sample events → enqueue → runner runs a rubric prompt via

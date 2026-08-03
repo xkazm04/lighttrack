@@ -1341,3 +1341,154 @@ async fn client_reported_cost_is_distinguishable_from_our_own_estimate() {
     let total = body["statuses"][0]["current"].as_f64().unwrap();
     assert!(total > client, "the book-priced call is in the total but not the client share: {body}");
 }
+
+/// POST one event and return `(status, retry-after header, body)`.
+async fn ingest_with_headers(
+    app: &Router,
+    token: &str,
+    body: Value,
+) -> (StatusCode, Option<String>, Value) {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/events")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let retry = resp
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: Value = if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+    (status, retry, v)
+}
+
+/// Build a router with one `Calls` rule of the given action/threshold and return `(app, key, store)`.
+fn app_with_calls_rule(
+    action: LimitAction,
+    threshold: f64,
+    warn_at: Option<f64>,
+) -> (Router, String, Arc<SqliteStore>) {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    store
+        .create_limit_rule(&LimitRule {
+            id: new_id(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::Calls,
+            window: LimitWindow::Hour,
+            threshold,
+            action,
+            enabled: true,
+            warn_at,
+            scope: None,
+        })
+        .unwrap();
+    (crate::build_router(state), key, store)
+}
+
+fn one_call() -> Value {
+    json!({
+        "provider": "anthropic", "model": "claude-haiku-4-5",
+        "usage": { "input": 1, "output": 1 }, "cost_usd": 0.0
+    })
+}
+
+#[tokio::test]
+async fn throttle_sheds_gradually_where_block_is_a_cliff() {
+    // The direction-(2) invariant: `Throttle` and `Block` must stop being synonyms. Same metric,
+    // same threshold, same traffic — the two actions must produce visibly different shapes.
+    let (t_app, t_key, t_store) = app_with_calls_rule(LimitAction::Throttle, 20.0, Some(0.5));
+    let (b_app, b_key, b_store) = app_with_calls_rule(LimitAction::Block, 20.0, Some(0.5));
+
+    let mut throttle_shed = 0;
+    let mut block_shed = 0;
+    for _ in 0..19 {
+        let (s, _, _) = ingest_with_headers(&t_app, &t_key, one_call()).await;
+        if s == StatusCode::TOO_MANY_REQUESTS {
+            throttle_shed += 1;
+        }
+        let (s, _, _) = ingest_with_headers(&b_app, &b_key, one_call()).await;
+        if s == StatusCode::TOO_MANY_REQUESTS {
+            block_shed += 1;
+        }
+    }
+    // Block is a cliff: everything below the threshold sails through untouched.
+    assert_eq!(block_shed, 0, "Block must not shed anything before its threshold");
+    assert_eq!(b_store.list_events(Some("proj-a"), 100).unwrap().len(), 19);
+    // Throttle is a ramp: real back-pressure builds on the approach, but traffic still flows.
+    assert!(throttle_shed > 0, "Throttle must actually throttle before the wall");
+    let stored = t_store.list_events(Some("proj-a"), 100).unwrap().len();
+    assert!(stored > 0 && stored < 19, "graduated, not all-or-nothing (stored {stored}/19)");
+}
+
+#[tokio::test]
+async fn a_shed_response_tells_the_client_how_close_it_is_and_when_to_retry() {
+    let (app, key, _store) = app_with_calls_rule(LimitAction::Throttle, 20.0, Some(0.5));
+
+    // Accepted writes carry the proximity signal, so a client never has to poll a second endpoint.
+    let (s, _, body) = ingest_with_headers(&app, &key, one_call()).await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    let ratio = body["usage_ratio"].as_f64().expect("accepted writes report proximity");
+    assert!((ratio - 0.05).abs() < 1e-9, "1 of 20 calls: {body}");
+    assert!(body.get("shed_fraction").is_none(), "nothing is shedding yet: {body}");
+
+    // Drive up into the ramp and capture the first shed response.
+    let mut shed: Option<(Option<String>, Value)> = None;
+    let mut saw_shed_fraction = false;
+    for _ in 0..18 {
+        let (s, retry, body) = ingest_with_headers(&app, &key, one_call()).await;
+        if s == StatusCode::OK {
+            saw_shed_fraction |= body.get("shed_fraction").is_some();
+        } else if shed.is_none() {
+            shed = Some((retry, body));
+        }
+    }
+    assert!(saw_shed_fraction, "accepted writes inside the ramp must report the shed pressure");
+
+    let (retry, body) = shed.expect("throttling must shed at least one event on the approach");
+    assert_eq!(body["error"]["code"], "rate_limited", "{body}");
+    let secs: u64 = retry.expect("a shed must carry Retry-After").parse().unwrap();
+    assert!((1..=15).contains(&secs), "a shed is transient back-pressure, got {secs}s");
+    let msg = body["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("throttled") && msg.contains("Not over budget"), "{msg}");
+
+    // A hard breach, by contrast, asks the client to wait for the window — a different schedule.
+    let (hard_app, hard_key, _) = app_with_calls_rule(LimitAction::Block, 1.0, None);
+    let (s, retry, _) = ingest_with_headers(&hard_app, &hard_key, one_call()).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    let hard_secs: u64 = retry.expect("a hard cap must carry Retry-After").parse().unwrap();
+    assert_eq!(hard_secs, LimitWindow::Hour.retry_after_secs());
+    assert!(hard_secs > 15, "a hard stop is a longer wait than transient shedding");
+}
+
+#[tokio::test]
+async fn a_shed_is_ledgered_and_is_never_confusable_with_server_overload() {
+    // Shedding for *budget* is 429 `rate_limited`; shedding for *server saturation* is 503
+    // `overloaded` (shed.rs). They must stay distinct — and a budget shed must still be attributed
+    // in the rejection ledger, or the operator surface goes blind exactly when throttling engages.
+    let (app, key, _store) = app_with_calls_rule(LimitAction::Throttle, 10.0, Some(0.3));
+    let mut shed_seen = 0;
+    for _ in 0..9 {
+        let (s, _, body) = ingest_with_headers(&app, &key, one_call()).await;
+        if s == StatusCode::TOO_MANY_REQUESTS {
+            shed_seen += 1;
+            assert_eq!(body["error"]["code"], "rate_limited", "never `overloaded`: {body}");
+            assert_ne!(s, StatusCode::SERVICE_UNAVAILABLE);
+        }
+    }
+    assert!(shed_seen > 0);
+
+    let (s, body) = get_limits_status(&app, &key, "proj-a").await;
+    assert_eq!(s, StatusCode::OK);
+    let rejected = body["rejected"].as_array().expect("shed events are ledgered");
+    assert_eq!(rejected.len(), 1, "{body}");
+    assert_eq!(rejected[0]["metric"], "calls");
+    assert_eq!(rejected[0]["count"], shed_seen, "every shed event is attributed: {body}");
+    // And the status surface shows the shedding pressure itself.
+    assert!(body["statuses"][0]["shed_fraction"].as_f64().unwrap() > 0.0, "{body}");
+}

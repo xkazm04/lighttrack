@@ -42,9 +42,11 @@ pub(crate) enum ErrorCode {
     Conflict,
     /// A usage/ingest limit has been exceeded. HTTP 429.
     ///
-    /// Returned by ingest admission when an enforcing (`throttle`/`block`) limit is breached: the
-    /// event is rejected and not recorded so a cooperating client backs off (see
-    /// `docs/ARCHITECTURE.md` §7).
+    /// Returned by ingest admission in two cases, both carrying a `Retry-After`: an enforcing
+    /// (`throttle`/`block`) limit is **breached**, or a `throttle` rule is **shedding** a share of
+    /// traffic on its approach to the threshold. Either way the event is not recorded, so a
+    /// cooperating client backs off (see `docs/ARCHITECTURE.md` §7 / §7c). The response body's
+    /// message distinguishes the two; the shed case is transient and the retry hint is seconds.
     RateLimited,
     /// The server is shedding load: too many ingest requests are already in flight, so this one was
     /// refused immediately rather than queued. HTTP 503, with `Retry-After`.
@@ -111,6 +113,10 @@ impl ErrorCode {
 pub(crate) struct ApiError {
     code: ErrorCode,
     message: String,
+    /// Seconds to advertise in a `Retry-After` response header. Set on limit rejections so a
+    /// cooperating client has a schedule to honor instead of guessing (a graduated throttle asks for
+    /// a short pause, a hard cap for the wait until its window ages out).
+    retry_after: Option<u64>,
 }
 
 impl ApiError {
@@ -118,7 +124,14 @@ impl ApiError {
         Self {
             code,
             message: m.into(),
+            retry_after: None,
         }
+    }
+
+    /// Attach a `Retry-After` (seconds) to this error response.
+    pub(crate) fn retry_after(mut self, secs: Option<u64>) -> Self {
+        self.retry_after = secs;
+        self
     }
     pub(crate) fn internal(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, m)
@@ -174,7 +187,13 @@ impl IntoResponse for ApiError {
         let body = Json(serde_json::json!({
             "error": { "code": self.code.as_str(), "message": self.message }
         }));
-        (self.code.status(), body).into_response()
+        let mut resp = (self.code.status(), body).into_response();
+        if let Some(secs) = self.retry_after {
+            if let Ok(v) = axum::http::HeaderValue::from_str(&secs.to_string()) {
+                resp.headers_mut().insert("retry-after", v);
+            }
+        }
+        resp
     }
 }
 
