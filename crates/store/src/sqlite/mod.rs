@@ -319,6 +319,9 @@ impl Store for SqliteStore {
     }
 
     // --- traces ---
+    fn serves_traces(&self) -> bool {
+        true
+    }
     fn list_traces(&self, project: Option<&str>, limit: usize) -> Result<Vec<TraceSummary>> {
         self.read(|c| events::list_trace_summaries(c, project, limit))
     }

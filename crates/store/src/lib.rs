@@ -756,6 +756,16 @@ pub trait Store: Send + Sync {
     // Default impls so backends that don't (yet) index by trace compile unchanged: the listing reads
     // empty and `get_trace` composes `list_trace_events` (so any backend that can list a trace's
     // events gets a correct rollup for free, from the pure `Trace::from_events`).
+    /// Whether this backend actually serves the trace surface (listing, detail, trace scores).
+    ///
+    /// A capability flag rather than a probe, on the same terms as [`Store::admission_is_atomic`]:
+    /// the conformance suite runs the full trace semantics against a backend that declares `true`
+    /// and, against one that declares `false`, asserts every trace method *refuses* with
+    /// [`StoreError::Unsupported`] — so "not implemented" can never quietly become an empty page.
+    /// The API surfaces the refusal as HTTP 501 `unsupported`.
+    fn serves_traces(&self) -> bool {
+        false
+    }
     /// Compact summaries of the most recent traces (grouped by `trace_id`), newest activity first.
     fn list_traces(&self, _project: Option<&str>, _limit: usize) -> Result<Vec<TraceSummary>> {
         Err(StoreError::Unsupported("traces"))
@@ -764,10 +774,10 @@ pub trait Store: Send + Sync {
     /// and pages on `(ended, trace_id)` descending, returning up to `limit` summaries plus a
     /// `next_cursor` when more remain.
     ///
-    /// The default ignores the filter/cursor and delegates to [`Store::list_traces`] (no pagination)
-    /// so backends that only return empty traces (Postgres/Firestore) compile unchanged — the SQLite
-    /// backend, which owns the trace surface, implements the full windowed/paginated form. Correct
-    /// string-keyset paging relies on the fixed-width `RFC3339(Nanos, Z)` timestamp invariant.
+    /// The default ignores the filter/cursor and delegates to [`Store::list_traces`] (no pagination),
+    /// which on a backend that doesn't serve traces is itself an [`StoreError::Unsupported`] refusal —
+    /// never a silently unfiltered page. SQLite and Postgres implement the full windowed/paginated
+    /// form. Correct string-keyset paging relies on the fixed-width `RFC3339(Nanos, Z)` invariant.
     fn list_traces_filtered(
         &self,
         project: Option<&str>,

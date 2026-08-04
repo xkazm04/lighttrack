@@ -12,7 +12,7 @@ use lighttrack_store::{
 
 use crate::util::{fmt_ts, parse_enum, parse_ts, pgerr};
 
-const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
+pub(crate) const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
     operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
     latency_ms, status, error, input, output, tags, source, metadata, name, \
     COALESCE(received_at, ts) AS received_at";
@@ -434,7 +434,7 @@ pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<LlmEvent>> {
     }
 }
 
-fn from_row(row: &PgRow) -> Result<LlmEvent> {
+pub(crate) fn from_row(row: &PgRow) -> Result<LlmEvent> {
     let ts: String = row.try_get(5).map_err(pgerr)?;
     let provider: String = row.try_get(6).map_err(pgerr)?;
     let operation: String = row.try_get(8).map_err(pgerr)?;

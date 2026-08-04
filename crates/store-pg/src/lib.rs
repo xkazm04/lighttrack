@@ -8,7 +8,7 @@
 //! Implements the full `Store` trait, verified against Postgres. This file is wiring: `connect` +
 //! the `impl Store` that delegates each method to an `async fn` in a per-domain module (`events`,
 //! `scores`, `projects`, `prices`, `benchmarks`, `datasets`, `rubrics`, `jobs`, `revenue`,
-//! `relay`), mirroring the SQLite backend's layout. `claim_job` and the relay `lease` use
+//! `relay`, `traces`), mirroring the SQLite backend's layout. `claim_job` and the relay `lease` use
 //! `FOR UPDATE SKIP LOCKED … RETURNING` for concurrency-safe atomic dequeues.
 
 mod admission;
@@ -22,6 +22,7 @@ mod relay;
 mod revenue;
 mod rubrics;
 mod scores;
+mod traces;
 mod util;
 
 use chrono::{DateTime, Utc};
@@ -32,11 +33,11 @@ use tokio::runtime::Runtime;
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule,
     JobCancel, LimitScope, LlmEvent, ModelPriceRow, Project, RelayOutcome, RelayTask, RevenueEvent,
-    Rubric, Score,
+    Rubric, Score, TraceSummary,
 };
 use lighttrack_store::{
-    Admission, CostRow, EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, Usage,
-    UseCaseCostRow,
+    Admission, CostRow, EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, TraceEvents,
+    TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 use util::pgerr;
@@ -144,6 +145,36 @@ impl Store for PgStore {
     }
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
         self.rt.block_on(events::get(&self.pool, id))
+    }
+
+    // --- traces ---
+    // Implemented, not inherited: the trait defaults refuse with `Unsupported` (HTTP 501), which on
+    // the backend most deployments actually run meant the whole trace surface was missing. Semantics
+    // are ported from the SQLite reference — see `traces`.
+    fn serves_traces(&self) -> bool {
+        true
+    }
+    fn list_traces(&self, project: Option<&str>, limit: usize) -> Result<Vec<TraceSummary>> {
+        self.rt.block_on(traces::list_summaries(&self.pool, project, limit))
+    }
+    fn list_traces_filtered(
+        &self,
+        project: Option<&str>,
+        filter: &TraceFilter,
+        limit: usize,
+    ) -> Result<TracePage> {
+        self.rt.block_on(traces::list_summaries_filtered(&self.pool, project, filter, limit))
+    }
+    fn list_trace_events(
+        &self,
+        project: Option<&str>,
+        trace_id: &str,
+        max_spans: usize,
+    ) -> Result<TraceEvents> {
+        self.rt.block_on(traces::list_by_trace(&self.pool, project, trace_id, max_spans))
+    }
+    fn list_trace_scores(&self, project: Option<&str>, trace_id: &str) -> Result<Vec<Score>> {
+        self.rt.block_on(traces::list_scores_by_trace(&self.pool, project, trace_id))
     }
 
     // --- projects / api keys / limits ---

@@ -70,6 +70,16 @@ within the trace). A whole trace can be scored with `POST /v1/traces/:id/score`:
 normal `scores` row anchored to the trace's root span event (or a named `event_id`), so it links back
 through the same `event_id → trace_id` path the read side joins on — no per-score `trace_id` column.
 
+**Project scope is part of the query.** A `trace_id` is caller-supplied and therefore not a tenant
+boundary — two projects can both pick `req-1`. Every trace read (listing, detail, the trace's scores,
+and the models on a summary) filters on `project_id` in SQL, so a colliding id in another project is
+*invisible* rather than merged and then authorized away; asking for someone else's trace is a **404**,
+not a 403. **Backend support:** SQLite and Postgres serve the full surface (same semantics, asserted
+by the shared conformance suite — grouping, filters, the `(ended, trace_id)` keyset, the span cap and
+its truncation signal, and the one `TraceShape` duration rule). Firestore has no server-side grouping
+by `trace_id` and refuses with **501 `unsupported`** (see `docs/FIRESTORE.md`) — never an empty page.
+`Store::serves_traces()` is the capability flag the suite branches on.
+
 ## `projects`
 | Field | Type | Notes |
 |---|---|---|

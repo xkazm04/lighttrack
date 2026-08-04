@@ -97,6 +97,16 @@ pub(crate) fn run(
     loop {
         match run_cycle(cli, http, engine, p, &judge) {
             Ok(n) => println!("cycle: scored {n} trace(s)"),
+            // A backend that doesn't serve traces (HTTP 501 `unsupported`) is not transient: every
+            // future cycle fails identically. Say so once and stop, instead of logging the same
+            // error every interval forever.
+            Err(e) if is_unsupported(&e) => {
+                bail!(
+                    "this backend does not serve traces: the API answered 501 `unsupported` \
+                     ({e}). score-traces needs a store with the trace surface (SQLite or \
+                     Postgres); it cannot run against this one."
+                )
+            }
             // A daemon must survive a transient failure (API briefly down); a one-shot run propagates
             // it so a cron/scheduler step fails loudly.
             Err(e) if daemon => eprintln!("cycle error (continuing): {e}"),
@@ -108,6 +118,13 @@ pub(crate) fn run(
         std::thread::sleep(Duration::from_secs(p.interval));
     }
     Ok(())
+}
+
+/// Whether a cycle failed because the store has no trace surface at all — the API's 501
+/// `unsupported`, which the HTTP helpers surface as `HTTP 501` in the error chain. Permanent by
+/// definition, so it ends the loop rather than being retried every interval.
+fn is_unsupported(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.to_string().contains("HTTP 501"))
 }
 
 /// Resolve the judging contract; exactly one of `--rubric` / `--rubric-id` is required.

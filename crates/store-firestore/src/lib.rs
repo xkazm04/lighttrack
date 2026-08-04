@@ -27,11 +27,12 @@ use serde_json::Value;
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, JobCancel, LimitRule,
     LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent, Rubric,
-    Score,
+    Score, TraceSummary,
 };
 use lighttrack_store::{
     insert_event_checked_nonatomic, insert_events_checked_nonatomic, Admission, CostRow,
-    EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, Usage, UseCaseCostRow,
+    EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, TraceEvents, Usage,
+    UseCaseCostRow,
 };
 
 use rest::Rest;
@@ -71,6 +72,12 @@ impl FirestoreStore {
              atomic, so a concurrent burst can exceed a cap before it takes effect. Postgres \
              (LIGHTTRACK_DATABASE_URL=postgres://…) enforces caps atomically."
         );
+        // Same rule for the trace surface: this backend has no server-side grouping by `trace_id`,
+        // so `/v1/traces` refuses with 501 `unsupported` rather than serving an empty page that
+        // reads like "you have no traces". SQLite and Postgres implement it.
+        eprintln!(
+            "lighttrack-store-firestore: the TRACE surface is NOT served on this backend —              /v1/traces, /v1/traces/:id and whole-trace scoring answer HTTP 501 `unsupported`.              Use SQLite or Postgres (LIGHTTRACK_DATABASE_URL=postgres://…) for traces."
+        );
         Ok(Self {
             rest: Rest::new(base, token),
         })
@@ -101,6 +108,29 @@ impl Store for FirestoreStore {
     }
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
         events::list_events(&self.rest, project, limit)
+    }
+    /// Left `false` deliberately (see the warning in [`FirestoreStore::connect`]): rolling events up
+    /// by `trace_id` needs a server-side grouping this REST data plane doesn't have. Declaring it
+    /// makes the refusal a tested property — the conformance suite asserts every trace method
+    /// answers [`StoreError::Unsupported`], so this can never decay into a silent empty page.
+    fn serves_traces(&self) -> bool {
+        false
+    }
+    /// Spelled out rather than inherited, so the refusal is a visible choice in this backend rather
+    /// than a trait default nobody remembered was there.
+    fn list_traces(&self, _project: Option<&str>, _limit: usize) -> Result<Vec<TraceSummary>> {
+        Err(StoreError::Unsupported("traces"))
+    }
+    fn list_trace_events(
+        &self,
+        _project: Option<&str>,
+        _trace_id: &str,
+        _max_spans: usize,
+    ) -> Result<TraceEvents> {
+        Err(StoreError::Unsupported("traces"))
+    }
+    fn list_trace_scores(&self, _project: Option<&str>, _trace_id: &str) -> Result<Vec<Score>> {
+        Err(StoreError::Unsupported("traces"))
     }
     fn list_events_filtered(
         &self,
@@ -330,5 +360,30 @@ impl Store for FirestoreStore {
         until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
         revenue::cost_by_dimension(&self.rest, project, dim, since, until)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The trace refusal is reachable without any Firestore at all — it must be a *refusal*, not an
+    /// empty page, and every entry point must agree (`get_trace` composes `list_trace_events`).
+    /// Needs no emulator, so it guards the property in ordinary CI too.
+    #[test]
+    fn the_trace_surface_refuses_rather_than_reading_empty() {
+        let store = FirestoreStore::connect("firestore://demo").expect("connect");
+        assert!(!store.serves_traces());
+        assert!(matches!(store.list_traces(Some("p"), 10), Err(StoreError::Unsupported(_))));
+        assert!(matches!(
+            store.list_traces_filtered(Some("p"), &lighttrack_store::TraceFilter::default(), 10),
+            Err(StoreError::Unsupported(_))
+        ));
+        assert!(matches!(
+            store.list_trace_events(Some("p"), "t", 10),
+            Err(StoreError::Unsupported(_))
+        ));
+        assert!(matches!(store.list_trace_scores(Some("p"), "t"), Err(StoreError::Unsupported(_))));
+        assert!(matches!(store.get_trace(Some("p"), "t", 10), Err(StoreError::Unsupported(_))));
     }
 }

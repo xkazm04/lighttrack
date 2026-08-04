@@ -72,6 +72,12 @@ CREATE INDEX IF NOT EXISTS idx_events_project_ts ON events(project_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_project_received
   ON events(project_id, COALESCE(received_at, ts));
 CREATE INDEX IF NOT EXISTS idx_events_trace ON events(trace_id);
+-- The trace surface reads a *project's* trace: `WHERE trace_id = $1 AND project_id = $2` (a trace id
+-- is caller-supplied, so the project scope is part of the query, not a later check). Matching the
+-- SQLite reference's idx_events_project_trace, this keeps the detail read proportional to the trace
+-- instead of scanning the project's events; single-column idx_events_trace still serves the
+-- project-agnostic (operator) read. Both columns predate every ADD COLUMN above.
+CREATE INDEX IF NOT EXISTS idx_events_project_trace ON events(project_id, trace_id);
 
 CREATE TABLE IF NOT EXISTS limit_rules (
   id          TEXT PRIMARY KEY,

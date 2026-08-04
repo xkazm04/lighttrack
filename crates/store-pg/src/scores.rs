@@ -8,7 +8,7 @@ use lighttrack_store::Result;
 
 use crate::util::{fmt_ts, parse_ts, pgerr};
 
-const COLS: &str = "id, project_id, event_id, rubric, value, \"max\", pass, reasoning, detail, \
+pub(crate) const COLS: &str = "id, project_id, event_id, rubric, value, \"max\", pass, reasoning, detail, \
     run_id, case_index, scored_by, cost_usd, created_at";
 
 pub(crate) async fn insert(pool: &PgPool, s: &Score) -> Result<()> {
@@ -104,7 +104,7 @@ pub(crate) async fn scored_event_ids(pool: &PgPool, event_ids: &[String]) -> Res
     rows.iter().map(|r| r.try_get::<String, _>(0).map_err(pgerr)).collect()
 }
 
-fn from_row(row: &PgRow) -> Result<Score> {
+pub(crate) fn from_row(row: &PgRow) -> Result<Score> {
     let created_at: String = row.try_get(13).map_err(pgerr)?;
     // A detail blob written by a newer/other writer must not sink the whole listing: an unreadable
     // one degrades to `None` (the score's scalar is still true) rather than erroring the query.

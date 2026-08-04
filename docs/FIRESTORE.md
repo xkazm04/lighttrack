@@ -31,6 +31,14 @@ These are O(matched-docs) reads — fine at the target load (≤1k calls/hr). At
 counter docs (incremented on ingest) or push events to the analytical `EventSink` (BigQuery/ClickHouse).
 All `list_*` / `get_*` map to `runQuery` (`orderBy` + `limit`) / document GET.
 
+### Traces are NOT served on this backend
+The trace listing is a `GROUP BY trace_id` with aggregate `HAVING` predicates and an `(ended,
+trace_id)` keyset — the one rollup that cannot be reconstructed client-side within a bounded read.
+So `list_traces` / `list_trace_events` / `list_trace_scores` answer `StoreError::Unsupported`
+(HTTP **501 `unsupported`**) rather than an empty page, `Store::serves_traces()` is `false`, and
+`FirestoreStore::connect` says so on stderr at startup. The conformance suite asserts the refusal, so
+it cannot decay into "you have no traces". SQLite and Postgres implement the surface in full.
+
 ## Atomic job claim
 `claim_job` uses a Firestore **transaction**: `beginTransaction` → read the oldest `queued` (or stale
 `running`) job → `commit` an update to `status=running` with the read precondition. No `SKIP LOCKED`, but

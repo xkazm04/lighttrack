@@ -447,30 +447,42 @@ pub(super) fn list_trace_summaries_filtered(
     } else {
         None
     };
-    attach_models(conn, &mut summaries)?;
+    attach_models(conn, project, &mut summaries)?;
     Ok(TracePage { traces: summaries, next_cursor })
 }
 
 /// Fill each summary's `models` with the trace's distinct models in first-seen (min-ts) order — the
 /// same ordering [`lighttrack_core::Trace::from_events`] produces for the detail view. One extra
-/// query, scoped to the trace ids actually returned (not N+1). Project-agnostic per trace, matching
-/// the detail rollup's `list_by_trace`.
-fn attach_models(conn: &Connection, summaries: &mut [TraceSummary]) -> Result<()> {
+/// query, scoped to the trace ids actually returned (not N+1).
+///
+/// Scoped by `project` on the same terms as the rest of the trace surface: a `trace_id` is
+/// caller-supplied, so the unscoped lookup this used to do let another project's model names appear
+/// in this project's summary — a cross-tenant read, now covered by the conformance collision case.
+fn attach_models(
+    conn: &Connection,
+    project: Option<&str>,
+    summaries: &mut [TraceSummary],
+) -> Result<()> {
     if summaries.is_empty() {
         return Ok(());
     }
     let placeholders = std::iter::repeat("?").take(summaries.len()).collect::<Vec<_>>().join(",");
+    let scope = if project.is_some() { "AND project_id = ? " } else { "" };
     // Group to one row per (trace, model) with that model's first timestamp, then order globally by
     // that first timestamp; pushing rows in that order builds each trace's list in first-seen order.
     let sql = format!(
         "SELECT trace_id, model FROM \
          (SELECT trace_id, model, MIN(ts) AS mt FROM events WHERE trace_id IN ({placeholders}) \
-          GROUP BY trace_id, model) ORDER BY mt ASC"
+          {scope}GROUP BY trace_id, model) ORDER BY mt ASC"
     );
-    let ids: Vec<&str> = summaries.iter().map(|s| s.trace_id.as_str()).collect();
+    let mut args: Vec<Box<dyn ToSql>> =
+        summaries.iter().map(|s| Box::new(s.trace_id.clone()) as Box<dyn ToSql>).collect();
+    if let Some(p) = project {
+        args.push(Box::new(p.to_string()));
+    }
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map(params_from_iter(ids.iter()), |row: &Row| {
+        .query_map(params_from_iter(args.iter()), |row: &Row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
