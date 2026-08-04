@@ -574,6 +574,64 @@ async fn a_non_consenting_projects_key_is_not_a_contributor_credential() {
 }
 
 #[tokio::test]
+async fn an_absurd_case_claim_cannot_own_a_row() {
+    // Two honest contributors agree a model is good. A third claims a billion cases saying it is
+    // terrible. Flat case-weighted pooling hands the row to whoever types the biggest number.
+    let (state, store) = setup_k(true, false, 5, 2);
+    let (ka, kb, liar) = (
+        contributor_key(&store, "a"),
+        contributor_key(&store, "b"),
+        contributor_key(&store, "liar"),
+    );
+    let app = crate::build_router(state);
+    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+    ingest(&app, Some(&kb), digest_of("anthropic", "haiku", 0.82, 100, "anthropic")).await;
+
+    // A billion cases from one instance is not a benchmark result, it is a typo or an attack.
+    let (status, ack) =
+        ingest(&app, Some(&liar), digest_of("anthropic", "haiku", 0.05, 1_000_000_000, "anthropic")).await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted"], 0, "an implausible claim is not stored: {ack}");
+    assert_eq!(ack["rejected_implausible"], 1, "…and it is disclosed, not silently dropped: {ack}");
+
+    let (_s, lb) = leaderboard(&app).await;
+    let row = &lb["rows"][0];
+    let q = row["quality"].as_f64().unwrap();
+    assert!(q > 0.75, "the honest consensus survives; got quality {q} in {lb}");
+
+    // Even a claim *within* the plausible ceiling cannot own the row: a single source's weight is
+    // winsorized to the documented share ceiling, and the row discloses that share.
+    let (status, ack) =
+        ingest(&app, Some(&liar), digest_of("anthropic", "haiku", 0.05, 999_999, "anthropic")).await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted"], 1, "a big-but-plausible contribution is still accepted: {ack}");
+
+    let (_s, lb) = leaderboard(&app).await;
+    let row = &lb["rows"][0];
+    let share = row["max_source_share"].as_f64().expect("provenance is visible");
+    assert!(share <= 0.801, "no source exceeds the documented share ceiling; got {share} in {lb}");
+    let q = row["quality"].as_f64().unwrap();
+    assert!(
+        q > 0.20,
+        "one source may lead a row but not own it outright; got {q} in {lb}"
+    );
+}
+
+#[tokio::test]
+async fn a_genuinely_large_single_source_still_outweighs_a_small_one() {
+    // The non-goal: do not over-correct into ignoring sample size. 10k cases must still beat 10.
+    let (state, store) = setup_k(true, false, 5, 1);
+    let (big, small) = (contributor_key(&store, "big"), contributor_key(&store, "small"));
+    let app = crate::build_router(state);
+    ingest(&app, Some(&big), digest_of("anthropic", "haiku", 0.90, 10_000, "anthropic")).await;
+    ingest(&app, Some(&small), digest_of("anthropic", "haiku", 0.10, 10, "anthropic")).await;
+
+    let (_s, lb) = leaderboard(&app).await;
+    let q = lb["rows"][0]["quality"].as_f64().unwrap();
+    assert!(q > 0.7, "the 10k-case run dominates the 10-case one, as it should; got {q} in {lb}");
+}
+
+#[tokio::test]
 async fn anonymous_push_refused_unless_allowed() {
     // Keyless push, hub does not allow anon → 403.
     let (state, _) = setup(true, false, 5);

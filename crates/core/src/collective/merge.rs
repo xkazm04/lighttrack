@@ -24,11 +24,24 @@ use super::types::{CollectiveEntry, LeaderboardRow, ModelDigestEntry, RunStat};
 /// Minimum fraction of a row's cases that must carry a known variance before a CI is estimated.
 const VARIANCE_COVERAGE_MIN: f64 = 0.5;
 
+/// **Bounded unilateral influence.** The largest share of a merged row's weight any single source may
+/// hold, once the row has ≥2 sources. Flat case-weighting takes `n_cases` at face value, so the row
+/// goes to whoever types the biggest number; winsorizing the top source's weight to this share means a
+/// contributor can *lead* a row but never *own* it. 0.8 is deliberately generous — a genuinely large
+/// contribution still outweighs everyone else combined 4:1, so sample size keeps mattering — and the
+/// residual is closed at ingest, where implausible case counts are rejected outright. Every row
+/// discloses its realized `max_source_share`.
+pub const MAX_SOURCE_WEIGHT_SHARE: f64 = 0.8;
+
 /// z for a two-sided 95% interval.
 const Z_95: f64 = 1.96;
 
 /// One case-weighted observation folded into an [`Acc`] — a run (digest) or a stored entry (merge).
 struct Sample {
+    /// The weight this sample carries in the pooled means. Equal to `cases` on the digest side (one
+    /// instance pooling its own runs); on the merge side it is the **winsorized** case count, so one
+    /// source cannot exceed [`MAX_SOURCE_WEIGHT_SHARE`] of the row.
+    weight: f64,
     quality: f64,
     pass_rate: f64,
     cost: f64,
@@ -48,17 +61,21 @@ struct Sample {
 /// Case-weighted accumulator shared by digest building and leaderboard merging.
 #[derive(Default)]
 struct Acc {
+    /// Raw cases behind the row — reported as-is (`n_cases`) and used for the display floor and the
+    /// variance-coverage test. Distinct from `w`, which is what the *means* are weighted by.
     cases: u64,
+    w: f64, // Σ effective weight
     q_w: f64,
     q_w2: f64, // Σ w·q²  — for the digest-side between-run variance
     p_w: f64,
     c_w: f64,
-    lat_cases: u64,
+    lat_w_total: f64,
     lat_w: f64,
     p95_max: u64,
     runs: u32,
     var_w: f64,      // Σ w·vᵢ over samples with a known variance — for the merge-side pooled CI
-    var_cases: u64,  // Σ w over samples with a known variance
+    var_weight: f64, // Σ w over samples with a known variance
+    var_cases: u64,  // Σ raw cases over samples with a known variance (coverage test / SE)
     contributors: BTreeSet<String>,
     judge_providers: BTreeSet<String>,
     rubric_fps: BTreeSet<String>,
@@ -66,15 +83,16 @@ struct Acc {
 
 impl Acc {
     fn add(&mut self, s: Sample, contributor: Option<&str>) {
-        let w = s.cases as f64;
+        let w = s.weight;
         self.cases += s.cases as u64;
+        self.w += w;
         self.q_w += s.quality * w;
         self.q_w2 += s.quality * s.quality * w;
         self.p_w += s.pass_rate * w;
         self.c_w += s.cost * w;
         self.runs += s.runs;
         if let Some(p) = s.p50 {
-            self.lat_cases += s.cases as u64;
+            self.lat_w_total += w;
             self.lat_w += p as f64 * w;
         }
         if let Some(p) = s.p95 {
@@ -82,6 +100,7 @@ impl Acc {
         }
         if let Some(v) = s.variance {
             self.var_w += v * w;
+            self.var_weight += w;
             self.var_cases += s.cases as u64;
         }
         if let Some(j) = s.judge_provider.filter(|j| !j.is_empty()) {
@@ -96,16 +115,16 @@ impl Acc {
     }
 
     fn quality(&self) -> f64 {
-        if self.cases == 0 { 0.0 } else { self.q_w / self.cases as f64 }
+        if self.w <= 0.0 { 0.0 } else { self.q_w / self.w }
     }
     fn pass_rate(&self) -> f64 {
-        if self.cases == 0 { 0.0 } else { self.p_w / self.cases as f64 }
+        if self.w <= 0.0 { 0.0 } else { self.p_w / self.w }
     }
     fn cost(&self) -> f64 {
-        if self.cases == 0 { 0.0 } else { self.c_w / self.cases as f64 }
+        if self.w <= 0.0 { 0.0 } else { self.c_w / self.w }
     }
     fn p50(&self) -> Option<u64> {
-        (self.lat_cases > 0).then(|| (self.lat_w / self.lat_cases as f64).round() as u64)
+        (self.lat_w_total > 0.0).then(|| (self.lat_w / self.lat_w_total).round() as u64)
     }
     fn p95(&self) -> Option<u64> {
         (self.p95_max > 0).then_some(self.p95_max)
@@ -113,11 +132,11 @@ impl Acc {
 
     /// Digest side: case-weighted population variance of the runs' mean scores. `None` with < 2 runs.
     fn run_variance(&self) -> Option<f64> {
-        if self.runs < 2 || self.cases == 0 {
+        if self.runs < 2 || self.w <= 0.0 {
             return None;
         }
-        let mean = self.q_w / self.cases as f64;
-        Some(((self.q_w2 / self.cases as f64) - mean * mean).max(0.0))
+        let mean = self.q_w / self.w;
+        Some(((self.q_w2 / self.w) - mean * mean).max(0.0))
     }
 
     /// Merge side: approximate 95% CI half-width on the merged mean quality, or `None` when too little
@@ -130,7 +149,7 @@ impl Acc {
         if coverage < VARIANCE_COVERAGE_MIN {
             return None;
         }
-        let pooled_var = (self.var_w / self.var_cases as f64).max(0.0);
+        let pooled_var = (self.var_w / self.var_weight).max(0.0);
         let se = (pooled_var / self.var_cases as f64).sqrt();
         Some(Z_95 * se)
     }
@@ -163,6 +182,8 @@ pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> 
         }
         groups.entry(key_of(&s.provider, &s.model, &s.task_type)).or_default().add(
             Sample {
+                // Digest side: an instance pooling its own runs, so weight == cases (nothing to bound).
+                weight: s.n_cases as f64,
                 quality: s.quality,
                 pass_rate: s.pass_rate,
                 cost: s.cost_per_case_usd,
@@ -200,32 +221,72 @@ pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> 
     out
 }
 
-/// Merge stored contributions from many instances into the public leaderboard. Each
-/// `(provider, model, task_type)` is case-weighted across contributors; `n_contributors` counts the
-/// distinct sources. Rows aggregating fewer than `low_confidence_floor` cases are flagged (not hidden).
-/// Sorted by quality desc.
-pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32) -> Vec<LeaderboardRow> {
-    let mut groups: BTreeMap<Key, Acc> = BTreeMap::new();
-    for e in entries {
-        groups.entry(key_of(&e.provider, &e.model, &e.task_type)).or_default().add(
-            Sample {
-                quality: e.quality,
-                pass_rate: e.pass_rate,
-                cost: e.avg_cost_usd,
-                cases: e.n_cases,
-                p50: e.p50_latency_ms,
-                p95: e.p95_latency_ms,
-                runs: e.n_runs,
-                variance: e.quality_variance,
-                judge_provider: e.judge_provider.clone(),
-                rubric_fingerprint: e.rubric_fingerprint.clone(),
-            },
-            Some(&e.contributor_id),
-        );
+/// Winsorize one row's per-source case counts so no single source exceeds
+/// [`MAX_SOURCE_WEIGHT_SHARE`] of the row's weight. Only the largest element can breach the share (two
+/// cannot each hold >80%), so clamping it to `share/(1-share)` times the sum of the rest is enough and
+/// exact. A row with a single source is returned untouched — there is no "collective" to skew, and the
+/// hub's `min_contributors` floor already decides whether such a row is publishable at all.
+fn winsorized_weights(cases: &[f64]) -> Vec<f64> {
+    let mut w = cases.to_vec();
+    if w.len() < 2 {
+        return w;
     }
+    let (i, &top) = match w.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)) {
+        Some(x) => x,
+        None => return w,
+    };
+    let others: f64 = w.iter().sum::<f64>() - top;
+    let ceiling = others * MAX_SOURCE_WEIGHT_SHARE / (1.0 - MAX_SOURCE_WEIGHT_SHARE);
+    if top > ceiling {
+        w[i] = ceiling;
+    }
+    w
+}
+
+/// Merge stored contributions from many instances into the public leaderboard. Each
+/// `(provider, model, task_type)` is case-weighted across contributors — with each source's weight
+/// **winsorized** to [`MAX_SOURCE_WEIGHT_SHARE`], so a contributor claiming an enormous `n_cases`
+/// cannot own a row (the realized share is disclosed as `max_source_share`). `n_contributors` counts
+/// the distinct sources and `n_cases` reports the raw evidence volume, uncapped. Rows aggregating
+/// fewer than `low_confidence_floor` cases are flagged (not hidden). Sorted by quality desc.
+pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32) -> Vec<LeaderboardRow> {
+    let mut buckets: BTreeMap<Key, Vec<&CollectiveEntry>> = BTreeMap::new();
+    for e in entries {
+        buckets.entry(key_of(&e.provider, &e.model, &e.task_type)).or_default().push(e);
+    }
+    let groups: BTreeMap<Key, (Acc, f64)> = buckets
+        .into_iter()
+        .map(|(k, es)| {
+            let raw: Vec<f64> = es.iter().map(|e| e.n_cases as f64).collect();
+            let weights = winsorized_weights(&raw);
+            let total: f64 = weights.iter().sum();
+            let top = weights.iter().copied().fold(0.0_f64, f64::max);
+            let max_share = if total > 0.0 { top / total } else { 0.0 };
+            let mut a = Acc::default();
+            for (e, &weight) in es.iter().zip(weights.iter()) {
+                a.add(
+                    Sample {
+                        weight,
+                        quality: e.quality,
+                        pass_rate: e.pass_rate,
+                        cost: e.avg_cost_usd,
+                        cases: e.n_cases,
+                        p50: e.p50_latency_ms,
+                        p95: e.p95_latency_ms,
+                        runs: e.n_runs,
+                        variance: e.quality_variance,
+                        judge_provider: e.judge_provider.clone(),
+                        rubric_fingerprint: e.rubric_fingerprint.clone(),
+                    },
+                    Some(&e.contributor_id),
+                );
+            }
+            (k, (a, max_share))
+        })
+        .collect();
     let mut out: Vec<LeaderboardRow> = groups
         .into_iter()
-        .map(|((provider, model, task_type), a)| {
+        .map(|((provider, model, task_type), (a, max_source_share))| {
             let judge_providers: Vec<String> = a.judge_providers.iter().cloned().collect();
             let mixed_judges = (judge_providers.len() > 1).then(|| judge_providers.len() as u32);
             LeaderboardRow {
@@ -244,6 +305,7 @@ pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32)
                 n_contributors: a.contributors.len() as u32,
                 n_runs: a.runs,
                 n_cases: a.cases as u32,
+                max_source_share: r3(max_source_share),
             }
         })
         .collect();
@@ -472,6 +534,66 @@ mod tests {
         );
         assert!(rows[0].mixed_judges.is_none());
         assert_eq!(rows[0].judge_providers, vec!["anthropic".to_string()]);
+    }
+
+    #[test]
+    fn one_source_cannot_own_a_row_but_still_leads_it() {
+        // 1M cases against two 100-case sources: flat pooling would hand the row to the big claim
+        // (quality ≈ 0.05). Winsorized, its weight is capped at 4× the rest, so the row lands between
+        // the two positions and discloses the share.
+        let rows = merge_leaderboard(
+            &[
+                entry("a", "haiku", 0.80, 100, None),
+                entry("b", "haiku", 0.82, 100, None),
+                entry("whale", "haiku", 0.05, 1_000_000, None),
+            ],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert_eq!(rows[0].max_source_share, 0.8, "the documented ceiling is realized exactly");
+        // 0.8·0.05 + 0.1·0.80 + 0.1·0.82 = 0.202.
+        assert!((rows[0].quality - 0.202).abs() < 1e-3, "got {}", rows[0].quality);
+        assert_eq!(rows[0].n_cases, 1_000_200, "raw evidence volume is reported truthfully");
+        assert_eq!(rows[0].n_contributors, 3);
+    }
+
+    #[test]
+    fn sample_size_still_matters_and_honest_rows_are_untouched() {
+        // The non-goal: 10k cases must still beat 10 by a wide margin (share ceiling 0.8, not 0.5).
+        let rows = merge_leaderboard(
+            &[entry("big", "haiku", 0.90, 10_000, None), entry("small", "haiku", 0.10, 10, None)],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert!((rows[0].quality - 0.74).abs() < 1e-3, "got {}", rows[0].quality);
+        assert_eq!(rows[0].max_source_share, 0.8);
+        // Sources within 4× of each other are never touched: exactly the flat case-weighted mean.
+        let rows = merge_leaderboard(
+            &[entry("a", "haiku", 0.60, 25, None), entry("b", "haiku", 0.90, 75, None)],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert!((rows[0].quality - 0.825).abs() < 1e-9, "got {}", rows[0].quality);
+        assert_eq!(rows[0].max_source_share, 0.75, "no winsorization applied");
+        // Beyond 4×, the ceiling bites — 90/10 becomes 80/20. That is the bound doing its job: a row
+        // that is 90% one instance is that instance's private eval on a collective billboard.
+        let rows = merge_leaderboard(
+            &[entry("a", "haiku", 0.60, 10, None), entry("b", "haiku", 0.90, 90, None)],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert!((rows[0].quality - 0.84).abs() < 1e-9, "got {}", rows[0].quality);
+        assert_eq!(rows[0].max_source_share, 0.8);
+        // Within ONE contributor, sample size is still respected exactly — the digest pools its own
+        // runs with no ceiling at all (10 cases at 0.6 + 90 at 0.9 ⇒ 0.87).
+        let d = build_digest(
+            &[
+                stat("anthropic", "haiku", "qa", 0.6, 0.002, 10),
+                stat("anthropic", "haiku", "qa", 0.9, 0.004, 90),
+            ],
+            5,
+        );
+        assert!((d[0].quality - 0.87).abs() < 1e-9, "got {}", d[0].quality);
+        // A single-source row is left alone entirely (the contributor floor decides its fate).
+        let rows = merge_leaderboard(&[entry("solo", "haiku", 0.5, 5000, None)], DEFAULT_LOW_CONFIDENCE_CASES);
+        assert_eq!(rows[0].max_source_share, 1.0);
+        assert_eq!(rows[0].n_cases, 5000);
     }
 
     #[test]

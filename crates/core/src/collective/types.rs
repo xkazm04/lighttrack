@@ -144,6 +144,11 @@ pub struct LeaderboardRow {
     pub n_contributors: u32,
     pub n_runs: u32,
     pub n_cases: u32,
+    /// Share of this row's **effective** (winsorized) weight held by its single largest source, in
+    /// `(0, 1]`. Provenance, not decoration: `1.0` means one instance's private eval results, and the
+    /// merge caps this at [`MAX_SOURCE_WEIGHT_SHARE`](super::MAX_SOURCE_WEIGHT_SHARE) whenever the row
+    /// has ≥2 sources, so no contributor can own a row outright however many cases it claims.
+    pub max_source_share: f64,
 }
 
 fn default_schema_version() -> u32 {

@@ -253,6 +253,9 @@ pub(crate) struct IngestAck {
     skipped: usize,
     /// Entries dropped for failing the hub's enforced k-anonymity floor (`n_cases < min_cases`).
     dropped_under_min: usize,
+    /// Entries refused as not-believable benchmark results (see `implausible`) — a claim of a billion
+    /// cases is disclosed back to the contributor, never silently absorbed into a merged row.
+    rejected_implausible: usize,
 }
 
 /// Hub side: accept a contributor's digest and replace its stored entry set (delete-then-upsert so a
@@ -289,19 +292,24 @@ pub(crate) async fn post_ingest(
     let now = Utc::now();
     let mut skipped = 0usize;
     let mut dropped_under_min = 0usize;
+    let mut rejected_implausible = 0usize;
     let entries: Vec<CollectiveEntry> = digest
         .entries
         .into_iter()
         .filter_map(|e| match sanitize_entry(&contributor, e, now, &st.collective.aliases) {
-            None => {
+            Err(Reject::Malformed) => {
                 skipped += 1;
                 None
             }
-            Some(ce) if ce.n_cases < min_cases => {
+            Err(Reject::Implausible) => {
+                rejected_implausible += 1;
+                None
+            }
+            Ok(ce) if ce.n_cases < min_cases => {
                 dropped_under_min += 1;
                 None
             }
-            Some(ce) => Some(ce),
+            Ok(ce) => Some(ce),
         })
         .take(MAX_ENTRIES)
         .collect();
@@ -318,7 +326,13 @@ pub(crate) async fn post_ingest(
     })
     .await?;
 
-    Ok(Json(IngestAck { contributor_id: contributor, accepted, skipped, dropped_under_min }))
+    Ok(Json(IngestAck {
+        contributor_id: contributor,
+        accepted,
+        skipped,
+        dropped_under_min,
+        rejected_implausible,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -523,22 +537,61 @@ fn provider_model(bench: &Benchmark, run: &BenchmarkRun) -> Option<(String, Stri
     from(&run.report).or_else(|| from(&bench.target))
 }
 
-/// Validate/clamp one contributed entry; `None` if it lacks a usable model identity. The model
-/// identity is **normalized** through `aliases` so equivalent spellings merge into one leaderboard row.
+/// Why a contributed entry was refused. Kept apart in the ack so a contributor can tell "you sent
+/// junk" from "your numbers are not believable".
+#[derive(Debug, PartialEq, Eq)]
+enum Reject {
+    /// No usable model identity (empty provider / model / task_type, or zero cases).
+    Malformed,
+    /// Structurally fine but not a believable benchmark result — see [`implausible`].
+    Implausible,
+}
+
+/// The largest per-bucket case count a hub will believe from one contributor. A single
+/// `(model, task_type)` bucket with more than a million scored cases is a typo or an attack, not a
+/// benchmark; accepting it hands the merged row to whoever types the biggest number.
+const MAX_CASES_PER_ENTRY: u32 = 1_000_000;
+
+/// The largest per-case cost a hub will believe. $1000 for one case is not a price, it is noise.
+const MAX_COST_PER_CASE_USD: f64 = 1_000.0;
+
+/// The plausibility rules, written down in one place so they can be documented verbatim:
+///   - every published number is finite (no NaN/∞ smuggled through JSON);
+///   - `n_runs ≥ 1` — a bucket with no runs produced no cases;
+///   - `n_cases ≥ n_runs` — a run scores at least one case, so more runs than cases is impossible;
+///   - `n_cases ≤ MAX_CASES_PER_ENTRY`;
+///   - `avg_cost_usd ≤ MAX_COST_PER_CASE_USD`.
+/// Quality/pass-rate are *clamped* rather than rejected (a [0,1] overshoot is a rounding artifact);
+/// counts are *rejected*, because a count is the weight the merge trusts.
+fn implausible(e: &lighttrack_core::ModelDigestEntry) -> bool {
+    !e.quality.is_finite()
+        || !e.pass_rate.is_finite()
+        || !e.avg_cost_usd.is_finite()
+        || e.n_runs == 0
+        || e.n_cases < e.n_runs
+        || e.n_cases > MAX_CASES_PER_ENTRY
+        || e.avg_cost_usd > MAX_COST_PER_CASE_USD
+}
+
+/// Validate/clamp one contributed entry. The model identity is **normalized** through `aliases` so
+/// equivalent spellings merge into one leaderboard row.
 fn sanitize_entry(
     contributor: &str,
     e: lighttrack_core::ModelDigestEntry,
     now: chrono::DateTime<Utc>,
     aliases: &ModelAliases,
-) -> Option<CollectiveEntry> {
+) -> Result<CollectiveEntry, Reject> {
     let provider = e.provider.trim();
     let model = e.model.trim();
     let task_type = e.task_type.trim().to_string();
     if provider.is_empty() || model.is_empty() || task_type.is_empty() || e.n_cases == 0 {
-        return None;
+        return Err(Reject::Malformed);
+    }
+    if implausible(&e) {
+        return Err(Reject::Implausible);
     }
     let (provider, model) = aliases.normalize(provider, model);
-    Some(CollectiveEntry {
+    Ok(CollectiveEntry {
         contributor_id: contributor.to_string(),
         provider,
         model,
@@ -677,7 +730,35 @@ mod tests {
             p50_latency_ms: None, p95_latency_ms: None, n_runs: 1, n_cases: 5,
             quality_variance: None, judge_provider: None, rubric_fingerprint: None,
         };
-        assert!(sanitize_entry("c-abc", bad, now, &a).is_none());
+        assert_eq!(sanitize_entry("c-abc", bad, now, &a).unwrap_err(), Reject::Malformed);
+    }
+
+    #[test]
+    fn implausible_counts_are_rejected_not_clamped() {
+        let now = Utc::now();
+        let a = ModelAliases::default();
+        let base = || lighttrack_core::ModelDigestEntry {
+            provider: "anthropic".into(), model: "haiku".into(), task_type: "qa".into(),
+            quality: 0.8, pass_rate: 0.8, avg_cost_usd: 0.01,
+            p50_latency_ms: None, p95_latency_ms: None, n_runs: 2, n_cases: 100,
+            quality_variance: None, judge_provider: None, rubric_fingerprint: None,
+        };
+        let rejected = |mutate: fn(&mut lighttrack_core::ModelDigestEntry)| {
+            let mut e = base();
+            mutate(&mut e);
+            sanitize_entry("c", e, now, &a).unwrap_err()
+        };
+        // A billion cases in one bucket is a typo or an attack, never a benchmark.
+        assert_eq!(rejected(|e| e.n_cases = 1_000_000_000), Reject::Implausible);
+        // More runs than cases is arithmetically impossible.
+        assert_eq!(rejected(|e| e.n_runs = 500), Reject::Implausible);
+        assert_eq!(rejected(|e| e.n_runs = 0), Reject::Implausible);
+        assert_eq!(rejected(|e| e.avg_cost_usd = 5_000.0), Reject::Implausible);
+        assert_eq!(rejected(|e| e.quality = f64::NAN), Reject::Implausible);
+        // The believable end of the range still lands.
+        let mut e = base();
+        e.n_cases = MAX_CASES_PER_ENTRY;
+        assert!(sanitize_entry("c", e, now, &a).is_ok(), "the ceiling itself is accepted");
     }
 
     #[test]

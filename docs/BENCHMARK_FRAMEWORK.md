@@ -378,6 +378,23 @@ LightTrack, the better the data for everyone (the moat).
   clamp ≥1): any contributed bucket with `n_cases` below it is dropped per-entry on ingest (not a whole
   request 400) and the count is returned as `dropped_under_min`, regardless of the floor the contributor
   claims it used.
+- **Bounded unilateral influence.** Case-weighted pooling takes `n_cases` at face value, so without a
+  bound the row goes to whoever types the biggest number — a contributor claiming a billion cases used
+  to *become* the row. Two rules, both written down and both enforced:
+  - *Plausibility, at ingest.* An entry is refused (and counted back as `rejected_implausible`, never
+    silently absorbed) unless every published number is finite, `n_runs ≥ 1`, `n_cases ≥ n_runs`
+    (a run scores at least one case), `n_cases ≤ 1,000,000` and `avg_cost_usd ≤ $1000`. Quality and
+    pass-rate are *clamped* to [0,1] instead — an overshoot there is a rounding artifact; a count is
+    the weight the merge trusts, so a bad count is rejected rather than repaired.
+  - *Winsorized weight, at merge.* On a row with ≥2 sources, the largest source's weight is clamped so
+    it never exceeds **80%** of the row (`MAX_SOURCE_WEIGHT_SHARE`) — i.e. a single contributor may
+    outweigh everyone else combined 4:1, but never own the row. Sample size still decides who leads:
+    10,000 cases beat 10 by 4:1, and sources within 4× of each other are pooled exactly as before.
+    *Within* one contributor there is no ceiling at all — the digest pools an instance's own runs by
+    exact case weight, because that is one source's internal evidence, not a vote.
+  - *Provenance is visible.* Every row publishes `max_source_share`, the realized share of its largest
+    source (`1.0` = one instance's private eval), and `n_cases` still reports the raw, uncapped
+    evidence volume.
 - **Trustworthy merge math (digest schema v2).** A point estimate lies when a 5-case bucket ranks next
   to a 50k-case one, so v2 carries second-order summaries and the merge surfaces uncertainty:
   - *Per-bucket variance.* Each v2 entry adds `quality_variance` — the **case-weighted population
