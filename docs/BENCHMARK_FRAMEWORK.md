@@ -351,14 +351,29 @@ LightTrack, the better the data for everyone (the moat).
     `summarization`, `coding`, `rag`, …) — the raw name is never published.
   - *Opaque contributor id.* `LIGHTTRACK_COLLECTIVE_ID` is hashed (SHA-256, truncated) before it goes on
     the wire, so a hub can update a source idempotently without learning who it is; unset ⇒ `anonymous`.
-- **Hub-side identity is derived, not asserted.** A hub does **not** trust the `contributor_id` in the
-  request body (kept only for wire compat, ignored). It derives the identity from the presented bearer
-  key — `c-` + first 12 hex of SHA-256(token) — so a poster can only ever replace *its own* set and can
-  neither overwrite a victim nor forge ids to inflate `n_contributors`.
-  - *Breaking change for keyless pushes.* A keyless (dev-mode) contribution is **refused** by default.
-    Set `LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1` to accept keyless pushes under one shared `anonymous`
-    identity (with a loud warning) — but then all anonymous posters can overwrite each other, so prefer
-    real keys. Contributors that previously pushed anonymously must now present a bearer key.
+- **Hub-side identity is derived from a credential the hub issued, not asserted.** A hub does **not**
+  trust the `contributor_id` in the request body (kept only for wire compat, ignored), *and it does not
+  hash the bearer string either*: `authenticate` is deliberately lenient in `dev` auth mode (any
+  unrecognized token resolves to a dev principal), so a token hash would let one poster mint an
+  unbounded number of contributor ids and walk straight through `min_contributors` — the floor both the
+  k-anonymity guarantee and the "≥2 independent sources" claim rest on. Instead the identity is
+  `c-` + first 12 hex of SHA-256 of a **hub-issued credential's stable id**:
+  - *Contribution needs a contributor credential, not any key.* A poster must present an API key the hub
+    minted **whose project carries `collective_opt_in`**. That opt-in is the contribution scope: an
+    ordinary ingest key belongs to a project that never consented, so it can push events all day and
+    still get `403` from `/v1/collective/ingest`. Identity = hash of the key's opaque `api_keys.id`
+    (never the secret). The admin key may also contribute, as one identity.
+  - *Everything else is refused, or collapses to one source.* A keyless push, or any token the hub did
+    not issue, is **refused**. `LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1` accepts such pushes under one shared
+    `anonymous` identity (with a loud warning) — deliberately *one* source, so it counts as 1 toward
+    `min_contributors` and cannot be used to manufacture a quorum; anonymous posters overwrite each
+    other, so prefer real credentials.
+  - *Hub operator workflow.* To accept contributions from Acme: create a project, set
+    `collective_opt_in`, mint a key on it, hand Acme the key. Revoking the key ends the grant.
+  - *Dev-mode hubs say so out loud.* Booting with `LIGHTTRACK_COLLECTIVE_ACCEPT=1` under `auth=dev`
+    prints a warning naming the exact consequence — `min_contributors` cannot be enforced against forged
+    identities in dev mode, so only hub-issued credentials get in. Run a real hub with
+    `LIGHTTRACK_AUTH=enforced`.
 - **Hub-enforced k-floor.** The hub re-enforces its own `LIGHTTRACK_COLLECTIVE_MIN_CASES` (default 5,
   clamp ≥1): any contributed bucket with `n_cases` below it is dropped per-entry on ingest (not a whole
   request 400) and the count is returned as `dropped_under_min`, regardless of the floor the contributor

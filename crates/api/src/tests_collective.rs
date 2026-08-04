@@ -1,10 +1,11 @@
 //! End-to-end tests for the Collective hub ingest/leaderboard path over the **wired axum router**.
 //!
 //! These pin the hardening guarantees that no pure unit test covers: ingest is gated by the accept
-//! flag; an unknown digest schema is rejected; the contributor identity is derived from the presented
-//! bearer key (the body's id is ignored) so two keys land under two ids and one key can only replace
-//! its own set; under-k buckets are dropped and counted; and a keyless push is refused unless the hub
-//! opts into anonymous contributions.
+//! flag; an unknown digest schema is rejected; the contributor identity is derived from a **hub-issued
+//! credential** (the body's id is ignored, and an arbitrary bearer string is not an identity at all)
+//! so two keys land under two ids and one key can only replace its own set; under-k buckets are
+//! dropped and counted; and a keyless push is refused unless the hub opts into anonymous
+//! contributions.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -70,6 +71,43 @@ fn setup_k(
         redaction_policies: Arc::new(crate::state::RedactionCache::new(HashMap::new())),
     };
     (state, store)
+}
+
+/// Mint a real hub-issued **contributor** credential: a project carrying `collective_opt_in` plus an
+/// API key on it. Returns the full key string. This is the only kind of token a hub accepts a
+/// contribution from — an arbitrary bearer string is not an identity (see `resolve_contributor`).
+fn contributor_key(store: &SqliteStore, name: &str) -> String {
+    mint_key(store, name, true)
+}
+
+fn mint_key(store: &SqliteStore, name: &str, opt_in: bool) -> String {
+    use chrono::Utc;
+    use lighttrack_core::{new_id, ApiKey, Project, Redaction};
+    let project_id = format!("proj-{name}");
+    store
+        .create_project(&Project {
+            id: project_id.clone(),
+            name: project_id.clone(),
+            enabled: true,
+            redaction: Redaction::None,
+            collective_opt_in: opt_in,
+            created_at: Utc::now(),
+        })
+        .unwrap();
+    let g = crate::auth::generate_key();
+    store
+        .create_api_key(&ApiKey {
+            id: new_id(),
+            project_id,
+            name: name.into(),
+            prefix: g.prefix.clone(),
+            key_hash: g.key_hash.clone(),
+            created_at: Utc::now(),
+            last_used_at: None,
+            revoked: false,
+        })
+        .unwrap();
+    g.full_key
 }
 
 fn entry(model: &str, q: f64, cases: u32) -> Value {
@@ -152,10 +190,11 @@ async fn identity_is_derived_from_the_key_not_the_body() {
     // A poster claims contributor_id "c-victim" in the body but presents its own key: the stored id
     // must be derived from the key, and must NOT be the claimed one.
     let (state, store) = setup(true, false, 5);
+    let key = contributor_key(&store, "attacker");
     let app = crate::build_router(state);
     let (status, ack) = ingest(
         &app,
-        Some("attacker-key"),
+        Some(&key),
         json!({ "contributor_id": "c-victim", "entries": [entry("haiku", 0.8, 10)] }),
     )
     .await;
@@ -173,11 +212,12 @@ async fn different_keys_land_under_different_ids_no_overwrite() {
     // Two keys both claim the same body id and the same model bucket. Because the identity is derived
     // from the key, they must NOT collide: two rows survive, not one overwriting the other.
     let (state, store) = setup(true, false, 5);
+    let (alpha, beta) = (contributor_key(&store, "alpha"), contributor_key(&store, "beta"));
     let app = crate::build_router(state);
     let body = |q: f64| json!({ "contributor_id": "c-shared", "entries": [entry("haiku", q, 10)] });
 
-    let (s1, _) = ingest(&app, Some("key-alpha"), body(0.7)).await;
-    let (s2, _) = ingest(&app, Some("key-beta"), body(0.9)).await;
+    let (s1, _) = ingest(&app, Some(&alpha), body(0.7)).await;
+    let (s2, _) = ingest(&app, Some(&beta), body(0.9)).await;
     assert_eq!((s1, s2), (StatusCode::OK, StatusCode::OK));
 
     let stored = store.list_collective_entries().unwrap();
@@ -195,16 +235,17 @@ async fn different_keys_land_under_different_ids_no_overwrite() {
 async fn same_key_replaces_its_own_set() {
     // Re-contributing under the same key replaces, never accretes.
     let (state, store) = setup(true, false, 5);
+    let alpha = contributor_key(&store, "alpha");
     let app = crate::build_router(state);
     let (_s, _) = ingest(
         &app,
-        Some("key-alpha"),
+        Some(&alpha),
         json!({ "entries": [entry("haiku", 0.7, 10), entry("sonnet", 0.8, 10)] }),
     )
     .await;
     assert_eq!(store.list_collective_entries().unwrap().len(), 2);
     // Second push from the same key with a single bucket → the dropped one must not linger.
-    let (_s, _) = ingest(&app, Some("key-alpha"), json!({ "entries": [entry("haiku", 0.9, 20)] })).await;
+    let (_s, _) = ingest(&app, Some(&alpha), json!({ "entries": [entry("haiku", 0.9, 20)] })).await;
     let stored = store.list_collective_entries().unwrap();
     assert_eq!(stored.len(), 1, "re-contribution replaces the whole set");
     assert_eq!(stored[0].model, "haiku");
@@ -214,11 +255,12 @@ async fn same_key_replaces_its_own_set() {
 #[tokio::test]
 async fn under_k_buckets_are_dropped_and_counted() {
     let (state, store) = setup(true, false, 5);
+    let key = contributor_key(&store, "a");
     let app = crate::build_router(state);
     // One bucket clears the floor (10 ≥ 5), one is below it (3 < 5).
     let (status, ack) = ingest(
         &app,
-        Some("some-key"),
+        Some(&key),
         json!({ "min_cases": 1, "entries": [entry("haiku", 0.8, 10), entry("sonnet", 0.9, 3)] }),
     )
     .await;
@@ -234,10 +276,11 @@ async fn under_k_buckets_are_dropped_and_counted() {
 async fn v1_digest_accepted_and_lands_with_null_variance() {
     // A legacy v1 digest (schema_version 1, no quality_variance) must not be orphaned by the v2 bump.
     let (state, store) = setup(true, false, 5);
+    let key = contributor_key(&store, "a");
     let app = crate::build_router(state);
     let (status, ack) = ingest(
         &app,
-        Some("some-key"),
+        Some(&key),
         json!({ "schema_version": 1, "entries": [entry("haiku", 0.8, 10)] }),
     )
     .await;
@@ -251,6 +294,7 @@ async fn v1_digest_accepted_and_lands_with_null_variance() {
 async fn v2_variance_is_carried_through_to_storage_and_ci() {
     // Two contributors report variance over enough cases → the leaderboard row carries a CI.
     let (state, store) = setup(true, false, 5);
+    let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
     let app = crate::build_router(state);
     let with_var = |model: &str, q: f64, var: f64, cases: u32| {
         json!({ "schema_version": 2, "entries": [{
@@ -260,8 +304,8 @@ async fn v2_variance_is_carried_through_to_storage_and_ci() {
             "n_runs": 3, "n_cases": cases, "quality_variance": var
         }]})
     };
-    ingest(&app, Some("key-a"), with_var("haiku", 0.80, 0.04, 100)).await;
-    ingest(&app, Some("key-b"), with_var("haiku", 0.84, 0.04, 100)).await;
+    ingest(&app, Some(&ka), with_var("haiku", 0.80, 0.04, 100)).await;
+    ingest(&app, Some(&kb), with_var("haiku", 0.84, 0.04, 100)).await;
 
     let stored = store.list_collective_entries().unwrap();
     assert!(stored.iter().all(|e| e.quality_variance == Some(0.04)), "variance persisted");
@@ -353,12 +397,17 @@ async fn digest_includes_only_consenting_projects() {
 async fn single_source_rows_are_withheld_below_the_contributor_floor() {
     // Hub with a real source floor (k=2): a row backed by one contributor must never surface —
     // however many cases it has, and no filter may resurrect it.
-    let (state, _) = setup_k(true, false, 5, 2);
+    let (state, store) = setup_k(true, false, 5, 2);
+    let (solo, ka, kb) = (
+        contributor_key(&store, "solo"),
+        contributor_key(&store, "a"),
+        contributor_key(&store, "b"),
+    );
     let app = crate::build_router(state);
     // One lone contributor benchmarks cohere; two contributors overlap on haiku.
-    ingest(&app, Some("key-solo"), digest_of("cohere", "command-r", 0.9, 5000, "openai")).await;
-    ingest(&app, Some("key-a"), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
-    ingest(&app, Some("key-b"), digest_of("anthropic", "haiku", 0.84, 100, "anthropic")).await;
+    ingest(&app, Some(&solo), digest_of("cohere", "command-r", 0.9, 5000, "openai")).await;
+    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+    ingest(&app, Some(&kb), digest_of("anthropic", "haiku", 0.84, 100, "anthropic")).await;
 
     let (ls, lb) = leaderboard(&app).await;
     assert_eq!(ls, StatusCode::OK);
@@ -373,9 +422,10 @@ async fn single_source_rows_are_withheld_below_the_contributor_floor() {
     assert!(fb["rows"].as_array().unwrap().is_empty(), "filter cannot resurrect a 1-source row: {fb}");
 
     // The same data on a single-tenant hub (k=1, the explicit opt-out) shows everything.
-    let (state1, _) = setup_k(true, false, 5, 1);
+    let (state1, store1) = setup_k(true, false, 5, 1);
+    let solo1 = contributor_key(&store1, "solo");
     let app1 = crate::build_router(state1);
-    ingest(&app1, Some("key-solo"), digest_of("cohere", "command-r", 0.9, 5000, "openai")).await;
+    ingest(&app1, Some(&solo1), digest_of("cohere", "command-r", 0.9, 5000, "openai")).await;
     let (s1, b1) = leaderboard(&app1).await;
     assert_eq!(s1, StatusCode::OK);
     assert_eq!(b1["rows"].as_array().unwrap().len(), 1, "k=1 opts out of the source floor");
@@ -385,10 +435,11 @@ async fn single_source_rows_are_withheld_below_the_contributor_floor() {
 #[tokio::test]
 async fn ingest_normalizes_identity_so_variants_merge_into_one_row() {
     // Two contributors report the same model spelled differently; normalization collapses them.
-    let (state, _) = setup(true, false, 5);
+    let (state, store) = setup(true, false, 5);
+    let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
     let app = crate::build_router(state);
-    ingest(&app, Some("key-a"), digest_of("openai", "gpt-4o-2024-08-06", 0.80, 100, "openai")).await;
-    ingest(&app, Some("key-b"), digest_of("azure-openai", "gpt-4o", 0.84, 100, "openai")).await;
+    ingest(&app, Some(&ka), digest_of("openai", "gpt-4o-2024-08-06", 0.80, 100, "openai")).await;
+    ingest(&app, Some(&kb), digest_of("azure-openai", "gpt-4o", 0.84, 100, "openai")).await;
 
     let (ls, lb) = leaderboard(&app).await;
     assert_eq!(ls, StatusCode::OK);
@@ -401,11 +452,12 @@ async fn ingest_normalizes_identity_so_variants_merge_into_one_row() {
 
 #[tokio::test]
 async fn mixed_judges_annotated_and_judge_filter_works() {
-    let (state, _) = setup(true, false, 5);
+    let (state, store) = setup(true, false, 5);
+    let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
     let app = crate::build_router(state);
     // Same bucket judged by two different providers across contributors.
-    ingest(&app, Some("key-a"), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
-    ingest(&app, Some("key-b"), digest_of("anthropic", "haiku", 0.84, 100, "openai")).await;
+    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+    ingest(&app, Some(&kb), digest_of("anthropic", "haiku", 0.84, 100, "openai")).await;
 
     let (_s, lb) = leaderboard(&app).await;
     let row = &lb["rows"][0];
@@ -425,10 +477,11 @@ async fn header_counts_are_computed_over_the_filtered_rows() {
     // Two contributors, each the *sole* backer of a distinct provider's row. A provider filter that
     // hides one contributor's only row must drop it from the header `contributors` count too — header
     // and rows can no longer disagree.
-    let (state, _) = setup(true, false, 5);
+    let (state, store) = setup(true, false, 5);
+    let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
     let app = crate::build_router(state);
-    ingest(&app, Some("key-a"), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
-    ingest(&app, Some("key-b"), digest_of("openai", "gpt-x", 0.84, 100, "openai")).await;
+    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+    ingest(&app, Some(&kb), digest_of("openai", "gpt-x", 0.84, 100, "openai")).await;
 
     // Unfiltered: both contributors and both models are visible.
     let (ls, lb) = leaderboard(&app).await;
@@ -448,7 +501,8 @@ async fn header_counts_are_computed_over_the_filtered_rows() {
 #[tokio::test]
 async fn n_models_is_distinct_models_not_row_count() {
     // One contributor, one model, under two task types → two rows but a single distinct model.
-    let (state, _) = setup(true, false, 5);
+    let (state, store) = setup(true, false, 5);
+    let ka = contributor_key(&store, "a");
     let app = crate::build_router(state);
     let two_tasks = json!({ "schema_version": 2, "entries": [
         {"provider":"anthropic","model":"haiku","task_type":"qa",
@@ -456,7 +510,7 @@ async fn n_models_is_distinct_models_not_row_count() {
         {"provider":"anthropic","model":"haiku","task_type":"summarization",
          "quality":0.7,"pass_rate":0.7,"avg_cost_usd":0.003,"n_runs":1,"n_cases":100}
     ]});
-    ingest(&app, Some("key-a"), two_tasks).await;
+    ingest(&app, Some(&ka), two_tasks).await;
 
     let (ls, lb) = leaderboard(&app).await;
     assert_eq!(ls, StatusCode::OK);
@@ -464,6 +518,59 @@ async fn n_models_is_distinct_models_not_row_count() {
     assert_eq!(lb["n_rows"], 2, "{lb}");
     assert_eq!(lb["n_models"], 1, "one distinct (provider, model): {lb}");
     assert_eq!(lb["contributors"], 1, "{lb}");
+}
+
+#[tokio::test]
+async fn varying_bearer_strings_cannot_manufacture_sources() {
+    // THE dev-mode forgery: `authenticate` is lenient in dev (any unrecognized token → Principal::Dev),
+    // so hashing the presented token would let one poster mint N ids and walk through min_contributors.
+    // Deriving from a hub-issued credential closes it: every made-up token is refused outright…
+    let (state, store) = setup_k(true, false, 5, 2);
+    let app = crate::build_router(state);
+    for tok in ["forged-1", "forged-2", "forged-3", "forged-4"] {
+        let (status, body) =
+            ingest(&app, Some(tok), digest_of("anthropic", "haiku", 0.99, 5000, "openai")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "made-up token {tok} must not be an identity: {body}");
+    }
+    assert!(store.list_collective_entries().unwrap().is_empty(), "nothing was forged into the hub");
+
+    // …and when the hub opts into anonymous contributions, they all collapse into ONE identity, so the
+    // source floor still cannot be defeated — the row stays withheld.
+    let (state, store) = setup_k(true, true, 5, 2);
+    let app = crate::build_router(state);
+    for tok in ["forged-1", "forged-2", "forged-3", "forged-4"] {
+        let (status, _) =
+            ingest(&app, Some(tok), digest_of("anthropic", "haiku", 0.99, 5000, "openai")).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let ids: std::collections::BTreeSet<_> =
+        store.list_collective_entries().unwrap().into_iter().map(|e| e.contributor_id).collect();
+    assert_eq!(ids.len(), 1, "every uncredentialed poster is one source, not four: {ids:?}");
+    let (_s, lb) = leaderboard(&app).await;
+    assert!(lb["rows"].as_array().unwrap().is_empty(), "k=2 still holds the row back: {lb}");
+    assert_eq!(lb["held_back"], 1);
+}
+
+#[tokio::test]
+async fn a_non_consenting_projects_key_is_not_a_contributor_credential() {
+    // An ordinary ingest key belongs to a project that never opted into the collective: it may push
+    // events all day, but it cannot contribute to the leaderboard.
+    let (state, store) = setup(true, false, 5);
+    let ingest_only = mint_key(&store, "plain", false);
+    let app = crate::build_router(state);
+    let (status, body) =
+        ingest(&app, Some(&ingest_only), json!({ "entries": [entry("haiku", 0.8, 10)] })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(store.list_collective_entries().unwrap().is_empty());
+
+    // The same project, once it consents, contributes fine.
+    let mut p = store.get_project("proj-plain").unwrap().unwrap();
+    p.collective_opt_in = true;
+    store.update_project(&p).unwrap();
+    let (status, ack) =
+        ingest(&app, Some(&ingest_only), json!({ "entries": [entry("haiku", 0.8, 10)] })).await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted"], 1);
 }
 
 #[tokio::test]

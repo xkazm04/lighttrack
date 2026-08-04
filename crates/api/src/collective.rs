@@ -28,6 +28,7 @@ use lighttrack_core::{
 };
 use lighttrack_store::{Store, StoreError};
 
+use crate::auth::{AuthMode, Principal};
 use crate::error::ApiError;
 use crate::guards::{authenticate, bearer, ensure_can_admin};
 use crate::state::{spawn_db, AppState};
@@ -86,6 +87,35 @@ impl Collective {
         Self { contributor_id, accept, allow_anon, min_cases, display_floor, min_contributors, aliases }
     }
 
+    /// Say out loud, at boot, when this hub's `min_contributors` floor cannot mean what it says.
+    /// A dev-mode hub can't distinguish one unrecognized bearer string from another, so contributions
+    /// from uncredentialed posters are refused at ingest (see [`resolve_contributor`]) — which makes a
+    /// dev-mode hub effectively closed unless keys are minted or anon is opted into. Better to name
+    /// that at startup than to have operators discover it as a wall of 403s.
+    pub(crate) fn warn_if_hub_is_weak(&self, mode: AuthMode) {
+        if !self.accept {
+            return;
+        }
+        if mode == AuthMode::Dev {
+            eprintln!(
+                "WARNING: collective hub is accepting contributions while auth mode is DEV. \
+                 min_contributors={} cannot be enforced against forged identities in dev mode, so only \
+                 hub-issued contributor keys (a project with collective_opt_in) and the admin key may \
+                 contribute; every other poster is refused. Run with LIGHTTRACK_AUTH=enforced for a real hub.",
+                self.min_contributors
+            );
+        }
+        if self.allow_anon {
+            eprintln!(
+                "WARNING: LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1 — uncredentialed contributions all land \
+                 under one shared '{}' identity and overwrite each other; they count as ONE source \
+                 toward min_contributors={}.",
+                lighttrack_core::collective::ANON_CONTRIBUTOR,
+                self.min_contributors
+            );
+        }
+    }
+
     pub(crate) fn describe(&self) -> String {
         let who = if self.contributor_id == "anonymous" { "anon" } else { "id-set" };
         format!(
@@ -120,12 +150,67 @@ fn opaque(s: &str) -> String {
     h.finalize().iter().take(6).map(|b| format!("{b:02x}")).collect()
 }
 
-/// Derive a hub-side contributor id from the raw bearer token the poster presented: `c-` + the first
-/// 12 hex of SHA-256(token). The id is **not** taken from the request body — a poster can only write
-/// under the identity of a key it actually holds, so it can neither overwrite a victim's set nor forge
-/// unlimited ids to inflate `n_contributors`.
-fn derive_contributor_id(bearer: &str) -> String {
-    format!("c-{}", opaque(bearer))
+/// Derive a hub-side contributor id from a **verified** credential: `c-` + the first 12 hex of
+/// SHA-256 of the credential's stable identifier (an `api_keys.id`, or the admin key). The id is
+/// never taken from the request body, and — since only a credential the hub itself issued can reach
+/// this function — a poster can neither overwrite a victim's set nor mint unlimited ids to inflate
+/// `n_contributors`. See [`resolve_contributor`].
+fn derive_contributor_id(credential: &str) -> String {
+    format!("c-{}", opaque(credential))
+}
+
+/// Resolve the contributing identity behind an ingest request, or refuse.
+///
+/// **Why this is not just `authenticate`.** `authenticate` is *lenient in dev mode*: it maps any
+/// unrecognized bearer string to [`Principal::Dev`]. Hashing the presented token would therefore let
+/// one poster on a dev-mode hub mint an unbounded number of distinct contributor ids and walk straight
+/// through `min_contributors` — the floor both the k-anonymity guarantee and the "≥2 independent
+/// sources" story rest on. So the identity is derived from a credential the hub *issued*, never from
+/// the bytes the poster typed:
+///   - [`Principal::Project`] — a key the hub minted, **and** whose project carries
+///     `collective_opt_in`. That opt-in is the contribution scope: an ordinary ingest key belongs to a
+///     project that never consented, so it cannot contribute. Identity = hash of the `api_keys.id`.
+///   - [`Principal::Admin`] — the hub operator pushing its own digest. One key, one identity.
+///   - [`Principal::Dev`] — no credential at all (or an unrecognized token on a dev-mode hub).
+///     Refused, unless `allow_anon`, in which case *every* such poster collapses into the single
+///     shared `anonymous` identity — one source, not N, so nothing can be forged from it either.
+async fn resolve_contributor(st: &AppState, headers: &HeaderMap) -> Result<String, ApiError> {
+    match authenticate(st, headers).await? {
+        Principal::Project { project_id, key_id } => {
+            let store = st.store.clone();
+            let pid = project_id.clone();
+            let project = spawn_db(move || store.get_project(&pid)).await?;
+            if !project.map(|p| p.collective_opt_in).unwrap_or(false) {
+                return Err(ApiError::forbidden(
+                    "this key may not contribute: contribution requires a key whose project has \
+                     collective_opt_in set — an ordinary ingest key is not a contributor credential",
+                ));
+            }
+            Ok(derive_contributor_id(&key_id))
+        }
+        Principal::Admin => Ok(derive_contributor_id(
+            st.admin_key.as_deref().unwrap_or("admin"),
+        )),
+        Principal::Dev => {
+            if !st.collective.allow_anon {
+                let hint = if bearer(headers).is_some() && st.auth_mode == AuthMode::Dev {
+                    "the presented token is not a key this hub issued, and a dev-mode hub cannot tell \
+                     one unrecognized token from another — min_contributors cannot be enforced against \
+                     forged identities, so the contribution is refused"
+                } else {
+                    "anonymous (keyless) contributions are refused; present a contributor key, or set \
+                     LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1 to accept them under one shared identity"
+                };
+                return Err(ApiError::forbidden(hint));
+            }
+            eprintln!(
+                "WARNING: accepting an ANONYMOUS collective contribution (LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1) \
+                 — every uncredentialed poster shares the '{}' identity and overwrites the others' set",
+                lighttrack_core::collective::ANON_CONTRIBUTOR
+            );
+            Ok(lighttrack_core::collective::ANON_CONTRIBUTOR.to_string())
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -173,18 +258,18 @@ pub(crate) struct IngestAck {
 /// Hub side: accept a contributor's digest and replace its stored entry set (delete-then-upsert so a
 /// bucket that fell below the floor doesn't linger). Off unless `LIGHTTRACK_COLLECTIVE_ACCEPT` is set.
 ///
-/// Hardening: the contributor identity is **derived from the presented bearer key**, never trusted from
-/// the request body — so a poster can only ever replace *its own* set. A keyless (dev-mode) push is
-/// refused unless `LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1`, in which case it lands under one shared
-/// `anonymous` identity with a loud warning. The hub also re-enforces its own k-anonymity floor
+/// Hardening: the contributor identity is **derived from a credential the hub issued**, never trusted
+/// from the request body — so a poster can only ever replace *its own* set, and cannot mint identities
+/// to defeat `min_contributors` (see [`resolve_contributor`]). Contribution needs a key whose project
+/// carries `collective_opt_in`; an uncredentialed push is refused unless
+/// `LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1`, in which case it lands under one shared `anonymous` identity
+/// with a loud warning. The hub also re-enforces its own k-anonymity floor
 /// (`LIGHTTRACK_COLLECTIVE_MIN_CASES`), dropping under-k buckets rather than trusting the poster's floor.
 pub(crate) async fn post_ingest(
     State(st): State<AppState>,
     headers: HeaderMap,
     Json(digest): Json<CollectiveDigest>,
 ) -> Result<Json<IngestAck>, ApiError> {
-    // Honor the API's auth mode (a key in enforced mode), but no admin: contributions are public.
-    authenticate(&st, &headers).await?;
     if !st.collective.accept {
         return Err(ApiError::forbidden(
             "this instance does not accept collective contributions (set LIGHTTRACK_COLLECTIVE_ACCEPT=1)",
@@ -197,24 +282,8 @@ pub(crate) async fn post_ingest(
         )));
     }
 
-    // Derive identity from the bearer key; the body's `contributor_id` is ignored (kept for wire compat).
-    let contributor = match bearer(&headers) {
-        Some(tok) => derive_contributor_id(&tok),
-        None => {
-            if !st.collective.allow_anon {
-                return Err(ApiError::forbidden(
-                    "anonymous (keyless) contributions are refused; present a bearer key, or set \
-                     LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1 to accept them under one shared identity",
-                ));
-            }
-            eprintln!(
-                "WARNING: accepting an ANONYMOUS collective contribution (LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1) \
-                 — all keyless posters share the '{}' identity and can overwrite each other's set",
-                lighttrack_core::collective::ANON_CONTRIBUTOR
-            );
-            lighttrack_core::collective::ANON_CONTRIBUTOR.to_string()
-        }
-    };
+    // Identity comes from a hub-issued credential; the body's `contributor_id` is ignored (wire compat).
+    let contributor = resolve_contributor(&st, &headers).await?;
 
     let min_cases = st.collective.min_cases;
     let now = Utc::now();

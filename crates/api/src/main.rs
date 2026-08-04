@@ -244,6 +244,7 @@ async fn main() -> anyhow::Result<()> {
     let billing_desc = billing.describe();
     let collective = Arc::new(collective::Collective::from_env());
     let collective_desc = collective.describe();
+    collective.warn_if_hub_is_weak(auth_mode);
     let seen_webhooks = Arc::new(idempotency::SeenWebhooks::new(idempotency::DEFAULT_CAPACITY));
     let rejections = Arc::new(rejections::RejectionLedger::new());
     let ingest_guard = Arc::new(shed::IngestGuard::from_env());
