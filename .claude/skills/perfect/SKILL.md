@@ -131,6 +131,8 @@ Loop while `pool < 10` and the user hasn't said stop:
    git worktree add .claude/worktrees/perfect-<ctx> -b worktree-perfect-<ctx>
    # Rust: share the main repo's build cache so builders don't cold-compile the workspace.
    # Each builder runs cargo with: CARGO_TARGET_DIR=C:/Users/mkdol/dolla/LightTrack/target
+   # Keep the FORWARD SLASHES — Bash mangles the backslash form into a literal
+   #   `Usersmkdol…` directory inside the worktree (measured 2026-08-04).
    # (cargo's file locking serializes concurrent builds across builders — expected, not a bug).
    # Copy .env into the worktree root if the builder needs to run lt-runner/api locally (never commit it).
    ```
@@ -226,14 +228,33 @@ This skill declares `contexts: tracked` — the Personas app measures per-contex
 
 | Marker | What it is | Use its names? |
 |---|---|---|
-| `"version": 2` (integer), **no** `$schema` key, flat top-level `contexts` array | The Personas app's own export, rewritten after every context scan | **Yes** — these are exactly the names the app knows |
-| `"$schema": "https://vibeman.dev/…"`, `"version": "2.0.0"` (string), `groups[].contexts[]` | A stale foreign Vibeman auto-map | **No** — the app has never scanned this repo; its names anchor to nothing |
+**The check is PROVENANCE, not shape.** Read `project.root` and `project.id` inside the map and
+compare them to THIS checkout:
+
+```bash
+node -e 'const m=require("./context-map.json");console.log(JSON.stringify(m.project||{id:m.projectId,root:m.projectPath}))'
+# must print root: C:\Users\mkdol\dolla\LightTrack  ·  id: 964ad47f-03bf-4849-ac97-f54c166615d2
+```
+
+| Signal | What it means | Use its names? |
+|---|---|---|
+| `project.root` = this checkout AND `project.id` = this repo's app project id | The app's export **for this machine** | **Yes** |
+| App-export shape but `project.root` is some **other** path | A foreign machine's map, committed here | **No** — the local app has never produced this; its names anchor to nothing |
+| `"$schema": "https://vibeman.dev/…"`, `"version": "2.0.0"` (string), `groups[].contexts[]` | A stale foreign Vibeman auto-map | **No** |
+
+**Why shape alone is not enough** — learned the hard way on 2026-08-04. The personas repo's own
+`context-map.json` is `version: 2` integer, no `$schema`, `generator: personas-context-scan` — it
+passes every shape test — and its `project.root` is `C:\Users\kazda\kiro\personas`, a different
+machine, while that machine's local DB held a completely different map. A shape-only
+discriminator (which is what this skill shipped earlier that same day) waves it straight through.
+Shape tells you which generator wrote the file; only `project.root`/`project.id` tell you whether
+it describes *your* app's view of *this* checkout.
 
 **As of 2026-08-03 LightTrack is a registered Personas project** (id `964ad47f-03bf-4849-ac97-f54c166615d2`) **and the app has scanned it**, so `context-map.json` is now the app export — 34 contexts across 8 groups, kebab-case (`api-server`, `alert-delivery`, `benchmark-management`, `core-types`, …). Those names are authoritative; use them for both the outbox `context` field and this loop's own queue in `Perfect.md` (the queue predates the scan and still carries the old Vibeman names — remap it on the next Phase 0 pass, per step 2's diff rule).
 
 Note that registration does NOT create `.personas/` — the app only ever reads and deletes the outbox; **you** create the dir on first write (`mkdir -p .personas`). Registration is what makes the file get swept.
 
-The table stays as the guard for the day the file changes shape again. **If you ever find the Vibeman markers back at that path**, the app's map and the file have diverged: emit outbox nodes **without** the `context` field until a re-scan, rather than guessing. A wrong name is indistinguishable from no name in the ledger (both land as `unanchored` and are excluded from the coverage math), so guessing hides the divergence instead of surfacing it. Say so once in the session summary.
+The table stays as the standing guard. **If the provenance check ever fails** — Vibeman markers, or an app-shaped map whose `project.root` is not this checkout — the app's map and the file have diverged: emit outbox nodes **without** the `context` field until a re-scan, rather than guessing. A wrong name is indistinguishable from no name in the ledger (both land as `unanchored` and are excluded from the coverage math), so guessing hides the divergence instead of surfacing it. Say so once in the session summary.
 
 A re-scan does not need the UI — the running app exposes a loopback bridge:
 
