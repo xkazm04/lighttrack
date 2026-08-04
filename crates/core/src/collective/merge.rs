@@ -207,7 +207,9 @@ pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> 
             task_type,
             quality: r3(a.quality()),
             pass_rate: r3(a.pass_rate()),
-            avg_cost_usd: r6(a.cost()),
+            // Cost is bucketed *before it leaves the instance*: a per-case cost is an unbounded
+            // continuous fingerprint, so it gets a privacy treatment like every other published field.
+            avg_cost_usd: super::privacy::bucket_cost(a.cost()),
             p50_latency_ms: a.p50(),
             p95_latency_ms: a.p95(),
             n_runs: a.runs,

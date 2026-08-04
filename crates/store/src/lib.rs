@@ -989,4 +989,11 @@ pub trait Store: Send + Sync {
     fn list_collective_entries(&self) -> Result<Vec<CollectiveEntry>> {
         Err(StoreError::Unsupported("the collective leaderboard"))
     }
+    /// Physically delete entries received before `cutoff` (retention sweep); returns how many went.
+    /// A backend that leaves this unimplemented still honors the retention policy — the API filters
+    /// expired entries out of the leaderboard before merging, on every backend — it just keeps the
+    /// dead rows on disk. The API therefore treats `Unsupported` here as non-fatal.
+    fn purge_collective_entries_before(&self, _cutoff: DateTime<Utc>) -> Result<u64> {
+        Err(StoreError::Unsupported("the collective leaderboard"))
+    }
 }

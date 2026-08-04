@@ -61,9 +61,12 @@
   `collective_entries` table per request; fix = filtered store list method (backend-parity family, do
   with the other store-trait additions + conformance).
 - Consent UX follow-ons (additive): `LIGHTTRACK_COLLECTIVE_CONTRIBUTE` master switch + `contributable`
-  stamp so the CLI refuses to POST; `DELETE /v1/collective/contribution` (right-to-withdraw, ~20 lines
-  on existing `derive_contributor_id` + `delete_collective_entries`); digest scope headline in render;
-  `received_at` freshness/retention (collective-api #3 High).
+  stamp so the CLI refuses to POST; digest scope headline in render.
+  - ~~`DELETE /v1/collective/contribution` (right-to-withdraw)~~ — **done**: endpoint +
+    `lt collective withdraw`, authenticated exactly like ingest, admin `?contributor=` escape hatch.
+  - ~~`received_at` freshness/retention (collective-api #3 High)~~ — **done**:
+    `LIGHTTRACK_COLLECTIVE_MAX_AGE_DAYS` (default 90); expired entries are filtered out of the
+    leaderboard on every backend and swept on ingest where the store implements the sweep.
 - Redaction audit trail (event-ingestion #2 remainder): stderr-only logging → a queryable provenance
   stamp (e.g. `metadata.redaction_applied`), and surface the *effective* policy (project ∨ env floor)
   in the projects table.

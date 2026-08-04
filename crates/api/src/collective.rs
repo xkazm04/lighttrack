@@ -56,10 +56,24 @@ pub(crate) struct Collective {
     /// a single instance, which `?provider=`/`?task_type=` can isolate in one request. Default 2 (the
     /// weakest defensible K); a private/single-tenant hub sets 1 to opt out explicitly.
     pub(crate) min_contributors: u32,
+    /// Minimum hours between two contributions from the same source. Ingest is delete-then-replace and
+    /// the source id is stable, so a hub operator who can diff successive pushes learns what changed
+    /// inside a contributor's private benchmark suite ("a new task type appeared", "their cost dropped
+    /// 30%"). Rate-limiting the pushes bounds how fine-grained that differencing can be. `0` (the
+    /// default) disables the limit — see `docs/BENCHMARK_FRAMEWORK.md` for what that costs.
+    pub(crate) min_interval_hours: u64,
+    /// Days after which a contributed entry stops being published and is swept. A benchmark result
+    /// from a year ago describes a model that has since been retrained; keeping it forever also means a
+    /// contributor that loses its key leaves rows behind permanently. `0` disables expiry.
+    pub(crate) max_age_days: u64,
     /// Model-identity normalization applied to `(provider, model)` at ingest, so `gpt-4o` /
     /// `openai/gpt-4o` / `gpt-4o-2024-08-06` collapse to one leaderboard row. Empty ⇒ pass-through.
     pub(crate) aliases: ModelAliases,
 }
+
+/// Default retention for contributed entries: a quarter. Long enough that a monthly contributor stays
+/// on the board, short enough that the leaderboard describes models as they are now.
+const DEFAULT_MAX_AGE_DAYS: u64 = 90;
 
 impl Collective {
     pub(crate) fn from_env() -> Self {
@@ -83,8 +97,25 @@ impl Collective {
             .and_then(|v| v.trim().parse::<u32>().ok())
             .unwrap_or(2)
             .max(1);
+        let min_interval_hours = env_u64("LIGHTTRACK_COLLECTIVE_MIN_INTERVAL_HOURS", 0);
+        let max_age_days = env_u64("LIGHTTRACK_COLLECTIVE_MAX_AGE_DAYS", DEFAULT_MAX_AGE_DAYS);
         let aliases = load_aliases();
-        Self { contributor_id, accept, allow_anon, min_cases, display_floor, min_contributors, aliases }
+        Self {
+            contributor_id,
+            accept,
+            allow_anon,
+            min_cases,
+            display_floor,
+            min_contributors,
+            min_interval_hours,
+            max_age_days,
+            aliases,
+        }
+    }
+
+    /// Cutoff before which stored entries are neither published nor kept. `None` when expiry is off.
+    pub(crate) fn retention_cutoff(&self, now: chrono::DateTime<Utc>) -> Option<chrono::DateTime<Utc>> {
+        (self.max_age_days > 0).then(|| now - chrono::Duration::days(self.max_age_days as i64))
     }
 
     /// Say out loud, at boot, when this hub's `min_contributors` floor cannot mean what it says.
@@ -101,7 +132,7 @@ impl Collective {
                 "WARNING: collective hub is accepting contributions while auth mode is DEV. \
                  min_contributors={} cannot be enforced against forged identities in dev mode, so only \
                  hub-issued contributor keys (a project with collective_opt_in) and the admin key may \
-                 contribute; every other poster is refused. Run with LIGHTTRACK_AUTH=enforced for a real hub.",
+                 contribute; every other poster is refused. Run with LIGHTTRACK_AUTH_MODE=enforced for a real hub.",
                 self.min_contributors
             );
         }
@@ -119,14 +150,25 @@ impl Collective {
     pub(crate) fn describe(&self) -> String {
         let who = if self.contributor_id == "anonymous" { "anon" } else { "id-set" };
         format!(
-            "{who}, accept={}, allow_anon={}, min_cases={}, display_floor={}, min_contributors={}",
-            self.accept, self.allow_anon, self.min_cases, self.display_floor, self.min_contributors
+            "{who}, accept={}, allow_anon={}, min_cases={}, display_floor={}, min_contributors={}, \
+             min_interval_h={}, max_age_d={}",
+            self.accept,
+            self.allow_anon,
+            self.min_cases,
+            self.display_floor,
+            self.min_contributors,
+            self.min_interval_hours,
+            self.max_age_days
         )
     }
 }
 
 fn env_flag(name: &str) -> bool {
     matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true") | Ok("on") | Ok("yes"))
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(default)
 }
 
 /// Load the model-alias table from `LIGHTTRACK_MODEL_ALIASES` (default `config/model_aliases.json`).
@@ -290,6 +332,7 @@ pub(crate) async fn post_ingest(
 
     let min_cases = st.collective.min_cases;
     let now = Utc::now();
+    enforce_min_interval(&st, &contributor, now).await?;
     let mut skipped = 0usize;
     let mut dropped_under_min = 0usize;
     let mut rejected_implausible = 0usize;
@@ -317,10 +360,19 @@ pub(crate) async fn post_ingest(
 
     let store = st.store.clone();
     let contrib = contributor.clone();
+    let cutoff = st.collective.retention_cutoff(now);
     spawn_db(move || -> Result<(), StoreError> {
         store.delete_collective_entries(&contrib)?;
         for e in &entries {
             store.upsert_collective_entry(e)?;
+        }
+        // Retention sweep, piggy-backed on the write that already holds the connection. A backend
+        // without a sweep still enforces the policy at read time, so `Unsupported` is not an error.
+        if let Some(c) = cutoff {
+            match store.purge_collective_entries_before(c) {
+                Ok(_) | Err(StoreError::Unsupported(_)) => {}
+                Err(e) => return Err(e),
+            }
         }
         Ok(())
     })
@@ -333,6 +385,80 @@ pub(crate) async fn post_ingest(
         dropped_under_min,
         rejected_implausible,
     }))
+}
+
+/// Bound how finely a hub operator can difference a contributor over time.
+///
+/// Ingest is delete-then-replace under a stable source id, so successive pushes are a changelog of a
+/// contributor's private benchmark suite: a new `task_type` appearing, a cost moving 30%, a bucket
+/// vanishing. Nothing in the payload leaks that — the *sequence* does. A minimum interval makes the
+/// changelog coarse; `0` (default) leaves it off, which is why the exposure is also documented for
+/// both sides in `docs/BENCHMARK_FRAMEWORK.md` rather than being quietly relied on.
+async fn enforce_min_interval(
+    st: &AppState,
+    contributor: &str,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), ApiError> {
+    let hours = st.collective.min_interval_hours;
+    if hours == 0 {
+        return Ok(());
+    }
+    let store = st.store.clone();
+    let who = contributor.to_string();
+    let last = spawn_db(move || {
+        store.list_collective_entries().map(|es| {
+            es.iter().filter(|e| e.contributor_id == who).map(|e| e.received_at).max()
+        })
+    })
+    .await?;
+    let Some(last) = last else { return Ok(()) };
+    let next = last + chrono::Duration::hours(hours as i64);
+    if now < next {
+        let secs = (next - now).num_seconds().max(1) as u64;
+        return Err(ApiError::rate_limited(format!(
+            "this hub accepts one contribution per source every {hours}h (frequent re-pushes let a hub \
+             operator difference your private benchmark suite); retry in {secs}s"
+        ))
+        .retry_after(Some(secs)));
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub(crate) struct WithdrawParams {
+    /// Admin-only escape hatch: withdraw a *named* source. The point is the contributor that lost its
+    /// key — without this, its rows would be unreachable forever. A non-admin may only withdraw itself.
+    contributor: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct WithdrawAck {
+    contributor_id: String,
+    deleted: u64,
+}
+
+/// The right to withdraw: `DELETE /v1/collective/contribution` removes every entry a source
+/// contributed. Authenticated exactly like ingest — you may withdraw what you could have published —
+/// so a contributor can leave the network without asking the hub operator, and consent stays revocable
+/// rather than one-way.
+pub(crate) async fn delete_contribution(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<WithdrawParams>,
+) -> Result<Json<WithdrawAck>, ApiError> {
+    let self_id = resolve_contributor(&st, &headers).await?;
+    let target = match q.contributor.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => self_id,
+        Some(other) if other == self_id => self_id,
+        Some(other) => {
+            ensure_can_admin(&authenticate(&st, &headers).await?)?;
+            other.to_string()
+        }
+    };
+    let store = st.store.clone();
+    let who = target.clone();
+    let deleted = spawn_db(move || store.delete_collective_entries(&who)).await?;
+    Ok(Json(WithdrawAck { contributor_id: target, deleted }))
 }
 
 #[derive(Deserialize)]
@@ -373,7 +499,13 @@ pub(crate) async fn get_leaderboard(
 ) -> Result<Json<LeaderboardResponse>, ApiError> {
     authenticate(&st, &headers).await?;
     let store = st.store.clone();
-    let entries = spawn_db(move || store.list_collective_entries()).await?;
+    let mut entries = spawn_db(move || store.list_collective_entries()).await?;
+
+    // Retention, enforced at read time so the policy holds on every backend — including those whose
+    // sweep is unimplemented, where the row survives on disk but is never published again.
+    if let Some(cutoff) = st.collective.retention_cutoff(Utc::now()) {
+        entries.retain(|e| e.received_at >= cutoff);
+    }
 
     let mut rows = merge_leaderboard(&entries, st.collective.display_floor);
 
@@ -561,7 +693,8 @@ const MAX_COST_PER_CASE_USD: f64 = 1_000.0;
 ///   - `n_cases ≥ n_runs` — a run scores at least one case, so more runs than cases is impossible;
 ///   - `n_cases ≤ MAX_CASES_PER_ENTRY`;
 ///   - `avg_cost_usd ≤ MAX_COST_PER_CASE_USD`.
-/// Quality/pass-rate are *clamped* rather than rejected (a [0,1] overshoot is a rounding artifact);
+///
+/// Quality/pass-rate are *clamped* rather than rejected (a `[0,1]` overshoot is a rounding artifact);
 /// counts are *rejected*, because a count is the weight the merge trusts.
 fn implausible(e: &lighttrack_core::ModelDigestEntry) -> bool {
     !e.quality.is_finite()
@@ -598,7 +731,9 @@ fn sanitize_entry(
         task_type,
         quality: e.quality.clamp(0.0, 1.0),
         pass_rate: e.pass_rate.clamp(0.0, 1.0),
-        avg_cost_usd: e.avg_cost_usd.max(0.0),
+        // Re-bucketed hub-side for the same reason the k-floor is re-enforced hub-side: what the
+        // contributor did to its own numbers is its business, what gets published is the hub's.
+        avg_cost_usd: lighttrack_core::bucket_cost(e.avg_cost_usd.max(0.0)),
         p50_latency_ms: e.p50_latency_ms,
         p95_latency_ms: e.p95_latency_ms,
         n_runs: e.n_runs,

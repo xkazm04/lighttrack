@@ -61,6 +61,8 @@ fn setup_k(
             min_cases,
             display_floor: 30,
             min_contributors,
+            min_interval_hours: 0,
+            max_age_days: 90,
             aliases,
         }),
         seen_webhooks: Arc::new(crate::idempotency::SeenWebhooks::new(
@@ -629,6 +631,116 @@ async fn a_genuinely_large_single_source_still_outweighs_a_small_one() {
     let (_s, lb) = leaderboard(&app).await;
     let q = lb["rows"][0]["quality"].as_f64().unwrap();
     assert!(q > 0.7, "the 10k-case run dominates the 10-case one, as it should; got {q} in {lb}");
+}
+
+/// DELETE /v1/collective/contribution with an optional bearer token and `?contributor=`.
+async fn withdraw(app: &Router, token: Option<&str>, who: Option<&str>) -> (StatusCode, Value) {
+    let uri = match who {
+        Some(c) => format!("/v1/collective/contribution?contributor={c}"),
+        None => "/v1/collective/contribution".to_string(),
+    };
+    let mut req = Request::builder().method("DELETE").uri(uri);
+    if let Some(t) = token {
+        req = req.header("authorization", format!("Bearer {t}"));
+    }
+    let resp = app.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: Value =
+        if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+    (status, v)
+}
+
+#[tokio::test]
+async fn a_contributor_can_withdraw_its_own_contribution_and_only_its_own() {
+    let (state, store) = setup(true, false, 5);
+    let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
+    let app = crate::build_router(state);
+    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+    ingest(&app, Some(&kb), digest_of("anthropic", "haiku", 0.84, 100, "anthropic")).await;
+    assert_eq!(store.list_collective_entries().unwrap().len(), 2);
+
+    // A withdraws: its rows go, B's stay. Consent is revocable, not one-way.
+    let (status, ack) = withdraw(&app, Some(&ka), None).await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["deleted"], 1, "{ack}");
+    let left = store.list_collective_entries().unwrap();
+    assert_eq!(left.len(), 1, "only the withdrawing source is removed");
+
+    // A cannot withdraw B's contribution.
+    let victim = left[0].contributor_id.clone();
+    let (status, body) = withdraw(&app, Some(&ka), Some(&victim)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(store.list_collective_entries().unwrap().len(), 1);
+
+    // Withdrawing twice is harmless (nothing left to delete).
+    let (status, ack) = withdraw(&app, Some(&ka), None).await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["deleted"], 0);
+}
+
+#[tokio::test]
+async fn expired_entries_stop_being_published_and_are_swept() {
+    use chrono::{Duration, Utc};
+    let (state, store) = setup(true, false, 5);
+    let ka = contributor_key(&store, "a");
+    let app = crate::build_router(state);
+    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+
+    // Age the stored row past the 90-day retention policy.
+    let mut aged = store.list_collective_entries().unwrap().remove(0);
+    aged.received_at = Utc::now() - Duration::days(120);
+    store.upsert_collective_entry(&aged).unwrap();
+
+    let (_s, lb) = leaderboard(&app).await;
+    assert!(lb["rows"].as_array().unwrap().is_empty(), "an expired row is not published: {lb}");
+    assert_eq!(lb["contributors"], 0);
+
+    // …and the next write sweeps it off disk rather than letting it accumulate forever.
+    let kb = contributor_key(&store, "b");
+    ingest(&app, Some(&kb), digest_of("openai", "gpt-x", 0.7, 100, "openai")).await;
+    let left = store.list_collective_entries().unwrap();
+    assert_eq!(left.len(), 1, "the expired row was purged: {left:?}");
+    assert_eq!(left[0].provider, "openai");
+}
+
+#[tokio::test]
+async fn a_hub_can_rate_limit_re_pushes_to_blunt_differencing() {
+    let (mut state, store) = setup(true, false, 5);
+    // One contribution per source per day: a hub operator gets a daily changelog at best, not a live
+    // feed of what changed inside a contributor's private suite.
+    let c = Arc::get_mut(&mut state.collective).unwrap();
+    c.min_interval_hours = 24;
+    let ka = contributor_key(&store, "a");
+    let app = crate::build_router(state);
+
+    let (s1, _) = ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+    assert_eq!(s1, StatusCode::OK);
+    let (s2, body) = ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.81, 101, "anthropic")).await;
+    assert_eq!(s2, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    // The first contribution is untouched — a refused re-push must not clear the set.
+    let stored = store.list_collective_entries().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].n_cases, 100);
+}
+
+#[tokio::test]
+async fn published_cost_is_bucketed_so_it_cannot_fingerprint_a_contributor() {
+    let (state, store) = setup(true, false, 5);
+    let ka = contributor_key(&store, "a");
+    let app = crate::build_router(state);
+    let with_cost = |cost: f64| {
+        json!({ "schema_version": 2, "entries": [{
+            "provider": "anthropic", "model": "haiku", "task_type": "qa",
+            "quality": 0.8, "pass_rate": 0.8, "avg_cost_usd": cost,
+            "n_runs": 1, "n_cases": 100
+        }]})
+    };
+    ingest(&app, Some(&ka), with_cost(0.003_141_59)).await;
+    let stored = store.list_collective_entries().unwrap();
+    assert_eq!(stored[0].avg_cost_usd, 0.0031, "a distinctive cost is stored coarsened, not verbatim");
+    let (_s, lb) = leaderboard(&app).await;
+    assert_eq!(lb["rows"][0]["avg_cost_usd"], 0.0031, "{lb}");
 }
 
 #[tokio::test]

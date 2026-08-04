@@ -66,6 +66,7 @@
 //!   GET  /v1/collective/digest?min_cases=     build this instance's privacy-safe model digest (admin)
 //!   POST /v1/collective/ingest                hub: accept a contributor's digest (gated; off default)
 //!   GET  /v1/collective/leaderboard?task_type=&provider=&judge=   merged real-world model leaderboard
+//!   DEL  /v1/collective/contribution        withdraw this source's contributed entries
 //!
 //! Env: LIGHTTRACK_BIND, LIGHTTRACK_DB, LIGHTTRACK_DATABASE_URL, LIGHTTRACK_PRICING,
 //!      LIGHTTRACK_MAX_TS_SKEW_SECS (symmetric client-`ts` skew bound in seconds; 0 = disable the
@@ -401,6 +402,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/collective/digest", get(collective::get_digest))
         .route("/v1/collective/ingest", post(collective::post_ingest))
         .route("/v1/collective/leaderboard", get(collective::get_leaderboard))
+        .route("/v1/collective/contribution", delete(collective::delete_contribution))
         .with_state(state)
 }
 

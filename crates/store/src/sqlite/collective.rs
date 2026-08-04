@@ -54,6 +54,16 @@ pub(super) fn delete(conn: &Connection, contributor_id: &str) -> Result<u64> {
     Ok(n as u64)
 }
 
+/// Retention sweep: drop entries received before `cutoff`. Timestamps are fixed-width
+/// `RFC3339(Nanos, Z)`, so the string comparison is a correct chronological one.
+pub(super) fn purge_before(conn: &Connection, cutoff: chrono::DateTime<chrono::Utc>) -> Result<u64> {
+    let n = conn.execute(
+        "DELETE FROM collective_entries WHERE received_at < ?1",
+        params![fmt_ts(cutoff)],
+    )?;
+    Ok(n as u64)
+}
+
 pub(super) fn list(conn: &Connection) -> Result<Vec<CollectiveEntry>> {
     let sql = "SELECT contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd, \
                p50_latency_ms, p95_latency_ms, n_runs, n_cases, quality_variance, \
@@ -176,6 +186,20 @@ mod tests {
         upsert(&c, &entry("b", "haiku", 0.6, 10)).unwrap();
         let removed = delete(&c, "a").unwrap();
         assert_eq!(removed, 2);
+        let all = list(&c).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].contributor_id, "b");
+    }
+
+    #[test]
+    fn purge_before_drops_only_expired_rows() {
+        let c = conn();
+        let mut old = entry("a", "haiku", 0.7, 10);
+        old.received_at = Utc::now() - chrono::Duration::days(120);
+        upsert(&c, &old).unwrap();
+        upsert(&c, &entry("b", "haiku", 0.8, 10)).unwrap();
+        let removed = purge_before(&c, Utc::now() - chrono::Duration::days(90)).unwrap();
+        assert_eq!(removed, 1);
         let all = list(&c).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].contributor_id, "b");

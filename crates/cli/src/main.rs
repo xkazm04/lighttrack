@@ -123,6 +123,15 @@ enum CollectiveCmd {
         #[arg(long = "hub-key")]
         hub_key: Option<String>,
     },
+    /// Withdraw everything this instance contributed to a hub (the right to leave the network).
+    Withdraw {
+        /// Base URL of the hub holding the contribution.
+        #[arg(long)]
+        hub: String,
+        /// The contributor key this instance contributes with — the hub identifies the source by it.
+        #[arg(long = "hub-key")]
+        hub_key: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -347,6 +356,7 @@ fn main() -> Result<()> {
             CollectiveCmd::Contribute { hub, min_cases, hub_key } => {
                 contribute(&cli, hub, *min_cases, hub_key.as_deref())
             }
+            CollectiveCmd::Withdraw { hub, hub_key } => withdraw(hub, hub_key.as_deref()),
         },
     }
 }
@@ -385,6 +395,27 @@ fn contribute(cli: &Cli, hub: &str, min_cases: u32, hub_key: Option<&str>) -> Re
         println!("contributed {n} bucket(s) to {hub_base}: {text}");
     } else {
         eprintln!("contribute failed: HTTP {} — {text}", status.as_u16());
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Ask a hub to delete everything this instance contributed. The hub identifies the source from the
+/// key, so withdrawal needs exactly the credential the contribution was made with.
+fn withdraw(hub: &str, hub_key: Option<&str>) -> Result<()> {
+    let hub_base = hub.trim_end_matches('/');
+    let mut req =
+        reqwest::blocking::Client::new().delete(format!("{hub_base}/v1/collective/contribution"));
+    if let Some(k) = hub_key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req.send()?;
+    let status = resp.status();
+    let text = resp.text()?;
+    if status.is_success() {
+        println!("withdrawn from {hub_base}: {text}");
+    } else {
+        eprintln!("withdraw failed: HTTP {} - {text}", status.as_u16());
         std::process::exit(1);
     }
     Ok(())

@@ -26,6 +26,7 @@
 mod aliases;
 mod classify;
 mod merge;
+mod privacy;
 mod types;
 
 /// Current digest wire-format version. Bump when [`ModelDigestEntry`] changes shape. v2 added
@@ -63,5 +64,6 @@ pub const TASK_TYPES: &[&str] = &[
 
 pub use aliases::ModelAliases;
 pub use classify::task_type_from;
-pub use merge::{build_digest, merge_leaderboard};
+pub use merge::{build_digest, merge_leaderboard, MAX_SOURCE_WEIGHT_SHARE};
+pub use privacy::bucket_cost;
 pub use types::{CollectiveDigest, CollectiveEntry, LeaderboardRow, ModelDigestEntry, RunStat};

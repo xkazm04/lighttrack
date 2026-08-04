@@ -351,6 +351,40 @@ LightTrack, the better the data for everyone (the moat).
     `summarization`, `coding`, `rag`, …) — the raw name is never published.
   - *Opaque contributor id.* `LIGHTTRACK_COLLECTIVE_ID` is hashed (SHA-256, truncated) before it goes on
     the wire, so a hub can update a source idempotently without learning who it is; unset ⇒ `anonymous`.
+  - *Cost is bucketed.* Quality, pass-rate and task type are coarse by construction; `avg_cost_usd` is
+    an unbounded continuous number derived from one instance's exact pricing, provider mix and prompt
+    lengths, so a distinctive cost-per-case fingerprints a contributor even when its quality and
+    `n_cases` clear both floors. It is therefore published at **2 significant figures** — once by the
+    digest builder (so the raw figure never leaves the contributor) and again hub-side at ingest (the
+    hub publishes on its own terms, exactly as it re-enforces the k-floor). `$0.0031` and `$0.0034`
+    still rank apart; `$0.003142` and `$0.003128` no longer identify anyone. This is a side-channel
+    fix, not anonymity on its own — the k-floors over cases and sources are what make a bucket
+    unattributable.
+- **What contributing still exposes — read this before opting in.** Two things are *not* fixed by any
+  amount of clamping, and both sides should know them:
+  - *Differencing over time.* Ingest is delete-then-replace under a stable source id, so a hub operator
+    who keeps successive pushes can diff them and learn what changed inside your private benchmark
+    suite: a new `task_type` appeared, a bucket vanished, your cost per case dropped 30%. No single
+    payload leaks that — the *sequence* does. Mitigation: `LIGHTTRACK_COLLECTIVE_MIN_INTERVAL_HOURS`
+    makes a hub refuse (429, with `Retry-After`) a re-push from the same source inside the window, so
+    the changelog is at best daily rather than continuous. **It defaults to `0`, i.e. off** — a hub that
+    wants to make this promise must set it, and a contributor that cares should ask what the hub set.
+    Rotating the source id would defeat differencing outright, but it would also break the
+    delete-then-replace idempotency the whole design rests on (a rotated id can no longer replace its
+    predecessor's rows, so every push would accrete a new ghost source and inflate `n_contributors`) —
+    we deliberately kept replace semantics and pay for it with disclosure plus the interval knob.
+  - *The hub sees what you send.* Bucketing and the floors bound what a hub *learns*, but a hub is a
+    party to the contribution, not an adversary you are hidden from. Contribute only from projects you
+    have deliberately opted in (`collective_opt_in`, per project, never inherited).
+- **The right to withdraw + retention.** `DELETE /v1/collective/contribution` (CLI:
+  `lt collective withdraw --hub <url> --hub-key <k>`) removes every entry a source contributed,
+  authenticated exactly like ingest — you may withdraw what you could have published — so leaving the
+  network never requires asking the hub operator. An admin may pass `?contributor=c-xxxx` to withdraw a
+  named source, which is the escape hatch for a contributor that lost its key. Entries also expire on a
+  stated policy: `LIGHTTRACK_COLLECTIVE_MAX_AGE_DAYS` (default **90**, `0` disables) — an expired entry
+  is **filtered out of the leaderboard before merging on every backend**, and is physically swept from
+  storage on the next ingest by backends that implement `purge_collective_entries_before` (SQLite
+  today; others keep the dead row on disk but never publish it again).
 - **Hub-side identity is derived from a credential the hub issued, not asserted.** A hub does **not**
   trust the `contributor_id` in the request body (kept only for wire compat, ignored), *and it does not
   hash the bearer string either*: `authenticate` is deliberately lenient in `dev` auth mode (any
@@ -373,7 +407,7 @@ LightTrack, the better the data for everyone (the moat).
   - *Dev-mode hubs say so out loud.* Booting with `LIGHTTRACK_COLLECTIVE_ACCEPT=1` under `auth=dev`
     prints a warning naming the exact consequence — `min_contributors` cannot be enforced against forged
     identities in dev mode, so only hub-issued credentials get in. Run a real hub with
-    `LIGHTTRACK_AUTH=enforced`.
+    `LIGHTTRACK_AUTH_MODE=enforced`.
 - **Hub-enforced k-floor.** The hub re-enforces its own `LIGHTTRACK_COLLECTIVE_MIN_CASES` (default 5,
   clamp ≥1): any contributed bucket with `n_cases` below it is dropped per-entry on ingest (not a whole
   request 400) and the count is returned as `dropped_under_min`, regardless of the floor the contributor
@@ -430,8 +464,9 @@ LightTrack, the better the data for everyone (the moat).
   receives digests and merges them; others contribute. Same binary, no central service required.
 - **API.** `GET /v1/collective/digest?min_cases=` (admin — preview what we'd publish) ·
   `POST /v1/collective/ingest` (hub-only; replaces a contributor's set, validates + clamps each entry) ·
-  `GET /v1/collective/leaderboard?task_type=&provider=&judge=` (open read — the merged leaderboard).
-- **Surfaces.** `lt collective leaderboard|digest|contribute --hub <url>` (the CLI does the two-hop push:
+  `GET /v1/collective/leaderboard?task_type=&provider=&judge=` (open read — the merged leaderboard) ·
+  `DELETE /v1/collective/contribution[?contributor=]` (withdraw a source's entries).
+- **Surfaces.** `lt collective leaderboard|digest|contribute|withdraw --hub <url>` (the CLI does the two-hop push:
   GET own digest → POST to the hub); the `get_collective_leaderboard` MCP read tool; a rendered
   leaderboard table shared by CLI + MCP.
 

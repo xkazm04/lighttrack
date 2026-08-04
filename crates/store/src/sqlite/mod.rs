@@ -595,4 +595,7 @@ impl Store for SqliteStore {
     fn list_collective_entries(&self) -> Result<Vec<CollectiveEntry>> {
         self.read(collective::list)
     }
+    fn purge_collective_entries_before(&self, cutoff: DateTime<Utc>) -> Result<u64> {
+        self.with(|c| collective::purge_before(c, cutoff))
+    }
 }
