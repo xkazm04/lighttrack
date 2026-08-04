@@ -154,11 +154,20 @@ pub struct LeaderboardRow {
     pub model: String,
     pub task_type: String,
     pub quality: f64,
-    /// Approximate 95% CI **half-width** on `quality` (i.e. `quality ± quality_ci95`). `None` when too
-    /// little of the weight carries a known variance to estimate it — an honest "insufficient variance
-    /// data" marker rather than a fabricated interval.
+    /// Approximate 95% CI **half-width** on `quality` (i.e. `quality ± quality_ci95`), combining the
+    /// pooled within-source case variance with a random-effects **between-source** term — so
+    /// contributors who disagree widen the interval instead of hiding in it. `None` when too little of
+    /// the weight carries a known variance to estimate the within term — an honest "insufficient
+    /// variance data" marker rather than a fabricated interval.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality_ci95: Option<f64>,
+    /// Weighted standard deviation of the **per-source** mean qualities behind this row — how much the
+    /// contributors disagree, published even when no CI could be formed. `None` for a single-source
+    /// row: with one source there is no between-source evidence, which is not the same as no
+    /// disagreement. At two sources it rests on one degree of freedom — read it as a lower bound (see
+    /// the `spread` module).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_spread: Option<f64>,
     pub pass_rate: f64,
     pub avg_cost_usd: f64,
     /// Approximate merged p50: case-weighted mean of contributors' per-run p50s (see merge docs).

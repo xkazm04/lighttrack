@@ -28,6 +28,7 @@ mod classify;
 mod merge;
 mod privacy;
 pub mod rigor;
+mod spread;
 mod types;
 
 /// Current digest wire-format version. Bump when [`ModelDigestEntry`] changes shape. v2 added

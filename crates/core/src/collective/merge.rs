@@ -7,19 +7,29 @@
 //!   - *Digest side.* A bucket's `quality_variance` is the **case-weighted population variance of the
 //!     contributing runs' mean scores** — dispersion *between runs*, computed from `Σw·q²/Σw − (Σw·q/Σw)²`.
 //!     It is `None` for a single-run bucket (variance undefined).
-//!   - *Merge side.* The leaderboard CI treats each contributor's `quality_variance` as the score
-//!     dispersion and pools it case-weighted: `V = Σ(nᵢ·vᵢ)/Σnᵢ` over entries with a known variance,
-//!     then `SE = √(V / N_known)` and a 95% half-width of `1.96·SE`. This is an **approximation**: it
-//!     ignores between-contributor mean shifts and uses between-run variance as a stand-in for
-//!     case-level variance, so it is a *floor* on the true uncertainty, not an exact interval. When
-//!     fewer than [`VARIANCE_COVERAGE_MIN`] of the cases carry a known variance the CI is `None` (an
+//!   - *Merge side, within-source.* The leaderboard treats each contributor's `quality_variance` as
+//!     the score dispersion and pools it case-weighted: `V = Σ(nᵢ·vᵢ)/Σnᵢ` over entries with a known
+//!     variance, then `SE_within = √(V / N_known)`. This part is still an approximation — it uses
+//!     between-run variance as a stand-in for case-level variance. When fewer than
+//!     [`VARIANCE_COVERAGE_MIN`] of the cases carry a known variance, no CI is published at all (an
 //!     honest "insufficient variance data" marker) rather than a fabricated number.
-//! Ranking is always by the point estimate `quality`; the CI and the `low_confidence` flag are
-//! annotation, never a reordering.
+//!   - *Merge side, between-source.* Pooling alone made the interval shrink with total evidence
+//!     whether or not the contributors agreed, so five sources that **disagreed** got a *narrower*
+//!     interval than five that agreed. A random-effects term fixes the direction: `SE_between² =
+//!     τ̂²·Σpᵢ²` over the winsorized per-source weights (see [`super::spread`] for the estimator, its
+//!     behaviour at k=2, and why it is not DerSimonian–Laird). The published half-width is
+//!     `1.96·√(SE_within² + SE_between²)`.
+//!   - *Disagreement is visible either way.* Every multi-source row publishes `source_spread` — the
+//!     weighted SD across its sources' means — **even when no CI could be formed**, so a row built
+//!     entirely from v1 contributions still shows whether its sources agree.
+//!
+//! Ranking is always by the point estimate `quality`; the CI, `source_spread` and the
+//! `low_confidence` flag are annotation, never a reordering.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::rigor::{sort_levels, weakest_determinism, Coverage, RowRigor};
+use super::spread::{between_sources, Between};
 use super::types::{CollectiveEntry, LeaderboardRow, ModelDigestEntry, RunStat};
 
 /// Minimum fraction of a row's cases that must carry a known variance before a CI is estimated.
@@ -196,8 +206,12 @@ impl Acc {
     }
 
     /// Merge side: approximate 95% CI half-width on the merged mean quality, or `None` when too little
-    /// of the weight carries a known variance. See the module docs for the estimator's caveats.
-    fn quality_ci95(&self) -> Option<f64> {
+    /// of the weight carries a known variance — the refusal to fabricate an interval survives the
+    /// random-effects change untouched, because `between.se2()` alone would understate case-level
+    /// noise just as badly as pooling alone understated disagreement.
+    ///
+    /// `between` is the row's between-source term; it is `0` for a single-source row.
+    fn quality_ci95(&self, between: &Between) -> Option<f64> {
         if self.var_cases == 0 || self.cases == 0 {
             return None;
         }
@@ -206,8 +220,8 @@ impl Acc {
             return None;
         }
         let pooled_var = (self.var_w / self.var_weight).max(0.0);
-        let se = (pooled_var / self.var_cases as f64).sqrt();
-        Some(Z_95 * se)
+        let se2_within = pooled_var / self.var_cases as f64;
+        Some(Z_95 * (se2_within + between.se2()).sqrt())
     }
 }
 
@@ -319,7 +333,7 @@ pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32)
     for e in entries {
         buckets.entry(key_of(&e.provider, &e.model, &e.task_type)).or_default().push(e);
     }
-    let groups: BTreeMap<Key, (Acc, f64)> = buckets
+    let groups: BTreeMap<Key, (Acc, f64, Between)> = buckets
         .into_iter()
         .map(|(k, es)| {
             let raw: Vec<f64> = es.iter().map(|e| e.n_cases as f64).collect();
@@ -327,6 +341,10 @@ pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32)
             let total: f64 = weights.iter().sum();
             let top = weights.iter().copied().fold(0.0_f64, f64::max);
             let max_share = if total > 0.0 { top / total } else { 0.0 };
+            // Between-source heterogeneity over the SAME winsorized weights the mean uses, so a whale
+            // can no more dominate the row's disagreement than it can its point estimate.
+            let qualities: Vec<f64> = es.iter().map(|e| e.quality).collect();
+            let between = between_sources(&weights, &qualities);
             let mut a = Acc::default();
             for (e, &weight) in es.iter().zip(weights.iter()) {
                 a.add(
@@ -350,12 +368,12 @@ pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32)
                     Some(&e.contributor_id),
                 );
             }
-            (k, (a, max_share))
+            (k, (a, max_share, between))
         })
         .collect();
     let mut out: Vec<LeaderboardRow> = groups
         .into_iter()
-        .map(|((provider, model, task_type), (a, max_source_share))| {
+        .map(|((provider, model, task_type), (a, max_source_share, between))| {
             let judge_providers: Vec<String> = a.judge_providers.iter().cloned().collect();
             let mixed_judges = (judge_providers.len() > 1).then(|| judge_providers.len() as u32);
             let rigor = a.row_rigor();
@@ -365,7 +383,8 @@ pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32)
                 model,
                 task_type,
                 quality: r3(a.quality()),
-                quality_ci95: a.quality_ci95().map(r3),
+                quality_ci95: a.quality_ci95(&between).map(r3),
+                source_spread: between.spread().map(r3),
                 pass_rate: r3(a.pass_rate()),
                 avg_cost_usd: r6(a.cost()),
                 p50_latency_ms: a.p50(),
@@ -551,8 +570,11 @@ mod tests {
 
     #[test]
     fn ci_formed_when_variance_covers_enough_weight() {
-        // Both contributors report variance 0.04 over 100 cases each → coverage 1.0.
-        // pooled V = 0.04, N_known = 200, SE = sqrt(0.04/200) ≈ 0.01414, CI ≈ 1.96·SE ≈ 0.0277.
+        // Two sources, 100 cases each, variance 0.04 each → coverage 1.0. Check the arithmetic by hand:
+        //   within:  V = 0.04, N_known = 200 ⇒ SE_within² = 0.04/200 = 0.0002
+        //   between: p = 0.5 each, q̄ = 0.82, raw τ² = 0.0004, ×k/(k−1)=2 ⇒ τ̂² = 0.0008,
+        //            Σp² = 0.5 ⇒ SE_between² = 0.0004
+        //   total:   SE = √0.0006 = 0.0244949 ⇒ CI = 1.96·SE = 0.0480100…, rounded 0.048.
         let rows = merge_leaderboard(
             &[
                 entry("a", "haiku", 0.80, 100, Some(0.04)),
@@ -561,7 +583,76 @@ mod tests {
             DEFAULT_LOW_CONFIDENCE_CASES,
         );
         let ci = rows[0].quality_ci95.expect("full coverage → CI known");
-        assert!((ci - 0.028).abs() < 0.002, "got {ci}");
+        assert_eq!(ci, 0.048, "the whole interval, hand-checkable");
+        // …and the disagreement that widened it is on the row: SD = √0.0008 = 0.0283 → 0.028.
+        assert_eq!(rows[0].source_spread, Some(0.028));
+    }
+
+    #[test]
+    fn disagreeing_sources_get_a_wider_interval_than_agreeing_ones() {
+        // THE BUG THIS FIXES: with fixed-effect pooling both of these rows got the SAME interval,
+        // because only the case counts entered it. Every input below is identical except the sources'
+        // mean qualities.
+        let ci_of = |qa: f64, qb: f64| {
+            let rows = merge_leaderboard(
+                &[
+                    entry("a", "haiku", qa, 100, Some(0.04)),
+                    entry("b", "haiku", qb, 100, Some(0.04)),
+                ],
+                DEFAULT_LOW_CONFIDENCE_CASES,
+            );
+            (rows[0].quality_ci95.unwrap(), rows[0].source_spread.unwrap())
+        };
+        // Perfect agreement ⇒ τ̂² = 0 ⇒ the interval is exactly the old within-source one:
+        //   SE = √(0.04/200) = 0.0141421 ⇒ CI = 0.0277186 → 0.028.
+        let (agree, spread_agree) = ci_of(0.82, 0.82);
+        assert_eq!(agree, 0.028);
+        assert_eq!(spread_agree, 0.0, "no disagreement to show");
+        // A 0.24-wide gap ⇒ raw τ² = 0.0144, τ̂² = 0.0288, SE_between² = 0.0144;
+        //   SE = √(0.0002 + 0.0144) = 0.1208305 ⇒ CI = 0.2368277 → 0.237.
+        let (disagree, spread_disagree) = ci_of(0.70, 0.94);
+        assert_eq!(disagree, 0.237);
+        assert_eq!(spread_disagree, 0.17, "√0.0288 = 0.169705…");
+        assert!(disagree > agree * 8.0, "disagreement dominates the interval, as it should");
+        // The middling gap sits between them — monotone in the disagreement, not in the case count.
+        let (mid, _) = ci_of(0.78, 0.86);
+        assert!(agree < mid && mid < disagree, "agree {agree} < mid {mid} < disagree {disagree}");
+    }
+
+    #[test]
+    fn disagreement_is_visible_even_when_no_ci_can_be_formed() {
+        // Two v1 contributors: no variance anywhere, so the refusal to fabricate a CI stands — but the
+        // reader can still see that the sources are 0.4 apart. Before, the row said nothing at all.
+        let rows = merge_leaderboard(
+            &[entry("a", "haiku", 0.60, 100, None), entry("b", "haiku", 1.00, 100, None)],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert!(rows[0].quality_ci95.is_none(), "the variance-coverage floor is untouched");
+        // raw τ² = 0.04, τ̂² = 0.08 ⇒ SD = 0.2828 → 0.283.
+        assert_eq!(rows[0].source_spread, Some(0.283));
+        // A single-source row has no between-source evidence — that is `None`, not "they all agree".
+        let rows = merge_leaderboard(&[entry("solo", "haiku", 0.9, 500, Some(0.04))], DEFAULT_LOW_CONFIDENCE_CASES);
+        assert!(rows[0].source_spread.is_none(), "k=1 spread is undefined, not zero");
+        // …and its interval is the within-source one alone: SE = √(0.04/500) ⇒ CI = 1.96·0.0089443.
+        assert_eq!(rows[0].quality_ci95, Some(0.018));
+    }
+
+    #[test]
+    fn uncertainty_never_reorders_the_leaderboard() {
+        // `high` disagrees violently (huge interval), `low` is unanimous. Ranking is still by the point
+        // estimate — `low_confidence` and the interval stay annotations, per the existing stance.
+        let rows = merge_leaderboard(
+            &[
+                entry("a", "high", 0.60, 100, Some(0.04)),
+                entry("b", "high", 1.00, 100, Some(0.04)),
+                entry("a", "low", 0.70, 100, Some(0.04)),
+                entry("b", "low", 0.70, 100, Some(0.04)),
+            ],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        let order: Vec<&str> = rows.iter().map(|r| r.model.as_str()).collect();
+        assert_eq!(order, ["high", "low"], "0.80 still outranks 0.70");
+        assert!(rows[0].quality_ci95.unwrap() > rows[1].quality_ci95.unwrap());
     }
 
     #[test]

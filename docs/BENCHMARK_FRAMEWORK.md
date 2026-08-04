@@ -444,11 +444,40 @@ LightTrack, the better the data for everyone (the moat).
     variance of the contributing runs' mean scores** (`None` for a single-run bucket, variance
     undefined). A hub accepts **both v1 and v2** (`MIN_SCHEMA_VERSION..=DIGEST_SCHEMA_VERSION`); v1
     entries land with `quality_variance` NULL rather than being orphaned by the version bump.
-  - *Approximate CI.* Each leaderboard row carries `quality ± quality_ci95` — a pooled, case-weighted
-    95% interval (`SE = √(V/N_known)`, `V = Σnᵢvᵢ/Σnᵢ`). It is an honest **approximation** (it treats
-    between-run variance as case-level dispersion and ignores between-contributor shifts, so it is a
-    floor on the true uncertainty). When fewer than half the cases carry a known variance the CI is
-    `None` — an explicit "insufficient variance data" marker, never a fabricated interval.
+  - *Random-effects CI — and the bug it fixes.* Each leaderboard row carries `quality ± quality_ci95`.
+    Until now that interval was **backwards**: pooling every contributor's cases into one sample made
+    it shrink with total evidence regardless of whether the contributors *agreed*, so five sources that
+    disagreed got a **narrower** interval than five that agreed. The half-width is now
+    `1.96·√(SE_within² + SE_between²)`:
+    - `SE_within² = V/N_known`, `V = Σnᵢvᵢ/Σnᵢ` — the old pooled, case-weighted term. Still an
+      approximation: it uses between-run variance as a stand-in for case-level dispersion.
+    - `SE_between² = τ̂²·Σpᵢ²`, where `pᵢ` are the **winsorized** per-source weights and
+      `τ̂² = Σpᵢ(qᵢ−q̄)² · k/(k−1)` is the Bessel-corrected weighted variance of the source means. With
+      equal weights that is the familiar `τ̂²/k`.
+    Worked example, checkable by hand: two sources, 100 cases and variance 0.04 each. Agreeing at 0.82
+    ⇒ `τ̂² = 0`, `SE = √0.0002`, **CI 0.028** (exactly the old number). At 0.70 vs 0.94 ⇒ `τ̂² = 0.0288`,
+    `SE_between² = 0.0144`, **CI 0.237** — 8× wider for the same sample size. That is the direction the
+    number was supposed to move all along.
+  - *What the estimator does at small k, said plainly.* At **k=1** `τ̂²` is undefined (reported as
+    `None`, between term 0) — one source is no between-source evidence, which is not the same as "no
+    disagreement"; such rows are normally withheld by `min_contributors` anyway. At **k=2** it rests on
+    one degree of freedom: `k/(k−1)=2` doubles the raw spread, and two sources that agree by luck still
+    give `τ̂² = 0`, so a two-source interval is a **lower bound**. We do not use DerSimonian–Laird:
+    it needs a per-source within variance that roughly half of contributions (v1 digests, single-run
+    buckets) simply do not have, which would be precision theatre. The chosen estimator needs only the
+    source means, which every contribution has, and it errs slightly **wide** (part of the observed
+    between-source spread is really within-source noise, counted twice) — on a public leaderboard an
+    interval that is a little too wide is a smaller lie than one that is too narrow.
+  - *Disagreement is visible, not just absorbed.* Every multi-source row publishes `source_spread` —
+    the weighted SD across its sources' means — **even when no CI could be formed**, so a row built
+    entirely from v1 contributions still shows whether its sources agree. The rendered table prints it
+    as `±0.048 σ0.028` next to the interval.
+  - *The refusal to fabricate stands.* When fewer than half the cases carry a known variance,
+    `quality_ci95` is still `None` — an explicit "insufficient variance data" marker. A
+    between-source-only interval would understate case-level noise exactly as badly as pooling alone
+    understated disagreement, so it is not published as a substitute; the spread is shown instead.
+  - *Ranking is unchanged.* Rows still sort by the point estimate. The interval, the spread and
+    `low_confidence` are annotations — uncertainty never silently reorders the board.
   - *Low-confidence, not hidden.* Rows aggregating fewer than the display floor
     (`LIGHTTRACK_COLLECTIVE_DISPLAY_FLOOR`, default 30) of cases are flagged `low_confidence` (shown,
     with a `†` in the rendered table) instead of being dropped. Ranking is always by the point estimate.

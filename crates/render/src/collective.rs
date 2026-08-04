@@ -2,7 +2,7 @@
 //! Shared so the CLI and MCP render the same tables the network is built around.
 //!
 //! Leaderboard input: `{ contributors, n_models, n_rows, task_type?, rows: [ {provider, model, task_type,
-//! quality, quality_ci95?, pass_rate, avg_cost_usd, p50_latency_ms?, p95_latency_ms?, low_confidence,
+//! quality, quality_ci95?, source_spread?, pass_rate, avg_cost_usd, p50_latency_ms?, p95_latency_ms?, low_confidence,
 //! judge_providers?, mixed_judges?, rigor{determinism?,determinism_levels?,frozen_dataset,
 //! significance_tested}, mixed_rigor, n_contributors, n_runs, n_cases} ] }`.
 //! Digest input:      `{ schema_version, contributor_id, min_cases, entries: [ {provider, model,
@@ -46,7 +46,10 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
     // Honest footnotes: what the annotations mean.
     let mut notes = vec![
         "p50 is an approximate case-weighted mean of contributors' medians; p95 is the worst observed.",
-        "±95% is an approximate CI on quality; `n/a` = insufficient variance data across contributors.",
+        "±95% is an approximate CI on quality that INCLUDES between-source disagreement (sources who \
+         disagree get a wider interval, not a narrower one); `n/a` = insufficient variance data. \
+         `σ` is the spread across contributing sources — shown even when no CI could be formed, and \
+         resting on one degree of freedom when only two sources back the row.",
         "Confidence = total cases × contributing sources backing the row.",
         "Rigor = weakest determinism behind the row; `frozen`/`tested` appear only when EVERY source \
          attested a frozen single-version dataset / a significance-tested verdict.",
@@ -124,9 +127,7 @@ fn model_row(r: &Value, cols: &Cols) -> Vec<String> {
         format!("{:.3}", f(r, "quality")),
     ];
     if cols.ci {
-        cells.push(
-            opt_f(r, "quality_ci95").map(|c| format!("±{c:.3}")).unwrap_or_else(|| "n/a".into()),
-        );
+        cells.push(ci_cell(r));
     }
     cells.push(pct(f(r, "pass_rate")));
     cells.push(money(f(r, "avg_cost_usd")));
@@ -151,6 +152,17 @@ fn confidence_cell(r: &Value, low: bool) -> String {
         format!("{cell} †")
     } else {
         cell
+    }
+}
+
+/// The uncertainty cell: the 95% half-width (which now includes between-source disagreement) plus the
+/// spread across sources as `σ`. The spread is shown **even when no CI could be formed**, so a row
+/// built from contributors that report no variance still says whether they agree.
+fn ci_cell(r: &Value) -> String {
+    let ci = opt_f(r, "quality_ci95").map(|c| format!("±{c:.3}")).unwrap_or_else(|| "n/a".into());
+    match opt_f(r, "source_spread") {
+        Some(sd) => format!("{ci} σ{sd:.3}"),
+        None => ci,
     }
 }
 
@@ -209,7 +221,7 @@ mod tests {
         let v = json!({
             "contributors": 3, "n_models": 2, "rows": [
                 {"provider":"anthropic","model":"haiku","task_type":"qa","quality":0.87,
-                 "quality_ci95":0.028,"pass_rate":0.9,"avg_cost_usd":0.0038,
+                 "quality_ci95":0.048,"source_spread":0.028,"pass_rate":0.9,"avg_cost_usd":0.0038,
                  "p50_latency_ms":820,"p95_latency_ms":2100,"low_confidence":false,
                  "judge_providers":["anthropic","openai"],"mixed_judges":2,
                  "rigor":{"determinism":"sampled","determinism_levels":["exact","sampled"],
@@ -228,9 +240,10 @@ mod tests {
         let md = leaderboard(&v).unwrap();
         assert!(md.contains("Collective model leaderboard"));
         assert!(md.contains("0.870"));
-        assert!(md.contains("±0.028"), "CI half-width surfaced");
+        assert!(md.contains("±0.048 σ0.028"), "CI half-width + the source spread that widened it");
         assert!(md.contains("2100ms"), "p95 surfaced");
         assert!(md.contains("n/a"), "missing CI shown as n/a (insufficient variance)");
+        assert!(md.contains("between-source disagreement"), "legend states what ± now includes");
         assert!(md.contains("Confidence"), "confidence column present");
         assert!(md.contains("1,200 × 3"), "confidence = cases × sources");
         assert!(md.contains("12 × 1 †"), "low-confidence row flagged in the confidence column");
