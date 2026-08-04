@@ -3,10 +3,12 @@
 //!
 //! Leaderboard input: `{ contributors, n_models, n_rows, task_type?, rows: [ {provider, model, task_type,
 //! quality, quality_ci95?, pass_rate, avg_cost_usd, p50_latency_ms?, p95_latency_ms?, low_confidence,
-//! judge_providers?, mixed_judges?, n_contributors, n_runs, n_cases} ] }`.
+//! judge_providers?, mixed_judges?, rigor{determinism?,determinism_levels?,frozen_dataset,
+//! significance_tested}, mixed_rigor, n_contributors, n_runs, n_cases} ] }`.
 //! Digest input:      `{ schema_version, contributor_id, min_cases, entries: [ {provider, model,
 //! task_type, quality, pass_rate, avg_cost_usd, p50_latency_ms?, p95_latency_ms?, quality_variance?,
-//! judge_provider?, rubric_fingerprint?, n_runs, n_cases} ] }`.
+//! judge_provider?, rubric_fingerprint?, determinism?, frozen_dataset?, significance_tested?,
+//! n_runs, n_cases} ] }`.
 
 use serde_json::Value;
 
@@ -30,8 +32,10 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
     let cols = Cols { sources: true, ci: true };
     let mut t = model_table(&cols);
     let mut any_low = false;
+    let mut any_mixed = false;
     for r in rows {
         any_low |= r.get("low_confidence").and_then(Value::as_bool).unwrap_or(false);
+        any_mixed |= r.get("mixed_rigor").and_then(Value::as_bool).unwrap_or(false);
         t.row(model_row(r, &cols));
     }
     let scope = v
@@ -44,9 +48,14 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
         "p50 is an approximate case-weighted mean of contributors' medians; p95 is the worst observed.",
         "±95% is an approximate CI on quality; `n/a` = insufficient variance data across contributors.",
         "Confidence = total cases × contributing sources backing the row.",
+        "Rigor = weakest determinism behind the row; `frozen`/`tested` appear only when EVERY source \
+         attested a frozen single-version dataset / a significance-tested verdict.",
     ];
     if any_low {
         notes.push("† low-confidence row: too few total cases to rank authoritatively.");
+    }
+    if any_mixed {
+        notes.push("‡ mixed rigor: the contributing sources did not run at the same rigor.");
     }
     Some(format!(
         "### Collective model leaderboard — {} model(s), {contributors} contributor(s){scope}\n\n{}\n\n_{}_",
@@ -93,6 +102,7 @@ fn model_table(cols: &Cols) -> Table {
     c.push(("p50", Align::Right));
     c.push(("p95", Align::Right));
     c.push(("Judge", Align::Left));
+    c.push(("Rigor", Align::Left));
     c.push(("Runs", Align::Right));
     if cols.sources {
         // Leaderboard: a single confidence column folding total cases × contributing sources, so a
@@ -123,6 +133,7 @@ fn model_row(r: &Value, cols: &Cols) -> Vec<String> {
     cells.push(lat(r, "p50_latency_ms"));
     cells.push(lat(r, "p95_latency_ms"));
     cells.push(judge_cell(r, cols));
+    cells.push(rigor_cell(r));
     cells.push(commafy(u(r, "n_runs")));
     if cols.sources {
         cells.push(confidence_cell(r, low));
@@ -138,6 +149,29 @@ fn confidence_cell(r: &Value, low: bool) -> String {
     let cell = format!("{} × {}", commafy(u(r, "n_cases")), u(r, "n_contributors"));
     if low {
         format!("{cell} †")
+    } else {
+        cell
+    }
+}
+
+/// The rigor cell: the weakest determinism stamp behind the row, plus `frozen` / `tested` badges that
+/// appear **only** when every source attested them. A trailing `‡` means the sources disagree on some
+/// facet — a rigorous and a sloppy contribution sitting in the same row, said out loud instead of
+/// averaged into one flattering label. Reads the leaderboard's nested `rigor` block, or a digest
+/// entry's flat fields.
+fn rigor_cell(r: &Value) -> String {
+    let g = r.get("rigor").unwrap_or(r);
+    let all = |k: &str| g.get(k).and_then(Value::as_str) == Some("all");
+    let mut parts = vec![g.get("determinism").and_then(Value::as_str).unwrap_or("—").to_string()];
+    if all("frozen_dataset") {
+        parts.push("frozen".into());
+    }
+    if all("significance_tested") {
+        parts.push("tested".into());
+    }
+    let cell = parts.join(" · ");
+    if r.get("mixed_rigor").and_then(Value::as_bool).unwrap_or(false) {
+        format!("{cell} ‡")
     } else {
         cell
     }
@@ -178,10 +212,16 @@ mod tests {
                  "quality_ci95":0.028,"pass_rate":0.9,"avg_cost_usd":0.0038,
                  "p50_latency_ms":820,"p95_latency_ms":2100,"low_confidence":false,
                  "judge_providers":["anthropic","openai"],"mixed_judges":2,
+                 "rigor":{"determinism":"sampled","determinism_levels":["exact","sampled"],
+                          "frozen_dataset":"all","significance_tested":"mixed"},
+                 "mixed_rigor":true,
                  "n_contributors":3,"n_runs":12,"n_cases":1200},
                 {"provider":"openai","model":"gpt-x","task_type":"qa","quality":0.80,
                  "pass_rate":0.8,"avg_cost_usd":0.002,"p50_latency_ms":600,
                  "low_confidence":true,"judge_providers":["google"],
+                 "rigor":{"determinism":"exact","determinism_levels":["exact"],
+                          "frozen_dataset":"all","significance_tested":"all"},
+                 "mixed_rigor":false,
                  "n_contributors":1,"n_runs":1,"n_cases":12}
             ]
         });
@@ -199,6 +239,11 @@ mod tests {
         assert!(md.contains("mixed(2)"), "mixed judges surfaced");
         assert!(md.contains("google"), "single judge family surfaced");
         assert!(md.contains("1,200"));
+        // Rigor rides the row: the weakest stamp, the all-source badges, and the mixture marker.
+        assert!(md.contains("Rigor"), "rigor column present");
+        assert!(md.contains("sampled · frozen ‡"), "weakest stamp + frozen badge + mixture marker");
+        assert!(md.contains("exact · frozen · tested"), "fully rigorous row wears both badges");
+        assert!(md.contains("mixed rigor:"), "legend explains the double dagger");
     }
 
     #[test]
@@ -219,11 +264,14 @@ mod tests {
         let v = json!({"contributor_id":"c-abc","min_cases":5,"entries":[
             {"provider":"anthropic","model":"haiku","task_type":"qa","quality":0.87,
              "pass_rate":0.9,"avg_cost_usd":0.0038,"p50_latency_ms":820,"p95_latency_ms":1500,
-             "judge_provider":"openai","n_runs":3,"n_cases":300}
+             "judge_provider":"openai","determinism":"exact","frozen_dataset":"all",
+             "significance_tested":"none","n_runs":3,"n_cases":300}
         ]});
         let md = digest(&v).unwrap();
         assert!(md.contains("1500ms"), "digest shows p95");
         assert!(md.contains("openai"), "digest shows the single judge family");
+        assert!(md.contains("exact · frozen"), "digest shows its own flat rigor fields");
+        assert!(!md.contains("tested"), "an untested verdict never wears the badge");
         assert!(!md.contains("±95%"), "digest has no CI column");
         assert!(!md.contains("Sources"), "digest has no Sources column");
     }

@@ -469,6 +469,15 @@ pub(crate) struct LeaderboardParams {
     provider: Option<String>,
     /// Filter to rows scored (at least partly) by one judge family (`anthropic|openai|google|unknown`).
     judge: Option<String>,
+    /// Rigor filter — keep only rows whose **weakest** determinism stamp is this level, i.e. rows
+    /// where *every* source ran at that level or better is expressed by asking for the level itself
+    /// (`?determinism=exact` ⇒ every source was exact). An unknown label matches nothing.
+    determinism: Option<String>,
+    /// Rigor filter — `true` keeps only rows whose every source ran against a frozen, single-version
+    /// dataset (`frozen_dataset = all`); `false` keeps rows that are anything less than that.
+    frozen_dataset: Option<bool>,
+    /// Rigor filter — `true` keeps only rows whose every source carried a significance-tested verdict.
+    significance_tested: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -529,6 +538,19 @@ pub(crate) async fn get_leaderboard(
     }
     if let Some(j) = q.judge.as_deref() {
         rows.retain(|r| r.judge_providers.iter().any(|p| p == j));
+    }
+    // Rigor filters — deliberately applied HERE, after the `min_contributors` retain above, for the
+    // same reason `?provider=` is: rigor is a low-cardinality but real fingerprint, and a filter that
+    // ran before the source floor could strip a row down to a lone contributor's private eval.
+    if let Some(d) = q.determinism.as_deref() {
+        let want = lighttrack_core::canon_determinism(d);
+        rows.retain(|r| want.is_some() && r.rigor.determinism == want);
+    }
+    if let Some(want) = q.frozen_dataset {
+        rows.retain(|r| (r.rigor.frozen_dataset == lighttrack_core::Coverage::All) == want);
+    }
+    if let Some(want) = q.significance_tested {
+        rows.retain(|r| (r.rigor.significance_tested == lighttrack_core::Coverage::All) == want);
     }
 
     // Header counts are computed over the FILTERED rows so they never disagree with what's shown.
@@ -610,7 +632,30 @@ fn run_stat(bench: &Benchmark, run: &BenchmarkRun) -> Option<RunStat> {
         p95_latency_ms: run.p95_latency_ms,
         judge_provider: judge_provider_of(&bench.judge_model),
         rubric_fingerprint: rubric_fingerprint_of(bench),
+        determinism: run
+            .report
+            .get("determinism")
+            .and_then(Value::as_str)
+            .and_then(lighttrack_core::canon_determinism),
+        dataset_frozen: run.report.get("dataset_frozen").and_then(Value::as_bool),
+        dataset_version: run
+            .report
+            .get("dataset_version")
+            .and_then(Value::as_u64)
+            .map(|v| v.min(u32::MAX as u64) as u32),
+        significance_tested: significance_tested_of(&run.report),
     })
+}
+
+/// Whether a run's verdict was **significance-tested**: the report carries a two-sided interval
+/// (`ci95`) over at least two scored cases. `n < 2` has no spread, so its "interval" is a point
+/// dressed up as one — that counts as untested, not as tested. `None` when the run predates the
+/// significance annotation entirely (no `n` recorded), so an old run reads as *unknown* rather than
+/// being libelled as sloppy.
+fn significance_tested_of(report: &Value) -> Option<bool> {
+    let n = report.get("n").and_then(Value::as_u64)?;
+    let has_ci = report.get("ci95").and_then(Value::as_array).is_some_and(|a| a.len() == 2);
+    Some(n >= 2 && has_ci)
 }
 
 /// Classify a benchmark's `judge_model` (`[provider/]model`) into a coarse judge family — provider
@@ -751,6 +796,12 @@ fn sanitize_entry(
             .rubric_fingerprint
             .map(|r| r.trim().chars().take(32).collect::<String>())
             .filter(|s| !s.is_empty()),
+        // v3 rigor: closed vocabularies, clamped hub-side. An unrecognized determinism label becomes
+        // "not recorded" rather than a fourth level — a poster must not be able to widen the rigor
+        // vocabulary, which is exactly what would turn it into a fingerprinting channel.
+        determinism: e.determinism.as_deref().and_then(lighttrack_core::canon_determinism),
+        frozen_dataset: e.frozen_dataset,
+        significance_tested: e.significance_tested,
         received_at: now,
     })
 }
@@ -833,6 +884,36 @@ mod tests {
     }
 
     #[test]
+    fn run_stat_reads_rigor_out_of_the_run_report() {
+        let b = bench("QA bench", Value::Null);
+        let report = json!({
+            "provider": "anthropic", "model": "haiku",
+            "determinism": "exact", "dataset_frozen": true, "dataset_version": 3,
+            "n": 20, "ci95": [0.78, 0.86],
+        });
+        let s = run_stat(&b, &run(report, Some(0.82), 20, 0.4)).unwrap();
+        assert_eq!(s.determinism.as_deref(), Some("exact"));
+        assert_eq!(s.dataset_frozen, Some(true));
+        assert_eq!(s.dataset_version, Some(3));
+        assert_eq!(s.significance_tested, Some(true));
+        // A run that predates the significance annotation is *unknown*, never libelled as untested.
+        let bare = json!({ "provider": "anthropic", "model": "haiku" });
+        let s = run_stat(&b, &run(bare, Some(0.82), 20, 0.4)).unwrap();
+        assert!(s.determinism.is_none());
+        assert!(s.dataset_frozen.is_none());
+        assert!(s.significance_tested.is_none());
+    }
+
+    #[test]
+    fn significance_needs_an_interval_over_more_than_one_case() {
+        // n=1 has no spread: its "interval" is a point dressed up as one.
+        assert_eq!(significance_tested_of(&json!({ "n": 1, "ci95": [0.8, 0.8] })), Some(false));
+        assert_eq!(significance_tested_of(&json!({ "n": 20 })), Some(false), "no interval recorded");
+        assert_eq!(significance_tested_of(&json!({ "n": 20, "ci95": [0.7, 0.9] })), Some(true));
+        assert_eq!(significance_tested_of(&json!({})), None, "unrecorded ≠ untested");
+    }
+
+    #[test]
     fn opaque_id_is_stable_and_not_the_input() {
         let a = opaque("my-secret-instance-id");
         assert_eq!(a, opaque("my-secret-instance-id"));
@@ -851,6 +932,10 @@ mod tests {
             quality_variance: Some(-0.5), // negative variance is nonsense → dropped to None
             judge_provider: Some("weird-label".into()), // unknown label → clamped to "unknown"
             rubric_fingerprint: Some("ab12cd34".into()),
+            // A determinism label outside the closed vocabulary must not become a fourth level.
+            determinism: Some("perfectly-reproducible".into()),
+            frozen_dataset: lighttrack_core::Coverage::All,
+            significance_tested: lighttrack_core::Coverage::Mixed,
         };
         let s = sanitize_entry("c-abc", good, now, &a).unwrap();
         assert_eq!(s.quality, 1.0);
@@ -859,11 +944,16 @@ mod tests {
         assert!(s.quality_variance.is_none(), "negative variance dropped");
         assert_eq!(s.judge_provider.as_deref(), Some("unknown"), "unknown judge label clamped");
         assert_eq!(s.rubric_fingerprint.as_deref(), Some("ab12cd34"));
+        assert!(s.determinism.is_none(), "an invented determinism label is dropped, not admitted");
+        assert_eq!(s.frozen_dataset, lighttrack_core::Coverage::All, "rigor coverage survives ingest");
+        assert_eq!(s.significance_tested, lighttrack_core::Coverage::Mixed);
         let bad = lighttrack_core::ModelDigestEntry {
             provider: "  ".into(), model: "haiku".into(), task_type: "qa".into(),
             quality: 0.5, pass_rate: 0.5, avg_cost_usd: 0.1,
             p50_latency_ms: None, p95_latency_ms: None, n_runs: 1, n_cases: 5,
             quality_variance: None, judge_provider: None, rubric_fingerprint: None,
+            determinism: None, frozen_dataset: Default::default(),
+            significance_tested: Default::default(),
         };
         assert_eq!(sanitize_entry("c-abc", bad, now, &a).unwrap_err(), Reject::Malformed);
     }
@@ -877,6 +967,8 @@ mod tests {
             quality: 0.8, pass_rate: 0.8, avg_cost_usd: 0.01,
             p50_latency_ms: None, p95_latency_ms: None, n_runs: 2, n_cases: 100,
             quality_variance: None, judge_provider: None, rubric_fingerprint: None,
+            determinism: None, frozen_dataset: Default::default(),
+            significance_tested: Default::default(),
         };
         let rejected = |mutate: fn(&mut lighttrack_core::ModelDigestEntry)| {
             let mut e = base();
@@ -908,6 +1000,8 @@ mod tests {
             quality: 0.8, pass_rate: 0.8, avg_cost_usd: 0.01,
             p50_latency_ms: None, p95_latency_ms: None, n_runs: 1, n_cases: 10,
             quality_variance: None, judge_provider: None, rubric_fingerprint: None,
+            determinism: None, frozen_dataset: Default::default(),
+            significance_tested: Default::default(),
         };
         // provider/ prefix stripped + dated variant collapsed + provider synonym mapped.
         let s = sanitize_entry("c", e("openai", "openai/gpt-4o-2024-08-06"), now, &a).unwrap();

@@ -19,6 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::rigor::{sort_levels, weakest_determinism, Coverage, RowRigor};
 use super::types::{CollectiveEntry, LeaderboardRow, ModelDigestEntry, RunStat};
 
 /// Minimum fraction of a row's cases that must carry a known variance before a CI is estimated.
@@ -56,6 +57,16 @@ struct Sample {
     judge_provider: Option<String>,
     /// Rubric-shape fingerprint behind this sample, if recorded.
     rubric_fingerprint: Option<String>,
+    /// Determinism stamp behind this sample, if recorded.
+    determinism: Option<String>,
+    /// Frozen-dataset coverage this sample brings (a single run on the digest side, an already-folded
+    /// contributor bucket on the merge side).
+    frozen: Coverage,
+    /// Significance-tested coverage this sample brings.
+    tested: Coverage,
+    /// Digest side only: the dataset version this run was pinned to, so a bucket can tell whether its
+    /// runs sat on ONE pin. Never published — see the `rigor` module's fingerprinting argument.
+    dataset_version: Option<u32>,
 }
 
 /// Case-weighted accumulator shared by digest building and leaderboard merging.
@@ -79,6 +90,14 @@ struct Acc {
     contributors: BTreeSet<String>,
     judge_providers: BTreeSet<String>,
     rubric_fps: BTreeSet<String>,
+    /// Rigor, folded conservatively: the weakest determinism seen (`None` once anything was
+    /// unrecorded), every distinct stamp, and the two boolean facets as [`Coverage`].
+    seen: bool,
+    determinism: Option<String>,
+    determinism_levels: BTreeSet<String>,
+    frozen: Coverage,
+    tested: Coverage,
+    dataset_versions: BTreeSet<u32>,
 }
 
 impl Acc {
@@ -111,6 +130,43 @@ impl Acc {
         }
         if let Some(c) = contributor {
             self.contributors.insert(c.to_string());
+        }
+        // Rigor folds conservatively: the first sample seeds, every later one can only weaken.
+        if let Some(d) = &s.determinism {
+            self.determinism_levels.insert(d.clone());
+        }
+        self.determinism = if self.seen {
+            weakest_determinism(self.determinism.as_deref(), s.determinism.as_deref())
+        } else {
+            s.determinism
+        };
+        self.frozen = if self.seen { self.frozen.fold(s.frozen) } else { s.frozen };
+        self.tested = if self.seen { self.tested.fold(s.tested) } else { s.tested };
+        if let Some(v) = s.dataset_version {
+            self.dataset_versions.insert(v);
+        }
+        self.seen = true;
+    }
+
+    /// Digest side: the bucket's frozen-dataset claim. `All` needs every run frozen **and** pinned to
+    /// one version — two versions of the same frozen dataset are two different case sets, so the
+    /// bucket's numbers are not from one immutable pin and the claim degrades to `Mixed`.
+    fn frozen_claim(&self) -> Coverage {
+        if self.frozen == Coverage::All && self.dataset_versions.len() > 1 {
+            return Coverage::Mixed;
+        }
+        self.frozen
+    }
+
+    /// Merge side: the row's rigor, with mixture disclosed rather than flattened.
+    fn row_rigor(&self) -> RowRigor {
+        let mut determinism_levels: Vec<String> = self.determinism_levels.iter().cloned().collect();
+        sort_levels(&mut determinism_levels);
+        RowRigor {
+            determinism: self.determinism.clone(),
+            determinism_levels,
+            frozen_dataset: self.frozen,
+            significance_tested: self.tested,
         }
     }
 
@@ -194,6 +250,10 @@ pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> 
                 variance: None,
                 judge_provider: s.judge_provider.clone(),
                 rubric_fingerprint: s.rubric_fingerprint.clone(),
+                determinism: s.determinism.clone(),
+                frozen: Coverage::of(s.dataset_frozen),
+                tested: Coverage::of(s.significance_tested),
+                dataset_version: s.dataset_version,
             },
             None,
         );
@@ -217,6 +277,9 @@ pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> 
             quality_variance: a.run_variance().map(r6),
             judge_provider: collapse(&a.judge_providers),
             rubric_fingerprint: collapse(&a.rubric_fps),
+            determinism: a.determinism.clone(),
+            frozen_dataset: a.frozen_claim(),
+            significance_tested: a.tested,
         })
         .collect();
     sort_by_quality(&mut out, |e| (e.quality, &e.provider, &e.model));
@@ -279,6 +342,10 @@ pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32)
                         variance: e.quality_variance,
                         judge_provider: e.judge_provider.clone(),
                         rubric_fingerprint: e.rubric_fingerprint.clone(),
+                        determinism: e.determinism.clone(),
+                        frozen: e.frozen_dataset,
+                        tested: e.significance_tested,
+                        dataset_version: None,
                     },
                     Some(&e.contributor_id),
                 );
@@ -291,6 +358,8 @@ pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32)
         .map(|((provider, model, task_type), (a, max_source_share))| {
             let judge_providers: Vec<String> = a.judge_providers.iter().cloned().collect();
             let mixed_judges = (judge_providers.len() > 1).then(|| judge_providers.len() as u32);
+            let rigor = a.row_rigor();
+            let mixed_rigor = rigor.is_mixed();
             LeaderboardRow {
                 provider,
                 model,
@@ -308,6 +377,8 @@ pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32)
                 n_runs: a.runs,
                 n_cases: a.cases as u32,
                 max_source_share: r3(max_source_share),
+                rigor,
+                mixed_rigor,
             }
         })
         .collect();
@@ -353,6 +424,10 @@ mod tests {
             p95_latency_ms: Some(1500),
             judge_provider: None,
             rubric_fingerprint: None,
+            determinism: None,
+            dataset_frozen: None,
+            dataset_version: None,
+            significance_tested: None,
         }
     }
 
@@ -389,6 +464,9 @@ mod tests {
             quality_variance: variance,
             judge_provider: judge.map(str::to_string),
             rubric_fingerprint: None,
+            determinism: None,
+            frozen_dataset: Coverage::Unknown,
+            significance_tested: Coverage::Unknown,
             received_at: Utc::now(),
         }
     }
@@ -596,6 +674,74 @@ mod tests {
         let rows = merge_leaderboard(&[entry("solo", "haiku", 0.5, 5000, None)], DEFAULT_LOW_CONFIDENCE_CASES);
         assert_eq!(rows[0].max_source_share, 1.0);
         assert_eq!(rows[0].n_cases, 5000);
+    }
+
+    #[test]
+    fn digest_rigor_folds_to_the_weakest_claim() {
+        let rigorous = |q: f64| {
+            let mut s = stat("anthropic", "haiku", "qa", q, 0.003, 50);
+            s.determinism = Some("exact".into());
+            s.dataset_frozen = Some(true);
+            s.dataset_version = Some(3);
+            s.significance_tested = Some(true);
+            s
+        };
+        // Two equally rigorous runs → the bucket keeps the full claim.
+        let d = build_digest(&[rigorous(0.8), rigorous(0.9)], 5);
+        assert_eq!(d[0].determinism.as_deref(), Some("exact"));
+        assert_eq!(d[0].frozen_dataset, Coverage::All);
+        assert_eq!(d[0].significance_tested, Coverage::All);
+        // One sloppy run drags every facet down — a bucket is only as good as its worst run.
+        let mut sloppy = rigorous(0.9);
+        sloppy.determinism = Some("sampled".into());
+        sloppy.dataset_frozen = Some(false);
+        sloppy.significance_tested = None;
+        let d = build_digest(&[rigorous(0.8), sloppy], 5);
+        assert_eq!(d[0].determinism.as_deref(), Some("sampled"));
+        assert_eq!(d[0].frozen_dataset, Coverage::Mixed);
+        assert_eq!(d[0].significance_tested, Coverage::Mixed, "silence is not agreement");
+        // Two *versions* of a frozen dataset are two case sets: the "one immutable pin" claim fails
+        // even though every run reported frozen=true. The version integers never leave the instance.
+        let mut v4 = rigorous(0.9);
+        v4.dataset_version = Some(4);
+        let d = build_digest(&[rigorous(0.8), v4], 5);
+        assert_eq!(d[0].frozen_dataset, Coverage::Mixed, "version drift breaks the pin claim");
+        // …and the version itself is nowhere on the wire.
+        let json = serde_json::to_string(&d[0]).unwrap();
+        assert!(!json.contains("version"), "dataset version must not be published: {json}");
+    }
+
+    #[test]
+    fn merged_row_discloses_mixed_rigor_and_v2_entries_still_merge() {
+        let rigorous = |c: &str| {
+            let mut e = entry(c, "haiku", 0.8, 100, None);
+            e.determinism = Some("exact".into());
+            e.frozen_dataset = Coverage::All;
+            e.significance_tested = Coverage::All;
+            e
+        };
+        let rows = merge_leaderboard(&[rigorous("a"), rigorous("b")], DEFAULT_LOW_CONFIDENCE_CASES);
+        assert_eq!(rows[0].rigor.determinism.as_deref(), Some("exact"));
+        assert_eq!(rows[0].rigor.determinism_levels, vec!["exact".to_string()]);
+        assert_eq!(rows[0].rigor.frozen_dataset, Coverage::All);
+        assert!(!rows[0].mixed_rigor);
+        // A sloppy contributor is disclosed, not averaged into a flattering single label.
+        let mut sloppy = rigorous("c");
+        sloppy.determinism = Some("sampled".into());
+        sloppy.frozen_dataset = Coverage::None;
+        let rows = merge_leaderboard(&[rigorous("a"), sloppy], DEFAULT_LOW_CONFIDENCE_CASES);
+        assert_eq!(rows[0].rigor.determinism.as_deref(), Some("sampled"), "headline is the weakest");
+        assert_eq!(rows[0].rigor.determinism_levels, vec!["exact".to_string(), "sampled".into()]);
+        assert_eq!(rows[0].rigor.frozen_dataset, Coverage::Mixed);
+        assert!(rows[0].mixed_rigor);
+        // A v1/v2 contributor (no rigor at all) merges as Unknown — never orphaned by the v3 bump.
+        let rows = merge_leaderboard(
+            &[rigorous("a"), entry("legacy", "haiku", 0.8, 100, None)],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert_eq!(rows[0].n_contributors, 2, "the v2 contribution still counts");
+        assert!(rows[0].rigor.determinism.is_none(), "one silent source voids the claim");
+        assert_eq!(rows[0].rigor.frozen_dataset, Coverage::Mixed);
     }
 
     #[test]

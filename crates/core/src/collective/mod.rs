@@ -27,14 +27,17 @@ mod aliases;
 mod classify;
 mod merge;
 mod privacy;
+pub mod rigor;
 mod types;
 
 /// Current digest wire-format version. Bump when [`ModelDigestEntry`] changes shape. v2 added
-/// `quality_variance` (and, in the same release, judge/rubric tags).
-pub const DIGEST_SCHEMA_VERSION: u32 = 2;
+/// `quality_variance` (and, in the same release, judge/rubric tags); v3 added the **rigor** block
+/// (`determinism`, `frozen_dataset`, `significance_tested`).
+pub const DIGEST_SCHEMA_VERSION: u32 = 3;
 
-/// Oldest digest wire-format version a hub still accepts. v1 digests carry no variance; they merge
-/// with `quality_variance = None` (CI unknown) rather than being orphaned by a version bump.
+/// Oldest digest wire-format version a hub still accepts. v1 digests carry no variance and v1/v2 no
+/// rigor; they merge with `quality_variance = None` (CI unknown) and `Coverage::Unknown` rigor rather
+/// than being orphaned by a version bump — every added field is additive and serde-defaulted.
 pub const MIN_SCHEMA_VERSION: u32 = 1;
 
 /// Default k-anonymity floor: a bucket needs at least this many cases to be published.
@@ -66,4 +69,5 @@ pub use aliases::ModelAliases;
 pub use classify::task_type_from;
 pub use merge::{build_digest, merge_leaderboard, MAX_SOURCE_WEIGHT_SHARE};
 pub use privacy::bucket_cost;
+pub use rigor::{canon_determinism, Coverage, RowRigor, DETERMINISM_LEVELS};
 pub use types::{CollectiveDigest, CollectiveEntry, LeaderboardRow, ModelDigestEntry, RunStat};

@@ -10,7 +10,8 @@ use lighttrack_core::{
     BenchTarget, Benchmark, BenchmarkCase, Dataset, DatasetItem, ModelPriceRow, Rubric, ScoreDetail,
 };
 use lighttrack_engine::{
-    build_eval_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig, JudgeOutcome,
+    build_eval_prompt, parse_judge_spec, run_judge, run_rubric_judge, Determinism, EngineConfig,
+    JudgeOutcome,
 };
 
 use crate::cli::Cli;
@@ -20,7 +21,10 @@ use crate::provenance::{freeform_detail, rubric_detail};
 use crate::rubric::run_rubric_benchmark;
 use crate::runctl::RunControl;
 use crate::stats::{annotate_significance, significance_verdict, Summary};
-use crate::util::{add_price_warnings, cost_or_book, join_csv, now_ts, parallel_map, percentiles};
+use crate::util::{
+    add_price_warnings, cost_or_book, join_csv, now_ts, parallel_map, percentiles,
+    stamp_determinism,
+};
 
 /// Parse a benchmark's `target` field into a comparison matrix. An **array** is unambiguously a
 /// target matrix and must deserialize cleanly — a malformed one is a hard error, not a silent
@@ -227,6 +231,10 @@ fn run_simple(
     // run-scoped verdicts in `scores` (queryable via `GET /v1/scores?run=`).
     let mut case_reports: Vec<Value> = Vec::new();
     let mut score_post_failures = 0u32;
+    // The weakest judging determinism across the cases actually judged — the run's reproducibility is
+    // its worst case's, and the collective digest reads this stamp to tell a pinned run from a
+    // sampled one. Compare/rubric/pairwise modes already stamp it; simple mode used to drop it.
+    let mut determinism: Option<Determinism> = None;
     for (i, outcome) in judged.into_iter().enumerate() {
         let outcome = match outcome? {
             Some(o) => o,
@@ -247,6 +255,8 @@ fn run_simple(
         } else {
             outcome.verdict.score
         };
+        determinism =
+            Some(determinism.map_or(outcome.determinism, |prev| prev.weakest(outcome.determinism)));
         sum += norm;
         scores.push(norm);
         n += 1;
@@ -330,6 +340,9 @@ fn run_simple(
     });
     attach_cases(&mut report, "cases", case_reports);
     annotate_significance(&mut report, &summary, scalar_fallback);
+    // Simple mode judges pre-existing outputs, so only the judging half is ours to claim; the
+    // generation half is `null` rather than an invented one.
+    stamp_determinism(&mut report, None, determinism);
     add_price_warnings(&mut report, &price_warnings);
     stamp_pins(&mut report, bench, report_extra);
     let run = json!({

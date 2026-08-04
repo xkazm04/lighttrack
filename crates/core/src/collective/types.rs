@@ -5,6 +5,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::rigor::{Coverage, RowRigor};
 use super::{ANON_CONTRIBUTOR, DIGEST_SCHEMA_VERSION};
 
 /// One benchmark run reduced to the fields a digest needs. Built by the API from a `(Benchmark,
@@ -30,6 +31,19 @@ pub struct RunStat {
     /// Short, one-way hash of the rubric shape/criteria — lets the hub tell whether two numbers were
     /// scored under the same rubric without ever seeing the rubric text.
     pub rubric_fingerprint: Option<String>,
+    /// v3 rigor: the run's weakest determinism stamp (`exact` | `best-effort` | `sampled`), or `None`
+    /// when the run recorded none.
+    pub determinism: Option<String>,
+    /// v3 rigor: whether this run's cases came from a **frozen** dataset. `None` when the run recorded
+    /// no dataset provenance (an inline case list, or a dataset whose head could not be read).
+    pub dataset_frozen: Option<bool>,
+    /// v3 rigor: the pinned dataset version. Consumed by [`build_digest`](super::build_digest) to tell
+    /// whether a bucket's runs all sat on **one** pin — the integer itself is never published (see the
+    /// fingerprinting argument in [`rigor`](super::rigor)).
+    pub dataset_version: Option<u32>,
+    /// v3 rigor: whether the run's verdict carried an interval (`n ≥ 2` + a `ci95`) rather than a bare
+    /// point estimate. `None` when the run recorded no significance annotation at all.
+    pub significance_tested: Option<bool>,
 }
 
 /// A published digest entry: one `(provider, model, task_type)` bucket aggregated across an instance's
@@ -60,6 +74,18 @@ pub struct ModelDigestEntry {
     /// v2: rubric-shape fingerprint (short one-way hash). `None` when the bucket mixes rubrics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rubric_fingerprint: Option<String>,
+    /// v3: the **weakest** determinism stamp across the bucket's runs — a bucket is only as
+    /// reproducible as its least reproducible run. `None` when any run recorded none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub determinism: Option<String>,
+    /// v3: whether the bucket's runs all ran against a frozen dataset pinned at a **single** version.
+    /// `all` is a complete claim; `mixed` means the runs disagreed (or drifted across versions);
+    /// `unknown` means no run recorded dataset provenance.
+    #[serde(default, skip_serializing_if = "Coverage::is_unknown")]
+    pub frozen_dataset: Coverage,
+    /// v3: whether the bucket's runs all carried a significance-tested verdict.
+    #[serde(default, skip_serializing_if = "Coverage::is_unknown")]
+    pub significance_tested: Coverage,
 }
 
 /// A full digest an instance contributes to a hub. The `contributor_id` is **opaque** (a hash) but a
@@ -108,6 +134,15 @@ pub struct CollectiveEntry {
     pub judge_provider: Option<String>,
     /// v2: rubric-shape fingerprint (short one-way hash) or `None`.
     pub rubric_fingerprint: Option<String>,
+    /// v3: weakest determinism stamp behind this contribution (`None` for v1/v2 contributors).
+    #[serde(default)]
+    pub determinism: Option<String>,
+    /// v3: frozen+single-version dataset coverage (`Unknown` for v1/v2 contributors).
+    #[serde(default)]
+    pub frozen_dataset: Coverage,
+    /// v3: significance-tested-verdict coverage (`Unknown` for v1/v2 contributors).
+    #[serde(default)]
+    pub significance_tested: Coverage,
     pub received_at: DateTime<Utc>,
 }
 
@@ -149,6 +184,13 @@ pub struct LeaderboardRow {
     /// merge caps this at [`MAX_SOURCE_WEIGHT_SHARE`](super::MAX_SOURCE_WEIGHT_SHARE) whenever the row
     /// has ≥2 sources, so no contributor can own a row outright however many cases it claims.
     pub max_source_share: f64,
+    /// v3: how rigorous the evidence behind this row was — determinism, frozen datasets, whether the
+    /// verdicts were significance-tested. Mixture is disclosed, not averaged away: see
+    /// [`RowRigor`](super::rigor::RowRigor).
+    pub rigor: RowRigor,
+    /// `true` when the row's sources disagree on any rigor facet. A convenience mirror of
+    /// [`RowRigor::is_mixed`] so a renderer/filter doesn't have to re-derive it.
+    pub mixed_rigor: bool,
 }
 
 fn default_schema_version() -> u32 {

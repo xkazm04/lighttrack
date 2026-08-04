@@ -105,6 +105,16 @@ enum CollectiveCmd {
         /// Filter to rows scored by one judge family (anthropic|openai|google|unknown).
         #[arg(long)]
         judge: Option<String>,
+        /// Rigor filter: keep only rows where EVERY source ran at this determinism level
+        /// (exact|best-effort|sampled).
+        #[arg(long)]
+        determinism: Option<String>,
+        /// Rigor filter: keep only rows where every source ran against a frozen, single-version dataset.
+        #[arg(long)]
+        frozen: bool,
+        /// Rigor filter: keep only rows where every source's verdict was significance-tested.
+        #[arg(long)]
+        tested: bool,
     },
     /// Preview this instance's privacy-safe digest — what `contribute` would publish (admin key).
     Digest {
@@ -335,12 +345,24 @@ fn main() -> Result<()> {
             call(&cli, Method::GET, &p, None, "get_margin")
         }
         Cmd::Collective { action } => match action {
-            CollectiveCmd::Leaderboard { task_type, provider, judge } => {
+            CollectiveCmd::Leaderboard { task_type, provider, judge, determinism, frozen, tested } => {
                 let mut p = "/v1/collective/leaderboard".to_string();
                 let mut sep = '?';
-                for (k, v) in [("task_type", task_type), ("provider", provider), ("judge", judge)] {
+                for (k, v) in [
+                    ("task_type", task_type),
+                    ("provider", provider),
+                    ("judge", judge),
+                    ("determinism", determinism),
+                ] {
                     if let Some(val) = v {
                         p.push_str(&format!("{sep}{k}={val}"));
+                        sep = '&';
+                    }
+                }
+                // Rigor booleans are opt-in narrowing flags: present ⇒ `=true`, absent ⇒ no filter.
+                for (k, on) in [("frozen_dataset", frozen), ("significance_tested", tested)] {
+                    if *on {
+                        p.push_str(&format!("{sep}{k}=true"));
                         sep = '&';
                     }
                 }

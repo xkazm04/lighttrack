@@ -6,7 +6,7 @@
 
 use rusqlite::{params, Connection, Row};
 
-use lighttrack_core::CollectiveEntry;
+use lighttrack_core::{CollectiveEntry, Coverage};
 
 use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
@@ -16,14 +16,17 @@ pub(super) fn upsert(conn: &Connection, e: &CollectiveEntry) -> Result<()> {
         "INSERT INTO collective_entries \
          (contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd, \
           p50_latency_ms, p95_latency_ms, n_runs, n_cases, quality_variance, \
-          judge_provider, rubric_fingerprint, received_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) \
+          judge_provider, rubric_fingerprint, determinism, frozen_dataset, significance_tested, \
+          received_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18) \
          ON CONFLICT(contributor_id, provider, model, task_type) DO UPDATE SET \
            quality=excluded.quality, pass_rate=excluded.pass_rate, avg_cost_usd=excluded.avg_cost_usd, \
            p50_latency_ms=excluded.p50_latency_ms, p95_latency_ms=excluded.p95_latency_ms, \
            n_runs=excluded.n_runs, n_cases=excluded.n_cases, \
            quality_variance=excluded.quality_variance, judge_provider=excluded.judge_provider, \
-           rubric_fingerprint=excluded.rubric_fingerprint, received_at=excluded.received_at",
+           rubric_fingerprint=excluded.rubric_fingerprint, determinism=excluded.determinism, \
+           frozen_dataset=excluded.frozen_dataset, \
+           significance_tested=excluded.significance_tested, received_at=excluded.received_at",
         params![
             e.contributor_id,
             e.provider,
@@ -39,6 +42,9 @@ pub(super) fn upsert(conn: &Connection, e: &CollectiveEntry) -> Result<()> {
             e.quality_variance,
             e.judge_provider,
             e.rubric_fingerprint,
+            e.determinism,
+            e.frozen_dataset.to_tag(),
+            e.significance_tested.to_tag(),
             fmt_ts(e.received_at),
         ],
     )?;
@@ -67,7 +73,8 @@ pub(super) fn purge_before(conn: &Connection, cutoff: chrono::DateTime<chrono::U
 pub(super) fn list(conn: &Connection) -> Result<Vec<CollectiveEntry>> {
     let sql = "SELECT contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd, \
                p50_latency_ms, p95_latency_ms, n_runs, n_cases, quality_variance, \
-               judge_provider, rubric_fingerprint, received_at \
+               judge_provider, rubric_fingerprint, determinism, frozen_dataset, \
+               significance_tested, received_at \
                FROM collective_entries";
     let mut stmt = conn.prepare(sql)?;
     let raws = stmt
@@ -91,6 +98,9 @@ struct Raw {
     quality_variance: Option<f64>,
     judge_provider: Option<String>,
     rubric_fingerprint: Option<String>,
+    determinism: Option<String>,
+    frozen_dataset: Option<String>,
+    significance_tested: Option<String>,
     received_at: String,
 }
 
@@ -110,8 +120,15 @@ fn map_raw(row: &Row) -> rusqlite::Result<Raw> {
         quality_variance: row.get(11)?,
         judge_provider: row.get(12)?,
         rubric_fingerprint: row.get(13)?,
-        received_at: row.get(14)?,
+        determinism: row.get(14)?,
+        frozen_dataset: row.get(15)?,
+        significance_tested: row.get(16)?,
+        received_at: row.get(17)?,
     })
+}
+
+fn cov(tag: Option<String>) -> Coverage {
+    tag.as_deref().map(Coverage::from_tag).unwrap_or(Coverage::Unknown)
 }
 
 fn from_raw(r: Raw) -> Result<CollectiveEntry> {
@@ -130,6 +147,11 @@ fn from_raw(r: Raw) -> Result<CollectiveEntry> {
         quality_variance: r.quality_variance,
         judge_provider: r.judge_provider,
         rubric_fingerprint: r.rubric_fingerprint,
+        determinism: r.determinism,
+        // A v1/v2 row stored NULL; `Coverage::from_tag` reads that back as `Unknown`, so the version
+        // bump needs no backfill.
+        frozen_dataset: cov(r.frozen_dataset),
+        significance_tested: cov(r.significance_tested),
         received_at: parse_ts(&r.received_at)?,
     })
 }
@@ -162,6 +184,9 @@ mod tests {
             quality_variance: None,
             judge_provider: None,
             rubric_fingerprint: None,
+            determinism: None,
+            frozen_dataset: Coverage::Unknown,
+            significance_tested: Coverage::Unknown,
             received_at: Utc::now(),
         }
     }
@@ -232,6 +257,26 @@ mod tests {
         upsert(&c, &entry("b", "haiku", 0.7, 20)).unwrap();
         let b = list(&c).unwrap().into_iter().find(|r| r.model == "haiku").unwrap();
         assert!(b.quality_variance.is_none());
+    }
+
+    #[test]
+    fn rigor_round_trips_and_v2_rows_read_back_as_unknown() {
+        let c = conn();
+        let mut e = entry("a", "sonnet", 0.8, 50);
+        e.determinism = Some("exact".into());
+        e.frozen_dataset = Coverage::All;
+        e.significance_tested = Coverage::Mixed;
+        upsert(&c, &e).unwrap();
+        let got = list(&c).unwrap();
+        assert_eq!(got[0].determinism.as_deref(), Some("exact"));
+        assert_eq!(got[0].frozen_dataset, Coverage::All);
+        assert_eq!(got[0].significance_tested, Coverage::Mixed);
+        // A v1/v2 contribution stores NULLs and reads back as Unknown — no backfill needed.
+        upsert(&c, &entry("b", "haiku", 0.7, 20)).unwrap();
+        let b = list(&c).unwrap().into_iter().find(|r| r.model == "haiku").unwrap();
+        assert!(b.determinism.is_none());
+        assert_eq!(b.frozen_dataset, Coverage::Unknown);
+        assert_eq!(b.significance_tested, Coverage::Unknown);
     }
 
     #[test]

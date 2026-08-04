@@ -469,11 +469,49 @@ LightTrack, the better the data for everyone (the moat).
     and dated/synonym variants collapse to their family **only where the alias file says so**
     (`gpt-4o`, `openai/gpt-4o`, `gpt-4o-2024-08-06` → one row). An identity absent from the table passes
     through unchanged, so a new model is never silently mis-merged.
+- **Benchmark rigor rides the digest (schema v3).** Rounds 4 and 5 built exactly the signals that
+  answer "should I trust this number" — determinism stamps, frozen datasets, significance-tested
+  verdicts — and none of them used to reach the collective, so a pinned exact-determinism run against a
+  frozen dataset merged as an equal with a sampled run against a mutable one. v3 carries three facets
+  (`core::collective::rigor`):
+  - *Determinism.* The run's **weakest** stamp (`exact` | `best-effort` | `sampled`), folded across the
+    bucket's runs and again across the row's sources — a set of runs is only as reproducible as its
+    least reproducible member. An unrecorded run **voids** the claim (`None`) rather than letting the
+    recorded ones vouch for it.
+  - *Frozen dataset.* Whether the cases were immutable **and** pinned at a single version, as a
+    four-state coverage tag (`all` | `mixed` | `none` | `unknown`). Two versions of the same frozen
+    dataset are two case sets, so version drift degrades an otherwise-`all` bucket to `mixed`.
+  - *Significance-tested.* Whether the run's verdict carried a real interval (`n ≥ 2` **and** a `ci95`
+    in the run report), same four-state tag. `n = 1` is a point dressed up as an interval and counts as
+    untested; a run predating the annotation is `unknown`, never libelled as sloppy.
+  - *Mixture is disclosed, not averaged.* A row publishes `rigor.determinism` (the weakest stamp),
+    `rigor.determinism_levels` (every distinct stamp behind it) and `mixed_rigor` — so `sampled` +
+    `["exact","sampled"]` reads as "one of these contributors sampled", instead of a flattering
+    average. The rendered table shows `weakest · frozen · tested` with a `‡` on mixed rows.
+  - *Filterable.* `GET …/leaderboard?determinism=exact&frozen_dataset=true&significance_tested=true`
+    keeps only rows where **every** source attested that level (a mixed row is not an exact row);
+    `lt collective leaderboard --determinism exact --frozen --tested` and the
+    `get_collective_leaderboard` MCP tool expose the same knobs.
+  - *Why this is not a new fingerprinting channel.* A unique rigor combination identifies a contributor
+    exactly as a unique task does, so rigor is built from **closed, tiny vocabularies** — three
+    determinism levels and a four-state tag — canon-clamped hub-side at ingest, so a poster cannot
+    widen the vocabulary (an invented determinism label is dropped to "not recorded", never admitted as
+    a fourth level). In particular the **dataset version integer never leaves the instance**: "v37"
+    tells a reader nothing (my v3 and your v3 are different datasets) while being a sharp per-contributor
+    fingerprint, so it is consumed by the digest builder and published only as its one useful
+    consequence — whether the bucket's runs sat on one immutable pin. And the rigor filters are applied
+    **after** the `min_contributors` k-anonymity retain, exactly as `?provider=` is, so no filter
+    combination can strip a row down to a lone source's private eval.
+  - *Additive, as v1→v2 was.* A hub accepts v1..=v3; a v1/v2 contribution stores NULLs and reads back
+    as `unknown` rigor with no backfill, and still counts toward `n_contributors`. What it cannot do is
+    lend its silence to someone else's claim: one silent source makes the merged row's determinism
+    `None` and its coverage tags `mixed`.
 - **Topology.** Any LightTrack can be a **hub** (`LIGHTTRACK_COLLECTIVE_ACCEPT=1`, off by default) that
   receives digests and merges them; others contribute. Same binary, no central service required.
 - **API.** `GET /v1/collective/digest?min_cases=` (admin — preview what we'd publish) ·
   `POST /v1/collective/ingest` (hub-only; replaces a contributor's set, validates + clamps each entry) ·
-  `GET /v1/collective/leaderboard?task_type=&provider=&judge=` (open read — the merged leaderboard) ·
+  `GET /v1/collective/leaderboard?task_type=&provider=&judge=&determinism=&frozen_dataset=&significance_tested=`
+  (open read — the merged leaderboard; the rigor filters run after the k-anonymity floor) ·
   `DELETE /v1/collective/contribution[?contributor=]` (withdraw a source's entries).
 - **Surfaces.** `lt collective leaderboard|digest|contribute|withdraw --hub <url>` (the CLI does the two-hop push:
   GET own digest → POST to the hub); the `get_collective_leaderboard` MCP read tool; a rendered
@@ -505,7 +543,9 @@ model_prices(provider, model, input_per_mtok, output_per_mtok, cached_input_per_
 jobs(id, type, payload_json, status, attempts, progress, error, claimed_at, created_at)
 collective_entries(contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd,
                    p50_latency_ms?, p95_latency_ms?, n_runs, n_cases, quality_variance?,
-                   judge_provider?, rubric_fingerprint?, received_at)  -- hub side; PK=(contributor_id,provider,model,task_type)
+                   judge_provider?, rubric_fingerprint?,
+                   determinism?, frozen_dataset?, significance_tested?,   -- v3 rigor; NULL = unknown
+                   received_at)  -- hub side; PK=(contributor_id,provider,model,task_type)
 ```
 
 ### Run-scoped case results

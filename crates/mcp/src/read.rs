@@ -91,7 +91,10 @@ pub(crate) fn tools() -> Vec<Value> {
         tool("get_collective_leaderboard", "The collective real-world model leaderboard: quality × cost × latency per (provider, model, task type), merged across contributing LightTrack instances. Optionally filter by task_type or provider.",
             json!({"type":"object","properties":{
                 "task_type":{"type":"string","description":"filter to one task bucket (qa, summarization, coding, …)"},
-                "provider":{"type":"string","description":"filter to one provider (anthropic, openai, …)"}
+                "provider":{"type":"string","description":"filter to one provider (anthropic, openai, …)"},
+                "determinism":{"type":"string","description":"rigor filter: keep only rows where EVERY source ran at this determinism level (exact|best-effort|sampled)"},
+                "frozen_dataset":{"type":"string","description":"rigor filter: 'true' keeps only rows whose every source ran against a frozen, single-version dataset"},
+                "significance_tested":{"type":"string","description":"rigor filter: 'true' keeps only rows whose every source's verdict was significance-tested"}
             }})),
         tool("get_collective_digest", "This instance's privacy-safe, k-anonymized model digest — the aggregate scorecards it would contribute to a collective hub (admin key required). Never reads raw events.",
             json!({"type":"object","properties":{
@@ -262,7 +265,7 @@ fn jobs_path(args: &Value) -> String {
 fn collective_path(args: &Value) -> String {
     let mut p = "/v1/collective/leaderboard".to_string();
     let mut sep = '?';
-    for k in ["task_type", "provider"] {
+    for k in ["task_type", "provider", "determinism", "frozen_dataset", "significance_tested"] {
         if let Some(v) = args.get(k).and_then(Value::as_str) {
             p.push_str(&format!("{sep}{k}={v}"));
             sep = '&';

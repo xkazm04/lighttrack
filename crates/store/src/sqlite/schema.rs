@@ -30,6 +30,11 @@ const ADDED_COLUMNS: &[&str] = &[
     "ALTER TABLE collective_entries ADD COLUMN quality_variance REAL",
     "ALTER TABLE collective_entries ADD COLUMN judge_provider TEXT",
     "ALTER TABLE collective_entries ADD COLUMN rubric_fingerprint TEXT",
+    // Collective digest v3: benchmark rigor — how reproducible the contributing runs were, whether
+    // their cases came from one frozen pin, and whether their verdicts were significance-tested.
+    "ALTER TABLE collective_entries ADD COLUMN determinism TEXT",
+    "ALTER TABLE collective_entries ADD COLUMN frozen_dataset TEXT",
+    "ALTER TABLE collective_entries ADD COLUMN significance_tested TEXT",
     // Collective consent: per-project opt-in to digest contribution (default off).
     "ALTER TABLE projects ADD COLUMN collective_opt_in INTEGER NOT NULL DEFAULT 0",
     // Verdict provenance: structured judge detail (core::ScoreDetail) as JSON.

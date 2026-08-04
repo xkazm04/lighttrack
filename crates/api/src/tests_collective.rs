@@ -759,3 +759,70 @@ async fn anonymous_push_refused_unless_allowed() {
     assert_eq!(ack["contributor_id"], "anonymous");
     assert_eq!(store.list_collective_entries().unwrap()[0].contributor_id, "anonymous");
 }
+
+/// A v3 digest carrying one bucket with an explicit rigor block.
+fn rigor_digest(model: &str, determinism: &str, frozen: &str, tested: &str) -> Value {
+    json!({ "schema_version": 3, "entries": [{
+        "provider": "anthropic", "model": model, "task_type": "qa",
+        "quality": 0.8, "pass_rate": 0.8, "avg_cost_usd": 0.003,
+        "n_runs": 2, "n_cases": 100,
+        "determinism": determinism, "frozen_dataset": frozen, "significance_tested": tested
+    }]})
+}
+
+#[tokio::test]
+async fn rigor_rides_the_row_and_the_leaderboard_can_be_filtered_by_it() {
+    let (state, store) = setup_k(true, false, 5, 2);
+    let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
+    let app = crate::build_router(state);
+    // `strict` is a pinned, frozen, significance-tested contribution; `loose` sampled a mutable set.
+    ingest(&app, Some(&ka), rigor_digest("haiku", "exact", "all", "all")).await;
+    let (_s, lb) = leaderboard(&app).await;
+    assert_eq!(lb["n_rows"], 0, "one source is still one source — the k floor comes first: {lb}");
+
+    ingest(&app, Some(&kb), rigor_digest("haiku", "exact", "all", "all")).await;
+    let (_s, lb) = leaderboard(&app).await;
+    let row = &lb["rows"][0];
+    assert_eq!(row["rigor"]["determinism"], "exact", "{lb}");
+    assert_eq!(row["rigor"]["frozen_dataset"], "all");
+    assert_eq!(row["rigor"]["significance_tested"], "all");
+    assert_eq!(row["mixed_rigor"], false);
+    // Asking for the rigorous slice keeps it; asking for the sloppy slice does not.
+    let (_s, lb) = leaderboard_q(&app, "determinism=exact&frozen_dataset=true").await;
+    assert_eq!(lb["n_rows"], 1, "{lb}");
+    let (_s, lb) = leaderboard_q(&app, "determinism=sampled").await;
+    assert_eq!(lb["n_rows"], 0, "{lb}");
+
+    // Now B re-contributes the same bucket from a sloppy run: the row discloses the mixture instead
+    // of averaging it away, and drops out of the "exact, frozen" slice.
+    ingest(&app, Some(&kb), rigor_digest("haiku", "sampled", "none", "all")).await;
+    let (_s, lb) = leaderboard(&app).await;
+    let row = &lb["rows"][0];
+    assert_eq!(row["rigor"]["determinism"], "sampled", "the headline is the weakest stamp: {lb}");
+    assert_eq!(row["rigor"]["determinism_levels"], json!(["exact", "sampled"]));
+    assert_eq!(row["rigor"]["frozen_dataset"], "mixed");
+    assert_eq!(row["rigor"]["significance_tested"], "all", "both sources did test");
+    assert_eq!(row["mixed_rigor"], true);
+    let (_s, lb) = leaderboard_q(&app, "determinism=exact").await;
+    assert_eq!(lb["n_rows"], 0, "a mixed row is not an exact-determinism row: {lb}");
+}
+
+#[tokio::test]
+async fn v2_digests_still_merge_under_a_v3_hub() {
+    let (state, store) = setup_k(true, false, 5, 2);
+    let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
+    let app = crate::build_router(state);
+    // A v2 contributor knows nothing about rigor; the bump must not orphan it.
+    let (status, ack) = ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.8, 100, "openai")).await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted"], 1);
+    ingest(&app, Some(&kb), rigor_digest("haiku", "exact", "all", "all")).await;
+    let (_s, lb) = leaderboard(&app).await;
+    let row = &lb["rows"][0];
+    assert_eq!(row["n_contributors"], 2, "the v2 contribution still counts: {lb}");
+    // One silent source voids the claim — the row never inherits the rigorous source's badge.
+    assert!(row["rigor"]["determinism"].is_null(), "{lb}");
+    assert_eq!(row["rigor"]["frozen_dataset"], "mixed");
+    let (_s, lb) = leaderboard_q(&app, "frozen_dataset=true").await;
+    assert_eq!(lb["n_rows"], 0, "a partly-unknown row is not a frozen-dataset row: {lb}");
+}

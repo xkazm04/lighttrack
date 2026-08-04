@@ -274,6 +274,9 @@ CREATE TABLE IF NOT EXISTS collective_entries (
   quality_variance REAL,          -- v2: case-weighted variance of quality across the contributor's runs
   judge_provider  TEXT,            -- v2: coarse judge family (anthropic|openai|google|unknown|mixed)
   rubric_fingerprint TEXT,         -- v2: short one-way hash of the rubric shape (no content leak)
+  determinism     TEXT,            -- v3 rigor: weakest stamp (exact|best-effort|sampled), NULL = unrecorded
+  frozen_dataset  TEXT,            -- v3 rigor: coverage tag (all|mixed|none), NULL = unknown
+  significance_tested TEXT,        -- v3 rigor: coverage tag (all|mixed|none), NULL = unknown
   received_at     TEXT NOT NULL,
   PRIMARY KEY (contributor_id, provider, model, task_type)
 );

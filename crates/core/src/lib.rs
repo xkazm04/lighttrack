@@ -27,9 +27,10 @@ pub mod trace;
 
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use collective::{
-    bucket_cost, build_digest, merge_leaderboard, task_type_from, CollectiveDigest, CollectiveEntry,
-    LeaderboardRow, ModelAliases, ModelDigestEntry, RunStat, DEFAULT_LOW_CONFIDENCE_CASES,
-    DEFAULT_MIN_CASES, DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
+    bucket_cost, build_digest, canon_determinism, merge_leaderboard, task_type_from,
+    CollectiveDigest, CollectiveEntry, Coverage, LeaderboardRow, ModelAliases, ModelDigestEntry,
+    RowRigor, RunStat, DEFAULT_LOW_CONFIDENCE_CASES, DEFAULT_MIN_CASES, DETERMINISM_LEVELS,
+    DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
 };
 pub use customer::{BillingProduct, Customer};
 pub use dataset::{Dataset, DatasetItem};
