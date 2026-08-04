@@ -108,6 +108,46 @@ async fn trace_rollup_lists_aggregates_and_nests_spans() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// One definition of a trace: the list rollup and the detail view must report the same duration and
+/// status. They drifted because the list computed `MAX(ts) - MIN(ts)` (start-to-start) while the
+/// detail counted the final span's latency — so this pins the exact case, a trailing span with
+/// non-trivial latency.
+#[tokio::test]
+async fn list_and_detail_agree_on_duration_and_status() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let span = |ts: &str, id: &str, latency: u64, status: &str| {
+        json!({
+            "provider": "anthropic", "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 }, "cost_usd": 0.001,
+            "trace_id": "tr-dur", "span_id": id, "ts": ts,
+            "latency_ms": latency, "status": status
+        })
+    };
+    let now = chrono::Utc::now();
+    let t0 = (now - chrono::Duration::seconds(30)).to_rfc3339();
+    let t2 = (now - chrono::Duration::seconds(28)).to_rfc3339();
+    for body in [span(&t0, "s1", 120, "success"), span(&t2, "s2", 750, "error")] {
+        let (status, v) = ingest(&app, &key, body).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+    }
+
+    let (_, list) = get(&app, &key, "/v1/traces").await;
+    let row = &list.as_array().unwrap()[0];
+    let (_, detail) = get(&app, &key, "/v1/traces/tr-dur").await;
+
+    assert_eq!(row["duration_ms"], 2750, "the trailing span's latency counts in the list: {list}");
+    assert_eq!(row["duration_ms"], detail["duration_ms"], "list vs detail duration");
+    assert_eq!(row["status"], detail["status"], "list vs detail status");
+    assert_eq!(row["status"], "error");
+    // A complete trace still says so explicitly.
+    assert_eq!(detail["spans_truncated"], false);
+    assert_eq!(detail["spans_total"], 2);
+    assert_eq!(detail["spans_logged"], 2);
+}
+
 #[tokio::test]
 async fn score_whole_trace_anchors_to_root_and_surfaces_in_detail() {
     let (state, store) = setup(Redactor::off());

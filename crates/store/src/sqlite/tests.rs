@@ -9,7 +9,7 @@ use lighttrack_core::{
 };
 
 use super::SqliteStore;
-use crate::{Store, TraceFilter};
+use crate::{Store, TraceFilter, MAX_TRACE_SPANS};
 
 fn ev(project: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEvent {
     LlmEvent {
@@ -329,11 +329,11 @@ fn trace_rollup_groups_events_and_scores() {
     assert_eq!(t1.models.len(), 2, "two distinct models in the trace");
 
     // The rollup nests child under root and totals the trace.
-    let trace = s.get_trace(Some("p1"), "tr-1").unwrap().expect("get_trace Some");
+    let trace = s.get_trace(Some("p1"), "tr-1", MAX_TRACE_SPANS).unwrap().expect("get_trace Some");
     assert_eq!(trace.totals.spans, 2);
     assert_eq!(trace.spans.len(), 1, "single root span");
     assert_eq!(trace.spans[0].children.len(), 1, "child nests under root");
-    assert!(s.get_trace(Some("p1"), "nope").unwrap().is_none(), "unknown trace -> None");
+    assert!(s.get_trace(Some("p1"), "nope", MAX_TRACE_SPANS).unwrap().is_none(), "unknown trace -> None");
 
     // A per-call score on the child + a whole-trace score anchored to the root both surface via join.
     let mk_score = |event_id: &str, rubric: &str| Score {
@@ -359,6 +359,69 @@ fn trace_rollup_groups_events_and_scores() {
 }
 
 #[test]
+fn list_and_detail_report_the_same_duration_and_status() {
+    use chrono::{TimeZone, Utc as ChronoUtc};
+
+    let s = SqliteStore::open_in_memory().unwrap();
+    // The exact case that drifted: the LAST span has real latency. `MAX(ts) - MIN(ts)` says 2000ms;
+    // the honest end (`max(ts + latency)`) is 2000 + 750. The last span also errored, so the status
+    // rule is exercised on both sides too.
+    let mk = |sec: u32, id: &str, latency: u64, status: lighttrack_core::Status| {
+        let mut e = ev("p1", "claude-haiku-4-5", 10, 5, 0.001);
+        e.id = id.into();
+        e.trace_id = Some("tr-dur".into());
+        e.span_id = Some(id.into());
+        e.latency_ms = Some(latency);
+        e.status = status;
+        e.ts = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, sec).unwrap();
+        e
+    };
+    s.insert_event(&mk(0, "e0", 120, lighttrack_core::Status::Success)).unwrap();
+    s.insert_event(&mk(2, "e1", 750, lighttrack_core::Status::Error)).unwrap();
+
+    let listed = s
+        .list_traces(Some("p1"), 10)
+        .unwrap()
+        .into_iter()
+        .find(|t| t.trace_id == "tr-dur")
+        .expect("trace listed");
+    let detail = s.get_trace(Some("p1"), "tr-dur", MAX_TRACE_SPANS).unwrap().expect("detail");
+
+    assert_eq!(listed.duration_ms, 2750, "the last span's latency counts in the LIST too");
+    assert_eq!(listed.duration_ms, detail.duration_ms, "list and detail must agree on duration");
+    assert_eq!(listed.status, detail.status, "and on status");
+    assert_eq!(listed.status, "error");
+    assert_eq!(listed.spans, detail.totals.spans);
+}
+
+#[test]
+fn a_runaway_trace_is_clipped_and_says_so() {
+    use chrono::{TimeZone, Utc as ChronoUtc};
+
+    let s = SqliteStore::open_in_memory().unwrap();
+    for i in 0..7u32 {
+        let mut e = ev("p1", "claude-haiku-4-5", 10, 5, 0.001);
+        e.id = format!("e{i}");
+        e.trace_id = Some("tr-loop".into());
+        e.span_id = Some(format!("s{i}"));
+        e.ts = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, i).unwrap();
+        s.insert_event(&e).unwrap();
+    }
+
+    let clipped = s.get_trace(Some("p1"), "tr-loop", 3).unwrap().expect("detail");
+    assert!(clipped.spans_truncated, "a clipped trace must never read as complete");
+    assert_eq!(clipped.spans_total, 7, "the true span count is reported");
+    assert_eq!(clipped.spans_logged, 3);
+    assert_eq!(clipped.totals.spans, 3);
+    // The head of the trace is what survives, so the entry-point span is still there to anchor a score.
+    assert_eq!(clipped.root_event_id(), Some("e0"));
+
+    let whole = s.get_trace(Some("p1"), "tr-loop", MAX_TRACE_SPANS).unwrap().expect("detail");
+    assert!(!whole.spans_truncated);
+    assert_eq!((whole.spans_total, whole.spans_logged), (7, 7));
+}
+
+#[test]
 fn colliding_trace_id_across_projects_stays_separate() {
     use lighttrack_core::Score;
 
@@ -379,20 +442,20 @@ fn colliding_trace_id_across_projects_stays_separate() {
         s.insert_event(e).unwrap();
     }
 
-    let mine = s.get_trace(Some("p1"), "req-1").unwrap().expect("p1 sees its own trace");
+    let mine = s.get_trace(Some("p1"), "req-1", MAX_TRACE_SPANS).unwrap().expect("p1 sees its own trace");
     assert_eq!(mine.project_id, "p1", "the older foreign event must not claim the trace");
     assert_eq!(mine.totals.spans, 1, "only p1's span is visible: {:?}", mine.spans);
     assert!((mine.totals.cost_usd - 0.001).abs() < 1e-9, "no foreign cost leaks in");
 
-    let theirs_view = s.get_trace(Some("p2"), "req-1").unwrap().expect("p2 sees its own trace");
+    let theirs_view = s.get_trace(Some("p2"), "req-1", MAX_TRACE_SPANS).unwrap().expect("p2 sees its own trace");
     assert_eq!(theirs_view.totals.spans, 1);
     assert_eq!(theirs_view.project_id, "p2");
 
     // A third project sees nothing at all — not an empty-but-existing trace, None.
-    assert!(s.get_trace(Some("p3"), "req-1").unwrap().is_none());
+    assert!(s.get_trace(Some("p3"), "req-1", MAX_TRACE_SPANS).unwrap().is_none());
 
     // Unscoped (admin/dev) keeps the deliberate cross-project view.
-    let merged = s.get_trace(None, "req-1").unwrap().expect("operator view");
+    let merged = s.get_trace(None, "req-1", MAX_TRACE_SPANS).unwrap().expect("operator view");
     assert_eq!(merged.totals.spans, 2, "admin/dev still see every project's spans");
 
     // Scores are scoped on the same terms.
@@ -441,7 +504,7 @@ fn trace_list_and_detail_models_match_first_seen_order() {
 
     let list = s.list_traces(Some("p1"), 10).unwrap();
     let listed = list.iter().find(|t| t.trace_id == "tr-order").expect("trace listed");
-    let detail = s.get_trace(Some("p1"), "tr-order").unwrap().expect("trace detail");
+    let detail = s.get_trace(Some("p1"), "tr-order", MAX_TRACE_SPANS).unwrap().expect("trace detail");
 
     assert_eq!(listed.models, vec!["beta".to_string(), "alpha".to_string()], "first-seen order");
     assert_eq!(listed.models, detail.models, "list and detail agree on model ordering");

@@ -19,7 +19,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use lighttrack_core::{new_id, Score, Trace};
-use lighttrack_store::TraceFilter;
+use lighttrack_store::{TraceFilter, MAX_TRACE_SPANS};
 
 use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_read_project};
@@ -190,7 +190,7 @@ async fn load_trace(
 ) -> Result<Trace, ApiError> {
     let store = st.store.clone();
     let tid = id.to_string();
-    spawn_db(move || store.get_trace(scope.as_deref(), &tid))
+    spawn_db(move || store.get_trace(scope.as_deref(), &tid, MAX_TRACE_SPANS))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("trace '{id}' not found")))
 }

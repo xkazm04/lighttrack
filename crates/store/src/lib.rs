@@ -159,6 +159,22 @@ pub struct TracePage {
     pub next_cursor: Option<String>,
 }
 
+/// A bounded window of one trace's events, plus how many it really has.
+///
+/// The detail path fetches at most [`MAX_TRACE_SPANS`] spans; `total` is the trace's true span count,
+/// so a clipped read is reported as clipped ([`Trace::spans_truncated`]) instead of passing for a
+/// whole trace. `total == events.len()` on the untruncated (normal) case.
+#[derive(Debug, Clone)]
+pub struct TraceEvents {
+    pub events: Vec<LlmEvent>,
+    pub total: usize,
+}
+
+/// Ceiling on how many spans one trace-detail read materializes. A runaway agent loop can put an
+/// unbounded number of spans behind a single `trace_id`, and the detail path — unlike the paginated
+/// listing — had no cap, so every fetch and every whole-trace scoring cycle grew with it.
+pub const MAX_TRACE_SPANS: usize = 5_000;
+
 /// One cost/usage bucket in a single customer's margin breakdown — grouped by model (`provider/model`)
 /// or by use-case `name`. `key` is that bucket label (`unattributed` / `(unnamed)` for the null group).
 #[derive(Debug, Clone, Serialize)]
@@ -771,7 +787,16 @@ pub trait Store: Send + Sync {
     /// check over a cross-project merge — a colliding id in another project must be invisible here,
     /// never folded into the caller's trace. `None` means "across every project" and is reserved for
     /// operator-level principals (admin/dev); a project-scoped caller always passes `Some`.
-    fn list_trace_events(&self, _project: Option<&str>, _trace_id: &str) -> Result<Vec<LlmEvent>> {
+    ///
+    /// At most `max_spans` events come back (the oldest, so the trace keeps its head), with
+    /// [`TraceEvents::total`] reporting the trace's real span count — the detail path is otherwise
+    /// unbounded, which is how one runaway loop slows every read of that trace.
+    fn list_trace_events(
+        &self,
+        _project: Option<&str>,
+        _trace_id: &str,
+        _max_spans: usize,
+    ) -> Result<TraceEvents> {
         Err(StoreError::Unsupported("traces"))
     }
     /// Scores attached to any event within a trace (i.e. `scores.event_id` ∈ the trace's events),
@@ -780,9 +805,16 @@ pub trait Store: Send + Sync {
         Err(StoreError::Unsupported("traces"))
     }
     /// Full rollup (totals + span tree) for one trace within `project`, or `None` if it has no events
-    /// there. See [`Store::list_trace_events`] for why the project scope is part of the query.
-    fn get_trace(&self, project: Option<&str>, trace_id: &str) -> Result<Option<Trace>> {
-        Ok(Trace::from_events(self.list_trace_events(project, trace_id)?))
+    /// there. See [`Store::list_trace_events`] for why the project scope is part of the query and why
+    /// the fan-out is capped; a clipped trace carries `spans_truncated`.
+    fn get_trace(
+        &self,
+        project: Option<&str>,
+        trace_id: &str,
+        max_spans: usize,
+    ) -> Result<Option<Trace>> {
+        let page = self.list_trace_events(project, trace_id, max_spans)?;
+        Ok(Trace::from_events_bounded(page.events, page.total))
     }
 
     // --- benchmarks (Phase 3.5) ---

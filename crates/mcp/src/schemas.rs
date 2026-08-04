@@ -157,6 +157,9 @@ fn trace_detail() -> Value {
             "started_at": {"type":"string"}, "ended_at": {"type":"string"},
             "duration_ms": {"type":"integer"}, "status": {"type":"string"},
             "models": {"type":"array"},
+            // Truncation signal: a clipped trace's totals cover `spans_logged` of `spans_total`.
+            "spans_total": {"type":"integer"}, "spans_logged": {"type":"integer"},
+            "spans_truncated": {"type":"boolean"},
             "totals": obj(json!({
                 "spans": {"type":"integer"}, "cost_usd": {"type":"number"},
                 "input_tokens": {"type":"integer"}, "output_tokens": {"type":"integer"},

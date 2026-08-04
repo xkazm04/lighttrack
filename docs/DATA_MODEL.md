@@ -58,11 +58,12 @@ parent is absent from the trace (or unset) is a root.
 | `trace_id` | string | the shared id |
 | `project_id` | string | from the trace's events |
 | `started_at` / `ended_at` | timestamp | first / last event time |
-| `duration_ms` | int | wall-clock span, `ended_at − started_at` |
-| `status` | string | `error` if any span errored, else `success` |
+| `duration_ms` | int | wall-clock span from the first span's start to the last span's **finish** — `max(ts + latency) − started_at`, so a trailing call's compute time counts. It may exceed `ended_at − started_at` (start-to-start). One definition (`core::trace::TraceShape`), so the list and the detail view always report the same number |
+| `status` | string | `error` if any span errored, else `success` — same `TraceShape` rule on both views |
 | `totals` | object | `{spans, cost_usd, input_tokens, output_tokens, total_tokens, errors}` |
 | `models` | string[] | distinct models touched, first-seen order |
-| `spans` | tree | root `{event, children[]}` nodes (detail view only) |
+| `spans_total` / `spans_logged` / `spans_truncated` | int / int / bool | detail view only. The detail read is capped at `MAX_TRACE_SPANS` (5 000) spans, oldest first; when the cap bites, `spans_truncated` is true and every derived number (`totals`, `models`, `duration_ms`, `status`) covers the retained spans only |
+| `spans` | tree | root `{event, children[]}` nodes (detail view only). A node carries `duplicate_span_id` when an earlier span already claimed its `span_id` — both are distinct calls, only the first owns the id for parent linkage |
 
 Read via `GET /v1/traces` (compact rollups) and `GET /v1/traces/:id` (totals + span tree + scores
 within the trace). A whole trace can be scored with `POST /v1/traces/:id/score`: the verdict is a

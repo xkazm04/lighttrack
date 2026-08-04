@@ -65,7 +65,19 @@ pub(crate) fn tree(v: &Value) -> Option<String> {
         None => wall,
     };
     out.push_str(&format!("- **When:** {when} · {timing}\n"));
-    out.push_str(&format!("- **Spans:** {}\n", u(totals, "spans")));
+    // A clipped trace says so on the Spans line — every number below it covers the retained spans
+    // only, so it must never read as a complete trace.
+    let truncated = v.get("spans_truncated").and_then(Value::as_bool).unwrap_or(false);
+    let spans_line = if truncated {
+        format!(
+            "{} of {} (⚠ truncated — totals below cover the shown spans only)",
+            opt_u(v, "spans_logged").unwrap_or_else(|| u(totals, "spans")),
+            opt_u(v, "spans_total").unwrap_or_else(|| u(totals, "spans")),
+        )
+    } else {
+        u(totals, "spans").to_string()
+    };
+    out.push_str(&format!("- **Spans:** {spans_line}\n"));
     let (in_t, out_t) = (u(totals, "input_tokens"), u(totals, "output_tokens"));
     out.push_str(&format!(
         "- **Tokens:** {} in / {} out\n",
@@ -148,6 +160,12 @@ fn render_node(node: &Value, depth: usize, out: &mut String) {
     };
     let op = s(ev, "operation");
     let op_seg = if op.is_empty() || op == "chat" { String::new() } else { format!(" ({op})") };
+    // Two events reported the same span_id: distinct calls that would otherwise read as one span.
+    let dup_seg = if node.get("duplicate_span_id").and_then(Value::as_bool).unwrap_or(false) {
+        " ⧉ dup span id"
+    } else {
+        ""
+    };
     let indent = "  ".repeat(depth);
     // The short event id is the operator's copy-paste handle into the single-event detail view
     // (tree → id → payloads). Emitted last so line width stays stable.
@@ -156,7 +174,7 @@ fn render_node(node: &Value, depth: usize, out: &mut String) {
         if id.is_empty() { String::new() } else { format!(" · `{}`", trunc(id, 10)) }
     };
     out.push_str(&format!(
-        "{indent}- {glyph} {label}{op_seg} · @{offset}ms {lat} · {}/{} tok · {cost}{id_seg}\n",
+        "{indent}- {glyph} {label}{op_seg} · @{offset}ms {lat} · {}/{} tok · {cost}{id_seg}{dup_seg}\n",
         commafy(in_t),
         commafy(out_t),
     ));
@@ -233,6 +251,28 @@ mod tests {
         assert!(md.contains("coherence"));
         // Not an object / no id -> no render.
         assert!(tree(&json!([])).is_none());
+    }
+
+    #[test]
+    fn tree_flags_a_clipped_trace_and_duplicate_span_ids() {
+        let v = json!({
+            "trace_id": "tr-loop", "status": "success",
+            "started_at": "2026-06-21T12:34:56.000000000Z", "duration_ms": 500,
+            "spans_total": 9000, "spans_logged": 5000, "spans_truncated": true,
+            "totals": { "spans": 5000, "input_tokens": 1, "output_tokens": 1, "cost_usd": 0.1,
+                        "errors": 0, "total_latency_ms": 10 },
+            "spans": [{
+                "offset_ms": 0, "latency_ms": 10, "duplicate_span_id": true,
+                "event": { "provider": "anthropic", "model": "m1", "status": "success",
+                           "usage": { "input": 1, "output": 1 }, "latency_ms": 10 },
+                "children": []
+            }],
+            "scores": []
+        });
+        let md = tree(&v).unwrap();
+        assert!(md.contains("5000 of 9000"), "clipped span count shown: {md}");
+        assert!(md.contains("truncated"), "a clipped trace must not read as complete: {md}");
+        assert!(md.contains("dup span id"), "duplicate span id marked: {md}");
     }
 
     #[test]

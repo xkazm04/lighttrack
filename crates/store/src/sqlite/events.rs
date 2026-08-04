@@ -2,20 +2,20 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::types::ToSql;
 use rusqlite::{params, params_from_iter, Connection, ErrorCode, OptionalExtension, Row};
 use serde_json::Value;
 
 use lighttrack_core::{
-    LimitScope, LlmEvent, Operation, Provider, Status, TokenUsage, TraceSummary,
+    LimitScope, LlmEvent, Operation, Provider, Status, TokenUsage, TraceShape, TraceSummary,
 };
 
 use super::usage_cache::UsageCache;
 use crate::codec::{decode_event_cursor, encode_event_cursor, fmt_ts, parse_enum, parse_ts};
 use crate::{
     event_contribution, evaluate_admission, Admission, CostRow, EventFilter, EventPage, Result,
-    ScopeUsage, StoreError, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    ScopeUsage, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 /// Map a failed event insert to a typed error: a primary-key / uniqueness violation (a duplicate
@@ -291,11 +291,17 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LlmEvent>> {
 /// `trace_id`. Scoped by `project` in the query: a trace id is caller-supplied, so a colliding id in
 /// another project must never enter the result set (see the `Store::list_trace_events` docs). `project =
 /// None` reads across projects and is reserved for operator principals.
+///
+/// Bounded at `max_spans` (the oldest ones, so the trace keeps its head): a runaway agent loop can
+/// otherwise put unbounded spans behind one id, and this path — unlike the paginated listing — had no
+/// cap at all. When the cap bites, one extra `COUNT(*)` reports the true span count so the caller can
+/// say the trace is clipped rather than serve a short read as a whole trace.
 pub(super) fn list_by_trace(
     conn: &Connection,
     project: Option<&str>,
     trace_id: &str,
-) -> Result<Vec<LlmEvent>> {
+    max_spans: usize,
+) -> Result<TraceEvents> {
     // `INDEXED BY` on the scoped path is deliberate: with a free choice the planner picks
     // idx_events_project_ts (it satisfies ORDER BY ts without a sort) and then filters trace_id over
     // *every* event in the project. Pinning the composite index keeps the read proportional to the
@@ -308,12 +314,26 @@ pub(super) fn list_by_trace(
         }
         None => ("events", ""),
     };
-    let sql = format!("SELECT {COLS} FROM {from} WHERE trace_id = ?1 {scope}ORDER BY ts ASC");
+    let where_clause = format!("WHERE trace_id = ?1 {scope}");
+    // Fetch one past the cap: cheaper than a COUNT on the overwhelmingly common untruncated trace.
+    let fetch = (max_spans as i64).saturating_add(1);
+    let sql =
+        format!("SELECT {COLS} FROM {from} {where_clause}ORDER BY ts ASC LIMIT {fetch}");
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
         .query_map(params_from_iter(args.iter()), map_raw)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    raws.into_iter().map(from_raw).collect()
+    let mut events = raws.into_iter().map(from_raw).collect::<Result<Vec<_>>>()?;
+
+    if events.len() as i64 <= max_spans as i64 {
+        let total = events.len();
+        return Ok(TraceEvents { events, total });
+    }
+    events.truncate(max_spans);
+    let count_sql = format!("SELECT COUNT(*) FROM {from} {where_clause}");
+    let mut count_stmt = conn.prepare(&count_sql)?;
+    let total: i64 = count_stmt.query_row(params_from_iter(args.iter()), |r| r.get(0))?;
+    Ok(TraceEvents { events, total: total as usize })
 }
 
 /// Per-trace rollups (one row per `trace_id`), most-recent activity first. Aggregated in SQL so
@@ -325,8 +345,16 @@ pub(super) fn list_by_trace(
 /// `list` and `get_trace` report identical model ordering.
 /// Aggregate select-list for a trace summary row. `ended` (MAX ts) is the keyset/order column and
 /// the bound `until`/`cursor`/`status`/`min_cost` filters compare against `MAX(ts)`/`SUM(...)`.
+///
+/// `finish_ms` is the aggregate that lets the list report the *same* duration as the detail view:
+/// `max(ts + latency)` in epoch milliseconds, not `MAX(ts)`. It leans on the fixed-width
+/// `RFC3339(Nanos, Z)` timestamp invariant — `strftime('%s', ts)` gives whole seconds and characters
+/// 21..24 are the milliseconds — and both endpoints then go through `TraceShape`, the one definition.
 const TRACE_SUMMARY_COLS: &str = "trace_id, MIN(project_id) AS project_id, MIN(ts) AS started, \
-    MAX(ts) AS ended, COUNT(*) AS spans, COALESCE(SUM(cost_usd),0.0) AS cost, \
+    MAX(ts) AS ended, \
+    MAX(CAST(strftime('%s', ts) AS INTEGER) * 1000 + CAST(substr(ts, 21, 3) AS INTEGER) \
+        + COALESCE(latency_ms, 0)) AS finish_ms, \
+    COUNT(*) AS spans, COALESCE(SUM(cost_usd),0.0) AS cost, \
     COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
     SUM(CASE WHEN status <> 'success' THEN 1 ELSE 0 END) AS errs";
 
@@ -465,6 +493,8 @@ struct TraceSummaryRaw {
     project_id: String,
     started: String,
     ended: String,
+    /// `max(ts + latency)` in epoch milliseconds — the trace's last *finish*, feeding `TraceShape`.
+    finish_ms: i64,
     spans: i64,
     cost_usd: f64,
     input_tokens: i64,
@@ -478,30 +508,40 @@ fn map_trace_summary(row: &Row) -> rusqlite::Result<TraceSummaryRaw> {
         project_id: row.get(1)?,
         started: row.get(2)?,
         ended: row.get(3)?,
-        spans: row.get(4)?,
-        cost_usd: row.get(5)?,
-        input_tokens: row.get(6)?,
-        output_tokens: row.get(7)?,
-        errors: row.get(8)?,
+        finish_ms: row.get(4)?,
+        spans: row.get(5)?,
+        cost_usd: row.get(6)?,
+        input_tokens: row.get(7)?,
+        output_tokens: row.get(8)?,
+        errors: row.get(9)?,
     })
 }
 
+/// Build the summary through [`TraceShape`] rather than re-deriving duration/status here: the list
+/// used to report `MAX(ts) - MIN(ts)` (start-to-start) while the detail reported `max(ts + latency)`,
+/// so the same trace showed two durations. The aggregate's only job now is to supply the shape's two
+/// endpoints; the rule that turns them into a number lives in one place.
 fn trace_summary_from_raw(r: TraceSummaryRaw) -> Result<TraceSummary> {
     let started_at = parse_ts(&r.started)?;
     let ended_at = parse_ts(&r.ended)?;
+    let last_finish = Utc
+        .timestamp_millis_opt(r.finish_ms)
+        .single()
+        .unwrap_or(ended_at);
+    let shape = TraceShape { started_at, last_finish, errors: r.errors as usize };
     Ok(TraceSummary {
         trace_id: r.trace_id,
         project_id: r.project_id,
         started_at,
         ended_at,
-        duration_ms: (ended_at - started_at).num_milliseconds().max(0),
+        duration_ms: shape.duration_ms(),
         spans: r.spans as usize,
         cost_usd: r.cost_usd,
         input_tokens: r.input_tokens as u64,
         output_tokens: r.output_tokens as u64,
         total_tokens: (r.input_tokens + r.output_tokens) as u64,
         errors: r.errors as usize,
-        status: if r.errors > 0 { "error" } else { "success" }.to_string(),
+        status: shape.status(),
         models: Vec::new(),
     })
 }

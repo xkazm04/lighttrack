@@ -13,6 +13,56 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::LlmEvent;
 
+/// The single definition of the two numbers the list and the detail view must agree on: a trace's
+/// wall-clock duration and its status.
+///
+/// The list rollup builds this from a SQL aggregate, the detail rollup by folding the events; both
+/// then read `duration_ms()` / `status()` from here. Keeping the *rule* in one place is what stops the
+/// two views drifting the way they did when the list reported `MAX(ts) - MIN(ts)` (start-to-start) and
+/// the detail reported `max(ts + latency) - started_at`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraceShape {
+    /// The first span's start.
+    pub started_at: DateTime<Utc>,
+    /// The last span's **finish** — `max(ts + latency)`, not `max(ts)`, so a trailing call's compute
+    /// time is counted.
+    pub last_finish: DateTime<Utc>,
+    /// Spans whose status is not `success`.
+    pub errors: usize,
+}
+
+impl TraceShape {
+    /// Fold a trace's events (any order) into its shape. `None` for an empty input.
+    pub fn of_events(events: &[LlmEvent]) -> Option<TraceShape> {
+        let started_at = events.iter().map(|e| e.ts).min()?;
+        let last_finish = events
+            .iter()
+            .map(|e| e.ts + Duration::milliseconds(e.latency_ms.unwrap_or(0) as i64))
+            .max()
+            .unwrap_or(started_at);
+        let errors = events
+            .iter()
+            .filter(|e| e.status != crate::event::Status::Success)
+            .count();
+        Some(TraceShape { started_at, last_finish, errors })
+    }
+
+    /// Wall-clock milliseconds from the trace's start to its last finish.
+    ///
+    /// Both endpoints are truncated to whole milliseconds *before* subtracting: the SQL side can only
+    /// offer millisecond precision (it adds an integer `latency_ms` to an epoch-ms timestamp), so
+    /// truncating here too makes the two paths produce the identical integer rather than one that
+    /// happens to be off by one on sub-millisecond timestamps.
+    pub fn duration_ms(&self) -> i64 {
+        (self.last_finish.timestamp_millis() - self.started_at.timestamp_millis()).max(0)
+    }
+
+    /// `success` unless any span errored, then `error`.
+    pub fn status(&self) -> String {
+        if self.errors > 0 { "error" } else { "success" }.to_string()
+    }
+}
+
 /// Aggregate totals over every span in a trace.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TraceTotals {
@@ -41,8 +91,17 @@ pub struct TraceSpan {
     /// bar `[offset_ms, offset_ms + latency_ms]` without digging into `event`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latency_ms: Option<u64>,
+    /// True when an earlier span in the trace already claimed this `span_id`. Two events reported the
+    /// same id, so they are genuinely distinct calls that would otherwise render as two identical-
+    /// looking bullets; only the first owns the id for parent linkage.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub duplicate_span_id: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TraceSpan>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// A compact per-trace rollup — the list view. No span payloads, so listing many traces stays cheap;
@@ -53,7 +112,9 @@ pub struct TraceSummary {
     pub project_id: String,
     pub started_at: DateTime<Utc>,
     pub ended_at: DateTime<Utc>,
-    /// Wall-clock span from the first to the last recorded event, in milliseconds.
+    /// Wall-clock milliseconds from the first span's start to the last span's *finish* — the same
+    /// [`TraceShape`] definition the detail view reports, so list and detail cannot disagree. (It was
+    /// `MAX(ts) - MIN(ts)`, start-to-start, which under-reported whenever the last span had latency.)
     pub duration_ms: i64,
     pub spans: usize,
     pub cost_usd: f64,
@@ -78,6 +139,7 @@ pub struct Trace {
     /// Wall-clock milliseconds from the first span's start to the last span's *finish*
     /// (`max(ts + latency)`), so a trailing call's latency is counted. May exceed
     /// `ended_at - started_at` (which is start-to-last-start) by that final span's compute time.
+    /// Defined once in [`TraceShape`] — the list rollup reports the identical number.
     pub duration_ms: i64,
     /// `success` unless any span errored, then `error`.
     pub status: String,
@@ -85,6 +147,17 @@ pub struct Trace {
     /// Distinct models touched, in first-seen (chronological) order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
+    /// How many spans the trace has in total — including any dropped by the fetch cap.
+    #[serde(default)]
+    pub spans_total: usize,
+    /// How many spans this payload actually carries (equals `totals.spans`).
+    #[serde(default)]
+    pub spans_logged: usize,
+    /// True when the fetch cap clipped the trace. Every derived number here — `totals`, `models`,
+    /// `duration_ms`, `status` — then describes the retained spans only, so a clipped trace must
+    /// never be read as a complete one.
+    #[serde(default)]
+    pub spans_truncated: bool,
     /// Root spans (those with no parent within this trace), each carrying its subtree.
     pub spans: Vec<TraceSpan>,
 }
@@ -96,7 +169,15 @@ impl Trace {
     /// Span nesting follows `parent_span_id` → `span_id`; an event whose parent is absent from the
     /// trace (or unset) is a root. Robust to malformed input: cycles and self-parents never drop or
     /// duplicate a span — every event appears exactly once.
-    pub fn from_events(mut events: Vec<LlmEvent>) -> Option<Trace> {
+    pub fn from_events(events: Vec<LlmEvent>) -> Option<Trace> {
+        let total = events.len();
+        Trace::from_events_bounded(events, total)
+    }
+
+    /// As [`Trace::from_events`], but told how many spans the trace really has (`spans_total`) when
+    /// the caller fetched a bounded window of them. Everything derived — totals, models, duration,
+    /// status — then covers the retained spans only, and `spans_truncated` says so.
+    pub fn from_events_bounded(mut events: Vec<LlmEvent>, spans_total: usize) -> Option<Trace> {
         if events.is_empty() {
             return None;
         }
@@ -108,31 +189,27 @@ impl Trace {
             .find_map(|e| e.trace_id.clone())
             .unwrap_or_default();
         let project_id = events[0].project_id.clone();
-        let started_at = events.first().map(|e| e.ts).unwrap_or_else(Utc::now);
-        let ended_at = events.iter().map(|e| e.ts).max().unwrap_or(started_at);
-        // Honest duration: the trace ends when its *last-finishing* span finishes, not when the last
-        // one started. Undercounted before by omitting the final span's latency.
-        let last_finish = events
-            .iter()
-            .map(|e| e.ts + Duration::milliseconds(e.latency_ms.unwrap_or(0) as i64))
-            .max()
-            .unwrap_or(started_at);
-        let duration_ms = (last_finish - started_at).num_milliseconds().max(0);
+        let ended_at = events.iter().map(|e| e.ts).max().unwrap_or(events[0].ts);
+        // Duration and status come from the shared TraceShape, the same rule the list rollup applies.
+        let shape = TraceShape::of_events(&events)?;
 
         let totals = totals_of(&events);
         let models = distinct_models(&events);
-        let status = if totals.errors > 0 { "error" } else { "success" }.to_string();
-        let spans = build_forest(events, started_at);
+        let spans_logged = events.len();
+        let spans = build_forest(events, shape.started_at);
 
         Some(Trace {
             trace_id,
             project_id,
-            started_at,
+            started_at: shape.started_at,
             ended_at,
-            duration_ms,
-            status,
+            duration_ms: shape.duration_ms(),
+            status: shape.status(),
             totals,
             models,
+            spans_total: spans_total.max(spans_logged),
+            spans_logged,
+            spans_truncated: spans_total > spans_logged,
             spans,
         })
     }
@@ -177,11 +254,19 @@ fn distinct_models(events: &[LlmEvent]) -> Vec<String> {
 /// Arrange events (already sorted oldest-first) into a forest of [`TraceSpan`]s by parent links.
 /// `trace_start` anchors each span's `offset_ms` on the waterfall.
 fn build_forest(events: Vec<LlmEvent>, trace_start: DateTime<Utc>) -> Vec<TraceSpan> {
-    // span_id -> index of the event that owns it (first occurrence wins on duplicates).
+    // span_id -> index of the event that owns it (first occurrence wins on duplicates). A later event
+    // reusing the id is flagged: it still renders as its own node (it IS a distinct call), but says so
+    // rather than reading as a second copy of the same span.
     let mut owner: HashMap<&str, usize> = HashMap::new();
+    let mut duplicate = vec![false; events.len()];
     for (i, e) in events.iter().enumerate() {
         if let Some(sid) = e.span_id.as_deref() {
-            owner.entry(sid).or_insert(i);
+            match owner.entry(sid) {
+                std::collections::hash_map::Entry::Occupied(_) => duplicate[i] = true,
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    v.insert(i);
+                }
+            }
         }
     }
 
@@ -199,15 +284,16 @@ fn build_forest(events: Vec<LlmEvent>, trace_start: DateTime<Utc>) -> Vec<TraceS
     let mut slots: Vec<Option<LlmEvent>> = events.into_iter().map(Some).collect();
     let mut visited: HashSet<usize> = HashSet::new();
     let mut forest = Vec::with_capacity(roots.len());
+    let ctx = ForestCtx { children: &children, duplicate: &duplicate, trace_start };
     for r in roots {
-        if let Some(node) = take_subtree(r, &mut slots, &children, &mut visited, trace_start) {
+        if let Some(node) = take_subtree(r, &mut slots, &mut visited, &ctx) {
             forest.push(node);
         }
     }
     // Any event not reachable from a root (a parent cycle) is promoted to a root so none is lost.
     for i in 0..slots.len() {
         if slots[i].is_some() {
-            if let Some(node) = take_subtree(i, &mut slots, &children, &mut visited, trace_start) {
+            if let Some(node) = take_subtree(i, &mut slots, &mut visited, &ctx) {
                 forest.push(node);
             }
         }
@@ -215,27 +301,39 @@ fn build_forest(events: Vec<LlmEvent>, trace_start: DateTime<Utc>) -> Vec<TraceS
     forest
 }
 
+/// The read-only side tables `take_subtree` needs, bundled so the recursion keeps a short signature.
+struct ForestCtx<'a> {
+    children: &'a HashMap<usize, Vec<usize>>,
+    duplicate: &'a [bool],
+    trace_start: DateTime<Utc>,
+}
+
 fn take_subtree(
     idx: usize,
     slots: &mut [Option<LlmEvent>],
-    children: &HashMap<usize, Vec<usize>>,
     visited: &mut HashSet<usize>,
-    trace_start: DateTime<Utc>,
+    ctx: &ForestCtx<'_>,
 ) -> Option<TraceSpan> {
     if !visited.insert(idx) {
         return None; // cycle guard
     }
     let event = slots[idx].take()?;
-    let offset_ms = (event.ts - trace_start).num_milliseconds().max(0);
+    let offset_ms = (event.ts - ctx.trace_start).num_milliseconds().max(0);
     let latency_ms = event.latency_ms;
-    let kids = children.get(&idx).map(Vec::as_slice).unwrap_or(&[]);
+    let kids = ctx.children.get(&idx).map(Vec::as_slice).unwrap_or(&[]);
     let mut child_nodes = Vec::with_capacity(kids.len());
     for &c in kids {
-        if let Some(node) = take_subtree(c, slots, children, visited, trace_start) {
+        if let Some(node) = take_subtree(c, slots, visited, ctx) {
             child_nodes.push(node);
         }
     }
-    Some(TraceSpan { event, offset_ms, latency_ms, children: child_nodes })
+    Some(TraceSpan {
+        event,
+        offset_ms,
+        latency_ms,
+        duplicate_span_id: ctx.duplicate.get(idx).copied().unwrap_or(false),
+        children: child_nodes,
+    })
 }
 
 #[cfg(test)]
@@ -245,6 +343,13 @@ mod tests {
     use chrono::Duration;
     use serde_json::Value;
 
+    /// A fixed base instant: offsets are exact whole seconds, so the millisecond-truncated duration
+    /// rule (see `TraceShape::duration_ms`) is deterministic instead of riding `Utc::now()`'s
+    /// sub-millisecond drift between calls.
+    fn base() -> DateTime<Utc> {
+        chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 6, 21, 12, 0, 0).unwrap()
+    }
+
     fn ev(span: &str, parent: Option<&str>, secs: i64, cost: f64, status: Status) -> LlmEvent {
         LlmEvent {
             id: format!("e-{span}"),
@@ -252,8 +357,8 @@ mod tests {
             trace_id: Some("t1".into()),
             span_id: Some(span.into()),
             parent_span_id: parent.map(str::to_string),
-            ts: Utc::now() + Duration::seconds(secs),
-            received_at: Utc::now(),
+            ts: base() + Duration::seconds(secs),
+            received_at: base(),
             provider: Provider::Anthropic,
             model: format!("m-{span}"),
             name: None,
@@ -363,6 +468,58 @@ mod tests {
         let t = Trace::from_events(evs).unwrap();
         assert_eq!(t.duration_ms, 2100, "final span's latency is no longer dropped");
         assert_eq!(t.totals.total_latency_ms, 200, "compute time sums per-span latency");
+    }
+
+    #[test]
+    fn bounded_fetch_reports_the_truncation() {
+        // Three spans exist; the caller was only handed the first two.
+        let evs = vec![
+            ev("a", None, 0, 0.001, Status::Success),
+            ev("b", Some("a"), 1, 0.002, Status::Success),
+        ];
+        let t = Trace::from_events_bounded(evs, 3).unwrap();
+        assert!(t.spans_truncated, "a clipped trace must say so");
+        assert_eq!(t.spans_total, 3);
+        assert_eq!(t.spans_logged, 2);
+        assert_eq!(t.totals.spans, 2, "derived numbers cover the retained spans only");
+
+        // The untruncated case carries the same three fields, saying "complete".
+        let whole = Trace::from_events(vec![ev("a", None, 0, 0.0, Status::Success)]).unwrap();
+        assert!(!whole.spans_truncated);
+        assert_eq!((whole.spans_total, whole.spans_logged), (1, 1));
+    }
+
+    #[test]
+    fn duplicate_span_ids_are_marked_not_silently_doubled() {
+        // Two distinct calls report the same span_id. Both must surface (they are different events),
+        // the second flagged, and only the first owns the id for parent linkage.
+        let mut dup = ev("a", None, 1, 0.0, Status::Success);
+        dup.id = "e-a2".into();
+        let evs = vec![
+            ev("a", None, 0, 0.0, Status::Success),
+            dup,
+            ev("c", Some("a"), 2, 0.0, Status::Success),
+        ];
+        let t = Trace::from_events(evs).unwrap();
+        assert_eq!(count_nodes(&t.spans), 3, "no span dropped or duplicated");
+        let flagged: Vec<&str> = flatten(&t.spans)
+            .into_iter()
+            .filter(|s| s.duplicate_span_id)
+            .map(|s| s.event.id.as_str())
+            .collect();
+        assert_eq!(flagged, vec!["e-a2"], "only the later claimant is flagged: {flagged:?}");
+        // c parents under the FIRST "a", not the duplicate.
+        let first = t.spans.iter().find(|s| s.event.id == "e-a").unwrap();
+        assert_eq!(first.children.len(), 1);
+        assert_eq!(first.children[0].event.span_id.as_deref(), Some("c"));
+    }
+
+    fn flatten(spans: &[TraceSpan]) -> Vec<&TraceSpan> {
+        spans.iter().flat_map(|s| {
+            let mut v = vec![s];
+            v.extend(flatten(&s.children));
+            v
+        }).collect()
     }
 
     #[test]

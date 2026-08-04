@@ -48,7 +48,7 @@ use lighttrack_core::{
 
 use crate::{
     Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, EventFilter, EventPage, Result,
-    ScopeUsage, Store, StoreError, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    ScopeUsage, Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 /// A **sargable** project predicate for `?1`-bound project queries. When a project is given this is an
@@ -330,8 +330,13 @@ impl Store for SqliteStore {
     ) -> Result<TracePage> {
         self.read(|c| events::list_trace_summaries_filtered(c, project, filter, limit))
     }
-    fn list_trace_events(&self, project: Option<&str>, trace_id: &str) -> Result<Vec<LlmEvent>> {
-        self.read(|c| events::list_by_trace(c, project, trace_id))
+    fn list_trace_events(
+        &self,
+        project: Option<&str>,
+        trace_id: &str,
+        max_spans: usize,
+    ) -> Result<TraceEvents> {
+        self.read(|c| events::list_by_trace(c, project, trace_id, max_spans))
     }
     fn list_trace_scores(&self, project: Option<&str>, trace_id: &str) -> Result<Vec<Score>> {
         self.read(|c| scores::list_by_trace(c, project, trace_id))
