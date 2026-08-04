@@ -33,6 +33,8 @@ pub(crate) fn rubric_detail(o: &RubricOutcome) -> ScoreDetail {
         injection_suspected: Some(o.injection_suspected),
         determinism: Some(o.determinism.as_str().to_string()),
         notes: Vec::new(),
+        // Whole-trace coverage is stamped by the API on the trace-scoring door, not here.
+        coverage: None,
     }
     .capped()
 }

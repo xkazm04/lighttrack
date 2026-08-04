@@ -11,6 +11,12 @@
 //! a still-streaming request won't be judged mid-flight. The pass is **idempotent**: a trace that
 //! already has a whole-trace score for this rubric is skipped, so a daemon or a cron `--once` run
 //! never double-scores. The judge is unbudgeted and uses only existing endpoints.
+//!
+//! The settle window is a heuristic, not a guarantee, so a second line of defence sits behind it:
+//! every whole-trace verdict records what it judged (`ScoreDetail::coverage`), and the trace read
+//! reports a verdict whose judged content has since moved as `stale`. Such a trace is **not**
+//! treated as already scored and gets a corrected verdict on the next cycle — see
+//! [`trace_already_scored`] for exactly how narrow "moved" is, and why.
 
 use std::time::Duration;
 
@@ -254,8 +260,23 @@ fn judge_one(engine: &EngineConfig, judge: &Judge, input: &str, output: &str) ->
     }
 }
 
-/// A trace already carries a whole-trace score for this rubric iff one of its scores has our
-/// `rubric` label anchored to the root event (the whole-trace anchor `score-traces` posts to).
+/// Is this trace already covered by a whole-trace verdict for this rubric?
+///
+/// A candidate verdict carries our `rubric` label anchored to the root event (the whole-trace anchor
+/// `score-traces` posts to). It **covers** the trace unless the API reports it as materially stale.
+///
+/// "Material" is deliberately narrow, because re-scoring spends real money on an unbudgeted judge:
+/// only `stale.reason == "changed"` — the judged root exchange itself differs from the one the
+/// verdict fingerprinted — buys a fresh judge call. That is the case where re-judging is guaranteed
+/// to send *different* text (the real root landing late, as an OTel parent span does; a streamed
+/// output filling in after the settle window). A `"grown"` trace — extra spans, byte-identical root
+/// exchange — would re-send an identical prompt for an identical verdict, so it is surfaced to the
+/// operator on read and left alone here. A verdict with no coverage recorded (written before
+/// coverage existed, or by an older API) reports no staleness and therefore still covers: the
+/// pre-existing skip behaviour, never a retroactive spend.
+///
+/// One covering verdict is enough, so a corrected trace (stale verdict + fresh one) is not
+/// re-scored again on the next cycle.
 fn trace_already_scored(detail: &Value, label: &str, root_id: &str) -> bool {
     detail
         .get("scores")
@@ -264,9 +285,15 @@ fn trace_already_scored(detail: &Value, label: &str, root_id: &str) -> bool {
             scores.iter().any(|s| {
                 s.get("rubric").and_then(Value::as_str) == Some(label)
                     && s.get("event_id").and_then(Value::as_str) == Some(root_id)
+                    && !verdict_superseded(s)
             })
         })
         .unwrap_or(false)
+}
+
+/// True when the API says this verdict's judged content is no longer what the trace holds.
+fn verdict_superseded(score: &Value) -> bool {
+    score.pointer("/stale/reason").and_then(Value::as_str) == Some("changed")
 }
 
 /// Pull a span-event text field (`input`/`output`) as plain text, treating a missing or `null`
@@ -372,6 +399,40 @@ mod tests {
         // A per-call score with the same rubric on a *child* span does not count as whole-trace.
         assert!(!trace_already_scored(&detail, "faithfulness", "root-1"));
         assert!(!trace_already_scored(&json!({}), "helpfulness", "root-1"));
+    }
+
+    #[test]
+    fn only_a_changed_exchange_reopens_a_scored_trace() {
+        let with_stale = |stale: Value| {
+            json!({ "scores": [{ "rubric": "helpfulness", "event_id": "root-1", "stale": stale }] })
+        };
+        // The judged root exchange itself moved → the verdict no longer covers, so re-score.
+        assert!(!trace_already_scored(
+            &with_stale(json!({ "reason": "changed", "scored_spans": 1, "current_spans": 4 })),
+            "helpfulness",
+            "root-1"
+        ));
+        // Extra spans with the same root exchange: stale to a reader, but re-judging would re-send
+        // identical text. Never spend on it.
+        assert!(trace_already_scored(
+            &with_stale(json!({ "reason": "grown", "scored_spans": 3, "current_spans": 9 })),
+            "helpfulness",
+            "root-1"
+        ));
+        // A verdict the API reported nothing about (no coverage recorded, or an older API) keeps the
+        // pre-existing skip — we never re-spend on a guess.
+        assert!(trace_already_scored(
+            &json!({ "scores": [{ "rubric": "helpfulness", "event_id": "root-1" }] }),
+            "helpfulness",
+            "root-1"
+        ));
+        // A corrected trace carries both verdicts; the fresh one covers, so it is not re-scored again.
+        let corrected = json!({ "scores": [
+            { "rubric": "helpfulness", "event_id": "root-1",
+              "stale": { "reason": "changed", "scored_spans": 1, "current_spans": 4 } },
+            { "rubric": "helpfulness", "event_id": "root-1" }
+        ]});
+        assert!(trace_already_scored(&corrected, "helpfulness", "root-1"));
     }
 
     #[test]

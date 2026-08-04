@@ -8,6 +8,12 @@
 //! Trace scoring reuses the `scores` table: the verdict is anchored to the trace's root span event
 //! (unless the body names a specific `event_id`), so it links back to the trace through the same
 //! `event_id → trace_id` path the read side joins on — no separate schema.
+//!
+//! A whole-trace verdict also records **what it judged** (`ScoreDetail::coverage`: the trace's span
+//! count and a fingerprint of the judged root exchange). A trace has no completion signal, so a span
+//! that lands after scoring is folded straight into the next read while the verdict stays put; the
+//! detail read compares each verdict's coverage against the trace as it now stands and marks the
+//! ones that stopped describing it (`scores[].stale`).
 
 use axum::{
     extract::{Path, Query, State},
@@ -18,7 +24,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{new_id, Score, Trace};
+use lighttrack_core::{new_id, Score, ScoreDetail, Trace, TraceCoverage};
 use lighttrack_store::{TraceFilter, MAX_TRACE_SPANS};
 
 use crate::error::ApiError;
@@ -94,7 +100,53 @@ pub(crate) async fn list_traces(
 pub(crate) struct TraceDetail {
     #[serde(flatten)]
     trace: Trace,
-    scores: Vec<Score>,
+    scores: Vec<TraceScoreView>,
+}
+
+/// A score as it reads *against this trace right now*: the stored row, plus whether the verdict has
+/// stopped covering the trace it was written about. Flattened, so every existing consumer of
+/// `scores[]` sees the same fields it always did.
+#[derive(Serialize)]
+pub(crate) struct TraceScoreView {
+    #[serde(flatten)]
+    score: Score,
+    /// Present only when the verdict no longer covers the trace as it now reads. Absent for a
+    /// current verdict *and* for one that recorded no coverage (an older or third-party score) —
+    /// silence means "nothing to report", never "verified fresh".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stale: Option<VerdictStaleness>,
+}
+
+/// Why a stored verdict no longer covers its trace, in the terms an operator needs to act on.
+#[derive(Serialize)]
+pub(crate) struct VerdictStaleness {
+    /// `changed` — the judged root exchange itself differs, so the verdict describes text that is no
+    /// longer there (this is what earns a re-score). `grown` — the same exchange, but the trace has
+    /// gained or lost spans since; the verdict is narrower than the trace it sits on.
+    reason: &'static str,
+    scored_spans: usize,
+    current_spans: usize,
+}
+
+/// Compare each stored verdict's recorded coverage against the trace as it now reads.
+fn views(scores: Vec<Score>, current: &TraceCoverage) -> Vec<TraceScoreView> {
+    scores
+        .into_iter()
+        .map(|score| {
+            let stale = score
+                .detail
+                .as_ref()
+                .and_then(|d| d.coverage.as_ref())
+                .and_then(|cov| {
+                    cov.drift(current).reason().map(|reason| VerdictStaleness {
+                        reason,
+                        scored_spans: cov.spans,
+                        current_spans: current.spans,
+                    })
+                });
+            TraceScoreView { score, stale }
+        })
+        .collect()
 }
 
 /// One trace: totals + span tree, plus any per-call or whole-trace scores attached to it.
@@ -110,6 +162,7 @@ pub(crate) async fn get_trace(
     let store = st.store.clone();
     let tid = id.clone();
     let scores = spawn_db(move || store.list_trace_scores(scope.as_deref(), &tid)).await?;
+    let scores = views(scores, &trace.coverage());
     Ok(Json(TraceDetail { trace, scores }))
 }
 
@@ -151,6 +204,13 @@ pub(crate) async fn score_trace(
 
     // Anchor to the requested call, else the trace's entry-point span.
     let event_id = body.event_id.or_else(|| trace.root_event_id().map(str::to_string));
+    // A verdict anchored to the root is a judgment of the *whole trace*, so it records what it
+    // judged: the trace has no end marker, and without this receipt a span landing a second later
+    // silently widens the trace while the verdict stays put. A verdict pinned to a specific inner
+    // call is a per-call score — whole-trace coverage would misdescribe it, so it gets none.
+    let detail = (event_id.is_some() && event_id.as_deref() == trace.root_event_id()).then(|| {
+        ScoreDetail { coverage: Some(trace.coverage()), ..Default::default() }
+    });
     let score = Score {
         id: new_id(),
         project_id: trace.project_id.clone(),
@@ -160,7 +220,7 @@ pub(crate) async fn score_trace(
         max: body.max,
         pass: body.pass,
         reasoning: body.reasoning,
-        detail: None,
+        detail,
         // A trace score is an ad-hoc human/API verdict, not a benchmark case.
         run_id: None,
         case_index: None,

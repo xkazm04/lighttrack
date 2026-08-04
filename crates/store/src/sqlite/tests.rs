@@ -1730,6 +1730,8 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
         injection_suspected: Some(true),
         determinism: Some("best-effort".into()),
         notes: vec!["candidate spoofed a section marker".into()],
+        // Whole-trace coverage: not a trace verdict, so none.
+        coverage: None,
     };
     let score = Score {
         id: new_id(),

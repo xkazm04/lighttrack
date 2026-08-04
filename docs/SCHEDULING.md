@@ -98,7 +98,8 @@ lt-runner score-traces --project <id> --rubric-id <rid> --sample-every 5 --error
    hash of its `trace_id` falls in the 1/N bucket — order-independent, so the same subset is picked
    every cycle. With `--errors-always`, **every** error trace is judged on top of the sample.
 3. For each sampled trace, fetches the trace detail and **skips** it if it already has a whole-trace
-   score for this rubric (idempotency, see below) or if its root span carries **no output** to judge.
+   score for this rubric that still *covers* the trace (idempotency + staleness, see below) or if its
+   root span carries **no output** to judge.
 4. Judges the surviving traces' root exchanges (root span's `input`/`output`) with the judge model —
    concurrently, bounded by the global `--jobs` — and posts each verdict to `POST /v1/traces/:id/score`
    with no `event_id`, so the score anchors to the trace's root span (the whole-request judgment).
@@ -115,6 +116,9 @@ Traces carry **no explicit completion marker** — new spans can always arrive l
 still-streaming trace isn't judged mid-flight, and smaller if you want fresher scoring; there is no
 correctness cost either way, only how soon a trace becomes eligible.
 
+The window is a **heuristic, not a guarantee**: a span can always land after it. The verdict coverage
+below is the correction layer behind it, not a replacement for it.
+
 ## Idempotent — never double-scores
 
 Before judging, `score-traces` checks the trace's existing scores: if one already has this run's
@@ -123,6 +127,36 @@ that same root, the very next cycle sees it and skips — so a daemon **and** re
 converge to "each trace scored once per rubric", never twice. Changing the rubric text / id scores the
 traces afresh under the new label. The judge is **unbudgeted** (it never counts against ingest limits)
 and uses only existing API endpoints.
+
+## A verdict records what it judged
+
+`POST /v1/traces/:id/score` stamps **coverage** onto every verdict anchored to the trace root, in the
+score's existing `detail` (`detail.coverage`): the trace's `spans` count, the `root_event_id`, a
+`digest` fingerprinting the judged root exchange, and whether that read was `truncated` by the span
+cap. No new table, no new column — it rides the same `ScoreDetail` provenance a judged score already
+carries.
+
+`GET /v1/traces/:id` then compares each verdict's coverage against the trace **as it now reads** and
+adds `scores[].stale` when it no longer covers it (`lt` renders it as `⚠ stale …` on the score line):
+
+| `stale.reason` | what moved | re-scored? |
+| --- | --- | --- |
+| *(absent)* | the trace is what was judged — or the verdict recorded no coverage (an older or third-party score), in which case silence means "nothing to report", never "verified fresh" | no |
+| `grown` | spans were added or removed; the **judged root exchange is byte-identical** | **no** |
+| `changed` | the judged root exchange itself differs — the verdict describes text that is no longer there | **yes** |
+
+Only `changed` is **material**. The rule is deliberately narrow because re-scoring spends real money:
+the judge is unbudgeted, so a policy that fired on every trailing span would be a spend bug, and a
+`grown` trace would re-send an identical prompt for an identical verdict. `changed` is exactly the
+case where the judge would read *different* text — the real root span landing after its children (as
+an OTel parent, exported when it finishes, routinely does), or a streamed output filling in after the
+settle window. Such a trace is not treated as already-scored and gets a corrected verdict on the next
+cycle; the corrected verdict then covers the trace, so it is not re-judged again.
+
+The digest covers the root exchange rather than every span so that the `MAX_TRACE_SPANS` cap cannot
+be mistaken for a change: the detail read keeps the **oldest** spans, so the root always survives
+clipping and a clipped trace fingerprints identically to the whole one. `spans` is the trace's true
+count (`spans_total`), not the clipped one.
 
 ## External schedulers (use `--once`)
 

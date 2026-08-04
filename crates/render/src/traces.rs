@@ -114,14 +114,31 @@ pub(crate) fn tree(v: &Value) -> Option<String> {
                 format!("{value:.2}/{max:.0}")
             };
             out.push_str(&format!(
-                "- {} {}: {score_cell} by {}\n",
+                "- {} {}: {score_cell} by {}{}\n",
                 pass_glyph(sc.get("pass").and_then(Value::as_bool)),
                 trunc(s(sc, "rubric"), 36),
                 trunc(s(sc, "scored_by"), 22),
+                stale_note(sc),
             ));
         }
     }
     Some(out)
+}
+
+/// A verdict that no longer covers the trace it sits on says so on its own line. Without this a
+/// stale score reads exactly like a fresh one — the whole point is that the drift is silent.
+fn stale_note(score: &Value) -> String {
+    let stale = match score.get("stale") {
+        Some(v) if v.is_object() => v,
+        _ => return String::new(),
+    };
+    let (scored, current) = (u(stale, "scored_spans"), u(stale, "current_spans"));
+    match s(stale, "reason") {
+        "changed" => format!(" ⚠ stale — the judged exchange changed since ({scored} → {current} spans)"),
+        "grown" => format!(" ⚠ stale — trace grew since ({scored} → {current} spans)"),
+        other if !other.is_empty() => format!(" ⚠ stale ({other})"),
+        _ => String::new(),
+    }
 }
 
 /// One span as an indented bullet, then its children one level deeper.
@@ -273,6 +290,30 @@ mod tests {
         assert!(md.contains("5000 of 9000"), "clipped span count shown: {md}");
         assert!(md.contains("truncated"), "a clipped trace must not read as complete: {md}");
         assert!(md.contains("dup span id"), "duplicate span id marked: {md}");
+    }
+
+    #[test]
+    fn tree_marks_a_verdict_that_no_longer_covers_the_trace() {
+        let with_scores = |scores: Value| {
+            json!({
+                "trace_id": "tr-1", "status": "success",
+                "started_at": "2026-06-21T12:34:56.000000000Z", "duration_ms": 500,
+                "totals": { "spans": 4, "input_tokens": 1, "output_tokens": 1, "cost_usd": 0.1,
+                            "errors": 0, "total_latency_ms": 10 },
+                "spans": [], "scores": scores
+            })
+        };
+        let md = tree(&with_scores(json!([
+            { "rubric": "fresh", "value": 0.9, "max": 1.0, "pass": true, "scored_by": "judge" },
+            { "rubric": "grew", "value": 0.9, "max": 1.0, "pass": true, "scored_by": "judge",
+              "stale": { "reason": "grown", "scored_spans": 2, "current_spans": 4 } },
+            { "rubric": "moved", "value": 0.9, "max": 1.0, "pass": true, "scored_by": "judge",
+              "stale": { "reason": "changed", "scored_spans": 1, "current_spans": 4 } }
+        ])))
+        .unwrap();
+        assert!(md.contains("grew: 0.90 by judge ⚠ stale — trace grew since (2 → 4 spans)"), "{md}");
+        assert!(md.contains("the judged exchange changed since (1 → 4 spans)"), "{md}");
+        assert!(md.contains("fresh: 0.90 by judge\n"), "a current verdict is unmarked: {md}");
     }
 
     #[test]

@@ -96,6 +96,12 @@ pub struct ScoreDetail {
     /// Judge text not tied to a dimension (a freeform verdict's rationale, a pairwise rationale).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// For a **whole-trace** verdict: what it judged (span count + the fingerprint of the judged
+    /// root exchange). Stamped by the API on `POST /v1/traces/:id/score`; a trace read compares it
+    /// against the trace as it now stands so a verdict that stopped describing its trace says so
+    /// instead of aging silently. `None` on every non-trace score.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<crate::trace::TraceCoverage>,
 }
 
 /// Truncate on a char boundary, marking that it happened.

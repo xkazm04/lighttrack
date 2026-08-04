@@ -63,7 +63,8 @@ pub use score::{
     ScoreDetail, ScoreDim, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM, MAX_REASONING_CHARS,
 };
 pub use trace::{
-    normalize_trace_ref, Trace, TraceShape, TraceSpan, TraceSummary, TraceTotals,
+    normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,
+    TraceTotals,
 };
 
 /// Convenience: a fresh UUIDv4 as a `String` (our canonical id form).

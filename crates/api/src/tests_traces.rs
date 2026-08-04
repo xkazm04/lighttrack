@@ -182,6 +182,106 @@ async fn score_whole_trace_anchors_to_root_and_surfaces_in_detail() {
     assert_eq!(scores[0]["rubric"], "trace-coherence");
 }
 
+/// A whole-trace verdict records what it judged, and a trace that moved underneath it says so on
+/// read. The two drifts are deliberately different: extra spans make the verdict *narrower* than the
+/// trace (stale, but re-judging would re-send identical text), while a changed root exchange means
+/// the verdict describes text that is no longer there.
+#[tokio::test]
+async fn a_verdict_records_its_coverage_and_a_changed_trace_reads_stale() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let exchange = |span: &str, output: &str| {
+        json!({
+            "provider": "anthropic", "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 }, "cost_usd": 0.001,
+            "trace_id": "tr-cov", "span_id": span,
+            "input": "what is 2+2?", "output": output,
+        })
+    };
+    let (status, root) = ingest(&app, &key, exchange("s1", "4")).await;
+    assert_eq!(status, StatusCode::OK, "{root}");
+    let root_id = root["id"].as_str().unwrap().to_string();
+
+    let score = |app: &Router, key: &str| {
+        let body = json!({ "rubric": "trace-coherence", "value": 0.9, "pass": true,
+                           "scored_by": "claude-haiku-4-5" });
+        let (app, key) = (app.clone(), key.to_string());
+        async move { send(&app, &key, "POST", "/v1/traces/tr-cov/score", Some(body)).await }
+    };
+    let (status, posted) = score(&app, &key).await;
+    assert_eq!(status, StatusCode::OK, "{posted}");
+    let cov = &posted["detail"]["coverage"];
+    assert_eq!(cov["spans"], 1, "the verdict records the trace it judged: {posted}");
+    assert_eq!(cov["root_event_id"], root_id);
+    let digest = cov["digest"].as_str().unwrap().to_string();
+    assert_eq!(digest.len(), 16, "content fingerprint of the judged exchange: {posted}");
+
+    // Nothing has moved yet: the verdict covers the trace, so nothing is reported.
+    let (_, detail) = get(&app, &key, "/v1/traces/tr-cov").await;
+    assert!(detail["scores"][0]["stale"].is_null(), "a current verdict is not stale: {detail}");
+
+    // A late child span lands. The trace is wider than the verdict, but the judged root exchange is
+    // byte-identical.
+    ingest_span(&app, &key, "tr-cov", "s2", Some("s1"), 0.002).await;
+    let (_, detail) = get(&app, &key, "/v1/traces/tr-cov").await;
+    assert_eq!(detail["totals"]["spans"], 2, "the late span is folded into the read: {detail}");
+    assert_eq!(detail["scores"][0]["stale"]["reason"], "grown", "{detail}");
+    assert_eq!(detail["scores"][0]["stale"]["scored_spans"], 1);
+    assert_eq!(detail["scores"][0]["stale"]["current_spans"], 2);
+
+    // Now the judged exchange itself moves: a *new* root lands ahead of the scored one (an OTel
+    // parent span exported when it finished). The verdict describes text that is no longer judged.
+    let mut late_root = exchange("s0", "the real answer is 4, with working");
+    late_root["ts"] = json!((chrono::Utc::now() - chrono::Duration::seconds(60)).to_rfc3339());
+    let (status, v) = ingest(&app, &key, late_root).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let (_, detail) = get(&app, &key, "/v1/traces/tr-cov").await;
+    assert_eq!(detail["scores"][0]["stale"]["reason"], "changed", "{detail}");
+
+    // Re-scoring the trace writes a verdict whose coverage matches the trace as it now reads, and
+    // that one is not stale — so a corrected trace does not stay flagged forever.
+    let (status, posted) = score(&app, &key).await;
+    assert_eq!(status, StatusCode::OK, "{posted}");
+    assert_ne!(posted["detail"]["coverage"]["digest"], json!(digest), "a new exchange, a new digest");
+    let (_, detail) = get(&app, &key, "/v1/traces/tr-cov").await;
+    let scores = detail["scores"].as_array().unwrap();
+    assert_eq!(scores.len(), 2, "{detail}");
+    assert!(
+        scores.iter().any(|s| s["stale"].is_null()),
+        "the corrected verdict covers the trace: {detail}"
+    );
+}
+
+/// A per-call verdict pinned to an inner span is not a whole-trace judgment, so it carries no
+/// whole-trace coverage — and never reads as stale when the trace grows around it.
+#[tokio::test]
+async fn a_per_call_verdict_carries_no_whole_trace_coverage() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    ingest_span(&app, &key, "tr-call", "s1", None, 0.001).await;
+    let child = ingest_span(&app, &key, "tr-call", "s2", Some("s1"), 0.002).await;
+
+    let (status, posted) = send(
+        &app,
+        &key,
+        "POST",
+        "/v1/traces/tr-call/score",
+        Some(json!({ "rubric": "faithfulness", "value": 0.5, "scored_by": "judge",
+                     "event_id": child })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{posted}");
+    assert!(posted["detail"].is_null(), "a per-call score gets no trace coverage: {posted}");
+
+    ingest_span(&app, &key, "tr-call", "s3", Some("s1"), 0.004).await;
+    let (_, detail) = get(&app, &key, "/v1/traces/tr-call").await;
+    assert!(detail["scores"][0]["stale"].is_null(), "not a whole-trace verdict: {detail}");
+}
+
 #[tokio::test]
 async fn project_key_cannot_read_another_projects_trace() {
     let (state, store) = setup(Redactor::off());

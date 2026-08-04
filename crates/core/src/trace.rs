@@ -83,6 +83,96 @@ impl TraceShape {
     }
 }
 
+/// What a whole-trace verdict actually judged, recorded on the verdict itself.
+///
+/// A trace has no end marker: a span that lands after the judge ran is folded straight into the next
+/// read (new totals, a new node in the tree) while the verdict stays put and silently stops
+/// describing the trace. This is the receipt that makes that detectable — the trace's size and the
+/// fingerprint of the exchange the judge actually read, so a later read can compare and say so.
+///
+/// The digest covers the **root exchange** (the root span's id + input + output) rather than every
+/// span, deliberately:
+/// - it is what a whole-trace judge is handed, so it changes exactly when the judged text changes;
+/// - it survives the [`Trace::spans_truncated`] cap — the detail read keeps the *oldest* spans, so
+///   the root is always present and a clipped trace fingerprints identically to the whole one. A
+///   truncated trace must never be mistaken for a changed one.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TraceCoverage {
+    /// The trace's true span count when judged — `spans_total`, so a clipped read still records the
+    /// real number.
+    #[serde(default)]
+    pub spans: usize,
+    /// The event whose exchange was judged (the trace's entry-point span).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub root_event_id: String,
+    /// Fingerprint of that exchange. Changes iff the text the judge saw changed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub digest: String,
+    /// The read this verdict was formed over was clipped by the span cap — provenance only, never a
+    /// drift signal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
+}
+
+/// How far a trace has moved from the verdict that covers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceDrift {
+    /// The trace is exactly what was judged.
+    None,
+    /// Same judged exchange, but the trace has more (or fewer) spans than the verdict covers. The
+    /// verdict is stale to a reader; re-judging would re-send byte-identical text, so it does not
+    /// justify spending on a fresh judge call.
+    Grown,
+    /// The judged exchange itself differs — the verdict describes text that is no longer there. This
+    /// is the only drift that earns a re-score.
+    Changed,
+}
+
+impl TraceCoverage {
+    /// Compare the coverage a verdict recorded against the trace as it now reads.
+    pub fn drift(&self, current: &TraceCoverage) -> TraceDrift {
+        // An unknown digest (a verdict written before coverage existed, or by a third party) can only
+        // be compared on size — never claim a content change we cannot see.
+        if !self.digest.is_empty() && self.digest != current.digest {
+            return TraceDrift::Changed;
+        }
+        if self.spans != current.spans {
+            return TraceDrift::Grown;
+        }
+        TraceDrift::None
+    }
+}
+
+impl TraceDrift {
+    /// The wire word for this drift, or `None` when the verdict still covers the trace.
+    pub fn reason(self) -> Option<&'static str> {
+        match self {
+            TraceDrift::None => None,
+            TraceDrift::Grown => Some("grown"),
+            TraceDrift::Changed => Some("changed"),
+        }
+    }
+}
+
+/// FNV-1a 64-bit, hex. Small, dependency-free and stable across processes and releases — a digest
+/// that changed with the toolchain would re-score every trace once, which costs real money.
+fn fingerprint(parts: &[&str]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |bytes: &[u8]| {
+        for b in bytes {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            mix(&[0x1f]); // unit separator: "ab"+"c" must not fingerprint as "a"+"bc"
+        }
+        mix(p.as_bytes());
+    }
+    format!("{h:016x}")
+}
+
 /// Aggregate totals over every span in a trace.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TraceTotals {
@@ -238,6 +328,28 @@ impl Trace {
     /// whole-trace score when the caller doesn't name a specific call. `None` only for an empty trace.
     pub fn root_event_id(&self) -> Option<&str> {
         self.spans.first().map(|s| s.event.id.as_str())
+    }
+
+    /// The [`TraceCoverage`] a verdict judged over this trace would record — and, on a later read,
+    /// what a stored verdict's coverage is compared against.
+    pub fn coverage(&self) -> TraceCoverage {
+        let root = self.spans.first().map(|s| &s.event);
+        let root_event_id = root.map(|e| e.id.clone()).unwrap_or_default();
+        let payload = |v: Option<&serde_json::Value>| match v {
+            Some(v) if !v.is_null() => v.to_string(),
+            _ => String::new(),
+        };
+        let digest = fingerprint(&[
+            &root_event_id,
+            &payload(root.and_then(|e| e.input.as_ref())),
+            &payload(root.and_then(|e| e.output.as_ref())),
+        ]);
+        TraceCoverage {
+            spans: self.spans_total,
+            root_event_id,
+            digest,
+            truncated: self.spans_truncated,
+        }
     }
 }
 
@@ -590,6 +702,99 @@ mod tests {
         // Children kept chronological: c (+1s) before b (+3s), with matching offsets.
         assert_eq!(root.children[0].offset_ms, 1000);
         assert_eq!(root.children[1].offset_ms, 3000);
+    }
+
+    #[test]
+    fn coverage_records_what_was_judged() {
+        let mut a = ev("a", None, 0, 0.0, Status::Success);
+        a.input = Some(serde_json::json!("what is 2+2?"));
+        a.output = Some(serde_json::json!("4"));
+        let t = Trace::from_events(vec![a, ev("b", Some("a"), 1, 0.0, Status::Success)]).unwrap();
+        let cov = t.coverage();
+        assert_eq!(cov.spans, 2);
+        assert_eq!(cov.root_event_id, "e-a");
+        assert!(!cov.truncated);
+        assert_eq!(cov.digest.len(), 16, "fixed-width hex digest: {}", cov.digest);
+        // Same trace -> same digest, so a quiet trace never looks changed.
+        assert_eq!(cov, t.coverage());
+    }
+
+    #[test]
+    fn a_late_span_is_stale_but_a_changed_exchange_is_material() {
+        let mut a = ev("a", None, 0, 0.0, Status::Success);
+        a.input = Some(serde_json::json!("q"));
+        a.output = Some(serde_json::json!("first answer"));
+        let scored = Trace::from_events(vec![a.clone()]).unwrap().coverage();
+
+        // Nothing moved.
+        assert_eq!(scored.drift(&scored), TraceDrift::None);
+        assert_eq!(TraceDrift::None.reason(), None);
+
+        // A trailing span lands: the trace is no longer what was judged, but the judged exchange is
+        // byte-identical -> stale to a reader, NOT worth paying a judge for.
+        let grown =
+            Trace::from_events(vec![a.clone(), ev("b", Some("a"), 1, 0.0, Status::Success)])
+                .unwrap()
+                .coverage();
+        assert_eq!(scored.drift(&grown), TraceDrift::Grown);
+        assert_eq!(TraceDrift::Grown.reason(), Some("grown"));
+
+        // The root exchange itself changes (the real root landed late, as OTel parents do, or the
+        // streamed output filled in) -> the verdict describes text that is not there. Material.
+        let mut edited = a.clone();
+        edited.output = Some(serde_json::json!("a different answer"));
+        let changed = Trace::from_events(vec![edited]).unwrap().coverage();
+        assert_eq!(scored.drift(&changed), TraceDrift::Changed);
+        assert_eq!(TraceDrift::Changed.reason(), Some("changed"));
+    }
+
+    #[test]
+    fn a_truncated_read_is_not_a_changed_trace() {
+        // The detail read keeps the OLDEST spans, so the root survives the cap. A trace scored whole
+        // and later read clipped must fingerprint identically and report the same span count.
+        let mut a = ev("a", None, 0, 0.0, Status::Success);
+        a.input = Some(serde_json::json!("q"));
+        a.output = Some(serde_json::json!("out"));
+        let whole = Trace::from_events(vec![
+            a.clone(),
+            ev("b", Some("a"), 1, 0.0, Status::Success),
+            ev("c", Some("a"), 2, 0.0, Status::Success),
+        ])
+        .unwrap()
+        .coverage();
+        let clipped = Trace::from_events_bounded(
+            vec![a, ev("b", Some("a"), 1, 0.0, Status::Success)],
+            3,
+        )
+        .unwrap()
+        .coverage();
+
+        assert_eq!(whole.digest, clipped.digest, "the cap must not read as a content change");
+        assert_eq!(clipped.spans, 3, "spans_total is the true count, not the clipped one");
+        assert!(clipped.truncated, "the clipped read is recorded as such");
+        assert_eq!(whole.drift(&clipped), TraceDrift::None);
+    }
+
+    #[test]
+    fn an_unknown_digest_is_never_called_a_content_change() {
+        // A verdict written before coverage existed (or by a third party) records no digest: it may
+        // be reported as stale on size, but never as materially changed — we would be spending a
+        // judge call on a guess.
+        let legacy = TraceCoverage { spans: 2, ..Default::default() };
+        let now = TraceCoverage {
+            spans: 2,
+            root_event_id: "e-a".into(),
+            digest: "deadbeefdeadbeef".into(),
+            truncated: false,
+        };
+        assert_eq!(legacy.drift(&now), TraceDrift::None);
+        assert_eq!(legacy.drift(&TraceCoverage { spans: 3, ..now }), TraceDrift::Grown);
+    }
+
+    #[test]
+    fn fingerprint_separates_its_parts() {
+        assert_ne!(fingerprint(&["ab", "c"]), fingerprint(&["a", "bc"]));
+        assert_eq!(fingerprint(&["a", "b"]), fingerprint(&["a", "b"]));
     }
 
     fn count_nodes(spans: &[TraceSpan]) -> usize {
