@@ -180,8 +180,13 @@ fn event_id(fs: &FlatSpan<'_>) -> String {
     }
 }
 
-fn nonempty(s: Option<&str>) -> Option<String> {
-    s.map(str::trim).filter(|v| !v.is_empty()).map(str::to_lowercase)
+/// Trim, drop empties, and canonicalize through the **shared** id rule — the same one the native door
+/// applies in `events::prepare_event`. One function, both doors: an OTel service and an SDK service in
+/// a single end-to-end trace now land on the identical `trace_id` instead of two case variants.
+pub(super) fn nonempty(s: Option<&str>) -> Option<String> {
+    s.map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(lighttrack_core::normalize_trace_ref)
 }
 
 fn from_nanos(nanos: i128) -> Option<DateTime<Utc>> {

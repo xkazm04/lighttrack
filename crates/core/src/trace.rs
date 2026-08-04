@@ -13,6 +13,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::LlmEvent;
 
+/// Canonicalize a `trace_id` / `span_id` / `parent_span_id` so both ingest doors agree on identity.
+///
+/// A W3C/OTel id is hex and **case-insensitive** — `5B8E…` and `5b8e…` are the same trace — but the
+/// OTLP door lower-cased its ids while the SDK door normalized nothing, so one end-to-end trace
+/// spanning an OTel service and an SDK service silently rendered as two. Hex ids of the W3C lengths
+/// (32 for a trace, 16 for a span) are therefore lower-cased.
+///
+/// Anything else is a caller's own opaque id (`"req-1"`, `"Order-7"`) and is preserved **verbatim**:
+/// case is meaningful there, and folding it would merge distinct traces and mangle an id the operator
+/// reads back.
+pub fn normalize_trace_ref(id: &str) -> String {
+    let is_w3c_hex =
+        matches!(id.len(), 16 | 32) && id.chars().all(|c| c.is_ascii_hexdigit());
+    if is_w3c_hex {
+        id.to_ascii_lowercase()
+    } else {
+        id.to_string()
+    }
+}
+
 /// The single definition of the two numbers the list and the detail view must agree on: a trace's
 /// wall-clock duration and its status.
 ///

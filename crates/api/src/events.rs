@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use lighttrack_core::{LimitStatus, LlmEvent, Status};
+use lighttrack_core::{normalize_trace_ref, LimitStatus, LlmEvent, Status};
 use lighttrack_store::{Admission, CostRow, EventFilter, StoreError, UseCaseCostRow};
 
 use crate::auth::Principal;
@@ -38,6 +38,7 @@ pub(crate) fn prepare_event(
     let now = Utc::now();
     ev.project_id = pid.to_string();
     ev.received_at = now;
+    normalize_ids(ev);
     stamp_api_key(ev, key_id);
     policy().validate(ev, now)?;
     // 1. The project's stored persistence policy (hash/drop) — the setting the projects API accepts
@@ -58,6 +59,19 @@ pub(crate) fn prepare_event(
     }
     mark_cost_source(ev, client_supplied);
     Ok(())
+}
+
+/// Canonicalize the event's trace/span ids. Both front doors pass through here, so a W3C hex id is
+/// case-folded identically whether it arrived over OTLP (which already lower-cased) or from an SDK
+/// (which normalized nothing) — that mismatch is what split one end-to-end trace spanning an OTel
+/// service and an SDK service into two. A non-W3C id (`"req-1"`) is left verbatim; see
+/// [`normalize_trace_ref`].
+fn normalize_ids(ev: &mut LlmEvent) {
+    for id in [&mut ev.trace_id, &mut ev.span_id, &mut ev.parent_span_id] {
+        if let Some(v) = id.as_deref() {
+            *id = Some(normalize_trace_ref(v));
+        }
+    }
 }
 
 /// Stamp the authenticated API key's **id** onto the event as `metadata.api_key_id`, and — this is

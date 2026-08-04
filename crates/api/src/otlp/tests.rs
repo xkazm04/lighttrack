@@ -291,3 +291,154 @@ async fn empty_export_is_a_clean_success() {
     assert!(body.get("partialSuccess").is_none(), "clean export omits partialSuccess: {body}");
     assert_eq!(body["lighttrack"]["accepted"], 0);
 }
+
+/// A realistic nested export: an HTTP-handler root with no `gen_ai.*` attributes, a tool span under
+/// it (also non-GenAI), and the LLM calls hanging off those. Only the LLM spans become events — but
+/// the trace must keep the shape it had in the exporter, one connected tree, not one root per span.
+fn nested_fixture() -> Value {
+    let span = |id: &str, parent: Option<&str>, name: &str, genai: bool| {
+        let mut s = json!({
+            "traceId": "9f2c4d6e8a0b1c3d5e7f9a1b2c3d4e5f",
+            "spanId": id,
+            "name": name,
+            "startTimeUnixNano": "1785578400000000000",
+            "endTimeUnixNano": "1785578401000000000",
+            "attributes": if genai {
+                json!([
+                    { "key": "gen_ai.system", "value": { "stringValue": "anthropic" } },
+                    { "key": "gen_ai.request.model", "value": { "stringValue": "claude-haiku-4-5" } },
+                    { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "10" } },
+                    { "key": "gen_ai.usage.output_tokens", "value": { "intValue": "5" } }
+                ])
+            } else {
+                json!([{ "key": "http.request.method", "value": { "stringValue": "POST" } }])
+            }
+        });
+        if let Some(p) = parent {
+            s["parentSpanId"] = json!(p);
+        }
+        s
+    };
+    json!({
+      "resourceSpans": [{
+        "resource": { "attributes": [
+          { "key": "service.name", "value": { "stringValue": "agent-api" } }
+        ]},
+        "scopeSpans": [{
+          "scope": { "name": "opentelemetry.instrumentation.anthropic" },
+          "spans": [
+            // HTTP handler (dropped) -> plan LLM call.
+            span("aaaa000000000001", None, "POST /agent", false),
+            span("bbbb000000000002", Some("aaaa000000000001"), "chat plan", true),
+            // plan -> tool span (dropped) -> the LLM call the tool made.
+            span("cccc000000000003", Some("bbbb000000000002"), "tool.search", false),
+            span("dddd000000000004", Some("cccc000000000003"), "chat summarize", true),
+          ]
+        }]
+      }]
+    })
+}
+
+#[tokio::test]
+async fn an_otel_trace_keeps_its_shape_when_non_genai_spans_are_dropped() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let (status, body) = export(&app, &key, nested_fixture()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["lighttrack"]["accepted"], 2, "only the LLM spans are stored: {body}");
+    assert_eq!(body["lighttrack"]["unmapped"], 2, "the HTTP + tool spans are refused: {body}");
+
+    // No phantom LLM events were invented for the dropped spans.
+    let rows = store.list_events(Some("proj-a"), 10).unwrap();
+    assert_eq!(rows.len(), 2, "the event table holds LLM calls only");
+
+    // The LLM call under the dropped HTTP handler has no GenAI ancestor: a genuine root.
+    let plan = rows.iter().find(|e| e.span_id.as_deref() == Some("bbbb000000000002")).unwrap();
+    assert!(plan.parent_span_id.is_none() || plan.parent_span_id.as_deref() == Some("aaaa000000000001"));
+
+    // The LLM call under the dropped TOOL span is reparented onto the plan call — the link survives.
+    let summarize = rows.iter().find(|e| e.span_id.as_deref() == Some("dddd000000000004")).unwrap();
+    assert_eq!(
+        summarize.parent_span_id.as_deref(),
+        Some("bbbb000000000002"),
+        "parent chain must survive the dropped tool span"
+    );
+    assert_eq!(
+        summarize.metadata["otel"]["otlp_parent_span_id"], "cccc000000000003",
+        "the exporter's own parent is recorded, so the synthesized link is visible as synthesized"
+    );
+
+    // And the trace reads as ONE connected tree rather than N roots.
+    let trace = store
+        .get_trace(Some("proj-a"), "9f2c4d6e8a0b1c3d5e7f9a1b2c3d4e5f", lighttrack_store::MAX_TRACE_SPANS)
+        .unwrap()
+        .expect("trace");
+    assert_eq!(trace.spans.len(), 1, "one root, not one per dropped parent: {:?}", trace.spans);
+    assert_eq!(trace.spans[0].children.len(), 1, "the summarize call nests under the plan call");
+}
+
+/// One logical trace that spans an OTel-instrumented service and an SDK-instrumented service. The
+/// SDK sends the W3C trace id in upper case (nothing normalized it before); OTLP lower-cases. Both
+/// doors now canonicalize identically, so this renders as one trace instead of two.
+#[tokio::test]
+async fn a_mixed_otel_and_sdk_trace_is_one_trace() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let (status, body) = export(&app, &key, nested_fixture()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The SDK-side service reports the same trace, upper-cased, parented on the OTel plan span.
+    let (status, v) = crate::tests_ingest::ingest(
+        &app,
+        &key,
+        json!({
+            "provider": "anthropic", "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 }, "cost_usd": 0.001,
+            "trace_id": "9F2C4D6E8A0B1C3D5E7F9A1B2C3D4E5F",
+            "span_id": "EEEE000000000005",
+            "parent_span_id": "BBBB000000000002"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+
+    let trace = store
+        .get_trace(Some("proj-a"), "9f2c4d6e8a0b1c3d5e7f9a1b2c3d4e5f", lighttrack_store::MAX_TRACE_SPANS)
+        .unwrap()
+        .expect("the OTel and SDK halves are one trace");
+    assert_eq!(trace.totals.spans, 3, "SDK span joined the OTel trace: {:?}", trace.spans);
+    assert_eq!(trace.spans.len(), 1, "still one connected tree");
+    // The SDK span parented onto the OTel plan span despite the case difference.
+    let plan = &trace.spans[0];
+    assert_eq!(plan.event.span_id.as_deref(), Some("bbbb000000000002"));
+    assert_eq!(plan.children.len(), 2, "both the OTel and the SDK child hang off the plan call");
+}
+
+/// A caller's own opaque trace id keeps its case — folding it would merge distinct traces and mangle
+/// an id the operator reads back.
+#[tokio::test]
+async fn a_non_w3c_trace_id_is_not_case_folded() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    for tid in ["Order-7", "order-7"] {
+        let (status, v) = crate::tests_ingest::ingest(
+            &app,
+            &key,
+            json!({
+                "provider": "anthropic", "model": "claude-haiku-4-5",
+                "usage": { "input": 1, "output": 1 }, "cost_usd": 0.0,
+                "trace_id": tid, "span_id": format!("s-{tid}")
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+    }
+    let upper = store.get_trace(Some("proj-a"), "Order-7", lighttrack_store::MAX_TRACE_SPANS).unwrap();
+    assert_eq!(upper.expect("kept verbatim").totals.spans, 1, "distinct opaque ids stay distinct");
+}

@@ -63,9 +63,37 @@ Notes and deliberate gaps:
 - `gen_ai.usage.total_tokens` **alone** is not mapped — a total can't be split into input/output
   without inventing cost.
 - IDs must be hex, as the OTLP/JSON spec requires. A non-conforming encoder that base64s them is not
-  decoded; the ids pass through verbatim.
+  decoded; the ids pass through verbatim (see *One id, both doors* for the case rule).
 - An unmodeled `gen_ai.system` (bedrock, mistral, groq, …) is accepted as provider `unknown` and
   stays unpriced — visible rather than silently dropped.
+
+## Trace shape
+
+A GenAI span's parent is usually **not** a GenAI span: the LLM call hangs off an HTTP handler, a tool
+span or a DB span carrying no `gen_ai.*` attributes. Those spans are refused (`not_genai`) and never
+stored — the event table is for LLM calls, and inventing phantom events for them would corrupt cost,
+token and span accounting.
+
+Their *linkage* is kept, though. Each mapped span is reparented onto the nearest ancestor in the
+export that also mapped, so the trace keeps the shape it had in the exporter instead of fragmenting
+into one root per dropped parent. The exporter's original parent is preserved at
+`metadata.otel.otlp_parent_span_id`, so a synthesized link is visible as synthesized. Only the spans
+in the same export are visible: a parent exported in a different batch leaves its child a root, as
+before.
+
+## One id, both doors
+
+Trace/span ids are canonicalized identically on the OTLP door and the native `POST /v1/events` door
+(`core::normalize_trace_ref`). A W3C id — 16 or 32 hex characters — is **case-insensitive** by spec
+and is lower-cased; anything else is a caller's own opaque id (`"req-1"`, `"Order-7"`) and is kept
+verbatim, because folding those would merge distinct traces. That is what lets a single end-to-end
+trace spanning an OTel-instrumented service and an SDK-instrumented service render as one trace: the
+OTLP door already lower-cased, the SDK door normalized nothing, and the two halves silently split.
+
+*Migration:* events stored before this change keep whatever case they arrived with. An old trace is
+intact and still readable under its own id, but if an SDK was sending upper-case W3C ids, new spans
+land under the lower-cased id — the old and new halves of that one trace stay separate. Nothing is
+rewritten in place.
 
 ## Guarantees
 

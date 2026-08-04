@@ -36,6 +36,7 @@
 //!
 //! Nothing is ever silently dropped: every span in the request appears in `results` with an outcome.
 
+mod linkage;
 mod proto;
 mod semconv;
 
@@ -136,6 +137,11 @@ pub(crate) async fn post_traces(
             }
         }
     }
+
+    // The dropped non-GenAI spans (HTTP handlers, tools, DB calls) were often the *parents* of these
+    // LLM spans. Reparenting onto the nearest ancestor that did map keeps the trace one connected tree
+    // instead of N roots — see `linkage`. Done before the write so the stored event carries the link.
+    linkage::reparent_past_dropped_spans(&spans, &mut events, &span_of_event);
 
     // Nothing mappable: authenticate anyway (the batch handler would have, and an unauthorized
     // caller must not learn how its payload was classified), then report the export as fully rejected.
