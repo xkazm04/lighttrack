@@ -168,3 +168,22 @@ avoids that fixed floor entirely and is billed purely on the judge payload's tok
 re-measured either number for this change** — doing so costs real money against a live key, and no
 figure here is from a run we performed. Treat D9's range as the CLI baseline and price the API path from
 the DB price book by tokens (the Messages API returns no `$`, same as Gemini/OpenAI).
+
+## D13 — A `trace_id` is not a tenant boundary (2026-08-04)
+
+Trace reads are **scoped by project in the query**, not authorized after the fact. The old contract said
+the opposite in as many words — `Store::list_trace_events` was documented as returning "all events of
+one trace, regardless of project (the caller authorizes against the result)" — and `Trace::from_events`
+derived the merged trace's owner from its **earliest** event. A `trace_id` is caller-supplied, so that
+made it a de facto cross-tenant secret: post one event under someone else's id with an older timestamp
+and the merged trace flips to you, spans, inputs and outputs included. No attacker is even required —
+two tenants that both use a natural upstream id (`"req-1"`) merge into one trace and each key reads the
+other's data.
+
+So `list_trace_events` / `list_trace_scores` / `get_trace` all take `project: Option<&str>`. A project
+key always passes `Some(its own project)`; `None` means "across every project" and is reserved for
+admin/dev, whose deliberate operator-wide view is preserved. Consequences we accept: another project's
+trace now reads **404, not 403** (it is invisible, which also removes the existence oracle), and the
+project-scoped SQLite read carries an `INDEXED BY idx_events_project_trace` — left free the planner
+picks `idx_events_project_ts` (it satisfies `ORDER BY ts` without a sort) and filters `trace_id` across
+the whole project, which is the wrong shape for a trace read.

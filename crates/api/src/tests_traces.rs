@@ -151,12 +151,74 @@ async fn project_key_cannot_read_another_projects_trace() {
 
     ingest_span(&app, &key_a, "tr-a", "s1", None, 0.001).await;
 
-    // B's key may not read A's trace.
+    // B's key may not read A's trace. It reads as 404, not 403: the trace read is scoped by project
+    // in the query, so A's trace simply does not exist for B (no existence oracle either).
     let (status, body) = get(&app, &key_b, "/v1/traces/tr-a").await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 
     // And B's listing doesn't include A's trace.
     let (status, list) = get(&app, &key_b, "/v1/traces").await;
     assert_eq!(status, StatusCode::OK);
     assert!(list.as_array().unwrap().is_empty(), "cross-tenant trace leaked: {list}");
+}
+
+/// The collision case: two projects legitimately reuse the same natural trace id (a shared upstream
+/// request id). Before the read was project-scoped, the merged trace's owner was decided by the
+/// *earliest* event, so whichever tenant posted first (or deliberately backdated) owned — and could
+/// read — the other's spans, inputs and outputs included.
+#[tokio::test]
+async fn colliding_trace_id_never_merges_across_projects() {
+    let (state, store) = setup(Redactor::off());
+    let key_a = make_key(&store, "proj-a");
+    let key_b = make_key(&store, "proj-b");
+    let app = crate::build_router(state);
+
+    // A ingests first (so A's span is the oldest — the one that used to claim the merged trace).
+    let a_root = ingest_span(&app, &key_a, "req-1", "s-a", None, 0.001).await;
+    let b_root = ingest_span(&app, &key_b, "req-1", "s-b", None, 0.050).await;
+
+    // Detail: each side sees exactly its own single span, and its own project/cost.
+    let (status, a_detail) = get(&app, &key_a, "/v1/traces/req-1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(a_detail["project_id"], "proj-a");
+    assert_eq!(a_detail["totals"]["spans"], 1, "B's span leaked into A's trace: {a_detail}");
+    assert_eq!(a_detail["spans"].as_array().unwrap()[0]["event"]["id"], a_root);
+    assert!((a_detail["totals"]["cost_usd"].as_f64().unwrap() - 0.001).abs() < 1e-9);
+
+    let (status, b_detail) = get(&app, &key_b, "/v1/traces/req-1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(b_detail["project_id"], "proj-b", "the older foreign span must not claim the trace");
+    assert_eq!(b_detail["totals"]["spans"], 1, "A's span leaked into B's trace: {b_detail}");
+    assert_eq!(b_detail["spans"].as_array().unwrap()[0]["event"]["id"], b_root);
+
+    // List: each side's rollup counts only its own spans.
+    for (key, cost) in [(&key_a, 0.001), (&key_b, 0.050)] {
+        let (_, list) = get(&app, key, "/v1/traces").await;
+        let rows = list.as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{list}");
+        assert_eq!(rows[0]["spans"], 1, "cross-project spans merged into the listing: {list}");
+        assert!((rows[0]["cost_usd"].as_f64().unwrap() - cost).abs() < 1e-9, "{list}");
+    }
+
+    // Whole-trace scoring anchors to the caller's own root, never the foreign one, and each side's
+    // detail shows only its own verdicts.
+    let (status, score) = send(
+        &app,
+        &key_b,
+        "POST",
+        "/v1/traces/req-1/score",
+        Some(json!({ "rubric": "trace-coherence", "value": 0.5, "scored_by": "judge" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{score}");
+    assert_eq!(score["project_id"], "proj-b");
+    assert_eq!(score["event_id"], b_root, "score anchored to the foreign project's root span");
+
+    let (_, a_detail) = get(&app, &key_a, "/v1/traces/req-1").await;
+    assert!(
+        a_detail["scores"].as_array().unwrap().is_empty(),
+        "B's verdict surfaced in A's trace: {a_detail}"
+    );
+    let (_, b_detail) = get(&app, &key_b, "/v1/traces/req-1").await;
+    assert_eq!(b_detail["scores"].as_array().unwrap().len(), 1);
 }

@@ -763,17 +763,26 @@ pub trait Store: Send + Sync {
             next_cursor: None,
         })
     }
-    /// All events of one trace, regardless of project (the caller authorizes against the result).
-    fn list_trace_events(&self, _trace_id: &str) -> Result<Vec<LlmEvent>> {
+    /// All events of one trace **within `project`**, oldest first.
+    ///
+    /// A `trace_id` is caller-supplied and therefore NOT a tenant boundary: two projects can pick the
+    /// same natural id (`"req-1"`, a shared upstream request id), and anyone who knows an id can post
+    /// an event under it. So the project filter belongs in the query, not in a post-hoc authorization
+    /// check over a cross-project merge — a colliding id in another project must be invisible here,
+    /// never folded into the caller's trace. `None` means "across every project" and is reserved for
+    /// operator-level principals (admin/dev); a project-scoped caller always passes `Some`.
+    fn list_trace_events(&self, _project: Option<&str>, _trace_id: &str) -> Result<Vec<LlmEvent>> {
         Err(StoreError::Unsupported("traces"))
     }
-    /// Scores attached to any event within a trace (i.e. `scores.event_id` ∈ the trace's events).
-    fn list_trace_scores(&self, _trace_id: &str) -> Result<Vec<Score>> {
+    /// Scores attached to any event within a trace (i.e. `scores.event_id` ∈ the trace's events),
+    /// scoped by `project` on the same terms as [`Store::list_trace_events`].
+    fn list_trace_scores(&self, _project: Option<&str>, _trace_id: &str) -> Result<Vec<Score>> {
         Err(StoreError::Unsupported("traces"))
     }
-    /// Full rollup (totals + span tree) for one trace, or `None` if it has no events.
-    fn get_trace(&self, trace_id: &str) -> Result<Option<Trace>> {
-        Ok(Trace::from_events(self.list_trace_events(trace_id)?))
+    /// Full rollup (totals + span tree) for one trace within `project`, or `None` if it has no events
+    /// there. See [`Store::list_trace_events`] for why the project scope is part of the query.
+    fn get_trace(&self, project: Option<&str>, trace_id: &str) -> Result<Option<Trace>> {
+        Ok(Trace::from_events(self.list_trace_events(project, trace_id)?))
     }
 
     // --- benchmarks (Phase 3.5) ---

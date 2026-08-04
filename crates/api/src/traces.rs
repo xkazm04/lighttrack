@@ -21,7 +21,6 @@ use serde::{Deserialize, Serialize};
 use lighttrack_core::{new_id, Score, Trace};
 use lighttrack_store::TraceFilter;
 
-use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_read_project};
 use crate::state::{spawn_db, AppState};
@@ -105,12 +104,12 @@ pub(crate) async fn get_trace(
     Path(id): Path<String>,
 ) -> Result<Json<TraceDetail>, ApiError> {
     let p = authenticate(&st, &headers).await?;
-    let trace = load_trace(&st, &id).await?;
-    authorize_trace(&p, &trace.project_id)?;
+    let scope = resolve_read_project(&p, None)?;
+    let trace = load_trace(&st, scope.clone(), &id).await?;
 
     let store = st.store.clone();
     let tid = id.clone();
-    let scores = spawn_db(move || store.list_trace_scores(&tid)).await?;
+    let scores = spawn_db(move || store.list_trace_scores(scope.as_deref(), &tid)).await?;
     Ok(Json(TraceDetail { trace, scores }))
 }
 
@@ -147,8 +146,8 @@ pub(crate) async fn score_trace(
     Json(body): Json<TraceScoreBody>,
 ) -> Result<Json<Score>, ApiError> {
     let p = authenticate(&st, &headers).await?;
-    let trace = load_trace(&st, &id).await?;
-    authorize_trace(&p, &trace.project_id)?;
+    let scope = resolve_read_project(&p, None)?;
+    let trace = load_trace(&st, scope, &id).await?;
 
     // Anchor to the requested call, else the trace's entry-point span.
     let event_id = body.event_id.or_else(|| trace.root_event_id().map(str::to_string));
@@ -177,21 +176,21 @@ pub(crate) async fn score_trace(
     Ok(Json(score))
 }
 
-/// Fetch a trace by id, mapping an unknown trace to 404.
-async fn load_trace(st: &AppState, id: &str) -> Result<Trace, ApiError> {
+/// Fetch a trace by id **within `scope`**, mapping an unknown trace to 404.
+///
+/// A `trace_id` is caller-supplied, so isolation is enforced by the query's project filter rather
+/// than by authorizing a cross-project merge after the fact: two projects using the same natural id
+/// (accidentally or otherwise) each see only their own spans. Consequently another project's trace
+/// reads as 404 (not 403) — it is invisible, which also removes the existence oracle. `scope` is
+/// `None` only for admin/dev, whose deliberate cross-project view is preserved.
+async fn load_trace(
+    st: &AppState,
+    scope: Option<String>,
+    id: &str,
+) -> Result<Trace, ApiError> {
     let store = st.store.clone();
     let tid = id.to_string();
-    spawn_db(move || store.get_trace(&tid))
+    spawn_db(move || store.get_trace(scope.as_deref(), &tid))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("trace '{id}' not found")))
-}
-
-/// A project key may only touch traces in its own project; admin/dev may touch any.
-fn authorize_trace(p: &Principal, project_id: &str) -> Result<(), ApiError> {
-    if let Principal::Project { project_id: pid, .. } = p {
-        if pid != project_id {
-            return Err(ApiError::forbidden("key not authorized for that trace's project"));
-        }
-    }
-    Ok(())
 }

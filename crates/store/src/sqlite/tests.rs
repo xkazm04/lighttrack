@@ -329,11 +329,11 @@ fn trace_rollup_groups_events_and_scores() {
     assert_eq!(t1.models.len(), 2, "two distinct models in the trace");
 
     // The rollup nests child under root and totals the trace.
-    let trace = s.get_trace("tr-1").unwrap().expect("get_trace Some");
+    let trace = s.get_trace(Some("p1"), "tr-1").unwrap().expect("get_trace Some");
     assert_eq!(trace.totals.spans, 2);
     assert_eq!(trace.spans.len(), 1, "single root span");
     assert_eq!(trace.spans[0].children.len(), 1, "child nests under root");
-    assert!(s.get_trace("nope").unwrap().is_none(), "unknown trace -> None");
+    assert!(s.get_trace(Some("p1"), "nope").unwrap().is_none(), "unknown trace -> None");
 
     // A per-call score on the child + a whole-trace score anchored to the root both surface via join.
     let mk_score = |event_id: &str, rubric: &str| Score {
@@ -354,8 +354,71 @@ fn trace_rollup_groups_events_and_scores() {
     };
     s.insert_score(&mk_score(&child.id, "call-quality")).unwrap();
     s.insert_score(&mk_score(&root.id, "trace-coherence")).unwrap();
-    let scores = s.list_trace_scores("tr-1").unwrap();
+    let scores = s.list_trace_scores(Some("p1"), "tr-1").unwrap();
     assert_eq!(scores.len(), 2, "both the per-call and whole-trace scores join to the trace");
+}
+
+#[test]
+fn colliding_trace_id_across_projects_stays_separate() {
+    use lighttrack_core::Score;
+
+    let s = SqliteStore::open_in_memory().unwrap();
+    // The ACCIDENTAL case: two tenants both use the natural upstream request id "req-1". p2's event
+    // is the OLDEST, which under the old project-agnostic read decided the merged trace's owner.
+    let mut theirs = ev("p2", "claude-opus-4-8", 999, 999, 9.99);
+    theirs.id = "e-theirs".into();
+    theirs.trace_id = Some("req-1".into());
+    theirs.span_id = Some("s-theirs".into());
+    theirs.ts = Utc::now() - chrono::Duration::seconds(60);
+    theirs.input = Some("their private prompt".into());
+    let mut ours = ev("p1", "claude-haiku-4-5", 10, 5, 0.001);
+    ours.id = "e-ours".into();
+    ours.trace_id = Some("req-1".into());
+    ours.span_id = Some("s-ours".into());
+    for e in [&theirs, &ours] {
+        s.insert_event(e).unwrap();
+    }
+
+    let mine = s.get_trace(Some("p1"), "req-1").unwrap().expect("p1 sees its own trace");
+    assert_eq!(mine.project_id, "p1", "the older foreign event must not claim the trace");
+    assert_eq!(mine.totals.spans, 1, "only p1's span is visible: {:?}", mine.spans);
+    assert!((mine.totals.cost_usd - 0.001).abs() < 1e-9, "no foreign cost leaks in");
+
+    let theirs_view = s.get_trace(Some("p2"), "req-1").unwrap().expect("p2 sees its own trace");
+    assert_eq!(theirs_view.totals.spans, 1);
+    assert_eq!(theirs_view.project_id, "p2");
+
+    // A third project sees nothing at all — not an empty-but-existing trace, None.
+    assert!(s.get_trace(Some("p3"), "req-1").unwrap().is_none());
+
+    // Unscoped (admin/dev) keeps the deliberate cross-project view.
+    let merged = s.get_trace(None, "req-1").unwrap().expect("operator view");
+    assert_eq!(merged.totals.spans, 2, "admin/dev still see every project's spans");
+
+    // Scores are scoped on the same terms.
+    let score = Score {
+        id: new_id(),
+        project_id: "p2".into(),
+        event_id: Some("e-theirs".into()),
+        rubric: "their-rubric".into(),
+        value: 1.0,
+        max: 1.0,
+        pass: Some(true),
+        reasoning: None,
+        detail: None,
+        run_id: None,
+        case_index: None,
+        scored_by: "judge".into(),
+        cost_usd: None,
+        created_at: Utc::now(),
+    };
+    s.insert_score(&score).unwrap();
+    assert!(
+        s.list_trace_scores(Some("p1"), "req-1").unwrap().is_empty(),
+        "p1 must not read p2's verdicts through a colliding trace id"
+    );
+    assert_eq!(s.list_trace_scores(Some("p2"), "req-1").unwrap().len(), 1);
+    assert_eq!(s.list_trace_scores(None, "req-1").unwrap().len(), 1, "operator view unchanged");
 }
 
 #[test]
@@ -378,7 +441,7 @@ fn trace_list_and_detail_models_match_first_seen_order() {
 
     let list = s.list_traces(Some("p1"), 10).unwrap();
     let listed = list.iter().find(|t| t.trace_id == "tr-order").expect("trace listed");
-    let detail = s.get_trace("tr-order").unwrap().expect("trace detail");
+    let detail = s.get_trace(Some("p1"), "tr-order").unwrap().expect("trace detail");
 
     assert_eq!(listed.models, vec!["beta".to_string(), "alpha".to_string()], "first-seen order");
     assert_eq!(listed.models, detail.models, "list and detail agree on model ordering");
@@ -401,9 +464,23 @@ fn trace_queries_use_indexes_not_full_scan() {
         detail.join(" | ")
     };
 
-    // list_by_trace: WHERE trace_id = ? — served by idx_events_trace (a SEARCH, never a full SCAN).
+    // list_by_trace, unscoped (admin/dev): WHERE trace_id = ? — served by idx_events_trace (a
+    // SEARCH, never a full SCAN).
     let by_trace = plan("SELECT id FROM events WHERE trace_id = 'x' ORDER BY ts ASC");
     assert!(by_trace.contains("USING INDEX idx_events_trace"), "list_by_trace plan: {by_trace}");
+
+    // list_by_trace, project-scoped (the normal path): the composite idx_events_project_trace serves
+    // both predicates, so scoping the read by project keeps it proportional to the trace. Left free
+    // the planner picks idx_events_project_ts and filters trace_id across the whole project, hence
+    // the INDEXED BY the query carries.
+    let scoped = plan(
+        "SELECT id FROM events INDEXED BY idx_events_project_trace \
+         WHERE trace_id = 'x' AND project_id = 'p' ORDER BY ts ASC",
+    );
+    assert!(
+        scoped.contains("idx_events_project_trace"),
+        "project-scoped list_by_trace must still use the composite index: {scoped}"
+    );
 
     // list_trace_summaries (project-scoped): filter project_id + GROUP BY trace_id — served by the
     // new composite idx_events_project_trace instead of scanning + building a grouping b-tree.

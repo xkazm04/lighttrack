@@ -330,11 +330,11 @@ impl Store for SqliteStore {
     ) -> Result<TracePage> {
         self.read(|c| events::list_trace_summaries_filtered(c, project, filter, limit))
     }
-    fn list_trace_events(&self, trace_id: &str) -> Result<Vec<LlmEvent>> {
-        self.read(|c| events::list_by_trace(c, trace_id))
+    fn list_trace_events(&self, project: Option<&str>, trace_id: &str) -> Result<Vec<LlmEvent>> {
+        self.read(|c| events::list_by_trace(c, project, trace_id))
     }
-    fn list_trace_scores(&self, trace_id: &str) -> Result<Vec<Score>> {
-        self.read(|c| scores::list_by_trace(c, trace_id))
+    fn list_trace_scores(&self, project: Option<&str>, trace_id: &str) -> Result<Vec<Score>> {
+        self.read(|c| scores::list_by_trace(c, project, trace_id))
     }
 
     // --- scores ---

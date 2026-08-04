@@ -288,12 +288,30 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LlmEvent>> {
 }
 
 /// Every event of one trace, oldest first (the order the rollup expects). Skips rows with no
-/// `trace_id`. Project-agnostic: a trace id is globally unique, and the caller authorizes the result.
-pub(super) fn list_by_trace(conn: &Connection, trace_id: &str) -> Result<Vec<LlmEvent>> {
-    let sql = format!("SELECT {COLS} FROM events WHERE trace_id = ?1 ORDER BY ts ASC");
+/// `trace_id`. Scoped by `project` in the query: a trace id is caller-supplied, so a colliding id in
+/// another project must never enter the result set (see the `Store::list_trace_events` docs). `project =
+/// None` reads across projects and is reserved for operator principals.
+pub(super) fn list_by_trace(
+    conn: &Connection,
+    project: Option<&str>,
+    trace_id: &str,
+) -> Result<Vec<LlmEvent>> {
+    // `INDEXED BY` on the scoped path is deliberate: with a free choice the planner picks
+    // idx_events_project_ts (it satisfies ORDER BY ts without a sort) and then filters trace_id over
+    // *every* event in the project. Pinning the composite index keeps the read proportional to the
+    // trace, paying only a temp-b-tree sort over that trace's own rows. Unscoped keeps idx_events_trace.
+    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(trace_id.to_string())];
+    let (from, scope) = match project {
+        Some(p) => {
+            args.push(Box::new(p.to_string()));
+            ("events INDEXED BY idx_events_project_trace", "AND project_id = ?2 ")
+        }
+        None => ("events", ""),
+    };
+    let sql = format!("SELECT {COLS} FROM {from} WHERE trace_id = ?1 {scope}ORDER BY ts ASC");
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
-        .query_map(params![trace_id], map_raw)?
+        .query_map(params_from_iter(args.iter()), map_raw)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(from_raw).collect()
 }
