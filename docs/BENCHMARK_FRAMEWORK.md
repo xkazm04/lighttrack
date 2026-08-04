@@ -404,6 +404,15 @@ LightTrack, the better the data for everyone (the moat).
     other, so prefer real credentials.
   - *Hub operator workflow.* To accept contributions from Acme: create a project, set
     `collective_opt_in`, mint a key on it, hand Acme the key. Revoking the key ends the grant.
+  - *Upgrade note — a hub that accepted contributions BEFORE this change must purge once.* Contributor
+    identity used to be derived from the presented bearer token; it is now derived from the hub-issued
+    `api_keys.id`. The two derivations produce different ids for the same contributor, and an id carries
+    no marker saying which scheme minted it. So on an existing hub, a contributor's next push lands under
+    a **new** id while its old rows stay put under the old one — the same real contributor is then counted
+    as **two sources**, which is exactly how a `min_contributors = 2` quorum gets satisfied by one
+    participant. Purge `collective_entries` once when upgrading and ask contributors to re-push. Left
+    alone, the stale rows age out via `LIGHTTRACK_COLLECTIVE_MAX_AGE_DAYS` (default 90) — until then the
+    floor is weaker than it reads.
   - *Dev-mode hubs say so out loud.* Booting with `LIGHTTRACK_COLLECTIVE_ACCEPT=1` under `auth=dev`
     prints a warning naming the exact consequence — `min_contributors` cannot be enforced against forged
     identities in dev mode, so only hub-issued credentials get in. Run a real hub with
