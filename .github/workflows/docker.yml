@@ -30,6 +30,7 @@ jobs:
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -40,6 +41,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build a LOCAL single-platform image first, so we can actually run it. This is the leg that
+      # compiles (and populates the cache); the push step below is a cache hit that only uploads.
+      # `load: true` works here precisely because each matrix leg is on a runner NATIVE to its arch —
+      # a multi-arch manifest could not be loaded into the daemon, and emulating arm64 would be
+      # unusably slow.
+      - name: Build image locally (for smoke)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          tags: lighttrack:smoke
+          load: true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      # Run the image and drive the real core loop through it. Nothing is pushed until this passes,
+      # so a broken image can never acquire a tag — previously the image was published with zero
+      # post-build verification of any kind.
+      - name: Smoke the built image
+        env:
+          LIGHTTRACK_ADMIN_KEY: smoke-admin-key
+        run: |
+          set -eu
+          cid=$(docker run -d -p 127.0.0.1:8787:8787 \
+            -e LIGHTTRACK_AUTH_MODE=enforced \
+            -e LIGHTTRACK_ADMIN_KEY="$LIGHTTRACK_ADMIN_KEY" \
+            lighttrack:smoke)
+          trap 'echo "--- container logs ---"; docker logs "$cid" 2>&1 || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          sh scripts/smoke.sh http://127.0.0.1:8787
+
       - id: build
         uses: docker/build-push-action@v6
         with:
@@ -48,8 +80,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           # Push by digest only; the merge job assigns the human-readable tags.
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # Cache was written by the smoke build above; this step is a hit that only uploads layers.
           cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
       - name: Export digest
         run: |
@@ -67,6 +99,7 @@ jobs:
   merge:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/download-artifact@v4
         with:

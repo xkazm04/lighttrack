@@ -25,6 +25,23 @@ fi
 
 target="${a}-${o}"
 url="https://github.com/${REPO}/releases/latest/download/lighttrack-${target}.tar.gz"
+
+# Check the asset exists before piping into tar. Without this, a missing build makes curl 404 while
+# `tar` reports "does not look like a tar archive" — the pipeline's status is tar's, so the real
+# cause is invisible and people go hunting the wrong bug. This bit us for real: no release before
+# v0.0.7 shipped an x86_64-apple-darwin build (its CI leg used a retired runner), so every Intel Mac
+# install died on that confusing tar error.
+code="$(curl -sSL -o /dev/null -w '%{http_code}' -I "$url" || echo 000)"
+if [ "$code" != "200" ]; then
+  echo "no published build for ${target} (HTTP ${code})" >&2
+  echo "  tried: ${url}" >&2
+  echo "  LightTrack publishes: x86_64-unknown-linux-gnu, x86_64-apple-darwin," >&2
+  echo "                        aarch64-apple-darwin, x86_64-pc-windows-msvc (deploy/install.ps1)." >&2
+  echo "  If your platform is on that list, the latest release is incomplete — please report it at" >&2
+  echo "  https://github.com/${REPO}/issues. Otherwise build from source: cargo build --release --bins" >&2
+  exit 1
+fi
+
 echo "downloading ${url}"
 
 tmp="$(mktemp -d)"

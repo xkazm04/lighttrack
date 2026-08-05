@@ -16,11 +16,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu, archive: tar.gz }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc,    archive: zip }
-          - { os: macos-latest,   target: aarch64-apple-darwin,      archive: tar.gz }
-          - { os: macos-13,       target: x86_64-apple-darwin,       archive: tar.gz }
+          - { os: ubuntu-latest,   target: x86_64-unknown-linux-gnu, archive: tar.gz }
+          - { os: windows-latest,  target: x86_64-pc-windows-msvc,   archive: zip }
+          - { os: macos-latest,    target: aarch64-apple-darwin,     archive: tar.gz }
+          # Intel macOS: `macos-13` was RETIRED in Dec 2025, so every tag from v0.0.2 on sat in the
+          # queue until the 24h limit cancelled the whole run — which is why no release before this
+          # one carries an x86_64-apple-darwin asset. `macos-15-intel` is GitHub's named x86_64
+          # replacement. It is the last Intel image: it goes away in Aug 2027, after which this leg
+          # must either drop or cross-compile from an arm64 runner.
+          - { os: macos-15-intel,  target: x86_64-apple-darwin,      archive: tar.gz }
     runs-on: ${{ matrix.os }}
+    # Bounds a *hung build* (wedged linker, stuck test). It does NOT bound time spent waiting for a
+    # runner — that is a separate 24h queue limit — so this is a backstop, not the fix for the above.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +44,23 @@ jobs:
         run: >
           cargo build --release --target ${{ matrix.target }}
           -p lighttrack-cli -p lighttrack-runner -p lighttrack-mcp -p lighttrack-api
+
+      # Boot the binary we are about to publish and drive the real core loop through it. Cheap
+      # (~10s) and it runs on the one leg whose artifact is also what the Docker image ships, so a
+      # binary that cannot start, cannot open its DB, or cannot price an event never reaches a
+      # release page. An artifact CI does not exercise is presumed broken.
+      - name: Smoke the built binary
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          LIGHTTRACK_ADMIN_KEY: smoke-admin-key
+        run: |
+          LIGHTTRACK_BIND=127.0.0.1:8787 \
+          LIGHTTRACK_AUTH_MODE=enforced \
+          LIGHTTRACK_DB="$RUNNER_TEMP/smoke.db" \
+          "target/${{ matrix.target }}/release/lighttrack-api" &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          sh scripts/smoke.sh http://127.0.0.1:8787
 
       - name: Package (unix)
         if: runner.os != 'Windows'
@@ -58,3 +83,36 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+
+  # The defect behind the defect: with `fail-fast: false`, three legs can succeed and publish while a
+  # fourth never runs, leaving a release that *looks* fine but silently has no binary for a platform
+  # deploy/install.sh will happily ask for. This job makes that state loud instead of invisible.
+  verify:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Assert every platform artifact was published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' > /tmp/assets.txt
+          echo "published assets:"; sed 's/^/  /' /tmp/assets.txt
+          missing=0
+          for a in lighttrack-x86_64-unknown-linux-gnu.tar.gz \
+                   lighttrack-x86_64-pc-windows-msvc.zip \
+                   lighttrack-aarch64-apple-darwin.tar.gz \
+                   lighttrack-x86_64-apple-darwin.tar.gz; do
+            grep -qxF "$a" /tmp/assets.txt || { echo "MISSING: $a" >&2; missing=1; }
+          done
+          [ "$missing" -eq 0 ] || {
+            echo "release $TAG is incomplete — deploy/install.sh will 404 for the missing platform" >&2
+            exit 1
+          }
+          echo "all four platform artifacts present"
