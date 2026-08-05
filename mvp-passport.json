@@ -5,7 +5,7 @@
   "verdict": "go",
   "launchShape": "public-oss-self-host",
   "phases": {
-    "P0": "partial",
+    "P0": "green",
     "P1": "green",
     "P2": "partial",
     "P3": "partial",
@@ -15,11 +15,11 @@
   },
   "items": {
     "value-case": {
-      "level": "partial",
+      "level": "met",
       "tool": null,
       "skippedByChoice": false,
-      "acceptedPartial": true,
-      "note": "Claims reconciled against code; collective leaderboard now pitched. Only the track-to-cost feature was walked end to end this run; judge/benchmark and collective were not."
+      "acceptedPartial": false,
+      "note": "Claims reconciled against code and the collective leaderboard pitched. Both differentiators were then walked end to end on a live instance: the judge produced a real structured verdict via `claude -p` (score 1.00, per-dimension provenance persisted), and the collective loop ran opt-in -> digest -> ingest -> leaderboard -> withdraw. The privacy promise was tested adversarially: 29 bait markers planted across benchmark names, rubric text, system prompts and case reports; zero leaked."
     },
     "monetization": {
       "level": "met",
@@ -85,18 +85,18 @@
       "note": "fmt clean across 240 files, clippy -D warnings clean, 723 tests pass. lt CLI split 504 LOC to 45 plus 7 modules. Deferred: store-pg/events.rs 607 LOC and api/collective.rs 1023 LOC still exceed the 300-LOC rule; one allow(too_many_arguments) in runner/bench.rs."
     },
     "auth": {
-      "level": "partial",
+      "level": "met",
       "tool": null,
       "skippedByChoice": false,
-      "acceptedPartial": true,
-      "note": "Admin key and post-hash comparisons are constant-time (subtle, fixed-width digests so length never leaks). Dev mode warns loudly at boot. Still absent: rate limiting on auth-bearing routes, and an atomic key-rotate endpoint."
+      "acceptedPartial": false,
+      "note": "Admin key, project-key digest and the relay device key all compare in constant time (subtle, fixed-width digests so length never leaks; the relay one was a second CWE-208 site found while wiring the throttle). Per-source failed-auth throttle: 429 + Retry-After after 10 failures/60s, bounded at 4096 sources, XFF ignored unless explicitly configured. Dev mode warns loudly at boot. Still no atomic key-rotate endpoint (rotation is create-new then revoke-old)."
     },
     "security": {
       "level": "met",
       "tool": "cargo-deny",
       "skippedByChoice": false,
       "acceptedPartial": false,
-      "note": "One advisory in 304 crates (RUSTSEC-2026-0190, unsound not vulnerability, unreachable), cleared by bumping anyhow. PII scrubbing now on by default; a relay ingest door that bypassed redaction was found and fixed. MCP writes default off. No secret in git history."
+      "note": "One advisory in 304 crates (RUSTSEC-2026-0190, unsound not vulnerability, unreachable), cleared by bumping anyhow. PII scrubbing now on by default; a relay ingest door that bypassed redaction was found and fixed. MCP writes default off. No secret in git history. The PII scrubber was then found rewriting clean prose (its phone rule matched any ISO date) and was narrowed to four explicit phone shapes; it deliberately under-matches, because a missed redaction is visible in the row while a mangled sentence is invisible to every consumer including the judge."
     },
     "design-system": {
       "level": "partial",
@@ -117,7 +117,7 @@
       "tool": null,
       "skippedByChoice": false,
       "acceptedPartial": false,
-      "note": "Documented quickstart failed silently before this run. Now: dev mode attributes a projectless event to a default project, all three SDKs warn (rate-limited, never throwing), the price book is compiled in so binary-only installs still price, and the README two-command path was run verbatim against a live instance. The judge loop still needs a separately installed claude CLI."
+      "note": "Documented quickstart failed silently before this run. Now: dev mode attributes a projectless event to a default project, all three SDKs warn (rate-limited, never throwing), the price book is compiled in so binary-only installs still price, and the README two-command path was run verbatim against a live instance. The judge loop still needs a separately installed claude CLI. A later walk closed three more traps: POST /v1/projects now honours a caller-supplied id (it silently minted a UUID, so the README's next step 404'd), rubric creation is documented and has an `lt rubrics` command, and `lt-runner score` accepts --rubric-id so the documented weighted-dimension methodology is actually reachable."
     },
     "feedback": {
       "level": "met",
@@ -173,9 +173,15 @@
     "note": "latest and v0.0.7 share digest sha256:9581c137. First release with a complete four-platform asset set since v0.0.2."
   },
   "acceptedRisks": [
-    "clippy is a blocking gate against a floating stable toolchain, so a future Rust release can red-wall CI with no code change. This happened once during the run (local 1.94 vs CI 1.97); the operator chose to accept it rather than pin.",
+    "clippy is a blocking gate against a floating stable toolchain, so a future Rust release can red-wall CI with no code change. Happened once during the run (local 1.94 vs CI 1.97); the operator chose to accept rather than pin.",
     "No rollback has been rehearsed, and no public production URL for LightTrack itself is verifiable from the repo.",
-    "No rate limiting on auth-bearing routes.",
-    "The Python and TypeScript SDKs are still unexercised by CI; only clients/rust has a job."
+    "The Python and TypeScript SDKs are still unexercised by CI; only clients/rust has a job.",
+    "The Grafana dashboard JSON (15 panels) has never been verified against the real schema.",
+    "store-pg's list_conds silently ignores metadata_key/metadata_value that SQLite implements, so a metadata-filtered query returns unfiltered rows instead of 501-ing. This violates CLAUDE.md's backend-parity invariant.",
+    "Windows Defender deletes lt-runner.exe as Trojan:Win32/Bearfoos.A!ml (ML false positive on the unsigned binary), making the from-source path unusable on a default-configured Windows box without an exclusion.",
+    "A judge verdict costs about $0.019 via `claude -p` (55k cached + 4k created tokens of context overhead for a ~200-token judgment). Scoring every event is materially expensive; --bare avoids the overhead but needs ANTHROPIC_API_KEY.",
+    "Four-component version strings (4.10.2.1) still redact as <IP> \u2014 a well-formed dotted quad is indistinguishable from a host. Pinned in a test as a known cost.",
+    "leaderboard's frozen_dataset and significance_tested query params reject `1` (strict true/false). Deliberately left strict because they are tri-state and a typo would narrow results; flagged for a decision.",
+    "store-pg and traces use the non-sargable ($1::text IS NULL OR project_id = $1) predicate that SQLite deliberately replaced."
   ]
 }
