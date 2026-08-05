@@ -540,7 +540,9 @@ LightTrack, the better the data for everyone (the moat).
 - **API.** `GET /v1/collective/digest?min_cases=` (admin — preview what we'd publish) ·
   `POST /v1/collective/ingest` (hub-only; replaces a contributor's set, validates + clamps each entry) ·
   `GET /v1/collective/leaderboard?task_type=&provider=&judge=&determinism=&frozen_dataset=&significance_tested=`
-  (open read — the merged leaderboard; the rigor filters run after the k-anonymity floor) ·
+  (non-admin read — the merged leaderboard; the rigor filters run after the k-anonymity floor. "Open"
+  means *any* principal, not *no* principal: under `LIGHTTRACK_AUTH_MODE=enforced` a keyless GET is
+  `401`, so a public board still needs a read key handed out — or a `dev`-mode instance in front) ·
   `DELETE /v1/collective/contribution[?contributor=]` (withdraw a source's entries).
 - **Surfaces.** `lt collective leaderboard|digest|contribute|withdraw --hub <url>` (the CLI does the two-hop push:
   GET own digest → POST to the hub); the `get_collective_leaderboard` MCP read tool; a rendered
