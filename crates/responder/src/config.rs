@@ -1,6 +1,8 @@
 //! Responder configuration: service settings from env + the project→repo map from a JSON file.
 
 use std::collections::HashMap;
+// Only `resolve_claude_bin`'s Windows branch probes the filesystem for a real claude.exe.
+#[cfg(windows)]
 use std::path::Path;
 
 use serde::Deserialize;
