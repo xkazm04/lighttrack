@@ -4,7 +4,8 @@ use axum::http::HeaderMap;
 use chrono::Utc;
 
 use crate::auth::{self, AuthMode, Principal};
-use crate::error::ApiError;
+use crate::auth_throttle;
+use crate::error::{ApiError, ErrorCode};
 use crate::state::{spawn_db, AppState};
 
 pub(crate) fn bearer(headers: &HeaderMap) -> Option<String> {
@@ -19,10 +20,31 @@ pub(crate) fn bearer(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Resolve the principal behind a request (see `auth` module for mode semantics).
+///
+/// This is the one place a bearer token is accepted or rejected, so it is also where **failed**
+/// attempts are metered (see [`auth_throttle`]). The throttle is consulted *before* the credential is
+/// compared — a check that ran afterwards would relabel the response without slowing the guessing —
+/// and only a genuine 401 counts against a source, never a store outage.
 pub(crate) async fn authenticate(
     st: &AppState,
     headers: &HeaderMap,
 ) -> Result<Principal, ApiError> {
+    auth_throttle::guard(st)?;
+    match resolve_principal(st, headers).await {
+        Ok(p) => {
+            auth_throttle::record_success(st);
+            Ok(p)
+        }
+        Err(e) => {
+            if e.code() == ErrorCode::Unauthorized {
+                auth_throttle::record_failure(st);
+            }
+            Err(e)
+        }
+    }
+}
+
+async fn resolve_principal(st: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
     let token = match bearer(headers) {
         Some(t) => t,
         None => {

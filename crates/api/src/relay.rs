@@ -29,7 +29,10 @@ use crate::state::{spawn_db, AppState};
 /// (`LIGHTTRACK_RELAY_DEVICE_KEY`); an admin principal (or dev mode) also passes, for local testing.
 async fn ensure_device(st: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
     if let (Some(expected), Some(token)) = (st.relay_device_key.as_ref(), bearer(headers)) {
-        if &token == expected {
+        // Constant-time for the same reason the admin key is: this is an operator-chosen secret
+        // compared against raw presented bytes, so a short-circuiting `==` is a byte-at-a-time
+        // oracle. A *wrong* device key falls through to `authenticate`, which meters the failure.
+        if crate::auth::secret_eq(&token, expected) {
             return Ok(());
         }
     }

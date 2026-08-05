@@ -47,6 +47,11 @@ pub(crate) enum ErrorCode {
     /// traffic on its approach to the threshold. Either way the event is not recorded, so a
     /// cooperating client backs off (see `docs/ARCHITECTURE.md` §7 / §7c). The response body's
     /// message distinguishes the two; the shed case is transient and the retry hint is seconds.
+    ///
+    /// Also returned by the **failed-authentication throttle** (`auth_throttle`) once a source has
+    /// spent its credential-guess budget. Same contract from a client's side — a `Retry-After` and a
+    /// budget that refills — so it reuses this code rather than widening the frozen wire enum; the
+    /// message names which budget was spent.
     RateLimited,
     /// The server is shedding load: too many ingest requests are already in flight, so this one was
     /// refused immediately rather than queued. HTTP 503, with `Retry-After`.
@@ -132,6 +137,13 @@ impl ApiError {
     pub(crate) fn retry_after(mut self, secs: Option<u64>) -> Self {
         self.retry_after = secs;
         self
+    }
+
+    /// The code this error will answer with. The failed-auth throttle needs to tell a *rejected
+    /// credential* from a *failing store*: only the former is an attempt worth counting, or an
+    /// unreachable database would lock every source out of a server that is merely sick.
+    pub(crate) fn code(&self) -> ErrorCode {
+        self.code
     }
     pub(crate) fn internal(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, m)

@@ -55,6 +55,11 @@ pub(crate) struct AppState {
     /// behind `GET /v1/ingest/status`. Admission control for *load*, orthogonal to the spend limits
     /// above — see [`crate::shed`].
     pub(crate) ingest_guard: Arc<crate::shed::IngestGuard>,
+    /// Per-source budget for **failed** credential attempts. A third, independent axis: `ingest_guard`
+    /// bounds concurrent load and the limit rules bound spend, but neither bounded how fast an
+    /// attacker could guess the (operator-chosen, possibly weak) admin key — see
+    /// [`crate::auth_throttle`].
+    pub(crate) auth_throttle: Arc<crate::auth_throttle::AuthThrottle>,
 }
 
 /// Env: how long a cached redaction policy may be served before it is re-read from the store.

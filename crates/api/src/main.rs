@@ -84,6 +84,12 @@
 //!      LIGHTTRACK_INGEST_TIMEOUT_SECS (ingest deadline → 504 `timeout`; default 10, 0 = off),
 //!      LIGHTTRACK_INGEST_RETRY_AFTER_SECS (Retry-After advertised when shedding; default 1),
 //!      LIGHTTRACK_AUTH_MODE (dev|enforced), LIGHTTRACK_ADMIN_KEY,
+//!      LIGHTTRACK_AUTH_MAX_FAILURES (failed credential attempts one source may make per window
+//!        before it is refused with 429 `rate_limited` + Retry-After; default 10, 0 = off),
+//!      LIGHTTRACK_AUTH_FAILURE_WINDOW_SECS (that window; default 60),
+//!      LIGHTTRACK_AUTH_THROTTLE_MAX_SOURCES (bound on tracked sources; default 4096),
+//!      LIGHTTRACK_AUTH_TRUSTED_PROXY_HOPS (trust X-Forwarded-For from this many proxies in front of
+//!        the instance; default 0 = never — an untrusted XFF both evades and poisons the throttle),
 //!      LIGHTTRACK_RELAY_DEVICE_KEY (bearer key of the enrolled local device — relay lease/result),
 //!      LIGHTTRACK_RELAY_FLAT_COST_USD (fixed cost stamped per relay run event; default 1.0),
 //!      LIGHTTRACK_ALERT_WEBHOOK / LIGHTTRACK_ALERT_NTFY / LIGHTTRACK_ALERT_COOLDOWN_SECS (see alerts),
@@ -106,6 +112,7 @@
 
 mod alerts;
 mod auth;
+mod auth_throttle;
 mod benchmarks;
 mod billing;
 mod collective;
@@ -137,6 +144,8 @@ mod shed;
 mod state;
 mod traces;
 
+#[cfg(test)]
+mod tests_auth_throttle;
 #[cfg(test)]
 mod tests_collective;
 #[cfg(test)]
@@ -260,6 +269,8 @@ async fn main() -> anyhow::Result<()> {
     let rejections = Arc::new(rejections::RejectionLedger::new());
     let ingest_guard = Arc::new(shed::IngestGuard::from_env());
     let shed_desc = ingest_guard.describe();
+    let auth_throttle = Arc::new(auth_throttle::AuthThrottle::from_env());
+    let auth_throttle_desc = auth_throttle.describe();
     let state = AppState {
         store,
         prices: Arc::new(RwLock::new(book)),
@@ -274,6 +285,7 @@ async fn main() -> anyhow::Result<()> {
         seen_webhooks,
         rejections,
         ingest_guard,
+        auth_throttle,
         redaction_policies: Arc::new(state::RedactionCache::new(redaction_policies)),
     };
 
@@ -288,6 +300,7 @@ async fn main() -> anyhow::Result<()> {
         priced_models = n_prices,
         auth = ?state.auth_mode,
         admin_key = if state.admin_key.is_some() { "set" } else { "unset" },
+        auth_throttle = %auth_throttle_desc,
         alerts = %alerts_desc,
         forecast_sweep = %sweep_desc,
         ingest = %shed_desc,
@@ -312,7 +325,14 @@ async fn main() -> anyhow::Result<()> {
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
-    axum::serve(listener, app).await?;
+    // `into_make_service_with_connect_info` is what puts the socket peer address in each request's
+    // extensions. Without it there is no source identity and `auth_throttle` silently does nothing —
+    // so this is not an optional nicety, it is the throttle's input.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -452,6 +472,13 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/collective/contribution",
             delete(collective::delete_contribution),
         )
+        // Outermost, over every route: it only establishes the failed-auth throttle's view of *who*
+        // is calling (the socket peer), which `guards::authenticate` then reads. Routes that never
+        // authenticate — `/health`, the HMAC-signed billing webhook — are unaffected by it.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_throttle::source_scope,
+        ))
         .with_state(state)
 }
 

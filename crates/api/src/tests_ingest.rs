@@ -62,6 +62,9 @@ pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
         )),
         rejections: Arc::new(crate::rejections::RejectionLedger::new()),
         ingest_guard: Arc::new(crate::shed::IngestGuard::from_env()),
+        // Router tests drive `oneshot` without `ConnectInfo`, so there is no source and the throttle
+        // is inert here by construction — `tests_auth_throttle` injects one deliberately.
+        auth_throttle: Arc::new(crate::auth_throttle::AuthThrottle::from_env()),
         // Empty cache: policies are back-filled lazily from the store on first sight, which is also
         // the path these tests exercise.
         redaction_policies: Arc::new(crate::state::RedactionCache::new(HashMap::new())),

@@ -70,6 +70,7 @@ fn setup_k(
         )),
         rejections: Arc::new(crate::rejections::RejectionLedger::new()),
         ingest_guard: Arc::new(crate::shed::IngestGuard::from_env()),
+        auth_throttle: Arc::new(crate::auth_throttle::AuthThrottle::from_env()),
         redaction_policies: Arc::new(crate::state::RedactionCache::new(HashMap::new())),
     };
     (state, store)
