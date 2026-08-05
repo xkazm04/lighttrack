@@ -11,7 +11,7 @@
     "P3": "partial",
     "P4": "green",
     "P5": "green",
-    "P6": "partial"
+    "P6": "green"
   },
   "items": {
     "value-case": {
@@ -166,7 +166,10 @@
     "latest": "v0.0.7",
     "cutAt": "2026-08-05",
     "assets": 4,
-    "imageTags": ["v0.0.7", "latest"],
+    "imageTags": [
+      "v0.0.7",
+      "latest"
+    ],
     "note": "latest and v0.0.7 share digest sha256:9581c137. First release with a complete four-platform asset set since v0.0.2."
   },
   "acceptedRisks": [
