@@ -48,6 +48,47 @@ pub(crate) struct Collective {
     /// Model-identity normalization applied to `(provider, model)` at ingest, so `gpt-4o` /
     /// `openai/gpt-4o` / `gpt-4o-2024-08-06` collapse to one leaderboard row. Empty ⇒ pass-through.
     pub(crate) aliases: ModelAliases,
+    /// Where [`Self::aliases`] came from — a path, or `compiled-in default`. Reported at boot by
+    /// [`Self::describe`] because the difference is not cosmetic; see [`EMBEDDED_ALIASES`].
+    pub(crate) alias_source: String,
+}
+
+/// The alias table shipped with the source tree, compiled in. Same reasoning as the price book in
+/// `crate::prices`, with a sharper failure mode: release archives carry only the binaries, so an
+/// installed instance has no `config/model_aliases.json` next to it. Without normalization
+/// `gpt-4o-2024-08-06` and `gpt-4o` never merge, each stays a **single-source** row, and every one of
+/// them is then withheld by the `min_contributors` k-anonymity floor — a missing file does not skip a
+/// cosmetic tidy-up, it publishes an empty leaderboard. A file on disk still wins when there is one.
+const EMBEDDED_ALIASES: &str = include_str!("../../../../config/model_aliases.json");
+
+const DEFAULT_ALIASES_PATH: &str = "config/model_aliases.json";
+
+/// Where a startup alias table came from — reported at boot so an operator can tell whether their
+/// edits to `model_aliases.json` were actually picked up.
+#[derive(Debug, PartialEq)]
+pub(crate) enum AliasSeed {
+    File,
+    Embedded,
+}
+
+/// Build the alias table: `path` if it reads and parses, else the compiled-in copy.
+pub(crate) fn seed_aliases(path: &str) -> (ModelAliases, AliasSeed) {
+    match std::fs::read_to_string(path) {
+        Ok(s) => match ModelAliases::from_json_str(&s) {
+            Ok(a) => (a, AliasSeed::File),
+            Err(e) => {
+                tracing::warn!(path = %path, error = %e, "model aliases did not parse; using the compiled-in table");
+                (embedded_aliases(), AliasSeed::Embedded)
+            }
+        },
+        Err(_) => (embedded_aliases(), AliasSeed::Embedded),
+    }
+}
+
+fn embedded_aliases() -> ModelAliases {
+    // A malformed embedded table is a build-time mistake, not a runtime condition; the test below
+    // makes that a compile-and-test failure rather than a silently pass-through table in production.
+    ModelAliases::from_json_str(EMBEDDED_ALIASES).unwrap_or_default()
 }
 
 /// Default retention for contributed entries: a quarter. Long enough that a monthly contributor stays
@@ -78,7 +119,7 @@ impl Collective {
             .max(1);
         let min_interval_hours = env_u64("LIGHTTRACK_COLLECTIVE_MIN_INTERVAL_HOURS", 0);
         let max_age_days = env_u64("LIGHTTRACK_COLLECTIVE_MAX_AGE_DAYS", DEFAULT_MAX_AGE_DAYS);
-        let aliases = load_aliases();
+        let (aliases, alias_source) = load_aliases();
         Self {
             contributor_id,
             accept,
@@ -89,6 +130,7 @@ impl Collective {
             min_interval_hours,
             max_age_days,
             aliases,
+            alias_source,
         }
     }
 
@@ -138,14 +180,15 @@ impl Collective {
         };
         format!(
             "{who}, accept={}, allow_anon={}, min_cases={}, display_floor={}, min_contributors={}, \
-             min_interval_h={}, max_age_d={}",
+             min_interval_h={}, max_age_d={}, aliases={}",
             self.accept,
             self.allow_anon,
             self.min_cases,
             self.display_floor,
             self.min_contributors,
             self.min_interval_hours,
-            self.max_age_days
+            self.max_age_days,
+            self.alias_source
         )
     }
 }
@@ -164,16 +207,71 @@ fn env_u64(name: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-/// Load the model-alias table from `LIGHTTRACK_MODEL_ALIASES` (default `config/model_aliases.json`).
-/// Absent ⇒ an empty (pass-through) table; a parse error is logged and normalization is disabled.
-fn load_aliases() -> ModelAliases {
-    let path = std::env::var("LIGHTTRACK_MODEL_ALIASES")
-        .unwrap_or_else(|_| "config/model_aliases.json".to_string());
-    match std::fs::read_to_string(&path) {
-        Ok(s) => ModelAliases::from_json_str(&s).unwrap_or_else(|e| {
-            tracing::warn!(path = %path, error = %e, "model aliases parse error; normalization disabled");
-            ModelAliases::default()
-        }),
-        Err(_) => ModelAliases::default(),
+/// Resolve the alias table and a label naming where it came from, for the boot line. An explicit
+/// `LIGHTTRACK_MODEL_ALIASES` still wins; a path an operator set by hand that does not resolve is
+/// warned about rather than quietly swapped for the compiled-in copy, because they clearly meant
+/// that file.
+fn load_aliases() -> (ModelAliases, String) {
+    let explicit = std::env::var("LIGHTTRACK_MODEL_ALIASES")
+        .ok()
+        .filter(|p| !p.trim().is_empty());
+    let path = explicit
+        .clone()
+        .unwrap_or_else(|| DEFAULT_ALIASES_PATH.to_string());
+    match seed_aliases(&path) {
+        (aliases, AliasSeed::File) => (aliases, path),
+        (aliases, AliasSeed::Embedded) => {
+            if explicit.is_some() {
+                tracing::warn!(path = %path, "LIGHTTRACK_MODEL_ALIASES points at a table that could not be read; using the compiled-in one");
+            }
+            (aliases, "compiled-in default".to_string())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_compiled_in_alias_table_parses_and_actually_normalizes() {
+        let a = ModelAliases::from_json_str(EMBEDDED_ALIASES)
+            .expect("embedded model_aliases.json must parse");
+        // Non-empty, asserted the way the leaderboard cares about: the dated variant collapses onto
+        // the family, which is what lets two contributors' rows merge past `min_contributors`.
+        assert_eq!(
+            a.normalize("openai", "gpt-4o-2024-08-06"),
+            ("openai".into(), "gpt-4o".into()),
+            "embedded alias table normalized nothing"
+        );
+    }
+
+    #[test]
+    fn a_missing_alias_file_falls_back_to_the_embedded_table_not_a_pass_through_one() {
+        let (aliases, seed) = seed_aliases("no/such/model_aliases.json");
+        assert_eq!(seed, AliasSeed::Embedded);
+        // The regression this guards: with a pass-through table these two stay distinct, so each is
+        // a single-source row and `min_contributors=2` withholds both — an empty leaderboard.
+        assert_eq!(
+            aliases.normalize("openai", "gpt-4o-2024-08-06"),
+            aliases.normalize("openai", "gpt-4o"),
+            "a binary-only install must still merge dated variants"
+        );
+    }
+
+    #[test]
+    fn a_file_on_disk_still_wins_over_the_compiled_in_table() {
+        let dir = std::env::temp_dir().join(format!("lt-aliases-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model_aliases.json");
+        std::fs::write(&path, r#"{"models":{"gpt-4o-2024-08-06":"house-blend"}}"#).unwrap();
+        let (aliases, seed) = seed_aliases(path.to_str().unwrap());
+        assert_eq!(seed, AliasSeed::File);
+        assert_eq!(
+            aliases.normalize("openai", "gpt-4o-2024-08-06"),
+            ("openai".into(), "house-blend".into()),
+            "the operator's file must override the compiled-in table"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -64,6 +64,7 @@ fn setup_k(
             min_interval_hours: 0,
             max_age_days: 90,
             aliases,
+            alias_source: "test fixture".to_string(),
         }),
         seen_webhooks: Arc::new(crate::idempotency::SeenWebhooks::new(
             crate::idempotency::DEFAULT_CAPACITY,
