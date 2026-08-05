@@ -53,8 +53,10 @@ over an instance:
   the server, unbounded reads.
 - **Redaction and PII** — this one is explicitly in scope and easy to get wrong. `crates/api/src/redact.rs`
   applies two layers on ingest: the per-project persistence policy (`none` / `hash` / `drop`) and the
-  server-global PII scrub gated by `LIGHTTRACK_REDACT_INGEST` (`off` | `all` | a CSV of project ids),
-  which scrubs `input`, `output`, `error`, and `tags` via the `lighttrack_anon` regex pass. A case
+  server-global PII scrub gated by `LIGHTTRACK_REDACT_INGEST` (`all` | a CSV of project ids | `off`),
+  which scrubs `input`, `output`, `error`, and `tags` via the `lighttrack_anon` regex pass. **The
+  scrub is ON by default** — an unset variable means `all` (see D14 in `docs/DECISIONS.md`); `off`
+  is an explicit opt-out. A case
   where a project's `drop`/`hash` policy is not honored, or where enabled redaction still persists PII
   it claims to remove — including on paths other than plain ingest (batch, OTLP, relay, dataset build,
   judge prompts, exports) — is a security bug, not a feature request. Report it here.

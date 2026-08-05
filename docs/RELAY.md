@@ -154,8 +154,10 @@ and **raise/throw** (`RelayError`) on failure. Prefer the connector push for del
   Keep relay traffic owner-facing/batch.
 - **Single-device SPOF** — intrinsic; mitigated by the 20h retry envelope and dead-letter alerts.
   Apps must treat relay results as eventually consistent.
-- **Payload privacy** — params rest in the cloud DB until executed; ingest redaction
-  (`LIGHTTRACK_REDACT_INGEST`) applies, and secrets stay device-side by construction.
+- **Payload privacy** — params rest in the cloud DB until executed, and secrets stay device-side by
+  construction. Ingest redaction (`LIGHTTRACK_REDACT_INGEST`) covers the **run event** a device posts
+  back, including its `error` string — but **not** the task `params` in `relay_tasks`, which are
+  stored as submitted. Don't put anything in params you wouldn't want at rest in the cloud DB.
 
 ## Status
 
