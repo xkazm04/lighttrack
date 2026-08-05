@@ -55,6 +55,57 @@ project so you can see something work before configuring anything.
 startup. From your app, the SDKs below need `LIGHTTRACK_PROJECT` (or a project key, which implies
 one) — without either, an event has nothing to attribute to.
 
+**Project ids are yours to choose.** `POST /v1/projects` takes an optional `id`; supply one and it is
+used verbatim, omit it and the server mints a UUID. A supplied id must be **1–64 characters, starting
+with an ASCII letter or digit, then letters, digits, `-`, `_` or `.`** (it is a URL path segment, a
+`?project=` value and an env var, so the alphabet is the part that is unambiguous everywhere else) —
+anything else is a `400`, and an id already in use is a `409`. It is never silently replaced.
+
+## Your first judged score
+
+The LLM-as-judge is the differentiator, so here is that loop end to end: a project, a **rubric** — the
+weighted, anchored contract the judge grades against — and a score. `lt-runner` invokes the judge, so
+it needs a judge credential: an authenticated `claude` CLI (the default), or `ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY` / `GEMINI_API_KEY` with `--model <provider>/<model>`.
+
+```bash
+# 1. a project with an id you choose — the same id goes in LIGHTTRACK_PROJECT and in every URL
+curl -sX POST localhost:8787/v1/projects -H 'content-type: application/json' \
+  -d '{"id":"qa-demo","name":"QA demo"}'
+
+# 2. a rubric: weighted dimensions, anchored levels, and a gating floor on the one that must not slip
+cat > rubric.json <<'JSON'
+{
+  "name": "support-quality",
+  "threshold": 0.8,
+  "dimensions": [
+    { "key": "correctness", "description": "Every factual claim is right and supported by the input.",
+      "weight": 3.0, "floor": 0.5,
+      "anchors": ["1.0 = fully correct & verifiable", "0.5 = one minor error", "0 = wrong or unsupported"] },
+    { "key": "completeness", "description": "Answers every part of the question.", "weight": 2.0 },
+    { "key": "concision", "description": "No filler, no restating the question.", "weight": 1.0 }
+  ]
+}
+JSON
+lt rubrics create --project qa-demo --file rubric.json
+# -> {"id":"f1518732-…","name":"support-quality",…}    that id is what --rubric-id takes
+
+# 3. judge something against it
+lt-runner score-text --project qa-demo --rubric-id f1518732-… \
+  --input "What is the capital of France, and what river runs through it?" \
+  --output "Paris, on the Seine."
+# -> value 1.0, pass true, and a per-dimension `detail`: each dimension's score, weight, floor and
+#    the judge's own reasoning — the provenance behind the number, not just the number
+```
+
+`--rubric-id` is accepted wherever a judge runs — `lt-runner score` (online, over stored events),
+`score-text`, `score-traces`, `calibrate`, and a benchmark's `rubric_id` — alongside the freeform
+`--rubric "<criteria>"`, which takes plain criteria text and returns a single score with no
+dimensions. Pass exactly one of the two. `lt rubrics list --project <id>` and
+`lt rubrics show <rubric-id>` read them back. The methodology behind the fields — dimension kinds
+(including deterministic checks that cost no tokens), self-consistency, gating floors, the four bias
+controls — is [`docs/BENCHMARK_FRAMEWORK.md`](docs/BENCHMARK_FRAMEWORK.md) §3.
+
 ## Install
 
 ### Container (published & public)

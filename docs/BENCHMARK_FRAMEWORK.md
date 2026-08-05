@@ -151,6 +151,51 @@ Rules that make a mixed rubric honest:
 - **An all-deterministic rubric makes no provider call at all**: `samples = 0`, `cost_usd = null`,
   `scored_by = "deterministic"`, determinism `exact`.
 
+### 3a. Creating a rubric, and where its id is accepted
+A rubric is a stored object, not a flag: you create it once per project and then reference it by id.
+
+```bash
+curl -sX POST "$LIGHTTRACK_URL/v1/projects/$PID/rubrics" -H "authorization: Bearer $KEY" \
+  -H 'content-type: application/json' \
+  -d '{ "name": "support-quality", "threshold": 0.8, "dimensions": [
+          { "key": "correctness", "description": "Every factual claim is right and supported by the input.",
+            "weight": 3.0, "floor": 0.5,
+            "anchors": ["1.0 = fully correct & verifiable", "0.5 = one minor error", "0 = wrong or unsupported"] },
+          { "key": "completeness", "description": "Answers every part of the question.", "weight": 2.0 },
+          { "key": "concision",    "description": "No filler, no restating the question.", "weight": 1.0 } ] }'
+# -> {"id":"f1518732-…","project_id":"qa-demo","name":"support-quality","threshold":0.8,…}
+```
+
+or from a JSON file you keep in version control next to the prompts it grades:
+
+```bash
+lt rubrics create --project qa-demo --file rubric.json   # the file is that same body — or a bare
+lt rubrics list   --project qa-demo                      # [dimensions] array plus --name/--threshold
+lt rubrics show   f1518732-…
+```
+
+Creation is **admin**; reads are project-scoped (a project key may read its own rubrics, and gets a
+`403` for another project's). `threshold` defaults to `0.7`, each dimension's `weight` to `1.0` and
+`kind` to `llm`; a dimension with no `floor` cannot fail a case on its own. There is no `PUT`/`DELETE`
+surface, so rubrics are append-only in practice — an "edit" is a new rubric with a new id, which is
+what keeps an old score interpretable against the exact contract that produced it.
+
+The id is then the judging contract for:
+
+| Surface | How the rubric is named |
+|---|---|
+| `lt-runner score` — online, over stored events | `--rubric-id <id>` |
+| `lt-runner score-text` — an ad-hoc input/output pair | `--rubric-id <id>` |
+| `lt-runner score-traces` — whole traces (§ trace scoring) | `--rubric-id <id>` |
+| `lt-runner calibrate` — judge↔human agreement | `--rubric-id <id>` |
+| a stored benchmark (`POST …/benchmarks`) | `"rubric_id": "<id>"` |
+
+Each of those also takes freeform criteria text instead (`--rubric "<criteria>"`, or the benchmark's
+`rubric` field), which produces one score and no dimensions — the weighted/floored methodology above
+is exactly what `--rubric-id` buys. Pass **one** of the two: both is an error, neither is an error. A
+verdict written under a rubric carries the rubric's **name** in `Score.rubric` and the per-dimension
+breakdown in `Score.detail` (D11).
+
 **Modes** (pick per goal):
 - **Pointwise** (analytic, per-item) — monitoring, dashboards, regression tracking. *(shipped)*
 - **Reference-guided** — when `expected` exists, anchor the score to the golden answer. *(shipped: eval prompt)*

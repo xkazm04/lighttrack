@@ -9,13 +9,15 @@ use crate::http::call;
 
 pub(crate) fn run(cli: &Cli, action: &ProjectsCmd) -> Result<()> {
     match action {
-        ProjectsCmd::Create { name } => call(
-            cli,
-            Method::POST,
-            "/v1/projects",
-            Some(json!({ "name": name })),
-            "",
-        ),
+        // `id` is sent only when the operator chose one: an explicit `null` would be a supplied id
+        // as far as a stricter server is concerned, and the server's UUID is the right default.
+        ProjectsCmd::Create { name, id } => {
+            let mut body = json!({ "name": name });
+            if let Some(id) = id {
+                body["id"] = json!(id);
+            }
+            call(cli, Method::POST, "/v1/projects", Some(body), "")
+        }
         ProjectsCmd::List => call(cli, Method::GET, "/v1/projects", None, "list_projects"),
     }
 }

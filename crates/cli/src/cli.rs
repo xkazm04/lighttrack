@@ -33,6 +33,11 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         action: LimitsCmd,
     },
+    /// Manage rubrics — the weighted, anchored contract the LLM judge scores against.
+    Rubrics {
+        #[command(subcommand)]
+        action: RubricsCmd,
+    },
     /// Cost/usage rollup.
     Costs {
         #[arg(long)]
@@ -130,8 +135,38 @@ pub(crate) enum ProjectsCmd {
     Create {
         #[arg(long)]
         name: String,
+        /// Choose the project id (1–64 chars: letter/digit first, then letters, digits, `-`, `_`,
+        /// `.`). This is the id you put in `LIGHTTRACK_PROJECT` and in URLs. Omit it for a UUID.
+        #[arg(long)]
+        id: Option<String>,
     },
     List,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum RubricsCmd {
+    /// Create a rubric from a JSON file: either the whole body
+    /// (`{"name","threshold","dimensions"}`) or a bare array of dimensions plus `--name`.
+    Create {
+        #[arg(long)]
+        project: String,
+        /// Path to the rubric JSON.
+        #[arg(long)]
+        file: String,
+        /// Rubric name — supplies or overrides `name` in the file.
+        #[arg(long)]
+        name: Option<String>,
+        /// Overall pass threshold 0–1 — supplies or overrides `threshold` (API default 0.7).
+        #[arg(long)]
+        threshold: Option<f64>,
+    },
+    /// List a project's rubrics (name, dimension count, threshold, id).
+    List {
+        #[arg(long)]
+        project: String,
+    },
+    /// Show one rubric by id: its dimensions, weights and gating floors.
+    Show { id: String },
 }
 
 #[derive(Subcommand)]
