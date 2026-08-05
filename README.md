@@ -30,6 +30,31 @@ your laptop or any cloud.
 - **Query from agents** via a built-in **MCP server** — rendered tables + slash-command workflows in
   Claude Code (or any MCP client).
 
+## Your first tracked event
+
+Two commands, no signup, no config. This is the whole loop — send a call, get it back priced.
+
+```bash
+docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/lighttrack:v0.0.6
+
+curl -X POST localhost:8787/v1/events -H 'content-type: application/json' \
+  -d '{"provider":"openai","model":"gpt-4o-mini","operation":"chat","status":"success",
+       "usage":{"input":1000,"output":500}}'
+# -> {"id":"…","project_id":"default","cost_usd":0.00045,…}   cost priced server-side
+
+curl 'localhost:8787/v1/events?limit=1'
+```
+
+That `cost_usd` came from the DB-backed price book, not from you — which is the point. A fresh
+instance starts in **dev mode**: no API key, and an event with no project lands in a `default`
+project so you can see something work before configuring anything.
+
+**Before you point a real app at it**, set `LIGHTTRACK_AUTH_MODE=enforced` and a
+`LIGHTTRACK_ADMIN_KEY`, then mint a per-project key (`POST /v1/projects`, then
+`POST /v1/projects/<id>/keys`). Dev mode accepts any bearer token as admin and says so loudly at
+startup. From your app, the SDKs below need `LIGHTTRACK_PROJECT` (or a project key, which implies
+one) — without either, an event has nothing to attribute to.
+
 ## Install
 
 ### Container (published & public)
