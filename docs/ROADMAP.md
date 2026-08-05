@@ -33,7 +33,7 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
       `text` (Slack) + `content` (Discord) + structured `breach`. See `docs/ALERTS.md`. *Verified live:*
       3 breaching ingests → exactly 1 webhook + 1 ntfy delivered (dedup). Pub/Sub fan-out is Phase 5.
 
-## Phase 3 — Scoring engine ✅ (benchmarks pending)
+## Phase 3 — Scoring engine ✅ (benchmarks landed in 3.5/3.6 below)
 - [x] `engine` crate: `claude -p --output-format json --model <m> --json-schema <JudgeVerdict>`
       (stdin=null; structured_output with result-text JSON fallback); parses verdict + `total_cost_usd`
 - [x] Structured-output enforcement on **all** providers (claude `--json-schema`, OpenAI
@@ -137,13 +137,20 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
 - [x] Verified via a real JSON-RPC session (initialize → tools/list → tools/call returning live data)
 - [x] `.mcp.json` committed for project-scoped registration in Claude Code
 - [x] Benchmark read tools (`list_benchmarks`, `get_benchmark_runs`) added in Phase 3.5
-- [x] **Expanded** (commit 088b77c): modularized (`client`/`rpc`/`read`/`write`/`tools` + wiring `main`);
-      grown to 18 read tools (events/costs/scores/prices/limits/projects/benchmarks+runs/datasets+items/
-      rubrics/jobs, all `readOnlyHint`) + 9 write tools (`enqueue_benchmark` + create project/dataset/item/
-      freeze/rubric/benchmark/limit + `put_price`). Writes are OFF by default, gated behind
-      `LIGHTTRACK_MCP_ALLOW_WRITES` atop the API's admin checks; key-minting deliberately not exposed.
-      Fulfils D5 ("trigger benchmarks"). Verified: read-only hides/blocks writes; write mode runs the full
-      create→freeze→benchmark→enqueue→poll loop; frozen-dataset writes still return 409 via the API.
+- [x] **Expanded** (commit 088b77c): modularized (`client`/`rpc`/`read`/`write`/`tools` + wiring `main`).
+      Writes are OFF by default, gated behind `LIGHTTRACK_MCP_ALLOW_WRITES` atop the API's admin checks;
+      key-minting deliberately not exposed. Fulfils D5 ("trigger benchmarks"). Verified: read-only
+      hides/blocks writes; write mode runs the full create→freeze→benchmark→enqueue→poll loop;
+      frozen-dataset writes still return 409 via the API.
+- [x] **Current tool catalog** — count it from the registry (`read::tools()` +
+      `prompts_tools::read_tools()`, and `write::tools()` + `prompts_tools::write_tools()` in
+      `crates/mcp/src/`), which is what `tools/list` returns: **28 read tools** (events + traces /
+      costs + use-cases / margin + forecast / scores / limits / prices / projects / benchmarks + runs +
+      CI gate / datasets + items / rubrics / prompt registry / jobs / collective leaderboard + digest,
+      all `readOnlyHint`) + **15 write tools** (`enqueue_benchmark`; `record_score`/`score_trace`;
+      create project/dataset/item/freeze/rubric/benchmark/limit; update/delete limit;
+      `create_prompt_version`/`promote_prompt`; `put_price`). README's MCP section quotes the same
+      numbers — change both together.
 
 ## Phase 5 — Packaging & multicloud (design: docs/PACKAGING.md)
 Reframed from "GCP cloud move" to portable, multi-DB/multicloud: one image + one
@@ -152,18 +159,27 @@ Reframed from "GCP cloud move" to portable, multi-DB/multicloud: one image + one
       `FOR UPDATE SKIP LOCKED`. Selected by `LIGHTTRACK_DATABASE_URL=postgres://…`. Verified vs PG 16.
 - [x] **Firestore backend** (`lighttrack-store-firestore`, REST-over-reqwest): full parity, modular
       (rest/codec + per-domain). `LIGHTTRACK_DATABASE_URL=firestore://<project>`. See `docs/FIRESTORE.md`.
-- [x] 5b **Containerize → GHCR**: multi-stage `Dockerfile` (all 4 bins), compose, buildx CI; image
-      `ghcr.io/xkazm04/tracklight:v0.0.1` published (amd64).
+- [x] 5b **Containerize → GHCR**: multi-stage `deploy/docker/Dockerfile` (all 4 bins), compose, buildx
+      CI. Published **public** at `ghcr.io/xkazm04/lighttrack` — anonymously pullable, linux/amd64 +
+      linux/arm64, one tag per release (currently through `v0.0.6`) plus a moving `:latest`. The image
+      bundles all three store backends (the `api` crate depends on them unconditionally — no features).
 - [x] 5f **Binary installers + dashboards**: cargo-dist config + `deploy/install.{sh,ps1}`; Grafana
       dashboard over Postgres (`dashboards/grafana`, `docker-compose.postgres.yml`).
 - [~] 5d/5e **Helm chart + GCP/Azure Terraform modules** (`deploy/helm`, `deploy/terraform/modules`):
       scaffolded; **unverified** (no helm/terraform locally, no real cloud creds applied yet).
-- [ ] Remaining: **Store-conformance tests** across backends (gated on a PG/emulator env var — pg &
-      firestore currently have 0 automated tests); validate against real cloud Postgres (Neon/Supabase)
-      + apply Helm/TF with GCP+Azure creds; rebuild/publish a **Postgres-capable image** (v0.0.2) and make
-      the GHCR package public; AWS App Runner TF module; neutral Queue/Blob/Secrets/Notifier adapters
-      (5c); Pub/Sub queue + Cloud Scheduler; optional BigQuery analytical sink (Looker Studio); enforce
-      auth + TLS termination in the cloud deploy.
+- [x] **Store-conformance tests** across backends: the shared suite (`lighttrack_store::conformance`)
+      is wired up as `crates/store-pg/tests/conformance.rs` (+ `received_at.rs`) and
+      `crates/store-firestore/tests/conformance.rs`. Both are **env-gated** — they skip as a no-op
+      unless `LIGHTTRACK_TEST_DATABASE_URL` / `LIGHTTRACK_TEST_FIRESTORE` (+ `FIRESTORE_EMULATOR_HOST`)
+      is set, so CI without a database/emulator stays green. Caveat: that gating means a default
+      `cargo test` exercises **neither** backend — pg has no in-crate unit tests at all, firestore has 4
+      (codec/revenue). Coverage is opt-in, not automatic.
+- [x] **Postgres validated on real cloud Postgres**: the `store-pg` backend runs on Neon and carries
+      production traffic (see CLAUDE.md). Supabase not separately exercised.
+- [x] **Postgres-capable public image**: done — see 5b above.
+- [ ] Remaining: apply Helm/TF with real GCP+Azure creds; AWS App Runner TF module; neutral
+      Queue/Blob/Secrets/Notifier adapters (5c); Pub/Sub queue + Cloud Scheduler; optional BigQuery
+      analytical sink (Looker Studio); enforce auth + TLS termination in the cloud deploy.
 
 ## Parallelism & scale targets
 - Expected: 5–10 apps × 10–100 calls/hour ≈ ≤1k calls/hr. `api` handles ingest concurrently (async axum);

@@ -22,6 +22,9 @@ your laptop or any cloud.
   alerts + an advisory throttle flag apps/MCP can read.
 - **Score & benchmark** traces with an LLM-as-judge run through `claude -p` (structured
   `--json-schema` verdicts); generate candidate outputs from OpenAI / Gemini / Anthropic.
+- **Collective model intelligence** — opt in to publish a **k-anonymized digest** of your benchmark
+  scorecards (aggregate quality/cost/latency per model × task type — no prompts, no ids, no customer
+  data) to a shared hub, and read back a leaderboard built from other operators' *real* tasks.
 - **Notify** on limit breaches and score regressions.
 - **Visualize** with a provisioned **Grafana** dashboard over the Postgres store.
 - **Query from agents** via a built-in **MCP server** — rendered tables + slash-command workflows in
@@ -31,12 +34,14 @@ your laptop or any cloud.
 
 ### Container (published & public)
 ```bash
-docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/lighttrack:v0.0.4
+docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/lighttrack:v0.0.6
 curl localhost:8787/health        # -> ok
 ```
 The image bundles **all backends** (SQLite by default; set `LIGHTTRACK_DATABASE_URL` for
-Postgres/Firestore) and **all binaries** (`lighttrack-api`, `lt-runner`, `lt-mcp`, `lt`).
-Pin a version tag (`:v0.0.2`) — there is no `:latest`.
+Postgres/Firestore) and **all binaries** (`lighttrack-api`, `lt-runner`, `lt-mcp`, `lt`); it is built
+for linux/amd64 + linux/arm64. A `:latest` tag is published and currently tracks the newest release —
+**pin an explicit version tag** in anything you deploy so a new release can't move under you. Tags
+track the [Releases](https://github.com/xkazm04/lighttrack/releases) page.
 
 ### Prebuilt binaries
 Download a tarball/zip from [Releases](https://github.com/xkazm04/lighttrack/releases), or install the
@@ -125,12 +130,14 @@ and mount the **directory**, not the single file. Reads come from a connection p
   client (see below).
 
 ## Status
-**v0.0.2 — early but functional, and published.** Implemented: the core data plane
-(events / cost / limits / scores), **all three store backends** (SQLite / Postgres / Firestore), the
-multi-provider judge + benchmark engine, the **three client SDKs**, the MCP server, the operator CLI,
-and the deploy assets above (Compose / Helm / Terraform / installers / GHCR image). Still planned:
-DuckDB / libSQL / BigQuery backends, AWS Terraform, scheduled online sampling. See
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+**v0.0.6 — early but functional, and published** (latest tag on the
+[Releases](https://github.com/xkazm04/lighttrack/releases) page). Implemented: the core data plane
+(events / traces / cost / limits / scores), **all three store backends** (SQLite / Postgres /
+Firestore), the multi-provider judge + benchmark engine, scheduled online sampling
+(`lt-runner schedule`), the collective leaderboard, the **three client SDKs**, the MCP server, the
+operator CLI, and the deploy assets above (Compose / Helm / Terraform / installers / GHCR image).
+Still planned: DuckDB / libSQL / BigQuery backends, AWS Terraform, and applying the Helm/Terraform
+assets against real cloud credentials. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Layout
 ```
@@ -153,9 +160,11 @@ docs/                   architecture, data model, packaging, roadmap, decisions
 ```
 
 ## Use from Claude Code (MCP)
-`lt-mcp` is an MCP server over the API: **19 read tools** (events / costs / margin / scores / limits /
-prices / projects / benchmarks + runs / datasets + items / rubrics / jobs) plus **9 write tools** (enqueue runs,
-create project/dataset/rubric/benchmark/limit, `put_price`). Writes are **off by default**, gated behind
+`lt-mcp` is an MCP server over the API: **28 read tools** (events + traces / costs + use-cases / margin +
+forecast / scores / limits / prices / projects / benchmarks + runs + CI gate / datasets + items / rubrics /
+prompt registry / jobs / collective leaderboard + digest) plus **15 write tools** (enqueue runs, record
+scores, create project/dataset + items/rubric/benchmark, create/update/delete limit, prompt versions +
+gated promotion, `put_price`). Writes are **off by default**, gated behind
 `LIGHTTRACK_MCP_ALLOW_WRITES=1` on top of the API's admin checks; key-minting is deliberately not exposed.
 
 A project-scoped [`.mcp.json`](.mcp.json) is committed, so after `cargo build` and starting the API on
