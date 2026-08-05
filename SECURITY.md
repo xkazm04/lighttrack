@@ -21,9 +21,13 @@ A useful report includes:
 - the version: image tag or commit SHA
 - reproduction steps, and the smallest config that shows it
 
-If you cannot use GitHub's reporting form, open a **public issue containing no details** — title it
-`security contact request` and say only that you have a security report. The maintainer will open a
-private advisory thread and invite you to it. Keep the specifics out of that issue.
+If you cannot use GitHub's reporting form, email **michal.kazdan@nuda.dev** with the same details.
+The advisory form is still preferred — it keeps the report, the fix and the eventual CVE in one
+private thread — but email is a fine second door.
+
+Failing both, open a **public issue containing no details** — title it `security contact request`
+and say only that you have a security report. The maintainer will open a private advisory thread and
+invite you to it. Keep the specifics out of that issue.
 
 ## What to expect
 
