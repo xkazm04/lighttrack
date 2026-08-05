@@ -130,3 +130,35 @@ pub(crate) fn from_row(row: &PgRow) -> Result<Score> {
         created_at: parse_ts(&created_at)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::select_list_names;
+
+    /// `from_row` reads by position; adding a column mid-list without moving the reads shifts every
+    /// field after it, and most are strings, so nothing would fail to compile.
+    #[test]
+    fn cols_match_the_positions_from_row_reads() {
+        let names = select_list_names(COLS);
+        assert_eq!(
+            names,
+            ["id", "project_id", "event_id", "rubric", "value", "\"max\"", "pass", "reasoning",
+             "detail", "run_id", "case_index", "scored_by", "cost_usd", "created_at"]
+        );
+    }
+
+    /// `traces::list_scores_by_trace` aliases these columns by splitting on ", " and prefixing each
+    /// with `s.`. That is only correct while every entry is a bare identifier: a `COALESCE(a, b)` or
+    /// an `AS` alias here would be split mid-expression and produce invalid SQL for the join read.
+    #[test]
+    fn cols_stay_bare_identifiers_for_the_trace_join() {
+        for c in COLS.split(", ") {
+            let c = c.trim();
+            assert!(
+                !c.contains('(') && !c.contains(" AS ") && !c.contains(' '),
+                "score column {c:?} is not a bare identifier"
+            );
+        }
+    }
+}

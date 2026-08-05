@@ -486,3 +486,122 @@ pub(crate) fn from_row(row: &PgRow) -> Result<LlmEvent> {
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::select_list_names;
+
+    /// A `sqlx::Error::Database` with a chosen SQLSTATE — the driver's own error type has no public
+    /// constructor, and the 23505 → 409 mapping is worth pinning without a live server.
+    #[derive(Debug)]
+    struct FakeDbError(&'static str);
+
+    impl std::fmt::Display for FakeDbError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "fake db error {}", self.0)
+        }
+    }
+    impl std::error::Error for FakeDbError {}
+    impl sqlx::error::DatabaseError for FakeDbError {
+        fn message(&self) -> &str {
+            "fake db error"
+        }
+        fn code(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some(std::borrow::Cow::Borrowed(self.0))
+        }
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+    }
+
+    fn db_err(code: &'static str) -> sqlx::Error {
+        sqlx::Error::Database(Box::new(FakeDbError(code)))
+    }
+
+    /// A duplicate event id is the client re-sending, not a server fault: it must surface as 409,
+    /// never as an opaque 500.
+    #[test]
+    fn duplicate_id_maps_to_conflict() {
+        match insert_err(db_err("23505"), "ev-1") {
+            StoreError::Conflict(msg) => assert!(msg.contains("ev-1"), "{msg}"),
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn other_database_errors_stay_generic() {
+        // A different SQLSTATE (23503 = foreign key violation) is not a duplicate.
+        assert!(matches!(insert_err(db_err("23503"), "ev-1"), StoreError::Other(_)));
+        // Nor is a non-database error.
+        assert!(matches!(insert_err(sqlx::Error::RowNotFound, "ev-1"), StoreError::Other(_)));
+    }
+
+    #[test]
+    fn scope_expr_knows_the_column_dimensions_and_the_metadata_ones() {
+        assert_eq!(scope_expr("provider"), Some("provider"));
+        assert_eq!(scope_expr("model"), Some("model"));
+        assert_eq!(scope_expr("name"), Some("name"));
+        // These two ride in `metadata`, so they are extractions rather than columns.
+        assert!(scope_expr("api_key").is_some_and(|e| e.contains("api_key_id")));
+        assert!(scope_expr("customer").is_some_and(|e| e.contains("customer_id")));
+        assert_eq!(scope_expr("nonsense"), None);
+    }
+
+    /// The gap this closes: a dimension added to `LimitScope` but not taught to `scope_expr` falls
+    /// back to the literal `NULL` in the admission query, so `NULL = value` matches nothing and a
+    /// configured cap silently never fires. Enumerating `KINDS` makes that a build-time failure.
+    #[test]
+    fn every_core_scope_dimension_has_an_expression() {
+        for kind in LimitScope::KINDS {
+            assert!(scope_expr(kind).is_some(), "no scope_expr for '{kind}'");
+        }
+    }
+
+    /// `from_row` reads by position, so `COLS` and the `try_get` indices are one contract. Adding a
+    /// column mid-list without moving the reads shifts every field after it — a silent corruption
+    /// no type error would catch, since most of these are strings.
+    #[test]
+    fn cols_match_the_positions_from_row_reads() {
+        let names = select_list_names(COLS);
+        assert_eq!(names.len(), 24, "COLS has {} entries: {names:?}", names.len());
+        for (i, expected) in [
+            (0, "id"),
+            (5, "ts"),
+            (6, "provider"),
+            (8, "operation"),
+            (9, "input_tokens"),
+            (10, "output_tokens"),
+            (13, "cost_usd"),
+            (14, "latency_ms"),
+            (15, "status"),
+            (17, "input"),
+            (18, "output"),
+            (19, "tags"),
+            (20, "source"),
+            (21, "metadata"),
+            (22, "name"),
+            (23, "received_at"),
+        ] {
+            assert_eq!(names[i], expected, "column {i} moved");
+        }
+    }
+
+    /// The window expression must prefer server arrival and only fall back to `ts` — "simplifying"
+    /// it to plain `ts` hands a client with a backdated clock unmetered traffic. The behavior itself
+    /// is pinned by `tests/received_at.rs`, which needs a live Postgres; this keeps the expression
+    /// from being edited away without one.
+    #[test]
+    fn window_expression_prefers_received_at_over_ts() {
+        assert_eq!(RECEIVED, "COALESCE(received_at, ts)");
+    }
+}

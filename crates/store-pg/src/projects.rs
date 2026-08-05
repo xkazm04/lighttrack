@@ -258,3 +258,43 @@ pub(crate) fn limit_rule_from_row(row: &PgRow) -> Result<LimitRule> {
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::select_list_names;
+
+    /// What `scope_parts` writes, `LimitScope::from_parts` (used by `limit_rule_from_row`) has to
+    /// read back — a rule that round-trips into a *different* scope caps the wrong dimension.
+    #[test]
+    fn scope_parts_round_trips_every_dimension() {
+        for kind in LimitScope::KINDS {
+            let scope = LimitScope::from_parts(kind, "v".to_string()).expect("known kind");
+            let (k, v) = scope_parts(&Some(scope.clone()));
+            assert_eq!(k, Some(*kind));
+            assert_eq!(v.as_deref(), Some("v"));
+            assert_eq!(LimitScope::from_parts(k.expect("kind"), v.expect("value")), Some(scope));
+        }
+    }
+
+    /// An unscoped rule stores NULL in both columns; `limit_rule_from_row` only rebuilds a scope
+    /// when *both* are present, so writing one without the other would be a half-scoped rule.
+    #[test]
+    fn unscoped_rule_writes_neither_column() {
+        assert_eq!(scope_parts(&None), (None, None));
+    }
+
+    /// `limit_rule_from_row` reads by position, and `admission` selects the same list inside the
+    /// ingest transaction — a column inserted mid-list shifts every field after it. The assertion
+    /// also pins `"window"` as quoted: it is a reserved word in Postgres (the window-function
+    /// clause), so bare it turns every rule read and write into a syntax error.
+    #[test]
+    fn limit_cols_match_the_positions_limit_rule_from_row_reads() {
+        let names = select_list_names(LIMIT_COLS);
+        assert_eq!(
+            names,
+            ["id", "project_id", "metric", "\"window\"", "threshold", "action", "enabled",
+             "warn_at", "scope_kind", "scope_value"]
+        );
+    }
+}

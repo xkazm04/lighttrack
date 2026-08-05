@@ -68,6 +68,17 @@ pub(crate) async fn list(
     rows.iter().map(from_row).collect()
 }
 
+/// The `metadata` key a margin dimension groups on. Mirrors the SQLite reference's dim map exactly
+/// — an unknown dim must never silently fall through to customer data (a "prompt" margin query
+/// answering with customers is wrong data).
+fn dim_key(dim: &str) -> &'static str {
+    match dim {
+        "product" => "product_id",
+        "prompt" => "prompt",
+        _ => "customer_id",
+    }
+}
+
 pub(crate) async fn cost_by_dimension(
     pool: &PgPool,
     project: Option<&str>,
@@ -75,13 +86,7 @@ pub(crate) async fn cost_by_dimension(
     since: DateTime<Utc>,
     until: DateTime<Utc>,
 ) -> Result<Vec<CostByDimension>> {
-    // Mirror the SQLite reference's dim map exactly — an unknown dim must never silently fall
-    // through to customer data (a "prompt" margin query answering with customers is wrong data).
-    let key = match dim {
-        "product" => "product_id",
-        "prompt" => "prompt",
-        _ => "customer_id",
-    };
+    let key = dim_key(dim);
     let sql = format!(
         "SELECT (metadata::jsonb)->>'{key}' AS k, COUNT(*)::bigint AS calls, \
          COALESCE(SUM(cost_usd),0.0) AS cost FROM events \
@@ -131,4 +136,28 @@ fn from_row(row: &PgRow) -> Result<RevenueEvent> {
         },
         ts: parse_ts(&ts)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The same three-way map the SQLite backend uses (`sqlite/revenue.rs`, modulo the `$.` JSON-path
+    /// prefix). Backends disagreeing here means the same margin query answers with different data
+    /// depending on which store a deployment runs.
+    #[test]
+    fn dim_key_matches_the_sqlite_reference() {
+        assert_eq!(dim_key("product"), "product_id");
+        assert_eq!(dim_key("prompt"), "prompt");
+        assert_eq!(dim_key("customer"), "customer_id");
+    }
+
+    /// `by` reaches here straight from a query parameter, so an unrecognized value must land on the
+    /// documented default rather than being interpolated into the SQL.
+    #[test]
+    fn unknown_dimension_falls_back_to_customer() {
+        assert_eq!(dim_key(""), "customer_id");
+        assert_eq!(dim_key("nonsense"), "customer_id");
+        assert_eq!(dim_key("'; DROP TABLE events; --"), "customer_id");
+    }
 }
