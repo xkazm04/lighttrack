@@ -1,0 +1,89 @@
+# cargo-deny configuration — dependency-CVE and license visibility for the workspace.
+#
+# LightTrack stores other people's prompts, completions, and cost data (see SECURITY.md), so a
+# vulnerable crate in the ingest/store path is a data-exposure bug, not a housekeeping chore. Until
+# this landed the project had *zero* automated view of its dependency advisories.
+#
+# Run locally with `cargo deny check`; CI runs the same checks in the `cargo-deny` job of
+# .github/workflows/ci.yml (advisory / non-blocking to start — see the comment there).
+
+[graph]
+# Deliberately left empty = check EVERY target. release.yml ships four platforms
+# (x86_64 linux-gnu, x86_64 windows-msvc, aarch64 + x86_64 apple-darwin), so pinning this to the
+# Linux CI runner's triple would hide advisories in the windows-* / core-foundation / security-
+# framework crates that only ever reach the graph through a target-specific dependency — i.e. it
+# would silently stop scanning three of the four artifacts we publish.
+targets = []
+
+[advisories]
+# The point of the exercise: surface RUSTSEC advisories in the dependency graph. Every lint here is
+# at its default (`deny` for vulnerabilities, `warn` for yanked/unmaintained), because the job is
+# already non-blocking in CI — softening the levels *and* the job would mean nothing ever surfaces.
+#
+# Keep this list EMPTY unless an advisory is genuinely not reachable from how LightTrack uses the
+# crate, and then only with a `reason` naming the analysis. An ignore with no reason is a silent
+# acceptance of risk that outlives whoever added it.
+ignore = [
+    #{ id = "RUSTSEC-0000-0000", reason = "why this one cannot be reached from our call paths" },
+]
+
+[licenses]
+# The workspace is dual MIT OR Apache-2.0 (LICENSE-MIT + LICENSE-APACHE). This allow-list is what a
+# self-hosted binary under that dual license can redistribute without a downstream user inheriting
+# obligations they did not sign up for — so a copyleft crate (GPL/AGPL/LGPL/MPL/SSPL) creeping in as
+# a transitive dependency fails the check instead of shipping in the release artifacts.
+#
+# Derived from the ACTUAL tree (304 crates surveyed), not a generic template, so the first run is a
+# real signal rather than a wall of noise. Each entry below is here because something in the graph
+# needs it and it is permissive:
+allow = [
+    "MIT",                          # the bulk of the graph
+    "Apache-2.0",                   # the other half of the usual dual license; ring needs it outright
+    "Apache-2.0 WITH LLVM-exception", # wasi / linux-raw-sys and friends
+    "BSD-2-Clause",                 # zerocopy family
+    "BSD-3-Clause",                 # subtle (BSD-3 only), matchit, encoding_rs
+    "ISC",                          # rustls-webpki, untrusted; ring is `Apache-2.0 AND ISC`
+    "Unicode-3.0",                  # the icu_* / zerovec stack pulled in via idna → reqwest/url
+    "Zlib",                         # foldhash (Zlib only), tinyvec
+]
+# Anything permissive we did not need is still worth listing above: an unused entry is cheap, while a
+# missing one turns a routine dependency bump into a red check. Licenses reachable only through an
+# `OR` we already satisfy (Unlicense, BSL-1.0, LGPL-2.1-or-later in r-efi's triple-OR) are
+# intentionally NOT listed — SPDX evaluation picks the permissive arm, and listing them would blur
+# what this project actually accepts.
+unused-allowed-license = "allow"
+
+[licenses.private]
+# Workspace crates are `publish`-able and carry the dual license in [workspace.package], so there is
+# nothing to exempt — check them like any other crate.
+ignore = false
+
+[bans]
+# `warn`, not `deny`, and on purpose. The first run reported 7 duplicated crates — core-foundation,
+# getrandom, hashbrown (x3), hashlink, redox_syscall, windows-sys, wit-bindgen — and every one of
+# them arrives through a transitive dep of rusqlite / sqlx / reqwest, not through anything this
+# workspace asks for directly. Denying would fail CI on somebody else's release cadence, for a
+# duplicate we cannot unify without patching upstream, and a check that fails for reasons you cannot
+# act on is a check people learn to ignore. `warn` keeps the count visible in the log so it can be
+# driven down as the upstreams converge. Tighten to `deny` (with a `skip` list for the genuinely
+# unfixable ones) if the count climbs well past ~15, or if a crate WE depend on directly shows up
+# twice — that one is our bug and worth blocking on.
+multiple-versions = "warn"
+# `allow`, reluctantly. No crate here depends on an *external* crate by `version = "*"`, so `deny`
+# looks free — but cargo-deny counts the 14 internal `{ path = "../x" }` / `x.workspace = true` edges
+# as wildcards too, and `allow-wildcard-paths` only exempts them for crates marked `publish = false`,
+# which ours are not. Turning this on therefore yields 11 errors that are all this workspace pointing
+# at itself: exactly the noise that gets a check ignored. Flip it back to "deny" if the internal
+# crates ever gain real version requirements (i.e. when we actually publish to crates.io).
+wildcards = "allow"
+highlight = "all"
+
+[sources]
+# Every one of the 304 crates in the graph resolves to crates.io — there is not a single git or
+# alternate-registry dependency. Locking that in is the cheapest supply-chain control available: a
+# dependency swapped to a personal fork, or added from an unvetted registry, becomes a check failure
+# rather than something you find out about after it ships.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

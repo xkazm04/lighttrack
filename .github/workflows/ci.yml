@@ -14,10 +14,21 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Weekly sweep for the `cargo-deny` job only — every other job here is a pure function of the
+  # commit and learns nothing from being re-run on unchanged code. The advisory database is the
+  # exception: a RUSTSEC entry can be published against a dependency we already ship, days after our
+  # last commit, and a push-only trigger would never notice. Each sibling job is gated off on this
+  # event (see `if:` below) so the cron costs one runner, not seven.
+  # NB: GitHub disables scheduled workflows on a public repo after 60 days without a commit.
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
 
 # A newer push to the same ref supersedes in-flight runs (rapid pushes, PR force-updates).
+# `github.event_name` is part of the key so the Monday cron gets its own group: it shares
+# `refs/heads/main` with pushes to main, and without this a scheduled run landing mid-push would
+# cancel real CI (`cancel-in-progress` cuts both ways). Push and pull_request already differ by ref.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -33,6 +44,9 @@ jobs:
   # the branch-protection rules for main. (rusqlite is `bundled`, so this job needs no system libs.)
   conformance:
     name: sqlite conformance (required)
+    # Nothing to learn from re-running the suite on an unchanged commit — the Monday cron exists for
+    # `cargo-deny` alone. (Only skipped on `schedule`, so required-check status on PRs is untouched.)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +64,7 @@ jobs:
   # non-empty one. Mark `postgres conformance (required)` as a required status check for main.
   pg-conformance:
     name: postgres conformance (required)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -88,6 +103,7 @@ jobs:
   # it in the background, and waits for the port before testing. Mark this required for main too.
   firestore-conformance:
     name: firestore conformance (required)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     env:
       FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
@@ -129,6 +145,7 @@ jobs:
   # Blocking — keep this required alongside the conformance job.
   test:
     name: cargo test --workspace
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -149,6 +166,7 @@ jobs:
   # cleanup PR makes both green, drop `continue-on-error` and mark these as required too.
   clippy:
     name: cargo clippy -D warnings (advisory)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -165,6 +183,7 @@ jobs:
 
   fmt:
     name: cargo fmt --check (advisory)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -173,3 +192,41 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
+
+  # ── Supply chain ──────────────────────────────────────────────────────────────────────────────
+  # `cargo deny check all` = RUSTSEC advisories + license allow-list + duplicate/wildcard bans +
+  # crate-source pinning, configured in deny.toml at the repo root. Before this job the project had
+  # no automated view of whether it was shipping a crate with a published CVE — for software that
+  # stores other people's prompts and completions (SECURITY.md), that was the gap worth closing.
+  #
+  # NON-BLOCKING ON PURPOSE, and for a different reason than clippy/fmt above: those are advisory
+  # because of pre-existing debt in *our* code, which a cleanup PR can retire. This one is advisory
+  # because its input is a database that changes without us — a RUSTSEC entry published overnight
+  # against a transitive dependency would wall every unrelated PR until someone lands a bump. That
+  # trade (a red pipeline for everyone vs. a visible warning) is wrong for a one-maintainer project.
+  #
+  # TIGHTEN IT WHEN: the split becomes worthwhile — `check bans licenses sources` is deterministic
+  # given Cargo.lock (it only changes when *we* change dependencies) and should become a blocking
+  # job, leaving only `check advisories` advisory. Do that as its own change once someone is
+  # actually watching the advisory output; until then a single non-blocking job is the honest state.
+  #
+  # Uses the upstream action rather than the `dtolnay/rust-toolchain` + `cargo …` idiom the rest of
+  # this file follows, because cargo-deny is not part of the toolchain: `cargo install cargo-deny`
+  # is a ~2.5 min from-source build that `Swatinem/rust-cache` does not cache (it installs to
+  # ~/.cargo/bin, not target/). The action ships a prebuilt binary. Same precedent as setup-java /
+  # setup-gcloud / action-gh-release elsewhere in this repo: purpose-built action for non-cargo
+  # tooling, pinned to a major tag.
+  cargo-deny:
+    name: cargo deny (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check all
+          # Replaces the action's default `--all-features` (a no-op here — no workspace crate
+          # declares a `[features]` table). `--locked` is the point: scan the dependency graph that
+          # is actually committed, and fail loudly if Cargo.lock is stale rather than silently
+          # auditing a resolved-on-the-fly graph that nobody ships.
+          arguments: --locked
