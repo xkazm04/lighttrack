@@ -30,8 +30,10 @@ pub(crate) async fn authenticate(st: &AppState, headers: &HeaderMap) -> Result<P
         }
     };
 
+    // Constant-time: this is the one credential compared against a raw secret rather than a stored
+    // digest, and it is the highest-privilege one on the instance.
     if let Some(admin) = &st.admin_key {
-        if &token == admin {
+        if auth::secret_eq(&token, admin) {
             return Ok(Principal::Admin);
         }
     }

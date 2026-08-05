@@ -275,6 +275,9 @@ async fn main() -> anyhow::Result<()> {
         state.auth_mode,
         if state.admin_key.is_some() { "set" } else { "unset" },
     );
+    // `auth=Dev` in the banner above is one field in a long line; an unauthenticated server deserves
+    // a block you cannot skim past.
+    auth::warn_if_unenforced(state.auth_mode);
 
     // Pre-emptive forecast alerts on a timer (off unless configured). Detached: it never shares a
     // task with a request, and its store reads go to the blocking pool like any handler's.
