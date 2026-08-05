@@ -4,8 +4,8 @@
 //! Subcommands: `score` / `score-text` (judge events or ad-hoc pairs), `bench` (run a benchmark:
 //! compare / rubric / simple), `dataset build` (sample + anonymize), `serve` (job-queue worker).
 //!
-//! Layout: `cli` (args), `http` (API client), `util` (helpers), `score`, `dataset`, `bench`
-//! (+`compare`, `rubric`), `serve`.
+//! Layout: `cli` (args), `http` (API client), `util` (helpers), `judge_spec` (the `--rubric` /
+//! `--rubric-id` contract), `score`, `dataset`, `bench` (+`compare`, `rubric`), `serve`.
 
 mod bench;
 mod billing;
@@ -18,6 +18,7 @@ mod dataset;
 mod gate;
 mod history;
 mod http;
+mod judge_spec;
 mod pairwise;
 mod provenance;
 mod recurrence;
@@ -49,25 +50,37 @@ fn main() -> Result<()> {
     match &cli.cmd {
         Cmd::Score {
             rubric,
+            rubric_id,
             project,
             limit,
             interval,
-        } => score::score_recent(
-            &cli,
-            &http,
-            &engine,
-            rubric,
-            project.as_deref(),
-            *limit,
-            *interval,
-            cli.jobs,
-        ),
+        } => {
+            // Resolved once, before any judging: a bad rubric id fails immediately instead of on
+            // every tick of an `--interval` loop.
+            let judge =
+                judge_spec::Judge::resolve(&cli, &http, rubric.as_deref(), rubric_id.as_deref())?;
+            score::score_recent(
+                &cli,
+                &http,
+                &engine,
+                &judge,
+                project.as_deref(),
+                *limit,
+                *interval,
+                cli.jobs,
+            )
+        }
         Cmd::ScoreText {
             rubric,
+            rubric_id,
             input,
             output,
             project,
-        } => score::score_text(&cli, &http, &engine, rubric, input, output, project),
+        } => {
+            let judge =
+                judge_spec::Judge::resolve(&cli, &http, rubric.as_deref(), rubric_id.as_deref())?;
+            score::score_text(&cli, &http, &engine, &judge, input, output, project)
+        }
         Cmd::ScoreTraces {
             project,
             rubric,

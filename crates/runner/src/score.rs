@@ -3,19 +3,22 @@
 //! `score` is **online evaluation**: it judges recent events that carry input+output content,
 //! skips events that already have a score (idempotent / re-runnable), and with `--interval` runs
 //! as a continuous loop scoring newly-arrived events.
+//!
+//! Both commands judge under a [`Judge`] — freeform `--rubric` criteria or a structured
+//! `--rubric-id` — resolved once by the caller, so the weighted-dimension methodology is reachable
+//! from the primary scoring command and not only from `bench` / `score-traces` / `calibrate`.
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::{json, Value};
 
 use lighttrack_core::LlmEvent;
-use lighttrack_engine::{
-    build_judge_prompt, parse_judge_spec, run_judge, EngineConfig, JudgeOutcome,
-};
+use lighttrack_engine::EngineConfig;
 
 use crate::cli::Cli;
 use crate::http::{get, post};
+use crate::judge_spec::{Judge, Verdict};
 use crate::util::{parallel_map, short, value_to_text};
 
 /// Online scoring: judge recent unscored events (with input+output) for a project. With
@@ -26,7 +29,7 @@ pub(crate) fn score_recent(
     cli: &Cli,
     http: &reqwest::blocking::Client,
     engine: &EngineConfig,
-    rubric: &str,
+    judge: &Judge,
     project: Option<&str>,
     limit: usize,
     interval: u64,
@@ -34,12 +37,13 @@ pub(crate) fn score_recent(
 ) -> Result<()> {
     if interval > 0 {
         println!(
-            "online scoring every {interval}s (judge={}, limit={limit})",
-            engine.model
+            "online scoring every {interval}s (judge={}, rubric='{}', limit={limit})",
+            engine.model,
+            judge.label()
         );
     }
     loop {
-        score_once(cli, http, engine, rubric, project, limit, jobs)?;
+        score_once(cli, http, engine, judge, project, limit, jobs)?;
         if interval == 0 {
             break;
         }
@@ -55,7 +59,7 @@ fn score_once(
     cli: &Cli,
     http: &reqwest::blocking::Client,
     engine: &EngineConfig,
-    rubric: &str,
+    judge: &Judge,
     project: Option<&str>,
     limit: usize,
     jobs: usize,
@@ -71,7 +75,6 @@ fn score_once(
     }
     let events: Vec<LlmEvent> = get(cli, http, &epath)?;
 
-    let (jp, jm) = parse_judge_spec(&engine.model);
     // Partition first (cheap, in order): eligible events keep their (event, input, output); events
     // without both input and output content are skipped. Only the eligible set is judged.
     let total = events.len();
@@ -84,30 +87,29 @@ fn score_once(
         }
     }
 
-    let judged: Vec<Result<JudgeOutcome>> = parallel_map(eligible.len(), jobs, |i| {
+    let judged: Vec<Result<Verdict>> = parallel_map(eligible.len(), jobs, |i| {
         let (_, input, output) = &eligible[i];
-        judge_one(engine, &jp, &jm, rubric, input, output)
+        judge.judge(engine, input, output)
     });
 
     let mut scored = 0usize;
-    for (i, outcome) in judged.into_iter().enumerate() {
+    for (i, verdict) in judged.into_iter().enumerate() {
         let (ev, _, _) = &eligible[i];
-        let outcome = outcome?;
-        let score = build_score(&ev.project_id, Some(&ev.id), rubric, &outcome);
+        let v = verdict?;
+        let score = build_score(&ev.project_id, Some(&ev.id), judge.label(), &v);
         post(cli, http, "/v1/scores", &score)?;
         scored += 1;
         println!(
             "  - {} ({}) score={:.2}/{:.0} pass={} cost={} :: {}",
             short(&ev.id),
             ev.model,
-            outcome.verdict.score,
-            outcome.verdict.max,
-            outcome.verdict.pass,
-            outcome
-                .cost_usd
+            v.value,
+            v.max,
+            v.pass,
+            v.cost_usd
                 .map(|c| format!("${c:.5}"))
                 .unwrap_or_else(|| "n/a".into()),
-            outcome.verdict.reasoning
+            v.reasoning
         );
     }
     println!(
@@ -121,47 +123,29 @@ pub(crate) fn score_text(
     cli: &Cli,
     http: &reqwest::blocking::Client,
     engine: &EngineConfig,
-    rubric: &str,
+    judge: &Judge,
     input: &str,
     output: &str,
     project: &str,
 ) -> Result<()> {
-    let (jp, jm) = parse_judge_spec(&engine.model);
-    let outcome = judge_one(engine, &jp, &jm, rubric, input, output)?;
-    let score = build_score(project, None, rubric, &outcome);
+    let v = judge.judge(engine, input, output)?;
+    let score = build_score(project, None, judge.label(), &v);
     let stored = post(cli, http, "/v1/scores", &score)?;
     println!("posted score: {}", serde_json::to_string_pretty(&stored)?);
     Ok(())
 }
 
-fn judge_one(
-    engine: &EngineConfig,
-    provider: &str,
-    model: &str,
-    rubric: &str,
-    input: &str,
-    output: &str,
-) -> Result<JudgeOutcome> {
-    let prompt = build_judge_prompt(rubric, input, output);
-    run_judge(engine, provider, model, &prompt).context("judge failed")
-}
-
-fn build_score(
-    project_id: &str,
-    event_id: Option<&str>,
-    rubric: &str,
-    outcome: &JudgeOutcome,
-) -> Value {
+fn build_score(project_id: &str, event_id: Option<&str>, rubric: &str, v: &Verdict) -> Value {
     json!({
         "project_id": project_id,
         "event_id": event_id,
         "rubric": rubric,
-        "value": outcome.verdict.score,
-        "max": outcome.verdict.max,
-        "pass": outcome.verdict.pass,
-        "reasoning": outcome.verdict.reasoning,
-        "detail": crate::provenance::freeform_detail(outcome),
-        "scored_by": outcome.model,
-        "cost_usd": outcome.cost_usd,
+        "value": v.value,
+        "max": v.max,
+        "pass": v.pass,
+        "reasoning": v.reasoning,
+        "detail": v.detail,
+        "scored_by": v.scored_by,
+        "cost_usd": v.cost_usd,
     })
 }

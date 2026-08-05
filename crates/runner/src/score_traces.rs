@@ -20,17 +20,16 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 
-use lighttrack_core::{Rubric, TraceSummary};
-use lighttrack_engine::{
-    build_judge_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig,
-};
+use lighttrack_core::TraceSummary;
+use lighttrack_engine::EngineConfig;
 
 use crate::cli::Cli;
 use crate::http::{get, get_paged, post};
+use crate::judge_spec::{Judge, Verdict};
 use crate::util::{parallel_map, short, value_to_text};
 
 /// Everything one `score-traces` invocation needs (borrows the parsed CLI strings).
@@ -47,32 +46,6 @@ pub(crate) struct Params<'a> {
     pub jobs: usize,
 }
 
-/// The judging contract for this run: freeform criteria, or a fetched structured rubric. The
-/// `label` is the `rubric` field written on every score — and the key the idempotency check matches.
-enum Judge {
-    Freeform(String),
-    Structured(Box<Rubric>),
-}
-
-impl Judge {
-    fn label(&self) -> &str {
-        match self {
-            Judge::Freeform(text) => text,
-            Judge::Structured(r) => &r.name,
-        }
-    }
-}
-
-/// A unified judge verdict, whichever mode produced it — the shape the score body needs.
-struct Verdict {
-    value: f64,
-    max: f64,
-    pass: bool,
-    reasoning: String,
-    scored_by: String,
-    cost_usd: Option<f64>,
-}
-
 /// A sampled trace whose root exchange is ready to judge.
 struct Eligible {
     trace_id: String,
@@ -86,7 +59,7 @@ pub(crate) fn run(
     engine: &EngineConfig,
     p: &Params,
 ) -> Result<()> {
-    let judge = resolve_judge(cli, http, p)?;
+    let judge = Judge::resolve(cli, http, p.rubric_text, p.rubric_id)?;
     let daemon = p.interval > 0 && !p.once;
     if daemon {
         println!(
@@ -125,20 +98,6 @@ pub(crate) fn run(
 /// definition, so it ends the loop rather than being retried every interval.
 fn is_unsupported(e: &anyhow::Error) -> bool {
     e.chain().any(|c| c.to_string().contains("HTTP 501"))
-}
-
-/// Resolve the judging contract; exactly one of `--rubric` / `--rubric-id` is required.
-fn resolve_judge(cli: &Cli, http: &reqwest::blocking::Client, p: &Params) -> Result<Judge> {
-    match (p.rubric_text, p.rubric_id) {
-        (Some(t), None) => Ok(Judge::Freeform(t.to_string())),
-        (None, Some(id)) => {
-            let r: Rubric = get(cli, http, &format!("/v1/rubrics/{id}"))
-                .with_context(|| format!("fetching rubric '{id}'"))?;
-            Ok(Judge::Structured(Box::new(r)))
-        }
-        (Some(_), Some(_)) => bail!("pass exactly one of --rubric or --rubric-id, not both"),
-        (None, None) => bail!("one of --rubric or --rubric-id is required"),
-    }
 }
 
 /// One policy pass: sample settled traces, judge each eligible root exchange, post the scores.
@@ -192,7 +151,7 @@ fn run_cycle(
 
     // Judge concurrently (unbudgeted, read-only); post in fetch order so output is deterministic.
     let judged: Vec<Result<Verdict>> = parallel_map(eligible.len(), p.jobs, |i| {
-        judge_one(engine, judge, &eligible[i].input, &eligible[i].output)
+        judge.judge(engine, &eligible[i].input, &eligible[i].output)
     });
     let mut scored = 0usize;
     for (i, verdict) in judged.into_iter().enumerate() {
@@ -267,42 +226,6 @@ fn collect_sampled(
         }
     }
     Ok(out)
-}
-
-/// Judge one root exchange under the run's contract, mapping either outcome to a [`Verdict`].
-fn judge_one(engine: &EngineConfig, judge: &Judge, input: &str, output: &str) -> Result<Verdict> {
-    let (jp, jm) = parse_judge_spec(&engine.model);
-    match judge {
-        Judge::Freeform(text) => {
-            let prompt = build_judge_prompt(text, input, output);
-            let o = run_judge(engine, &jp, &jm, &prompt).context("judge failed")?;
-            Ok(Verdict {
-                value: o.verdict.score,
-                max: o.verdict.max,
-                pass: o.verdict.pass,
-                reasoning: o.verdict.reasoning,
-                scored_by: o.model,
-                cost_usd: o.cost_usd,
-            })
-        }
-        Judge::Structured(r) => {
-            let o = run_rubric_judge(engine, &jp, &jm, r, input, None, output, 1, 1)
-                .context("rubric judge failed")?;
-            Ok(Verdict {
-                value: o.overall,
-                max: 1.0,
-                pass: o.pass,
-                // The judge's own words for the weakest dimension — a template restating the
-                // rubric's shape tells a reader nothing they couldn't already compute.
-                reasoning: crate::provenance::weakest_reasoning(&crate::provenance::rubric_detail(
-                    &o,
-                ))
-                .unwrap_or_else(|| format!("rubric '{}' ({} dims)", r.name, o.dimensions.len())),
-                scored_by: o.model,
-                cost_usd: o.cost_usd,
-            })
-        }
-    }
 }
 
 /// Is this trace already covered by a whole-trace verdict for this rubric?

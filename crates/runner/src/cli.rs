@@ -46,8 +46,12 @@ pub(crate) enum Cmd {
     /// Score recent events (those with both input and output) for a project. Skips events that
     /// already have a score, so it's safe to re-run; `--interval` turns it into an online loop.
     Score {
+        /// Freeform judge criteria (use this OR --rubric-id).
         #[arg(long)]
-        rubric: String,
+        rubric: Option<String>,
+        /// Structured rubric id to fetch from the API and judge per-dimension (use this OR --rubric).
+        #[arg(long)]
+        rubric_id: Option<String>,
         #[arg(long)]
         project: Option<String>,
         #[arg(long, default_value_t = 10)]
@@ -58,8 +62,12 @@ pub(crate) enum Cmd {
     },
     /// Score an ad-hoc input/output pair (not tied to a stored event).
     ScoreText {
+        /// Freeform judge criteria (use this OR --rubric-id).
         #[arg(long)]
-        rubric: String,
+        rubric: Option<String>,
+        /// Structured rubric id to fetch from the API and judge per-dimension (use this OR --rubric).
+        #[arg(long)]
+        rubric_id: Option<String>,
         #[arg(long)]
         input: String,
         #[arg(long)]
