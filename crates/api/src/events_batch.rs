@@ -218,7 +218,7 @@ pub(crate) async fn post_batch(
             // batch; siblings already committed stay committed. The raw store error goes to the log,
             // not the wire (it is an internal detail on the product's most public surface).
             Err(e) => {
-                eprintln!("[BATCH] item {index} store error: {e}");
+                tracing::error!(index, event_id = %ev.id, error = %e, "batch item store error");
                 BatchItem::Invalid {
                     index,
                     id: Some(ev.id.clone()),

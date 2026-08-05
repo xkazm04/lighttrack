@@ -96,7 +96,7 @@ pub(crate) fn spawn(st: AppState, cfg: Option<SweepConfig>) {
             ticker.tick().await;
             let n = sweep_once(&st).await;
             if n > 0 {
-                eprintln!("[forecast-sweep] raised {n} pre-emptive alert(s) (cooldown decides delivery)");
+                tracing::info!(raised = n, "forecast sweep raised pre-emptive alerts (cooldown decides delivery)");
             }
         }
     });
@@ -112,7 +112,7 @@ pub(crate) async fn sweep_once(st: &AppState) -> usize {
     let projects = match spawn_db(move || store.list_projects()).await {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("[forecast-sweep] could not list projects: {e}");
+            tracing::warn!(error = %e, "forecast sweep could not list projects");
             return 0;
         }
     };
@@ -124,7 +124,7 @@ pub(crate) async fn sweep_once(st: &AppState) -> usize {
                 st.alerts.notify_forecast(&alerts);
             }
             Ok(_) => {}
-            Err(e) => eprintln!("[forecast-sweep] project {}: {e}", p.id),
+            Err(e) => tracing::warn!(project_id = %p.id, error = %e, "forecast sweep failed for a project"),
         }
         // Be a polite background citizen: hand the runtime back between projects so a hundred-project
         // instance can't monopolize a worker while ingest is waiting.

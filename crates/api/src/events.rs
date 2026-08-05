@@ -130,9 +130,14 @@ pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) 
     let breached: Vec<LimitStatus> =
         admission.statuses.iter().filter(|s| s.breached).cloned().collect();
     for b in &breached {
-        eprintln!(
-            "[ALERT] project={} metric={:?} window={:?} value={:.6} >= threshold={:.6} action={:?}",
-            b.project_id, b.metric, b.window, b.current, b.threshold, b.action
+        tracing::warn!(
+            project_id = %b.project_id,
+            metric = ?b.metric,
+            window = ?b.window,
+            value = b.current,
+            threshold = b.threshold,
+            action = ?b.action,
+            "usage limit breached",
         );
     }
     // A rejected event is never stored (that would corrupt usage/cost), so count it out-of-band in the
@@ -147,15 +152,14 @@ pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) 
         record_rejection(st, ev, &admission.statuses)
     };
     for s in admission.statuses.iter().filter(|s| s.shedding) {
-        eprintln!(
-            "[THROTTLE] project={} metric={:?} window={:?} ratio={:.3} shedding={:.0}% event={} \
-             (graduated back-pressure, not a breach)",
-            s.project_id,
-            s.metric,
-            s.window,
-            s.ratio,
-            s.shed_fraction * 100.0,
-            ev.id
+        tracing::info!(
+            project_id = %s.project_id,
+            metric = ?s.metric,
+            window = ?s.window,
+            ratio = s.ratio,
+            shed_pct = s.shed_fraction * 100.0,
+            event_id = %ev.id,
+            "throttling ingest: graduated back-pressure, not a breach",
         );
     }
     // Best-effort, off the request path: deliver breaches to webhook/ntfy (deduped per cooldown).

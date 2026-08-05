@@ -15,12 +15,26 @@ npm run build    # emits dist/ (ESM + types)
 You can also vendor `src/index.ts` directly. Node 22.18+/23+/24 runs the `.ts` sources without a build
 step (type stripping): `node example.ts`.
 
+## Configure
+
+**Every event needs a project.** The server derives it from a project key, or takes it from the
+event — so with no key you must set `LIGHTTRACK_PROJECT`, or ingest fails with
+`400 project_id is required`. Set one of these before your first call:
+
+```bash
+export LIGHTTRACK_URL=http://127.0.0.1:8787   # default; override for a remote server
+export LIGHTTRACK_PROJECT=demo                # required in dev mode / with an admin key
+# ...or instead: export LIGHTTRACK_KEY=lt_...  # a project key pins the project server-side
+```
+
 ## Use
 
 ```ts
 import { LightTrack } from "lighttrack-client";
 
 const lt = new LightTrack({ source: "my-app" });   // env: LIGHTTRACK_URL / _KEY / _PROJECT
+// ...or pass it explicitly, no env needed:
+// const lt = new LightTrack({ project: "demo", source: "my-app" });
 
 const resp = await openai.chat.completions.create({ model: "gpt-4o", messages: [...] });
 lt.trackOpenAI(resp, { latencyMs: 120 });          // also: trackAnthropic, trackGemini, track(...)
@@ -30,6 +44,28 @@ await lt.flush();                                   // await in-flight sends bef
 
 `lt.span(provider, model)` returns a span; call `span.setOpenAI(resp); span.end()` to record latency
 automatically. See `example.ts` and the repo's `clients/README.md`.
+
+## Why don't I see my events?
+
+`track*` never throws — but it is not silent. A failed send emits one actionable line via
+`console.warn` (stderr in Node, never stdout, which your app may be using as a protocol channel):
+
+```
+[lighttrack] events are being dropped: no project is configured, and without an API key the server
+cannot infer one, so it will reject them with HTTP 400 'project_id is required'. Fix: set
+LIGHTTRACK_PROJECT=<your-project-id> ...
+```
+
+That case is detected *before* the request, so it appears on your very first `track*`. Warnings are
+rate-limited to one line per error kind per 60 s, so a hot loop costs one line, not thousands.
+
+Silence them with `LIGHTTRACK_QUIET=1` or `new LightTrack({ quiet: true })`.
+
+## Test
+
+```bash
+cd clients/typescript && npm install && npm test   # also: npx tsc --noEmit -p tsconfig.json
+```
 
 ## Auto-instrument (one line)
 

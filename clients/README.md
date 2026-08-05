@@ -58,15 +58,46 @@ Read from the environment (or pass explicitly to the constructor):
 - `LIGHTTRACK_URL` — API base URL (default `http://127.0.0.1:8787`).
 - `LIGHTTRACK_KEY` — a project or admin key (`Bearer`). With a **project key**, the project is
   derived server-side. Empty values are ignored.
-- `LIGHTTRACK_PROJECT` — project id to stamp on events. Needed in **dev mode** (no key) or when using
-  an **admin key** to ingest into a specific project; ignored when a project key already pins it.
+- `LIGHTTRACK_PROJECT` — project id to stamp on events. **Required** in dev mode (no key) or when
+  using an **admin key**; ignored when a project key already pins the project.
+- `LIGHTTRACK_QUIET` — set to `1` to silence the SDK's failure diagnostics (see below).
+
+**Every event needs a project.** The server derives it from a project key, or takes it from the
+event — so with no key you must set `LIGHTTRACK_PROJECT`, or ingest fails with
+`400 project_id is required`. The minimum that works:
+
+```bash
+export LIGHTTRACK_URL=http://127.0.0.1:8787
+export LIGHTTRACK_PROJECT=demo        # ...or export LIGHTTRACK_KEY=lt_... instead, and skip this
+```
+
+## Why don't I see my events? (SDK diagnostics)
+
+Sends are best-effort and never throw — but they are **not silent**. When a send fails, each SDK
+writes one actionable line to stderr (`console.warn` in TypeScript, never stdout), naming the likely
+cause and the fix:
+
+```
+[lighttrack] events are being dropped: no project is configured, and without an API key the server
+cannot infer one, so it will reject them with HTTP 400 'project_id is required'. Fix: set
+LIGHTTRACK_PROJECT=<your-project-id> ...
+```
+
+The unconfigured-project case is caught **before** the network call, so it surfaces on the very first
+`track*`. Warnings are rate-limited to **one line per error kind per 60 s** (a repeat reports how many
+were suppressed), so a hot loop of failing calls costs one line, not thousands.
+
+To turn them off entirely: `LIGHTTRACK_QUIET=1`, or per client — `LightTrack(quiet=True)` (Python),
+`new LightTrack({ quiet: true })` (TypeScript), `Client::from_env().quiet(true)` (Rust).
 
 ## Python
 
 ```python
+# export LIGHTTRACK_PROJECT=demo   (or LIGHTTRACK_KEY=lt_... — a project key pins the project)
 from lighttrack import LightTrack
 
 lt = LightTrack(source="my-app")            # env: LIGHTTRACK_URL / _KEY / _PROJECT
+# ...or pass it explicitly: LightTrack(project="demo", source="my-app")
 
 resp = openai_client.chat.completions.create(model="gpt-4o", messages=[...])
 lt.track_openai(resp, latency_ms=120)       # extracts model + token usage
@@ -82,9 +113,10 @@ lt.close()                                   # flush at shutdown (also auto-runs
 ## TypeScript / JavaScript
 
 ```ts
+// export LIGHTTRACK_PROJECT=demo   (or LIGHTTRACK_KEY=lt_... — a project key pins the project)
 import { LightTrack } from "lighttrack-client";
 
-const lt = new LightTrack({ source: "my-app" });
+const lt = new LightTrack({ source: "my-app" });   // ...or { project: "demo", source: "my-app" }
 
 const resp = await openai.chat.completions.create({ model: "gpt-4o", messages: [...] });
 lt.trackOpenAI(resp, { latencyMs: 120 });
@@ -95,9 +127,11 @@ await lt.flush();                            // await in-flight sends before exi
 ## Rust
 
 ```rust
+// export LIGHTTRACK_PROJECT=demo   (or LIGHTTRACK_KEY=lt_... — a project key pins the project)
 use lighttrack_client::{Client, Provider};
 
 let lt = Client::from_env().source("my-app");
+// ...or explicitly: Client::new("http://127.0.0.1:8787", None, Some("demo".into()))
 
 lt.event(Provider::OpenAi, "gpt-4o")
     .input_tokens(120).output_tokens(45).latency_ms(120)
@@ -126,5 +160,9 @@ Provider names are normalized to the API's enum (`openai` / `anthropic` / `googl
 
 - **Non-blocking:** sends happen off the request path (Python: background daemon thread; TS:
   un-awaited `fetch`; Rust: background worker thread). A full queue drops events rather than blocking.
-- **Best-effort:** all network errors are swallowed; a down or slow LightTrack never affects your app.
+- **Best-effort:** no network error ever reaches your code — a down or slow LightTrack cannot fail,
+  block, or crash your app.
+- **Visible, not silent:** a swallowed error is still *reported* — one rate-limited, actionable line
+  on stderr per error kind (see [above](#why-dont-i-see-my-events-sdk-diagnostics)). Telemetry that
+  fails invisibly is worse than no telemetry. `LIGHTTRACK_QUIET=1` opts out.
 - **Flush on exit:** call `close()` / `await flush()` / `flush()` to drain before the process exits.

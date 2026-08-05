@@ -121,7 +121,7 @@ pub(crate) async fn resolve_ingest_project_ensuring(
     Ok(pid)
 }
 
-/// Create [`DEV_DEFAULT_PROJECT`] if it isn't there yet, and say so once — on stderr, so an operator
+/// Create [`DEV_DEFAULT_PROJECT`] if it isn't there yet, and say so once — at `info`, so an operator
 /// who named no project can find where their events went.
 ///
 /// Best-effort by design: no ingest step depends on the row existing (an event carries its own
@@ -134,7 +134,7 @@ async fn ensure_dev_default_project(st: &AppState) {
         Ok(Some(_)) => return,
         Ok(None) => {}
         Err(e) => {
-            eprintln!("[DEV] could not look up project '{DEV_DEFAULT_PROJECT}': {e}");
+            tracing::warn!(project_id = DEV_DEFAULT_PROJECT, error = %e, "could not look up the dev default project");
             return;
         }
     }
@@ -147,13 +147,14 @@ async fn ensure_dev_default_project(st: &AppState) {
         created_at: Utc::now(),
     };
     match crate::projects::insert_project(st, &proj).await {
-        Ok(()) => eprintln!(
-            "[DEV] an event arrived with no project_id and no API key: created project \
+        Ok(()) => tracing::info!(
+            project_id = DEV_DEFAULT_PROJECT,
+            "an event arrived with no project_id and no API key: created project \
              '{DEV_DEFAULT_PROJECT}' and attributed it there. Set project_id on the event (SDKs \
              read LIGHTTRACK_PROJECT) or mint a project key to send it elsewhere. Dev mode only — \
              under LIGHTTRACK_AUTH_MODE=enforced this request would be a 400."
         ),
-        Err(e) => eprintln!("[DEV] could not create project '{DEV_DEFAULT_PROJECT}': {e}"),
+        Err(e) => tracing::warn!(project_id = DEV_DEFAULT_PROJECT, error = %e, "could not create the dev default project"),
     }
 }
 

@@ -128,21 +128,21 @@ impl Collective {
             return;
         }
         if mode == AuthMode::Dev {
-            eprintln!(
-                "WARNING: collective hub is accepting contributions while auth mode is DEV. \
-                 min_contributors={} cannot be enforced against forged identities in dev mode, so only \
+            tracing::warn!(
+                min_contributors = self.min_contributors,
+                "collective hub is accepting contributions while auth mode is DEV. \
+                 min_contributors cannot be enforced against forged identities in dev mode, so only \
                  hub-issued contributor keys (a project with collective_opt_in) and the admin key may \
                  contribute; every other poster is refused. Run with LIGHTTRACK_AUTH_MODE=enforced for a real hub.",
-                self.min_contributors
             );
         }
         if self.allow_anon {
-            eprintln!(
-                "WARNING: LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1 — uncredentialed contributions all land \
-                 under one shared '{}' identity and overwrite each other; they count as ONE source \
-                 toward min_contributors={}.",
-                lighttrack_core::collective::ANON_CONTRIBUTOR,
-                self.min_contributors
+            tracing::warn!(
+                anon_identity = lighttrack_core::collective::ANON_CONTRIBUTOR,
+                min_contributors = self.min_contributors,
+                "LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1 — uncredentialed contributions all land under \
+                 one shared identity and overwrite each other; they count as ONE source toward \
+                 min_contributors.",
             );
         }
     }
@@ -178,7 +178,7 @@ fn load_aliases() -> ModelAliases {
         .unwrap_or_else(|_| "config/model_aliases.json".to_string());
     match std::fs::read_to_string(&path) {
         Ok(s) => ModelAliases::from_json_str(&s).unwrap_or_else(|e| {
-            eprintln!("model aliases parse error in {path}: {e}; normalization disabled");
+            tracing::warn!(path = %path, error = %e, "model aliases parse error; normalization disabled");
             ModelAliases::default()
         }),
         Err(_) => ModelAliases::default(),
@@ -245,10 +245,10 @@ async fn resolve_contributor(st: &AppState, headers: &HeaderMap) -> Result<Strin
                 };
                 return Err(ApiError::forbidden(hint));
             }
-            eprintln!(
-                "WARNING: accepting an ANONYMOUS collective contribution (LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1) \
-                 — every uncredentialed poster shares the '{}' identity and overwrites the others' set",
-                lighttrack_core::collective::ANON_CONTRIBUTOR
+            tracing::warn!(
+                anon_identity = lighttrack_core::collective::ANON_CONTRIBUTOR,
+                "accepting an ANONYMOUS collective contribution (LIGHTTRACK_COLLECTIVE_ALLOW_ANON=1) \
+                 — every uncredentialed poster shares one identity and overwrites the others' set",
             );
             Ok(lighttrack_core::collective::ANON_CONTRIBUTOR.to_string())
         }

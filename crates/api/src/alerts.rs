@@ -246,7 +246,7 @@ impl Alerter {
                 Some(handle)
             }
             Err(e) => {
-                eprintln!("[alert] attribution store open failed ({path}): {e}");
+                tracing::warn!(path = %path, error = %e, "alert attribution store open failed");
                 None
             }
         }

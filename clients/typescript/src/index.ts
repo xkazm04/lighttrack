@@ -3,7 +3,8 @@
  *
  * Wrap your OpenAI / Anthropic / Gemini results and POST a normalized event to the LightTrack API.
  * Best-effort by design: `track*` never throws and never blocks (the POST is not awaited). Uses the
- * global `fetch` (Node 18+ / browsers); zero runtime dependencies.
+ * global `fetch` (Node 18+ / browsers); zero runtime dependencies. A send that fails is reported via
+ * `console.warn` (rate-limited; `LIGHTTRACK_QUIET=1` to silence) rather than vanishing.
  *
  *   import { LightTrack } from "lighttrack-client";
  *   const lt = new LightTrack();                  // LIGHTTRACK_URL + LIGHTTRACK_KEY from env (Node)
@@ -11,6 +12,8 @@
  *   lt.trackOpenAI(resp, { latencyMs: 120 });
  *   await lt.flush();                             // await in-flight sends before exit
  */
+
+import { Diagnostics, noProjectMessage, sendFailureMessage, truncate } from "./diagnostics.ts";
 
 export type ProviderName = "openai" | "anthropic" | "google" | (string & {});
 
@@ -45,6 +48,11 @@ export interface LightTrackConfig {
   tags?: string[];
   enabled?: boolean;
   timeoutMs?: number;
+  /**
+   * Suppress the `console.warn` diagnostics a dropped or rejected event otherwise reports.
+   * Defaults to the `LIGHTTRACK_QUIET` env var (`1`/`true`/`yes`/`on`).
+   */
+  quiet?: boolean;
 }
 
 const DEFAULT_URL = "http://127.0.0.1:8787";
@@ -227,6 +235,8 @@ export class LightTrack {
   private enabled: boolean;
   private timeoutMs: number;
   private inflight: Set<Promise<void>> = new Set();
+  /** Rate-limited failure reporting (see diagnostics.ts). Exposed for tests / custom silencing. */
+  readonly diag: Diagnostics;
 
   constructor(cfg: LightTrackConfig = {}) {
     this.baseUrl = (cfg.baseUrl ?? env("LIGHTTRACK_URL") ?? DEFAULT_URL).replace(/\/+$/, "");
@@ -236,6 +246,7 @@ export class LightTrack {
     this.defaultTags = cfg.tags ?? [];
     this.enabled = cfg.enabled ?? true;
     this.timeoutMs = cfg.timeoutMs ?? 2000;
+    this.diag = new Diagnostics({ quiet: cfg.quiet });
   }
 
   /** Record one LLM call. Returns immediately; the send is fire-and-forget. */
@@ -392,7 +403,17 @@ export class LightTrack {
     }
   }
 
+  /**
+   * Best-effort POST: the promise is never awaited by the caller and never rejects into the host
+   * app — but a failure is reported (rate-limited, per error kind) instead of vanishing.
+   */
   private post(path: string, body: Record<string, unknown>): void {
+    const hasProject = Boolean(body.project_id);
+    const hasKey = Boolean(this.apiKey);
+    // Catch the misconfiguration that is guaranteed to fail *before* spending a round trip on it:
+    // no project and no API key means the server has no way to attribute the event and will 400.
+    if (!hasProject && !hasKey) this.diag.warn("no-project", noProjectMessage(this.baseUrl));
+
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (this.apiKey) headers["Authorization"] = `Bearer ${this.apiKey}`;
     const ac = typeof AbortController !== "undefined" ? new AbortController() : undefined;
@@ -403,8 +424,30 @@ export class LightTrack {
       body: JSON.stringify(body),
       signal: ac?.signal,
     })
-      .then(() => undefined)
-      .catch(() => undefined) // best-effort: telemetry must never break the host app
+      .then(async (resp) => {
+        if (resp.ok) return;
+        let detail = "";
+        try {
+          detail = truncate(await resp.text());
+        } catch {
+          /* body unreadable (aborted / already consumed) — the status alone is still actionable */
+        }
+        this.diag.warn(
+          `http-${resp.status}`,
+          sendFailureMessage(this.baseUrl, path, `HTTP ${resp.status} ${detail}`, {
+            status: resp.status,
+            hasProject,
+            hasKey,
+          }),
+        );
+      })
+      .catch((e: unknown) => {
+        // A timeout aborts the request; report it as its own kind so it doesn't hide behind (or
+        // crowd out) genuine connection failures.
+        const aborted = (e as { name?: string })?.name === "AbortError";
+        const detail = aborted ? `timed out after ${this.timeoutMs}ms` : String(e);
+        this.diag.warn(aborted ? "timeout" : "network", sendFailureMessage(this.baseUrl, path, detail, { hasProject, hasKey }));
+      })
       .finally(() => {
         if (timer) clearTimeout(timer);
         this.inflight.delete(p);
@@ -468,6 +511,9 @@ export class Span {
     });
   }
 }
+
+// Rate-limited failure reporting (see diagnostics.ts) — exported so a host app can inspect or reuse it.
+export { Diagnostics, noProjectMessage, sendFailureMessage } from "./diagnostics.ts";
 
 // One-line auto-instrumentation + trace-context propagation (see instrument.ts).
 export {

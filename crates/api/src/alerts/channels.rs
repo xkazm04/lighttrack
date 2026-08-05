@@ -34,9 +34,9 @@ pub(super) async fn deliver_bench_run(http: &Client, url: &str, r: &BenchRunAler
     });
     match http.post(url).json(&body).send().await {
         Ok(resp) if !resp.status().is_success() => {
-            eprintln!("[alert] bench_run webhook -> HTTP {}", resp.status())
+            tracing::warn!(channel = "webhook", event = "bench_run", status = %resp.status(), "alert delivery rejected")
         }
-        Err(e) => eprintln!("[alert] bench_run webhook error: {e}"),
+        Err(e) => tracing::warn!(channel = "webhook", event = "bench_run", error = %e, "alert delivery failed"),
         _ => {}
     }
 }
@@ -184,8 +184,8 @@ async fn post_webhook(cfg: &AlertConfig, http: &Client, event: &str, msg: &str, 
         }
     }
     match http.post(url).json(&body).send().await {
-        Ok(r) if !r.status().is_success() => eprintln!("[alert] {event} webhook -> HTTP {}", r.status()),
-        Err(e) => eprintln!("[alert] {event} webhook error: {e}"),
+        Ok(r) if !r.status().is_success() => tracing::warn!(channel = "webhook", event, status = %r.status(), "alert delivery rejected"),
+        Err(e) => tracing::warn!(channel = "webhook", event, error = %e, "alert delivery failed"),
         _ => {}
     }
 }
@@ -199,8 +199,8 @@ async fn post_ntfy(cfg: &AlertConfig, http: &Client, title: &str, msg: &str) {
         .header("Priority", "high")
         .body(msg.to_string());
     match req.send().await {
-        Ok(r) if !r.status().is_success() => eprintln!("[alert] ntfy -> HTTP {}", r.status()),
-        Err(e) => eprintln!("[alert] ntfy error: {e}"),
+        Ok(r) if !r.status().is_success() => tracing::warn!(channel = "ntfy", status = %r.status(), "alert delivery rejected"),
+        Err(e) => tracing::warn!(channel = "ntfy", error = %e, "alert delivery failed"),
         _ => {}
     }
 }
@@ -219,9 +219,9 @@ async fn post_resend(cfg: &AlertConfig, http: &Client, subject: &str, text: &str
         Ok(resp) if !resp.status().is_success() => {
             let code = resp.status();
             let detail = resp.text().await.unwrap_or_default();
-            eprintln!("[alert] resend -> HTTP {code}: {}", detail.trim());
+            tracing::warn!(channel = "resend", status = %code, detail = detail.trim(), "alert delivery rejected");
         }
-        Err(e) => eprintln!("[alert] resend error: {e}"),
+        Err(e) => tracing::warn!(channel = "resend", error = %e, "alert delivery failed"),
         _ => {}
     }
 }

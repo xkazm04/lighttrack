@@ -64,7 +64,7 @@ pub(crate) async fn post_webhook(
     let idem_key = lookup("webhook-id").map(|id| format!("{provider}:{id}"));
     if let Some(key) = &idem_key {
         if st.seen_webhooks.check_and_insert(key) {
-            eprintln!("[BILLING] {provider} webhook: duplicate delivery {key}, already handled");
+            tracing::info!(provider = %provider, delivery = %key, "billing webhook: duplicate delivery, already handled");
             return Ok(StatusCode::OK);
         }
     }
@@ -89,13 +89,17 @@ pub(crate) async fn post_webhook(
         if let Some(key) = &idem_key {
             st.seen_webhooks.forget(key);
         }
-        eprintln!(
-            "[BILLING] {provider} webhook REJECTED for project={project}: {e} \
-             — {n} record(s) not stored, provider ids: {provider_ids:?}"
+        tracing::error!(
+            provider = %provider,
+            project_id = %project,
+            error = %e,
+            records = n,
+            provider_ids = ?provider_ids,
+            "billing webhook REJECTED: the batch rolled back and nothing was stored",
         );
     }
     stored?;
 
-    eprintln!("[BILLING] {provider} webhook: stored {n} revenue record(s) for project={project}");
+    tracing::info!(provider = %provider, project_id = %project, records = n, "billing webhook: stored revenue records");
     Ok(StatusCode::OK)
 }

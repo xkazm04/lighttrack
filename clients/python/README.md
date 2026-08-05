@@ -10,12 +10,26 @@ your app.
 pip install ./clients/python      # or: pip install lighttrack-client (once published)
 ```
 
+## Configure
+
+**Every event needs a project.** The server derives it from a project key, or takes it from the
+event — so with no key you must set `LIGHTTRACK_PROJECT`, or ingest fails with
+`400 project_id is required`. Set one of these before your first call:
+
+```bash
+export LIGHTTRACK_URL=http://127.0.0.1:8787   # default; override for a remote server
+export LIGHTTRACK_PROJECT=demo                # required in dev mode / with an admin key
+# ...or instead: export LIGHTTRACK_KEY=lt_...  # a project key pins the project server-side
+```
+
 ## Use
 
 ```python
 from lighttrack import LightTrack
 
 lt = LightTrack(source="my-app")           # reads LIGHTTRACK_URL / LIGHTTRACK_KEY / LIGHTTRACK_PROJECT
+# ...or pass it explicitly, no env needed:
+# lt = LightTrack(project="demo", source="my-app")
 
 resp = openai_client.chat.completions.create(model="gpt-4o", messages=[...])
 lt.track_openai(resp, latency_ms=120)      # also: track_anthropic, track_gemini, generic track(...)
@@ -25,6 +39,28 @@ lt.close()                                  # flush at shutdown (auto-runs at ex
 
 `with LightTrack() as lt:` flushes on exit. `lt.span(provider, model)` times a call and tracks it
 automatically. See `example.py` for a runnable demo and the repo's `clients/README.md` for details.
+
+## Why don't I see my events?
+
+`track*` never raises — but it is not silent. A failed send writes one actionable line to **stderr**
+(never stdout, which your app may be using as a protocol channel):
+
+```
+[lighttrack] events are being dropped: no project is configured, and without an API key the server
+cannot infer one, so it will reject them with HTTP 400 'project_id is required'. Fix: set
+LIGHTTRACK_PROJECT=<your-project-id> ...
+```
+
+That case is detected *before* the request, so it appears on your very first `track*`. Warnings are
+rate-limited to one line per error kind per 60 s, so a hot loop costs one line, not thousands.
+
+Silence them with `LIGHTTRACK_QUIET=1` or `LightTrack(quiet=True)`.
+
+## Test
+
+```bash
+cd clients/python && python -m unittest discover tests
+```
 
 ## Auto-instrument (one line)
 

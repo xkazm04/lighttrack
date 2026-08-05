@@ -5,6 +5,9 @@
 //! channel, which POSTs them. The worker drains and joins when the [`Client`] is dropped (or on an
 //! explicit [`Client::flush`]).
 //!
+//! Best-effort does not mean silent: a send that fails writes one actionable, rate-limited line to
+//! stderr (see [`Client::quiet`] / `LIGHTTRACK_QUIET=1` to turn that off). It still never panics.
+//!
 //! ```no_run
 //! use lighttrack_client::{Client, Provider};
 //! let lt = Client::from_env();
@@ -14,7 +17,10 @@
 //! lt.flush(); // drain the background worker before exit
 //! ```
 
+mod diagnostics;
+
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -23,13 +29,20 @@ use serde_json::Value;
 pub use lighttrack_core::{Operation, Provider, Status};
 use lighttrack_core::{LlmEvent, TokenUsage};
 
+use diagnostics::{Diagnostics, FailureContext};
+
 const DEFAULT_URL: &str = "http://127.0.0.1:8787";
 
 /// A best-effort, non-blocking ingestion client. Cheap to construct; events are POSTed from a
 /// background thread. Configure via [`Client::from_env`] or [`Client::new`].
 pub struct Client {
+    base_url: String,
     project: Option<String>,
     source: Option<String>,
+    /// Whether an API key was configured. The key itself lives in the worker thread; only this
+    /// answer is needed here, to tell a first-run misconfiguration from a legitimately keyed client.
+    has_key: bool,
+    diag: Arc<Diagnostics>,
     tx: Option<Sender<(&'static str, Value)>>,
     worker: Option<JoinHandle<()>>,
 }
@@ -48,7 +61,11 @@ impl Client {
     /// admin key ingesting into a specific project.
     pub fn new(base_url: impl Into<String>, api_key: Option<String>, project: Option<String>) -> Self {
         let base = base_url.into().trim_end_matches('/').to_string();
+        let has_key = api_key.is_some();
+        let diag = Arc::new(Diagnostics::from_env());
         let (tx, rx) = mpsc::channel::<(&'static str, Value)>();
+        let worker_diag = Arc::clone(&diag);
+        let worker_base = base.clone();
         let worker = std::thread::Builder::new()
             .name("lighttrack".into())
             .spawn(move || {
@@ -59,20 +76,29 @@ impl Client {
                 // Receives (path, body) until all senders drop; delivers queued items first, so Drop
                 // drains. `path` is /v1/events for calls and /v1/scores for guard verdicts.
                 while let Ok((path, body)) = rx.recv() {
-                    let mut req = http.post(format!("{base}{path}")).json(&body);
+                    let mut req = http.post(format!("{worker_base}{path}")).json(&body);
                     if let Some(k) = &api_key {
                         req = req.bearer_auth(k);
                     }
-                    let _ = req.send(); // best-effort: telemetry must never break the host app
+                    // Best-effort: the outcome never propagates to the caller, but it is no longer
+                    // discarded either — a rejection or an outage is reported, once per kind.
+                    report(&worker_diag, &worker_base, path, &body, has_key, req.send());
                 }
             })
             .ok();
-        Self { project, source: None, tx: Some(tx), worker }
+        Self { base_url: base, project, source: None, has_key, diag, tx: Some(tx), worker }
     }
 
     /// Set a `source` label stamped on every event.
     pub fn source(mut self, s: impl Into<String>) -> Self {
         self.source = Some(s.into());
+        self
+    }
+
+    /// Suppress the stderr diagnostics a dropped or rejected event otherwise reports. Equivalent to
+    /// setting `LIGHTTRACK_QUIET=1`; applies to the background worker too.
+    pub fn quiet(self, quiet: bool) -> Self {
+        self.diag.set_quiet(quiet);
         self
     }
 
@@ -88,6 +114,12 @@ impl Client {
 
     /// Enqueue a pre-serialized body to an API path (best-effort, non-blocking).
     fn send_raw(&self, path: &'static str, body: Value) {
+        // Catch the misconfiguration that is guaranteed to fail *before* spending a round trip on
+        // it: no project and no API key means the server has no way to attribute the event and will
+        // answer 400. Checked on the body, so a per-event `.project(...)` override counts.
+        if !body_has_project(&body) && !self.has_key {
+            self.diag.warn("no-project", &diagnostics::no_project_message(&self.base_url));
+        }
         if let Some(tx) = &self.tx {
             let _ = tx.send((path, body));
         }
@@ -111,6 +143,11 @@ impl Client {
             } else {
                 result.violations.join("; ")
             }),
+            // A guard verdict is inline and deterministic: it belongs to no benchmark run and
+            // carries no per-dimension breakdown.
+            detail: None,
+            run_id: None,
+            case_index: None,
             scored_by: self
                 .source
                 .clone()
@@ -159,6 +196,47 @@ impl Client {
     }
 }
 
+/// Whether a body carries a usable project. The Rust client always *writes* `project_id` (an unset
+/// project serializes as `""`), so presence is not enough — it has to be non-empty, which is exactly
+/// the test the server's own ingest guard applies.
+fn body_has_project(body: &Value) -> bool {
+    body.get("project_id").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty())
+}
+
+/// Turn one send outcome into at most one stderr line. Runs on the worker thread, so it must never
+/// panic: every failure path here is a `match`, not an `unwrap`.
+fn report(
+    diag: &Diagnostics,
+    base_url: &str,
+    path: &str,
+    body: &Value,
+    has_key: bool,
+    outcome: reqwest::Result<reqwest::blocking::Response>,
+) {
+    let ctx = FailureContext { status: None, has_project: body_has_project(body), has_key };
+    match outcome {
+        Ok(resp) if resp.status().is_success() => {}
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            // The server's explanation of a rejection is the whole point of the diagnostic.
+            let detail = resp.text().map(|b| diagnostics::truncate(&b, 200)).unwrap_or_default();
+            let ctx = FailureContext { status: Some(status), ..ctx };
+            let msg = diagnostics::send_failure_message(
+                base_url,
+                path,
+                &format!("HTTP {status} {detail}"),
+                ctx,
+            );
+            diag.warn(&format!("http-{status}"), &msg);
+        }
+        Err(e) => {
+            let kind = if e.is_timeout() { "timeout" } else { "network" };
+            let msg = diagnostics::send_failure_message(base_url, path, &e.to_string(), ctx);
+            diag.warn(kind, &msg);
+        }
+    }
+}
+
 impl Drop for Client {
     fn drop(&mut self) {
         self.tx.take(); // close the channel → worker drains queued events, then exits
@@ -183,6 +261,9 @@ impl<'a> EventBuilder<'a> {
             span_id: None,
             parent_span_id: None,
             ts: chrono::Utc::now(),
+            // Server-owned (`skip_deserializing` on the wire type): whatever we put here is ignored
+            // and re-stamped on arrival. Filled only to satisfy the struct literal.
+            received_at: chrono::Utc::now(),
             provider,
             model,
             name: None,

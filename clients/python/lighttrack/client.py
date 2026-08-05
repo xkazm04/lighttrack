@@ -1,7 +1,8 @@
 """LightTrack client: wrap OpenAI / Anthropic / Gemini results and POST a normalized event.
 
 Design goals:
-- **Never break your app.** Every send is best-effort; exceptions are swallowed.
+- **Never break your app.** Every send is best-effort; exceptions are swallowed — but a failure is
+  reported on stderr (rate-limited, `LIGHTTRACK_QUIET=1` to silence) instead of vanishing.
 - **Never block the request path.** Events go on a background daemon thread by default; if the queue
   is full they are dropped rather than blocking the caller.
 - **Zero third-party dependencies** (stdlib only) so it drops into any project.
@@ -23,6 +24,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+from .diagnostics import Diagnostics, no_project_message, send_failure_message, truncate
 
 _DEFAULT_URL = "http://127.0.0.1:8787"
 
@@ -149,6 +152,14 @@ def guard(output: str, rules: dict) -> GuardResult:
     return GuardResult(ok=len(violations) == 0, violations=violations, checks=checks)
 
 
+def _error_body(e: "urllib.error.HTTPError") -> str:
+    """The server's explanation of a rejection — that string is the whole point of the diagnostic."""
+    try:
+        return truncate(e.read().decode("utf-8", "replace"))
+    except Exception:
+        return ""
+
+
 class RelayError(Exception):
     """A relay call failed (network error or non-2xx). Unlike telemetry, relay enqueue/status is a
     functional call the app depends on, so failures raise instead of being swallowed."""
@@ -158,7 +169,9 @@ class LightTrack:
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None, *,
                  project: Optional[str] = None, source: Optional[str] = None,
                  tags: Optional[list] = None, enabled: bool = True, async_: bool = True,
-                 timeout: float = 2.0, max_queue: int = 1000):
+                 timeout: float = 2.0, max_queue: int = 1000, quiet: Optional[bool] = None):
+        """`quiet=True` (or `LIGHTTRACK_QUIET=1`) suppresses the stderr diagnostics that a dropped or
+        rejected event otherwise reports; `None` defers to the env var."""
         self.base_url = (base_url or os.environ.get("LIGHTTRACK_URL", _DEFAULT_URL)).rstrip("/")
         self.api_key = api_key or os.environ.get("LIGHTTRACK_KEY") or None
         # A project key derives the project server-side; set `project` only for dev mode (no key) or
@@ -168,6 +181,7 @@ class LightTrack:
         self.default_tags = list(tags or [])
         self.enabled = enabled
         self.timeout = timeout
+        self.diag = Diagnostics(quiet)
         self._async = async_
         self._q: "queue.Queue[Optional[tuple]]" = queue.Queue(maxsize=max_queue)
         self._closed = False
@@ -339,13 +353,26 @@ class LightTrack:
 
     # ---- internals ----
     def _emit(self, body: dict, path: str = "/v1/events") -> None:
+        self._preflight(body)
         if self._async:
             try:
                 self._q.put_nowait((path, body))
             except queue.Full:
-                pass  # drop rather than block the caller
+                # Drop rather than block the caller — but say so, or a saturated queue silently
+                # deletes telemetry and looks exactly like "the app made no LLM calls".
+                self.diag.warn(
+                    "queue-full",
+                    f"queue is full ({self._q.maxsize} pending) — dropping events. The LightTrack "
+                    "server is slow or unreachable; raise max_queue if this is bursty traffic.",
+                )
         else:
             self._post(path, body)
+
+    def _preflight(self, body: dict) -> None:
+        """Catch the misconfiguration that is guaranteed to fail *before* spending a round trip on it:
+        no project and no API key means the server has no way to attribute the event and will 400."""
+        if not body.get("project_id") and not self.api_key:
+            self.diag.warn("no-project", no_project_message(self.base_url))
 
     def _run(self) -> None:
         while True:
@@ -374,16 +401,24 @@ class LightTrack:
             raise RelayError(f"{method} {path} failed: {e}") from e
 
     def _post(self, path: str, body: dict) -> None:
+        """Best-effort POST: never raises into the host app, but reports what went wrong on stderr
+        (rate-limited per error kind) so a failing pipeline is discoverable rather than silent."""
+        ctx = {"has_project": bool(body.get("project_id")), "has_key": bool(self.api_key)}
         try:
             data = json.dumps(body).encode("utf-8")
             headers = {"Content-Type": "application/json"}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
-            req = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers, method="POST")
+            req = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers,
+                                         method="POST")
             with urllib.request.urlopen(req, timeout=self.timeout):
                 pass
-        except Exception:
-            pass  # best-effort: telemetry must never break the host app
+        except urllib.error.HTTPError as e:
+            self.diag.warn(f"http-{e.code}", send_failure_message(
+                self.base_url, path, f"HTTP {e.code} {_error_body(e)}", status=e.code, **ctx))
+        except Exception as e:
+            self.diag.warn("network", send_failure_message(
+                self.base_url, path, f"{type(e).__name__}: {e}", **ctx))
 
 
 class Span:

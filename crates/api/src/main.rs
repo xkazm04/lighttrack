@@ -91,6 +91,8 @@
 //!        sweep; unset or 0 = off, floor 60s), LIGHTTRACK_FORECAST_SWEEP_HORIZON /
 //!        LIGHTTRACK_FORECAST_SWEEP_LOOKBACK (projection shape; default 14/14 days),
 //!      LIGHTTRACK_BENCH_WEBHOOK (benchmark-run completion webhook; falls back to LIGHTTRACK_ALERT_WEBHOOK),
+//!      LIGHTTRACK_LOG (level or full tracing filter directive; default `info`, falls back to RUST_LOG),
+//!      LIGHTTRACK_LOG_FORMAT (json — the default, one indexed JSON object per line on stdout — | text),
 //!      LIGHTTRACK_REDACT_INGEST (off | all | csv of project_ids — scrub PII from input/output; see redact),
 //!      LIGHTTRACK_COLLECTIVE_ID (opaque source id — hashed before contribution),
 //!      LIGHTTRACK_COLLECTIVE_ACCEPT (1|true — this instance is a leaderboard hub; off by default),
@@ -119,6 +121,7 @@ mod idempotency;
 mod jobs;
 mod limits;
 mod limits_usage;
+mod logging;
 mod otlp;
 mod prices;
 mod projects;
@@ -164,6 +167,10 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // First, before anything can want to say something: every diagnostic below this line is a
+    // structured event on stdout (see `logging`).
+    logging::init();
+
     let bind = env_or("LIGHTTRACK_BIND", "127.0.0.1:8787");
     let db = env_or("LIGHTTRACK_DB", "data/lighttrack.db");
     let pricing = env_or("LIGHTTRACK_PRICING", "config/pricing.json");
@@ -209,18 +216,18 @@ async fn main() -> anyhow::Result<()> {
             if store.list_prices()?.is_empty() {
                 let seed = match std::fs::read_to_string(&pricing) {
                     Ok(s) => PriceBook::from_json_str(&s).unwrap_or_else(|e| {
-                        eprintln!("pricing parse error: {e}; seeding empty");
+                        tracing::warn!(path = %pricing, error = %e, "pricing parse error; seeding an empty price book");
                         PriceBook::default()
                     }),
                     Err(_) => {
-                        eprintln!("pricing file '{pricing}' not found; seeding empty");
+                        tracing::warn!(path = %pricing, "pricing file not found; seeding an empty price book");
                         PriceBook::default()
                     }
                 };
                 for row in seed.rows() {
                     store.upsert_price(&row)?;
                 }
-                eprintln!("seeded {} model prices into the DB", seed.len());
+                tracing::info!(count = seed.len(), "seeded model prices into the DB");
             }
             let book = PriceBook::from_rows(&store.list_prices()?);
             // Warm the per-project persistence-policy cache here too: this closure is the one
@@ -271,14 +278,27 @@ async fn main() -> anyhow::Result<()> {
 
     let sweep = forecast_sweep::SweepConfig::from_env();
     let sweep_desc = forecast_sweep::describe(sweep);
-    println!(
-        "lighttrack-api v{} on http://{bind}  (store={backend}, {n_prices} priced models, auth={:?}, admin_key={}, alerts={alerts_desc}, forecast-sweep={sweep_desc}, ingest={shed_desc}, redact={redact_desc}, billing={billing_desc}, collective={collective_desc})",
+    // The whole runtime configuration as one indexed event: "why did prod behave differently" is a
+    // field comparison across two boots, not a diff of two prose lines. The human-critical part (are
+    // we up, and on what address) stays in the message so it reads at a glance in either format.
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        store = backend,
+        priced_models = n_prices,
+        auth = ?state.auth_mode,
+        admin_key = if state.admin_key.is_some() { "set" } else { "unset" },
+        alerts = %alerts_desc,
+        forecast_sweep = %sweep_desc,
+        ingest = %shed_desc,
+        redact = %redact_desc,
+        billing = %billing_desc,
+        collective = %collective_desc,
+        "lighttrack-api v{} listening on http://{bind}",
         env!("CARGO_PKG_VERSION"),
-        state.auth_mode,
-        if state.admin_key.is_some() { "set" } else { "unset" },
     );
-    // `auth=Dev` in the banner above is one field in a long line; an unauthenticated server deserves
-    // a block you cannot skim past.
+    // `auth=Dev` in the banner above is one field among many; an unauthenticated server deserves a
+    // block you cannot skim past, so that one stays a raw multi-line stderr shout rather than
+    // becoming a JSON string with `\n`s in it.
     auth::warn_if_unenforced(state.auth_mode);
 
     // Pre-emptive forecast alerts on a timer (off unless configured). Detached: it never shares a
