@@ -261,31 +261,71 @@ async fn saturated_ingest_sheds_with_503_and_retry_after_never_a_budget_429() {
     assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
 }
 
-#[tokio::test]
-async fn ingest_past_its_deadline_is_cut_with_504_not_left_hanging() {
-    // A zero deadline: the handler yields at its first blocking store call and the deadline is
-    // already past, so this exercises the real timeout path rather than a mocked one.
-    let (mut state, store) = setup(Redactor::off());
-    state.ingest_guard =
-        Arc::new(crate::shed::IngestGuard::with_limits(8, Some(std::time::Duration::ZERO)));
-    let key = make_key(&store, "proj-a");
-    let guard = state.ingest_guard.clone();
-    let app = crate::build_router(state);
+/// An ingest that outlives its deadline is cut with 504 `timeout`, counted as a timeout and not as a
+/// shed, and nothing of it reaches the store.
+///
+/// **Why this drives its own runtime.** The previous version set `Duration::ZERO` and relied on the
+/// comment's claim that "the handler yields at its first blocking store call and the deadline is
+/// already past". Only the first half is guaranteed. Tokio's timer wheel has millisecond granularity
+/// and only advances when the driver parks, so a zero deadline is not *observably* past until the
+/// wheel is processed — leaving a genuine race between the timer firing and the handler's store call
+/// returning. It lost that race once under CPU load and returned 200.
+///
+/// The fix removes the race instead of widening the margin: this runtime has exactly **one** blocking
+/// thread and the test holds it. Every store call in the handler goes through `spawn_blocking`, so
+/// while the occupier is parked the handler provably cannot get past its first store read — the
+/// deadline is then the only thing that can complete the request, on any machine at any load. The
+/// assertions are unchanged, plus one the racy version could not make: the store stayed empty.
+#[test]
+fn ingest_past_its_deadline_is_cut_with_504_not_left_hanging() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .expect("test runtime");
 
-    let (status, body) = ingest(
-        &app,
-        &key,
-        json!({ "provider": "anthropic", "model": "claude-haiku-4-5",
-                "usage": { "input": 1, "output": 1 }, "cost_usd": 0.0 }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{body}");
-    assert_eq!(body["error"]["code"], "timeout", "{body}");
-    // A timeout is a distinct condition from shedding, and counted as one.
-    let (_, st) = get_json(&app, &key, "/v1/ingest/status").await;
-    assert_eq!(st["timeout_total"], 1, "{st}");
-    assert_eq!(st["shed_total"], 0, "a deadline is not a shed: {st}");
-    assert!(guard.describe().contains("max_inflight=8"));
+    rt.block_on(async {
+        let (mut state, store) = setup(Redactor::off());
+        state.ingest_guard = Arc::new(crate::shed::IngestGuard::with_limits(
+            8,
+            Some(std::time::Duration::from_millis(10)),
+        ));
+        let key = make_key(&store, "proj-a");
+        let guard = state.ingest_guard.clone();
+        let app = crate::build_router(state);
+
+        // Take the pool's only thread, and don't proceed until it is provably taken — otherwise the
+        // handler's own `spawn_blocking` could win the thread and we'd be back to racing.
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let (release, blocked) = std::sync::mpsc::channel::<()>();
+        let occupier = tokio::task::spawn_blocking(move || {
+            let _ = started_tx.send(());
+            let _ = blocked.recv();
+        });
+        started_rx.recv().expect("occupier reached the blocking pool");
+
+        let (status, body) = ingest(
+            &app,
+            &key,
+            json!({ "provider": "anthropic", "model": "claude-haiku-4-5",
+                    "usage": { "input": 1, "output": 1 }, "cost_usd": 0.0 }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{body}");
+        assert_eq!(body["error"]["code"], "timeout", "{body}");
+
+        drop(release);
+        occupier.await.expect("occupier joins");
+        // The 504 is honest about what it means ("the write may or may not have landed") — here it
+        // definitively did not, because the handler never reached an insert.
+        assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty());
+
+        // A timeout is a distinct condition from shedding, and counted as one.
+        let (_, st) = get_json(&app, &key, "/v1/ingest/status").await;
+        assert_eq!(st["timeout_total"], 1, "{st}");
+        assert_eq!(st["shed_total"], 0, "a deadline is not a shed: {st}");
+        assert!(guard.describe().contains("max_inflight=8"));
+    });
 }
 
 /// Saturation experiment, run on demand (`cargo test -p lighttrack-api -- --ignored --nocapture
