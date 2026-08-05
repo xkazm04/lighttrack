@@ -1,0 +1,14 @@
+# Blank issues stay enabled on purpose: there is no Discussions tab, so a plain question
+# ("does it do X?", "how do I point it at Neon?") needs somewhere to land, and the issue tracker
+# is the whole front door.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability (do not open an issue)
+    url: https://github.com/xkazm04/lighttrack/security/advisories/new
+    about: Report privately via GitHub security advisories. See SECURITY.md for what is in scope.
+  - name: Setup, deployment, and configuration docs
+    url: https://github.com/xkazm04/lighttrack/tree/main/docs
+    about: Architecture, data model, pricing, Firestore, packaging, and the benchmark framework.
+  - name: Contributing guide
+    url: https://github.com/xkazm04/lighttrack/blob/main/CONTRIBUTING.md
+    about: How to build per-crate, run the three store-conformance suites, and what CI enforces.

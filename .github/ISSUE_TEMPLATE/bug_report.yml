@@ -1,0 +1,115 @@
+name: Bug report
+description: Something in LightTrack behaves wrongly — wrong data, a crash, a 500, a score that makes no sense.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The four dropdowns below (binary, version, store backend, deployment
+        shape) narrow this down faster than a paragraph of prose does — please fill them in.
+
+        **Do not report a security vulnerability here.** Use
+        [private vulnerability reporting](https://github.com/xkazm04/lighttrack/security/advisories/new)
+        instead — see [SECURITY.md](https://github.com/xkazm04/lighttrack/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you observed, and what you expected instead.
+      placeholder: |
+        Ingesting an event with a null `output` returns 200 but the event never appears in
+        GET /events. Expected it to either store the event or reject it.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which binary
+      description: Where the problem shows up. Pick more than one only if you genuinely saw it in both.
+      multiple: true
+      options:
+        - lighttrack-api (the HTTP server)
+        - lt-runner (judge / benchmark worker)
+        - lt-mcp (MCP server)
+        - lt (operator CLI)
+        - lt-agent (device relay)
+        - lt-responder
+        - a client SDK (Python / TypeScript / Rust)
+        - not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >
+        Container image tag, release binary version, or the commit SHA you built from.
+        "latest" is a valid answer only if you also say roughly when you pulled it.
+      placeholder: "ghcr.io/xkazm04/lighttrack:0.0.1  ·  or commit 35ca94b"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Store backend
+      description: >
+        Set by LIGHTTRACK_DATABASE_URL — `postgres://…` → Postgres, `firestore://…` → Firestore,
+        unset → SQLite at LIGHTTRACK_DB. Backend-specific divergence is a real bug class here, so
+        this matters even when it seems irrelevant.
+      options:
+        - SQLite (default, no LIGHTTRACK_DATABASE_URL)
+        - Postgres (incl. Neon / Supabase / Cloud SQL / RDS)
+        - Firestore
+        - not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment shape
+      options:
+        - Container (Docker / Compose)
+        - Container (Cloud Run / App Runner / Container Apps / Kubernetes)
+        - Release binary
+        - Built from source (cargo)
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: >
+        The smallest sequence that shows it — the request you sent, the CLI command you ran, the
+        config that was in effect. A curl line beats a description of a curl line.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: >
+        Server stderr around the failure, or the response body. **Redact API keys, ingest keys, and
+        any prompt content you cannot share** — this is a public tracker.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: >
+        Any LIGHTTRACK_* env vars that are set — auth mode, redaction (LIGHTTRACK_REDACT_INGEST),
+        limits, MCP write gating. **Values of keys, not the keys themselves.**
+      render: shell
+    validations:
+      required: false
