@@ -1,4 +1,8 @@
-# LightTrack
+<p align="center">
+  <img src="logo.png" alt="LightTrack" width="160">
+</p>
+
+<h1 align="center">LightTrack</h1>
 
 A lightweight, self-hosted **LLM observability + scoring** tool. Think Langfuse, but headless-first,
 data-open (raw SQL over everything), and using **Claude Code headless (`claude -p`) as a pluggable
