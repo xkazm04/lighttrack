@@ -71,7 +71,10 @@ pub(crate) async fn get_rubric(
     let r = spawn_db(move || store.get_rubric(&id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("rubric '{id}' not found")))?;
-    if let Principal::Project { project_id: pid, .. } = &p {
+    if let Principal::Project {
+        project_id: pid, ..
+    } = &p
+    {
         if &r.project_id != pid {
             return Err(ApiError::forbidden("key not authorized for that rubric"));
         }

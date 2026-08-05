@@ -171,9 +171,7 @@ impl From<StoreError> for ApiError {
             StoreError::Conflict(m) => ApiError::conflict(m),
             // A capability the configured backend hasn't ported: 501 `unsupported`, so "this
             // deploy can't answer" is never presented as an empty result or a generic outage.
-            e @ StoreError::Unsupported(_) => {
-                ApiError::new(ErrorCode::Unsupported, e.to_string())
-            }
+            e @ StoreError::Unsupported(_) => ApiError::new(ErrorCode::Unsupported, e.to_string()),
             // Every remaining store-layer failure (sqlite/json/io, and the catch-all `Other`) is a
             // server-side fault from a client's perspective: collapse to a single stable `internal`
             // code. Clients must not branch on store internals; the message carries the detail.
@@ -212,7 +210,10 @@ mod tests {
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["error"]["code"], "unsupported");
-        assert_eq!(v["error"]["message"], "traces is not supported by this store backend");
+        assert_eq!(
+            v["error"]["message"],
+            "traces is not supported by this store backend"
+        );
     }
 
     #[test]
@@ -222,10 +223,19 @@ mod tests {
         assert_eq!(ErrorCode::Forbidden.status(), StatusCode::FORBIDDEN);
         assert_eq!(ErrorCode::NotFound.status(), StatusCode::NOT_FOUND);
         assert_eq!(ErrorCode::Conflict.status(), StatusCode::CONFLICT);
-        assert_eq!(ErrorCode::RateLimited.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(ErrorCode::Overloaded.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            ErrorCode::RateLimited.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            ErrorCode::Overloaded.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
         assert_eq!(ErrorCode::Timeout.status(), StatusCode::GATEWAY_TIMEOUT);
-        assert_eq!(ErrorCode::Internal.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            ErrorCode::Internal.status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
         assert_eq!(ErrorCode::Unsupported.status(), StatusCode::NOT_IMPLEMENTED);
     }
 

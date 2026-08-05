@@ -24,7 +24,10 @@ pub(crate) fn list(v: &Value) -> Option<String> {
         t.row(vec![
             trunc(s(r, "name"), 28),
             labels(r),
-            r.get("benchmark_id").and_then(Value::as_str).unwrap_or("—").to_string(),
+            r.get("benchmark_id")
+                .and_then(Value::as_str)
+                .unwrap_or("—")
+                .to_string(),
             short_ts(s(r, "updated_at")),
             s(r, "id").to_string(),
         ]);

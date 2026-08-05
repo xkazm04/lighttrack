@@ -30,7 +30,11 @@ pub(crate) async fn handle_trigger(cfg: Arc<Config>, breaker: Arc<Breaker>, trig
 /// concurrency permit. Returns the RAII guard to hold for the run, or `None` if the run was shed
 /// (already logged). The read stage runs first and always, so this — not the ACT breaker — is what
 /// actually bounds a flapping project's spend.
-fn admit(breaker: &Breaker, cfg: &Config, project: &str) -> Option<crate::breaker::InvestigationGuard> {
+fn admit(
+    breaker: &Breaker,
+    cfg: &Config,
+    project: &str,
+) -> Option<crate::breaker::InvestigationGuard> {
     match breaker.try_admit_investigation(
         project,
         Duration::from_secs(cfg.defaults.investigate_cooldown_secs),
@@ -59,7 +63,9 @@ async fn run_error(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, spike:
 
     // Gate the paid investigation after classification, so transient errors (which never spawn)
     // don't consume a permit or the per-project cooldown. Held across investigate + act + deliver.
-    let Some(_guard) = admit(breaker, cfg, project) else { return };
+    let Some(_guard) = admit(breaker, cfg, project) else {
+        return;
+    };
 
     println!(
         "[responder] '{project}': error — investigating in {} (branch={}, model={}, mode={})",
@@ -97,7 +103,16 @@ async fn run_error(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, spike:
         spike.status.as_deref().unwrap_or("error"),
         spike.error.as_deref().unwrap_or("(no message)")
     );
-    deliver(cfg, &ts, project, "error", &detail, &diag, act_outcome.as_ref()).await;
+    deliver(
+        cfg,
+        &ts,
+        project,
+        "error",
+        &detail,
+        &diag,
+        act_outcome.as_ref(),
+    )
+    .await;
 }
 
 async fn run_quality(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, drop: &Drop) {
@@ -105,15 +120,22 @@ async fn run_quality(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, drop
     let rubric = drop.rubric.as_deref().unwrap_or("?");
 
     // Same admission gate as the error path — a quality-drop investigation is an equally billable run.
-    let Some(_guard) = admit(breaker, cfg, project) else { return };
+    let Some(_guard) = admit(breaker, cfg, project) else {
+        return;
+    };
 
     println!(
         "[responder] '{project}': quality regression on rubric '{rubric}' — investigating in {}",
         entry.repo
     );
-    let context =
-        enrich::recent_scores(&http_client(), &cfg.lighttrack_url, project, drop.rubric.as_deref(), 30)
-            .await;
+    let context = enrich::recent_scores(
+        &http_client(),
+        &cfg.lighttrack_url,
+        project,
+        drop.rubric.as_deref(),
+        30,
+    )
+    .await;
     let prompt = investigate::quality_prompt(entry, drop, &context);
     let diag = investigate::investigate(cfg, entry, &prompt).await;
     let ts = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
@@ -125,7 +147,16 @@ async fn run_quality(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, drop
         drop.baseline_avg.unwrap_or(0.0),
     );
     // Diagnosis-only: no ACT for quality regressions.
-    deliver(cfg, &ts, project, "quality regression", &detail, &diag, None).await;
+    deliver(
+        cfg,
+        &ts,
+        project,
+        "quality regression",
+        &detail,
+        &diag,
+        None,
+    )
+    .await;
 }
 
 /// Render the report once, persist it, and (if email is configured) send the same body.

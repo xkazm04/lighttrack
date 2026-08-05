@@ -15,7 +15,11 @@ pub fn model_family(provider: &str, model: &str) -> String {
     let m = model.to_ascii_lowercase();
     // Model name wins over provider: a gateway/proxy provider can serve another lab's model, and
     // the family that matters for self-preference is whoever trained it.
-    if m.contains("claude") || m.starts_with("haiku") || m.starts_with("sonnet") || m.starts_with("opus") {
+    if m.contains("claude")
+        || m.starts_with("haiku")
+        || m.starts_with("sonnet")
+        || m.starts_with("opus")
+    {
         return "anthropic".to_string();
     }
     if m.contains("gemini") || m.contains("gemma") {
@@ -54,7 +58,10 @@ mod tests {
     #[test]
     fn the_model_name_outranks_a_proxy_provider() {
         // A gateway serving Claude is still the Anthropic family for bias purposes.
-        assert_eq!(model_family("openrouter", "anthropic/claude-sonnet-5"), "anthropic");
+        assert_eq!(
+            model_family("openrouter", "anthropic/claude-sonnet-5"),
+            "anthropic"
+        );
     }
 
     #[test]
@@ -66,7 +73,17 @@ mod tests {
 
     #[test]
     fn self_preference_is_detected_across_aliases() {
-        assert!(same_family("anthropic", "haiku", "anthropic", "claude-sonnet-5"));
-        assert!(!same_family("google", "gemini-2.5-flash", "anthropic", "claude-haiku-4-5"));
+        assert!(same_family(
+            "anthropic",
+            "haiku",
+            "anthropic",
+            "claude-sonnet-5"
+        ));
+        assert!(!same_family(
+            "google",
+            "gemini-2.5-flash",
+            "anthropic",
+            "claude-haiku-4-5"
+        ));
     }
 }

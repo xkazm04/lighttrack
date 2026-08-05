@@ -58,7 +58,11 @@ pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<RelayTask>> {
     row.as_ref().map(from_row).transpose()
 }
 
-pub(crate) async fn find_by_key(pool: &PgPool, project: &str, key: &str) -> Result<Option<RelayTask>> {
+pub(crate) async fn find_by_key(
+    pool: &PgPool,
+    project: &str,
+    key: &str,
+) -> Result<Option<RelayTask>> {
     let row = sqlx::query(&format!(
         "SELECT {COLS} FROM relay_tasks WHERE project_id = $1 AND idempotency_key = $2"
     ))
@@ -139,11 +143,13 @@ pub(crate) async fn settle(
     outcome: &RelayOutcome,
 ) -> Result<Option<RelayTask>> {
     let mut tx = pool.begin().await.map_err(pgerr)?;
-    let row = sqlx::query(&format!("SELECT {COLS} FROM relay_tasks WHERE id = $1 FOR UPDATE"))
-        .bind(id.to_string())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(pgerr)?;
+    let row = sqlx::query(&format!(
+        "SELECT {COLS} FROM relay_tasks WHERE id = $1 FOR UPDATE"
+    ))
+    .bind(id.to_string())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(pgerr)?;
     let Some(task) = row.as_ref().map(from_row).transpose()? else {
         return Ok(None); // tx rolls back on drop
     };
@@ -170,7 +176,10 @@ pub(crate) async fn settle(
             let (status, next) = if task.attempts >= task.max_attempts {
                 ("dead", task.next_attempt_at)
             } else {
-                ("queued", now + Duration::seconds(task.retry_interval_secs as i64))
+                (
+                    "queued",
+                    now + Duration::seconds(task.retry_interval_secs as i64),
+                )
             };
             sqlx::query(
                 "UPDATE relay_tasks SET status=$2, error=$3, next_attempt_at=$4, \
@@ -185,7 +194,10 @@ pub(crate) async fn settle(
             .await
             .map_err(pgerr)?;
         }
-        RelayOutcome::Deferred { retry_after_secs, reason } => {
+        RelayOutcome::Deferred {
+            retry_after_secs,
+            reason,
+        } => {
             // Not the task's fault (e.g. subscription window exhausted): hand the attempt back.
             let attempts = task.attempts.saturating_sub(1);
             let delay = retry_after_secs.unwrap_or(task.retry_interval_secs);

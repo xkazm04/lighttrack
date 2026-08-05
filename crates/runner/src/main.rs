@@ -53,7 +53,14 @@ fn main() -> Result<()> {
             limit,
             interval,
         } => score::score_recent(
-            &cli, &http, &engine, rubric, project.as_deref(), *limit, *interval, cli.jobs,
+            &cli,
+            &http,
+            &engine,
+            rubric,
+            project.as_deref(),
+            *limit,
+            *interval,
+            cli.jobs,
         ),
         Cmd::ScoreText {
             rubric,
@@ -102,8 +109,17 @@ fn main() -> Result<()> {
             pairwise,
         } => {
             let status = bench::run_benchmark(
-                &cli, &http, &engine, benchmark, *samples, *gen_samples, *heal, *pairwise, cli.jobs,
-                None, &runctl::RunControl::inert(),
+                &cli,
+                &http,
+                &engine,
+                benchmark,
+                *samples,
+                *gen_samples,
+                *heal,
+                *pairwise,
+                cli.jobs,
+                None,
+                &runctl::RunControl::inert(),
             )?;
             if *gate {
                 let code = gate::gate_exit_code(&status);
@@ -138,14 +154,30 @@ fn main() -> Result<()> {
             name_prefix,
             llm_scrub,
         } => schedule::schedule(
-            &cli, &http, &engine, project, *interval, *once, *n, name_prefix, *llm_scrub,
+            &cli,
+            &http,
+            &engine,
+            project,
+            *interval,
+            *once,
+            *n,
+            name_prefix,
+            *llm_scrub,
         ),
         Cmd::Serve {
             once,
             interval,
             stale_secs,
             recur_interval,
-        } => serve::serve(&cli, &http, &engine, *once, *interval, *stale_secs, *recur_interval),
+        } => serve::serve(
+            &cli,
+            &http,
+            &engine,
+            *once,
+            *interval,
+            *stale_secs,
+            *recur_interval,
+        ),
         Cmd::Calibrate {
             file,
             rubric,

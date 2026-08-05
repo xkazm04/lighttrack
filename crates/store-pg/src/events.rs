@@ -12,7 +12,8 @@ use lighttrack_store::{
 
 use crate::util::{fmt_ts, parse_enum, parse_ts, pgerr};
 
-pub(crate) const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
+pub(crate) const COLS: &str =
+    "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
     operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
     latency_ms, status, error, input, output, tags, source, metadata, name, \
     COALESCE(received_at, ts) AS received_at";
@@ -63,7 +64,10 @@ pub(crate) fn insert_err(e: sqlx::Error, id: &str) -> StoreError {
 }
 
 pub(crate) async fn insert(pool: &PgPool, ev: &LlmEvent) -> Result<()> {
-    insert_query(ev)?.execute(pool).await.map_err(|e| insert_err(e, &ev.id))?;
+    insert_query(ev)?
+        .execute(pool)
+        .await
+        .map_err(|e| insert_err(e, &ev.id))?;
     Ok(())
 }
 
@@ -121,7 +125,11 @@ pub(crate) fn insert_query(
     .bind(fmt_ts(ev.received_at)))
 }
 
-pub(crate) async fn list(pool: &PgPool, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
+pub(crate) async fn list(
+    pool: &PgPool,
+    project: Option<&str>,
+    limit: usize,
+) -> Result<Vec<LlmEvent>> {
     let rows = match project {
         Some(p) => {
             sqlx::query(&format!(
@@ -133,10 +141,12 @@ pub(crate) async fn list(pool: &PgPool, project: Option<&str>, limit: usize) -> 
             .await
         }
         None => {
-            sqlx::query(&format!("SELECT {COLS} FROM events ORDER BY ts DESC LIMIT $1"))
-                .bind(limit as i64)
-                .fetch_all(pool)
-                .await
+            sqlx::query(&format!(
+                "SELECT {COLS} FROM events ORDER BY ts DESC LIMIT $1"
+            ))
+            .bind(limit as i64)
+            .fetch_all(pool)
+            .await
         }
     }
     .map_err(pgerr)?;
@@ -267,14 +277,23 @@ pub(crate) async fn list_filtered(
         q = q.bind(b);
     }
     let rows = q.bind(fetch).fetch_all(pool).await.map_err(pgerr)?;
-    let mut events = rows.iter().map(from_row).collect::<Result<Vec<LlmEvent>>>()?;
+    let mut events = rows
+        .iter()
+        .map(from_row)
+        .collect::<Result<Vec<LlmEvent>>>()?;
     let next_cursor = if events.len() as i64 > limit as i64 {
         events.truncate(limit);
-        events.last().map(|e| encode_event_cursor(&fmt_ts(e.ts), &e.id))
+        events
+            .last()
+            .map(|e| encode_event_cursor(&fmt_ts(e.ts), &e.id))
     } else {
         None
     };
-    Ok(EventPage { events, next_cursor, total: None })
+    Ok(EventPage {
+        events,
+        next_cursor,
+        total: None,
+    })
 }
 
 /// The SQL expression yielding one scope dimension's value for a row — columns for the three
@@ -460,11 +479,20 @@ pub(crate) fn from_row(row: &PgRow) -> Result<LlmEvent> {
         usage: TokenUsage {
             input: row.try_get::<i64, _>(9).map_err(pgerr)? as u64,
             output: row.try_get::<i64, _>(10).map_err(pgerr)? as u64,
-            cached_input: row.try_get::<Option<i64>, _>(11).map_err(pgerr)?.map(|v| v as u64),
-            reasoning: row.try_get::<Option<i64>, _>(12).map_err(pgerr)?.map(|v| v as u64),
+            cached_input: row
+                .try_get::<Option<i64>, _>(11)
+                .map_err(pgerr)?
+                .map(|v| v as u64),
+            reasoning: row
+                .try_get::<Option<i64>, _>(12)
+                .map_err(pgerr)?
+                .map(|v| v as u64),
         },
         cost_usd: row.try_get(13).map_err(pgerr)?,
-        latency_ms: row.try_get::<Option<i64>, _>(14).map_err(pgerr)?.map(|v| v as u64),
+        latency_ms: row
+            .try_get::<Option<i64>, _>(14)
+            .map_err(pgerr)?
+            .map(|v| v as u64),
         status: parse_enum::<Status>(&status),
         error: row.try_get(16).map_err(pgerr)?,
         input: match input {
@@ -541,9 +569,15 @@ mod tests {
     #[test]
     fn other_database_errors_stay_generic() {
         // A different SQLSTATE (23503 = foreign key violation) is not a duplicate.
-        assert!(matches!(insert_err(db_err("23503"), "ev-1"), StoreError::Other(_)));
+        assert!(matches!(
+            insert_err(db_err("23503"), "ev-1"),
+            StoreError::Other(_)
+        ));
         // Nor is a non-database error.
-        assert!(matches!(insert_err(sqlx::Error::RowNotFound, "ev-1"), StoreError::Other(_)));
+        assert!(matches!(
+            insert_err(sqlx::Error::RowNotFound, "ev-1"),
+            StoreError::Other(_)
+        ));
     }
 
     #[test]
@@ -573,7 +607,12 @@ mod tests {
     #[test]
     fn cols_match_the_positions_from_row_reads() {
         let names = select_list_names(COLS);
-        assert_eq!(names.len(), 24, "COLS has {} entries: {names:?}", names.len());
+        assert_eq!(
+            names.len(),
+            24,
+            "COLS has {} entries: {names:?}",
+            names.len()
+        );
         for (i, expected) in [
             (0, "id"),
             (5, "ts"),

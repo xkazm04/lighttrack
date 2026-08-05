@@ -120,9 +120,13 @@ impl Alerter {
                 resend: ResendConfig::from_env(),
                 cooldown: Duration::from_secs(env_u64("LIGHTTRACK_ALERT_COOLDOWN_SECS", 3600)),
                 error_threshold: (env_u64("LIGHTTRACK_ALERT_ERROR_THRESHOLD", 5) as u32).max(1),
-                error_window: Duration::from_secs(env_u64("LIGHTTRACK_ALERT_ERROR_WINDOW_SECS", 300)),
+                error_window: Duration::from_secs(env_u64(
+                    "LIGHTTRACK_ALERT_ERROR_WINDOW_SECS",
+                    300,
+                )),
                 score_window: (env_u64("LIGHTTRACK_ALERT_SCORE_WINDOW", 20) as usize).max(4),
-                score_min_samples: (env_u64("LIGHTTRACK_ALERT_SCORE_MIN_SAMPLES", 8) as usize).max(4),
+                score_min_samples: (env_u64("LIGHTTRACK_ALERT_SCORE_MIN_SAMPLES", 8) as usize)
+                    .max(4),
                 score_drop: env_f64("LIGHTTRACK_ALERT_SCORE_DROP", 0.15),
                 attribution_db: attribution_db_from_env(),
             },
@@ -174,11 +178,19 @@ impl Alerter {
     /// immediately; the actual HTTP happens on a spawned task. `rejections` maps a breach's dedup key
     /// (`project:metric:window`) to the running count of ingest attempts that rule has rejected, so an
     /// enforcing breach's alert can report how many calls the cap has turned away.
-    pub(crate) fn notify(self: &Arc<Self>, breaches: &[LimitStatus], rejections: &HashMap<String, u64>) {
+    pub(crate) fn notify(
+        self: &Arc<Self>,
+        breaches: &[LimitStatus],
+        rejections: &HashMap<String, u64>,
+    ) {
         if !self.enabled() {
             return;
         }
-        let due: Vec<LimitStatus> = breaches.iter().filter(|b| self.should_send(b)).cloned().collect();
+        let due: Vec<LimitStatus> = breaches
+            .iter()
+            .filter(|b| self.should_send(b))
+            .cloned()
+            .collect();
         if due.is_empty() {
             return;
         }
@@ -277,8 +289,11 @@ impl Alerter {
         if !self.enabled() {
             return;
         }
-        let due: Vec<ForecastAlert> =
-            alerts.iter().filter(|a| self.should_send_key(&a.dedup_key())).cloned().collect();
+        let due: Vec<ForecastAlert> = alerts
+            .iter()
+            .filter(|a| self.should_send_key(&a.dedup_key()))
+            .cloned()
+            .collect();
         if due.is_empty() {
             return;
         }
@@ -340,7 +355,9 @@ impl Alerter {
             error: ev.error.clone(),
         };
         let me = Arc::clone(self);
-        tokio::spawn(async move { channels::deliver_error_spike(&me.config, &me.http, &spike).await });
+        tokio::spawn(
+            async move { channels::deliver_error_spike(&me.config, &me.http, &spike).await },
+        );
     }
 
     /// Push `now` into the project's rolling error window, evict entries older than the window, and
@@ -383,7 +400,9 @@ impl Alerter {
             scored_by: s.scored_by.clone(),
         };
         let me = Arc::clone(self);
-        tokio::spawn(async move { channels::deliver_score_drop(&me.config, &me.http, &drop).await });
+        tokio::spawn(
+            async move { channels::deliver_score_drop(&me.config, &me.http, &drop).await },
+        );
     }
 
     /// Push a normalized score into the (project, rubric) window (capped at `score_window`) and, once
@@ -482,11 +501,17 @@ fn attribution_db_from_env() -> Option<String> {
 }
 
 fn env_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 fn env_f64(key: &str, default: f64) -> f64 {
-    std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 #[cfg(test)]
@@ -568,9 +593,18 @@ mod tests {
         let b = breach("p1");
         // Same rule: the warning key and the breach key don't collide, so each sends once and the
         // warning never suppresses the breach.
-        assert!(a.should_send_key(&a.warn_key(&w)), "warning sends first time");
-        assert!(!a.should_send_key(&a.warn_key(&w)), "warning suppressed within cooldown");
-        assert!(a.should_send(&b), "breach still sends despite the earlier warning");
+        assert!(
+            a.should_send_key(&a.warn_key(&w)),
+            "warning sends first time"
+        );
+        assert!(
+            !a.should_send_key(&a.warn_key(&w)),
+            "warning suppressed within cooldown"
+        );
+        assert!(
+            a.should_send(&b),
+            "breach still sends despite the earlier warning"
+        );
     }
 
     #[test]
@@ -605,7 +639,7 @@ mod tests {
     #[test]
     fn score_regression_detected() {
         let a = alerter(3600); // default score window 20 / min 8 / drop 0.15
-        // A run of good scores establishes the baseline — no regression.
+                               // A run of good scores establishes the baseline — no regression.
         for _ in 0..12 {
             assert!(a.note_score("p\u{1}helpfulness", 0.9).is_none());
         }

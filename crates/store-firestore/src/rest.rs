@@ -46,16 +46,29 @@ impl Rest {
     pub(crate) fn put_doc(&self, collection: &str, id: &str, fields: &Fields) -> Result<()> {
         let url = format!("{}/{}/{}", self.base, collection, id);
         let body = json!({ "fields": encode_fields(fields) });
-        json_ok(self.req(Method::PATCH, url).json(&body).send().map_err(re)?).map(|_| ())
+        json_ok(
+            self.req(Method::PATCH, url)
+                .json(&body)
+                .send()
+                .map_err(re)?,
+        )
+        .map(|_| ())
     }
 
     /// Create a document by id, failing with [`StoreError::Conflict`] if it already exists. Uses
     /// the `currentDocument.exists=false` precondition — [`Rest::put_doc`]'s plain PATCH is an
     /// upsert that would silently overwrite, which is data loss on an insert path.
     pub(crate) fn create_doc(&self, collection: &str, id: &str, fields: &Fields) -> Result<()> {
-        let url = format!("{}/{}/{}?currentDocument.exists=false", self.base, collection, id);
+        let url = format!(
+            "{}/{}/{}?currentDocument.exists=false",
+            self.base, collection, id
+        );
         let body = json!({ "fields": encode_fields(fields) });
-        let resp = self.req(Method::PATCH, url).json(&body).send().map_err(re)?;
+        let resp = self
+            .req(Method::PATCH, url)
+            .json(&body)
+            .send()
+            .map_err(re)?;
         let status = resp.status();
         if status.is_success() {
             return Ok(());
@@ -65,7 +78,9 @@ impl Rest {
             || text.contains("ALREADY_EXISTS")
             || text.contains("FAILED_PRECONDITION")
         {
-            return Err(StoreError::Conflict(format!("'{collection}/{id}' already exists")));
+            return Err(StoreError::Conflict(format!(
+                "'{collection}/{id}' already exists"
+            )));
         }
         Err(other(format!("firestore HTTP {}: {text}", status.as_u16())))
     }
@@ -78,17 +93,29 @@ impl Rest {
         fields: &Fields,
         mask: &[&str],
     ) -> Result<()> {
-        let q: Vec<String> = mask.iter().map(|m| format!("updateMask.fieldPaths={m}")).collect();
+        let q: Vec<String> = mask
+            .iter()
+            .map(|m| format!("updateMask.fieldPaths={m}"))
+            .collect();
         let url = format!("{}/{}/{}?{}", self.base, collection, id, q.join("&"));
         let body = json!({ "fields": encode_fields(fields) });
-        json_ok(self.req(Method::PATCH, url).json(&body).send().map_err(re)?).map(|_| ())
+        json_ok(
+            self.req(Method::PATCH, url)
+                .json(&body)
+                .send()
+                .map_err(re)?,
+        )
+        .map(|_| ())
     }
 
     /// DELETE a document by id. Returns `true` when it existed, `false` when it didn't — the
     /// `exists=true` precondition turns Firestore's silently-idempotent delete into an observable
     /// outcome (the Store contract maps unknown-id deletes to `false` → API 404).
     pub(crate) fn delete_doc(&self, collection: &str, id: &str) -> Result<bool> {
-        let url = format!("{}/{}/{}?currentDocument.exists=true", self.base, collection, id);
+        let url = format!(
+            "{}/{}/{}?currentDocument.exists=true",
+            self.base, collection, id
+        );
         let resp = self.req(Method::DELETE, url).send().map_err(re)?;
         let status = resp.status();
         if status.is_success() {
@@ -170,10 +197,16 @@ impl Rest {
         if status.is_success() {
             return Ok(true);
         }
-        if status.as_u16() == 409 || text.contains("FAILED_PRECONDITION") || text.contains("ABORTED") {
+        if status.as_u16() == 409
+            || text.contains("FAILED_PRECONDITION")
+            || text.contains("ABORTED")
+        {
             return Ok(false);
         }
-        Err(other(format!("firestore commit HTTP {}: {text}", status.as_u16())))
+        Err(other(format!(
+            "firestore commit HTTP {}: {text}",
+            status.as_u16()
+        )))
     }
 }
 

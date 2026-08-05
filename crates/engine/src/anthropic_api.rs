@@ -64,7 +64,15 @@ pub(crate) fn generate(
         .map_err(|_| EngineError::Other(format!("no Anthropic API key (set {API_KEY_ENV})")))?;
     let resolved = resolve_model(model);
 
-    match send(&key, resolved, model, system_prompt, input, schema, deterministic) {
+    match send(
+        &key,
+        resolved,
+        model,
+        system_prompt,
+        input,
+        schema,
+        deterministic,
+    ) {
         // Some model/parameter combinations answer a `temperature` with a 400 (extended-thinking
         // configurations in particular). Detect it from the response rather than from a model
         // allowlist. Retry once *keeping the schema* — dropping to a schema-less prose call here
@@ -132,7 +140,9 @@ fn send(
     let v: Value = serde_json::from_str(&text)?;
     let output = completion_text(&v, schema.is_some());
     if output.is_empty() {
-        return Err(EngineError::EmptyCompletion { who: "anthropic".into() });
+        return Err(EngineError::EmptyCompletion {
+            who: "anthropic".into(),
+        });
     }
     let usage = v.get("usage");
     Ok(GenOutcome {
@@ -145,8 +155,12 @@ fn send(
             .map(str::to_string)
             .unwrap_or_else(|| requested.to_string()),
         latency_ms,
-        input_tokens: usage.and_then(|u| u.get("input_tokens")).and_then(Value::as_u64),
-        output_tokens: usage.and_then(|u| u.get("output_tokens")).and_then(Value::as_u64),
+        input_tokens: usage
+            .and_then(|u| u.get("input_tokens"))
+            .and_then(Value::as_u64),
+        output_tokens: usage
+            .and_then(|u| u.get("output_tokens"))
+            .and_then(Value::as_u64),
         // Temperature-pinned, but Anthropic exposes no seed — reproducible by convention only.
         determinism: Determinism::BestEffort,
     })

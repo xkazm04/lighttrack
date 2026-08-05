@@ -29,7 +29,10 @@ impl ForecastAlert {
     /// hand-made `GET /v1/forecast` for the same project share this key, so turning the sweep on
     /// cannot double the volume an operator receives.
     pub(crate) fn dedup_key(&self) -> String {
-        format!("forecast:{}:{}:{}", self.project_id, self.kind, self.subject)
+        format!(
+            "forecast:{}:{}:{}",
+            self.project_id, self.kind, self.subject
+        )
     }
 }
 

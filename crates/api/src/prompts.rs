@@ -57,8 +57,14 @@ pub(crate) async fn create_prompt(
     // Reject a duplicate registry name within the project.
     let store = st.store.clone();
     let (pid_c, name_c) = (pid.clone(), req.name.clone());
-    if spawn_db(move || store.get_prompt(&pid_c, &name_c)).await?.is_some() {
-        return Err(ApiError::conflict(format!("prompt '{}' already exists", req.name)));
+    if spawn_db(move || store.get_prompt(&pid_c, &name_c))
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::conflict(format!(
+            "prompt '{}' already exists",
+            req.name
+        )));
     }
     // Validate the linked benchmark exists and belongs to the caller, if given.
     if let Some(bid) = &req.benchmark_id {
@@ -93,7 +99,11 @@ pub(crate) async fn create_prompt(
     .await?;
 
     let enqueued_job = maybe_enqueue(&st, &prompt, version.version).await?;
-    Ok(Json(CreatedPrompt { prompt, version, enqueued_job }))
+    Ok(Json(CreatedPrompt {
+        prompt,
+        version,
+        enqueued_job,
+    }))
 }
 
 pub(crate) async fn list_prompts(
@@ -154,7 +164,10 @@ pub(crate) async fn add_version(
     spawn_db(move || store.create_prompt_version(&v2)).await?;
 
     let enqueued_job = maybe_enqueue(&st, &prompt, version.version).await?;
-    Ok(Json(AddedVersion { version, enqueued_job }))
+    Ok(Json(AddedVersion {
+        version,
+        enqueued_job,
+    }))
 }
 
 pub(crate) async fn list_versions(
@@ -212,11 +225,10 @@ pub(crate) async fn get_prompt(
     let (version, label) = if let Some(v) = q.version {
         (v, None)
     } else if let Some(lbl) = q.label {
-        let v = prompt
-            .labels
-            .get(&lbl)
-            .copied()
-            .ok_or_else(|| ApiError::not_found(format!("label '{lbl}' is not set on '{name}'")))?;
+        let v =
+            prompt.labels.get(&lbl).copied().ok_or_else(|| {
+                ApiError::not_found(format!("label '{lbl}' is not set on '{name}'"))
+            })?;
         (v, Some(lbl))
     } else {
         let store = st.store.clone();
@@ -271,8 +283,14 @@ pub(crate) async fn promote(
     // The target version must exist.
     let store = st.store.clone();
     let (id, ver) = (prompt.id.clone(), req.version);
-    if spawn_db(move || store.get_prompt_version(&id, ver)).await?.is_none() {
-        return Err(ApiError::not_found(format!("'{name}' has no version {}", req.version)));
+    if spawn_db(move || store.get_prompt_version(&id, ver))
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::not_found(format!(
+            "'{name}' has no version {}",
+            req.version
+        )));
     }
 
     // Regression gate: compare the linked benchmark's latest scored run FOR THE VERSION BEING
@@ -366,7 +384,11 @@ pub(crate) struct GateEvidence {
 ///   fix is more cases, which the report says.
 /// - A run with no recorded interval (legacy, or `n < 2`) keeps the plain scalar compare, so the
 ///   `scalar_fallback` honesty of the small-n path is preserved rather than silently upgraded.
-fn gate_promotion(latest: Option<GateEvidence>, baseline: Option<f64>, force: bool) -> Option<String> {
+fn gate_promotion(
+    latest: Option<GateEvidence>,
+    baseline: Option<f64>,
+    force: bool,
+) -> Option<String> {
     if force {
         return None;
     }
@@ -445,7 +467,11 @@ fn evidence_of(run: &BenchmarkRun) -> GateEvidence {
 /// the tagging (no tagged run at all), falls back to the newest scored run of any version, so legacy
 /// projects keep a working gate rather than an always-blocking one; once tagged runs exist for the
 /// version, only they count — a tagged-but-unscored set correctly reads as "no scored run yet".
-fn version_scored_run(runs: &[BenchmarkRun], prompt_id: &str, version: u32) -> Option<GateEvidence> {
+fn version_scored_run(
+    runs: &[BenchmarkRun],
+    prompt_id: &str,
+    version: u32,
+) -> Option<GateEvidence> {
     let mut tagged: Vec<&BenchmarkRun> = runs
         .iter()
         .filter(|r| {
@@ -454,10 +480,17 @@ fn version_scored_run(runs: &[BenchmarkRun], prompt_id: &str, version: u32) -> O
         })
         .collect();
     if tagged.is_empty() {
-        return runs.iter().find(|r| r.mean_score.is_some()).map(evidence_of);
+        return runs
+            .iter()
+            .find(|r| r.mean_score.is_some())
+            .map(evidence_of);
     }
     tagged.sort_by_key(|r| r.finished_at);
-    tagged.iter().rev().find(|r| r.mean_score.is_some()).map(|r| evidence_of(r))
+    tagged
+        .iter()
+        .rev()
+        .find(|r| r.mean_score.is_some())
+        .map(|r| evidence_of(r))
 }
 
 #[cfg(test)]
@@ -504,7 +537,12 @@ mod tests {
 
     /// Legacy-shaped evidence: a bare mean with no recorded interval (the scalar-compare path).
     fn scalar(mean: f64) -> Option<GateEvidence> {
-        Some(GateEvidence { mean: Some(mean), ci_upper: None, runner_regressed: false, incomplete: None })
+        Some(GateEvidence {
+            mean: Some(mean),
+            ci_upper: None,
+            runner_regressed: false,
+            incomplete: None,
+        })
     }
 
     #[test]
@@ -517,10 +555,17 @@ mod tests {
             // The run that actually scored v9 is older and RED.
             run_with(tag(9), Some(0.40), 50),
         ];
-        assert_eq!(mean_of(version_scored_run(&runs, "p1", 9)), Some(0.40), "v9's own run counts");
+        assert_eq!(
+            mean_of(version_scored_run(&runs, "p1", 9)),
+            Some(0.40),
+            "v9's own run counts"
+        );
         assert_eq!(mean_of(version_scored_run(&runs, "p1", 3)), Some(0.95));
         // Two runs for the same version: the newest finished_at wins.
-        let runs2 = vec![run_with(tag(9), Some(0.40), 10), run_with(tag(9), Some(0.90), 20)];
+        let runs2 = vec![
+            run_with(tag(9), Some(0.40), 10),
+            run_with(tag(9), Some(0.90), 20),
+        ];
         assert_eq!(mean_of(version_scored_run(&runs2, "p1", 9)), Some(0.90));
         // Tagged runs exist but none scored → None (the gate blocks as "no scored run yet").
         let runs3 = vec![run_with(tag(9), None, 10)];
@@ -529,27 +574,59 @@ mod tests {
         let legacy = vec![run_with(Value::Null, Some(0.7), 10)];
         assert_eq!(mean_of(version_scored_run(&legacy, "p1", 9)), Some(0.7));
         // A different prompt's tag never matches.
-        let other = vec![run_with(serde_json::json!({"prompt_id":"px","prompt_version":9}), Some(0.9), 10)];
+        let other = vec![run_with(
+            serde_json::json!({"prompt_id":"px","prompt_version":9}),
+            Some(0.9),
+            10,
+        )];
         assert_eq!(
-            mean_of(version_scored_run(&other, "p1", 9)), Some(0.9), "falls back to legacy path"
+            mean_of(version_scored_run(&other, "p1", 9)),
+            Some(0.9),
+            "falls back to legacy path"
         );
     }
 
     #[test]
     fn gate_allows_when_no_baseline_or_forced() {
-        assert!(gate_promotion(scalar(0.1), None, false).is_none(), "no baseline → allow");
-        assert!(gate_promotion(None, Some(0.9), true).is_none(), "force overrides a block");
-        assert!(gate_promotion(scalar(0.1), Some(0.9), true).is_none(), "force overrides a regression");
+        assert!(
+            gate_promotion(scalar(0.1), None, false).is_none(),
+            "no baseline → allow"
+        );
+        assert!(
+            gate_promotion(None, Some(0.9), true).is_none(),
+            "force overrides a block"
+        );
+        assert!(
+            gate_promotion(scalar(0.1), Some(0.9), true).is_none(),
+            "force overrides a regression"
+        );
     }
 
     #[test]
     fn gate_blocks_regression_and_unscored() {
-        assert!(gate_promotion(None, Some(0.8), false).is_some(), "baseline but no run → block");
-        assert!(gate_promotion(scalar(0.79), Some(0.8), false).is_some(), "below baseline → block");
-        assert!(gate_promotion(scalar(0.8), Some(0.8), false).is_none(), "meeting baseline → allow");
-        assert!(gate_promotion(scalar(0.95), Some(0.8), false).is_none(), "above baseline → allow");
+        assert!(
+            gate_promotion(None, Some(0.8), false).is_some(),
+            "baseline but no run → block"
+        );
+        assert!(
+            gate_promotion(scalar(0.79), Some(0.8), false).is_some(),
+            "below baseline → block"
+        );
+        assert!(
+            gate_promotion(scalar(0.8), Some(0.8), false).is_none(),
+            "meeting baseline → allow"
+        );
+        assert!(
+            gate_promotion(scalar(0.95), Some(0.8), false).is_none(),
+            "above baseline → allow"
+        );
         // A run whose mean is missing entirely reads as "no scored run yet", not as a pass.
-        let no_mean = Some(GateEvidence { mean: None, ci_upper: None, runner_regressed: false, incomplete: None });
+        let no_mean = Some(GateEvidence {
+            mean: None,
+            ci_upper: None,
+            runner_regressed: false,
+            incomplete: None,
+        });
         assert!(gate_promotion(no_mean, Some(0.8), false).is_some());
     }
 
@@ -558,14 +635,30 @@ mod tests {
         // The false positive the old scalar gate produced: mean 0.79 vs baseline 0.80 on a noisy
         // run whose 95% interval reaches 0.88. That 0.01 dip is inside the run's own uncertainty,
         // so it is not evidence of a regression and must not block a deploy.
-        let noisy = Some(GateEvidence { mean: Some(0.79), ci_upper: Some(0.88), runner_regressed: false, incomplete: None });
-        assert!(gate_promotion(noisy, Some(0.80), false).is_none(), "a dip inside the noise");
+        let noisy = Some(GateEvidence {
+            mean: Some(0.79),
+            ci_upper: Some(0.88),
+            runner_regressed: false,
+            incomplete: None,
+        });
+        assert!(
+            gate_promotion(noisy, Some(0.80), false).is_none(),
+            "a dip inside the noise"
+        );
         // A REAL regression — the whole interval below baseline — still blocks. The gate is not
         // disarmed, only made to require evidence.
-        let real = Some(GateEvidence { mean: Some(0.50), ci_upper: Some(0.56), runner_regressed: false, incomplete: None });
+        let real = Some(GateEvidence {
+            mean: Some(0.50),
+            ci_upper: Some(0.56),
+            runner_regressed: false,
+            incomplete: None,
+        });
         let reason = gate_promotion(real, Some(0.80), false).expect("must block");
         assert!(reason.contains("significantly below"), "got: {reason}");
-        assert!(reason.contains("0.560"), "the interval is quoted so the operator can check it");
+        assert!(
+            reason.contains("0.560"),
+            "the interval is quoted so the operator can check it"
+        );
     }
 
     #[test]
@@ -573,7 +666,12 @@ mod tests {
         // The runner's verdict is the significance-aware one (paired per-case, family-wise
         // corrected). If it says regressed, the gate blocks even where the raw mean looks fine —
         // one definition of "regressed", not two.
-        let ev = Some(GateEvidence { mean: Some(0.85), ci_upper: Some(0.92), runner_regressed: true, incomplete: None });
+        let ev = Some(GateEvidence {
+            mean: Some(0.85),
+            ci_upper: Some(0.92),
+            runner_regressed: true,
+            incomplete: None,
+        });
         let reason = gate_promotion(ev, Some(0.80), false).expect("must block");
         assert!(reason.contains("'regressed'"), "got: {reason}");
         // …and force still overrides it.
@@ -585,9 +683,11 @@ mod tests {
         // A cancelled or budget-halted run scored only the cases that finished, and which ones
         // those were is scheduling-dependent — so a favourable subset must not become a promotion.
         // The mean here (0.95) beats the baseline comfortably; partiality still blocks.
-        for (status, needle) in
-            [("cancelled", "cancelled"), ("partial", "budget"), ("aborted", "aborted")]
-        {
+        for (status, needle) in [
+            ("cancelled", "cancelled"),
+            ("partial", "budget"),
+            ("aborted", "aborted"),
+        ] {
             let mut run = run_with(serde_json::json!({}), Some(0.95), 1);
             run.status = status.to_string();
             let reason = gate_promotion(Some(evidence_of(&run)), Some(0.80), false)

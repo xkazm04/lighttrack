@@ -152,8 +152,9 @@ pub fn resolve_claude_bin(given: &str) -> String {
     #[cfg(windows)]
     {
         if let Ok(appdata) = std::env::var("APPDATA") {
-            let p =
-                format!("{appdata}\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe");
+            let p = format!(
+                "{appdata}\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"
+            );
             if std::path::Path::new(&p).exists() {
                 return p;
             }
@@ -169,6 +170,9 @@ mod tests {
     #[test]
     fn resolve_claude_bin_passes_through_explicit_paths() {
         assert_eq!(resolve_claude_bin("/usr/bin/claude"), "/usr/bin/claude");
-        assert_eq!(resolve_claude_bin("C:\\tools\\claude.exe"), "C:\\tools\\claude.exe");
+        assert_eq!(
+            resolve_claude_bin("C:\\tools\\claude.exe"),
+            "C:\\tools\\claude.exe"
+        );
     }
 }

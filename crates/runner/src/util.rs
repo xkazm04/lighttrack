@@ -121,7 +121,10 @@ pub(crate) fn price_gen_cost_checked(
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
 ) -> (f64, bool) {
-    match prices.iter().find(|p| p.provider == provider && p.model == model) {
+    match prices
+        .iter()
+        .find(|p| p.provider == provider && p.model == model)
+    {
         Some(p) => (
             (input_tokens.unwrap_or(0) as f64) * p.input_per_mtok / 1_000_000.0
                 + (output_tokens.unwrap_or(0) as f64) * p.output_per_mtok / 1_000_000.0,
@@ -213,7 +216,12 @@ mod tests {
     }
 
     /// Build a `ModelPriceRow` via serde so the test doesn't depend on chrono for `effective_date`.
-    fn price(provider: &str, model: &str, input_per_mtok: f64, output_per_mtok: f64) -> ModelPriceRow {
+    fn price(
+        provider: &str,
+        model: &str,
+        input_per_mtok: f64,
+        output_per_mtok: f64,
+    ) -> ModelPriceRow {
         serde_json::from_value(json!({
             "provider": provider, "model": model,
             "input_per_mtok": input_per_mtok, "output_per_mtok": output_per_mtok,
@@ -260,9 +268,15 @@ mod tests {
     #[test]
     fn price_gen_cost_unknown_model_is_zero() {
         let prices = vec![price("openai", "gpt-4o", 2.5, 10.0)];
-        assert!(approx(price_gen_cost(&prices, "google", "gemini", Some(10), Some(10)), 0.0));
+        assert!(approx(
+            price_gen_cost(&prices, "google", "gemini", Some(10), Some(10)),
+            0.0
+        ));
         // None token counts count as zero.
-        assert!(approx(price_gen_cost(&prices, "openai", "gpt-4o", None, None), 0.0));
+        assert!(approx(
+            price_gen_cost(&prices, "openai", "gpt-4o", None, None),
+            0.0
+        ));
     }
 
     #[test]
@@ -281,7 +295,10 @@ mod tests {
 
     #[test]
     fn aggregate_status_prioritizes_regression() {
-        assert_eq!(aggregate_status(&["passed", "regressed", "no_baseline"]), "regressed");
+        assert_eq!(
+            aggregate_status(&["passed", "regressed", "no_baseline"]),
+            "regressed"
+        );
         assert_eq!(aggregate_status(&["passed", "no_baseline"]), "passed");
         // A budget-halted target can never let the comparison roll up to `passed`.
         assert_eq!(aggregate_status(&["passed", "partial"]), "partial");
@@ -289,7 +306,10 @@ mod tests {
         assert_eq!(aggregate_status(&["partial", "no_baseline"]), "partial");
         // …but a real regression on the cases that did run still outranks it.
         assert_eq!(aggregate_status(&["partial", "regressed"]), "regressed");
-        assert_eq!(aggregate_status(&["no_baseline", "no_baseline"]), "no_baseline");
+        assert_eq!(
+            aggregate_status(&["no_baseline", "no_baseline"]),
+            "no_baseline"
+        );
         assert_eq!(aggregate_status(&[]), "no_baseline");
     }
 
@@ -299,16 +319,21 @@ mod tests {
         let par = parallel_map(25, 8, |i| i * 3);
         let expected: Vec<usize> = (0..25).map(|i| i * 3).collect();
         assert_eq!(seq, expected);
-        assert_eq!(par, expected, "parallel result must match sequential order byte-for-byte");
+        assert_eq!(
+            par, expected,
+            "parallel result must match sequential order byte-for-byte"
+        );
         assert_eq!(parallel_map(0, 4, |i: usize| i), Vec::<usize>::new());
     }
 
     #[test]
     fn price_gen_cost_checked_flags_missing() {
         let prices = vec![price("openai", "gpt-4o", 2.5, 10.0)];
-        let (cost, priced) = price_gen_cost_checked(&prices, "openai", "gpt-4o", Some(1_000_000), None);
+        let (cost, priced) =
+            price_gen_cost_checked(&prices, "openai", "gpt-4o", Some(1_000_000), None);
         assert!(approx(cost, 2.5) && priced);
-        let (cost, priced) = price_gen_cost_checked(&prices, "google", "gemini", Some(10), Some(10));
+        let (cost, priced) =
+            price_gen_cost_checked(&prices, "google", "gemini", Some(10), Some(10));
         assert!(approx(cost, 0.0) && !priced);
     }
 

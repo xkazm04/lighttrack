@@ -13,8 +13,8 @@ use lighttrack_core::{
     compute_margin, new_id, ApiKey, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem,
     DimensionCheck, DimensionKind, Job, JobCancel, LimitAction, LimitMetric, LimitRule, LimitScope,
     LimitWindow, LlmEvent, MarginDimension, ModelPriceRow, Operation, Project, Provider, Redaction,
-    RelayOutcome, RelayTask, RevenueEvent, RevenueKind, Rubric, RubricDimension, Score, ScoreDetail,
-    ScoreDim, Status, TokenUsage,
+    RelayOutcome, RelayTask, RevenueEvent, RevenueKind, Rubric, RubricDimension, Score,
+    ScoreDetail, ScoreDim, Status, TokenUsage,
 };
 
 use crate::{Admission, EventFilter, Result, Store, StoreError, TraceFilter};
@@ -54,7 +54,12 @@ fn sample_event(pid: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEve
         model: model.into(),
         name: None,
         operation: Operation::Chat,
-        usage: TokenUsage { input: inp, output: out, cached_input: None, reasoning: None },
+        usage: TokenUsage {
+            input: inp,
+            output: out,
+            cached_input: None,
+            reasoning: None,
+        },
         cost_usd: Some(cost),
         latency_ms: Some(42),
         status: Status::Success,
@@ -83,12 +88,22 @@ fn events(store: &dyn Store, pid: &str) -> Result<()> {
     assert_eq!(listed.len(), 2, "list_events scoped to project");
     assert_eq!(listed[0].project_id, pid);
     assert_eq!(listed[0].tags, vec!["conf".to_string()]);
-    assert_eq!(listed[0].metadata, json!({ "k": "v" }), "metadata round-trip");
-    assert!(listed[0].input.is_some() && listed[0].output.is_some(), "payload round-trip");
+    assert_eq!(
+        listed[0].metadata,
+        json!({ "k": "v" }),
+        "metadata round-trip"
+    );
+    assert!(
+        listed[0].input.is_some() && listed[0].output.is_some(),
+        "payload round-trip"
+    );
 
     let one = store.get_event(&listed[0].id)?.expect("get_event Some");
     assert_eq!(one.id, listed[0].id);
-    assert!(store.get_event(&new_id())?.is_none(), "get_event None for unknown id");
+    assert!(
+        store.get_event(&new_id())?.is_none(),
+        "get_event None for unknown id"
+    );
 
     // Re-inserting an existing id must be a typed Conflict on every backend — not an opaque
     // error (Postgres pre-23505-mapping) and never a silent overwrite (Firestore pre-precondition
@@ -97,7 +112,11 @@ fn events(store: &dyn Store, pid: &str) -> Result<()> {
         Err(crate::StoreError::Conflict(_)) => {}
         other => panic!("duplicate insert_event must be Err(Conflict), got {other:?}"),
     }
-    assert_eq!(store.list_events(Some(pid), 10)?.len(), 2, "duplicate insert persisted nothing");
+    assert_eq!(
+        store.list_events(Some(pid), 10)?.len(),
+        2,
+        "duplicate insert persisted nothing"
+    );
 
     let costs = store.cost_summary(Some(pid))?;
     assert_eq!(costs.len(), 1, "one (provider,model) group");
@@ -125,7 +144,10 @@ fn events(store: &dyn Store, pid: &str) -> Result<()> {
     assert!((k.cost_usd - 0.004).abs() < 1e-9);
     let none =
         store.usage_since_scoped(pid, since, &LimitScope::ApiKey("conf-key-absent".into()))?;
-    assert_eq!(none.calls, 0, "an unknown key has no usage (never the project-wide total)");
+    assert_eq!(
+        none.calls, 0,
+        "an unknown key has no usage (never the project-wide total)"
+    );
 
     let by_key = store.usage_by_scope(pid, since, "api_key")?;
     let keyed_row = by_key
@@ -165,7 +187,10 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
     let got = store.get_project(pid)?.expect("get_project Some");
     assert!(got.collective_opt_in, "collective_opt_in round-trips");
     assert!(store.get_project(&new_id())?.is_none(), "get_project None");
-    assert!(store.list_projects()?.iter().any(|p| p.id == pid), "list_projects contains ours");
+    assert!(
+        store.list_projects()?.iter().any(|p| p.id == pid),
+        "list_projects contains ours"
+    );
 
     let prefix: String = new_id().chars().take(8).collect();
     let key = ApiKey {
@@ -179,22 +204,46 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
         revoked: false,
     };
     store.create_api_key(&key)?;
-    let found = store.find_api_key_by_prefix(&prefix)?.expect("find_api_key_by_prefix Some");
+    let found = store
+        .find_api_key_by_prefix(&prefix)?
+        .expect("find_api_key_by_prefix Some");
     assert_eq!(found.project_id, pid);
-    assert!(store.find_api_key_by_prefix("zzzzzzzz")?.is_none(), "unknown prefix None");
+    assert!(
+        store.find_api_key_by_prefix("zzzzzzzz")?.is_none(),
+        "unknown prefix None"
+    );
     store.touch_api_key(&key.id, Utc::now())?;
 
     // Key lifecycle: the project's keys are listable (with the last-use we just stamped), and a key
     // can be revoked — the two fields that were write-only / enforced-but-unsettable before this wave.
     let keys = store.list_api_keys(pid)?;
-    assert!(keys.iter().any(|k| k.id == key.id), "list_api_keys contains our key");
     assert!(
-        keys.iter().find(|k| k.id == key.id).unwrap().last_used_at.is_some(),
+        keys.iter().any(|k| k.id == key.id),
+        "list_api_keys contains our key"
+    );
+    assert!(
+        keys.iter()
+            .find(|k| k.id == key.id)
+            .unwrap()
+            .last_used_at
+            .is_some(),
         "last_used_at is readable back"
     );
-    assert!(store.set_api_key_revoked(&key.id, true)?, "revoke reports a row changed");
-    assert!(store.find_api_key_by_prefix(&prefix)?.expect("still present").revoked, "revoked persisted");
-    assert!(!store.set_api_key_revoked(&new_id(), true)?, "revoking an unknown id returns false");
+    assert!(
+        store.set_api_key_revoked(&key.id, true)?,
+        "revoke reports a row changed"
+    );
+    assert!(
+        store
+            .find_api_key_by_prefix(&prefix)?
+            .expect("still present")
+            .revoked,
+        "revoked persisted"
+    );
+    assert!(
+        !store.set_api_key_revoked(&new_id(), true)?,
+        "revoking an unknown id returns false"
+    );
 
     let rule = LimitRule {
         id: new_id(),
@@ -212,7 +261,10 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
     assert_eq!(enabled.len(), 1);
     assert_eq!(enabled[0].metric, LimitMetric::CostUsd);
     let u = store.usage_since(pid, Utc::now() - chrono::Duration::hours(1))?;
-    assert!(rule.evaluate(u.cost_usd).breached, "0.003 cost should breach 0.0015 threshold");
+    assert!(
+        rule.evaluate(u.cost_usd).breached,
+        "0.003 cost should breach 0.0015 threshold"
+    );
 
     // Scoped-rule lifecycle round-trip: `warn_at` + `scope` must persist faithfully — a backend
     // that drops them turns "cap gpt-4o at $X" into an unscoped project-wide cap (a semantic
@@ -229,7 +281,9 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
         scope: Some(LimitScope::Model("conf-scoped-model".into())),
     };
     store.create_limit_rule(&scoped)?;
-    let got = store.get_limit_rule(&scoped.id)?.expect("get_limit_rule finds the rule");
+    let got = store
+        .get_limit_rule(&scoped.id)?
+        .expect("get_limit_rule finds the rule");
     assert_eq!(got.warn_at, Some(0.8), "warn_at round-trips");
     assert_eq!(
         got.scope,
@@ -240,12 +294,24 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
     updated.threshold = 75.0;
     updated.scope = Some(LimitScope::Provider("conf-prov".into()));
     assert!(store.update_limit_rule(&updated)?, "update matches the row");
-    let after = store.get_limit_rule(&scoped.id)?.expect("rule still present after update");
-    assert!((after.threshold - 75.0).abs() < 1e-9, "threshold update persists");
-    assert_eq!(after.scope, Some(LimitScope::Provider("conf-prov".into())), "scope update persists");
+    let after = store
+        .get_limit_rule(&scoped.id)?
+        .expect("rule still present after update");
+    assert!(
+        (after.threshold - 75.0).abs() < 1e-9,
+        "threshold update persists"
+    );
+    assert_eq!(
+        after.scope,
+        Some(LimitScope::Provider("conf-prov".into())),
+        "scope update persists"
+    );
     // The key/customer dimensions must survive the same round-trip — a backend that dropped an
     // unknown `scope_kind` would silently promote a $5 staging cap to a project-wide one.
-    for s in [LimitScope::ApiKey("conf-key-1".into()), LimitScope::Customer("conf-cus".into())] {
+    for s in [
+        LimitScope::ApiKey("conf-key-1".into()),
+        LimitScope::Customer("conf-cus".into()),
+    ] {
         let mut r = after.clone();
         r.scope = Some(s.clone());
         assert!(store.update_limit_rule(&r)?);
@@ -256,9 +322,18 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
             s.kind_str()
         );
     }
-    assert!(store.delete_limit_rule(&scoped.id)?, "delete removes the rule");
-    assert!(store.get_limit_rule(&scoped.id)?.is_none(), "deleted rule is gone");
-    assert!(!store.delete_limit_rule(&new_id())?, "deleting an unknown id returns false");
+    assert!(
+        store.delete_limit_rule(&scoped.id)?,
+        "delete removes the rule"
+    );
+    assert!(
+        store.get_limit_rule(&scoped.id)?.is_none(),
+        "deleted rule is gone"
+    );
+    assert!(
+        !store.delete_limit_rule(&new_id())?,
+        "deleting an unknown id returns false"
+    );
     Ok(())
 }
 
@@ -298,8 +373,15 @@ fn scores(store: &dyn Store, pid: &str) -> Result<()> {
     store.insert_score(&sc)?;
 
     let scored_set = store.scored_event_ids(&[scored_ev.id.clone(), unscored_ev.id.clone()])?;
-    assert_eq!(scored_set, vec![scored_ev.id.clone()], "only the scored event id comes back");
-    assert!(store.scored_event_ids(&[])?.is_empty(), "empty input -> empty output");
+    assert_eq!(
+        scored_set,
+        vec![scored_ev.id.clone()],
+        "only the scored event id comes back"
+    );
+    assert!(
+        store.scored_event_ids(&[])?.is_empty(),
+        "empty input -> empty output"
+    );
 
     let unscored = store.list_unscored_events(Some(pid), 50)?;
     assert!(
@@ -361,13 +443,21 @@ fn run_scoped_cases(store: &dyn Store, pid: &str) -> Result<()> {
     store.insert_score(&case(&other_run, Some(1), 0.1))?;
 
     let cases = store.list_run_scores(&run_id, Some(pid), 100)?;
-    assert_eq!(cases.len(), 3, "exactly this run's cases, never another run's");
+    assert_eq!(
+        cases.len(),
+        3,
+        "exactly this run's cases, never another run's"
+    );
     assert_eq!(
         cases.iter().map(|c| c.case_index).collect::<Vec<_>>(),
         vec![Some(1), Some(2), None],
         "case order, with unindexed cases last on every backend"
     );
-    assert_eq!(cases[0].run_id.as_deref(), Some(run_id.as_str()), "run scoping round-trips");
+    assert_eq!(
+        cases[0].run_id.as_deref(),
+        Some(run_id.as_str()),
+        "run scoping round-trips"
+    );
     assert_eq!(
         cases[0].detail.as_ref(),
         Some(&detail),
@@ -375,11 +465,20 @@ fn run_scoped_cases(store: &dyn Store, pid: &str) -> Result<()> {
     );
     // Authorization scope is applied in the query, not by the caller.
     assert!(
-        store.list_run_scores(&run_id, Some(&new_id()), 100)?.is_empty(),
+        store
+            .list_run_scores(&run_id, Some(&new_id()), 100)?
+            .is_empty(),
         "another project's key sees none of this run's cases"
     );
-    assert!(store.list_run_scores(&new_id(), None, 100)?.is_empty(), "unknown run -> no cases");
-    assert_eq!(store.list_run_scores(&run_id, None, 2)?.len(), 2, "limit is honored");
+    assert!(
+        store.list_run_scores(&new_id(), None, 100)?.is_empty(),
+        "unknown run -> no cases"
+    );
+    assert_eq!(
+        store.list_run_scores(&run_id, None, 2)?.len(),
+        2,
+        "limit is honored"
+    );
     Ok(())
 }
 
@@ -404,20 +503,33 @@ fn parity_gap_methods(store: &dyn Store) -> Result<()> {
     store.insert_event(&mk("m-a", "gen", 4.0, now - chrono::Duration::hours(48)))?;
 
     // list_events_filtered: a model filter must actually filter (the default returns ALL events).
-    let filter = EventFilter { model: Some("m-b".into()), ..Default::default() };
+    let filter = EventFilter {
+        model: Some("m-b".into()),
+        ..Default::default()
+    };
     let page = store.list_events_filtered(Some(&pid), &filter, 50)?;
-    assert_eq!(page.events.len(), 1, "model filter returns only m-b (default would return all 3)");
+    assert_eq!(
+        page.events.len(),
+        1,
+        "model filter returns only m-b (default would return all 3)"
+    );
     assert_eq!(page.events[0].model, "m-b");
 
     // cost_summary_windowed: a 1h window excludes the 48h-old event (the default returns all-time).
     let since = now - chrono::Duration::hours(1);
     let windowed = store.cost_summary_windowed(Some(&pid), Some(since), None)?;
     let total: f64 = windowed.iter().map(|c| c.cost_usd).sum();
-    assert!((total - 3.0).abs() < 1e-9, "windowed cost = a+b = 3.0, not all-time 7.0 (got {total})");
+    assert!(
+        (total - 3.0).abs() < 1e-9,
+        "windowed cost = a+b = 3.0, not all-time 7.0 (got {total})"
+    );
 
     // usage_since_scoped: scoping to model m-b sees only b (the default falls back to project-wide).
     let scoped = store.usage_since_scoped(&pid, since, &LimitScope::Model("m-b".into()))?;
-    assert_eq!(scoped.calls, 1, "scoped usage counts only m-b (default would count both)");
+    assert_eq!(
+        scoped.calls, 1,
+        "scoped usage counts only m-b (default would count both)"
+    );
     assert!((scoped.cost_usd - 2.0).abs() < 1e-9);
 
     // usecase_costs: groups by (name, provider, model) within the window (the default returns empty).
@@ -433,19 +545,40 @@ fn parity_gap_methods(store: &dyn Store) -> Result<()> {
     // be duplicated or skipped across the page boundary (the default mints no cursor at all).
     let page1 = store.list_events_filtered(Some(&pid), &EventFilter::default(), 2)?;
     assert_eq!(page1.events.len(), 2, "first page fills to the limit");
-    let cursor = page1.next_cursor.clone().expect("more rows exist -> next_cursor is minted");
+    let cursor = page1
+        .next_cursor
+        .clone()
+        .expect("more rows exist -> next_cursor is minted");
     let page2 = store.list_events_filtered(
         Some(&pid),
-        &EventFilter { cursor: Some(cursor), ..Default::default() },
+        &EventFilter {
+            cursor: Some(cursor),
+            ..Default::default()
+        },
         2,
     )?;
-    assert_eq!(page2.events.len(), 1, "second page holds the remaining event");
-    assert!(page2.next_cursor.is_none(), "exhausted -> no further cursor");
-    let mut ids: Vec<&str> =
-        page1.events.iter().chain(page2.events.iter()).map(|e| e.id.as_str()).collect();
+    assert_eq!(
+        page2.events.len(),
+        1,
+        "second page holds the remaining event"
+    );
+    assert!(
+        page2.next_cursor.is_none(),
+        "exhausted -> no further cursor"
+    );
+    let mut ids: Vec<&str> = page1
+        .events
+        .iter()
+        .chain(page2.events.iter())
+        .map(|e| e.id.as_str())
+        .collect();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 3, "no duplicate or skipped events across the page boundary");
+    assert_eq!(
+        ids.len(),
+        3,
+        "no duplicate or skipped events across the page boundary"
+    );
 
     // Predicates AND-combine: model + name + window jointly isolate the single recent m-a event.
     let filter = EventFilter {
@@ -455,7 +588,11 @@ fn parity_gap_methods(store: &dyn Store) -> Result<()> {
         ..Default::default()
     };
     let anded = store.list_events_filtered(Some(&pid), &filter, 50)?;
-    assert_eq!(anded.events.len(), 1, "model+name+since AND together (not OR / not ignored)");
+    assert_eq!(
+        anded.events.len(),
+        1,
+        "model+name+since AND together (not OR / not ignored)"
+    );
     assert_eq!(anded.events[0].model, "m-a");
     Ok(())
 }
@@ -491,11 +628,22 @@ fn traces(store: &dyn Store) -> Result<()> {
         refused("list_traces", store.list_traces(Some(&pid), 10).map(|_| ()));
         refused(
             "list_traces_filtered",
-            store.list_traces_filtered(Some(&pid), &TraceFilter::default(), 10).map(|_| ()),
+            store
+                .list_traces_filtered(Some(&pid), &TraceFilter::default(), 10)
+                .map(|_| ()),
         );
-        refused("list_trace_events", store.list_trace_events(Some(&pid), &tid, 10).map(|_| ()));
-        refused("list_trace_scores", store.list_trace_scores(Some(&pid), &tid).map(|_| ()));
-        refused("get_trace", store.get_trace(Some(&pid), &tid, 10).map(|_| ()));
+        refused(
+            "list_trace_events",
+            store.list_trace_events(Some(&pid), &tid, 10).map(|_| ()),
+        );
+        refused(
+            "list_trace_scores",
+            store.list_trace_scores(Some(&pid), &tid).map(|_| ()),
+        );
+        refused(
+            "get_trace",
+            store.get_trace(Some(&pid), &tid, 10).map(|_| ()),
+        );
         return Ok(());
     }
 
@@ -526,19 +674,33 @@ fn traces(store: &dyn Store) -> Result<()> {
 
     // --- listing ---
     let listed = store.list_traces(Some(&pid), 50)?;
-    assert_eq!(listed.len(), 2, "both of this project's traces roll up (the default returns none)");
+    assert_eq!(
+        listed.len(),
+        2,
+        "both of this project's traces roll up (the default returns none)"
+    );
     assert_eq!(listed[0].trace_id, tid, "newest-ended first");
     let a = listed[0].clone();
     assert_eq!(a.project_id, pid);
-    assert_eq!(a.spans, 3, "the other project's colliding span is NOT merged in");
-    assert!((a.cost_usd - 0.7).abs() < 1e-9, "cost sums this project's spans only: {}", a.cost_usd);
+    assert_eq!(
+        a.spans, 3,
+        "the other project's colliding span is NOT merged in"
+    );
+    assert!(
+        (a.cost_usd - 0.7).abs() < 1e-9,
+        "cost sums this project's spans only: {}",
+        a.cost_usd
+    );
     assert_eq!(a.errors, 1);
     assert_eq!(a.status, "error", "a trace is `error` iff any span errored");
     assert_eq!(a.input_tokens, 30);
     assert_eq!(a.total_tokens, 45);
     // The last span's own latency counts: 200ms of spread + 42ms of trailing compute — NOT
     // MAX(ts) - MIN(ts), the start-to-start number the list used to report.
-    assert_eq!(a.duration_ms, 242, "summary duration includes the last span's latency");
+    assert_eq!(
+        a.duration_ms, 242,
+        "summary duration includes the last span's latency"
+    );
     assert_eq!(
         a.models,
         vec!["m-first".to_string(), "m-second".to_string()],
@@ -548,57 +710,119 @@ fn traces(store: &dyn Store) -> Result<()> {
     // --- filters + keyset paging ---
     let errs = store.list_traces_filtered(
         Some(&pid),
-        &TraceFilter { status: Some("error".into()), ..Default::default() },
+        &TraceFilter {
+            status: Some("error".into()),
+            ..Default::default()
+        },
         50,
     )?;
-    assert_eq!(errs.traces.len(), 1, "status filter keeps only the errored trace");
+    assert_eq!(
+        errs.traces.len(),
+        1,
+        "status filter keeps only the errored trace"
+    );
     assert_eq!(errs.traces[0].trace_id, tid);
     let ok = store.list_traces_filtered(
         Some(&pid),
-        &TraceFilter { status: Some("success".into()), ..Default::default() },
+        &TraceFilter {
+            status: Some("success".into()),
+            ..Default::default()
+        },
         50,
     )?;
-    assert_eq!(ok.traces.len(), 1, "…and its complement keeps only the clean one");
+    assert_eq!(
+        ok.traces.len(),
+        1,
+        "…and its complement keeps only the clean one"
+    );
     assert_eq!(ok.traces[0].trace_id, tid2);
     let dear = store.list_traces_filtered(
         Some(&pid),
-        &TraceFilter { min_cost: Some(0.5), ..Default::default() },
+        &TraceFilter {
+            min_cost: Some(0.5),
+            ..Default::default()
+        },
         50,
     )?;
-    assert_eq!(dear.traces.len(), 1, "min_cost is an aggregate predicate over the trace's spans");
+    assert_eq!(
+        dear.traces.len(),
+        1,
+        "min_cost is an aggregate predicate over the trace's spans"
+    );
     assert_eq!(dear.traces[0].trace_id, tid);
     let windowed = store.list_traces_filtered(
         Some(&pid),
-        &TraceFilter { since: Some(t0 - chrono::Duration::seconds(5)), ..Default::default() },
+        &TraceFilter {
+            since: Some(t0 - chrono::Duration::seconds(5)),
+            ..Default::default()
+        },
         50,
     )?;
-    assert_eq!(windowed.traces.len(), 1, "`since` excludes the trace that ended before it");
+    assert_eq!(
+        windowed.traces.len(),
+        1,
+        "`since` excludes the trace that ended before it"
+    );
 
     let page1 = store.list_traces_filtered(Some(&pid), &TraceFilter::default(), 1)?;
     assert_eq!(page1.traces.len(), 1, "the page fills to the limit");
-    let cursor = page1.next_cursor.clone().expect("more traces remain -> next_cursor is minted");
+    let cursor = page1
+        .next_cursor
+        .clone()
+        .expect("more traces remain -> next_cursor is minted");
     let page2 = store.list_traces_filtered(
         Some(&pid),
-        &TraceFilter { cursor: Some(cursor), ..Default::default() },
+        &TraceFilter {
+            cursor: Some(cursor),
+            ..Default::default()
+        },
         1,
     )?;
-    assert_eq!(page2.traces.len(), 1, "the (ended, trace_id) keyset continues, not restarts");
-    assert_ne!(page1.traces[0].trace_id, page2.traces[0].trace_id, "no trace served twice");
-    assert!(page2.next_cursor.is_none(), "exhausted -> no further cursor");
+    assert_eq!(
+        page2.traces.len(),
+        1,
+        "the (ended, trace_id) keyset continues, not restarts"
+    );
+    assert_ne!(
+        page1.traces[0].trace_id, page2.traces[0].trace_id,
+        "no trace served twice"
+    );
+    assert!(
+        page2.next_cursor.is_none(),
+        "exhausted -> no further cursor"
+    );
 
     // --- detail ---
     let evs = store.list_trace_events(Some(&pid), &tid, 50)?;
     assert_eq!(evs.total, 3);
     assert_eq!(evs.events.len(), 3);
-    assert!(evs.events.iter().all(|e| e.project_id == pid), "another project's span is invisible");
-    assert!(evs.events.windows(2).all(|w| w[0].ts <= w[1].ts), "oldest first");
+    assert!(
+        evs.events.iter().all(|e| e.project_id == pid),
+        "another project's span is invisible"
+    );
+    assert!(
+        evs.events.windows(2).all(|w| w[0].ts <= w[1].ts),
+        "oldest first"
+    );
     // The cap keeps the trace's head and reports the true span count, so a clipped read says so.
     let clipped = store.list_trace_events(Some(&pid), &tid, 2)?;
-    assert_eq!(clipped.events.len(), 2, "at most max_spans events come back");
-    assert_eq!(clipped.total, 3, "…and `total` is still the trace's real span count");
-    assert_eq!(clipped.events[0].ts, evs.events[0].ts, "the retained window is the trace's head");
+    assert_eq!(
+        clipped.events.len(),
+        2,
+        "at most max_spans events come back"
+    );
+    assert_eq!(
+        clipped.total, 3,
+        "…and `total` is still the trace's real span count"
+    );
+    assert_eq!(
+        clipped.events[0].ts, evs.events[0].ts,
+        "the retained window is the trace's head"
+    );
 
-    let trace = store.get_trace(Some(&pid), &tid, 50)?.expect("get_trace Some");
+    let trace = store
+        .get_trace(Some(&pid), &tid, 50)?
+        .expect("get_trace Some");
     assert_eq!(trace.trace_id, tid);
     assert_eq!(trace.project_id, pid);
     assert_eq!(trace.totals.spans, 3);
@@ -609,17 +833,30 @@ fn traces(store: &dyn Store) -> Result<()> {
     );
     assert_eq!(trace.status, a.status, "…and the one status rule");
     assert_eq!(trace.models, a.models, "…and the same model ordering");
-    let short = store.get_trace(Some(&pid), &tid, 2)?.expect("clipped get_trace Some");
+    let short = store
+        .get_trace(Some(&pid), &tid, 2)?
+        .expect("clipped get_trace Some");
     assert!(short.spans_truncated, "a clipped trace must say so");
     assert_eq!((short.spans_total, short.spans_logged), (3, 2));
 
     // Tenancy: the other project's rollup of the same id sees only its own span, and a project that
     // has no span under this id gets None (404-shaped: invisible, not forbidden).
-    let theirs = store.get_trace(Some(&other), &tid, 50)?.expect("the colliding trace exists there");
-    assert_eq!(theirs.totals.spans, 1, "the collision resolves per project, both ways");
+    let theirs = store
+        .get_trace(Some(&other), &tid, 50)?
+        .expect("the colliding trace exists there");
+    assert_eq!(
+        theirs.totals.spans, 1,
+        "the collision resolves per project, both ways"
+    );
     assert!((theirs.totals.cost_usd - 100.0).abs() < 1e-9);
-    assert!(store.get_trace(Some(&new_id()), &tid, 50)?.is_none(), "invisible to a third project");
-    assert!(store.get_trace(Some(&pid), &new_id(), 50)?.is_none(), "unknown trace id -> None");
+    assert!(
+        store.get_trace(Some(&new_id()), &tid, 50)?.is_none(),
+        "invisible to a third project"
+    );
+    assert!(
+        store.get_trace(Some(&pid), &new_id(), 50)?.is_none(),
+        "unknown trace id -> None"
+    );
 
     // --- verdicts attached to a trace ---
     let root = evs.events[0].id.clone();
@@ -642,7 +879,11 @@ fn traces(store: &dyn Store) -> Result<()> {
     store.insert_score(&verdict(&pid, &root, "whole-trace"))?;
     store.insert_score(&verdict(&other, &intruder.id, "not-yours"))?;
     let got = store.list_trace_scores(Some(&pid), &tid)?;
-    assert_eq!(got.len(), 1, "a score reaches its trace through its event_id");
+    assert_eq!(
+        got.len(),
+        1,
+        "a score reaches its trace through its event_id"
+    );
     assert_eq!(got[0].rubric, "whole-trace");
     assert!(
         !got.iter().any(|s| s.rubric == "not-yours"),
@@ -683,7 +924,10 @@ fn prices(store: &dyn Store) -> Result<()> {
         .into_iter()
         .find(|p| p.model == model)
         .expect("price still present");
-    assert!((updated.output_per_mtok - 9.0).abs() < 1e-9, "upsert ON CONFLICT updates");
+    assert!(
+        (updated.output_per_mtok - 9.0).abs() < 1e-9,
+        "upsert ON CONFLICT updates"
+    );
     Ok(())
 }
 
@@ -698,7 +942,11 @@ fn benchmarks(store: &dyn Store, pid: &str) -> Result<()> {
         target: target.clone(),
         dataset_ref: None,
         rubric_id: None,
-        dataset: vec![BenchmarkCase { input: "2+2".into(), expected: Some("4".into()), output: Some("4".into()) }],
+        dataset: vec![BenchmarkCase {
+            input: "2+2".into(),
+            expected: Some("4".into()),
+            output: Some("4".into()),
+        }],
         baseline_score: Some(0.8),
         created_at: Utc::now(),
     };
@@ -729,7 +977,11 @@ fn benchmarks(store: &dyn Store, pid: &str) -> Result<()> {
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].n_cases, 1);
     assert_eq!(runs[0].total_tokens, Some(123));
-    assert_eq!(runs[0].report, json!({ "note": "ok" }), "run report round-trip");
+    assert_eq!(
+        runs[0].report,
+        json!({ "note": "ok" }),
+        "run report round-trip"
+    );
     Ok(())
 }
 
@@ -762,10 +1014,16 @@ fn datasets(store: &dyn Store, pid: &str) -> Result<()> {
     let items = store.list_dataset_items(&d.id)?;
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].expected, Some("4".to_string()));
-    assert_eq!(items[0].anonymization, json!({ "method": "regex", "redactions": 0 }));
+    assert_eq!(
+        items[0].anonymization,
+        json!({ "method": "regex", "redactions": 0 })
+    );
 
     store.set_dataset_frozen(&d.id, true)?;
-    assert!(store.get_dataset(&d.id)?.expect("dataset").frozen, "frozen after set");
+    assert!(
+        store.get_dataset(&d.id)?.expect("dataset").frozen,
+        "frozen after set"
+    );
     Ok(())
 }
 
@@ -837,9 +1095,13 @@ fn admission(store: &dyn Store) -> Result<()> {
         scope: None,
     };
     store.create_limit_rule(&alert)?;
-    let alerted = store.insert_event_checked(&sample_event(&pid, "claude-haiku-4-5", 10, 5, 1.0))?;
+    let alerted =
+        store.insert_event_checked(&sample_event(&pid, "claude-haiku-4-5", 10, 5, 1.0))?;
     assert!(alerted.admitted, "Alert action never blocks ingest");
-    assert!(alerted.statuses.iter().any(|s| s.breached), "Alert rule reports the breach");
+    assert!(
+        alerted.statuses.iter().any(|s| s.breached),
+        "Alert rule reports the breach"
+    );
 
     // A Block rule on cost: usage is 2.0 so far; threshold 2.5. The next $1.0 event would push
     // usage-with-this-event to 3.0 >= 2.5, so it is rejected and not recorded.
@@ -855,7 +1117,8 @@ fn admission(store: &dyn Store) -> Result<()> {
         scope: None,
     };
     store.create_limit_rule(&block)?;
-    let blocked = store.insert_event_checked(&sample_event(&pid, "claude-haiku-4-5", 10, 5, 1.0))?;
+    let blocked =
+        store.insert_event_checked(&sample_event(&pid, "claude-haiku-4-5", 10, 5, 1.0))?;
     assert!(!blocked.admitted, "Block rule rejects an over-cap event");
     assert!(
         blocked.statuses.iter().any(|s| s.rejects_ingest()),
@@ -865,7 +1128,10 @@ fn admission(store: &dyn Store) -> Result<()> {
     // The rejected event was never recorded: usage stays at the two admitted events.
     let u = store.usage_since(&pid, Utc::now() - chrono::Duration::hours(1))?;
     assert_eq!(u.calls, 2, "only the two admitted events are recorded");
-    assert!((u.cost_usd - 2.0).abs() < 1e-9, "rejected event's cost not counted");
+    assert!(
+        (u.cost_usd - 2.0).abs() < 1e-9,
+        "rejected event's cost not counted"
+    );
     Ok(())
 }
 
@@ -887,8 +1153,9 @@ fn admission_batch(store: &dyn Store) -> Result<()> {
         warn_at: None,
         scope: None,
     })?;
-    let batch: Vec<LlmEvent> =
-        (0..5).map(|_| sample_event(&pid, "claude-haiku-4-5", 1, 1, 0.0)).collect();
+    let batch: Vec<LlmEvent> = (0..5)
+        .map(|_| sample_event(&pid, "claude-haiku-4-5", 1, 1, 0.0))
+        .collect();
     let results = store.insert_events_checked(&batch);
     assert_eq!(results.len(), 5, "one result per batch item, in order");
     let mut admitted = 0;
@@ -897,9 +1164,14 @@ fn admission_batch(store: &dyn Store) -> Result<()> {
             admitted += 1;
         }
     }
-    assert_eq!(admitted, 2, "in-batch accepted items count toward the cap of 3");
     assert_eq!(
-        store.usage_since(&pid, Utc::now() - chrono::Duration::hours(1))?.calls,
+        admitted, 2,
+        "in-batch accepted items count toward the cap of 3"
+    );
+    assert_eq!(
+        store
+            .usage_since(&pid, Utc::now() - chrono::Duration::hours(1))?
+            .calls,
         2,
         "only the admitted items were persisted"
     );
@@ -910,7 +1182,10 @@ fn admission_batch(store: &dyn Store) -> Result<()> {
     let first = sample_event(&pid2, "claude-haiku-4-5", 1, 1, 0.0);
     let third = sample_event(&pid2, "claude-haiku-4-5", 1, 1, 0.0);
     let mixed = store.insert_events_checked(&[first.clone(), first.clone(), third]);
-    assert!(matches!(mixed[0], Ok(ref a) if a.admitted), "first item admitted");
+    assert!(
+        matches!(mixed[0], Ok(ref a) if a.admitted),
+        "first item admitted"
+    );
     assert!(
         matches!(mixed[1], Err(crate::StoreError::Conflict(_))),
         "duplicate id is a typed per-item Conflict, got {:?}",
@@ -922,7 +1197,9 @@ fn admission_batch(store: &dyn Store) -> Result<()> {
         mixed[2]
     );
     assert_eq!(
-        store.usage_since(&pid2, Utc::now() - chrono::Duration::hours(1))?.calls,
+        store
+            .usage_since(&pid2, Utc::now() - chrono::Duration::hours(1))?
+            .calls,
         2,
         "the two distinct events are stored; the duplicate added nothing"
     );
@@ -970,8 +1247,9 @@ pub fn admission_race_probe(
         scope: None,
     })?;
 
-    let evs: Vec<LlmEvent> =
-        (0..RACERS).map(|_| sample_event(&pid, "claude-haiku-4-5", 1, 1, 0.0)).collect();
+    let evs: Vec<LlmEvent> = (0..RACERS)
+        .map(|_| sample_event(&pid, "claude-haiku-4-5", 1, 1, 0.0))
+        .collect();
     let barrier = std::sync::Barrier::new(RACERS);
     let results: Vec<Result<Admission>> = std::thread::scope(|s| {
         let handles: Vec<_> = evs
@@ -983,7 +1261,10 @@ pub fn admission_race_probe(
                 })
             })
             .collect();
-        handles.into_iter().map(|h| h.join().expect("admission thread panicked")).collect()
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("admission thread panicked"))
+            .collect()
     });
 
     let mut admitted = 0;
@@ -992,8 +1273,14 @@ pub fn admission_race_probe(
             admitted += 1;
         }
     }
-    let stored = store.usage_since(&pid, Utc::now() - chrono::Duration::hours(1))?.calls;
-    Ok(RaceOutcome { cap: CAP, admitted, stored })
+    let stored = store
+        .usage_since(&pid, Utc::now() - chrono::Duration::hours(1))?
+        .calls;
+    Ok(RaceOutcome {
+        cap: CAP,
+        admitted,
+        stored,
+    })
 }
 
 /// The cap must hold under a **simultaneous** burst, not merely under serial traffic — the property
@@ -1005,7 +1292,10 @@ pub fn admission_race_probe(
 /// claiming atomicity and leaking is a correctness bug.
 fn admission_race(store: &dyn Store) -> Result<()> {
     let out = admission_race_probe(store, &|s, e| s.insert_event_checked(e))?;
-    assert_eq!(out.stored, out.admitted, "every admitted event is recorded, and only those");
+    assert_eq!(
+        out.stored, out.admitted,
+        "every admitted event is recorded, and only those"
+    );
     if store.admission_is_atomic() {
         assert!(
             out.admitted < out.cap,
@@ -1067,14 +1357,28 @@ fn revenue(store: &dyn Store) -> Result<()> {
     let until = now + chrono::Duration::hours(1);
 
     let listed = store.list_revenue_events(Some(&pid), since, until)?;
-    assert_eq!(listed.len(), 2, "both point-in-time revenue records recognized in window");
-    assert!(listed.iter().all(|r| r.project_id == pid), "list scoped to project");
+    assert_eq!(
+        listed.len(),
+        2,
+        "both point-in-time revenue records recognized in window"
+    );
+    assert!(
+        listed.iter().all(|r| r.project_id == pid),
+        "list scoped to project"
+    );
     let got_acme = listed
         .iter()
         .find(|r| r.customer_id.as_deref() == Some("acme"))
         .expect("acme revenue present");
-    assert!((got_acme.amount_usd - 20.0).abs() < 1e-9, "amount round-trip");
-    assert_eq!(got_acme.external_id.as_deref(), Some("inv-acme"), "external_id round-trip");
+    assert!(
+        (got_acme.amount_usd - 20.0).abs() < 1e-9,
+        "amount round-trip"
+    );
+    assert_eq!(
+        got_acme.external_id.as_deref(),
+        Some("inv-acme"),
+        "external_id round-trip"
+    );
     assert_eq!(got_acme.kind, RevenueKind::OneTime, "kind round-trip");
 
     // A replayed Stripe webhook: `normalize_invoice` runs again on the redelivery and yields a *fresh*
@@ -1083,9 +1387,16 @@ fn revenue(store: &dyn Store) -> Result<()> {
     // number, the exact corruption profit tracking exists to prevent.
     store.insert_revenue_event(&mk_rev("acme", 20.0))?;
     let after = store.list_revenue_events(Some(&pid), since, until)?;
-    assert_eq!(after.len(), 2, "redelivered webhook upserts; total revenue row count unchanged");
     assert_eq!(
-        after.iter().filter(|r| r.external_id.as_deref() == Some("inv-acme")).count(),
+        after.len(),
+        2,
+        "redelivered webhook upserts; total revenue row count unchanged"
+    );
+    assert_eq!(
+        after
+            .iter()
+            .filter(|r| r.external_id.as_deref() == Some("inv-acme"))
+            .count(),
         1,
         "acme stays a single row after replay — no double-count",
     );
@@ -1097,7 +1408,10 @@ fn revenue(store: &dyn Store) -> Result<()> {
         .find(|c| c.key.as_deref() == Some("acme"))
         .expect("acme cost group");
     assert_eq!(acme_cost.calls, 2);
-    assert!((acme_cost.cost_usd - 0.87).abs() < 1e-9, "acme cost summed across its events");
+    assert!(
+        (acme_cost.cost_usd - 0.87).abs() < 1e-9,
+        "acme cost summed across its events"
+    );
     let heavy_cost = costs
         .iter()
         .find(|c| c.key.as_deref() == Some("heavy"))
@@ -1110,9 +1424,18 @@ fn revenue(store: &dyn Store) -> Result<()> {
     let rows = compute_margin(&after, &costs, MarginDimension::Customer, since, until);
     assert_eq!(rows[0].key, "heavy", "money-loser sorts first");
     assert!((rows[0].gross_margin_usd - (99.0 - 142.5)).abs() < 1e-6);
-    let acme_row = rows.iter().find(|r| r.key == "acme").expect("acme margin row");
-    assert!((acme_row.revenue_usd - 20.0).abs() < 1e-9, "revenue recognized once, not doubled");
-    assert!((acme_row.gross_margin_usd - 19.13).abs() < 1e-9, "revenue − attributed cost");
+    let acme_row = rows
+        .iter()
+        .find(|r| r.key == "acme")
+        .expect("acme margin row");
+    assert!(
+        (acme_row.revenue_usd - 20.0).abs() < 1e-9,
+        "revenue recognized once, not doubled"
+    );
+    assert!(
+        (acme_row.gross_margin_usd - 19.13).abs() < 1e-9,
+        "revenue − attributed cost"
+    );
     Ok(())
 }
 
@@ -1140,7 +1463,10 @@ fn jobs(store: &dyn Store) -> Result<()> {
     let now = Utc::now();
     let j = new_job();
     store.create_job(&j)?;
-    assert_eq!(store.get_job(&j.id)?.expect("get_job Some").status, "queued");
+    assert_eq!(
+        store.get_job(&j.id)?.expect("get_job Some").status,
+        "queued"
+    );
 
     // Claim is global (oldest queued/stale first), so on a shared DB it may return another job —
     // assert only that a job was claimed and flipped to running with a bumped attempt count.
@@ -1154,7 +1480,10 @@ fn jobs(store: &dyn Store) -> Result<()> {
     let done = store.get_job(&j.id)?.expect("get_job after finish");
     assert_eq!(done.status, "done");
     assert_eq!(done.result, json!({ "ok": true }), "job result round-trip");
-    assert!(store.list_jobs(Some("done"), 100)?.iter().any(|x| x.id == j.id));
+    assert!(store
+        .list_jobs(Some("done"), 100)?
+        .iter()
+        .any(|x| x.id == j.id));
     job_cancellation(store)?;
     job_failure_accounting(store)?;
     Ok(())
@@ -1196,7 +1525,10 @@ fn job_cancellation(store: &dyn Store) -> Result<()> {
     assert_eq!(store.cancel_job(&new_id())?, None);
     // Cancelling something terminal reports that nothing was stopped.
     assert!(
-        matches!(store.cancel_job(&queued.id)?, Some(JobCancel::AlreadyFinished { .. })),
+        matches!(
+            store.cancel_job(&queued.id)?,
+            Some(JobCancel::AlreadyFinished { .. })
+        ),
         "re-cancelling a cancelled job must not claim to have stopped it"
     );
 
@@ -1205,14 +1537,25 @@ fn job_cancellation(store: &dyn Store) -> Result<()> {
     drain_jobs(store)?;
     let running = new_job();
     store.create_job(&running)?;
-    let claimed = store.claim_job(Utc::now())?.expect("claim the job just enqueued");
-    assert_eq!(claimed.id, running.id, "the drained queue's only job is ours");
+    let claimed = store
+        .claim_job(Utc::now())?
+        .expect("claim the job just enqueued");
+    assert_eq!(
+        claimed.id, running.id,
+        "the drained queue's only job is ours"
+    );
     assert_eq!(store.cancel_job(&running.id)?, Some(JobCancel::Cancelling));
-    assert_eq!(store.get_job(&running.id)?.expect("get").status, "cancelling");
+    assert_eq!(
+        store.get_job(&running.id)?.expect("get").status,
+        "cancelling"
+    );
     // `Utc::now()` as the staleness cutoff makes every claim in existence stale. The cancelled job
     // must STILL not come back — this is the race the reclaim path used to lose.
     for id in drain_jobs(store)? {
-        assert_ne!(id, running.id, "a cancelled run must never be reclaimed as stale");
+        assert_ne!(
+            id, running.id,
+            "a cancelled run must never be reclaimed as stale"
+        );
     }
     assert_eq!(
         store.get_job(&running.id)?.expect("get").status,
@@ -1231,26 +1574,51 @@ fn job_failure_accounting(store: &dyn Store) -> Result<()> {
     store.create_job(&j)?;
     let first = store.claim_job(Utc::now())?.expect("claim");
     assert_eq!(first.id, j.id);
-    assert_eq!((first.attempts, first.failures, first.stale_reclaims), (1, 0, 0));
+    assert_eq!(
+        (first.attempts, first.failures, first.stale_reclaims),
+        (1, 0, 0)
+    );
 
     // Simulate the worker being killed: never finish, let the claim go stale, reclaim it.
     let second = store.claim_job(Utc::now())?.expect("reclaim the stale job");
     assert_eq!(second.id, j.id);
     assert_eq!(second.attempts, 2, "a claim is a claim, crash or not");
     assert_eq!(second.failures, 0, "a dead worker must not burn a retry");
-    assert_eq!(second.stale_reclaims, 1, "…it is counted as a worker death instead");
+    assert_eq!(
+        second.stale_reclaims, 1,
+        "…it is counted as a worker death instead"
+    );
     assert!(
-        second.error.as_deref().unwrap_or_default().contains("worker lost"),
+        second
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("worker lost"),
         "the stored error must say the worker died, not invent a benchmark failure: {:?}",
         second.error
     );
 
     // Now the benchmark itself fails: that IS a retry.
-    store.finish_job(&j.id, "queued", &Value::Null, Some("benchmark failure: judge failed"))?;
+    store.finish_job(
+        &j.id,
+        "queued",
+        &Value::Null,
+        Some("benchmark failure: judge failed"),
+    )?;
     let after = store.get_job(&j.id)?.expect("get");
-    assert_eq!(after.failures, 1, "a reported error consumes the retry budget");
-    assert_eq!(after.stale_reclaims, 1, "…and is not confused with a worker death");
-    assert!(after.error.as_deref().unwrap_or_default().contains("judge failed"));
+    assert_eq!(
+        after.failures, 1,
+        "a reported error consumes the retry budget"
+    );
+    assert_eq!(
+        after.stale_reclaims, 1,
+        "…and is not confused with a worker death"
+    );
+    assert!(after
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("judge failed"));
 
     // A clean finish never consumes the budget.
     store.finish_job(&j.id, "done", &json!({ "ok": true }), None)?;
@@ -1286,7 +1654,10 @@ fn relay(store: &dyn Store, pid: &str) -> Result<()> {
         }
     }
     fn leased_ours(store: &dyn Store, id: &str) -> Result<Option<RelayTask>> {
-        Ok(store.lease_relay_tasks("conf-dev", 60, 20)?.into_iter().find(|t| t.id == id))
+        Ok(store
+            .lease_relay_tasks("conf-dev", 60, 20)?
+            .into_iter()
+            .find(|t| t.id == id))
     }
 
     let mut t = task(pid, 2);
@@ -1305,8 +1676,13 @@ fn relay(store: &dyn Store, pid: &str) -> Result<()> {
     let got = store.get_relay_task(&t.id)?.expect("get_relay_task Some");
     assert_eq!(got.payload, json!({ "k": "v" }), "relay payload round-trip");
     let key = t.idempotency_key.clone().unwrap();
-    assert_eq!(store.find_relay_task_by_key(pid, &key)?.expect("by key").id, t.id);
-    assert!(store.find_relay_task_by_key("other-project", &key)?.is_none());
+    assert_eq!(
+        store.find_relay_task_by_key(pid, &key)?.expect("by key").id,
+        t.id
+    );
+    assert!(store
+        .find_relay_task_by_key("other-project", &key)?
+        .is_none());
 
     // Lease consumes an attempt; a failure requeues (zero interval ⇒ due again) with the error.
     let leased = leased_ours(store, &t.id)?.expect("our task leased");
@@ -1323,7 +1699,10 @@ fn relay(store: &dyn Store, pid: &str) -> Result<()> {
     let deferred = store
         .settle_relay_task(
             &t.id,
-            &RelayOutcome::Deferred { retry_after_secs: Some(0), reason: Some("window".into()) },
+            &RelayOutcome::Deferred {
+                retry_after_secs: Some(0),
+                reason: Some("window".into()),
+            },
         )?
         .expect("settle deferred");
     assert_eq!(deferred.status, "queued");
@@ -1335,7 +1714,11 @@ fn relay(store: &dyn Store, pid: &str) -> Result<()> {
         .settle_relay_task(&t.id, &RelayOutcome::Succeeded(json!({ "ok": true })))?
         .expect("settle succeeded");
     assert_eq!(done.status, "succeeded");
-    assert_eq!(done.result, json!({ "ok": true }), "relay result round-trip");
+    assert_eq!(
+        done.result,
+        json!({ "ok": true }),
+        "relay result round-trip"
+    );
     let dup = store
         .settle_relay_task(&t.id, &RelayOutcome::Failed("late".into()))?
         .expect("duplicate settle");
@@ -1358,11 +1741,20 @@ fn relay(store: &dyn Store, pid: &str) -> Result<()> {
     let vanished = task(pid, 1);
     store.create_relay_task(&vanished)?;
     let held = store.lease_relay_tasks("conf-dev", 0, 20)?; // zero-second lease: expires at once
-    assert!(held.iter().any(|x| x.id == vanished.id), "vanished task leased");
+    assert!(
+        held.iter().any(|x| x.id == vanished.id),
+        "vanished task leased"
+    );
     let swept = store.sweep_relay_dead()?;
-    let ours = swept.iter().find(|x| x.id == vanished.id).expect("sweep returns our task");
+    let ours = swept
+        .iter()
+        .find(|x| x.id == vanished.id)
+        .expect("sweep returns our task");
     assert_eq!(ours.status, "dead");
-    assert_eq!(ours.error.as_deref(), Some("lease expired without a result"));
+    assert_eq!(
+        ours.error.as_deref(),
+        Some("lease expired without a result")
+    );
     Ok(())
 }
 
@@ -1381,7 +1773,10 @@ mod tests {
         for _ in 0..3 {
             let out = admission_race_probe(&store, &|s, e| s.insert_event_checked(e))
                 .expect("atomic probe");
-            assert!(out.admitted < out.cap, "atomic admission stays under the cap: {out:?}");
+            assert!(
+                out.admitted < out.cap,
+                "atomic admission stays under the cap: {out:?}"
+            );
         }
         // The default's usage read and insert are separate critical sections, so simultaneous racers
         // all count pre-burst usage. Sampled over a few rounds: the leak is a race, not a certainty.
@@ -1391,6 +1786,9 @@ mod tests {
                 .admitted
                 >= 4
         });
-        assert!(leaked, "the race probe must detect the non-atomic default over-admitting");
+        assert!(
+            leaked,
+            "the race probe must detect the non-atomic default over-admitting"
+        );
     }
 }

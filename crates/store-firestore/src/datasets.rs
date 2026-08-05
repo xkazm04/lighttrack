@@ -21,7 +21,10 @@ pub(crate) fn create_dataset(rest: &Rest, d: &Dataset) -> Result<()> {
 }
 
 pub(crate) fn get_dataset(rest: &Rest, id: &str) -> Result<Option<Dataset>> {
-    rest.get_doc("datasets", id)?.as_ref().map(dataset_from).transpose()
+    rest.get_doc("datasets", id)?
+        .as_ref()
+        .map(dataset_from)
+        .transpose()
 }
 
 pub(crate) fn list_datasets(rest: &Rest, project: &str) -> Result<Vec<Dataset>> {
@@ -46,7 +49,10 @@ pub(crate) fn create_dataset_item(rest: &Rest, item: &DatasetItem) -> Result<()>
     m.insert("context".into(), json!(item.context));
     m.insert("tags".into(), json!(serde_json::to_string(&item.tags)?));
     m.insert("source_event_id".into(), json!(item.source_event_id));
-    m.insert("anonymization".into(), json!(json_or_null_str(&item.anonymization)?));
+    m.insert(
+        "anonymization".into(),
+        json!(json_or_null_str(&item.anonymization)?),
+    );
     rest.put_doc("dataset_items", &item.id, &m)
 }
 

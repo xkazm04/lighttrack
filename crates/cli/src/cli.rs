@@ -53,9 +53,7 @@ pub(crate) enum Cmd {
         limit: usize,
     },
     /// One trace by id: rolled-up totals, the span tree, and any scores within it.
-    Trace {
-        id: String,
-    },
+    Trace { id: String },
     /// Profit margin: revenue − LLM cost by customer or product (default window: last 30 days).
     Margin {
         #[arg(long, default_value = "customer")]
@@ -198,9 +196,7 @@ pub(crate) enum LimitsCmd {
         scope_name: Option<String>,
     },
     /// Delete a rule by id.
-    Delete {
-        id: String,
-    },
+    Delete { id: String },
     List {
         #[arg(long)]
         project: String,
@@ -250,13 +246,37 @@ mod tests {
     #[test]
     fn scope_flags_are_mutually_exclusive() {
         let ok = Cli::try_parse_from([
-            "lt", "limits", "set", "--project", "p", "--metric", "cost_usd", "--window", "day",
-            "--threshold", "5", "--scope-model", "m",
+            "lt",
+            "limits",
+            "set",
+            "--project",
+            "p",
+            "--metric",
+            "cost_usd",
+            "--window",
+            "day",
+            "--threshold",
+            "5",
+            "--scope-model",
+            "m",
         ]);
         assert!(ok.is_ok());
         let clash = Cli::try_parse_from([
-            "lt", "limits", "set", "--project", "p", "--metric", "cost_usd", "--window", "day",
-            "--threshold", "5", "--scope-model", "m", "--scope-provider", "openai",
+            "lt",
+            "limits",
+            "set",
+            "--project",
+            "p",
+            "--metric",
+            "cost_usd",
+            "--window",
+            "day",
+            "--threshold",
+            "5",
+            "--scope-model",
+            "m",
+            "--scope-provider",
+            "openai",
         ]);
         assert!(clash.is_err());
     }

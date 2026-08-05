@@ -45,7 +45,10 @@ pub(crate) struct Source {
 impl Source {
     pub(crate) fn key(&self) -> Result<String> {
         std::env::var(&self.device_key_env).with_context(|| {
-            format!("source '{}': env var {} is not set", self.name, self.device_key_env)
+            format!(
+                "source '{}': env var {} is not set",
+                self.name, self.device_key_env
+            )
         })
     }
 }

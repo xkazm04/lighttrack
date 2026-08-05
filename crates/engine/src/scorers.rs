@@ -31,7 +31,10 @@ fn snip(s: &str) -> String {
     if s.chars().count() <= SNIP {
         return s.to_string();
     }
-    s.chars().take(SNIP - 1).chain(std::iter::once('…')).collect()
+    s.chars()
+        .take(SNIP - 1)
+        .chain(std::iter::once('…'))
+        .collect()
 }
 
 /// True when this rubric has at least one dimension the judge model must actually score.
@@ -52,7 +55,11 @@ pub(crate) fn evaluate_all(
         .filter(|d| !d.kind.is_llm())
         .map(|d| {
             let (score, reasoning) = evaluate(d, expected, output)?;
-            Ok(DetScore { key: d.key.clone(), score, reasoning })
+            Ok(DetScore {
+                key: d.key.clone(),
+                score,
+                reasoning,
+            })
         })
         .collect()
 }
@@ -74,7 +81,11 @@ fn evaluate(d: &RubricDimension, expected: Option<&str>, output: &str) -> Result
             let want = target(d, expected)?;
             verdict(
                 same(&subject, &want, c.case_sensitive),
-                format!("exact: expected `{}`, got `{}`", snip(&want), snip(&subject)),
+                format!(
+                    "exact: expected `{}`, got `{}`",
+                    snip(&want),
+                    snip(&subject)
+                ),
             )
         }
         DimensionKind::Contains => {
@@ -82,7 +93,11 @@ fn evaluate(d: &RubricDimension, expected: Option<&str>, output: &str) -> Result
             let (hay, needle) = folded(&subject, &want, c.case_sensitive);
             verdict(
                 hay.contains(&needle),
-                format!("contains: looked for `{}` in `{}`", snip(&want), snip(&subject)),
+                format!(
+                    "contains: looked for `{}` in `{}`",
+                    snip(&want),
+                    snip(&subject)
+                ),
             )
         }
         DimensionKind::Regex => {
@@ -178,7 +193,11 @@ fn target(d: &RubricDimension, expected: Option<&str>) -> Result<String> {
             d.kind.as_str()
         ))
     })?;
-    Ok(if d.check.trim { raw.trim().to_string() } else { raw.to_string() })
+    Ok(if d.check.trim {
+        raw.trim().to_string()
+    } else {
+        raw.to_string()
+    })
 }
 
 /// Narrow the output to the configured JSON Pointer, then trim. `Err` carries the candidate-facing
@@ -189,7 +208,10 @@ fn select(c: &DimensionCheck, output: &str) -> std::result::Result<String, Strin
         Some(p) => {
             let v: Value = serde_json::from_str(output.trim())
                 .map_err(|e| format!("output is not JSON ({e}), so path `{p}` cannot be read"))?;
-            match v.pointer(p).ok_or_else(|| format!("no value at path `{p}`"))? {
+            match v
+                .pointer(p)
+                .ok_or_else(|| format!("no value at path `{p}`"))?
+            {
                 Value::String(s) => s.clone(),
                 other => other.to_string(),
             }
@@ -220,7 +242,9 @@ fn first_number(s: &str) -> Option<f64> {
     if let Ok(v) = s.trim().parse::<f64>() {
         return Some(v);
     }
-    let re = RegexBuilder::new(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?").build().ok()?;
+    let re = RegexBuilder::new(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+        .build()
+        .ok()?;
     re.find(s).and_then(|m| m.as_str().parse::<f64>().ok())
 }
 

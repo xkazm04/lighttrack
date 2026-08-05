@@ -12,9 +12,23 @@ pub(crate) enum Class {
 /// Substrings that mark a provider- or network-side transient error. Matched case-insensitively
 /// against the error message; the `timeout` status is transient on its own.
 const TRANSIENT_MARKERS: &[&str] = &[
-    "429", "overloaded", "rate limit", "rate_limit", "timeout", "timed out", "capacity",
-    "temporarily unavailable", "service unavailable", "connection reset", "econnreset", "etimedout",
-    "500", "502", "503", "504", "529",
+    "429",
+    "overloaded",
+    "rate limit",
+    "rate_limit",
+    "timeout",
+    "timed out",
+    "capacity",
+    "temporarily unavailable",
+    "service unavailable",
+    "connection reset",
+    "econnreset",
+    "etimedout",
+    "500",
+    "502",
+    "503",
+    "504",
+    "529",
 ];
 
 pub(crate) fn classify(status: Option<&str>, error: Option<&str>) -> Class {
@@ -34,17 +48,29 @@ mod tests {
 
     #[test]
     fn provider_errors_are_transient() {
-        assert_eq!(classify(Some("error"), Some("HTTP 529 overloaded")), Class::Transient);
-        assert_eq!(classify(Some("error"), Some("rate_limit_exceeded: retry")), Class::Transient);
+        assert_eq!(
+            classify(Some("error"), Some("HTTP 529 overloaded")),
+            Class::Transient
+        );
+        assert_eq!(
+            classify(Some("error"), Some("rate_limit_exceeded: retry")),
+            Class::Transient
+        );
         assert_eq!(classify(Some("timeout"), None), Class::Transient);
     }
 
     #[test]
     fn code_errors_are_investigated() {
         assert_eq!(
-            classify(Some("error"), Some("TypeError: cannot read properties of undefined")),
+            classify(
+                Some("error"),
+                Some("TypeError: cannot read properties of undefined")
+            ),
             Class::Code
         );
-        assert_eq!(classify(Some("error"), Some("failed to parse model JSON response")), Class::Code);
+        assert_eq!(
+            classify(Some("error"), Some("failed to parse model JSON response")),
+            Class::Code
+        );
     }
 }

@@ -116,7 +116,8 @@ pub(crate) async fn get_margin(
 
     let store = st.store.clone();
     let proj = project.clone();
-    let revenue = spawn_db(move || store.list_revenue_events(proj.as_deref(), since, until)).await?;
+    let revenue =
+        spawn_db(move || store.list_revenue_events(proj.as_deref(), since, until)).await?;
 
     let store = st.store.clone();
     let proj = project.clone();
@@ -218,14 +219,17 @@ pub(crate) async fn get_margin_simulate(
     let store = st.store.clone();
     let proj = project.clone();
     let dim_s = dim.as_str().to_string();
-    let (revenue, costs, tokens): (Vec<RevenueEvent>, Vec<CostByDimension>, Vec<TokensByDimension>) =
-        spawn_db(move || {
-            let revenue = store.list_revenue_events(proj.as_deref(), since, until)?;
-            let costs = store.cost_by_dimension(proj.as_deref(), &dim_s, since, until)?;
-            let tokens = store.tokens_by_dimension(proj.as_deref(), &dim_s, since, until)?;
-            Ok::<_, StoreError>((revenue, costs, tokens))
-        })
-        .await?;
+    let (revenue, costs, tokens): (
+        Vec<RevenueEvent>,
+        Vec<CostByDimension>,
+        Vec<TokensByDimension>,
+    ) = spawn_db(move || {
+        let revenue = store.list_revenue_events(proj.as_deref(), since, until)?;
+        let costs = store.cost_by_dimension(proj.as_deref(), &dim_s, since, until)?;
+        let tokens = store.tokens_by_dimension(proj.as_deref(), &dim_s, since, until)?;
+        Ok::<_, StoreError>((revenue, costs, tokens))
+    })
+    .await?;
 
     let unconverted = unconverted_currencies(&revenue);
     let rows = compute_margin_simulation(&revenue, &costs, &tokens, assumptions, dim, since, until);

@@ -203,14 +203,18 @@ pub(crate) async fn score_trace(
     let trace = load_trace(&st, scope, &id).await?;
 
     // Anchor to the requested call, else the trace's entry-point span.
-    let event_id = body.event_id.or_else(|| trace.root_event_id().map(str::to_string));
+    let event_id = body
+        .event_id
+        .or_else(|| trace.root_event_id().map(str::to_string));
     // A verdict anchored to the root is a judgment of the *whole trace*, so it records what it
     // judged: the trace has no end marker, and without this receipt a span landing a second later
     // silently widens the trace while the verdict stays put. A verdict pinned to a specific inner
     // call is a per-call score — whole-trace coverage would misdescribe it, so it gets none.
-    let detail = (event_id.is_some() && event_id.as_deref() == trace.root_event_id()).then(|| {
-        ScoreDetail { coverage: Some(trace.coverage()), ..Default::default() }
-    });
+    let detail =
+        (event_id.is_some() && event_id.as_deref() == trace.root_event_id()).then(|| ScoreDetail {
+            coverage: Some(trace.coverage()),
+            ..Default::default()
+        });
     let score = Score {
         id: new_id(),
         project_id: trace.project_id.clone(),
@@ -243,11 +247,7 @@ pub(crate) async fn score_trace(
 /// (accidentally or otherwise) each see only their own spans. Consequently another project's trace
 /// reads as 404 (not 403) — it is invisible, which also removes the existence oracle. `scope` is
 /// `None` only for admin/dev, whose deliberate cross-project view is preserved.
-async fn load_trace(
-    st: &AppState,
-    scope: Option<String>,
-    id: &str,
-) -> Result<Trace, ApiError> {
+async fn load_trace(st: &AppState, scope: Option<String>, id: &str) -> Result<Trace, ApiError> {
     let store = st.store.clone();
     let tid = id.to_string();
     spawn_db(move || store.get_trace(scope.as_deref(), &tid, MAX_TRACE_SPANS))

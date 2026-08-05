@@ -126,7 +126,9 @@ fn load_map(path: &str) -> (Defaults, HashMap<String, ProjectEntry>) {
         max_budget_usd: d.max_budget_usd.unwrap_or(1.0),
         enrich_limit: d.enrich_limit.unwrap_or(20),
         timeout_secs: d.timeout_secs.unwrap_or(240),
-        act_permission_mode: d.act_permission_mode.unwrap_or_else(|| "acceptEdits".to_string()),
+        act_permission_mode: d
+            .act_permission_mode
+            .unwrap_or_else(|| "acceptEdits".to_string()),
         act_cooldown_secs: d.act_cooldown_secs.unwrap_or(3600),
         max_acts_per_hour: d.max_acts_per_hour.unwrap_or(3),
         investigate_cooldown_secs: d.investigate_cooldown_secs.unwrap_or(600),
@@ -171,8 +173,9 @@ fn resolve_claude_bin(given: &str) -> String {
             }
         }
         if let Ok(appdata) = std::env::var("APPDATA") {
-            let p =
-                format!("{appdata}\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe");
+            let p = format!(
+                "{appdata}\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"
+            );
             if Path::new(&p).exists() {
                 return p;
             }
@@ -182,7 +185,10 @@ fn resolve_claude_bin(given: &str) -> String {
 }
 
 fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key).ok().filter(|s| !s.is_empty()).unwrap_or_else(|| default.to_string())
+    std::env::var(key)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 fn env_opt(key: &str) -> Option<String> {

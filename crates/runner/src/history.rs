@@ -17,7 +17,10 @@ pub(crate) fn case_scores(report: &Value) -> Option<Vec<f64>> {
     if cases.is_empty() {
         return None;
     }
-    cases.iter().map(|c| c.get("score").and_then(Value::as_f64)).collect()
+    cases
+        .iter()
+        .map(|c| c.get("score").and_then(Value::as_f64))
+        .collect()
 }
 
 /// The dataset version a run was scored over, when it recorded one.
@@ -92,7 +95,10 @@ mod tests {
 
     #[test]
     fn case_scores_needs_every_case_scored() {
-        assert_eq!(case_scores(&compare_report("t", &[0.5, 0.7], None)), Some(vec![0.5, 0.7]));
+        assert_eq!(
+            case_scores(&compare_report("t", &[0.5, 0.7], None)),
+            Some(vec![0.5, 0.7])
+        );
         // A case with no numeric score would misalign the pairing → refuse the whole vector.
         let partial = json!({ "cases": [{ "score": 0.5 }, { "pass": true }] });
         assert!(case_scores(&partial).is_none());
@@ -108,8 +114,14 @@ mod tests {
             run(compare_report("gpt", &[0.5, 0.6], Some(3)), 40), // newest for gpt
             run(compare_report("gemini", &[0.9, 0.9], Some(3)), 50), // another target
         ];
-        assert_eq!(previous_case_scores(&runs, "gpt", 2, Some(3)), Some(vec![0.5, 0.6]));
-        assert_eq!(previous_case_scores(&runs, "gemini", 2, Some(3)), Some(vec![0.9, 0.9]));
+        assert_eq!(
+            previous_case_scores(&runs, "gpt", 2, Some(3)),
+            Some(vec![0.5, 0.6])
+        );
+        assert_eq!(
+            previous_case_scores(&runs, "gemini", 2, Some(3)),
+            Some(vec![0.9, 0.9])
+        );
         assert!(previous_case_scores(&runs, "claude", 2, Some(3)).is_none());
     }
 
@@ -125,7 +137,10 @@ mod tests {
         );
         // A legacy run that recorded no dataset version is still usable when the shape matches.
         let legacy = vec![run(compare_report("gpt", &[0.4, 0.4], None), 30)];
-        assert_eq!(previous_case_scores(&legacy, "gpt", 2, Some(3)), Some(vec![0.4, 0.4]));
+        assert_eq!(
+            previous_case_scores(&legacy, "gpt", 2, Some(3)),
+            Some(vec![0.4, 0.4])
+        );
     }
 
     #[test]
@@ -137,7 +152,10 @@ mod tests {
 
     #[test]
     fn a_pairwise_or_rubric_run_is_not_a_compare_baseline() {
-        let runs = vec![run(json!({ "mode": "pairwise", "target": "gpt", "cases": [{"score":0.5}] }), 40)];
+        let runs = vec![run(
+            json!({ "mode": "pairwise", "target": "gpt", "cases": [{"score":0.5}] }),
+            40,
+        )];
         assert!(previous_case_scores(&runs, "gpt", 1, None).is_none());
     }
 }

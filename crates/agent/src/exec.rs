@@ -40,7 +40,10 @@ impl RunReport {
     }
 
     fn deferred(reason: String) -> Self {
-        RunReport { status: "deferred", ..Self::failed(reason) }
+        RunReport {
+            status: "deferred",
+            ..Self::failed(reason)
+        }
     }
 }
 
@@ -69,7 +72,9 @@ pub(crate) fn execute(cfg: &AgentConfig, engine: &EngineConfig, task: &RelayTask
     let result = match &action.schema {
         Some(_) => match serde_json::from_str::<Value>(&out.text) {
             Ok(v) => v,
-            Err(e) => return RunReport::failed(format!("schema output is not JSON ({e}): {}", out.text)),
+            Err(e) => {
+                return RunReport::failed(format!("schema output is not JSON ({e}): {}", out.text))
+            }
         },
         None => json!({ "text": out.text }),
     };
@@ -119,7 +124,10 @@ fn deliver(
 fn rate_limited(e: &EngineError) -> bool {
     if let EngineError::NonZero { stderr, .. } = e {
         let s = stderr.to_lowercase();
-        return s.contains("usage limit") || s.contains("rate limit") || s.contains("429") || s.contains("overloaded");
+        return s.contains("usage limit")
+            || s.contains("rate limit")
+            || s.contains("429")
+            || s.contains("overloaded");
     }
     false
 }
@@ -164,9 +172,15 @@ mod tests {
 
     #[test]
     fn rate_limit_stderr_classifies_as_deferred() {
-        let rl = EngineError::NonZero { code: 1, stderr: "Claude AI usage limit reached|123".into() };
+        let rl = EngineError::NonZero {
+            code: 1,
+            stderr: "Claude AI usage limit reached|123".into(),
+        };
         assert!(rate_limited(&rl));
-        let other = EngineError::NonZero { code: 1, stderr: "boom".into() };
+        let other = EngineError::NonZero {
+            code: 1,
+            stderr: "boom".into(),
+        };
         assert!(!rate_limited(&other));
         assert!(!rate_limited(&EngineError::Parse("x".into())));
     }

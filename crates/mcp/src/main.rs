@@ -36,7 +36,11 @@ fn main() {
         "lt-mcp v{} started (base={}, mode={})",
         env!("CARGO_PKG_VERSION"),
         client.base(),
-        if allow_writes { "read+write" } else { "read-only" },
+        if allow_writes {
+            "read+write"
+        } else {
+            "read-only"
+        },
     );
 
     let stdin = io::stdin();
@@ -96,6 +100,11 @@ fn main() {
 
 fn env_flag(key: &str) -> bool {
     std::env::var(key)
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false)
 }

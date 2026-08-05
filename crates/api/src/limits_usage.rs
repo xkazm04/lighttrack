@@ -162,7 +162,9 @@ fn compose(
         .into_iter()
         .map(|r| {
             let label = r.value.as_deref().and_then(|v| {
-                keys.iter().find(|k| k.id == v).map(|k| format!("{} ({})", k.name, k.prefix))
+                keys.iter()
+                    .find(|k| k.id == v)
+                    .map(|k| format!("{} ({})", k.name, k.prefix))
             });
             // A rule binds this row when it is scoped to this dimension AND this value. Evaluated
             // against the row's own usage — the same evaluator `/v1/limits/status` uses, so the two
@@ -190,7 +192,15 @@ fn compose(
         })
         .collect();
 
-    UsageByScopeResp { project_id: project, by, window, since, total, entries, truncated }
+    UsageByScopeResp {
+        project_id: project,
+        by,
+        window,
+        since,
+        total,
+        entries,
+        truncated,
+    }
 }
 
 #[cfg(test)]
@@ -199,11 +209,19 @@ mod tests {
     use lighttrack_core::{LimitAction, LimitMetric, LimitRule};
 
     fn usage(cost: f64, calls: i64) -> Usage {
-        Usage { cost_usd: cost, calls, tokens: calls * 10, ..Default::default() }
+        Usage {
+            cost_usd: cost,
+            calls,
+            tokens: calls * 10,
+            ..Default::default()
+        }
     }
 
     fn row(value: Option<&str>, cost: f64, calls: i64) -> ScopeUsage {
-        ScopeUsage { value: value.map(str::to_string), usage: usage(cost, calls) }
+        ScopeUsage {
+            value: value.map(str::to_string),
+            usage: usage(cost, calls),
+        }
     }
 
     fn key_rule(id: &str, key: &str, threshold: f64) -> LimitRule {
@@ -220,8 +238,16 @@ mod tests {
         }
     }
 
-    fn resp(rows: Vec<ScopeUsage>, rules: &[LimitRule], keys: &[ApiKey], limit: usize) -> UsageByScopeResp {
-        let total = usage(rows.iter().map(|r| r.usage.cost_usd).sum(), rows.iter().map(|r| r.usage.calls).sum());
+    fn resp(
+        rows: Vec<ScopeUsage>,
+        rules: &[LimitRule],
+        keys: &[ApiKey],
+        limit: usize,
+    ) -> UsageByScopeResp {
+        let total = usage(
+            rows.iter().map(|r| r.usage.cost_usd).sum(),
+            rows.iter().map(|r| r.usage.calls).sum(),
+        );
         compose(
             "p".into(),
             "api_key".into(),
@@ -238,7 +264,11 @@ mod tests {
     #[test]
     fn ranks_by_cost_and_computes_shares() {
         let r = resp(
-            vec![row(Some("k-small"), 1.0, 1), row(Some("k-big"), 9.0, 3), row(None, 0.0, 0)],
+            vec![
+                row(Some("k-small"), 1.0, 1),
+                row(Some("k-big"), 9.0, 3),
+                row(None, 0.0, 0),
+            ],
             &[],
             &[],
             10,
@@ -257,19 +287,36 @@ mod tests {
             key_rule("r-staging", "k-staging", 5.0),
             key_rule("r-prod", "k-prod", 500.0),
             // A model-scoped rule shares no dimension with an api_key breakdown.
-            LimitRule { scope: Some(LimitScope::Model("gpt-4o".into())), ..key_rule("r-model", "x", 1.0) },
+            LimitRule {
+                scope: Some(LimitScope::Model("gpt-4o".into())),
+                ..key_rule("r-model", "x", 1.0)
+            },
             // An unscoped project rule binds no single key.
-            LimitRule { scope: None, ..key_rule("r-all", "x", 1.0) },
+            LimitRule {
+                scope: None,
+                ..key_rule("r-all", "x", 1.0)
+            },
         ];
-        let r = resp(vec![row(Some("k-staging"), 6.0, 2), row(Some("k-prod"), 3.0, 1)], &rules, &[], 10);
+        let r = resp(
+            vec![row(Some("k-staging"), 6.0, 2), row(Some("k-prod"), 3.0, 1)],
+            &rules,
+            &[],
+            10,
+        );
         let staging = &r.entries[0];
         assert_eq!(staging.value.as_deref(), Some("k-staging"));
         assert_eq!(staging.rules.len(), 1);
         assert_eq!(staging.rules[0].rule_id, "r-staging");
-        assert!(staging.rules[0].breached, "$6 of a $5 key budget is a breach, named per key");
+        assert!(
+            staging.rules[0].breached,
+            "$6 of a $5 key budget is a breach, named per key"
+        );
         let prod = &r.entries[1];
         assert_eq!(prod.rules.len(), 1);
-        assert!(!prod.rules[0].breached, "the prod key is nowhere near its own, larger budget");
+        assert!(
+            !prod.rules[0].breached,
+            "the prod key is nowhere near its own, larger budget"
+        );
     }
 
     #[test]
@@ -284,18 +331,31 @@ mod tests {
             last_used_at: None,
             revoked: false,
         }];
-        let r = resp(vec![row(Some("k-staging"), 1.0, 1), row(Some("k-gone"), 1.0, 1)], &[], &keys, 10);
+        let r = resp(
+            vec![row(Some("k-staging"), 1.0, 1), row(Some("k-gone"), 1.0, 1)],
+            &[],
+            &keys,
+            10,
+        );
         assert_eq!(r.entries[0].label.as_deref(), Some("staging (ab12cd)"));
-        assert_eq!(r.entries[1].label, None, "an unknown id gets no invented label");
+        assert_eq!(
+            r.entries[1].label, None,
+            "an unknown id gets no invented label"
+        );
         // The stored hash is never anywhere in the payload — the label is name + non-secret prefix.
         let body = serde_json::to_string(&r).unwrap();
-        assert!(!body.contains("deadbeef"), "key material must never reach this surface");
+        assert!(
+            !body.contains("deadbeef"),
+            "key material must never reach this surface"
+        );
         assert!(!body.contains("key_hash"));
     }
 
     #[test]
     fn truncation_is_reported_rather_than_silent() {
-        let rows = (0..5).map(|i| row(Some(&format!("k{i}")), i as f64, 1)).collect();
+        let rows = (0..5)
+            .map(|i| row(Some(&format!("k{i}")), i as f64, 1))
+            .collect();
         let r = resp(rows, &[], &[], 2);
         assert_eq!(r.entries.len(), 2);
         assert!(r.truncated);

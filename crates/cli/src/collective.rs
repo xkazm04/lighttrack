@@ -53,7 +53,14 @@ pub(crate) fn leaderboard_path(
 
 pub(crate) fn run(cli: &Cli, action: &CollectiveCmd) -> Result<()> {
     match action {
-        CollectiveCmd::Leaderboard { task_type, provider, judge, determinism, frozen, tested } => {
+        CollectiveCmd::Leaderboard {
+            task_type,
+            provider,
+            judge,
+            determinism,
+            frozen,
+            tested,
+        } => {
             let p = leaderboard_path(task_type, provider, judge, determinism, *frozen, *tested);
             call(cli, Method::GET, &p, None, "get_collective_leaderboard")
         }
@@ -64,9 +71,11 @@ pub(crate) fn run(cli: &Cli, action: &CollectiveCmd) -> Result<()> {
             None,
             "get_collective_digest",
         ),
-        CollectiveCmd::Contribute { hub, min_cases, hub_key } => {
-            contribute(cli, hub, *min_cases, hub_key.as_deref())
-        }
+        CollectiveCmd::Contribute {
+            hub,
+            min_cases,
+            hub_key,
+        } => contribute(cli, hub, *min_cases, hub_key.as_deref()),
         CollectiveCmd::Withdraw { hub, hub_key } => withdraw(hub, hub_key.as_deref()),
     }
 }
@@ -83,18 +92,26 @@ fn contribute(cli: &Cli, hub: &str, min_cases: u32, hub_key: Option<&str>) -> Re
     }
     let resp = req.send()?;
     if !resp.status().is_success() {
-        eprintln!("build digest failed: HTTP {} — {}", resp.status().as_u16(), resp.text()?);
+        eprintln!(
+            "build digest failed: HTTP {} — {}",
+            resp.status().as_u16(),
+            resp.text()?
+        );
         std::process::exit(1);
     }
     let digest: Value = resp.json()?;
     let n = digest_bucket_count(&digest);
     if n == 0 {
-        println!("nothing to contribute: no (model, task) bucket reached the k≥{min_cases} floor yet.");
+        println!(
+            "nothing to contribute: no (model, task) bucket reached the k≥{min_cases} floor yet."
+        );
         return Ok(());
     }
 
     let hub_base = normalize_hub(hub);
-    let mut req = client.post(format!("{hub_base}/v1/collective/ingest")).json(&digest);
+    let mut req = client
+        .post(format!("{hub_base}/v1/collective/ingest"))
+        .json(&digest);
     if let Some(k) = hub_key {
         req = req.bearer_auth(k);
     }
@@ -113,7 +130,11 @@ fn contribute(cli: &Cli, hub: &str, min_cases: u32, hub_key: Option<&str>) -> Re
 /// How many (model, task) buckets a digest carries. A digest with no `entries` array is treated as
 /// empty rather than as an error: there is simply nothing to publish.
 fn digest_bucket_count(digest: &Value) -> usize {
-    digest.get("entries").and_then(Value::as_array).map(Vec::len).unwrap_or(0)
+    digest
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
 }
 
 /// Ask a hub to delete everything this instance contributed. The hub identifies the source from the
@@ -176,14 +197,24 @@ mod tests {
     #[test]
     fn unset_rigor_flags_are_omitted_never_sent_as_false() {
         let p = leaderboard_path(&s("qa"), &None, &None, &s("exact"), false, false);
-        assert_eq!(p, "/v1/collective/leaderboard?task_type=qa&determinism=exact");
+        assert_eq!(
+            p,
+            "/v1/collective/leaderboard?task_type=qa&determinism=exact"
+        );
         assert!(!p.contains("frozen_dataset") && !p.contains("significance_tested"));
     }
 
     #[test]
     fn all_filters_together_keep_their_order() {
         assert_eq!(
-            leaderboard_path(&s("qa"), &s("openai"), &s("google"), &s("sampled"), true, true),
+            leaderboard_path(
+                &s("qa"),
+                &s("openai"),
+                &s("google"),
+                &s("sampled"),
+                true,
+                true
+            ),
             "/v1/collective/leaderboard?task_type=qa&provider=openai&judge=google\
              &determinism=sampled&frozen_dataset=true&significance_tested=true"
         );
@@ -198,7 +229,10 @@ mod tests {
     fn normalize_hub_tolerates_trailing_slashes() {
         assert_eq!(normalize_hub("https://hub.example"), "https://hub.example");
         assert_eq!(normalize_hub("https://hub.example/"), "https://hub.example");
-        assert_eq!(normalize_hub("https://hub.example///"), "https://hub.example");
+        assert_eq!(
+            normalize_hub("https://hub.example///"),
+            "https://hub.example"
+        );
     }
 
     #[test]

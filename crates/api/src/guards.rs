@@ -19,7 +19,10 @@ pub(crate) fn bearer(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Resolve the principal behind a request (see `auth` module for mode semantics).
-pub(crate) async fn authenticate(st: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
+pub(crate) async fn authenticate(
+    st: &AppState,
+    headers: &HeaderMap,
+) -> Result<Principal, ApiError> {
     let token = match bearer(headers) {
         Some(t) => t,
         None => {
@@ -51,7 +54,10 @@ pub(crate) async fn authenticate(st: &AppState, headers: &HeaderMap) -> Result<P
                         tokio::task::spawn_blocking(move || store2.touch_api_key(&id, Utc::now()))
                             .await;
                 });
-                return Ok(Principal::Project { project_id: k.project_id, key_id: k.id });
+                return Ok(Principal::Project {
+                    project_id: k.project_id,
+                    key_id: k.id,
+                });
             }
         }
     }
@@ -82,7 +88,10 @@ pub(crate) const NO_PROJECT_MSG: &str =
      project server-side";
 
 /// Which project an ingested event belongs to. A project key forces its own project.
-pub(crate) fn resolve_ingest_project(p: &Principal, body_project: &str) -> Result<String, ApiError> {
+pub(crate) fn resolve_ingest_project(
+    p: &Principal,
+    body_project: &str,
+) -> Result<String, ApiError> {
     match p {
         Principal::Project { project_id, .. } => Ok(project_id.clone()),
         // The zero-config first run: dev mode, no key, no project named. Rejecting it with a 400 is
@@ -154,7 +163,9 @@ async fn ensure_dev_default_project(st: &AppState) {
              read LIGHTTRACK_PROJECT) or mint a project key to send it elsewhere. Dev mode only — \
              under LIGHTTRACK_AUTH_MODE=enforced this request would be a 400."
         ),
-        Err(e) => tracing::warn!(project_id = DEV_DEFAULT_PROJECT, error = %e, "could not create the dev default project"),
+        Err(e) => {
+            tracing::warn!(project_id = DEV_DEFAULT_PROJECT, error = %e, "could not create the dev default project")
+        }
     }
 }
 
@@ -164,7 +175,9 @@ pub(crate) fn resolve_read_project(
     requested: Option<&str>,
 ) -> Result<Option<String>, ApiError> {
     match p {
-        Principal::Project { project_id: pid, .. } => {
+        Principal::Project {
+            project_id: pid, ..
+        } => {
             if let Some(r) = requested {
                 if r != pid {
                     return Err(ApiError::forbidden("key not authorized for that project"));
@@ -181,7 +194,10 @@ mod tests {
     use super::*;
 
     fn project_principal() -> Principal {
-        Principal::Project { project_id: "proj-a".into(), key_id: "key-1".into() }
+        Principal::Project {
+            project_id: "proj-a".into(),
+            key_id: "key-1".into(),
+        }
     }
 
     /// `ApiError` is deliberately not `Debug` (it is a wire envelope, not a diagnostic), so flatten
@@ -195,7 +211,10 @@ mod tests {
         // The dev fallback exists so the documented first run works; it is reachable ONLY through
         // `Principal::Dev`, which `authenticate` produces only under `AuthMode::Dev`.
         assert_eq!(resolved(&Principal::Dev, "").unwrap(), DEV_DEFAULT_PROJECT);
-        assert_eq!(resolved(&Principal::Dev, "   ").unwrap(), DEV_DEFAULT_PROJECT);
+        assert_eq!(
+            resolved(&Principal::Dev, "   ").unwrap(),
+            DEV_DEFAULT_PROJECT
+        );
         // A named project still wins — the default never overrides an explicit one.
         assert_eq!(resolved(&Principal::Dev, "mine").unwrap(), "mine");
 

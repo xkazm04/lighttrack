@@ -20,9 +20,9 @@ use thiserror::Error;
 
 use lighttrack_core::{
     scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, CostEvidence,
-    Dataset, DatasetItem, Job, JobCancel, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow,
-    LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome, RelayTask, RevenueEvent,
-    Rubric, Score, TokensByDimension, Trace, TraceSummary,
+    Dataset, DatasetItem, Job, JobCancel, LimitMetric, LimitRule, LimitScope, LimitStatus,
+    LimitWindow, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome, RelayTask,
+    RevenueEvent, Rubric, Score, TokensByDimension, Trace, TraceSummary,
 };
 
 pub use sqlite::SqliteStore;
@@ -365,9 +365,18 @@ impl Admission {
             .map(|s| s.retry_after_secs())
             .max()
             .or_else(|| {
-                statuses.iter().filter(|s| s.shedding).map(|s| s.retry_after_secs()).max()
+                statuses
+                    .iter()
+                    .filter(|s| s.shedding)
+                    .map(|s| s.retry_after_secs())
+                    .max()
             });
-        Admission { admitted, statuses, shed, retry_after_secs }
+        Admission {
+            admitted,
+            statuses,
+            shed,
+            retry_after_secs,
+        }
     }
 }
 
@@ -384,7 +393,11 @@ pub fn event_contribution(ev: &LlmEvent) -> Usage {
         calls: 1,
         tokens: (ev.usage.input + ev.usage.output) as i64,
         unpriced_calls: i64::from(ev.cost_usd.is_none()),
-        client_cost_usd: if ev.cost_is_client_reported() { cost } else { 0.0 },
+        client_cost_usd: if ev.cost_is_client_reported() {
+            cost
+        } else {
+            0.0
+        },
     }
 }
 
@@ -474,7 +487,9 @@ pub fn insert_events_checked_nonatomic<S: Store + ?Sized>(
     store: &S,
     evs: &[LlmEvent],
 ) -> Vec<Result<Admission>> {
-    evs.iter().map(|e| insert_event_checked_nonatomic(store, e)).collect()
+    evs.iter()
+        .map(|e| insert_event_checked_nonatomic(store, e))
+        .collect()
 }
 
 /// Backend-agnostic persistence interface.
@@ -749,7 +764,10 @@ pub trait Store: Send + Sync {
         let ids: Vec<String> = events.iter().map(|e| e.id.clone()).collect();
         let scored: std::collections::HashSet<String> =
             self.scored_event_ids(&ids)?.into_iter().collect();
-        Ok(events.into_iter().filter(|e| !scored.contains(&e.id)).collect())
+        Ok(events
+            .into_iter()
+            .filter(|e| !scored.contains(&e.id))
+            .collect())
     }
 
     // --- traces: roll events sharing a trace_id into one end-to-end view ---
@@ -868,7 +886,8 @@ pub trait Store: Send + Sync {
         Err(StoreError::Unsupported("cancelling a job"))
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()>;
-    fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()>;
+    fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>)
+        -> Result<()>;
     fn get_job(&self, id: &str) -> Result<Option<Job>>;
     fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>>;
 

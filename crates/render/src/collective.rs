@@ -29,13 +29,22 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
             "_No collective data yet ({contributors} contributor(s))._ Contribute with `lt collective contribute --hub <url>`."
         ));
     }
-    let cols = Cols { sources: true, ci: true };
+    let cols = Cols {
+        sources: true,
+        ci: true,
+    };
     let mut t = model_table(&cols);
     let mut any_low = false;
     let mut any_mixed = false;
     for r in rows {
-        any_low |= r.get("low_confidence").and_then(Value::as_bool).unwrap_or(false);
-        any_mixed |= r.get("mixed_rigor").and_then(Value::as_bool).unwrap_or(false);
+        any_low |= r
+            .get("low_confidence")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        any_mixed |= r
+            .get("mixed_rigor")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         t.row(model_row(r, &cols));
     }
     let scope = v
@@ -78,7 +87,10 @@ pub(crate) fn digest(v: &Value) -> Option<String> {
             "_No publishable buckets: every (model, task) has < {min_cases} cases (k-anonymity floor)._"
         ));
     }
-    let cols = Cols { sources: false, ci: false };
+    let cols = Cols {
+        sources: false,
+        ci: false,
+    };
     let mut t = model_table(&cols);
     for e in entries {
         t.row(model_row(e, &cols));
@@ -119,7 +131,10 @@ fn model_table(cols: &Cols) -> Table {
 
 fn model_row(r: &Value, cols: &Cols) -> Vec<String> {
     // A low-confidence leaderboard row is flagged with a trailing † in the Confidence column.
-    let low = r.get("low_confidence").and_then(Value::as_bool).unwrap_or(false);
+    let low = r
+        .get("low_confidence")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut cells = vec![
         s(r, "provider").to_string(),
         s(r, "model").to_string(),
@@ -159,7 +174,9 @@ fn confidence_cell(r: &Value, low: bool) -> String {
 /// spread across sources as `σ`. The spread is shown **even when no CI could be formed**, so a row
 /// built from contributors that report no variance still says whether they agree.
 fn ci_cell(r: &Value) -> String {
-    let ci = opt_f(r, "quality_ci95").map(|c| format!("±{c:.3}")).unwrap_or_else(|| "n/a".into());
+    let ci = opt_f(r, "quality_ci95")
+        .map(|c| format!("±{c:.3}"))
+        .unwrap_or_else(|| "n/a".into());
     match opt_f(r, "source_spread") {
         Some(sd) => format!("{ci} σ{sd:.3}"),
         None => ci,
@@ -174,7 +191,11 @@ fn ci_cell(r: &Value) -> String {
 fn rigor_cell(r: &Value) -> String {
     let g = r.get("rigor").unwrap_or(r);
     let all = |k: &str| g.get(k).and_then(Value::as_str) == Some("all");
-    let mut parts = vec![g.get("determinism").and_then(Value::as_str).unwrap_or("—").to_string()];
+    let mut parts = vec![g
+        .get("determinism")
+        .and_then(Value::as_str)
+        .unwrap_or("—")
+        .to_string()];
     if all("frozen_dataset") {
         parts.push("frozen".into());
     }
@@ -182,7 +203,10 @@ fn rigor_cell(r: &Value) -> String {
         parts.push("tested".into());
     }
     let cell = parts.join(" · ");
-    if r.get("mixed_rigor").and_then(Value::as_bool).unwrap_or(false) {
+    if r.get("mixed_rigor")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         format!("{cell} ‡")
     } else {
         cell
@@ -190,24 +214,30 @@ fn rigor_cell(r: &Value) -> String {
 }
 
 fn lat(r: &Value, key: &str) -> String {
-    opt_u(r, key).map(|m| format!("{m}ms")).unwrap_or_else(|| "—".into())
+    opt_u(r, key)
+        .map(|m| format!("{m}ms"))
+        .unwrap_or_else(|| "—".into())
 }
 
 /// The judge cell: on the leaderboard, the distinct judge families (or `mixed(n)` when they disagree);
 /// on the digest, the single coarse judge family for the bucket.
 fn judge_cell(r: &Value, cols: &Cols) -> String {
     if cols.sources {
-        let js: Vec<&str> =
-            r.get("judge_providers").and_then(Value::as_array).map(|a| {
-                a.iter().filter_map(Value::as_str).collect()
-            }).unwrap_or_default();
+        let js: Vec<&str> = r
+            .get("judge_providers")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
         match js.len() {
             0 => "—".into(),
             1 => js[0].to_string(),
             n => format!("mixed({n})"),
         }
     } else {
-        r.get("judge_provider").and_then(Value::as_str).unwrap_or("—").to_string()
+        r.get("judge_provider")
+            .and_then(Value::as_str)
+            .unwrap_or("—")
+            .to_string()
     }
 }
 
@@ -240,23 +270,50 @@ mod tests {
         let md = leaderboard(&v).unwrap();
         assert!(md.contains("Collective model leaderboard"));
         assert!(md.contains("0.870"));
-        assert!(md.contains("±0.048 σ0.028"), "CI half-width + the source spread that widened it");
+        assert!(
+            md.contains("±0.048 σ0.028"),
+            "CI half-width + the source spread that widened it"
+        );
         assert!(md.contains("2100ms"), "p95 surfaced");
-        assert!(md.contains("n/a"), "missing CI shown as n/a (insufficient variance)");
-        assert!(md.contains("between-source disagreement"), "legend states what ± now includes");
+        assert!(
+            md.contains("n/a"),
+            "missing CI shown as n/a (insufficient variance)"
+        );
+        assert!(
+            md.contains("between-source disagreement"),
+            "legend states what ± now includes"
+        );
         assert!(md.contains("Confidence"), "confidence column present");
         assert!(md.contains("1,200 × 3"), "confidence = cases × sources");
-        assert!(md.contains("12 × 1 †"), "low-confidence row flagged in the confidence column");
-        assert!(md.contains("Confidence = total cases"), "legend explains the confidence column");
-        assert!(md.contains("low-confidence row"), "legend explains the dagger");
+        assert!(
+            md.contains("12 × 1 †"),
+            "low-confidence row flagged in the confidence column"
+        );
+        assert!(
+            md.contains("Confidence = total cases"),
+            "legend explains the confidence column"
+        );
+        assert!(
+            md.contains("low-confidence row"),
+            "legend explains the dagger"
+        );
         assert!(md.contains("mixed(2)"), "mixed judges surfaced");
         assert!(md.contains("google"), "single judge family surfaced");
         assert!(md.contains("1,200"));
         // Rigor rides the row: the weakest stamp, the all-source badges, and the mixture marker.
         assert!(md.contains("Rigor"), "rigor column present");
-        assert!(md.contains("sampled · frozen ‡"), "weakest stamp + frozen badge + mixture marker");
-        assert!(md.contains("exact · frozen · tested"), "fully rigorous row wears both badges");
-        assert!(md.contains("mixed rigor:"), "legend explains the double dagger");
+        assert!(
+            md.contains("sampled · frozen ‡"),
+            "weakest stamp + frozen badge + mixture marker"
+        );
+        assert!(
+            md.contains("exact · frozen · tested"),
+            "fully rigorous row wears both badges"
+        );
+        assert!(
+            md.contains("mixed rigor:"),
+            "legend explains the double dagger"
+        );
     }
 
     #[test]
@@ -282,9 +339,18 @@ mod tests {
         ]});
         let md = digest(&v).unwrap();
         assert!(md.contains("1500ms"), "digest shows p95");
-        assert!(md.contains("openai"), "digest shows the single judge family");
-        assert!(md.contains("exact · frozen"), "digest shows its own flat rigor fields");
-        assert!(!md.contains("tested"), "an untested verdict never wears the badge");
+        assert!(
+            md.contains("openai"),
+            "digest shows the single judge family"
+        );
+        assert!(
+            md.contains("exact · frozen"),
+            "digest shows its own flat rigor fields"
+        );
+        assert!(
+            !md.contains("tested"),
+            "an untested verdict never wears the badge"
+        );
         assert!(!md.contains("±95%"), "digest has no CI column");
         assert!(!md.contains("Sources"), "digest has no Sources column");
     }

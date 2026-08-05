@@ -20,7 +20,13 @@ pub struct ScopeDims<'a> {
 impl<'a> ScopeDims<'a> {
     /// The three original dimensions, for callers with no key/customer context (tests, tools).
     pub fn new(provider: &'a str, model: &'a str, name: Option<&'a str>) -> Self {
-        ScopeDims { provider, model, name, api_key_id: None, customer_id: None }
+        ScopeDims {
+            provider,
+            model,
+            name,
+            api_key_id: None,
+            customer_id: None,
+        }
     }
 }
 
@@ -230,7 +236,12 @@ pub const DEFAULT_THROTTLE_START: f64 = 0.8;
 /// `DefaultHasher` so the mapping is pinned to this code, not to a std implementation detail.
 fn shed_ticket(rule_id: &str, event_id: &str) -> f64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in rule_id.as_bytes().iter().chain(b"\x1f").chain(event_id.as_bytes()) {
+    for b in rule_id
+        .as_bytes()
+        .iter()
+        .chain(b"\x1f")
+        .chain(event_id.as_bytes())
+    {
         h ^= *b as u64;
         h = h.wrapping_mul(0x1000_0000_01b3);
     }
@@ -370,7 +381,9 @@ impl LimitStatus {
 
     /// Whether any part of `current` is inferred (imputed for unpriced traffic).
     pub fn estimated(&self) -> bool {
-        self.cost_evidence.as_ref().is_some_and(CostEvidence::estimated)
+        self.cost_evidence
+            .as_ref()
+            .is_some_and(CostEvidence::estimated)
     }
 
     /// Whether graduated throttling sheds the event identified by `event_id`.
@@ -407,7 +420,13 @@ impl LimitStatus {
     /// rejection count. Includes the scope so a scoped cap and a project-wide cap on the same
     /// metric+window don't collide on one key.
     pub fn alert_key(&self) -> String {
-        format!("{}:{:?}:{:?}:{}", self.project_id, self.metric, self.window, self.scope_tag())
+        format!(
+            "{}:{:?}:{:?}:{}",
+            self.project_id,
+            self.metric,
+            self.window,
+            self.scope_tag()
+        )
     }
 }
 
@@ -438,7 +457,9 @@ impl LimitRule {
     /// knob that could contradict the first), else [`DEFAULT_THROTTLE_START`]. Meaningless for the
     /// other actions.
     pub fn throttle_start(&self) -> f64 {
-        self.warn_at.filter(|w| w.is_finite() && *w > 0.0 && *w < 1.0).unwrap_or(DEFAULT_THROTTLE_START)
+        self.warn_at
+            .filter(|w| w.is_finite() && *w > 0.0 && *w < 1.0)
+            .unwrap_or(DEFAULT_THROTTLE_START)
     }
 
     /// Pure evaluation: given the project's current value for this rule's metric+window,
@@ -517,7 +538,10 @@ mod tests {
     #[test]
     fn scope_matches_dimension() {
         let s = LimitScope::Model("gpt-4o".into());
-        assert!(s.matches(&ScopeDims::new("openai", "gpt-4o", None)), "model matches");
+        assert!(
+            s.matches(&ScopeDims::new("openai", "gpt-4o", None)),
+            "model matches"
+        );
         assert!(
             !s.matches(&ScopeDims::new("openai", "gpt-4o-mini", None)),
             "other model does not"
@@ -577,7 +601,10 @@ mod tests {
     #[test]
     fn scope_roundtrips_through_parts_and_key() {
         let s = LimitScope::Model("gpt-4o".into());
-        assert_eq!(LimitScope::from_parts(s.kind_str(), s.value().to_string()), Some(s.clone()));
+        assert_eq!(
+            LimitScope::from_parts(s.kind_str(), s.value().to_string()),
+            Some(s.clone())
+        );
         assert_eq!(s.label(), "model=gpt-4o");
         let mut r = rule();
         r.scope = Some(s);
@@ -597,7 +624,10 @@ mod tests {
         assert!(!s.warning && !s.breached);
         // At/over warn_at, under threshold: warning, not breached.
         let s = r.evaluate(8.5);
-        assert!(s.warning && !s.breached, "crossing warn_at warns without breaching");
+        assert!(
+            s.warning && !s.breached,
+            "crossing warn_at warns without breaching"
+        );
         // At threshold: breached, and warning is suppressed (already past the cap).
         let s = r.evaluate(10.0);
         assert!(s.breached && !s.warning);
@@ -658,8 +688,14 @@ mod tests {
             unpriceable: true,
         };
         let s = r.evaluate_with_evidence(0.0, Some(ev.clone()));
-        assert!(!s.breached, "nothing was actually measured, so nothing breached");
-        assert!(s.unpriceable() && s.rejects_ingest(), "an unmeasurable cap must still refuse ingest");
+        assert!(
+            !s.breached,
+            "nothing was actually measured, so nothing breached"
+        );
+        assert!(
+            s.unpriceable() && s.rejects_ingest(),
+            "an unmeasurable cap must still refuse ingest"
+        );
         // Alert-only rules are observe-only in every state, unpriceable included.
         r.action = LimitAction::Alert;
         assert!(!r.evaluate_with_evidence(0.0, Some(ev)).rejects_ingest());
@@ -678,7 +714,10 @@ mod tests {
                 unpriceable: false,
             }),
         );
-        assert!(s.estimated(), "a status carrying imputed cost is marked estimated");
+        assert!(
+            s.estimated(),
+            "a status carrying imputed cost is marked estimated"
+        );
         assert!(!s.unpriceable());
         // A plain evaluate (calls/tokens rules, or evidence-free callers) carries none of this.
         assert!(!rule().evaluate(6.0).estimated());
@@ -706,15 +745,29 @@ mod tests {
 
         // Halfway up the ramp (ratio 0.9) sheds about half; Block still sheds nothing at all.
         let mid = t.evaluate(9.0);
-        assert!((mid.shed_fraction - 0.5).abs() < 1e-9, "{}", mid.shed_fraction);
+        assert!(
+            (mid.shed_fraction - 0.5).abs() < 1e-9,
+            "{}",
+            mid.shed_fraction
+        );
         let shed = shed_count(&mid, 400);
-        assert!((150..=250).contains(&shed), "proportional shedding, got {shed}/400");
-        assert_eq!(b.evaluate(9.0).shed_fraction, 0.0, "Block never sheds before its threshold");
+        assert!(
+            (150..=250).contains(&shed),
+            "proportional shedding, got {shed}/400"
+        );
+        assert_eq!(
+            b.evaluate(9.0).shed_fraction,
+            0.0,
+            "Block never sheds before its threshold"
+        );
         assert_eq!(shed_count(&b.evaluate(9.0), 400), 0);
 
         // At the threshold both are a hard stop; shedding is no longer the mechanism.
         assert!(t.evaluate(10.0).rejects_ingest() && b.evaluate(10.0).rejects_ingest());
-        assert!(!t.evaluate(10.0).sheds("ev-1"), "a breached rule rejects outright, it doesn't shed");
+        assert!(
+            !t.evaluate(10.0).sheds("ev-1"),
+            "a breached rule rejects outright, it doesn't shed"
+        );
     }
 
     #[test]
@@ -766,7 +819,10 @@ mod tests {
         assert!((1..=15).contains(&light) && (1..=15).contains(&heavy));
         assert!(heavy > light, "harder shedding asks for a longer pause");
         // A breach waits for the window to age out — much longer, and window-dependent.
-        assert_eq!(t.evaluate(10.0).retry_after_secs(), LimitWindow::Day.retry_after_secs());
+        assert_eq!(
+            t.evaluate(10.0).retry_after_secs(),
+            LimitWindow::Day.retry_after_secs()
+        );
         let mut hourly = t.clone();
         hourly.window = LimitWindow::Hour;
         assert!(hourly.evaluate(10.0).retry_after_secs() < t.evaluate(10.0).retry_after_secs());

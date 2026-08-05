@@ -27,7 +27,11 @@ async fn get(app: &Router, token: &str, path: &str) -> (StatusCode, Value) {
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let v: Value = if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+    let v: Value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
     (status, v)
 }
 
@@ -72,7 +76,9 @@ async fn a_staging_key_gets_its_own_budget_while_production_keeps_spending() {
 
     // $1.20/day on the staging key only — the thing that was impossible before: two keys of one
     // project with genuinely different budgets.
-    store.create_limit_rule(&key_rule("proj-a", &staging_id, 1.2)).unwrap();
+    store
+        .create_limit_rule(&key_rule("proj-a", &staging_id, 1.2))
+        .unwrap();
 
     let app = crate::build_router(state);
 
@@ -82,12 +88,20 @@ async fn a_staging_key_gets_its_own_budget_while_production_keeps_spending() {
         assert_eq!(s, StatusCode::OK, "staging call {i} should admit");
     }
     let (s, v) = ingest(&app, &staging_token, body(Value::Null)).await;
-    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "staging hit its own cap: {v}");
+    assert_eq!(
+        s,
+        StatusCode::TOO_MANY_REQUESTS,
+        "staging hit its own cap: {v}"
+    );
 
     // Production is untouched by staging's cap, at any volume.
     for i in 0..6 {
         let (s, _) = ingest(&app, &prod_token, body(Value::Null)).await;
-        assert_eq!(s, StatusCode::OK, "prod call {i} must not be charged to staging's budget");
+        assert_eq!(
+            s,
+            StatusCode::OK,
+            "prod call {i} must not be charged to staging's budget"
+        );
     }
     // ...and staging is still capped afterwards (production's spend didn't relieve it either).
     let (s, _) = ingest(&app, &staging_token, body(Value::Null)).await;
@@ -102,14 +116,25 @@ async fn usage_by_key_answers_who_is_spending_before_any_rule_exists() {
     let app = crate::build_router(state);
 
     for _ in 0..3 {
-        assert_eq!(ingest(&app, &staging_token, body(Value::Null)).await.0, StatusCode::OK);
+        assert_eq!(
+            ingest(&app, &staging_token, body(Value::Null)).await.0,
+            StatusCode::OK
+        );
     }
-    assert_eq!(ingest(&app, &prod_token, body(Value::Null)).await.0, StatusCode::OK);
+    assert_eq!(
+        ingest(&app, &prod_token, body(Value::Null)).await.0,
+        StatusCode::OK
+    );
 
     // No limit rule has ever been created for this project.
     assert!(store.list_limit_rules("proj-a", false).unwrap().is_empty());
 
-    let (s, v) = get(&app, "admin-secret", "/v1/limits/usage?project=proj-a&by=api_key").await;
+    let (s, v) = get(
+        &app,
+        "admin-secret",
+        "/v1/limits/usage?project=proj-a&by=api_key",
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["by"], "api_key");
     let staging = entry(&v, Some(&staging_id));
@@ -121,7 +146,10 @@ async fn usage_by_key_answers_who_is_spending_before_any_rule_exists() {
         staging["label"].as_str().unwrap().starts_with("staging ("),
         "admin sees the key's name: {staging}"
     );
-    assert!(staging.get("rules").is_none(), "no rule exists yet: {staging}");
+    assert!(
+        staging.get("rules").is_none(),
+        "no rule exists yet: {staging}"
+    );
 }
 
 #[tokio::test]
@@ -141,17 +169,31 @@ async fn a_breach_names_its_key_through_the_api_not_only_an_alert_channel() {
     let app = crate::build_router(state);
 
     for _ in 0..2 {
-        assert_eq!(ingest(&app, &staging_token, body(Value::Null)).await.0, StatusCode::OK);
+        assert_eq!(
+            ingest(&app, &staging_token, body(Value::Null)).await.0,
+            StatusCode::OK
+        );
     }
 
     // No webhook is configured in this test process; the answer still has to be reachable.
-    assert!(!state_alerts_enabled(), "this test must not depend on an alert channel");
-    let (s, v) = get(&app, "admin-secret", "/v1/limits/usage?project=proj-a&by=api_key").await;
+    assert!(
+        !state_alerts_enabled(),
+        "this test must not depend on an alert channel"
+    );
+    let (s, v) = get(
+        &app,
+        "admin-secret",
+        "/v1/limits/usage?project=proj-a&by=api_key",
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let e = entry(&v, Some(&staging_id));
     let rules = e["rules"].as_array().unwrap();
     assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0]["breached"], true, "the breached rule is reported against the key: {e}");
+    assert_eq!(
+        rules[0]["breached"], true,
+        "the breached rule is reported against the key: {e}"
+    );
     assert_eq!(rules[0]["scope"]["api_key"], staging_id.as_str());
 }
 
@@ -168,20 +210,49 @@ async fn a_client_cannot_forge_the_key_it_is_billed_as() {
     let (staging_id, staging_token) = add_key(&store, "proj-a", "staging");
     let (victim_id, _victim_token) = add_key(&store, "proj-a", "victim");
     // Cap staging tightly; leave the victim key uncapped.
-    store.create_limit_rule(&key_rule("proj-a", &staging_id, 0.6)).unwrap();
+    store
+        .create_limit_rule(&key_rule("proj-a", &staging_id, 0.6))
+        .unwrap();
     let app = crate::build_router(state);
 
     // Staging claims to be the victim key. If the body were trusted, this would both dodge staging's
     // cap and charge the victim.
-    let (s, _) = ingest(&app, &staging_token, body(json!({ "api_key_id": victim_id }))).await;
+    let (s, _) = ingest(
+        &app,
+        &staging_token,
+        body(json!({ "api_key_id": victim_id })),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "first call is under the cap either way");
-    let (s, _) = ingest(&app, &staging_token, body(json!({ "api_key_id": victim_id }))).await;
-    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "the forged id must not dodge staging's own cap");
+    let (s, _) = ingest(
+        &app,
+        &staging_token,
+        body(json!({ "api_key_id": victim_id })),
+    )
+    .await;
+    assert_eq!(
+        s,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the forged id must not dodge staging's own cap"
+    );
 
-    let (_, v) = get(&app, "admin-secret", "/v1/limits/usage?project=proj-a&by=api_key").await;
-    assert_eq!(entry(&v, Some(&staging_id))["calls"], 1, "spend is attributed to the real key");
+    let (_, v) = get(
+        &app,
+        "admin-secret",
+        "/v1/limits/usage?project=proj-a&by=api_key",
+    )
+    .await;
+    assert_eq!(
+        entry(&v, Some(&staging_id))["calls"],
+        1,
+        "spend is attributed to the real key"
+    );
     assert!(
-        v["entries"].as_array().unwrap().iter().all(|e| e["value"].as_str() != Some(&victim_id)),
+        v["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["value"].as_str() != Some(&victim_id)),
         "the victim key was never charged: {v}"
     );
 }
@@ -197,11 +268,20 @@ async fn an_admin_written_event_is_unattributed_rather_than_borrowing_a_key() {
     b["project_id"] = json!("proj-a");
     assert_eq!(ingest(&app, "admin-secret", b).await.0, StatusCode::OK);
 
-    let (_, v) = get(&app, "admin-secret", "/v1/limits/usage?project=proj-a&by=api_key").await;
+    let (_, v) = get(
+        &app,
+        "admin-secret",
+        "/v1/limits/usage?project=proj-a&by=api_key",
+    )
+    .await;
     // The admin principal is not a key: its traffic lands in the unattributed bucket, and the id it
     // tried to claim is nowhere.
     assert_eq!(entry(&v, None)["calls"], 1);
-    assert!(v["entries"].as_array().unwrap().iter().all(|e| e["value"].as_str() != Some(&staging_id)));
+    assert!(v["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["value"].as_str() != Some(&staging_id)));
 }
 
 #[tokio::test]
@@ -210,14 +290,25 @@ async fn a_project_key_reading_the_breakdown_sees_ids_but_no_sibling_names() {
     let prod_token = make_key(&store, "proj-a");
     let (staging_id, staging_token) = add_key(&store, "proj-a", "staging");
     let app = crate::build_router(state);
-    assert_eq!(ingest(&app, &staging_token, body(Value::Null)).await.0, StatusCode::OK);
+    assert_eq!(
+        ingest(&app, &staging_token, body(Value::Null)).await.0,
+        StatusCode::OK
+    );
 
     let (s, v) = get(&app, &prod_token, "/v1/limits/usage?by=api_key").await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let e = entry(&v, Some(&staging_id));
-    assert!(e.get("label").is_none(), "a project key gets no roster of its siblings: {e}");
+    assert!(
+        e.get("label").is_none(),
+        "a project key gets no roster of its siblings: {e}"
+    );
     // ...and it certainly cannot read another project.
-    let (s, _) = get(&app, &prod_token, "/v1/limits/usage?project=other&by=api_key").await;
+    let (s, _) = get(
+        &app,
+        &prod_token,
+        "/v1/limits/usage?project=other&by=api_key",
+    )
+    .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
 }
 
@@ -233,18 +324,46 @@ async fn customer_scoped_budgets_read_the_existing_billing_linkage() {
         .unwrap();
     let app = crate::build_router(state);
 
-    assert_eq!(ingest(&app, &token, body(json!({ "customer_id": "acme" }))).await.0, StatusCode::OK);
     assert_eq!(
-        ingest(&app, &token, body(json!({ "customer_id": "acme" }))).await.0,
+        ingest(&app, &token, body(json!({ "customer_id": "acme" })))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        ingest(&app, &token, body(json!({ "customer_id": "acme" })))
+            .await
+            .0,
         StatusCode::TOO_MANY_REQUESTS
     );
     // Another customer, and untagged traffic, are untouched.
-    assert_eq!(ingest(&app, &token, body(json!({ "customer_id": "other" }))).await.0, StatusCode::OK);
-    assert_eq!(ingest(&app, &token, body(Value::Null)).await.0, StatusCode::OK);
+    assert_eq!(
+        ingest(&app, &token, body(json!({ "customer_id": "other" })))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        ingest(&app, &token, body(Value::Null)).await.0,
+        StatusCode::OK
+    );
 
-    let (_, v) = get(&app, "admin-secret", "/v1/limits/usage?project=proj-a&by=customer").await;
-    assert_eq!(entry(&v, Some("acme"))["calls"], 1, "only the admitted acme call is stored");
-    assert_eq!(entry(&v, None)["calls"], 1, "untagged traffic keeps its own bucket");
+    let (_, v) = get(
+        &app,
+        "admin-secret",
+        "/v1/limits/usage?project=proj-a&by=customer",
+    )
+    .await;
+    assert_eq!(
+        entry(&v, Some("acme"))["calls"],
+        1,
+        "only the admitted acme call is stored"
+    );
+    assert_eq!(
+        entry(&v, None)["calls"],
+        1,
+        "untagged traffic keeps its own bucket"
+    );
 }
 
 #[tokio::test]
@@ -271,7 +390,10 @@ async fn model_and_name_scoped_rules_behave_exactly_as_before() {
     let app = crate::build_router(state);
 
     // The model cap binds (2 calls); the name cap never applies (our events are `summarize`).
-    assert_eq!(ingest(&app, &token, body(Value::Null)).await.0, StatusCode::OK);
+    assert_eq!(
+        ingest(&app, &token, body(Value::Null)).await.0,
+        StatusCode::OK
+    );
     let (s, v) = ingest(&app, &token, body(Value::Null)).await;
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "{v}");
     // A different model is unaffected.
@@ -283,8 +405,16 @@ async fn model_and_name_scoped_rules_behave_exactly_as_before() {
     // The status surface still reports both scoped rules unchanged.
     let (s, v) = get(&app, "admin-secret", "/v1/limits/status?project=proj-a").await;
     assert_eq!(s, StatusCode::OK);
-    let scopes: Vec<&Value> = v["statuses"].as_array().unwrap().iter().map(|s| &s["scope"]).collect();
-    assert!(scopes.contains(&&json!({ "model": "claude-haiku-4-5" })), "{v}");
+    let scopes: Vec<&Value> = v["statuses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| &s["scope"])
+        .collect();
+    assert!(
+        scopes.contains(&&json!({ "model": "claude-haiku-4-5" })),
+        "{v}"
+    );
     assert!(scopes.contains(&&json!({ "name": "other-usecase" })), "{v}");
 }
 
@@ -293,8 +423,18 @@ async fn an_unknown_dimension_is_a_400_not_a_silent_default() {
     let (state, store) = setup(Redactor::off());
     let _t = make_key(&store, "proj-a");
     let app = crate::build_router(state);
-    let (s, _) = get(&app, "admin-secret", "/v1/limits/usage?project=proj-a&by=nonsense").await;
+    let (s, _) = get(
+        &app,
+        "admin-secret",
+        "/v1/limits/usage?project=proj-a&by=nonsense",
+    )
+    .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
-    let (s, _) = get(&app, "admin-secret", "/v1/limits/usage?project=proj-a&window=fortnight").await;
+    let (s, _) = get(
+        &app,
+        "admin-secret",
+        "/v1/limits/usage?project=proj-a&window=fortnight",
+    )
+    .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }

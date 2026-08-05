@@ -7,7 +7,11 @@ use crate::md::{commafy, f, money, pct, s, Align, Table};
 /// Render a rule/status's optional `scope` object (`{"model":"gpt-4o"}`) as a compact `kind=value`,
 /// or an em dash when the rule is project-wide (unscoped).
 fn scope_label(v: &Value) -> String {
-    match v.get("scope").and_then(Value::as_object).and_then(|m| m.iter().next()) {
+    match v
+        .get("scope")
+        .and_then(Value::as_object)
+        .and_then(|m| m.iter().next())
+    {
         Some((kind, val)) => format!("{kind}={}", val.as_str().unwrap_or_default()),
         None => "—".to_string(),
     }

@@ -44,16 +44,26 @@ pub(crate) async fn run(
             cmd.arg(t);
         }
     }
-    cmd.current_dir(repo).stdin(Stdio::null()).kill_on_drop(true);
+    cmd.current_dir(repo)
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
 
     let dur = std::time::Duration::from_secs(cfg.defaults.timeout_secs);
     let output = match tokio::time::timeout(dur, cmd.output()).await {
         Ok(Ok(o)) => o,
-        Ok(Err(e)) => return fail(cfg, format!("failed to launch claude ('{}'): {e}", cfg.claude_bin)),
+        Ok(Err(e)) => {
+            return fail(
+                cfg,
+                format!("failed to launch claude ('{}'): {e}", cfg.claude_bin),
+            )
+        }
         Err(_) => {
             return fail(
                 cfg,
-                format!("claude run timed out after {}s and was killed.", cfg.defaults.timeout_secs),
+                format!(
+                    "claude run timed out after {}s and was killed.",
+                    cfg.defaults.timeout_secs
+                ),
             )
         }
     };
@@ -100,5 +110,10 @@ pub(crate) async fn run(
 }
 
 fn fail(cfg: &Config, text: String) -> ClaudeRun {
-    ClaudeRun { text, model: cfg.defaults.model.clone(), cost_usd: None, ok: false }
+    ClaudeRun {
+        text,
+        model: cfg.defaults.model.clone(),
+        cost_usd: None,
+        ok: false,
+    }
 }

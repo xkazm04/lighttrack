@@ -14,7 +14,14 @@ pub(super) fn create(conn: &Connection, r: &Rubric) -> Result<()> {
     conn.execute(
         "INSERT INTO rubrics (id, project_id, name, dimensions, threshold, created_at) \
          VALUES (?1,?2,?3,?4,?5,?6)",
-        params![r.id, r.project_id, r.name, dims, r.threshold, fmt_ts(r.created_at)],
+        params![
+            r.id,
+            r.project_id,
+            r.name,
+            dims,
+            r.threshold,
+            fmt_ts(r.created_at)
+        ],
     )?;
     Ok(())
 }

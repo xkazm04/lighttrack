@@ -16,8 +16,8 @@ use axum::Router;
 
 mod act;
 mod breaker;
-mod claude;
 mod classify;
+mod claude;
 mod config;
 mod email;
 mod enrich;

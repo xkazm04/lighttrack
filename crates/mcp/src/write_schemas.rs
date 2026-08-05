@@ -84,7 +84,10 @@ mod tests {
         for f in ["key", "description", "weight", "anchors", "floor"] {
             assert!(props.get(f).is_some(), "missing {f}");
         }
-        assert_eq!(s["items"]["properties"]["anchors"]["items"]["type"], "string");
+        assert_eq!(
+            s["items"]["properties"]["anchors"]["items"]["type"],
+            "string"
+        );
     }
 
     #[test]
@@ -102,7 +105,10 @@ mod tests {
         assert_eq!(item_required(&s), vec!["provider", "model"]);
         let props = &s["items"]["properties"];
         assert!(props.get("system_prompt").is_some());
-        assert!(props.get("prompt").is_none(), "the real field is system_prompt");
+        assert!(
+            props.get("prompt").is_none(),
+            "the real field is system_prompt"
+        );
         assert!(props.get("label").is_some());
     }
 }

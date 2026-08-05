@@ -153,19 +153,31 @@ pub(crate) async fn create_limit(pool: &PgPool, r: &LimitRule) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn list_limits(pool: &PgPool, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
+pub(crate) async fn list_limits(
+    pool: &PgPool,
+    project: &str,
+    only_enabled: bool,
+) -> Result<Vec<LimitRule>> {
     let sql = if only_enabled {
         format!("SELECT {LIMIT_COLS} FROM limit_rules WHERE project_id = $1 AND enabled = 1")
     } else {
         format!("SELECT {LIMIT_COLS} FROM limit_rules WHERE project_id = $1")
     };
-    let rows = sqlx::query(&sql).bind(project.to_string()).fetch_all(pool).await.map_err(pgerr)?;
+    let rows = sqlx::query(&sql)
+        .bind(project.to_string())
+        .fetch_all(pool)
+        .await
+        .map_err(pgerr)?;
     rows.iter().map(limit_rule_from_row).collect()
 }
 
 pub(crate) async fn get_limit(pool: &PgPool, id: &str) -> Result<Option<LimitRule>> {
     let sql = format!("SELECT {LIMIT_COLS} FROM limit_rules WHERE id = $1");
-    let row = sqlx::query(&sql).bind(id.to_string()).fetch_optional(pool).await.map_err(pgerr)?;
+    let row = sqlx::query(&sql)
+        .bind(id.to_string())
+        .fetch_optional(pool)
+        .await
+        .map_err(pgerr)?;
     row.as_ref().map(limit_rule_from_row).transpose()
 }
 
@@ -273,7 +285,10 @@ mod tests {
             let (k, v) = scope_parts(&Some(scope.clone()));
             assert_eq!(k, Some(*kind));
             assert_eq!(v.as_deref(), Some("v"));
-            assert_eq!(LimitScope::from_parts(k.expect("kind"), v.expect("value")), Some(scope));
+            assert_eq!(
+                LimitScope::from_parts(k.expect("kind"), v.expect("value")),
+                Some(scope)
+            );
         }
     }
 
@@ -293,8 +308,18 @@ mod tests {
         let names = select_list_names(LIMIT_COLS);
         assert_eq!(
             names,
-            ["id", "project_id", "metric", "\"window\"", "threshold", "action", "enabled",
-             "warn_at", "scope_kind", "scope_value"]
+            [
+                "id",
+                "project_id",
+                "metric",
+                "\"window\"",
+                "threshold",
+                "action",
+                "enabled",
+                "warn_at",
+                "scope_kind",
+                "scope_value"
+            ]
         );
     }
 }

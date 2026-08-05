@@ -129,11 +129,18 @@ async fn ingest(app: &Router, token: Option<&str>, digest: Value) -> (StatusCode
     if let Some(t) = token {
         req = req.header("authorization", format!("Bearer {t}"));
     }
-    let resp = app.clone().oneshot(req.body(Body::from(digest.to_string())).unwrap()).await.unwrap();
+    let resp = app
+        .clone()
+        .oneshot(req.body(Body::from(digest.to_string())).unwrap())
+        .await
+        .unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let v: Value =
-        if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+    let v: Value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
     (status, v)
 }
 
@@ -147,7 +154,11 @@ async fn leaderboard_q(app: &Router, query: &str) -> (StatusCode, Value) {
     } else {
         format!("/v1/collective/leaderboard?{query}")
     };
-    let req = Request::builder().method("GET").uri(uri).body(Body::empty()).unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
@@ -168,8 +179,12 @@ fn digest_of(provider: &str, model: &str, q: f64, cases: u32, judge: &str) -> Va
 async fn ingest_refused_unless_accept_flag_set() {
     let (state, _) = setup(false, false, 5);
     let app = crate::build_router(state);
-    let (status, body) =
-        ingest(&app, Some("some-key"), json!({ "entries": [entry("haiku", 0.8, 10)] })).await;
+    let (status, body) = ingest(
+        &app,
+        Some("some-key"),
+        json!({ "entries": [entry("haiku", 0.8, 10)] }),
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["error"]["code"], "forbidden", "{body}");
 }
@@ -204,8 +219,14 @@ async fn identity_is_derived_from_the_key_not_the_body() {
     assert_eq!(ack["accepted"], 1);
     let stored = store.list_collective_entries().unwrap();
     assert_eq!(stored.len(), 1);
-    assert_ne!(stored[0].contributor_id, "c-victim", "body-supplied id must be ignored");
-    assert!(stored[0].contributor_id.starts_with("c-"), "id is key-derived");
+    assert_ne!(
+        stored[0].contributor_id, "c-victim",
+        "body-supplied id must be ignored"
+    );
+    assert!(
+        stored[0].contributor_id.starts_with("c-"),
+        "id is key-derived"
+    );
     assert_eq!(ack["contributor_id"], stored[0].contributor_id);
 }
 
@@ -214,7 +235,10 @@ async fn different_keys_land_under_different_ids_no_overwrite() {
     // Two keys both claim the same body id and the same model bucket. Because the identity is derived
     // from the key, they must NOT collide: two rows survive, not one overwriting the other.
     let (state, store) = setup(true, false, 5);
-    let (alpha, beta) = (contributor_key(&store, "alpha"), contributor_key(&store, "beta"));
+    let (alpha, beta) = (
+        contributor_key(&store, "alpha"),
+        contributor_key(&store, "beta"),
+    );
     let app = crate::build_router(state);
     let body = |q: f64| json!({ "contributor_id": "c-shared", "entries": [entry("haiku", q, 10)] });
 
@@ -223,8 +247,13 @@ async fn different_keys_land_under_different_ids_no_overwrite() {
     assert_eq!((s1, s2), (StatusCode::OK, StatusCode::OK));
 
     let stored = store.list_collective_entries().unwrap();
-    assert_eq!(stored.len(), 2, "distinct keys must not overwrite each other");
-    let ids: std::collections::BTreeSet<_> = stored.iter().map(|e| e.contributor_id.clone()).collect();
+    assert_eq!(
+        stored.len(),
+        2,
+        "distinct keys must not overwrite each other"
+    );
+    let ids: std::collections::BTreeSet<_> =
+        stored.iter().map(|e| e.contributor_id.clone()).collect();
     assert_eq!(ids.len(), 2, "two distinct derived ids");
 
     // The leaderboard therefore reports two contributors for the shared bucket.
@@ -247,7 +276,12 @@ async fn same_key_replaces_its_own_set() {
     .await;
     assert_eq!(store.list_collective_entries().unwrap().len(), 2);
     // Second push from the same key with a single bucket → the dropped one must not linger.
-    let (_s, _) = ingest(&app, Some(&alpha), json!({ "entries": [entry("haiku", 0.9, 20)] })).await;
+    let (_s, _) = ingest(
+        &app,
+        Some(&alpha),
+        json!({ "entries": [entry("haiku", 0.9, 20)] }),
+    )
+    .await;
     let stored = store.list_collective_entries().unwrap();
     assert_eq!(stored.len(), 1, "re-contribution replaces the whole set");
     assert_eq!(stored[0].model, "haiku");
@@ -289,7 +323,10 @@ async fn v1_digest_accepted_and_lands_with_null_variance() {
     assert_eq!(status, StatusCode::OK, "{ack}");
     assert_eq!(ack["accepted"], 1);
     let stored = store.list_collective_entries().unwrap();
-    assert!(stored[0].quality_variance.is_none(), "v1 entry lands with variance NULL");
+    assert!(
+        stored[0].quality_variance.is_none(),
+        "v1 entry lands with variance NULL"
+    );
 }
 
 #[tokio::test]
@@ -310,12 +347,18 @@ async fn v2_variance_is_carried_through_to_storage_and_ci() {
     ingest(&app, Some(&kb), with_var("haiku", 0.84, 0.04, 100)).await;
 
     let stored = store.list_collective_entries().unwrap();
-    assert!(stored.iter().all(|e| e.quality_variance == Some(0.04)), "variance persisted");
+    assert!(
+        stored.iter().all(|e| e.quality_variance == Some(0.04)),
+        "variance persisted"
+    );
 
     let (ls, lb) = leaderboard(&app).await;
     assert_eq!(ls, StatusCode::OK);
     let row = &lb["rows"][0];
-    assert!(row["quality_ci95"].as_f64().is_some(), "full variance coverage → CI present: {lb}");
+    assert!(
+        row["quality_ci95"].as_f64().is_some(),
+        "full variance coverage → CI present: {lb}"
+    );
     assert_eq!(row["p95_latency_ms"], 2000, "worst-observed p95 surfaced");
     assert_eq!(row["low_confidence"], false, "200 cases clears the floor");
 }
@@ -347,7 +390,11 @@ async fn digest_includes_only_consenting_projects() {
             target: json!({ "provider": "anthropic", "model": model }),
             dataset_ref: None,
             rubric_id: None,
-            dataset: vec![BenchmarkCase { input: "2+2".into(), expected: None, output: None }],
+            dataset: vec![BenchmarkCase {
+                input: "2+2".into(),
+                expected: None,
+                output: None,
+            }],
             baseline_score: None,
             created_at: Utc::now(),
         };
@@ -370,8 +417,12 @@ async fn digest_includes_only_consenting_projects() {
             })
             .unwrap();
     };
-    store.create_project(&mk_project("proj-nda", false)).unwrap();
-    store.create_project(&mk_project("proj-open", true)).unwrap();
+    store
+        .create_project(&mk_project("proj-nda", false))
+        .unwrap();
+    store
+        .create_project(&mk_project("proj-open", true))
+        .unwrap();
     mk_bench_run("proj-nda", "secret-model");
     mk_bench_run("proj-open", "public-model");
 
@@ -386,12 +437,18 @@ async fn digest_includes_only_consenting_projects() {
     let digest: Value = serde_json::from_slice(&bytes).unwrap();
 
     let blob = digest.to_string();
-    assert!(blob.contains("public-model"), "consenting project's runs are in the digest: {blob}");
+    assert!(
+        blob.contains("public-model"),
+        "consenting project's runs are in the digest: {blob}"
+    );
     assert!(
         !blob.contains("secret-model"),
         "a project that never opted in must not ship in the digest: {blob}"
     );
-    assert_eq!(digest["projects_included"], 1, "consent envelope disclosed: {digest}");
+    assert_eq!(
+        digest["projects_included"], 1,
+        "consent envelope disclosed: {digest}"
+    );
     assert_eq!(digest["projects_excluded"], 1);
 }
 
@@ -407,30 +464,60 @@ async fn single_source_rows_are_withheld_below_the_contributor_floor() {
     );
     let app = crate::build_router(state);
     // One lone contributor benchmarks cohere; two contributors overlap on haiku.
-    ingest(&app, Some(&solo), digest_of("cohere", "command-r", 0.9, 5000, "openai")).await;
-    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
-    ingest(&app, Some(&kb), digest_of("anthropic", "haiku", 0.84, 100, "anthropic")).await;
+    ingest(
+        &app,
+        Some(&solo),
+        digest_of("cohere", "command-r", 0.9, 5000, "openai"),
+    )
+    .await;
+    ingest(
+        &app,
+        Some(&ka),
+        digest_of("anthropic", "haiku", 0.80, 100, "anthropic"),
+    )
+    .await;
+    ingest(
+        &app,
+        Some(&kb),
+        digest_of("anthropic", "haiku", 0.84, 100, "anthropic"),
+    )
+    .await;
 
     let (ls, lb) = leaderboard(&app).await;
     assert_eq!(ls, StatusCode::OK);
     let rows = lb["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 1, "only the 2-source row is visible: {lb}");
     assert_eq!(rows[0]["model"], "haiku");
-    assert_eq!(lb["held_back"], 1, "the withheld row is disclosed, not silently dropped");
+    assert_eq!(
+        lb["held_back"], 1,
+        "the withheld row is disclosed, not silently dropped"
+    );
 
     // A provider filter must not strip the board down to the lone source.
     let (fs, fb) = leaderboard_q(&app, "provider=cohere").await;
     assert_eq!(fs, StatusCode::OK);
-    assert!(fb["rows"].as_array().unwrap().is_empty(), "filter cannot resurrect a 1-source row: {fb}");
+    assert!(
+        fb["rows"].as_array().unwrap().is_empty(),
+        "filter cannot resurrect a 1-source row: {fb}"
+    );
 
     // The same data on a single-tenant hub (k=1, the explicit opt-out) shows everything.
     let (state1, store1) = setup_k(true, false, 5, 1);
     let solo1 = contributor_key(&store1, "solo");
     let app1 = crate::build_router(state1);
-    ingest(&app1, Some(&solo1), digest_of("cohere", "command-r", 0.9, 5000, "openai")).await;
+    ingest(
+        &app1,
+        Some(&solo1),
+        digest_of("cohere", "command-r", 0.9, 5000, "openai"),
+    )
+    .await;
     let (s1, b1) = leaderboard(&app1).await;
     assert_eq!(s1, StatusCode::OK);
-    assert_eq!(b1["rows"].as_array().unwrap().len(), 1, "k=1 opts out of the source floor");
+    assert_eq!(
+        b1["rows"].as_array().unwrap().len(),
+        1,
+        "k=1 opts out of the source floor"
+    );
     assert_eq!(b1["held_back"], 0);
 }
 
@@ -440,12 +527,26 @@ async fn ingest_normalizes_identity_so_variants_merge_into_one_row() {
     let (state, store) = setup(true, false, 5);
     let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
     let app = crate::build_router(state);
-    ingest(&app, Some(&ka), digest_of("openai", "gpt-4o-2024-08-06", 0.80, 100, "openai")).await;
-    ingest(&app, Some(&kb), digest_of("azure-openai", "gpt-4o", 0.84, 100, "openai")).await;
+    ingest(
+        &app,
+        Some(&ka),
+        digest_of("openai", "gpt-4o-2024-08-06", 0.80, 100, "openai"),
+    )
+    .await;
+    ingest(
+        &app,
+        Some(&kb),
+        digest_of("azure-openai", "gpt-4o", 0.84, 100, "openai"),
+    )
+    .await;
 
     let (ls, lb) = leaderboard(&app).await;
     assert_eq!(ls, StatusCode::OK);
-    assert_eq!(lb["rows"].as_array().unwrap().len(), 1, "variants merged into one row: {lb}");
+    assert_eq!(
+        lb["rows"].as_array().unwrap().len(),
+        1,
+        "variants merged into one row: {lb}"
+    );
     let row = &lb["rows"][0];
     assert_eq!(row["provider"], "openai");
     assert_eq!(row["model"], "gpt-4o");
@@ -458,8 +559,18 @@ async fn mixed_judges_annotated_and_judge_filter_works() {
     let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
     let app = crate::build_router(state);
     // Same bucket judged by two different providers across contributors.
-    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
-    ingest(&app, Some(&kb), digest_of("anthropic", "haiku", 0.84, 100, "openai")).await;
+    ingest(
+        &app,
+        Some(&ka),
+        digest_of("anthropic", "haiku", 0.80, 100, "anthropic"),
+    )
+    .await;
+    ingest(
+        &app,
+        Some(&kb),
+        digest_of("anthropic", "haiku", 0.84, 100, "openai"),
+    )
+    .await;
 
     let (_s, lb) = leaderboard(&app).await;
     let row = &lb["rows"][0];
@@ -482,8 +593,18 @@ async fn header_counts_are_computed_over_the_filtered_rows() {
     let (state, store) = setup(true, false, 5);
     let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
     let app = crate::build_router(state);
-    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
-    ingest(&app, Some(&kb), digest_of("openai", "gpt-x", 0.84, 100, "openai")).await;
+    ingest(
+        &app,
+        Some(&ka),
+        digest_of("anthropic", "haiku", 0.80, 100, "anthropic"),
+    )
+    .await;
+    ingest(
+        &app,
+        Some(&kb),
+        digest_of("openai", "gpt-x", 0.84, 100, "openai"),
+    )
+    .await;
 
     // Unfiltered: both contributors and both models are visible.
     let (ls, lb) = leaderboard(&app).await;
@@ -495,7 +616,10 @@ async fn header_counts_are_computed_over_the_filtered_rows() {
     // Filter to anthropic: only key-a's row survives, so the header must report one contributor.
     let (_s, only_a) = leaderboard_q(&app, "provider=anthropic").await;
     assert_eq!(only_a["rows"].as_array().unwrap().len(), 1, "{only_a}");
-    assert_eq!(only_a["contributors"], 1, "excluded contributor drops from the count: {only_a}");
+    assert_eq!(
+        only_a["contributors"], 1,
+        "excluded contributor drops from the count: {only_a}"
+    );
     assert_eq!(only_a["n_models"], 1, "{only_a}");
     assert_eq!(only_a["n_rows"], 1, "{only_a}");
 }
@@ -516,7 +640,11 @@ async fn n_models_is_distinct_models_not_row_count() {
 
     let (ls, lb) = leaderboard(&app).await;
     assert_eq!(ls, StatusCode::OK);
-    assert_eq!(lb["rows"].as_array().unwrap().len(), 2, "two task-type rows: {lb}");
+    assert_eq!(
+        lb["rows"].as_array().unwrap().len(),
+        2,
+        "two task-type rows: {lb}"
+    );
     assert_eq!(lb["n_rows"], 2, "{lb}");
     assert_eq!(lb["n_models"], 1, "one distinct (provider, model): {lb}");
     assert_eq!(lb["contributors"], 1, "{lb}");
@@ -530,26 +658,52 @@ async fn varying_bearer_strings_cannot_manufacture_sources() {
     let (state, store) = setup_k(true, false, 5, 2);
     let app = crate::build_router(state);
     for tok in ["forged-1", "forged-2", "forged-3", "forged-4"] {
-        let (status, body) =
-            ingest(&app, Some(tok), digest_of("anthropic", "haiku", 0.99, 5000, "openai")).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "made-up token {tok} must not be an identity: {body}");
+        let (status, body) = ingest(
+            &app,
+            Some(tok),
+            digest_of("anthropic", "haiku", 0.99, 5000, "openai"),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "made-up token {tok} must not be an identity: {body}"
+        );
     }
-    assert!(store.list_collective_entries().unwrap().is_empty(), "nothing was forged into the hub");
+    assert!(
+        store.list_collective_entries().unwrap().is_empty(),
+        "nothing was forged into the hub"
+    );
 
     // …and when the hub opts into anonymous contributions, they all collapse into ONE identity, so the
     // source floor still cannot be defeated — the row stays withheld.
     let (state, store) = setup_k(true, true, 5, 2);
     let app = crate::build_router(state);
     for tok in ["forged-1", "forged-2", "forged-3", "forged-4"] {
-        let (status, _) =
-            ingest(&app, Some(tok), digest_of("anthropic", "haiku", 0.99, 5000, "openai")).await;
+        let (status, _) = ingest(
+            &app,
+            Some(tok),
+            digest_of("anthropic", "haiku", 0.99, 5000, "openai"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
     }
-    let ids: std::collections::BTreeSet<_> =
-        store.list_collective_entries().unwrap().into_iter().map(|e| e.contributor_id).collect();
-    assert_eq!(ids.len(), 1, "every uncredentialed poster is one source, not four: {ids:?}");
+    let ids: std::collections::BTreeSet<_> = store
+        .list_collective_entries()
+        .unwrap()
+        .into_iter()
+        .map(|e| e.contributor_id)
+        .collect();
+    assert_eq!(
+        ids.len(),
+        1,
+        "every uncredentialed poster is one source, not four: {ids:?}"
+    );
     let (_s, lb) = leaderboard(&app).await;
-    assert!(lb["rows"].as_array().unwrap().is_empty(), "k=2 still holds the row back: {lb}");
+    assert!(
+        lb["rows"].as_array().unwrap().is_empty(),
+        "k=2 still holds the row back: {lb}"
+    );
     assert_eq!(lb["held_back"], 1);
 }
 
@@ -560,8 +714,12 @@ async fn a_non_consenting_projects_key_is_not_a_contributor_credential() {
     let (state, store) = setup(true, false, 5);
     let ingest_only = mint_key(&store, "plain", false);
     let app = crate::build_router(state);
-    let (status, body) =
-        ingest(&app, Some(&ingest_only), json!({ "entries": [entry("haiku", 0.8, 10)] })).await;
+    let (status, body) = ingest(
+        &app,
+        Some(&ingest_only),
+        json!({ "entries": [entry("haiku", 0.8, 10)] }),
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert!(store.list_collective_entries().unwrap().is_empty());
 
@@ -569,8 +727,12 @@ async fn a_non_consenting_projects_key_is_not_a_contributor_credential() {
     let mut p = store.get_project("proj-plain").unwrap().unwrap();
     p.collective_opt_in = true;
     store.update_project(&p).unwrap();
-    let (status, ack) =
-        ingest(&app, Some(&ingest_only), json!({ "entries": [entry("haiku", 0.8, 10)] })).await;
+    let (status, ack) = ingest(
+        &app,
+        Some(&ingest_only),
+        json!({ "entries": [entry("haiku", 0.8, 10)] }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{ack}");
     assert_eq!(ack["accepted"], 1);
 }
@@ -586,32 +748,67 @@ async fn an_absurd_case_claim_cannot_own_a_row() {
         contributor_key(&store, "liar"),
     );
     let app = crate::build_router(state);
-    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
-    ingest(&app, Some(&kb), digest_of("anthropic", "haiku", 0.82, 100, "anthropic")).await;
+    ingest(
+        &app,
+        Some(&ka),
+        digest_of("anthropic", "haiku", 0.80, 100, "anthropic"),
+    )
+    .await;
+    ingest(
+        &app,
+        Some(&kb),
+        digest_of("anthropic", "haiku", 0.82, 100, "anthropic"),
+    )
+    .await;
 
     // A billion cases from one instance is not a benchmark result, it is a typo or an attack.
-    let (status, ack) =
-        ingest(&app, Some(&liar), digest_of("anthropic", "haiku", 0.05, 1_000_000_000, "anthropic")).await;
+    let (status, ack) = ingest(
+        &app,
+        Some(&liar),
+        digest_of("anthropic", "haiku", 0.05, 1_000_000_000, "anthropic"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{ack}");
-    assert_eq!(ack["accepted"], 0, "an implausible claim is not stored: {ack}");
-    assert_eq!(ack["rejected_implausible"], 1, "…and it is disclosed, not silently dropped: {ack}");
+    assert_eq!(
+        ack["accepted"], 0,
+        "an implausible claim is not stored: {ack}"
+    );
+    assert_eq!(
+        ack["rejected_implausible"], 1,
+        "…and it is disclosed, not silently dropped: {ack}"
+    );
 
     let (_s, lb) = leaderboard(&app).await;
     let row = &lb["rows"][0];
     let q = row["quality"].as_f64().unwrap();
-    assert!(q > 0.75, "the honest consensus survives; got quality {q} in {lb}");
+    assert!(
+        q > 0.75,
+        "the honest consensus survives; got quality {q} in {lb}"
+    );
 
     // Even a claim *within* the plausible ceiling cannot own the row: a single source's weight is
     // winsorized to the documented share ceiling, and the row discloses that share.
-    let (status, ack) =
-        ingest(&app, Some(&liar), digest_of("anthropic", "haiku", 0.05, 999_999, "anthropic")).await;
+    let (status, ack) = ingest(
+        &app,
+        Some(&liar),
+        digest_of("anthropic", "haiku", 0.05, 999_999, "anthropic"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{ack}");
-    assert_eq!(ack["accepted"], 1, "a big-but-plausible contribution is still accepted: {ack}");
+    assert_eq!(
+        ack["accepted"], 1,
+        "a big-but-plausible contribution is still accepted: {ack}"
+    );
 
     let (_s, lb) = leaderboard(&app).await;
     let row = &lb["rows"][0];
-    let share = row["max_source_share"].as_f64().expect("provenance is visible");
-    assert!(share <= 0.801, "no source exceeds the documented share ceiling; got {share} in {lb}");
+    let share = row["max_source_share"]
+        .as_f64()
+        .expect("provenance is visible");
+    assert!(
+        share <= 0.801,
+        "no source exceeds the documented share ceiling; got {share} in {lb}"
+    );
     let q = row["quality"].as_f64().unwrap();
     assert!(
         q > 0.20,
@@ -623,14 +820,30 @@ async fn an_absurd_case_claim_cannot_own_a_row() {
 async fn a_genuinely_large_single_source_still_outweighs_a_small_one() {
     // The non-goal: do not over-correct into ignoring sample size. 10k cases must still beat 10.
     let (state, store) = setup_k(true, false, 5, 1);
-    let (big, small) = (contributor_key(&store, "big"), contributor_key(&store, "small"));
+    let (big, small) = (
+        contributor_key(&store, "big"),
+        contributor_key(&store, "small"),
+    );
     let app = crate::build_router(state);
-    ingest(&app, Some(&big), digest_of("anthropic", "haiku", 0.90, 10_000, "anthropic")).await;
-    ingest(&app, Some(&small), digest_of("anthropic", "haiku", 0.10, 10, "anthropic")).await;
+    ingest(
+        &app,
+        Some(&big),
+        digest_of("anthropic", "haiku", 0.90, 10_000, "anthropic"),
+    )
+    .await;
+    ingest(
+        &app,
+        Some(&small),
+        digest_of("anthropic", "haiku", 0.10, 10, "anthropic"),
+    )
+    .await;
 
     let (_s, lb) = leaderboard(&app).await;
     let q = lb["rows"][0]["quality"].as_f64().unwrap();
-    assert!(q > 0.7, "the 10k-case run dominates the 10-case one, as it should; got {q} in {lb}");
+    assert!(
+        q > 0.7,
+        "the 10k-case run dominates the 10-case one, as it should; got {q} in {lb}"
+    );
 }
 
 /// DELETE /v1/collective/contribution with an optional bearer token and `?contributor=`.
@@ -643,11 +856,18 @@ async fn withdraw(app: &Router, token: Option<&str>, who: Option<&str>) -> (Stat
     if let Some(t) = token {
         req = req.header("authorization", format!("Bearer {t}"));
     }
-    let resp = app.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    let resp = app
+        .clone()
+        .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let v: Value =
-        if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+    let v: Value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
     (status, v)
 }
 
@@ -656,8 +876,18 @@ async fn a_contributor_can_withdraw_its_own_contribution_and_only_its_own() {
     let (state, store) = setup(true, false, 5);
     let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
     let app = crate::build_router(state);
-    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
-    ingest(&app, Some(&kb), digest_of("anthropic", "haiku", 0.84, 100, "anthropic")).await;
+    ingest(
+        &app,
+        Some(&ka),
+        digest_of("anthropic", "haiku", 0.80, 100, "anthropic"),
+    )
+    .await;
+    ingest(
+        &app,
+        Some(&kb),
+        digest_of("anthropic", "haiku", 0.84, 100, "anthropic"),
+    )
+    .await;
     assert_eq!(store.list_collective_entries().unwrap().len(), 2);
 
     // A withdraws: its rows go, B's stay. Consent is revocable, not one-way.
@@ -685,7 +915,12 @@ async fn expired_entries_stop_being_published_and_are_swept() {
     let (state, store) = setup(true, false, 5);
     let ka = contributor_key(&store, "a");
     let app = crate::build_router(state);
-    ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+    ingest(
+        &app,
+        Some(&ka),
+        digest_of("anthropic", "haiku", 0.80, 100, "anthropic"),
+    )
+    .await;
 
     // Age the stored row past the 90-day retention policy.
     let mut aged = store.list_collective_entries().unwrap().remove(0);
@@ -693,12 +928,20 @@ async fn expired_entries_stop_being_published_and_are_swept() {
     store.upsert_collective_entry(&aged).unwrap();
 
     let (_s, lb) = leaderboard(&app).await;
-    assert!(lb["rows"].as_array().unwrap().is_empty(), "an expired row is not published: {lb}");
+    assert!(
+        lb["rows"].as_array().unwrap().is_empty(),
+        "an expired row is not published: {lb}"
+    );
     assert_eq!(lb["contributors"], 0);
 
     // …and the next write sweeps it off disk rather than letting it accumulate forever.
     let kb = contributor_key(&store, "b");
-    ingest(&app, Some(&kb), digest_of("openai", "gpt-x", 0.7, 100, "openai")).await;
+    ingest(
+        &app,
+        Some(&kb),
+        digest_of("openai", "gpt-x", 0.7, 100, "openai"),
+    )
+    .await;
     let left = store.list_collective_entries().unwrap();
     assert_eq!(left.len(), 1, "the expired row was purged: {left:?}");
     assert_eq!(left[0].provider, "openai");
@@ -714,9 +957,19 @@ async fn a_hub_can_rate_limit_re_pushes_to_blunt_differencing() {
     let ka = contributor_key(&store, "a");
     let app = crate::build_router(state);
 
-    let (s1, _) = ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.80, 100, "anthropic")).await;
+    let (s1, _) = ingest(
+        &app,
+        Some(&ka),
+        digest_of("anthropic", "haiku", 0.80, 100, "anthropic"),
+    )
+    .await;
     assert_eq!(s1, StatusCode::OK);
-    let (s2, body) = ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.81, 101, "anthropic")).await;
+    let (s2, body) = ingest(
+        &app,
+        Some(&ka),
+        digest_of("anthropic", "haiku", 0.81, 101, "anthropic"),
+    )
+    .await;
     assert_eq!(s2, StatusCode::TOO_MANY_REQUESTS, "{body}");
     // The first contribution is untouched — a refused re-push must not clear the set.
     let stored = store.list_collective_entries().unwrap();
@@ -738,7 +991,10 @@ async fn published_cost_is_bucketed_so_it_cannot_fingerprint_a_contributor() {
     };
     ingest(&app, Some(&ka), with_cost(0.003_141_59)).await;
     let stored = store.list_collective_entries().unwrap();
-    assert_eq!(stored[0].avg_cost_usd, 0.0031, "a distinctive cost is stored coarsened, not verbatim");
+    assert_eq!(
+        stored[0].avg_cost_usd, 0.0031,
+        "a distinctive cost is stored coarsened, not verbatim"
+    );
     let (_s, lb) = leaderboard(&app).await;
     assert_eq!(lb["rows"][0]["avg_cost_usd"], 0.0031, "{lb}");
 }
@@ -757,7 +1013,10 @@ async fn anonymous_push_refused_unless_allowed() {
     let (status, ack) = ingest(&app, None, json!({ "entries": [entry("haiku", 0.8, 10)] })).await;
     assert_eq!(status, StatusCode::OK, "{ack}");
     assert_eq!(ack["contributor_id"], "anonymous");
-    assert_eq!(store.list_collective_entries().unwrap()[0].contributor_id, "anonymous");
+    assert_eq!(
+        store.list_collective_entries().unwrap()[0].contributor_id,
+        "anonymous"
+    );
 }
 
 /// A v3 digest carrying one bucket with an explicit rigor block.
@@ -776,11 +1035,24 @@ async fn rigor_rides_the_row_and_the_leaderboard_can_be_filtered_by_it() {
     let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
     let app = crate::build_router(state);
     // `strict` is a pinned, frozen, significance-tested contribution; `loose` sampled a mutable set.
-    ingest(&app, Some(&ka), rigor_digest("haiku", "exact", "all", "all")).await;
+    ingest(
+        &app,
+        Some(&ka),
+        rigor_digest("haiku", "exact", "all", "all"),
+    )
+    .await;
     let (_s, lb) = leaderboard(&app).await;
-    assert_eq!(lb["n_rows"], 0, "one source is still one source — the k floor comes first: {lb}");
+    assert_eq!(
+        lb["n_rows"], 0,
+        "one source is still one source — the k floor comes first: {lb}"
+    );
 
-    ingest(&app, Some(&kb), rigor_digest("haiku", "exact", "all", "all")).await;
+    ingest(
+        &app,
+        Some(&kb),
+        rigor_digest("haiku", "exact", "all", "all"),
+    )
+    .await;
     let (_s, lb) = leaderboard(&app).await;
     let row = &lb["rows"][0];
     assert_eq!(row["rigor"]["determinism"], "exact", "{lb}");
@@ -795,16 +1067,33 @@ async fn rigor_rides_the_row_and_the_leaderboard_can_be_filtered_by_it() {
 
     // Now B re-contributes the same bucket from a sloppy run: the row discloses the mixture instead
     // of averaging it away, and drops out of the "exact, frozen" slice.
-    ingest(&app, Some(&kb), rigor_digest("haiku", "sampled", "none", "all")).await;
+    ingest(
+        &app,
+        Some(&kb),
+        rigor_digest("haiku", "sampled", "none", "all"),
+    )
+    .await;
     let (_s, lb) = leaderboard(&app).await;
     let row = &lb["rows"][0];
-    assert_eq!(row["rigor"]["determinism"], "sampled", "the headline is the weakest stamp: {lb}");
-    assert_eq!(row["rigor"]["determinism_levels"], json!(["exact", "sampled"]));
+    assert_eq!(
+        row["rigor"]["determinism"], "sampled",
+        "the headline is the weakest stamp: {lb}"
+    );
+    assert_eq!(
+        row["rigor"]["determinism_levels"],
+        json!(["exact", "sampled"])
+    );
     assert_eq!(row["rigor"]["frozen_dataset"], "mixed");
-    assert_eq!(row["rigor"]["significance_tested"], "all", "both sources did test");
+    assert_eq!(
+        row["rigor"]["significance_tested"], "all",
+        "both sources did test"
+    );
     assert_eq!(row["mixed_rigor"], true);
     let (_s, lb) = leaderboard_q(&app, "determinism=exact").await;
-    assert_eq!(lb["n_rows"], 0, "a mixed row is not an exact-determinism row: {lb}");
+    assert_eq!(
+        lb["n_rows"], 0,
+        "a mixed row is not an exact-determinism row: {lb}"
+    );
 }
 
 #[tokio::test]
@@ -813,16 +1102,32 @@ async fn v2_digests_still_merge_under_a_v3_hub() {
     let (ka, kb) = (contributor_key(&store, "a"), contributor_key(&store, "b"));
     let app = crate::build_router(state);
     // A v2 contributor knows nothing about rigor; the bump must not orphan it.
-    let (status, ack) = ingest(&app, Some(&ka), digest_of("anthropic", "haiku", 0.8, 100, "openai")).await;
+    let (status, ack) = ingest(
+        &app,
+        Some(&ka),
+        digest_of("anthropic", "haiku", 0.8, 100, "openai"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{ack}");
     assert_eq!(ack["accepted"], 1);
-    ingest(&app, Some(&kb), rigor_digest("haiku", "exact", "all", "all")).await;
+    ingest(
+        &app,
+        Some(&kb),
+        rigor_digest("haiku", "exact", "all", "all"),
+    )
+    .await;
     let (_s, lb) = leaderboard(&app).await;
     let row = &lb["rows"][0];
-    assert_eq!(row["n_contributors"], 2, "the v2 contribution still counts: {lb}");
+    assert_eq!(
+        row["n_contributors"], 2,
+        "the v2 contribution still counts: {lb}"
+    );
     // One silent source voids the claim — the row never inherits the rigorous source's badge.
     assert!(row["rigor"]["determinism"].is_null(), "{lb}");
     assert_eq!(row["rigor"]["frozen_dataset"], "mixed");
     let (_s, lb) = leaderboard_q(&app, "frozen_dataset=true").await;
-    assert_eq!(lb["n_rows"], 0, "a partly-unknown row is not a frozen-dataset row: {lb}");
+    assert_eq!(
+        lb["n_rows"], 0,
+        "a partly-unknown row is not a frozen-dataset row: {lb}"
+    );
 }

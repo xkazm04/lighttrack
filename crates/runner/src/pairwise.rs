@@ -62,7 +62,9 @@ fn criteria_of(rubric: &Option<Rubric>, bench: &Benchmark) -> Option<String> {
 }
 
 fn label_of(t: &BenchTarget) -> String {
-    t.label.clone().unwrap_or_else(|| format!("{}/{}", t.provider, t.model))
+    t.label
+        .clone()
+        .unwrap_or_else(|| format!("{}/{}", t.provider, t.model))
 }
 
 /// Run the round-robin pairwise phase and print the matrix + ranking. `jp`/`jm` are the judge
@@ -105,7 +107,9 @@ pub(crate) fn run_pairwise_matrix(
     let run_id = lighttrack_core::new_id();
     let criteria = criteria_of(rubric, bench);
     let (n_t, n_c) = (targets.len(), cases.len());
-    println!("\nPAIRWISE (round-robin, order-debiased): {n_t} targets × {n_c} case(s), judge={jp}/{jm}");
+    println!(
+        "\nPAIRWISE (round-robin, order-debiased): {n_t} targets × {n_c} case(s), judge={jp}/{jm}"
+    );
 
     // Pre-flight cost gate. The full round-robin is `round_robin_games` games and each game is TWO
     // judge calls (both A/B orders, for debias), so the call count jumps super-linearly in targets:
@@ -114,10 +118,15 @@ pub(crate) fn run_pairwise_matrix(
     let max_possible = round_robin_games(n_t, n_c);
     let judge_calls = 2 * max_possible;
     let dollar_hint = match price_gen_cost(prices, jp, jm, Some(1500), Some(400)) {
-        c if c > 0.0 => format!(" (~${:.2} at ~1.5k/0.4k tokens per call)", c * judge_calls as f64),
+        c if c > 0.0 => format!(
+            " (~${:.2} at ~1.5k/0.4k tokens per call)",
+            c * judge_calls as f64
+        ),
         _ => String::new(),
     };
-    println!("  cost pre-flight: up to {max_possible} games ⇒ ~{judge_calls} judge calls{dollar_hint}");
+    println!(
+        "  cost pre-flight: up to {max_possible} games ⇒ ~{judge_calls} judge calls{dollar_hint}"
+    );
     if max_possible > cli.max_games {
         println!(
             "  ABORT (pairwise): {max_possible} games exceeds --max-games {}. Re-run with \
@@ -135,11 +144,22 @@ pub(crate) fn run_pairwise_matrix(
         let (ti, ci) = (idx / n_c, idx % n_c);
         let t = &targets[ti];
         match generate_deterministic(
-            engine, &t.provider, &t.model, t.system_prompt.as_deref(), &cases[ci].input, None,
+            engine,
+            &t.provider,
+            &t.model,
+            t.system_prompt.as_deref(),
+            &cases[ci].input,
+            None,
         ) {
             Ok(g) => GenCell {
                 cost: g.cost_usd.unwrap_or_else(|| {
-                    price_gen_cost(prices, &t.provider, &t.model, g.input_tokens, g.output_tokens)
+                    price_gen_cost(
+                        prices,
+                        &t.provider,
+                        &t.model,
+                        g.input_tokens,
+                        g.output_tokens,
+                    )
                 }),
                 tokens: g.input_tokens.unwrap_or(0) + g.output_tokens.unwrap_or(0),
                 determinism: Some(g.determinism),
@@ -147,7 +167,12 @@ pub(crate) fn run_pairwise_matrix(
             },
             Err(e) => {
                 eprintln!("  gen error [{}, case {}]: {e}", labels[ti], ci + 1);
-                GenCell { output: None, cost: 0.0, tokens: 0, determinism: None }
+                GenCell {
+                    output: None,
+                    cost: 0.0,
+                    tokens: 0,
+                    determinism: None,
+                }
             }
         }
     });
@@ -176,14 +201,21 @@ pub(crate) fn run_pairwise_matrix(
     }
 
     // 3. Judge every game with the order-debiased engine judge, in parallel.
-    let outcomes: Vec<Result<lighttrack_engine::PairwiseOutcome>> = parallel_map(games.len(), jobs, |g| {
-        let (ci, i, j) = games[g];
-        run_pairwise(
-            engine, jp, jm, &cases[ci].input, cases[ci].expected.as_deref(),
-            output(i, ci).unwrap_or_default(), output(j, ci).unwrap_or_default(), criteria.as_deref(),
-        )
-        .map_err(anyhow::Error::from)
-    });
+    let outcomes: Vec<Result<lighttrack_engine::PairwiseOutcome>> =
+        parallel_map(games.len(), jobs, |g| {
+            let (ci, i, j) = games[g];
+            run_pairwise(
+                engine,
+                jp,
+                jm,
+                &cases[ci].input,
+                cases[ci].expected.as_deref(),
+                output(i, ci).unwrap_or_default(),
+                output(j, ci).unwrap_or_default(),
+                criteria.as_deref(),
+            )
+            .map_err(anyhow::Error::from)
+        });
 
     // 4. Fold outcomes (in game order — deterministic at any --jobs): accrue judge cost/tokens and
     // collect the per-game winners, then tally standings + head-to-head matrix. `parallel_map` is
@@ -246,7 +278,10 @@ pub(crate) fn run_pairwise_matrix(
                 // Best-effort: a transient post failure must not discard a paid-for round-robin, but
                 // it is counted into the run report rather than silently dropped.
                 if let Err(e) = post(cli, http, "/v1/scores", &score) {
-                    eprintln!("  case {}: game score post failed (verdict not persisted): {e}", ci + 1);
+                    eprintln!(
+                        "  case {}: game score post failed (verdict not persisted): {e}",
+                        ci + 1
+                    );
                     score_post_failures += 1;
                 }
                 played.push(g);
@@ -254,7 +289,12 @@ pub(crate) fn run_pairwise_matrix(
             }
             Err(e) => {
                 let (ci, i, j) = g;
-                eprintln!("  judge error [case {}, {} vs {}]: {e}", ci + 1, labels[i], labels[j]);
+                eprintln!(
+                    "  judge error [case {}, {} vs {}]: {e}",
+                    ci + 1,
+                    labels[i],
+                    labels[j]
+                );
                 judge_errors += 1;
             }
         }
@@ -270,9 +310,25 @@ pub(crate) fn run_pairwise_matrix(
     );
 
     post_run(
-        cli, http, bench, &run_id, &labels, &standings, &beats, played.len(), judge_errors,
-        bias_count, injected, score_post_failures, gen_determinism, judge_determinism,
-        &self_preference, game_log, gen_cost, judge_cost, gen_tokens + judge_tokens,
+        cli,
+        http,
+        bench,
+        &run_id,
+        &labels,
+        &standings,
+        &beats,
+        played.len(),
+        judge_errors,
+        bias_count,
+        injected,
+        score_post_failures,
+        gen_determinism,
+        judge_determinism,
+        &self_preference,
+        game_log,
+        gen_cost,
+        judge_cost,
+        gen_tokens + judge_tokens,
     )
 }
 
@@ -332,14 +388,22 @@ fn tally(
 fn print_ranking(labels: &[String], standings: &[Standing]) {
     let mut order: Vec<usize> = (0..labels.len()).collect();
     order.sort_by(|&a, &b| {
-        standings[b].win_rate().total_cmp(&standings[a].win_rate()).then(a.cmp(&b))
+        standings[b]
+            .win_rate()
+            .total_cmp(&standings[a].win_rate())
+            .then(a.cmp(&b))
     });
     println!("  win-rate ranking:");
     for (rank, &i) in order.iter().enumerate() {
         let s = &standings[i];
         println!(
             "    {}. {:<20} win_rate={:.3}  W-L-T={}-{}-{}",
-            rank + 1, trunc(&labels[i], 20), s.win_rate(), s.wins, s.losses, s.ties
+            rank + 1,
+            trunc(&labels[i], 20),
+            s.win_rate(),
+            s.wins,
+            s.losses,
+            s.ties
         );
     }
 }
@@ -454,11 +518,20 @@ mod tests {
         let (standings, beats, bias) = tally(3, &games, &winners);
         assert_eq!(bias, 1, "one game was a positional tie");
         // Target 0: beat 1, lost to 2 → 1W-1L-0T.
-        assert_eq!((standings[0].wins, standings[0].losses, standings[0].ties), (1, 1, 0));
+        assert_eq!(
+            (standings[0].wins, standings[0].losses, standings[0].ties),
+            (1, 1, 0)
+        );
         // Target 1: lost to 0, tied 2 → 0W-1L-1T.
-        assert_eq!((standings[1].wins, standings[1].losses, standings[1].ties), (0, 1, 1));
+        assert_eq!(
+            (standings[1].wins, standings[1].losses, standings[1].ties),
+            (0, 1, 1)
+        );
         // Target 2: beat 0, tied 1 → 1W-0L-1T.
-        assert_eq!((standings[2].wins, standings[2].losses, standings[2].ties), (1, 0, 1));
+        assert_eq!(
+            (standings[2].wins, standings[2].losses, standings[2].ties),
+            (1, 0, 1)
+        );
         // Head-to-head: 0 beat 1 once; 2 beat 0 once.
         assert_eq!(beats[0][1], 1);
         assert_eq!(beats[2][0], 1);
@@ -480,7 +553,11 @@ mod tests {
 
     #[test]
     fn win_rate_counts_ties_as_half() {
-        let s = Standing { wins: 2, losses: 1, ties: 1 };
+        let s = Standing {
+            wins: 2,
+            losses: 1,
+            ties: 1,
+        };
         // (2 + 0.5) / 4 = 0.625
         assert!(approx(s.win_rate(), 0.625));
         // No games → neutral 0.5.
@@ -491,14 +568,33 @@ mod tests {
     fn ranking_order_is_by_win_rate_desc_stable() {
         // Two targets tied on win-rate keep their original index order.
         let standings = vec![
-            Standing { wins: 1, losses: 1, ties: 0 }, // 0.5
-            Standing { wins: 2, losses: 0, ties: 0 }, // 1.0
-            Standing { wins: 1, losses: 1, ties: 0 }, // 0.5
+            Standing {
+                wins: 1,
+                losses: 1,
+                ties: 0,
+            }, // 0.5
+            Standing {
+                wins: 2,
+                losses: 0,
+                ties: 0,
+            }, // 1.0
+            Standing {
+                wins: 1,
+                losses: 1,
+                ties: 0,
+            }, // 0.5
         ];
         let mut order: Vec<usize> = (0..3).collect();
         order.sort_by(|&a, &b| {
-            standings[b].win_rate().total_cmp(&standings[a].win_rate()).then(a.cmp(&b))
+            standings[b]
+                .win_rate()
+                .total_cmp(&standings[a].win_rate())
+                .then(a.cmp(&b))
         });
-        assert_eq!(order, vec![1, 0, 2], "highest win-rate first, ties keep index order");
+        assert_eq!(
+            order,
+            vec![1, 0, 2],
+            "highest win-rate first, ties keep index order"
+        );
     }
 }

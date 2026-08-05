@@ -26,7 +26,10 @@ async fn call(
         req = req.header("content-type", "application/json");
     }
     let req = req
-        .body(body.map(|b| Body::from(b.to_string())).unwrap_or_else(Body::empty))
+        .body(
+            body.map(|b| Body::from(b.to_string()))
+                .unwrap_or_else(Body::empty),
+        )
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
@@ -51,8 +54,10 @@ async fn project_key_enqueue_is_forced_into_its_own_project() {
         "POST",
         "/v1/relay/tasks",
         &key_a,
-        Some(json!({ "action_type": "xprice/summary", "project_id": "proj-b",
-                     "payload": { "sku": "A-1" } })),
+        Some(
+            json!({ "action_type": "xprice/summary", "project_id": "proj-b",
+                     "payload": { "sku": "A-1" } }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -80,14 +85,25 @@ async fn device_key_leases_and_reports_project_keys_cannot() {
     let id = task["id"].as_str().unwrap().to_string();
 
     // A project key is not the device: lease and result are forbidden.
-    let (status, _) =
-        call(&app, "POST", "/v1/relay/lease", &key_a, Some(json!({ "device": "pc" }))).await;
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/relay/lease",
+        &key_a,
+        Some(json!({ "device": "pc" })),
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     // The enrolled device key leases the due task…
-    let (status, leased) =
-        call(&app, "POST", "/v1/relay/lease", "device-secret", Some(json!({ "device": "pc" })))
-            .await;
+    let (status, leased) = call(
+        &app,
+        "POST",
+        "/v1/relay/lease",
+        "device-secret",
+        Some(json!({ "device": "pc" })),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(leased.as_array().unwrap().len(), 1);
     assert_eq!(leased[0]["id"], id.as_str());
@@ -133,7 +149,14 @@ async fn terminal_settle_logs_one_flat_cost_event_deferred_none() {
 
     // Deferred settle (rate limit): no Claude run happened, so no event.
     let lease = json!({ "device": "pc" });
-    call(&app, "POST", "/v1/relay/lease", "device-secret", Some(lease.clone())).await;
+    call(
+        &app,
+        "POST",
+        "/v1/relay/lease",
+        "device-secret",
+        Some(lease.clone()),
+    )
+    .await;
     call(
         &app,
         "POST",
@@ -145,11 +168,24 @@ async fn terminal_settle_logs_one_flat_cost_event_deferred_none() {
     assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty());
 
     // Successful settle: exactly one event at the flat price, traced by task id.
-    call(&app, "POST", "/v1/relay/lease", "device-secret", Some(lease)).await;
+    call(
+        &app,
+        "POST",
+        "/v1/relay/lease",
+        "device-secret",
+        Some(lease),
+    )
+    .await;
     let report = json!({ "status": "succeeded", "result": { "ok": true }, "model": "claude-sonnet-5",
                          "input_tokens": 1200, "output_tokens": 300, "latency_ms": 4500 });
-    call(&app, "POST", &format!("/v1/relay/tasks/{id}/result"), "device-secret", Some(report.clone()))
-        .await;
+    call(
+        &app,
+        "POST",
+        &format!("/v1/relay/tasks/{id}/result"),
+        "device-secret",
+        Some(report.clone()),
+    )
+    .await;
     let events = store.list_events(Some("proj-a"), 10).unwrap();
     assert_eq!(events.len(), 1);
     let ev = &events[0];
@@ -161,7 +197,14 @@ async fn terminal_settle_logs_one_flat_cost_event_deferred_none() {
     assert_eq!(ev.metadata["action_type"], "xprice/summary");
 
     // A duplicate report of the already-settled task must not double-log.
-    call(&app, "POST", &format!("/v1/relay/tasks/{id}/result"), "device-secret", Some(report)).await;
+    call(
+        &app,
+        "POST",
+        &format!("/v1/relay/tasks/{id}/result"),
+        "device-secret",
+        Some(report),
+    )
+    .await;
     assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
 }
 
@@ -181,7 +224,14 @@ async fn exhausted_failure_dead_letters_and_long_poll_waits() {
     )
     .await;
     let id = task["id"].as_str().unwrap().to_string();
-    call(&app, "POST", "/v1/relay/lease", "device-secret", Some(json!({ "device": "pc" }))).await;
+    call(
+        &app,
+        "POST",
+        "/v1/relay/lease",
+        "device-secret",
+        Some(json!({ "device": "pc" })),
+    )
+    .await;
     let (status, dead) = call(
         &app,
         "POST",

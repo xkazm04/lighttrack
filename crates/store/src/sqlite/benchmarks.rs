@@ -41,8 +41,9 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Benchmark>> {
 }
 
 pub(super) fn list(conn: &Connection, project: &str) -> Result<Vec<Benchmark>> {
-    let sql =
-        format!("SELECT {BENCH_COLS} FROM benchmarks WHERE project_id = ?1 ORDER BY created_at DESC");
+    let sql = format!(
+        "SELECT {BENCH_COLS} FROM benchmarks WHERE project_id = ?1 ORDER BY created_at DESC"
+    );
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
         .query_map(params![project], map_bench)?

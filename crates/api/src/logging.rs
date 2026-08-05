@@ -68,7 +68,11 @@ fn directive(explicit: Option<&str>, rust_log: Option<&str>) -> String {
 /// machine-readable shape is the one a host depends on, so a typo must not silently break ingestion.
 fn wants_json(format: Option<&str>) -> bool {
     !matches!(
-        format.map(str::trim).unwrap_or_default().to_ascii_lowercase().as_str(),
+        format
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
         "text" | "plain" | "human" | "pretty" | "compact"
     )
 }
@@ -86,7 +90,10 @@ mod tests {
         assert_eq!(directive(Some("  "), Some("warn")), "warn");
         assert_eq!(directive(Some(""), None), DEFAULT_LEVEL);
         // Full directives pass through untouched.
-        assert_eq!(directive(Some("info,lighttrack_api::events=debug"), None), "info,lighttrack_api::events=debug");
+        assert_eq!(
+            directive(Some("info,lighttrack_api::events=debug"), None),
+            "info,lighttrack_api::events=debug"
+        );
     }
 
     #[test]
@@ -94,7 +101,10 @@ mod tests {
         assert!(wants_json(None));
         assert!(wants_json(Some("json")));
         assert!(wants_json(Some("")));
-        assert!(wants_json(Some("jsno")), "a typo must not silently break log ingestion");
+        assert!(
+            wants_json(Some("jsno")),
+            "a typo must not silently break log ingestion"
+        );
         assert!(!wants_json(Some("text")));
         assert!(!wants_json(Some("TEXT")));
         assert!(!wants_json(Some(" pretty ")));

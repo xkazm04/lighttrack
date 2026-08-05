@@ -34,10 +34,12 @@ pub(crate) async fn upsert(pool: &PgPool, p: &ModelPriceRow) -> Result<()> {
 }
 
 pub(crate) async fn list(pool: &PgPool) -> Result<Vec<ModelPriceRow>> {
-    let rows = sqlx::query(&format!("SELECT {COLS} FROM model_prices ORDER BY provider, model"))
-        .fetch_all(pool)
-        .await
-        .map_err(pgerr)?;
+    let rows = sqlx::query(&format!(
+        "SELECT {COLS} FROM model_prices ORDER BY provider, model"
+    ))
+    .fetch_all(pool)
+    .await
+    .map_err(pgerr)?;
     rows.iter().map(from_row).collect()
 }
 

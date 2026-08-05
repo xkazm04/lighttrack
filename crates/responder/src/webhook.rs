@@ -57,7 +57,10 @@ impl Trigger {
 }
 
 pub(crate) async fn receive(State(st): State<AppState>, Json(body): Json<Value>) -> StatusCode {
-    let event = body.get("event").and_then(Value::as_str).unwrap_or("(unknown)");
+    let event = body
+        .get("event")
+        .and_then(Value::as_str)
+        .unwrap_or("(unknown)");
     let trigger = if let Some(v) = body.get("spike") {
         match serde_json::from_value::<Spike>(v.clone()) {
             Ok(s) => Trigger::Error(s),

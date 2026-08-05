@@ -129,9 +129,15 @@ fn retry_decision(failures: u32, max_attempts: u32) -> (&'static str, String) {
     // `failures` is the count BEFORE this one; finishing with an error records it.
     let after = failures + 1;
     if after < max_attempts {
-        ("queued", format!("failure {after}/{max_attempts}, retrying"))
+        (
+            "queued",
+            format!("failure {after}/{max_attempts}, retrying"),
+        )
     } else {
-        ("failed", format!("failure {after}/{max_attempts}, giving up"))
+        (
+            "failed",
+            format!("failure {after}/{max_attempts}, giving up"),
+        )
     }
 }
 
@@ -145,7 +151,12 @@ fn sweep_due(last_sweep: Option<Instant>, recur_interval: u64) -> bool {
 }
 
 fn claim(cli: &Cli, http: &reqwest::blocking::Client, stale_secs: i64) -> Result<Option<Job>> {
-    let v = post(cli, http, "/v1/jobs/claim", &json!({ "stale_secs": stale_secs }))?;
+    let v = post(
+        cli,
+        http,
+        "/v1/jobs/claim",
+        &json!({ "stale_secs": stale_secs }),
+    )?;
     if v.is_null() {
         Ok(None)
     } else {
@@ -184,13 +195,32 @@ fn process_job(
                 .get("benchmark_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("bench_run payload missing benchmark_id"))?;
-            let samples = job.payload.get("samples").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-            let gen_samples =
-                job.payload.get("gen_samples").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-            let heal = job.payload.get("heal").and_then(|v| v.as_bool()).unwrap_or(false);
-            let pairwise = job.payload.get("pairwise").and_then(|v| v.as_bool()).unwrap_or(false);
+            let samples = job
+                .payload
+                .get("samples")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1) as u32;
+            let gen_samples = job
+                .payload
+                .get("gen_samples")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1) as u32;
+            let heal = job
+                .payload
+                .get("heal")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let pairwise = job
+                .payload
+                .get("pairwise")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             // Bounded parallelism for queued bench jobs; defaults to the CLI's --jobs (4).
-            let jobs = job.payload.get("jobs").and_then(|v| v.as_u64()).unwrap_or(cli.jobs as u64) as usize;
+            let jobs = job
+                .payload
+                .get("jobs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(cli.jobs as u64) as usize;
             ctl.note(&format!("running benchmark {bid}"));
             // Provenance passthrough: a version-triggered enqueue (prompts::maybe_enqueue) tags its
             // job payload with the prompt + version being scored; stamp them into the run report so
@@ -206,8 +236,17 @@ fn process_job(
                 (!m.is_empty()).then_some(Value::Object(m))
             };
             let status = run_benchmark(
-                cli, http, engine, bid, samples, gen_samples, heal, pairwise, jobs,
-                extra.as_ref(), ctl,
+                cli,
+                http,
+                engine,
+                bid,
+                samples,
+                gen_samples,
+                heal,
+                pairwise,
+                jobs,
+                extra.as_ref(),
+                ctl,
             )?;
             Ok(json!({
                 "benchmark_id": bid,

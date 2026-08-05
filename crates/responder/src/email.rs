@@ -14,7 +14,10 @@ pub(crate) struct EmailConfig {
 
 impl EmailConfig {
     pub(crate) fn from_env() -> Option<Self> {
-        let key = or_env("LIGHTTRACK_RESPONDER_RESEND_KEY", "LIGHTTRACK_ALERT_RESEND_KEY")?;
+        let key = or_env(
+            "LIGHTTRACK_RESPONDER_RESEND_KEY",
+            "LIGHTTRACK_ALERT_RESEND_KEY",
+        )?;
         let to: Vec<String> = or_env("LIGHTTRACK_RESPONDER_EMAIL_TO", "LIGHTTRACK_ALERT_EMAIL_TO")?
             .split(',')
             .map(|s| s.trim().to_string())
@@ -23,8 +26,11 @@ impl EmailConfig {
         if to.is_empty() {
             return None;
         }
-        let from = or_env("LIGHTTRACK_RESPONDER_EMAIL_FROM", "LIGHTTRACK_ALERT_EMAIL_FROM")
-            .unwrap_or_else(|| "onboarding@resend.dev".to_string());
+        let from = or_env(
+            "LIGHTTRACK_RESPONDER_EMAIL_FROM",
+            "LIGHTTRACK_ALERT_EMAIL_FROM",
+        )
+        .unwrap_or_else(|| "onboarding@resend.dev".to_string());
         Some(EmailConfig { key, from, to })
     }
 
@@ -39,7 +45,8 @@ pub(crate) async fn send(cfg: &EmailConfig, subject: &str, html: &str, text: &st
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap_or_default();
-    let body = json!({ "from": cfg.from, "to": cfg.to, "subject": subject, "html": html, "text": text });
+    let body =
+        json!({ "from": cfg.from, "to": cfg.to, "subject": subject, "html": html, "text": text });
     match http
         .post("https://api.resend.com/emails")
         .bearer_auth(&cfg.key)

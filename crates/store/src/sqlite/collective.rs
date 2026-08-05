@@ -62,7 +62,10 @@ pub(super) fn delete(conn: &Connection, contributor_id: &str) -> Result<u64> {
 
 /// Retention sweep: drop entries received before `cutoff`. Timestamps are fixed-width
 /// `RFC3339(Nanos, Z)`, so the string comparison is a correct chronological one.
-pub(super) fn purge_before(conn: &Connection, cutoff: chrono::DateTime<chrono::Utc>) -> Result<u64> {
+pub(super) fn purge_before(
+    conn: &Connection,
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> Result<u64> {
     let n = conn.execute(
         "DELETE FROM collective_entries WHERE received_at < ?1",
         params![fmt_ts(cutoff)],
@@ -71,7 +74,8 @@ pub(super) fn purge_before(conn: &Connection, cutoff: chrono::DateTime<chrono::U
 }
 
 pub(super) fn list(conn: &Connection) -> Result<Vec<CollectiveEntry>> {
-    let sql = "SELECT contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd, \
+    let sql =
+        "SELECT contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd, \
                p50_latency_ms, p95_latency_ms, n_runs, n_cases, quality_variance, \
                judge_provider, rubric_fingerprint, determinism, frozen_dataset, \
                significance_tested, received_at \
@@ -128,7 +132,9 @@ fn map_raw(row: &Row) -> rusqlite::Result<Raw> {
 }
 
 fn cov(tag: Option<String>) -> Coverage {
-    tag.as_deref().map(Coverage::from_tag).unwrap_or(Coverage::Unknown)
+    tag.as_deref()
+        .map(Coverage::from_tag)
+        .unwrap_or(Coverage::Unknown)
 }
 
 fn from_raw(r: Raw) -> Result<CollectiveEntry> {
@@ -164,7 +170,8 @@ mod tests {
 
     fn conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch(include_str!("../../../../schema/sqlite/001_init.sql")).unwrap();
+        c.execute_batch(include_str!("../../../../schema/sqlite/001_init.sql"))
+            .unwrap();
         c
     }
 
@@ -255,7 +262,11 @@ mod tests {
         assert_eq!(got[0].quality_variance, Some(0.0081));
         // A NULL (v1) variance also round-trips as None.
         upsert(&c, &entry("b", "haiku", 0.7, 20)).unwrap();
-        let b = list(&c).unwrap().into_iter().find(|r| r.model == "haiku").unwrap();
+        let b = list(&c)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.model == "haiku")
+            .unwrap();
         assert!(b.quality_variance.is_none());
     }
 
@@ -273,7 +284,11 @@ mod tests {
         assert_eq!(got[0].significance_tested, Coverage::Mixed);
         // A v1/v2 contribution stores NULLs and reads back as Unknown — no backfill needed.
         upsert(&c, &entry("b", "haiku", 0.7, 20)).unwrap();
-        let b = list(&c).unwrap().into_iter().find(|r| r.model == "haiku").unwrap();
+        let b = list(&c)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.model == "haiku")
+            .unwrap();
         assert!(b.determinism.is_none());
         assert_eq!(b.frozen_dataset, Coverage::Unknown);
         assert_eq!(b.significance_tested, Coverage::Unknown);

@@ -33,7 +33,9 @@ pub(crate) fn list(v: &Value) -> Option<String> {
             score_cell,
             pass_glyph(opt_b(r, "pass")).to_string(),
             trunc(s(r, "scored_by"), 22),
-            opt_f(r, "cost_usd").map(money).unwrap_or_else(|| "—".into()),
+            opt_f(r, "cost_usd")
+                .map(money)
+                .unwrap_or_else(|| "—".into()),
         ]);
     }
     let mean = vals.iter().sum::<f64>() / vals.len() as f64;

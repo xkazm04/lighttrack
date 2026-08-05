@@ -49,7 +49,11 @@ pub(crate) fn deliver(spec: &ConnectorSpec, envelope: &Value) -> Result<()> {
             let status = resp.status();
             if !status.is_success() {
                 let body = resp.text().unwrap_or_default();
-                bail!("connector POST {url} -> HTTP {}: {}", status.as_u16(), truncate(&body));
+                bail!(
+                    "connector POST {url} -> HTTP {}: {}",
+                    status.as_u16(),
+                    truncate(&body)
+                );
             }
             Ok(())
         }
@@ -74,7 +78,10 @@ pub(crate) fn deliver(spec: &ConnectorSpec, envelope: &Value) -> Result<()> {
             let bytes = serde_json::to_vec(envelope)?;
             let writer = std::thread::spawn(move || stdin.write_all(&bytes));
 
-            let mut stderr = child.stderr.take().context("connector stderr unavailable")?;
+            let mut stderr = child
+                .stderr
+                .take()
+                .context("connector stderr unavailable")?;
             let reader = std::thread::spawn(move || {
                 let mut buf = Vec::new();
                 // Keep only the first MAX_STDERR bytes, but keep draining to /dev/null so the child's
@@ -103,7 +110,9 @@ pub(crate) fn deliver(spec: &ConnectorSpec, envelope: &Value) -> Result<()> {
                 }
             };
 
-            let write_res = writer.join().map_err(|_| anyhow!("connector stdin writer panicked"))?;
+            let write_res = writer
+                .join()
+                .map_err(|_| anyhow!("connector stdin writer panicked"))?;
             let stderr_buf = reader.join().unwrap_or_default();
 
             if !status.success() {
@@ -117,7 +126,9 @@ pub(crate) fn deliver(spec: &ConnectorSpec, envelope: &Value) -> Result<()> {
             // other write error is a real delivery failure.
             if let Err(e) = write_res {
                 if e.kind() != std::io::ErrorKind::BrokenPipe {
-                    return Err(anyhow::Error::new(e).context("writing envelope to connector stdin"));
+                    return Err(
+                        anyhow::Error::new(e).context("writing envelope to connector stdin")
+                    );
                 }
             }
             Ok(())
@@ -149,16 +160,29 @@ mod tests {
         // `cmd /c findstr x` exits 1 when stdin lacks a match; `cmd /c more` always succeeds.
         #[cfg(windows)]
         {
-            let ok = ConnectorSpec::Command { command: vec!["cmd".into(), "/c".into(), "findstr".into(), "task".into()] };
+            let ok = ConnectorSpec::Command {
+                command: vec!["cmd".into(), "/c".into(), "findstr".into(), "task".into()],
+            };
             deliver(&ok, &json!({ "task_id": "t-1" })).unwrap();
-            let fail = ConnectorSpec::Command { command: vec!["cmd".into(), "/c".into(), "findstr".into(), "zzz_no_match".into()] };
+            let fail = ConnectorSpec::Command {
+                command: vec![
+                    "cmd".into(),
+                    "/c".into(),
+                    "findstr".into(),
+                    "zzz_no_match".into(),
+                ],
+            };
             assert!(deliver(&fail, &json!({ "task_id": "t-1" })).is_err());
         }
         #[cfg(not(windows))]
         {
-            let ok = ConnectorSpec::Command { command: vec!["grep".into(), "task".into()] };
+            let ok = ConnectorSpec::Command {
+                command: vec!["grep".into(), "task".into()],
+            };
             deliver(&ok, &json!({ "task_id": "t-1" })).unwrap();
-            let fail = ConnectorSpec::Command { command: vec!["grep".into(), "zzz_no_match".into()] };
+            let fail = ConnectorSpec::Command {
+                command: vec!["grep".into(), "zzz_no_match".into()],
+            };
             assert!(deliver(&fail, &json!({ "task_id": "t-1" })).is_err());
         }
         let empty = ConnectorSpec::Command { command: vec![] };
@@ -176,7 +200,9 @@ mod tests {
             command: vec!["cmd".into(), "/c".into(), "findstr".into(), "task".into()],
         };
         #[cfg(not(windows))]
-        let ok = ConnectorSpec::Command { command: vec!["grep".into(), "task".into()] };
+        let ok = ConnectorSpec::Command {
+            command: vec!["grep".into(), "task".into()],
+        };
         deliver(&ok, &big).unwrap();
     }
 }

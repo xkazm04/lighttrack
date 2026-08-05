@@ -15,7 +15,10 @@ pub(crate) fn upsert_price(rest: &Rest, p: &ModelPriceRow) -> Result<()> {
     m.insert("model".into(), json!(p.model));
     m.insert("input_per_mtok".into(), json!(p.input_per_mtok));
     m.insert("output_per_mtok".into(), json!(p.output_per_mtok));
-    m.insert("cached_input_per_mtok".into(), json!(p.cached_input_per_mtok));
+    m.insert(
+        "cached_input_per_mtok".into(),
+        json!(p.cached_input_per_mtok),
+    );
     m.insert("effective_date".into(), json!(fmt_ts(p.effective_date)));
     m.insert("source_url".into(), json!(p.source_url));
     rest.put_doc("model_prices", &id, &m)

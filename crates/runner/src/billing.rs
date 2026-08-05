@@ -36,7 +36,12 @@ fn since_cutoff(now: i64, days: i64) -> i64 {
     now - days.max(0) * 86_400
 }
 
-fn sync_stripe(cli: &Cli, http: &reqwest::blocking::Client, project: &str, since: i64) -> Result<()> {
+fn sync_stripe(
+    cli: &Cli,
+    http: &reqwest::blocking::Client,
+    project: &str,
+    since: i64,
+) -> Result<()> {
     let key = std::env::var("STRIPE_API_KEY").context("STRIPE_API_KEY is not set")?;
     let mut starting_after: Option<String> = None;
     let mut total = 0usize;
@@ -61,7 +66,11 @@ fn sync_stripe(cli: &Cli, http: &reqwest::blocking::Client, project: &str, since
             .json()
             .context("decoding Stripe response")?;
 
-        let data = resp.get("data").and_then(Value::as_array).cloned().unwrap_or_default();
+        let data = resp
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         if data.is_empty() {
             break;
         }
@@ -73,7 +82,11 @@ fn sync_stripe(cli: &Cli, http: &reqwest::blocking::Client, project: &str, since
                 total += 1;
             }
         }
-        if !resp.get("has_more").and_then(Value::as_bool).unwrap_or(false) {
+        if !resp
+            .get("has_more")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
             break;
         }
         starting_after = data

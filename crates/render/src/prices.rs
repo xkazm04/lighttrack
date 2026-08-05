@@ -25,7 +25,9 @@ pub(crate) fn list(v: &Value) -> Option<String> {
         ("Source", Align::Left),
     ]);
     for r in &sorted {
-        let cached = opt_f(r, "cached_input_per_mtok").map(rate).unwrap_or_else(|| "—".into());
+        let cached = opt_f(r, "cached_input_per_mtok")
+            .map(rate)
+            .unwrap_or_else(|| "—".into());
         let src = match opt_s(r, "source_url").filter(|x| !x.is_empty()) {
             Some(u) => trunc(host(u), 24),
             None => "—".into(),

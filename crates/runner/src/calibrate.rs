@@ -10,7 +10,9 @@ use std::fs;
 use anyhow::{bail, Context, Result};
 
 use lighttrack_core::{agreement, Agreement, CalibrationItem, ModelPriceRow, Rubric};
-use lighttrack_engine::{build_judge_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig};
+use lighttrack_engine::{
+    build_judge_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig,
+};
 
 use crate::cli::Cli;
 use crate::http::get;
@@ -50,7 +52,17 @@ pub(crate) fn calibrate(
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
 
     let c = judge_set(
-        engine, &jp, &jm, &rubric, rubric_text, &items, threshold, kappa_bar, samples, jobs, &prices,
+        engine,
+        &jp,
+        &jm,
+        &rubric,
+        rubric_text,
+        &items,
+        threshold,
+        kappa_bar,
+        samples,
+        jobs,
+        &prices,
         true,
     );
 
@@ -63,7 +75,8 @@ pub(crate) fn calibrate(
             "agreement": c.agreement,
             "judge_cost_usd": c.cost,
         });
-        fs::write(p, serde_json::to_string_pretty(&report)?).with_context(|| format!("writing {p}"))?;
+        fs::write(p, serde_json::to_string_pretty(&report)?)
+            .with_context(|| format!("writing {p}"))?;
         println!("wrote report to {p}");
     }
     Ok(())
@@ -107,11 +120,23 @@ pub(crate) fn judge_set(
             items.len(),
             rubric.as_ref().map(|r| format!(", rubric={}", r.name)).unwrap_or_default(),
         );
-        println!("  {:<10}  {:>6}  {:>6}  {:>7}  {:<5}", "item", "human", "judge", "delta", "agree");
+        println!(
+            "  {:<10}  {:>6}  {:>6}  {:>7}  {:<5}",
+            "item", "human", "judge", "delta", "agree"
+        );
     }
 
     let scored: Vec<Result<(f64, f64)>> = parallel_map(items.len(), jobs, |i| {
-        judge_item(engine, jp, jm, rubric, rubric_text, &items[i], samples, prices)
+        judge_item(
+            engine,
+            jp,
+            jm,
+            rubric,
+            rubric_text,
+            &items[i],
+            samples,
+            prices,
+        )
     });
 
     let mut pairs: Vec<(f64, f64)> = Vec::new();
@@ -151,7 +176,11 @@ pub(crate) fn judge_set(
     if verbose {
         print_summary(&a, cost, skipped, kappa_bar);
     }
-    Calibrated { agreement: a, cost, skipped }
+    Calibrated {
+        agreement: a,
+        cost,
+        skipped,
+    }
 }
 
 /// Print the one-shot summary block (agreement line, rates, verdict, bias note).
@@ -202,7 +231,15 @@ fn judge_item(
         // jobs=1: the item loop is already parallelized, so keep per-item sample judging sequential to
         // bound total concurrency at --jobs.
         let o = run_rubric_judge(
-            engine, jp, jm, r, &it.input, it.expected.as_deref(), &it.output, samples, 1,
+            engine,
+            jp,
+            jm,
+            r,
+            &it.input,
+            it.expected.as_deref(),
+            &it.output,
+            samples,
+            1,
         )
         .context("rubric judge failed")?;
         let jc = o
@@ -235,7 +272,8 @@ pub(crate) fn load_items(file: &str) -> Result<Vec<CalibrationItem>> {
 /// error context. I/O-free so it can be unit-tested without a temp file or a live provider.
 fn parse_items(text: &str, file: &str) -> Result<Vec<CalibrationItem>> {
     if text.trim_start().starts_with('[') {
-        return serde_json::from_str(text).with_context(|| format!("{file}: invalid JSON array of items"));
+        return serde_json::from_str(text)
+            .with_context(|| format!("{file}: invalid JSON array of items"));
     }
     let mut items = Vec::new();
     for (n, line) in text.lines().enumerate() {
@@ -244,7 +282,8 @@ fn parse_items(text: &str, file: &str) -> Result<Vec<CalibrationItem>> {
             continue;
         }
         items.push(
-            serde_json::from_str(l).with_context(|| format!("{file}:{} \u{2014} invalid item", n + 1))?,
+            serde_json::from_str(l)
+                .with_context(|| format!("{file}:{} \u{2014} invalid item", n + 1))?,
         );
     }
     Ok(items)
@@ -282,14 +321,20 @@ mod tests {
 
     #[test]
     fn array_detection_ignores_leading_whitespace() {
-        let items = parse_items("   \n  [{\"input\":\"a\",\"output\":\"x\",\"human_score\":1.0}]", "f").unwrap();
+        let items = parse_items(
+            "   \n  [{\"input\":\"a\",\"output\":\"x\",\"human_score\":1.0}]",
+            "f",
+        )
+        .unwrap();
         assert_eq!(items.len(), 1);
     }
 
     #[test]
     fn empty_input_yields_no_items() {
         assert!(parse_items("", "f").unwrap().is_empty());
-        assert!(parse_items("// only a comment\n\n", "f").unwrap().is_empty());
+        assert!(parse_items("// only a comment\n\n", "f")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

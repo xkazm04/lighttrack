@@ -13,7 +13,9 @@ fn pg_conformance() {
     let url = match std::env::var("LIGHTTRACK_TEST_DATABASE_URL") {
         Ok(u) if !u.is_empty() => u,
         _ => {
-            eprintln!("skipping pg_conformance: set LIGHTTRACK_TEST_DATABASE_URL=postgres://… to run");
+            eprintln!(
+                "skipping pg_conformance: set LIGHTTRACK_TEST_DATABASE_URL=postgres://… to run"
+            );
             return;
         }
     };

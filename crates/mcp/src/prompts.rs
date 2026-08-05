@@ -32,7 +32,10 @@ pub(crate) fn list() -> Value {
 /// Handle `prompts/get`: resolve the named prompt + its arguments into a user message.
 pub(crate) fn get(params: &Value) -> Result<Value, String> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-    let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let args = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let a = |k: &str| {
         args.get(k)
             .and_then(Value::as_str)
@@ -110,7 +113,9 @@ fn benchmark_leaderboard(benchmark: Option<&str>) -> (&'static str, String) {
 }
 
 fn score_triage(project: Option<&str>, limit: Option<&str>) -> (&'static str, String) {
-    let scope = project.map(|p| format!(" for project `{p}`")).unwrap_or_default();
+    let scope = project
+        .map(|p| format!(" for project `{p}`"))
+        .unwrap_or_default();
     let call = call_with("list_scores", project, limit, "limit");
     let text = format!(
         "Triage recent LLM-as-judge scores{scope}.\n\n\
@@ -122,7 +127,9 @@ fn score_triage(project: Option<&str>, limit: Option<&str>) -> (&'static str, St
 }
 
 fn recent_activity(project: Option<&str>, limit: Option<&str>) -> (&'static str, String) {
-    let scope = project.map(|p| format!(" for project `{p}`")).unwrap_or_default();
+    let scope = project
+        .map(|p| format!(" for project `{p}`"))
+        .unwrap_or_default();
     let events = call_with("query_events", project, limit, "limit");
     let costs = match project {
         Some(p) => format!("`get_cost_summary` for `{p}`"),
@@ -139,7 +146,9 @@ fn recent_activity(project: Option<&str>, limit: Option<&str>) -> (&'static str,
 
 fn margin_report(by: Option<&str>, project: Option<&str>) -> (&'static str, String) {
     let dim = by.unwrap_or("customer");
-    let scope = project.map(|p| format!(" for project `{p}`")).unwrap_or_default();
+    let scope = project
+        .map(|p| format!(" for project `{p}`"))
+        .unwrap_or_default();
     let call = call_with("get_margin", project, Some(dim), "by");
     let text = format!(
         "Report profit margin by {dim}{scope}.\n\n\
@@ -196,7 +205,8 @@ mod tests {
 
     #[test]
     fn get_weaves_in_arguments() {
-        let p = get(&json!({ "name": "cost-report", "arguments": { "project": "qa-demo" } })).unwrap();
+        let p =
+            get(&json!({ "name": "cost-report", "arguments": { "project": "qa-demo" } })).unwrap();
         let text = p["messages"][0]["content"]["text"].as_str().unwrap();
         assert!(text.contains("project `qa-demo`"));
         assert!(text.contains("get_cost_summary"));

@@ -7,7 +7,13 @@
 /// finer than any decision we make with it (we compare p-values against α ≈ 0.05 / m).
 fn erf(x: f64) -> f64 {
     const P: f64 = 0.327_591_1;
-    const A: [f64; 5] = [0.254_829_592, -0.284_496_736, 1.421_413_741, -1.453_152_027, 1.061_405_429];
+    const A: [f64; 5] = [
+        0.254_829_592,
+        -0.284_496_736,
+        1.421_413_741,
+        -1.453_152_027,
+        1.061_405_429,
+    ];
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
     let x = x.abs();
     let t = 1.0 / (1.0 + P * x);
@@ -30,19 +36,32 @@ pub(crate) fn two_sided_p(z: f64) -> f64 {
 /// make the test *more* conservative, never undefined.
 pub(crate) fn z_quantile(p: f64) -> f64 {
     const A: [f64; 6] = [
-        -3.969_683_028_665_376e1, 2.209_460_984_245_205e2, -2.759_285_104_469_687e2,
-        1.383_577_518_672_690e2, -3.066_479_806_614_716e1, 2.506_628_277_459_239e0,
+        -3.969_683_028_665_376e1,
+        2.209_460_984_245_205e2,
+        -2.759_285_104_469_687e2,
+        1.383_577_518_672_690e2,
+        -3.066_479_806_614_716e1,
+        2.506_628_277_459_239e0,
     ];
     const B: [f64; 5] = [
-        -5.447_609_879_822_406e1, 1.615_858_368_580_409e2, -1.556_989_798_598_866e2,
-        6.680_131_188_771_972e1, -1.328_068_155_288_572e1,
+        -5.447_609_879_822_406e1,
+        1.615_858_368_580_409e2,
+        -1.556_989_798_598_866e2,
+        6.680_131_188_771_972e1,
+        -1.328_068_155_288_572e1,
     ];
     const C: [f64; 6] = [
-        -7.784_894_002_430_293e-3, -3.223_964_580_411_365e-1, -2.400_758_277_161_838e0,
-        -2.549_732_539_343_734e0, 4.374_664_141_464_968e0, 2.938_163_982_698_783e0,
+        -7.784_894_002_430_293e-3,
+        -3.223_964_580_411_365e-1,
+        -2.400_758_277_161_838e0,
+        -2.549_732_539_343_734e0,
+        4.374_664_141_464_968e0,
+        2.938_163_982_698_783e0,
     ];
     const D: [f64; 4] = [
-        7.784_695_709_041_462e-3, 3.224_671_290_700_398e-1, 2.445_134_137_142_996e0,
+        7.784_695_709_041_462e-3,
+        3.224_671_290_700_398e-1,
+        2.445_134_137_142_996e0,
         3.754_408_661_907_416e0,
     ];
     const P_LOW: f64 = 0.02425;
@@ -120,12 +139,18 @@ mod tests {
     #[test]
     fn quantile_inverts_the_cdf() {
         assert!(near(z_quantile(0.5), 0.0, 1e-9));
-        assert!(near(z_quantile(0.975), 1.959_963_98, 1e-6), "the 95% two-sided z");
+        assert!(
+            near(z_quantile(0.975), 1.959_963_98, 1e-6),
+            "the 95% two-sided z"
+        );
         assert!(near(z_quantile(0.995), 2.575_829_3, 1e-6));
         assert!(near(z_quantile(0.025), -1.959_963_98, 1e-6));
         // Round-trip through the CDF at a few points in each region of the approximation.
         for p in [0.001, 0.01, 0.2, 0.5, 0.8, 0.99, 0.999] {
-            assert!(near(norm_cdf(z_quantile(p)), p, 1e-6), "round trip failed at p={p}");
+            assert!(
+                near(norm_cdf(z_quantile(p)), p, 1e-6),
+                "round trip failed at p={p}"
+            );
         }
         // Degenerate inputs saturate instead of producing NaN.
         assert!(z_quantile(0.0).is_infinite() && z_quantile(1.0).is_infinite());
@@ -138,7 +163,11 @@ mod tests {
         assert!(near(bonferroni_alpha(0.05, 1), 0.05, 1e-12));
         // m = 6 targets → per-comparison α = 0.008333 → two-sided z ≈ 2.6383.
         assert!(near(bonferroni_alpha(0.05, 6), 0.008_333_33, 1e-8));
-        assert!(near(bonferroni_z(0.05, 6), 2.638_257, 1e-4), "got {}", bonferroni_z(0.05, 6));
+        assert!(
+            near(bonferroni_z(0.05, 6), 2.638_257, 1e-4),
+            "got {}",
+            bonferroni_z(0.05, 6)
+        );
         // m = 2 → α' = 0.025 → z ≈ 2.2414. Monotone: more comparisons ⇒ a stricter bar.
         assert!(near(bonferroni_z(0.05, 2), 2.241_403, 1e-4));
         assert!(bonferroni_z(0.05, 6) > bonferroni_z(0.05, 2));

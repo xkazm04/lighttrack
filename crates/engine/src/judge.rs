@@ -137,8 +137,9 @@ pub fn run_judge(
             let json = extract_json_object(raw).ok_or_else(|| {
                 EngineError::Parse(format!("no JSON object in judge output: {raw}"))
             })?;
-            serde_json::from_str::<JudgeVerdict>(&json)
-                .map_err(|e| EngineError::Parse(format!("judge JSON not a verdict: {e}; got: {json}")))
+            serde_json::from_str::<JudgeVerdict>(&json).map_err(|e| {
+                EngineError::Parse(format!("judge JSON not a verdict: {e}; got: {json}"))
+            })
         },
     )?;
     let verdict = parsed.value.ok_or_else(|| {
@@ -203,7 +204,12 @@ pub fn run_rubric_judge(
     // or not a model ends up seeing it. `judge_with` decides whether to send it.
     let prompt = build_rubric_prompt(rubric, input, expected, output);
     let schema = build_rubric_schema(rubric);
-    let gen = ProviderGen { cfg, provider, model, schema: Some(schema) };
+    let gen = ProviderGen {
+        cfg,
+        provider,
+        model,
+        schema: Some(schema),
+    };
     judge_with(&gen, rubric, &prompt, model, samples, jobs, &det)
 }
 
@@ -227,7 +233,11 @@ fn judge_with(
     jobs: usize,
     det: &[DetScore],
 ) -> Result<RubricOutcome> {
-    let k = if scorers::has_llm_dims(rubric) { samples.max(1) as usize } else { 0 };
+    let k = if scorers::has_llm_dims(rubric) {
+        samples.max(1) as usize
+    } else {
+        0
+    };
     let results: Vec<Result<Parsed<SampleDims>>> = pool::parallel_map(k, jobs, |i| {
         sample_parsed(
             |idx, p| gen.generate(idx, p),
@@ -271,7 +281,11 @@ fn aggregate(
     let (mut total_cost, mut any_cost, mut max_latency, mut in_tok, mut out_tok) =
         (0.0_f64, false, 0_u64, 0_u64, 0_u64);
     // With no LLM dimension no model ran, so claiming one scored the case would be a lie.
-    let mut model_used = if k == 0 { "deterministic".into() } else { model.to_string() };
+    let mut model_used = if k == 0 {
+        "deterministic".into()
+    } else {
+        model.to_string()
+    };
     let mut parse_failures = 0_u32;
     let mut first_raw_failure: Option<String> = None;
 
@@ -294,7 +308,10 @@ fn aggregate(
                 for (key, score, reasoning) in dims {
                     per_dim.entry(key.clone()).or_default().push(*score);
                     if !reasoning.is_empty() {
-                        reasonings.entry(key.clone()).or_default().push(reasoning.clone());
+                        reasonings
+                            .entry(key.clone())
+                            .or_default()
+                            .push(reasoning.clone());
                     }
                     sample.push((key.clone(), *score));
                 }

@@ -86,7 +86,13 @@ pub(crate) fn assess_drift(
     } else {
         DriftLevel::Ok
     };
-    DriftDecision { trusted, prev_kappa, delta, drifted, level }
+    DriftDecision {
+        trusted,
+        prev_kappa,
+        delta,
+        drifted,
+        level,
+    }
 }
 
 /// The reserved rubric name that calibration history is persisted under, per judge model.
@@ -117,12 +123,18 @@ pub(crate) fn watch(
     println!(
         "calibrate --watch: {} item(s), judge={jp}/{jm}, rubric={reserved}, every {}s (once={}), \
          \u{3ba}-bar={:.2}, drift>{:.2}",
-        items.len(), p.interval, p.once, p.kappa_bar, p.drift_threshold,
+        items.len(),
+        p.interval,
+        p.once,
+        p.kappa_bar,
+        p.drift_threshold,
     );
 
     let mut last = DriftLevel::Ok;
     loop {
-        match run_cycle(cli, http, engine, p, &items, &rubric, &jp, &jm, &reserved, &prices) {
+        match run_cycle(
+            cli, http, engine, p, &items, &rubric, &jp, &jm, &reserved, &prices,
+        ) {
             Ok(level) => last = level,
             // A failed cycle (API briefly down, transient judge error) must not kill the daemon.
             Err(e) => eprintln!("calibrate cycle error (continuing): {e}"),
@@ -132,7 +144,11 @@ pub(crate) fn watch(
         }
         std::thread::sleep(Duration::from_secs(p.interval));
     }
-    Ok(if p.once && last == DriftLevel::Untrusted { UNTRUSTED_EXIT } else { 0 })
+    Ok(if p.once && last == DriftLevel::Untrusted {
+        UNTRUSTED_EXIT
+    } else {
+        0
+    })
 }
 
 /// One sentinel cycle: read the previous κ from scores history, re-judge the golden set, persist the
@@ -152,10 +168,25 @@ fn run_cycle(
 ) -> Result<DriftLevel> {
     let prev = previous_kappa(cli, http, p.project, reserved);
     let c = judge_set(
-        engine, jp, jm, rubric, p.rubric_text, items, p.threshold, p.kappa_bar, p.samples, p.jobs,
-        prices, false,
+        engine,
+        jp,
+        jm,
+        rubric,
+        p.rubric_text,
+        items,
+        p.threshold,
+        p.kappa_bar,
+        p.samples,
+        p.jobs,
+        prices,
+        false,
     );
-    let decision = assess_drift(c.agreement.cohen_kappa, prev, p.kappa_bar, p.drift_threshold);
+    let decision = assess_drift(
+        c.agreement.cohen_kappa,
+        prev,
+        p.kappa_bar,
+        p.drift_threshold,
+    );
     post_calibration(cli, http, p.project, reserved, jp, jm, &c.agreement, c.cost)?;
     report(&decision, &c.agreement, c.cost, c.skipped);
     Ok(decision.level)
@@ -175,7 +206,10 @@ fn previous_kappa(
         None => "/v1/scores?limit=500".to_string(),
     };
     let scores: Vec<Score> = get(cli, http, &path).unwrap_or_default();
-    scores.into_iter().find(|s| s.rubric == reserved).map(|s| s.value)
+    scores
+        .into_iter()
+        .find(|s| s.rubric == reserved)
+        .map(|s| s.value)
 }
 
 /// Persist a cycle's agreement as a [`Score`] under the reserved rubric: value = κ, pass = trusted,
@@ -223,23 +257,36 @@ fn report(d: &DriftDecision, a: &Agreement, cost: f64, skipped: u32) {
     };
     println!(
         "  [{}] \u{3ba}={:.3} (n={})  MAE={:.3}  bias={:+.3}  cost=${cost:.5}{delta}",
-        now_ts(), a.cohen_kappa, a.n, a.mae, a.bias,
+        now_ts(),
+        a.cohen_kappa,
+        a.n,
+        a.mae,
+        a.bias,
     );
     match d.level {
         DriftLevel::Ok => {
             debug_assert!(d.trusted && !d.drifted);
-            println!("  verdict: OK (\u{3ba} {:.3} >= bar {:.2})", a.cohen_kappa, a.kappa_bar)
+            println!(
+                "  verdict: OK (\u{3ba} {:.3} >= bar {:.2})",
+                a.cohen_kappa, a.kappa_bar
+            )
         }
-        DriftLevel::Drift => eprintln!(
+        DriftLevel::Drift => {
+            eprintln!(
             "  WARN drift: \u{3ba} fell {:.3} vs previous run ({:.3} -> {:.3}), still >= bar {:.2}",
             d.delta.unwrap_or(0.0), d.prev_kappa.unwrap_or(0.0), a.cohen_kappa, a.kappa_bar,
-        ),
+        )
+        }
         DriftLevel::Untrusted => eprintln!(
             "  ALERT untrusted: \u{3ba} {:.3} < bar {:.2} — judge no longer trusted{} \
              (persisted; degradation feeds the API score_drop alert)",
             a.cohen_kappa,
             a.kappa_bar,
-            if d.drifted { " and dropped sharply vs the previous run" } else { "" },
+            if d.drifted {
+                " and dropped sharply vs the previous run"
+            } else {
+                ""
+            },
         ),
     }
     if skipped > 0 {
@@ -326,7 +373,13 @@ mod tests {
 
     #[test]
     fn reserved_rubric_name_is_stable() {
-        assert_eq!(reserved_rubric("anthropic", "haiku"), "lt:calibration:anthropic/haiku");
-        assert_eq!(reserved_rubric("openai", "gpt-4o"), "lt:calibration:openai/gpt-4o");
+        assert_eq!(
+            reserved_rubric("anthropic", "haiku"),
+            "lt:calibration:anthropic/haiku"
+        );
+        assert_eq!(
+            reserved_rubric("openai", "gpt-4o"),
+            "lt:calibration:openai/gpt-4o"
+        );
     }
 }

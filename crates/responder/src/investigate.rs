@@ -21,7 +21,14 @@ const READONLY_TOOLS: &[&str] = &[
 ];
 
 pub(crate) async fn investigate(cfg: &Config, entry: &ProjectEntry, prompt: &str) -> ClaudeRun {
-    claude::run(cfg, &entry.repo, &cfg.defaults.permission_mode, READONLY_TOOLS, prompt).await
+    claude::run(
+        cfg,
+        &entry.repo,
+        &cfg.defaults.permission_mode,
+        READONLY_TOOLS,
+        prompt,
+    )
+    .await
 }
 
 /// Prompt for an error investigation. The alert's error text is untrusted input, so it is fenced and

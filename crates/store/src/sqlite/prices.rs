@@ -35,11 +35,21 @@ pub(super) fn upsert(conn: &Connection, p: &ModelPriceRow) -> Result<()> {
 pub(super) fn list(conn: &Connection) -> Result<Vec<ModelPriceRow>> {
     let sql = format!("SELECT {COLS} FROM model_prices ORDER BY provider, model");
     let mut stmt = conn.prepare(&sql)?;
-    let raws = stmt.query_map([], map_raw)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let raws = stmt
+        .query_map([], map_raw)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(from_raw).collect()
 }
 
-type PriceRaw = (String, String, f64, f64, Option<f64>, String, Option<String>);
+type PriceRaw = (
+    String,
+    String,
+    f64,
+    f64,
+    Option<f64>,
+    String,
+    Option<String>,
+);
 
 fn map_raw(row: &Row) -> rusqlite::Result<PriceRaw> {
     Ok((

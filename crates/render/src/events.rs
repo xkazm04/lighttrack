@@ -27,7 +27,10 @@ pub(crate) fn list(v: &Value) -> Option<String> {
         } else {
             format!("{provider}/{model}")
         };
-        let tok = r.get("usage").map(|x| u(x, "input") + u(x, "output")).unwrap_or(0);
+        let tok = r
+            .get("usage")
+            .map(|x| u(x, "input") + u(x, "output"))
+            .unwrap_or(0);
         let status = s(r, "status");
         let when = short_ts(s(r, "ts"));
         let when_cell = if status.is_empty() || status == "success" {
@@ -39,8 +42,12 @@ pub(crate) fn list(v: &Value) -> Option<String> {
             when_cell,
             trunc(&model_cell, 28),
             commafy(tok),
-            opt_f(r, "cost_usd").map(money).unwrap_or_else(|| "—".into()),
-            opt_u(r, "latency_ms").map(|m| m.to_string()).unwrap_or_else(|| "—".into()),
+            opt_f(r, "cost_usd")
+                .map(money)
+                .unwrap_or_else(|| "—".into()),
+            opt_u(r, "latency_ms")
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "—".into()),
             s(r, "id").to_string(),
         ]);
     }
@@ -69,7 +76,11 @@ pub(crate) fn detail(v: &Value) -> Option<String> {
 
     let mut out = format!("### Event `{id}` {glyph}\n\n");
     out.push_str(&format!("- **When:** {}\n", short_ts(s(v, "ts"))));
-    out.push_str(&format!("- **Model:** {}/{}", s(v, "provider"), s(v, "model")));
+    out.push_str(&format!(
+        "- **Model:** {}/{}",
+        s(v, "provider"),
+        s(v, "model")
+    ));
     let op = s(v, "operation");
     if !op.is_empty() {
         out.push_str(&format!(" ({op})"));
@@ -89,7 +100,11 @@ pub(crate) fn detail(v: &Value) -> Option<String> {
     if let Some(src) = opt_s(v, "source").filter(|x| !x.is_empty()) {
         out.push_str(&format!("- **Source:** {src}\n"));
     }
-    if let Some(tags) = v.get("tags").and_then(Value::as_array).filter(|t| !t.is_empty()) {
+    if let Some(tags) = v
+        .get("tags")
+        .and_then(Value::as_array)
+        .filter(|t| !t.is_empty())
+    {
         let joined: Vec<&str> = tags.iter().filter_map(Value::as_str).collect();
         out.push_str(&format!("- **Tags:** {}\n", joined.join(", ")));
     }

@@ -13,14 +13,20 @@ pub(crate) fn create_rubric(rest: &Rest, r: &Rubric) -> Result<()> {
     m.insert("id".into(), json!(r.id));
     m.insert("project_id".into(), json!(r.project_id));
     m.insert("name".into(), json!(r.name));
-    m.insert("dimensions".into(), json!(serde_json::to_string(&r.dimensions)?));
+    m.insert(
+        "dimensions".into(),
+        json!(serde_json::to_string(&r.dimensions)?),
+    );
     m.insert("threshold".into(), json!(r.threshold));
     m.insert("created_at".into(), json!(fmt_ts(r.created_at)));
     rest.put_doc("rubrics", &r.id, &m)
 }
 
 pub(crate) fn get_rubric(rest: &Rest, id: &str) -> Result<Option<Rubric>> {
-    rest.get_doc("rubrics", id)?.as_ref().map(rubric_from).transpose()
+    rest.get_doc("rubrics", id)?
+        .as_ref()
+        .map(rubric_from)
+        .transpose()
 }
 
 pub(crate) fn list_rubrics(rest: &Rest, project: &str) -> Result<Vec<Rubric>> {

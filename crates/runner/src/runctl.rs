@@ -51,13 +51,13 @@ impl<'a> RunControl<'a> {
         }
     }
 
-    pub(crate) fn for_job(
-        cli: &'a Cli,
-        http: &'a reqwest::blocking::Client,
-        job_id: &str,
-    ) -> Self {
+    pub(crate) fn for_job(cli: &'a Cli, http: &'a reqwest::blocking::Client, job_id: &str) -> Self {
         RunControl {
-            job: Some(JobSink { cli, http, job_id: job_id.to_string() }),
+            job: Some(JobSink {
+                cli,
+                http,
+                job_id: job_id.to_string(),
+            }),
             ..RunControl::inert()
         }
     }
@@ -138,7 +138,10 @@ pub(crate) fn progress_line(done: usize, total: usize, elapsed: Duration) -> Str
     let pct = (done.min(total) * 100) / total;
     let eta = if done > 0 && done < total {
         let per_case = elapsed.as_secs_f64() / done as f64;
-        format!(", eta ~{}s", ((total - done) as f64 * per_case).round() as u64)
+        format!(
+            ", eta ~{}s",
+            ((total - done) as f64 * per_case).round() as u64
+        )
     } else {
         String::new()
     };
@@ -155,11 +158,20 @@ mod tests {
         let s = progress_line(10, 100, Duration::from_secs(20));
         assert_eq!(s, "10/100 cases (10%), eta ~180s");
         // The last case has nothing left to wait for.
-        assert_eq!(progress_line(100, 100, Duration::from_secs(200)), "100/100 cases (100%)");
+        assert_eq!(
+            progress_line(100, 100, Duration::from_secs(200)),
+            "100/100 cases (100%)"
+        );
         // Nothing judged yet ⇒ no ETA invented from a zero denominator.
-        assert_eq!(progress_line(0, 50, Duration::from_secs(5)), "0/50 cases (0%)");
+        assert_eq!(
+            progress_line(0, 50, Duration::from_secs(5)),
+            "0/50 cases (0%)"
+        );
         // An unknown case count still reports something true.
-        assert_eq!(progress_line(3, 0, Duration::from_secs(1)), "3 case(s) judged");
+        assert_eq!(
+            progress_line(3, 0, Duration::from_secs(1)),
+            "3 case(s) judged"
+        );
     }
 
     #[test]

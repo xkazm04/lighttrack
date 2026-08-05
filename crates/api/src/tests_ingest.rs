@@ -38,7 +38,11 @@ pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
     let mut entries = HashMap::new();
     entries.insert(
         "anthropic/claude-haiku-4-5".to_string(),
-        ModelPrice { input_per_mtok: 1.0, output_per_mtok: 5.0, cached_input_per_mtok: None },
+        ModelPrice {
+            input_per_mtok: 1.0,
+            output_per_mtok: 5.0,
+            cached_input_per_mtok: None,
+        },
     );
     let book = PriceBook::new(entries);
 
@@ -165,7 +169,10 @@ async fn project_persistence_policy_is_enforced_on_ingest() {
     assert_eq!(status, StatusCode::OK);
     let rows = store.list_events(Some("proj-drop"), 10).unwrap();
     assert_eq!(rows.len(), 1);
-    assert!(rows[0].input.is_none() && rows[0].output.is_none(), "drop persists no payloads");
+    assert!(
+        rows[0].input.is_none() && rows[0].output.is_none(),
+        "drop persists no payloads"
+    );
     assert_eq!(rows[0].usage.input, 10, "metering fields untouched");
 
     // `hash`: presence/diff survive as sha256 digests; no plaintext lands in the store.
@@ -174,10 +181,25 @@ async fn project_persistence_policy_is_enforced_on_ingest() {
     let rows = store.list_events(Some("proj-hash"), 10).unwrap();
     assert_eq!(rows.len(), 1);
     let stored = serde_json::to_string(&rows[0]).unwrap();
-    assert!(!stored.contains("secret"), "no plaintext payload survives hashing: {stored}");
-    let digest = rows[0].input.as_ref().and_then(|v| v.get("sha256")).and_then(Value::as_str);
-    assert_eq!(digest.map(str::len), Some(64), "input replaced by a sha256 digest");
-    assert!(rows[0].output.as_ref().and_then(|v| v.get("sha256")).is_some());
+    assert!(
+        !stored.contains("secret"),
+        "no plaintext payload survives hashing: {stored}"
+    );
+    let digest = rows[0]
+        .input
+        .as_ref()
+        .and_then(|v| v.get("sha256"))
+        .and_then(Value::as_str);
+    assert_eq!(
+        digest.map(str::len),
+        Some(64),
+        "input replaced by a sha256 digest"
+    );
+    assert!(rows[0]
+        .output
+        .as_ref()
+        .and_then(|v| v.get("sha256"))
+        .is_some());
 }
 
 /// GET a JSON endpoint through the router; returns (status, parsed body).
@@ -224,12 +246,23 @@ async fn saturated_ingest_sheds_with_503_and_retry_after_never_a_budget_429() {
         .body(Body::from(body.to_string()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "overload sheds, it does not queue");
-    assert_eq!(resp.headers().get("retry-after").unwrap(), "1", "a shed must say when to come back");
+    assert_eq!(
+        resp.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "overload sheds, it does not queue"
+    );
+    assert_eq!(
+        resp.headers().get("retry-after").unwrap(),
+        "1",
+        "a shed must say when to come back"
+    );
     let v: Value =
         serde_json::from_slice(&to_bytes(resp.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(v["error"]["code"], "overloaded", "{v}");
-    assert_ne!(v["error"]["code"], "rate_limited", "shedding must never read as a usage limit");
+    assert_ne!(
+        v["error"]["code"], "rate_limited",
+        "shedding must never read as a usage limit"
+    );
 
     // The batch route is gated too — a big write is exactly what you don't want queueing.
     let breq = Request::builder()
@@ -250,7 +283,10 @@ async fn saturated_ingest_sheds_with_503_and_retry_after_never_a_budget_429() {
     let (s, st) = get_json(&app, &key, "/v1/ingest/status").await;
     assert_eq!(s, StatusCode::OK, "{st}");
     assert_eq!(st["max_in_flight"], 1, "{st}");
-    assert_eq!(st["in_flight"], 1, "the held permit is visible as live depth: {st}");
+    assert_eq!(
+        st["in_flight"], 1,
+        "the held permit is visible as live depth: {st}"
+    );
     assert_eq!(st["shed_total"], 2, "both sheds counted: {st}");
     assert_eq!(st["admitted_total"], 1, "{st}");
 
@@ -302,7 +338,9 @@ fn ingest_past_its_deadline_is_cut_with_504_not_left_hanging() {
             let _ = started_tx.send(());
             let _ = blocked.recv();
         });
-        started_rx.recv().expect("occupier reached the blocking pool");
+        started_rx
+            .recv()
+            .expect("occupier reached the blocking pool");
 
         let (status, body) = ingest(
             &app,
@@ -389,12 +427,23 @@ async fn shedding_bounds_latency_under_saturation() {
         v[((v.len() as f64 * p) as usize).min(v.len() - 1)] as f64 / 1000.0
     };
     // Sweeping the offered load is the point: unbounded, p95 tracks it upward; bounded, it doesn't.
-    for (cap, load) in [(0usize, 300), (0, 600), (0, 1200), (16, 300), (16, 600), (16, 1200)] {
+    for (cap, load) in [
+        (0usize, 300),
+        (0, 600),
+        (0, 1200),
+        (16, 300),
+        (16, 600),
+        (16, 1200),
+    ] {
         let (served, shed) = run(cap, load).await;
         println!(
             "cap={:<9} offered={load:<5} served={:<5} shed={:<5} | served p50={:>6.1}ms \
              p95={:>6.1}ms p99={:>6.1}ms max={:>6.1}ms | shed p95={:>6.2}ms",
-            if cap == 0 { "unbounded".into() } else { cap.to_string() },
+            if cap == 0 {
+                "unbounded".into()
+            } else {
+                cap.to_string()
+            },
             served.len(),
             shed.len(),
             pct(&served, 0.50),
@@ -427,7 +476,10 @@ async fn tightening_redaction_takes_effect_on_the_next_event_without_a_restart()
     let (s1, _) = ingest(&app, &key, payload("before")).await;
     assert_eq!(s1, StatusCode::OK);
     let before = store.get_event("before").unwrap().unwrap();
-    assert!(before.input.is_some(), "baseline: `none` persists the payload");
+    assert!(
+        before.input.is_some(),
+        "baseline: `none` persists the payload"
+    );
 
     // Tighten it through the API (admin).
     let req = Request::builder()
@@ -448,8 +500,14 @@ async fn tightening_redaction_takes_effect_on_the_next_event_without_a_restart()
     let (s2, _) = ingest(&app, &key, payload("after")).await;
     assert_eq!(s2, StatusCode::OK);
     let after = store.get_event("after").unwrap().unwrap();
-    assert!(after.input.is_none(), "a tightened policy must bind the next event, not the next boot");
-    assert_eq!(after.usage.input, 10, "metering is untouched by the persistence policy");
+    assert!(
+        after.input.is_none(),
+        "a tightened policy must bind the next event, not the next boot"
+    );
+    assert_eq!(
+        after.usage.input, 10,
+        "metering is untouched by the persistence policy"
+    );
 }
 
 #[tokio::test]
@@ -469,25 +527,50 @@ async fn client_ts_skew_is_rejected_with_distinct_codes_and_cannot_move_a_window
     };
 
     // Beyond the default bounds → refused, with the direction named.
-    let (s_old, b_old) = ingest(&app, &key, ev("old", Utc::now() - chrono::Duration::days(400))).await;
+    let (s_old, b_old) = ingest(
+        &app,
+        &key,
+        ev("old", Utc::now() - chrono::Duration::days(400)),
+    )
+    .await;
     assert_eq!(s_old, StatusCode::BAD_REQUEST, "{b_old}");
     assert_eq!(b_old["error"]["code"], "ts_too_old", "{b_old}");
-    let (s_new, b_new) = ingest(&app, &key, ev("new", Utc::now() + chrono::Duration::hours(3))).await;
+    let (s_new, b_new) = ingest(
+        &app,
+        &key,
+        ev("new", Utc::now() + chrono::Duration::hours(3)),
+    )
+    .await;
     assert_eq!(s_new, StatusCode::BAD_REQUEST, "{b_new}");
     assert_eq!(b_new["error"]["code"], "ts_too_new", "{b_new}");
-    assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty(), "neither was stored");
+    assert!(
+        store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+        "neither was stored"
+    );
 
     // Within tolerance but backdated a full day: accepted, and it counts against the *hour* window it
     // actually arrived in. Under the old ts-keyed accounting this call was invisible to an hourly cap.
-    let (s_ok, b_ok) =
-        ingest(&app, &key, ev("backdated", Utc::now() - chrono::Duration::days(1))).await;
+    let (s_ok, b_ok) = ingest(
+        &app,
+        &key,
+        ev("backdated", Utc::now() - chrono::Duration::days(1)),
+    )
+    .await;
     assert_eq!(s_ok, StatusCode::OK, "{b_ok}");
-    let usage = store.usage_since("proj-a", Utc::now() - chrono::Duration::hours(1)).unwrap();
-    assert_eq!(usage.calls, 1, "a backdated event still consumes the live budget window");
+    let usage = store
+        .usage_since("proj-a", Utc::now() - chrono::Duration::hours(1))
+        .unwrap();
+    assert_eq!(
+        usage.calls, 1,
+        "a backdated event still consumes the live budget window"
+    );
     assert_eq!(usage.cost_usd, 1.0);
     // Its client-supplied `ts` is preserved and returned unchanged — we reject skew, we don't rewrite it.
     let stored = store.get_event("backdated").unwrap().unwrap();
-    assert!(stored.ts < stored.received_at, "client ts preserved, arrival stamped separately");
+    assert!(
+        stored.ts < stored.received_at,
+        "client ts preserved, arrival stamped separately"
+    );
 }
 
 #[tokio::test]
@@ -560,8 +643,15 @@ async fn uncosted_event_is_priced_from_the_book() {
     );
 
     // The priced cost is persisted, not merely returned.
-    let ev = store.list_events(Some("proj-a"), 10).unwrap().pop().unwrap();
-    assert!((ev.cost_usd.unwrap() - 6.0).abs() < 1e-9, "stored cost not priced");
+    let ev = store
+        .list_events(Some("proj-a"), 10)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert!(
+        (ev.cost_usd.unwrap() - 6.0).abs() < 1e-9,
+        "stored cost not priced"
+    );
 }
 
 #[tokio::test]
@@ -586,11 +676,21 @@ async fn pii_is_redacted_before_the_row_is_stored() {
     assert_eq!(status, StatusCode::OK);
 
     // The stored row must carry scrubbed content — raw PII never lands in the DB.
-    let ev = store.list_events(Some("proj-a"), 10).unwrap().pop().unwrap();
+    let ev = store
+        .list_events(Some("proj-a"), 10)
+        .unwrap()
+        .pop()
+        .unwrap();
     let stored = serde_json::to_string(&ev).unwrap();
-    assert!(!stored.contains("jane@example.com"), "raw email persisted: {stored}");
+    assert!(
+        !stored.contains("jane@example.com"),
+        "raw email persisted: {stored}"
+    );
     assert!(!stored.contains("4111"), "raw card persisted: {stored}");
-    assert!(stored.contains("<EMAIL>"), "redaction marker missing: {stored}");
+    assert!(
+        stored.contains("<EMAIL>"),
+        "redaction marker missing: {stored}"
+    );
 }
 
 /// The D14 behavior change, asserted through the wired router rather than the unit under it: an
@@ -624,15 +724,24 @@ async fn an_unconfigured_instance_scrubs_pii_on_every_ingest_door() {
         .header("authorization", format!("Bearer {key}"))
         .body(Body::from(json!([pii]).to_string()))
         .unwrap();
-    assert_eq!(app.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::OK
+    );
 
     let rows = store.list_events(Some("proj-a"), 10).unwrap();
     assert_eq!(rows.len(), 2, "both doors stored an event");
     for ev in &rows {
         let stored = serde_json::to_string(ev).unwrap();
-        assert!(!stored.contains("jane@example.com"), "raw email persisted: {stored}");
+        assert!(
+            !stored.contains("jane@example.com"),
+            "raw email persisted: {stored}"
+        );
         assert!(!stored.contains("4111"), "raw card persisted: {stored}");
-        assert!(stored.contains("<EMAIL>"), "redaction marker missing: {stored}");
+        assert!(
+            stored.contains("<EMAIL>"),
+            "redaction marker missing: {stored}"
+        );
     }
 
     // A `hash` project keeps a real 64-hex digest: the scrub must not treat the digest it was handed
@@ -640,11 +749,28 @@ async fn an_unconfigured_instance_scrubs_pii_on_every_ingest_door() {
     // secret" would do if the two layers were not ordered against each other).
     let (status, _) = ingest(&app, &hash_key, pii).await;
     assert_eq!(status, StatusCode::OK);
-    let ev = store.list_events(Some("proj-hash"), 10).unwrap().pop().unwrap();
-    let digest = ev.input.as_ref().and_then(|v| v.get("sha256")).and_then(Value::as_str);
-    assert_eq!(digest.map(str::len), Some(64), "hash policy lost its digest: {:?}", ev.input);
+    let ev = store
+        .list_events(Some("proj-hash"), 10)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let digest = ev
+        .input
+        .as_ref()
+        .and_then(|v| v.get("sha256"))
+        .and_then(Value::as_str);
+    assert_eq!(
+        digest.map(str::len),
+        Some(64),
+        "hash policy lost its digest: {:?}",
+        ev.input
+    );
     // …while the surfaces no persistence policy covers are still scrubbed.
-    assert!(!ev.error.as_deref().unwrap_or_default().contains("jane@example.com"));
+    assert!(!ev
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("jane@example.com"));
     assert!(!ev.tags.iter().any(|t| t.contains("jane@example.com")));
 }
 
@@ -681,7 +807,11 @@ async fn enforcing_actions_reject_ingest_and_do_not_store() {
         )
         .await;
 
-        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{action:?} must reject ingest");
+        assert_eq!(
+            status,
+            StatusCode::TOO_MANY_REQUESTS,
+            "{action:?} must reject ingest"
+        );
         assert_eq!(body["error"]["code"], "rate_limited", "{action:?}: {body}");
         assert!(
             store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
@@ -740,14 +870,25 @@ async fn rejected_events_are_ledgered_but_never_touch_usage_math() {
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
 
     // Usage math is provably untouched: no event row, no cost rows, zero usage.
-    assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty(), "rejected event was stored");
     assert!(
-        store.cost_summary_windowed(Some("proj-a"), None, None).unwrap().is_empty(),
+        store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+        "rejected event was stored"
+    );
+    assert!(
+        store
+            .cost_summary_windowed(Some("proj-a"), None, None)
+            .unwrap()
+            .is_empty(),
         "rejected event leaked into the cost summary"
     );
-    let usage = store.usage_since("proj-a", Utc::now() - chrono::Duration::hours(1)).unwrap();
+    let usage = store
+        .usage_since("proj-a", Utc::now() - chrono::Duration::hours(1))
+        .unwrap();
     assert_eq!(usage.calls, 0, "rejected event counted toward usage");
-    assert_eq!(usage.cost_usd, 0.0, "rejected event counted toward cost usage");
+    assert_eq!(
+        usage.cost_usd, 0.0,
+        "rejected event counted toward cost usage"
+    );
 
     // But it *is* visible out-of-band: the ledger recorded one rejection with its estimated cost.
     let (s, body) = get_limits_status(&app, &key, "proj-a").await;
@@ -798,7 +939,10 @@ async fn alert_limit_flags_but_admits_and_stores() {
 
     // Alert is observe-only: the event is admitted (200), the breach is surfaced, never throttled.
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["throttled"], false, "an Alert breach must not throttle: {body}");
+    assert_eq!(
+        body["throttled"], false,
+        "an Alert breach must not throttle: {body}"
+    );
     let breached = body["breached"].as_array().expect("breached array present");
     assert_eq!(breached.len(), 1, "{body}");
     assert_eq!(breached[0]["action"], "alert");
@@ -861,15 +1005,25 @@ async fn batch_returns_per_item_accept_reject_invalid() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK, "batch is multi-status under 200: {body}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "batch is multi-status under 200: {body}"
+    );
     let results = body["results"].as_array().unwrap();
     assert_eq!(results.len(), 4, "{body}");
     // Order preserved.
     assert_eq!(results[0]["status"], "accepted");
     assert_eq!(results[0]["id"], "a");
-    assert_eq!(results[1]["status"], "invalid", "empty model → invalid: {body}");
+    assert_eq!(
+        results[1]["status"], "invalid",
+        "empty model → invalid: {body}"
+    );
     assert_eq!(results[2]["status"], "accepted");
-    assert_eq!(results[3]["status"], "rejected", "cap reached → rejected: {body}");
+    assert_eq!(
+        results[3]["status"], "rejected",
+        "cap reached → rejected: {body}"
+    );
     assert_eq!(body["accepted"], 2);
     assert_eq!(body["invalid"], 1);
     assert_eq!(body["rejected"], 1);
@@ -965,7 +1119,12 @@ async fn query_events(
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let hdr = |n: &str| resp.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let hdr = |n: &str| {
+        resp.headers()
+            .get(n)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
     let (cursor, total) = (hdr("x-next-cursor"), hdr("x-total-count"));
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let v = serde_json::from_slice(&bytes)
@@ -1000,8 +1159,12 @@ async fn events_can_be_asked_the_questions_that_matter_over_http() {
         assert_eq!(s, StatusCode::OK, "{b}");
     }
     let ids = |v: &Value| {
-        let mut out: Vec<String> =
-            v.as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap().to_string()).collect();
+        let mut out: Vec<String> = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap().to_string())
+            .collect();
         out.sort();
         out
     };
@@ -1025,19 +1188,31 @@ async fn events_can_be_asked_the_questions_that_matter_over_http() {
     // Opt-in total travels beside a limited page, and counts the whole match set.
     let (_, cursor, total, v) = query_events(&app, &key, "status=error&count=1&limit=1").await;
     assert_eq!(v.as_array().unwrap().len(), 1);
-    assert_eq!(total.as_deref(), Some("2"), "X-Total-Count is the match set, not the page");
+    assert_eq!(
+        total.as_deref(),
+        Some("2"),
+        "X-Total-Count is the match set, not the page"
+    );
     assert!(cursor.is_some(), "a further page remains");
     // …and is absent unless asked for.
     let (_, _, no_total, _) = query_events(&app, &key, "status=error").await;
     assert!(no_total.is_none());
 
     // Cursor semantics survive the new predicates end to end.
-    let (_, _, _, page2) =
-        query_events(&app, &key, &format!("status=error&limit=1&cursor={}", cursor.unwrap())).await;
+    let (_, _, _, page2) = query_events(
+        &app,
+        &key,
+        &format!("status=error&limit=1&cursor={}", cursor.unwrap()),
+    )
+    .await;
     let mut seen = ids(&v);
     seen.extend(ids(&page2));
     seen.sort();
-    assert_eq!(seen, ["q2", "q3"], "paging under a filter yields each match exactly once");
+    assert_eq!(
+        seen,
+        ["q2", "q3"],
+        "paging under a filter yields each match exactly once"
+    );
 
     // Combined predicates AND; a nonsense status is a 400, never a misleading empty page.
     let (_, _, _, v) = query_events(&app, &key, "status=error&min_cost=0.25").await;
@@ -1091,7 +1266,11 @@ async fn key_lifecycle_list_shows_use_and_revoke_kills_auth() {
         app.clone().oneshot(req)
     };
     let json_of = |bytes: axum::body::Bytes| -> Value {
-        if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() }
+        if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        }
     };
 
     // Use the key once so last_used_at is stamped (best-effort/detached — poll briefly).
@@ -1101,31 +1280,49 @@ async fn key_lifecycle_list_shows_use_and_revoke_kills_auth() {
     assert_eq!(s, StatusCode::OK);
 
     // List keys (admin): the key is there; key_hash is never exposed.
-    let resp = send("GET", "/v1/projects/proj-a/keys".into(), admin).await.unwrap();
+    let resp = send("GET", "/v1/projects/proj-a/keys".into(), admin)
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let list = json_of(to_bytes(resp.into_body(), usize::MAX).await.unwrap());
     let row = &list.as_array().unwrap()[0];
     let kid = row["id"].as_str().unwrap().to_string();
     assert_eq!(row["revoked"], false);
-    assert!(row.get("key_hash").is_none(), "key_hash must never be listed: {row}");
+    assert!(
+        row.get("key_hash").is_none(),
+        "key_hash must never be listed: {row}"
+    );
 
     // A project key can't list (admin-gated).
-    let resp = send("GET", "/v1/projects/proj-a/keys".into(), &key).await.unwrap();
+    let resp = send("GET", "/v1/projects/proj-a/keys".into(), &key)
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     // Revoke it (admin). The key still authenticates BEFORE revocation…
-    let resp = send("DELETE", format!("/v1/projects/proj-a/keys/{kid}"), admin).await.unwrap();
+    let resp = send("DELETE", format!("/v1/projects/proj-a/keys/{kid}"), admin)
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(json_of(to_bytes(resp.into_body(), usize::MAX).await.unwrap())["revoked"], true);
+    assert_eq!(
+        json_of(to_bytes(resp.into_body(), usize::MAX).await.unwrap())["revoked"],
+        true
+    );
 
     // …and is rejected immediately AFTER — auth reads the store per request.
     let (s2, _) = ingest(&app, &key, json!({
         "provider": "anthropic", "model": "claude-haiku-4-5", "usage": { "input": 1, "output": 1 }, "cost_usd": 0.0
     })).await;
-    assert_eq!(s2, StatusCode::UNAUTHORIZED, "a revoked key is dead on the next call");
+    assert_eq!(
+        s2,
+        StatusCode::UNAUTHORIZED,
+        "a revoked key is dead on the next call"
+    );
 
     // Revoking an unknown key id → 404.
-    let resp = send("DELETE", "/v1/projects/proj-a/keys/nope".into(), admin).await.unwrap();
+    let resp = send("DELETE", "/v1/projects/proj-a/keys/nope".into(), admin)
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
@@ -1206,15 +1403,26 @@ async fn replayed_ingest_is_acknowledged_not_conflicted() {
 
     let (s1, b1) = ingest(&app, &key, body.clone()).await;
     assert_eq!(s1, StatusCode::OK);
-    assert!(b1.get("duplicate").is_none(), "first write is not a duplicate: {b1}");
+    assert!(
+        b1.get("duplicate").is_none(),
+        "first write is not a duplicate: {b1}"
+    );
 
     // The retry (a timed-out POST resent verbatim): acknowledged as the original write, 200 with
     // duplicate: true — a client can now tell "you already have this" from "malformed and gone".
     let (s2, b2) = ingest(&app, &key, body.clone()).await;
-    assert_eq!(s2, StatusCode::OK, "a replay is an acknowledgement, not an error: {b2}");
+    assert_eq!(
+        s2,
+        StatusCode::OK,
+        "a replay is an acknowledgement, not an error: {b2}"
+    );
     assert_eq!(b2["duplicate"], true, "{b2}");
     assert_eq!(b2["cost_usd"], 0.25, "the ORIGINAL outcome is returned");
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1, "nothing double-counted");
+    assert_eq!(
+        store.list_events(Some("proj-a"), 10).unwrap().len(),
+        1,
+        "nothing double-counted"
+    );
 
     // Same id but a DIFFERENT payload: a true conflict, still refused.
     let mut different = body;
@@ -1265,7 +1473,11 @@ async fn replayed_batch_is_acknowledged_per_item() {
         assert_eq!(item["duplicate"], true, "{item}");
         assert_eq!(item["index"], i, "positional correlation is explicit");
     }
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2, "no double-count");
+    assert_eq!(
+        store.list_events(Some("proj-a"), 10).unwrap().len(),
+        2,
+        "no double-count"
+    );
 }
 
 #[tokio::test]
@@ -1361,7 +1573,10 @@ async fn an_unpriced_model_cannot_spend_freely_under_a_cost_cap() {
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
     assert_eq!(body["error"]["code"], "rate_limited", "{body}");
     let msg = body["error"]["message"].as_str().unwrap();
-    assert!(msg.contains("price book"), "the reason must name the actual problem: {msg}");
+    assert!(
+        msg.contains("price book"),
+        "the reason must name the actual problem: {msg}"
+    );
     assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty());
 
     // Once there is priced traffic to learn from, unpriced calls are charged the window's mean
@@ -1382,9 +1597,16 @@ async fn an_unpriced_model_cannot_spend_freely_under_a_cost_cap() {
     }
     // Rolling cost is $0.80 stored; one unpriced call is imputed at the $0.40 mean → $1.20 >= $1.00.
     let (s, body) = ingest(&app, &key, unpriced).await;
-    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "imputed cost must trip the cap: {body}");
+    assert_eq!(
+        s,
+        StatusCode::TOO_MANY_REQUESTS,
+        "imputed cost must trip the cap: {body}"
+    );
     assert!(
-        body["error"]["message"].as_str().unwrap().contains("imputed"),
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("imputed"),
         "a cap tripped on estimated cost must say so: {body}"
     );
 
@@ -1392,18 +1614,28 @@ async fn an_unpriced_model_cannot_spend_freely_under_a_cost_cap() {
     let (s, body) = get_limits_status(&app, &key, "proj-a").await;
     assert_eq!(s, StatusCode::OK);
     let basis = &body["cost_basis"];
-    assert_eq!(basis["unpriced_calls"], 0, "no unpriced call was ever admitted: {body}");
-    assert!(basis["notes"].as_array().unwrap().len() >= 3, "the caveats are stated: {body}");
+    assert_eq!(
+        basis["unpriced_calls"], 0,
+        "no unpriced call was ever admitted: {body}"
+    );
     assert!(
-        basis["notes"].as_array().unwrap().iter().any(|n| n
-            .as_str()
+        basis["notes"].as_array().unwrap().len() >= 3,
+        "the caveats are stated: {body}"
+    );
+    assert!(
+        basis["notes"]
+            .as_array()
             .unwrap()
-            .contains("no repricing of history")),
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("no repricing of history")),
         "the absence of a repricing path must be stated in the response: {body}"
     );
     // The cost status carries its provenance so a client can tell measured from inferred.
     assert!(body["statuses"][0]["cost_evidence"].is_object(), "{body}");
-    assert_eq!(body["statuses"][0]["cost_evidence"]["priced_calls"], 2, "{body}");
+    assert_eq!(
+        body["statuses"][0]["cost_evidence"]["priced_calls"], 2,
+        "{body}"
+    );
 }
 
 #[tokio::test]
@@ -1451,10 +1683,18 @@ async fn client_reported_cost_is_distinguishable_from_our_own_estimate() {
 
     let (s, body) = get_limits_status(&app, &key, "proj-a").await;
     assert_eq!(s, StatusCode::OK);
-    let client = body["cost_basis"]["client_reported_cost_usd"].as_f64().unwrap();
-    assert!((client - 2.50).abs() < 1e-9, "only the client-supplied cost counts here: {body}");
+    let client = body["cost_basis"]["client_reported_cost_usd"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        (client - 2.50).abs() < 1e-9,
+        "only the client-supplied cost counts here: {body}"
+    );
     let total = body["statuses"][0]["current"].as_f64().unwrap();
-    assert!(total > client, "the book-priced call is in the total but not the client share: {body}");
+    assert!(
+        total > client,
+        "the book-priced call is in the total but not the client share: {body}"
+    );
 }
 
 /// POST one event and return `(status, retry-after header, body)`.
@@ -1478,7 +1718,11 @@ async fn ingest_with_headers(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let v: Value = if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+    let v: Value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
     (status, retry, v)
 }
 
@@ -1533,12 +1777,21 @@ async fn throttle_sheds_gradually_where_block_is_a_cliff() {
         }
     }
     // Block is a cliff: everything below the threshold sails through untouched.
-    assert_eq!(block_shed, 0, "Block must not shed anything before its threshold");
+    assert_eq!(
+        block_shed, 0,
+        "Block must not shed anything before its threshold"
+    );
     assert_eq!(b_store.list_events(Some("proj-a"), 100).unwrap().len(), 19);
     // Throttle is a ramp: real back-pressure builds on the approach, but traffic still flows.
-    assert!(throttle_shed > 0, "Throttle must actually throttle before the wall");
+    assert!(
+        throttle_shed > 0,
+        "Throttle must actually throttle before the wall"
+    );
     let stored = t_store.list_events(Some("proj-a"), 100).unwrap().len();
-    assert!(stored > 0 && stored < 19, "graduated, not all-or-nothing (stored {stored}/19)");
+    assert!(
+        stored > 0 && stored < 19,
+        "graduated, not all-or-nothing (stored {stored}/19)"
+    );
 }
 
 #[tokio::test]
@@ -1548,9 +1801,14 @@ async fn a_shed_response_tells_the_client_how_close_it_is_and_when_to_retry() {
     // Accepted writes carry the proximity signal, so a client never has to poll a second endpoint.
     let (s, _, body) = ingest_with_headers(&app, &key, one_call()).await;
     assert_eq!(s, StatusCode::OK, "{body}");
-    let ratio = body["usage_ratio"].as_f64().expect("accepted writes report proximity");
+    let ratio = body["usage_ratio"]
+        .as_f64()
+        .expect("accepted writes report proximity");
     assert!((ratio - 0.05).abs() < 1e-9, "1 of 20 calls: {body}");
-    assert!(body.get("shed_fraction").is_none(), "nothing is shedding yet: {body}");
+    assert!(
+        body.get("shed_fraction").is_none(),
+        "nothing is shedding yet: {body}"
+    );
 
     // Drive up into the ramp and capture the first shed response.
     let mut shed: Option<(Option<String>, Value)> = None;
@@ -1563,22 +1821,40 @@ async fn a_shed_response_tells_the_client_how_close_it_is_and_when_to_retry() {
             shed = Some((retry, body));
         }
     }
-    assert!(saw_shed_fraction, "accepted writes inside the ramp must report the shed pressure");
+    assert!(
+        saw_shed_fraction,
+        "accepted writes inside the ramp must report the shed pressure"
+    );
 
     let (retry, body) = shed.expect("throttling must shed at least one event on the approach");
     assert_eq!(body["error"]["code"], "rate_limited", "{body}");
-    let secs: u64 = retry.expect("a shed must carry Retry-After").parse().unwrap();
-    assert!((1..=15).contains(&secs), "a shed is transient back-pressure, got {secs}s");
+    let secs: u64 = retry
+        .expect("a shed must carry Retry-After")
+        .parse()
+        .unwrap();
+    assert!(
+        (1..=15).contains(&secs),
+        "a shed is transient back-pressure, got {secs}s"
+    );
     let msg = body["error"]["message"].as_str().unwrap();
-    assert!(msg.contains("throttled") && msg.contains("Not over budget"), "{msg}");
+    assert!(
+        msg.contains("throttled") && msg.contains("Not over budget"),
+        "{msg}"
+    );
 
     // A hard breach, by contrast, asks the client to wait for the window — a different schedule.
     let (hard_app, hard_key, _) = app_with_calls_rule(LimitAction::Block, 1.0, None);
     let (s, retry, _) = ingest_with_headers(&hard_app, &hard_key, one_call()).await;
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
-    let hard_secs: u64 = retry.expect("a hard cap must carry Retry-After").parse().unwrap();
+    let hard_secs: u64 = retry
+        .expect("a hard cap must carry Retry-After")
+        .parse()
+        .unwrap();
     assert_eq!(hard_secs, LimitWindow::Hour.retry_after_secs());
-    assert!(hard_secs > 15, "a hard stop is a longer wait than transient shedding");
+    assert!(
+        hard_secs > 15,
+        "a hard stop is a longer wait than transient shedding"
+    );
 }
 
 #[tokio::test]
@@ -1592,7 +1868,10 @@ async fn a_shed_is_ledgered_and_is_never_confusable_with_server_overload() {
         let (s, _, body) = ingest_with_headers(&app, &key, one_call()).await;
         if s == StatusCode::TOO_MANY_REQUESTS {
             shed_seen += 1;
-            assert_eq!(body["error"]["code"], "rate_limited", "never `overloaded`: {body}");
+            assert_eq!(
+                body["error"]["code"], "rate_limited",
+                "never `overloaded`: {body}"
+            );
             assert_ne!(s, StatusCode::SERVICE_UNAVAILABLE);
         }
     }
@@ -1600,10 +1879,18 @@ async fn a_shed_is_ledgered_and_is_never_confusable_with_server_overload() {
 
     let (s, body) = get_limits_status(&app, &key, "proj-a").await;
     assert_eq!(s, StatusCode::OK);
-    let rejected = body["rejected"].as_array().expect("shed events are ledgered");
+    let rejected = body["rejected"]
+        .as_array()
+        .expect("shed events are ledgered");
     assert_eq!(rejected.len(), 1, "{body}");
     assert_eq!(rejected[0]["metric"], "calls");
-    assert_eq!(rejected[0]["count"], shed_seen, "every shed event is attributed: {body}");
+    assert_eq!(
+        rejected[0]["count"], shed_seen,
+        "every shed event is attributed: {body}"
+    );
     // And the status surface shows the shedding pressure itself.
-    assert!(body["statuses"][0]["shed_fraction"].as_f64().unwrap() > 0.0, "{body}");
+    assert!(
+        body["statuses"][0]["shed_fraction"].as_f64().unwrap() > 0.0,
+        "{body}"
+    );
 }

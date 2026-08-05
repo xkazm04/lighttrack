@@ -70,7 +70,10 @@ pub(super) fn apply(c: &Connection) -> Result<()> {
     let backfill = add_column(c, ADD_RECEIVED_AT)?;
     c.execute_batch(SCHEMA)?;
     if backfill {
-        c.execute("UPDATE events SET received_at = ts WHERE received_at IS NULL", [])?;
+        c.execute(
+            "UPDATE events SET received_at = ts WHERE received_at IS NULL",
+            [],
+        )?;
     }
     Ok(())
 }

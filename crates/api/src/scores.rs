@@ -31,7 +31,11 @@ pub(crate) async fn post_score(
     // Bound verdict provenance at the boundary, not at the (many) callers: a score row is hot, and a
     // client posting unbounded reasoning must not be able to balloon it. An empty detail is dropped
     // so `{}` never persists as if it were provenance.
-    s.detail = s.detail.take().map(lighttrack_core::ScoreDetail::capped).filter(|d| !d.is_empty());
+    s.detail = s
+        .detail
+        .take()
+        .map(lighttrack_core::ScoreDetail::capped)
+        .filter(|d| !d.is_empty());
     let store = st.store.clone();
     let s2 = s.clone();
     spawn_db(move || store.insert_score(&s2)).await?;

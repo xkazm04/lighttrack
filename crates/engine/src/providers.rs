@@ -44,19 +44,36 @@ pub(crate) fn http_client() -> Result<&'static reqwest::blocking::Client> {
 pub(crate) fn http_error(who: &str, status: reqwest::StatusCode, body: String) -> EngineError {
     let s = status.as_u16();
     match s {
-        429 => EngineError::RateLimited { who: who.to_string() },
-        401 | 403 => EngineError::Auth { who: who.to_string(), status: s },
-        500..=599 => EngineError::ServerError { who: who.to_string(), status: s },
-        _ => EngineError::BadRequest { who: who.to_string(), status: s, body },
+        429 => EngineError::RateLimited {
+            who: who.to_string(),
+        },
+        401 | 403 => EngineError::Auth {
+            who: who.to_string(),
+            status: s,
+        },
+        500..=599 => EngineError::ServerError {
+            who: who.to_string(),
+            status: s,
+        },
+        _ => EngineError::BadRequest {
+            who: who.to_string(),
+            status: s,
+            body,
+        },
     }
 }
 
 /// Map a reqwest transport error to a typed error: timeouts/connect failures are retryable.
 pub(crate) fn send_error(who: &str, e: reqwest::Error) -> EngineError {
     if e.is_timeout() || e.is_connect() {
-        EngineError::Timeout { who: who.to_string() }
+        EngineError::Timeout {
+            who: who.to_string(),
+        }
     } else {
-        EngineError::Http { who: who.to_string(), detail: e.to_string() }
+        EngineError::Http {
+            who: who.to_string(),
+            detail: e.to_string(),
+        }
     }
 }
 
@@ -66,14 +83,19 @@ pub(crate) fn read_bounded(resp: reqwest::blocking::Response, who: &str) -> Resu
     let mut buf = Vec::new();
     resp.take(MAX_BODY_BYTES + 1)
         .read_to_end(&mut buf)
-        .map_err(|e| EngineError::Http { who: who.to_string(), detail: e.to_string() })?;
+        .map_err(|e| EngineError::Http {
+            who: who.to_string(),
+            detail: e.to_string(),
+        })?;
     if buf.len() as u64 > MAX_BODY_BYTES {
         return Err(EngineError::Other(format!(
             "{who} response exceeded {MAX_BODY_BYTES}-byte cap"
         )));
     }
-    String::from_utf8(buf)
-        .map_err(|e| EngineError::Http { who: who.to_string(), detail: format!("non-UTF-8 body: {e}") })
+    String::from_utf8(buf).map_err(|e| EngineError::Http {
+        who: who.to_string(),
+        detail: format!("non-UTF-8 body: {e}"),
+    })
 }
 
 /// Generate a candidate output from a target (provider + model + optional system-prompt variant).
@@ -154,7 +176,17 @@ fn generate_retrying(
     schema: Option<&Value>,
     deterministic: bool,
 ) -> Result<GenOutcome> {
-    with_retry(|| generate_once(cfg, provider, model, system_prompt, input, schema, deterministic))
+    with_retry(|| {
+        generate_once(
+            cfg,
+            provider,
+            model,
+            system_prompt,
+            input,
+            schema,
+            deterministic,
+        )
+    })
 }
 
 fn generate_once(
@@ -194,11 +226,14 @@ fn generate_anthropic(
     schema: Option<&Value>,
 ) -> Result<GenOutcome> {
     let schema_str = schema.map(|s| s.to_string());
-    let (envelope, latency_ms) = claude::invoke(cfg, input, model, system_prompt, schema_str.as_deref())?;
+    let (envelope, latency_ms) =
+        claude::invoke(cfg, input, model, system_prompt, schema_str.as_deref())?;
     let (input_tokens, output_tokens) = claude::token_counts(&envelope);
     let output = claude::completion_text(&envelope);
     if output.is_empty() {
-        return Err(EngineError::EmptyCompletion { who: "claude".into() });
+        return Err(EngineError::EmptyCompletion {
+            who: "claude".into(),
+        });
     }
     Ok(GenOutcome {
         output,
@@ -223,7 +258,9 @@ fn strip_schema_key(v: &Value, key: &str) -> Value {
                 .map(|(k, val)| (k.clone(), strip_schema_key(val, key)))
                 .collect(),
         ),
-        Value::Array(items) => Value::Array(items.iter().map(|i| strip_schema_key(i, key)).collect()),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|i| strip_schema_key(i, key)).collect())
+        }
         other => other.clone(),
     }
 }
@@ -242,15 +279,21 @@ fn generate_gemini(
         .map_err(|_| EngineError::Other("no Gemini API key (set GEMINI_API_KEY)".into()))?;
     let url =
         format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
-    let mut body = serde_json::json!({ "contents": [{ "role": "user", "parts": [{ "text": input }] }] });
+    let mut body =
+        serde_json::json!({ "contents": [{ "role": "user", "parts": [{ "text": input }] }] });
     if let Some(sys) = system_prompt {
         body["system_instruction"] = serde_json::json!({ "parts": [{ "text": sys }] });
     }
     let mut gen_config = serde_json::Map::new();
     if let Some(sc) = schema {
-        gen_config.insert("responseMimeType".into(), serde_json::json!("application/json"));
-        gen_config
-            .insert("responseSchema".into(), strip_schema_key(sc, "additionalProperties"));
+        gen_config.insert(
+            "responseMimeType".into(),
+            serde_json::json!("application/json"),
+        );
+        gen_config.insert(
+            "responseSchema".into(),
+            strip_schema_key(sc, "additionalProperties"),
+        );
     }
     if deterministic {
         gen_config.insert("temperature".into(), serde_json::json!(0.0));
@@ -285,7 +328,9 @@ fn generate_gemini(
         .unwrap_or("")
         .to_string();
     if output.is_empty() {
-        return Err(EngineError::EmptyCompletion { who: "gemini".into() });
+        return Err(EngineError::EmptyCompletion {
+            who: "gemini".into(),
+        });
     }
     let usage = v.get("usageMetadata");
     Ok(GenOutcome {
@@ -293,12 +338,18 @@ fn generate_gemini(
         cost_usd: None,
         model: model.to_string(),
         latency_ms,
-        input_tokens: usage.and_then(|u| u.get("promptTokenCount")).and_then(Value::as_u64),
+        input_tokens: usage
+            .and_then(|u| u.get("promptTokenCount"))
+            .and_then(Value::as_u64),
         output_tokens: usage
             .and_then(|u| u.get("candidatesTokenCount"))
             .and_then(Value::as_u64),
         // temperature 0 + a fixed seed were both accepted: reproducible by contract.
-        determinism: if deterministic { Determinism::Exact } else { Determinism::BestEffort },
+        determinism: if deterministic {
+            Determinism::Exact
+        } else {
+            Determinism::BestEffort
+        },
     })
 }
 
@@ -353,7 +404,9 @@ fn generate_openai(
         .unwrap_or("")
         .to_string();
     if output.is_empty() {
-        return Err(EngineError::EmptyCompletion { who: "openai".into() });
+        return Err(EngineError::EmptyCompletion {
+            who: "openai".into(),
+        });
     }
     let usage = v.get("usage");
     Ok(GenOutcome {
@@ -365,11 +418,17 @@ fn generate_openai(
             .map(str::to_string)
             .unwrap_or_else(|| model.to_string()),
         latency_ms,
-        input_tokens: usage.and_then(|u| u.get("prompt_tokens")).and_then(Value::as_u64),
+        input_tokens: usage
+            .and_then(|u| u.get("prompt_tokens"))
+            .and_then(Value::as_u64),
         output_tokens: usage
             .and_then(|u| u.get("completion_tokens"))
             .and_then(Value::as_u64),
-        determinism: if deterministic { Determinism::Exact } else { Determinism::BestEffort },
+        determinism: if deterministic {
+            Determinism::Exact
+        } else {
+            Determinism::BestEffort
+        },
     })
 }
 
@@ -389,8 +448,13 @@ mod tests {
         });
         let cleaned = strip_schema_key(&schema, "additionalProperties");
         assert!(cleaned.get("additionalProperties").is_none());
-        assert!(cleaned["properties"]["dim"].get("additionalProperties").is_none());
+        assert!(cleaned["properties"]["dim"]
+            .get("additionalProperties")
+            .is_none());
         // Untouched keys survive.
-        assert_eq!(cleaned["properties"]["dim"]["properties"]["score"]["type"], "number");
+        assert_eq!(
+            cleaned["properties"]["dim"]["properties"]["score"]["type"],
+            "number"
+        );
     }
 }

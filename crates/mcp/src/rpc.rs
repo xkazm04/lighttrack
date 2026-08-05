@@ -54,11 +54,16 @@ pub(crate) fn tool_rendered(markdown: &str, raw: &Value, next_cursor: Option<&st
 
 /// The trailing pagination hint appended to a paged tool's Markdown output.
 pub(crate) fn more_results_line(cursor: &str) -> String {
-    format!("\n\n_More results available — call again with `cursor={cursor}` to fetch the next page._")
+    format!(
+        "\n\n_More results available — call again with `cursor={cursor}` to fetch the next page._"
+    )
 }
 
 pub(crate) fn send_result(out: &mut impl Write, id: Option<Value>, result: Value) {
-    send(out, json!({ "jsonrpc": "2.0", "id": id.unwrap_or(Value::Null), "result": result }));
+    send(
+        out,
+        json!({ "jsonrpc": "2.0", "id": id.unwrap_or(Value::Null), "result": result }),
+    );
 }
 
 pub(crate) fn send_error(out: &mut impl Write, id: Option<Value>, code: i64, message: &str) {

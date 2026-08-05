@@ -54,13 +54,18 @@ mod tests {
             "get_forecast",
             "get_collective_digest",
         ] {
-            assert!(output_schema(t).is_some(), "{t} should declare an outputSchema");
+            assert!(
+                output_schema(t).is_some(),
+                "{t} should declare an outputSchema"
+            );
         }
     }
 
     #[test]
     fn prompt_read_tools_declare_output_schemas() {
-        assert!(output_schema("list_prompts").unwrap()["properties"].get("items").is_some());
+        assert!(output_schema("list_prompts").unwrap()["properties"]
+            .get("items")
+            .is_some());
         let resolved = output_schema("get_prompt").unwrap();
         assert!(resolved["properties"].get("content").is_some());
         assert!(resolved["properties"].get("version").is_some());
@@ -71,7 +76,10 @@ mod tests {
         let s = output_schema("get_limit_status").expect("schema present");
         let props = &s["properties"];
         assert!(props.get("statuses").is_some());
-        assert!(props.get("rejected").is_some(), "rejected block must be schema'd");
+        assert!(
+            props.get("rejected").is_some(),
+            "rejected block must be schema'd"
+        );
     }
 
     #[test]

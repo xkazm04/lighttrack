@@ -47,7 +47,11 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<RelayTask>> {
     raw.map(from_raw).transpose()
 }
 
-pub(super) fn find_by_key(conn: &Connection, project: &str, key: &str) -> Result<Option<RelayTask>> {
+pub(super) fn find_by_key(
+    conn: &Connection,
+    project: &str,
+    key: &str,
+) -> Result<Option<RelayTask>> {
     let sql =
         format!("SELECT {COLS} FROM relay_tasks WHERE project_id = ?1 AND idempotency_key = ?2");
     let mut stmt = conn.prepare(&sql)?;
@@ -148,7 +152,10 @@ pub(super) fn settle(
             let (status, next) = if task.attempts >= task.max_attempts {
                 ("dead", task.next_attempt_at)
             } else {
-                ("queued", now + Duration::seconds(task.retry_interval_secs as i64))
+                (
+                    "queued",
+                    now + Duration::seconds(task.retry_interval_secs as i64),
+                )
             };
             conn.execute(
                 "UPDATE relay_tasks SET status=?2, error=?3, next_attempt_at=?4, \
@@ -156,7 +163,10 @@ pub(super) fn settle(
                 params![id, status, err, fmt_ts(next), now_s],
             )?;
         }
-        RelayOutcome::Deferred { retry_after_secs, reason } => {
+        RelayOutcome::Deferred {
+            retry_after_secs,
+            reason,
+        } => {
             // Not the task's fault (e.g. subscription window exhausted): hand the attempt back.
             let attempts = task.attempts.saturating_sub(1);
             let delay = retry_after_secs.unwrap_or(task.retry_interval_secs);
@@ -164,7 +174,13 @@ pub(super) fn settle(
             conn.execute(
                 "UPDATE relay_tasks SET status='queued', attempts=?2, error=?3, \
                      next_attempt_at=?4, lease_deadline=NULL, updated_at=?5 WHERE id=?1",
-                params![id, attempts as i64, reason.as_deref().or(task.error.as_deref()), fmt_ts(next), now_s],
+                params![
+                    id,
+                    attempts as i64,
+                    reason.as_deref().or(task.error.as_deref()),
+                    fmt_ts(next),
+                    now_s
+                ],
             )?;
         }
     }

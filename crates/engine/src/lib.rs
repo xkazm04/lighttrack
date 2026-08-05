@@ -30,13 +30,13 @@ use lighttrack_core::JudgeVerdict;
 use thiserror::Error;
 
 pub use claude::{resolve_claude_bin, run_raw, RawOutcome};
+pub use family::{model_family, same_family};
 pub use judge::{parse_judge_spec, run_judge, run_rubric_judge, run_text};
 pub use pairwise::{run_pairwise, PairwiseOutcome, PairwiseVerdict, PairwiseWinner};
 pub use prompts::{
     build_eval_prompt, build_judge_prompt, build_pairwise_prompt, build_rubric_prompt,
     build_rubric_schema, Prompt,
 };
-pub use family::{model_family, same_family};
 pub use providers::{generate, generate_deterministic};
 
 /// Errors from the scoring engine. Transport failures carry a typed classification (not string
@@ -45,10 +45,7 @@ pub use providers::{generate, generate_deterministic};
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("failed to spawn '{bin}': {source}")]
-    Spawn {
-        bin: String,
-        source: std::io::Error,
-    },
+    Spawn { bin: String, source: std::io::Error },
     #[error("claude exited with status {code}: {stderr}")]
     NonZero { code: i32, stderr: String },
     /// HTTP 429 — retryable.
@@ -63,7 +60,11 @@ pub enum EngineError {
     /// HTTP 4xx other than 429/401/403 — often a rejected JSON schema; triggers the schema-less
     /// prose fallback in [`generate`](crate::generate).
     #[error("{who} rejected the request (HTTP {status}): {body}")]
-    BadRequest { who: String, status: u16, body: String },
+    BadRequest {
+        who: String,
+        status: u16,
+        body: String,
+    },
     /// HTTP 401/403 — a credentials problem; not retryable.
     #[error("{who} authentication failed (HTTP {status})")]
     Auth { who: String, status: u16 },

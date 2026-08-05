@@ -141,8 +141,10 @@ pub(crate) fn run_benchmark(
             }
             // The items already loaded; a missing/forbidden dataset head is a provenance gap, not a
             // reason to abandon a paid run. Say so instead of silently claiming a pin.
-            Err(e) => eprintln!("  warning: could not read dataset {ds} metadata ({e}); the run \
-                                 will not record its frozen-state/version"),
+            Err(e) => eprintln!(
+                "  warning: could not read dataset {ds} metadata ({e}); the run \
+                                 will not record its frozen-state/version"
+            ),
         }
         items
             .into_iter()
@@ -160,13 +162,33 @@ pub(crate) fn run_benchmark(
     let targets = parse_targets(&bench.target)?;
     if !targets.is_empty() {
         return run_compare(
-            cli, http, engine, &bench, &cases, &targets, samples, gen_samples, pairwise, jobs,
-            report_extra, ctl,
+            cli,
+            http,
+            engine,
+            &bench,
+            &cases,
+            &targets,
+            samples,
+            gen_samples,
+            pairwise,
+            jobs,
+            report_extra,
+            ctl,
         );
     }
     if let Some(rid) = bench.rubric_id.clone() {
         return run_rubric_benchmark(
-            cli, http, engine, &bench, &cases, &rid, samples, heal, jobs, report_extra, ctl,
+            cli,
+            http,
+            engine,
+            &bench,
+            &cases,
+            &rid,
+            samples,
+            heal,
+            jobs,
+            report_extra,
+            ctl,
         );
     }
     run_simple(cli, http, engine, &bench, &cases, jobs, report_extra, ctl)
@@ -211,9 +233,15 @@ fn run_simple(
         let out = match &cases[i].output {
             None => Ok(None),
             Some(output) => {
-                let prompt =
-                    build_eval_prompt(&bench.rubric, &cases[i].input, cases[i].expected.as_deref(), output);
-                run_judge(engine, &jp, &jm, &prompt).context("judge failed").map(Some)
+                let prompt = build_eval_prompt(
+                    &bench.rubric,
+                    &cases[i].input,
+                    cases[i].expected.as_deref(),
+                    output,
+                );
+                run_judge(engine, &jp, &jm, &prompt)
+                    .context("judge failed")
+                    .map(Some)
             }
         };
         ctl.tick(n_cases);
@@ -255,16 +283,23 @@ fn run_simple(
         } else {
             outcome.verdict.score
         };
-        determinism =
-            Some(determinism.map_or(outcome.determinism, |prev| prev.weakest(outcome.determinism)));
+        determinism = Some(determinism.map_or(outcome.determinism, |prev| {
+            prev.weakest(outcome.determinism)
+        }));
         sum += norm;
         scores.push(norm);
         n += 1;
         if outcome.verdict.pass {
             passes += 1;
         }
-        let (jc, priced) =
-            cost_or_book(outcome.cost_usd, &prices, &jp, &jm, outcome.input_tokens, outcome.output_tokens);
+        let (jc, priced) = cost_or_book(
+            outcome.cost_usd,
+            &prices,
+            &jp,
+            &jm,
+            outcome.input_tokens,
+            outcome.output_tokens,
+        );
         if !priced {
             price_warnings.insert(format!("{jp}/{jm}"));
         }
@@ -296,7 +331,10 @@ fn run_simple(
         // Best-effort, as in compare mode: a transient post failure must neither abort a long run nor
         // vanish — it is counted into the report so "the cases are missing" is a recorded fact.
         if let Err(e) = post(cli, http, "/v1/scores", &score) {
-            eprintln!("  case {}: score post failed (verdict not persisted): {e}", i + 1);
+            eprintln!(
+                "  case {}: score post failed (verdict not persisted): {e}",
+                i + 1
+            );
             score_post_failures += 1;
         }
     }
@@ -310,7 +348,11 @@ fn run_simple(
     let (verdict_status, scalar_fallback) = significance_verdict(bench.baseline_score, &summary);
     // A cancelled run judged only part of its dataset — it must never be published under a verdict
     // that reads as a finished one.
-    let status = if cancelled { "cancelled" } else { verdict_status };
+    let status = if cancelled {
+        "cancelled"
+    } else {
+        verdict_status
+    };
     println!(
         "\nscorecard: mean={mean:.3}±{:.3} (n={})  pass_rate={:.0}%  cost=${cost:.5}  p50={}ms p95={}ms  tokens={total_tokens}  status={status}",
         summary.stderr,
@@ -320,11 +362,18 @@ fn run_simple(
         p95.unwrap_or(0),
     );
     if let Some(b) = bench.baseline_score {
-        let verdict = if status == "regressed" { "REGRESSION" } else { "ok" };
+        let verdict = if status == "regressed" {
+            "REGRESSION"
+        } else {
+            "ok"
+        };
         println!("baseline={b:.3} -> {verdict}");
     }
     if !price_warnings.is_empty() {
-        println!("warning: no price book entry for {} — judge cost undercounted", join_csv(&price_warnings));
+        println!(
+            "warning: no price book entry for {} — judge cost undercounted",
+            join_csv(&price_warnings)
+        );
     }
 
     if cancelled {
@@ -353,7 +402,10 @@ fn run_simple(
         "report": report,
     });
     let stored = post(cli, http, "/v1/benchmark-runs", &run)?;
-    println!("recorded run {}", stored.get("id").and_then(|v| v.as_str()).unwrap_or("?"));
+    println!(
+        "recorded run {}",
+        stored.get("id").and_then(|v| v.as_str()).unwrap_or("?")
+    );
     Ok(status.to_string())
 }
 
@@ -394,12 +446,25 @@ pub(crate) fn judge_output(
         // jobs=1: compare parallelizes across (target, case) cells, so per-cell sample judging stays
         // sequential to keep total concurrency bounded at --jobs.
         let o = run_rubric_judge(
-            engine, judge_provider, judge_model, r, &case.input,
-            case.expected.as_deref(), output, samples, 1,
+            engine,
+            judge_provider,
+            judge_model,
+            r,
+            &case.input,
+            case.expected.as_deref(),
+            output,
+            samples,
+            1,
         )
         .context("rubric judge failed")?;
-        let (jc, priced) =
-            cost_or_book(o.cost_usd, prices, judge_provider, judge_model, o.input_tokens, o.output_tokens);
+        let (jc, priced) = cost_or_book(
+            o.cost_usd,
+            prices,
+            judge_provider,
+            judge_model,
+            o.input_tokens,
+            o.output_tokens,
+        );
         Ok(JudgeResult {
             overall: o.overall,
             pass: o.pass,
@@ -407,19 +472,30 @@ pub(crate) fn judge_output(
             tokens: o.tokens.unwrap_or(0),
             agreement: o.agreement,
             judge_priced: priced,
-            dimensions: o.dimensions.iter().map(|d| (d.key.clone(), d.score)).collect(),
+            dimensions: o
+                .dimensions
+                .iter()
+                .map(|d| (d.key.clone(), d.score))
+                .collect(),
             detail: rubric_detail(&o),
         })
     } else {
-        let prompt = build_eval_prompt(&bench.rubric, &case.input, case.expected.as_deref(), output);
+        let prompt =
+            build_eval_prompt(&bench.rubric, &case.input, case.expected.as_deref(), output);
         let v = run_judge(engine, judge_provider, judge_model, &prompt).context("judge failed")?;
         let norm = if v.verdict.max > 0.0 {
             v.verdict.score / v.verdict.max
         } else {
             v.verdict.score
         };
-        let (jc, priced) =
-            cost_or_book(v.cost_usd, prices, judge_provider, judge_model, v.input_tokens, v.output_tokens);
+        let (jc, priced) = cost_or_book(
+            v.cost_usd,
+            prices,
+            judge_provider,
+            judge_model,
+            v.input_tokens,
+            v.output_tokens,
+        );
         Ok(JudgeResult {
             overall: norm,
             pass: v.verdict.pass,
@@ -442,7 +518,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn dataset(version: u32, frozen: bool) -> Dataset {
-        serde_json::from_value(json!({ "name": "d", "version": version, "frozen": frozen })).unwrap()
+        serde_json::from_value(json!({ "name": "d", "version": version, "frozen": frozen }))
+            .unwrap()
     }
 
     #[test]
@@ -456,7 +533,11 @@ mod tests {
         let p = dataset_pin(Some(&extra), &dataset(1, false));
         assert_eq!(p["prompt_id"], json!("p1"));
         assert_eq!(p["prompt_version"], json!(9));
-        assert_eq!(p["dataset_frozen"], json!(false), "an unfrozen dataset is recorded, not hidden");
+        assert_eq!(
+            p["dataset_frozen"],
+            json!(false),
+            "an unfrozen dataset is recorded, not hidden"
+        );
     }
 
     #[test]
@@ -467,8 +548,16 @@ mod tests {
         let mut report = json!({ "mode": "compare" });
         let extra = dataset_pin(None, &dataset(2, false));
         stamp_pins(&mut report, &bench, Some(&extra));
-        assert_eq!(report["dataset_ref"], json!("ds1"), "the id is still pinned");
-        assert_eq!(report["dataset_version"], json!(2), "…and now so is the content it named");
+        assert_eq!(
+            report["dataset_ref"],
+            json!("ds1"),
+            "the id is still pinned"
+        );
+        assert_eq!(
+            report["dataset_version"],
+            json!(2),
+            "…and now so is the content it named"
+        );
         assert_eq!(report["dataset_frozen"], json!(false));
     }
 
@@ -476,7 +565,9 @@ mod tests {
     fn parse_targets_null_and_object_are_no_matrix() {
         assert!(parse_targets(&json!(null)).unwrap().is_empty());
         // A legacy free-form object target is not a comparison matrix (and must not error).
-        assert!(parse_targets(&json!({ "endpoint": "https://x" })).unwrap().is_empty());
+        assert!(parse_targets(&json!({ "endpoint": "https://x" }))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -503,22 +594,35 @@ mod tests {
         use super::{attach_cases, MAX_LOGGED_CASES};
         // A short list is complete, and says so.
         let mut r = json!({ "mode": "simple" });
-        attach_cases(&mut r, "cases", vec![json!({ "case": 1 }), json!({ "case": 2 })]);
+        attach_cases(
+            &mut r,
+            "cases",
+            vec![json!({ "case": 1 }), json!({ "case": 2 })],
+        );
         assert_eq!(r["cases"].as_array().unwrap().len(), 2);
         assert_eq!(r["cases_total"], json!(2));
         assert_eq!(r["cases_logged"], json!(2));
         assert_eq!(r["cases_truncated"], json!(false));
 
         // A long one is clipped — and a consumer can tell, which is the whole point.
-        let many: Vec<serde_json::Value> =
-            (0..MAX_LOGGED_CASES + 50).map(|i| json!({ "case": i })).collect();
+        let many: Vec<serde_json::Value> = (0..MAX_LOGGED_CASES + 50)
+            .map(|i| json!({ "case": i }))
+            .collect();
         let mut r = json!({ "mode": "compare" });
         attach_cases(&mut r, "cases", many);
         assert_eq!(r["cases"].as_array().unwrap().len(), MAX_LOGGED_CASES);
         assert_eq!(r["cases_total"], json!(MAX_LOGGED_CASES + 50));
         assert_eq!(r["cases_logged"], json!(MAX_LOGGED_CASES));
-        assert_eq!(r["cases_truncated"], json!(true), "a clipped list must never look complete");
-        assert_eq!(r["cases"][0]["case"], json!(0), "the preview is the first k, in case order");
+        assert_eq!(
+            r["cases_truncated"],
+            json!(true),
+            "a clipped list must never look complete"
+        );
+        assert_eq!(
+            r["cases"][0]["case"],
+            json!(0),
+            "the preview is the first k, in case order"
+        );
     }
 
     #[test]

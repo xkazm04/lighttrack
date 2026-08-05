@@ -18,16 +18,17 @@ use lighttrack_engine::{
 use crate::bench::judge_output;
 use crate::budget::{estimate_compare, Budget};
 use crate::cli::Cli;
-use crate::http::{get, post};
 use crate::history::previous_case_scores;
+use crate::http::{get, post};
 use crate::provenance::{merge_details, weakest_reasoning};
 use crate::runctl::RunControl;
 use crate::stats::{
-    annotate_significance, annotate_verdict, paired_deltas, stability, superiority, verdict, Summary,
+    annotate_significance, annotate_verdict, paired_deltas, stability, superiority, verdict,
+    Summary,
 };
 use crate::util::{
-    add_price_warnings, aggregate_status, cost_or_book, join_csv, now_ts, parallel_map, percentiles,
-    stamp_determinism,
+    add_price_warnings, aggregate_status, cost_or_book, join_csv, now_ts, parallel_map,
+    percentiles, stamp_determinism,
 };
 
 /// One `(target, case)` cell's independent result: the candidate scores/agreements plus this cell's
@@ -112,8 +113,19 @@ fn compute_cell(
     // so we sample and stamp the run `sampled` rather than quietly claiming reproducibility.
     let pin = ng == 1;
     for _ in 0..ng {
-        let gen_call = if pin { generate_deterministic } else { generate };
-        let gen = match gen_call(engine, &t.provider, &t.model, t.system_prompt.as_deref(), &case.input, None) {
+        let gen_call = if pin {
+            generate_deterministic
+        } else {
+            generate
+        };
+        let gen = match gen_call(
+            engine,
+            &t.provider,
+            &t.model,
+            t.system_prompt.as_deref(),
+            &case.input,
+            None,
+        ) {
             Ok(g) => g,
             Err(e) => {
                 cell.error_msg = Some(format!("generation error — {e}"));
@@ -122,22 +134,43 @@ fn compute_cell(
         };
         // A pinned call reports what the provider actually honoured (`exact` only with a real seed);
         // an unpinned multi-draw is `sampled` regardless of what the provider could have offered.
-        let stamp = if pin { gen.determinism } else { Determinism::Sampled };
+        let stamp = if pin {
+            gen.determinism
+        } else {
+            Determinism::Sampled
+        };
         cell.gen_determinism = Some(match cell.gen_determinism {
             Some(prev) => prev.weakest(stamp),
             None => stamp,
         });
-        let (gc, gpriced) =
-            cost_or_book(gen.cost_usd, prices, &t.provider, &t.model, gen.input_tokens, gen.output_tokens);
+        let (gc, gpriced) = cost_or_book(
+            gen.cost_usd,
+            prices,
+            &t.provider,
+            &t.model,
+            gen.input_tokens,
+            gen.output_tokens,
+        );
         if !gpriced {
-            cell.price_warnings.insert(format!("{}/{}", t.provider, t.model));
+            cell.price_warnings
+                .insert(format!("{}/{}", t.provider, t.model));
         }
         cell.gen_cost += gc;
         cell.gen_tokens += gen.input_tokens.unwrap_or(0) + gen.output_tokens.unwrap_or(0);
         if let Some(l) = gen.latency_ms {
             cell.latencies.push(l);
         }
-        let jr = match judge_output(engine, jp, jm, rubric, bench, case, &gen.output, samples, prices) {
+        let jr = match judge_output(
+            engine,
+            jp,
+            jm,
+            rubric,
+            bench,
+            case,
+            &gen.output,
+            samples,
+            prices,
+        ) {
             Ok(jr) => jr,
             // Unparseable judge output is not a silent 0.0; stop sampling this cell (and skip the case
             // if none scored) rather than aborting the whole comparison.
@@ -193,8 +226,10 @@ fn r3(x: f64) -> f64 {
 /// isn't real the claim is downgraded to "highest mean, not significantly ahead" — a fact about the
 /// sample, not about the models.
 fn best_claim(per_target: &[(String, f64, Vec<f64>)]) -> Value {
-    let mut ranked: Vec<&(String, f64, Vec<f64>)> =
-        per_target.iter().filter(|(_, _, cs)| !cs.is_empty()).collect();
+    let mut ranked: Vec<&(String, f64, Vec<f64>)> = per_target
+        .iter()
+        .filter(|(_, _, cs)| !cs.is_empty())
+        .collect();
     if ranked.is_empty() {
         return Value::Null;
     }
@@ -301,8 +336,8 @@ pub(crate) fn run_compare(
     // runs, so per-case deltas remove between-case variance and have far more power than comparing
     // this run's mean to a bare scalar. Best-effort — a benchmark with no readable history simply
     // falls back to the unpaired test (and the report says which one decided).
-    let history: Vec<BenchmarkRun> = get(cli, http, &format!("/v1/benchmarks/{}/runs", bench.id))
-        .unwrap_or_default();
+    let history: Vec<BenchmarkRun> =
+        get(cli, http, &format!("/v1/benchmarks/{}/runs", bench.id)).unwrap_or_default();
     let dsv = report_extra
         .and_then(|e| e.get("dataset_version"))
         .and_then(Value::as_u64);
@@ -332,8 +367,18 @@ pub(crate) fn run_compare(
     let cells: Vec<Cell> = parallel_map(total_cells, jobs, |idx| {
         let (ti, ci) = (idx / n_c.max(1), idx % n_c.max(1));
         let cell = compute_cell(
-            engine, &targets[ti], &jp, &jm, &rubric, bench, &cases[ci], ng, samples, &prices,
-            &budget, ctl,
+            engine,
+            &targets[ti],
+            &jp,
+            &jm,
+            &rubric,
+            bench,
+            &cases[ci],
+            ng,
+            samples,
+            &prices,
+            &budget,
+            ctl,
         );
         // Live progress: the job's status line used to be written once at claim time and never
         // again, so a 500-case run looked identical at second 1 and minute 40.
@@ -437,7 +482,12 @@ pub(crate) fn run_compare(
             }
             let dim_str: String = dims_obj
                 .iter()
-                .map(|(k, v)| format!("{k}={}", v.as_f64().map(|x| format!("{x:.2}")).unwrap_or_default()))
+                .map(|(k, v)| {
+                    format!(
+                        "{k}={}",
+                        v.as_f64().map(|x| format!("{x:.2}")).unwrap_or_default()
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(" ");
             case_reports.push(json!({
@@ -459,8 +509,11 @@ pub(crate) fn run_compare(
             // free-text "k=0.82 …" restatement of numbers already in `value`.
             let detail = merge_details(&cell.cand_details);
             if let Some(d) = detail.determinism.as_deref() {
-                let stamp =
-                    if d == "exact" { Determinism::Exact } else { Determinism::BestEffort };
+                let stamp = if d == "exact" {
+                    Determinism::Exact
+                } else {
+                    Determinism::BestEffort
+                };
                 target_determinism =
                     Some(target_determinism.map_or(stamp, |prev| prev.weakest(stamp)));
             }
@@ -486,16 +539,40 @@ pub(crate) fn run_compare(
             // must not vanish either. Log it and count it into the run report, so "the scores are
             // missing" is a recorded fact rather than something an operator has to infer.
             if let Err(e) = post(cli, http, "/v1/scores", &score) {
-                eprintln!("  case {}: score post failed (verdict not persisted): {e}", i + 1);
+                eprintln!(
+                    "  case {}: score post failed (verdict not persisted): {e}",
+                    i + 1
+                );
                 score_post_failures += 1;
             }
         }
 
-        let mean = if judged > 0 { overall_sum / judged as f64 } else { 0.0 };
-        let pass_rate = if judged > 0 { passes as f64 / judged as f64 } else { 0.0 };
-        let mean_agree = if judged > 0 { agree_sum / judged as f64 } else { 1.0 };
+        let mean = if judged > 0 {
+            overall_sum / judged as f64
+        } else {
+            0.0
+        };
+        let pass_rate = if judged > 0 {
+            passes as f64 / judged as f64
+        } else {
+            0.0
+        };
+        let mean_agree = if judged > 0 {
+            agree_sum / judged as f64
+        } else {
+            1.0
+        };
         let (p50, p95) = percentiles(&mut latencies);
-        rows.push((label.clone(), mean, pass_rate, gen_cost, judge_cost, p50.unwrap_or(0), errored, mean_agree));
+        rows.push((
+            label.clone(),
+            mean,
+            pass_rate,
+            gen_cost,
+            judge_cost,
+            p50.unwrap_or(0),
+            errored,
+            mean_agree,
+        ));
 
         // Per-target verdict vs the benchmark baseline: the absolute-floor CI test (now at the
         // family-wise-corrected critical z) composed with a paired per-case test against this
@@ -505,7 +582,11 @@ pub(crate) fn run_compare(
         let prev = previous_case_scores(&history, &label, case_scores.len(), dsv);
         let deltas = prev.as_ref().and_then(|p| paired_deltas(&case_scores, p));
         let sig = verdict(
-            if judged > 0 { bench.baseline_score } else { None },
+            if judged > 0 {
+                bench.baseline_score
+            } else {
+                None
+            },
             &summary,
             deltas.as_deref(),
             m,
@@ -539,7 +620,10 @@ pub(crate) fn run_compare(
         statuses.push(status.to_string());
         per_target.push((label.clone(), mean, case_scores.clone()));
         if !price_warnings.is_empty() {
-            println!("  warning: no price book entry for {} — cost undercounted", join_csv(&price_warnings));
+            println!(
+                "  warning: no price book entry for {} — cost undercounted",
+                join_csv(&price_warnings)
+            );
         }
         all_price_warnings.extend(price_warnings.iter().cloned());
 
@@ -612,7 +696,10 @@ pub(crate) fn run_compare(
         );
     }
     if bench.baseline_score.is_some() {
-        println!("\ncompare verdict vs baseline {:.3}: {overall}", bench.baseline_score.unwrap_or(0.0));
+        println!(
+            "\ncompare verdict vs baseline {:.3}: {overall}",
+            bench.baseline_score.unwrap_or(0.0)
+        );
     }
 
     // Render the leaderboard via the shared render layer, so the runner, CLI, and MCP agree.
@@ -683,7 +770,10 @@ mod tests {
             let (ti, ci) = cell_at(i, n_c);
             work(ti, ci)
         });
-        assert_eq!(seq, par, "the matrix schedule must be byte-identical at any --jobs");
+        assert_eq!(
+            seq, par,
+            "the matrix schedule must be byte-identical at any --jobs"
+        );
 
         // Each target's fold — the thing that becomes its leaderboard row — matches the old
         // outer-loop-per-target computation exactly.
@@ -724,7 +814,10 @@ mod tests {
         // 3 rounds of 50ms vs ceil(12/8) = 2 rounds. Only the *direction* is asserted: an absolute
         // millisecond bound would flake on a loaded machine, while the round count is structural —
         // identical total work, fewer scheduling rounds.
-        assert!(new < old, "matrix scheduling must not be slower (old={old:?} new={new:?})");
+        assert!(
+            new < old,
+            "matrix scheduling must not be slower (old={old:?} new={new:?})"
+        );
     }
 
     #[test]

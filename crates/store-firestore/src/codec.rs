@@ -41,8 +41,10 @@ pub(crate) fn encode_value(v: &Value) -> Value {
             json!({ "arrayValue": { "values": a.iter().map(encode_value).collect::<Vec<_>>() } })
         }
         Value::Object(o) => {
-            let f: Map<String, Value> =
-                o.iter().map(|(k, v)| (k.clone(), encode_value(v))).collect();
+            let f: Map<String, Value> = o
+                .iter()
+                .map(|(k, v)| (k.clone(), encode_value(v)))
+                .collect();
             json!({ "mapValue": { "fields": f } })
         }
     }

@@ -122,7 +122,11 @@ pub(crate) fn dim_key(r: &RevenueEvent, dim: MarginDimension) -> String {
 /// period amortize linearly across the overlap; everything else is recognized fully at `ts`. Shared by
 /// the window rollup ([`compute_margin`]) and the per-day trend ([`crate::margin_trend`]) so both apply
 /// identical recognition rules — a daily point is just this over a one-day window.
-pub(crate) fn recognized_amount(r: &RevenueEvent, since: DateTime<Utc>, until: DateTime<Utc>) -> f64 {
+pub(crate) fn recognized_amount(
+    r: &RevenueEvent,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> f64 {
     let signed = if r.kind == RevenueKind::Refund {
         -r.amount_usd.abs()
     } else {
@@ -194,7 +198,12 @@ mod tests {
     fn healthy_margin() {
         let (s, u) = window();
         let rows = compute_margin(
-            &[rev("acme", 20.0, RevenueKind::Subscription, "2026-06-10T00:00:00Z")],
+            &[rev(
+                "acme",
+                20.0,
+                RevenueKind::Subscription,
+                "2026-06-10T00:00:00Z",
+            )],
             &[cost(Some("acme"), 0.87, 412)],
             MarginDimension::Customer,
             s,
@@ -217,7 +226,10 @@ mod tests {
                 rev("acme", 20.0, RevenueKind::OneTime, "2026-06-10T00:00:00Z"),
                 rev("heavy", 99.0, RevenueKind::OneTime, "2026-06-10T00:00:00Z"),
             ],
-            &[cost(Some("acme"), 0.87, 10), cost(Some("heavy"), 142.5, 9000)],
+            &[
+                cost(Some("acme"), 0.87, 10),
+                cost(Some("heavy"), 142.5, 9000),
+            ],
             MarginDimension::Customer,
             s,
             u,
@@ -263,7 +275,12 @@ mod tests {
     #[test]
     fn subscription_amortizes_across_window() {
         // $30 covering a 30-day period; only the 10 days inside the window are recognized → $10.
-        let mut r = rev("acme", 30.0, RevenueKind::Subscription, "2026-05-21T00:00:00Z");
+        let mut r = rev(
+            "acme",
+            30.0,
+            RevenueKind::Subscription,
+            "2026-05-21T00:00:00Z",
+        );
         r.period_start = Some(t("2026-05-21T00:00:00Z"));
         r.period_end = Some(t("2026-06-20T00:00:00Z"));
         let rows = compute_margin(
@@ -288,7 +305,12 @@ mod tests {
     fn out_of_window_revenue_is_excluded() {
         let (s, u) = window();
         let rows = compute_margin(
-            &[rev("acme", 20.0, RevenueKind::OneTime, "2026-05-01T00:00:00Z")],
+            &[rev(
+                "acme",
+                20.0,
+                RevenueKind::OneTime,
+                "2026-05-01T00:00:00Z",
+            )],
             &[],
             MarginDimension::Customer,
             s,

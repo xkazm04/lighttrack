@@ -15,13 +15,19 @@ pub(crate) fn create_project(rest: &Rest, p: &Project) -> Result<()> {
     m.insert("name".into(), json!(p.name));
     m.insert("enabled".into(), json!(p.enabled as i64));
     m.insert("redaction".into(), json!(enum_to_str(&p.redaction)?));
-    m.insert("collective_opt_in".into(), json!(p.collective_opt_in as i64));
+    m.insert(
+        "collective_opt_in".into(),
+        json!(p.collective_opt_in as i64),
+    );
     m.insert("created_at".into(), json!(fmt_ts(p.created_at)));
     rest.put_doc("projects", &p.id, &m)
 }
 
 pub(crate) fn get_project(rest: &Rest, id: &str) -> Result<Option<Project>> {
-    rest.get_doc("projects", id)?.as_ref().map(project_from).transpose()
+    rest.get_doc("projects", id)?
+        .as_ref()
+        .map(project_from)
+        .transpose()
 }
 
 pub(crate) fn list_projects(rest: &Rest) -> Result<Vec<Project>> {

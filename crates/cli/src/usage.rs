@@ -52,15 +52,33 @@ pub(crate) fn costs(cli: &Cli, project: &Option<String>) -> Result<()> {
 }
 
 pub(crate) fn events(cli: &Cli, project: &Option<String>, limit: usize) -> Result<()> {
-    call(cli, Method::GET, &listing_path("/v1/events", project, limit), None, "query_events")
+    call(
+        cli,
+        Method::GET,
+        &listing_path("/v1/events", project, limit),
+        None,
+        "query_events",
+    )
 }
 
 pub(crate) fn traces(cli: &Cli, project: &Option<String>, limit: usize) -> Result<()> {
-    call(cli, Method::GET, &listing_path("/v1/traces", project, limit), None, "list_traces")
+    call(
+        cli,
+        Method::GET,
+        &listing_path("/v1/traces", project, limit),
+        None,
+        "list_traces",
+    )
 }
 
 pub(crate) fn trace(cli: &Cli, id: &str) -> Result<()> {
-    call(cli, Method::GET, &format!("/v1/traces/{id}"), None, "get_trace")
+    call(
+        cli,
+        Method::GET,
+        &format!("/v1/traces/{id}"),
+        None,
+        "get_trace",
+    )
 }
 
 pub(crate) fn margin(
@@ -70,7 +88,13 @@ pub(crate) fn margin(
     since: &Option<String>,
     until: &Option<String>,
 ) -> Result<()> {
-    call(cli, Method::GET, &margin_path(by, project, since, until), None, "get_margin")
+    call(
+        cli,
+        Method::GET,
+        &margin_path(by, project, since, until),
+        None,
+        "get_margin",
+    )
 }
 
 #[cfg(test)]
@@ -84,7 +108,10 @@ mod tests {
     #[test]
     fn path_with_project_omits_the_query_when_unscoped() {
         assert_eq!(path_with_project("/v1/costs", &None), "/v1/costs");
-        assert_eq!(path_with_project("/v1/costs", &s("p1")), "/v1/costs?project=p1");
+        assert_eq!(
+            path_with_project("/v1/costs", &s("p1")),
+            "/v1/costs?project=p1"
+        );
     }
 
     /// `limit` opens the query string, so `project` must join with `&` — swapping the separators
@@ -100,7 +127,10 @@ mod tests {
 
     #[test]
     fn margin_path_appends_only_the_bounds_that_were_given() {
-        assert_eq!(margin_path("customer", &None, &None, &None), "/v1/margin?by=customer");
+        assert_eq!(
+            margin_path("customer", &None, &None, &None),
+            "/v1/margin?by=customer"
+        );
         assert_eq!(
             margin_path("product", &s("p1"), &s("2026-01-01T00:00:00Z"), &None),
             "/v1/margin?by=product&project=p1&since=2026-01-01T00:00:00Z"

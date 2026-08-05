@@ -12,9 +12,21 @@ use crate::client::Client;
 
 /// Each template: the URI kind, the API path prefix it reads, and a human description.
 const KINDS: &[(&str, &str, &str)] = &[
-    ("trace", "/v1/traces/", "One agent trace: rolled-up totals, the span tree, and any scores within it."),
-    ("event", "/v1/events/", "One LLM call event: provider, model, tokens, cost, latency, and status."),
-    ("benchmark", "/v1/benchmarks/", "One benchmark definition: rubric, judge model, dataset, and baseline."),
+    (
+        "trace",
+        "/v1/traces/",
+        "One agent trace: rolled-up totals, the span tree, and any scores within it.",
+    ),
+    (
+        "event",
+        "/v1/events/",
+        "One LLM call event: provider, model, tokens, cost, latency, and status.",
+    ),
+    (
+        "benchmark",
+        "/v1/benchmarks/",
+        "One benchmark definition: rubric, judge model, dataset, and baseline.",
+    ),
 ];
 
 const SCHEME: &str = "lighttrack://";
@@ -50,10 +62,9 @@ pub(crate) fn read(c: &Client, params: &Value) -> Result<Value, String> {
         .and_then(Value::as_str)
         .ok_or_else(|| "missing required argument: uri".to_string())?;
     let (kind, id) = parse_uri(uri)?;
-    let (_, prefix, _) = KINDS
-        .iter()
-        .find(|(k, _, _)| *k == kind)
-        .ok_or_else(|| format!("unknown resource kind '{kind}' — expected one of trace, event, benchmark"))?;
+    let (_, prefix, _) = KINDS.iter().find(|(k, _, _)| *k == kind).ok_or_else(|| {
+        format!("unknown resource kind '{kind}' — expected one of trace, event, benchmark")
+    })?;
 
     let body = c.get(&format!("{prefix}{id}"))?;
     let markdown = lighttrack_render::render(render_kind(kind), &body)
@@ -78,7 +89,9 @@ fn parse_uri(uri: &str) -> Result<(&str, &str), String> {
         .split_once('/')
         .ok_or_else(|| format!("resource uri must be `{SCHEME}{{kind}}/{{id}}` (got `{uri}`)"))?;
     if kind.is_empty() || id.is_empty() {
-        return Err(format!("resource uri is missing a kind or id (got `{uri}`)"));
+        return Err(format!(
+            "resource uri is missing a kind or id (got `{uri}`)"
+        ));
     }
     Ok((kind, id))
 }
@@ -114,7 +127,10 @@ mod tests {
             assert_eq!(t["mimeType"], "text/markdown");
             assert!(t["description"].as_str().is_some());
         }
-        let uris: Vec<&str> = tpls.iter().map(|t| t["uriTemplate"].as_str().unwrap()).collect();
+        let uris: Vec<&str> = tpls
+            .iter()
+            .map(|t| t["uriTemplate"].as_str().unwrap())
+            .collect();
         assert!(uris.contains(&"lighttrack://trace/{id}"));
         assert!(uris.contains(&"lighttrack://event/{id}"));
         assert!(uris.contains(&"lighttrack://benchmark/{id}"));
@@ -136,10 +152,10 @@ mod tests {
     #[test]
     fn parse_uri_rejects_bad_shapes() {
         for bad in [
-            "http://trace/1",              // wrong scheme
-            "lighttrack://trace",          // no id segment
-            "lighttrack:///id",            // empty kind
-            "lighttrack://event/",         // empty id
+            "http://trace/1",      // wrong scheme
+            "lighttrack://trace",  // no id segment
+            "lighttrack:///id",    // empty kind
+            "lighttrack://event/", // empty id
         ] {
             assert!(parse_uri(bad).is_err(), "{bad} should be rejected");
         }

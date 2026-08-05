@@ -32,10 +32,18 @@ async fn post(app: &Router, uri: &str, token: Option<&str>, body: Value) -> (Sta
     if let Some(t) = token {
         req = req.header("authorization", format!("Bearer {t}"));
     }
-    let resp = app.clone().oneshot(req.body(Body::from(body.to_string())).unwrap()).await.unwrap();
+    let resp = app
+        .clone()
+        .oneshot(req.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let v: Value = if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+    let v: Value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
     (status, v)
 }
 
@@ -63,21 +71,49 @@ async fn dev_mode_attributes_a_projectless_event_to_the_default_project() {
     // Attributed for real: the row is queryable under that project, priced from the book like any
     // other event (1M-scale usage is not needed — this just proves the normal pipeline ran).
     let rows = store.list_events(Some(DEV_DEFAULT_PROJECT), 10).unwrap();
-    assert_eq!(rows.len(), 1, "the event must be stored, not merely acknowledged");
+    assert_eq!(
+        rows.len(),
+        1,
+        "the event must be stored, not merely acknowledged"
+    );
     assert_eq!(rows[0].project_id, DEV_DEFAULT_PROJECT);
-    assert!(rows[0].cost_usd.is_some(), "the dev default is a normal project: costing still runs");
+    assert!(
+        rows[0].cost_usd.is_some(),
+        "the dev default is a normal project: costing still runs"
+    );
 
     // And the project actually EXISTS — otherwise the events would live under an id that never
     // appears in GET /v1/projects, which is its own kind of silent.
     let proj = store.get_project(DEV_DEFAULT_PROJECT).unwrap();
-    assert!(proj.is_some(), "the default project must be created, not just referenced");
-    assert!(store.list_projects().unwrap().iter().any(|p| p.id == DEV_DEFAULT_PROJECT));
+    assert!(
+        proj.is_some(),
+        "the default project must be created, not just referenced"
+    );
+    assert!(store
+        .list_projects()
+        .unwrap()
+        .iter()
+        .any(|p| p.id == DEV_DEFAULT_PROJECT));
 
     // Repeatable: a second event reuses the row rather than erroring on the duplicate insert.
     let (s2, b2) = post(&app, "/v1/events", None, quickstart_event()).await;
     assert_eq!(s2, StatusCode::OK, "{b2}");
-    assert_eq!(store.list_events(Some(DEV_DEFAULT_PROJECT), 10).unwrap().len(), 2);
-    assert_eq!(store.list_projects().unwrap().iter().filter(|p| p.id == DEV_DEFAULT_PROJECT).count(), 1);
+    assert_eq!(
+        store
+            .list_events(Some(DEV_DEFAULT_PROJECT), 10)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        store
+            .list_projects()
+            .unwrap()
+            .iter()
+            .filter(|p| p.id == DEV_DEFAULT_PROJECT)
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -87,13 +123,27 @@ async fn dev_mode_default_applies_to_the_batch_door_too() {
     state.auth_mode = AuthMode::Dev;
     let app = crate::build_router(state);
 
-    let (status, body) =
-        post(&app, "/v1/events/batch", None, json!([quickstart_event(), quickstart_event()])).await;
+    let (status, body) = post(
+        &app,
+        "/v1/events/batch",
+        None,
+        json!([quickstart_event(), quickstart_event()]),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["accepted"], 2, "{body}");
-    assert_eq!(body["invalid"], 0, "a projectless item is no longer invalid in dev mode: {body}");
-    assert_eq!(store.list_events(Some(DEV_DEFAULT_PROJECT), 10).unwrap().len(), 2);
+    assert_eq!(
+        body["invalid"], 0,
+        "a projectless item is no longer invalid in dev mode: {body}"
+    );
+    assert_eq!(
+        store
+            .list_events(Some(DEV_DEFAULT_PROJECT), 10)
+            .unwrap()
+            .len(),
+        2
+    );
     assert!(store.get_project(DEV_DEFAULT_PROJECT).unwrap().is_some());
 }
 
@@ -109,23 +159,38 @@ async fn enforced_mode_still_refuses_an_unattributable_event() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], "bad_request", "{body}");
     let msg = body["error"]["message"].as_str().unwrap_or_default();
-    assert!(msg.contains("LIGHTTRACK_PROJECT"), "the 400 must name a fix: {body}");
+    assert!(
+        msg.contains("LIGHTTRACK_PROJECT"),
+        "the 400 must name a fix: {body}"
+    );
 
     // No key at all: 401, unchanged — enforced mode never reaches project resolution.
     let (unauth, _) = post(&app, "/v1/events", None, quickstart_event()).await;
     assert_eq!(unauth, StatusCode::UNAUTHORIZED);
 
     // Nothing was written, and no default project was conjured up.
-    assert!(store.list_events(Some(DEV_DEFAULT_PROJECT), 10).unwrap().is_empty());
+    assert!(store
+        .list_events(Some(DEV_DEFAULT_PROJECT), 10)
+        .unwrap()
+        .is_empty());
     assert!(
         store.get_project(DEV_DEFAULT_PROJECT).unwrap().is_none(),
         "enforced mode must never create the dev default project"
     );
 
     // Same in a batch: the item is invalid, with the same actionable reason.
-    let (bstatus, bbody) =
-        post(&app, "/v1/events/batch", Some("admin-secret"), json!([quickstart_event()])).await;
-    assert_eq!(bstatus, StatusCode::OK, "batch is multi-status under 200: {bbody}");
+    let (bstatus, bbody) = post(
+        &app,
+        "/v1/events/batch",
+        Some("admin-secret"),
+        json!([quickstart_event()]),
+    )
+    .await;
+    assert_eq!(
+        bstatus,
+        StatusCode::OK,
+        "batch is multi-status under 200: {bbody}"
+    );
     assert_eq!(bbody["invalid"], 1, "{bbody}");
     assert_eq!(bbody["results"][0]["code"], "bad_request", "{bbody}");
     assert!(store.get_project(DEV_DEFAULT_PROJECT).unwrap().is_none());

@@ -54,8 +54,7 @@ pub(super) fn cancel(conn: &Connection, id: &str) -> Result<Option<JobCancel>> {
          WHERE id = ?1 AND status IN ('queued','running') \
          RETURNING status",
     )?;
-    let new_status: Option<String> =
-        stmt.query_row(params![id, now], |r| r.get(0)).optional()?;
+    let new_status: Option<String> = stmt.query_row(params![id, now], |r| r.get(0)).optional()?;
     match new_status.as_deref() {
         Some("cancelled") => return Ok(Some(JobCancel::Cancelled)),
         Some(_) => return Ok(Some(JobCancel::Cancelling)),
@@ -63,7 +62,9 @@ pub(super) fn cancel(conn: &Connection, id: &str) -> Result<Option<JobCancel>> {
     }
     // Nothing to cancel: either it's already terminal, or there is no such job.
     let existing: Option<String> = conn
-        .query_row("SELECT status FROM jobs WHERE id = ?1", params![id], |r| r.get(0))
+        .query_row("SELECT status FROM jobs WHERE id = ?1", params![id], |r| {
+            r.get(0)
+        })
         .optional()?;
     Ok(existing.map(|status| JobCancel::AlreadyFinished { status }))
 }
@@ -88,7 +89,9 @@ pub(super) fn claim(conn: &Connection, stale_before: DateTime<Utc>) -> Result<Op
          RETURNING {COLS}"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![now, stale, JOB_ERROR_WORKER_LOST], map_raw).optional()?;
+    let raw = stmt
+        .query_row(params![now, stale, JOB_ERROR_WORKER_LOST], map_raw)
+        .optional()?;
     raw.map(from_raw).transpose()
 }
 
@@ -103,7 +106,13 @@ pub(super) fn update_progress(conn: &Connection, id: &str, progress: &str) -> Re
 /// Finish a job. An error means the job RAN and the work failed, so it increments `failures` — the
 /// retry budget. A clean finish (including a cancellation, which carries no error) never does, so a
 /// crash-and-reclaim cycle can't consume a job's chances without the benchmark ever failing.
-pub(super) fn finish(conn: &Connection, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()> {
+pub(super) fn finish(
+    conn: &Connection,
+    id: &str,
+    status: &str,
+    result: &Value,
+    error: Option<&str>,
+) -> Result<()> {
     let result_s = json_or_null(result)?;
     conn.execute(
         "UPDATE jobs SET status = ?2, result = ?3, error = ?4, updated_at = ?5, \

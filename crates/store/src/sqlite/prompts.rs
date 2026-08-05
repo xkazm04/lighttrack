@@ -42,7 +42,9 @@ pub(super) fn update(conn: &Connection, p: &Prompt) -> Result<()> {
 pub(super) fn get(conn: &Connection, project: &str, name: &str) -> Result<Option<Prompt>> {
     let sql = format!("SELECT {PROMPT_COLS} FROM prompts WHERE project_id = ?1 AND name = ?2");
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![project, name], map_prompt).optional()?;
+    let raw = stmt
+        .query_row(params![project, name], map_prompt)
+        .optional()?;
     raw.map(prompt_from_raw).transpose()
 }
 
@@ -106,7 +108,15 @@ pub(super) fn list_versions(conn: &Connection, prompt_id: &str) -> Result<Vec<Pr
     raws.into_iter().map(version_from_raw).collect()
 }
 
-type PromptRaw = (String, String, String, Option<String>, String, String, String);
+type PromptRaw = (
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+);
 
 fn map_prompt(row: &Row) -> rusqlite::Result<PromptRaw> {
     Ok((
@@ -133,7 +143,15 @@ fn prompt_from_raw(r: PromptRaw) -> Result<Prompt> {
     })
 }
 
-type VersionRaw = (String, String, i64, String, Option<String>, Option<String>, String);
+type VersionRaw = (
+    String,
+    String,
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+);
 
 fn map_version(row: &Row) -> rusqlite::Result<VersionRaw> {
     Ok((

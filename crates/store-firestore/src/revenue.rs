@@ -85,7 +85,11 @@ pub(crate) fn cost_by_dimension(
     }
     Ok(agg
         .into_iter()
-        .map(|(key, (calls, cost_usd))| CostByDimension { key, calls, cost_usd })
+        .map(|(key, (calls, cost_usd))| CostByDimension {
+            key,
+            calls,
+            cost_usd,
+        })
         .collect())
 }
 
@@ -211,7 +215,10 @@ mod tests {
         assert_eq!(got.period_start, sub.period_start);
         assert_eq!(got.period_end, sub.period_end);
 
-        let refund = RevenueEvent { kind: RevenueKind::Refund, ..sub };
+        let refund = RevenueEvent {
+            kind: RevenueKind::Refund,
+            ..sub
+        };
         assert_eq!(roundtrip(&refund).kind, RevenueKind::Refund);
     }
 
@@ -220,21 +227,44 @@ mod tests {
         let s = t("2026-06-01T00:00:00Z");
         let u = t("2026-07-01T00:00:00Z");
         let point = |ts: &str| RevenueEvent {
-            id: "x".into(), project_id: "p".into(), source: "manual".into(),
-            external_id: None, customer_id: None, product_id: None, amount_usd: 1.0,
-            currency: "USD".into(), kind: RevenueKind::OneTime,
-            period_start: None, period_end: None, ts: t(ts),
+            id: "x".into(),
+            project_id: "p".into(),
+            source: "manual".into(),
+            external_id: None,
+            customer_id: None,
+            product_id: None,
+            amount_usd: 1.0,
+            currency: "USD".into(),
+            kind: RevenueKind::OneTime,
+            period_start: None,
+            period_end: None,
+            ts: t(ts),
         };
-        assert!(recognizable(&point("2026-06-15T00:00:00Z"), s, u), "in-window point counts");
-        assert!(!recognizable(&point("2026-05-15T00:00:00Z"), s, u), "pre-window point excluded");
-        assert!(!recognizable(&point("2026-07-01T00:00:00Z"), s, u), "until is exclusive");
+        assert!(
+            recognizable(&point("2026-06-15T00:00:00Z"), s, u),
+            "in-window point counts"
+        );
+        assert!(
+            !recognizable(&point("2026-05-15T00:00:00Z"), s, u),
+            "pre-window point excluded"
+        );
+        assert!(
+            !recognizable(&point("2026-07-01T00:00:00Z"), s, u),
+            "until is exclusive"
+        );
 
         // A period that merely overlaps the window is recognizable; one entirely before is not.
         let mut overlap = point("2026-05-20T00:00:00Z");
         overlap.period_start = Some(t("2026-05-20T00:00:00Z"));
         overlap.period_end = Some(t("2026-06-05T00:00:00Z"));
-        assert!(recognizable(&overlap, s, u), "period overlapping the window counts");
+        assert!(
+            recognizable(&overlap, s, u),
+            "period overlapping the window counts"
+        );
         overlap.period_end = Some(t("2026-05-25T00:00:00Z"));
-        assert!(!recognizable(&overlap, s, u), "period entirely before the window excluded");
+        assert!(
+            !recognizable(&overlap, s, u),
+            "period entirely before the window excluded"
+        );
     }
 }

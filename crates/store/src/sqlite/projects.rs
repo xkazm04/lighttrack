@@ -57,14 +57,23 @@ pub(super) fn list(conn: &Connection) -> Result<Vec<Project>> {
         "SELECT id, name, enabled, redaction, collective_opt_in, created_at \
          FROM projects ORDER BY created_at DESC",
     )?;
-    let raws = stmt.query_map([], map_project)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let raws = stmt
+        .query_map([], map_project)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(project_from_raw).collect()
 }
 
 type ProjectRaw = (String, String, i64, String, i64, String);
 
 fn map_project(row: &Row) -> rusqlite::Result<ProjectRaw> {
-    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+    ))
 }
 
 fn project_from_raw(r: ProjectRaw) -> Result<Project> {
@@ -121,7 +130,9 @@ pub(super) fn list_keys(conn: &Connection, project: &str) -> Result<Vec<ApiKey>>
         "SELECT id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked \
          FROM api_keys WHERE project_id = ?1 ORDER BY created_at DESC",
     )?;
-    let raws = stmt.query_map(params![project], map_key)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let raws = stmt
+        .query_map(params![project], map_key)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(key_from_raw).collect()
 }
 
@@ -133,7 +144,16 @@ pub(super) fn set_key_revoked(conn: &Connection, id: &str, revoked: bool) -> Res
     Ok(n > 0)
 }
 
-type ApiKeyRaw = (String, String, String, String, String, String, Option<String>, i64);
+type ApiKeyRaw = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    i64,
+);
 
 fn map_key(row: &Row) -> rusqlite::Result<ApiKeyRaw> {
     Ok((

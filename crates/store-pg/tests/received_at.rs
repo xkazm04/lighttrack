@@ -7,8 +7,8 @@
 
 use chrono::{Duration, Utc};
 use lighttrack_core::{
-    new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation, Provider, Status,
-    TokenUsage,
+    new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation, Provider,
+    Status, TokenUsage,
 };
 use lighttrack_store::Store;
 use lighttrack_store_pg::PgStore;
@@ -27,7 +27,12 @@ fn event(pid: &str) -> LlmEvent {
         model: "claude-haiku-4-5".into(),
         name: None,
         operation: Operation::Chat,
-        usage: TokenUsage { input: 1, output: 1, cached_input: None, reasoning: None },
+        usage: TokenUsage {
+            input: 1,
+            output: 1,
+            cached_input: None,
+            reasoning: None,
+        },
         cost_usd: Some(1.0),
         latency_ms: None,
         status: Status::Success,
@@ -61,13 +66,22 @@ fn windowed_accounting_ignores_a_backdated_client_clock() {
     // Genuinely old traffic (arrived a month ago), replayed with a fresh `ts`: it does not.
     let mut old_arrival = event(&pid);
     old_arrival.received_at = now - Duration::days(30);
-    store.insert_event(&old_arrival).expect("insert old arrival");
+    store
+        .insert_event(&old_arrival)
+        .expect("insert old arrival");
 
-    let u = store.usage_since(&pid, now - Duration::hours(1)).expect("usage");
+    let u = store
+        .usage_since(&pid, now - Duration::hours(1))
+        .expect("usage");
     assert_eq!(u.calls, 1, "the window follows received_at, not ts");
     assert!((u.cost_usd - 1.0).abs() < 1e-9);
     assert_eq!(
-        store.get_event(&backdated.id).expect("get").expect("present").ts.timestamp(),
+        store
+            .get_event(&backdated.id)
+            .expect("get")
+            .expect("present")
+            .ts
+            .timestamp(),
         backdated.ts.timestamp(),
         "the client's ts is preserved verbatim, only the accounting ignores it"
     );
@@ -90,5 +104,8 @@ fn windowed_accounting_ignores_a_backdated_client_clock() {
     let mut sneaky = event(&pid);
     sneaky.ts = now - Duration::days(29);
     let out = store.insert_event_checked(&sneaky).expect("admission");
-    assert!(!out.admitted, "a backdated `ts` cannot buy room under the cap");
+    assert!(
+        !out.admitted,
+        "a backdated `ts` cannot buy room under the cap"
+    );
 }

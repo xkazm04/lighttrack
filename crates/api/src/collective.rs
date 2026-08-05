@@ -114,7 +114,10 @@ impl Collective {
     }
 
     /// Cutoff before which stored entries are neither published nor kept. `None` when expiry is off.
-    pub(crate) fn retention_cutoff(&self, now: chrono::DateTime<Utc>) -> Option<chrono::DateTime<Utc>> {
+    pub(crate) fn retention_cutoff(
+        &self,
+        now: chrono::DateTime<Utc>,
+    ) -> Option<chrono::DateTime<Utc>> {
         (self.max_age_days > 0).then(|| now - chrono::Duration::days(self.max_age_days as i64))
     }
 
@@ -148,7 +151,11 @@ impl Collective {
     }
 
     pub(crate) fn describe(&self) -> String {
-        let who = if self.contributor_id == "anonymous" { "anon" } else { "id-set" };
+        let who = if self.contributor_id == "anonymous" {
+            "anon"
+        } else {
+            "id-set"
+        };
         format!(
             "{who}, accept={}, allow_anon={}, min_cases={}, display_floor={}, min_contributors={}, \
              min_interval_h={}, max_age_d={}",
@@ -164,11 +171,17 @@ impl Collective {
 }
 
 fn env_flag(name: &str) -> bool {
-    matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true") | Ok("on") | Ok("yes"))
+    matches!(
+        std::env::var(name).as_deref(),
+        Ok("1") | Ok("true") | Ok("on") | Ok("yes")
+    )
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
-    std::env::var(name).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(default)
 }
 
 /// Load the model-alias table from `LIGHTTRACK_MODEL_ALIASES` (default `config/model_aliases.json`).
@@ -189,7 +202,11 @@ fn load_aliases() -> ModelAliases {
 fn opaque(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
-    h.finalize().iter().take(6).map(|b| format!("{b:02x}")).collect()
+    h.finalize()
+        .iter()
+        .take(6)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Derive a hub-side contributor id from a **verified** credential: `c-` + the first 12 hex of
@@ -339,21 +356,23 @@ pub(crate) async fn post_ingest(
     let entries: Vec<CollectiveEntry> = digest
         .entries
         .into_iter()
-        .filter_map(|e| match sanitize_entry(&contributor, e, now, &st.collective.aliases) {
-            Err(Reject::Malformed) => {
-                skipped += 1;
-                None
-            }
-            Err(Reject::Implausible) => {
-                rejected_implausible += 1;
-                None
-            }
-            Ok(ce) if ce.n_cases < min_cases => {
-                dropped_under_min += 1;
-                None
-            }
-            Ok(ce) => Some(ce),
-        })
+        .filter_map(
+            |e| match sanitize_entry(&contributor, e, now, &st.collective.aliases) {
+                Err(Reject::Malformed) => {
+                    skipped += 1;
+                    None
+                }
+                Err(Reject::Implausible) => {
+                    rejected_implausible += 1;
+                    None
+                }
+                Ok(ce) if ce.n_cases < min_cases => {
+                    dropped_under_min += 1;
+                    None
+                }
+                Ok(ce) => Some(ce),
+            },
+        )
         .take(MAX_ENTRIES)
         .collect();
     let accepted = entries.len();
@@ -407,7 +426,10 @@ async fn enforce_min_interval(
     let who = contributor.to_string();
     let last = spawn_db(move || {
         store.list_collective_entries().map(|es| {
-            es.iter().filter(|e| e.contributor_id == who).map(|e| e.received_at).max()
+            es.iter()
+                .filter(|e| e.contributor_id == who)
+                .map(|e| e.received_at)
+                .max()
         })
     })
     .await?;
@@ -447,7 +469,12 @@ pub(crate) async fn delete_contribution(
     Query(q): Query<WithdrawParams>,
 ) -> Result<Json<WithdrawAck>, ApiError> {
     let self_id = resolve_contributor(&st, &headers).await?;
-    let target = match q.contributor.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let target = match q
+        .contributor
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         None => self_id,
         Some(other) if other == self_id => self_id,
         Some(other) => {
@@ -458,7 +485,10 @@ pub(crate) async fn delete_contribution(
     let store = st.store.clone();
     let who = target.clone();
     let deleted = spawn_db(move || store.delete_collective_entries(&who)).await?;
-    Ok(Json(WithdrawAck { contributor_id: target, deleted }))
+    Ok(Json(WithdrawAck {
+        contributor_id: target,
+        deleted,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -563,7 +593,9 @@ pub(crate) async fn get_leaderboard(
         .collect();
     let contributors = entries
         .iter()
-        .filter(|e| surviving.contains(&(e.provider.as_str(), e.model.as_str(), e.task_type.as_str())))
+        .filter(|e| {
+            surviving.contains(&(e.provider.as_str(), e.model.as_str(), e.task_type.as_str()))
+        })
         .map(|e| e.contributor_id.as_str())
         .collect::<std::collections::BTreeSet<_>>()
         .len();
@@ -654,7 +686,10 @@ fn run_stat(bench: &Benchmark, run: &BenchmarkRun) -> Option<RunStat> {
 /// being libelled as sloppy.
 fn significance_tested_of(report: &Value) -> Option<bool> {
     let n = report.get("n").and_then(Value::as_u64)?;
-    let has_ci = report.get("ci95").and_then(Value::as_array).is_some_and(|a| a.len() == 2);
+    let has_ci = report
+        .get("ci95")
+        .and_then(Value::as_array)
+        .is_some_and(|a| a.len() == 2);
     Some(n >= 2 && has_ci)
 }
 
@@ -677,7 +712,10 @@ fn judge_provider_of(judge_model: &str) -> Option<String> {
         return Some(c.to_string());
     }
     let name = if name.is_empty() { m.as_str() } else { name };
-    let family = if ["claude", "haiku", "sonnet", "opus"].iter().any(|k| name.contains(k)) {
+    let family = if ["claude", "haiku", "sonnet", "opus"]
+        .iter()
+        .any(|k| name.contains(k))
+    {
         "anthropic"
     } else if name.contains("gpt") || name.starts_with("o1") || name.starts_with("o3") {
         "openai"
@@ -695,19 +733,38 @@ fn judge_provider_of(judge_model: &str) -> Option<String> {
 /// benchmark carries no rubric at all.
 fn rubric_fingerprint_of(bench: &Benchmark) -> Option<String> {
     let basis = if !bench.rubric.trim().is_empty() {
-        bench.rubric.split_whitespace().collect::<Vec<_>>().join(" ")
+        bench
+            .rubric
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     } else {
-        bench.rubric_id.as_deref().map(str::trim).filter(|s| !s.is_empty())?.to_string()
+        bench
+            .rubric_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())?
+            .to_string()
     };
     let mut h = Sha256::new();
     h.update(basis.as_bytes());
-    Some(h.finalize().iter().take(4).map(|b| format!("{b:02x}")).collect())
+    Some(
+        h.finalize()
+            .iter()
+            .take(4)
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
 }
 
 /// Resolve the model identity from the compare-mode run report, else the benchmark's single target.
 fn provider_model(bench: &Benchmark, run: &BenchmarkRun) -> Option<(String, String)> {
     let from = |v: &Value| {
-        let p = v.get("provider").and_then(Value::as_str)?.trim().to_string();
+        let p = v
+            .get("provider")
+            .and_then(Value::as_str)?
+            .trim()
+            .to_string();
         let m = v.get("model").and_then(Value::as_str)?.trim().to_string();
         (!p.is_empty() && !m.is_empty()).then_some((p, m))
     };
@@ -799,7 +856,10 @@ fn sanitize_entry(
         // v3 rigor: closed vocabularies, clamped hub-side. An unrecognized determinism label becomes
         // "not recorded" rather than a fourth level — a poster must not be able to widen the rigor
         // vocabulary, which is exactly what would turn it into a fingerprinting channel.
-        determinism: e.determinism.as_deref().and_then(lighttrack_core::canon_determinism),
+        determinism: e
+            .determinism
+            .as_deref()
+            .and_then(lighttrack_core::canon_determinism),
         frozen_dataset: e.frozen_dataset,
         significance_tested: e.significance_tested,
         received_at: now,
@@ -861,9 +921,17 @@ mod tests {
     #[test]
     fn run_stat_reads_compare_report() {
         let b = bench("Nightly QA bench", Value::Null);
-        let r = run(json!({"provider":"anthropic","model":"haiku"}), Some(0.82), 20, 0.4);
+        let r = run(
+            json!({"provider":"anthropic","model":"haiku"}),
+            Some(0.82),
+            20,
+            0.4,
+        );
         let s = run_stat(&b, &r).unwrap();
-        assert_eq!((s.provider.as_str(), s.model.as_str()), ("anthropic", "haiku"));
+        assert_eq!(
+            (s.provider.as_str(), s.model.as_str()),
+            ("anthropic", "haiku")
+        );
         assert_eq!(s.task_type, "qa");
         assert!((s.cost_per_case_usd - 0.02).abs() < 1e-9); // 0.4 / 20
     }
@@ -907,10 +975,24 @@ mod tests {
     #[test]
     fn significance_needs_an_interval_over_more_than_one_case() {
         // n=1 has no spread: its "interval" is a point dressed up as one.
-        assert_eq!(significance_tested_of(&json!({ "n": 1, "ci95": [0.8, 0.8] })), Some(false));
-        assert_eq!(significance_tested_of(&json!({ "n": 20 })), Some(false), "no interval recorded");
-        assert_eq!(significance_tested_of(&json!({ "n": 20, "ci95": [0.7, 0.9] })), Some(true));
-        assert_eq!(significance_tested_of(&json!({})), None, "unrecorded ≠ untested");
+        assert_eq!(
+            significance_tested_of(&json!({ "n": 1, "ci95": [0.8, 0.8] })),
+            Some(false)
+        );
+        assert_eq!(
+            significance_tested_of(&json!({ "n": 20 })),
+            Some(false),
+            "no interval recorded"
+        );
+        assert_eq!(
+            significance_tested_of(&json!({ "n": 20, "ci95": [0.7, 0.9] })),
+            Some(true)
+        );
+        assert_eq!(
+            significance_tested_of(&json!({})),
+            None,
+            "unrecorded ≠ untested"
+        );
     }
 
     #[test]
@@ -926,9 +1008,16 @@ mod tests {
         let now = Utc::now();
         let a = ModelAliases::default();
         let good = lighttrack_core::ModelDigestEntry {
-            provider: "anthropic".into(), model: "haiku".into(), task_type: "qa".into(),
-            quality: 1.4, pass_rate: -0.2, avg_cost_usd: -1.0,
-            p50_latency_ms: None, p95_latency_ms: None, n_runs: 2, n_cases: 9,
+            provider: "anthropic".into(),
+            model: "haiku".into(),
+            task_type: "qa".into(),
+            quality: 1.4,
+            pass_rate: -0.2,
+            avg_cost_usd: -1.0,
+            p50_latency_ms: None,
+            p95_latency_ms: None,
+            n_runs: 2,
+            n_cases: 9,
             quality_variance: Some(-0.5), // negative variance is nonsense → dropped to None
             judge_provider: Some("weird-label".into()), // unknown label → clamped to "unknown"
             rubric_fingerprint: Some("ab12cd34".into()),
@@ -942,20 +1031,44 @@ mod tests {
         assert_eq!(s.pass_rate, 0.0);
         assert_eq!(s.avg_cost_usd, 0.0);
         assert!(s.quality_variance.is_none(), "negative variance dropped");
-        assert_eq!(s.judge_provider.as_deref(), Some("unknown"), "unknown judge label clamped");
+        assert_eq!(
+            s.judge_provider.as_deref(),
+            Some("unknown"),
+            "unknown judge label clamped"
+        );
         assert_eq!(s.rubric_fingerprint.as_deref(), Some("ab12cd34"));
-        assert!(s.determinism.is_none(), "an invented determinism label is dropped, not admitted");
-        assert_eq!(s.frozen_dataset, lighttrack_core::Coverage::All, "rigor coverage survives ingest");
+        assert!(
+            s.determinism.is_none(),
+            "an invented determinism label is dropped, not admitted"
+        );
+        assert_eq!(
+            s.frozen_dataset,
+            lighttrack_core::Coverage::All,
+            "rigor coverage survives ingest"
+        );
         assert_eq!(s.significance_tested, lighttrack_core::Coverage::Mixed);
         let bad = lighttrack_core::ModelDigestEntry {
-            provider: "  ".into(), model: "haiku".into(), task_type: "qa".into(),
-            quality: 0.5, pass_rate: 0.5, avg_cost_usd: 0.1,
-            p50_latency_ms: None, p95_latency_ms: None, n_runs: 1, n_cases: 5,
-            quality_variance: None, judge_provider: None, rubric_fingerprint: None,
-            determinism: None, frozen_dataset: Default::default(),
+            provider: "  ".into(),
+            model: "haiku".into(),
+            task_type: "qa".into(),
+            quality: 0.5,
+            pass_rate: 0.5,
+            avg_cost_usd: 0.1,
+            p50_latency_ms: None,
+            p95_latency_ms: None,
+            n_runs: 1,
+            n_cases: 5,
+            quality_variance: None,
+            judge_provider: None,
+            rubric_fingerprint: None,
+            determinism: None,
+            frozen_dataset: Default::default(),
             significance_tested: Default::default(),
         };
-        assert_eq!(sanitize_entry("c-abc", bad, now, &a).unwrap_err(), Reject::Malformed);
+        assert_eq!(
+            sanitize_entry("c-abc", bad, now, &a).unwrap_err(),
+            Reject::Malformed
+        );
     }
 
     #[test]
@@ -963,11 +1076,21 @@ mod tests {
         let now = Utc::now();
         let a = ModelAliases::default();
         let base = || lighttrack_core::ModelDigestEntry {
-            provider: "anthropic".into(), model: "haiku".into(), task_type: "qa".into(),
-            quality: 0.8, pass_rate: 0.8, avg_cost_usd: 0.01,
-            p50_latency_ms: None, p95_latency_ms: None, n_runs: 2, n_cases: 100,
-            quality_variance: None, judge_provider: None, rubric_fingerprint: None,
-            determinism: None, frozen_dataset: Default::default(),
+            provider: "anthropic".into(),
+            model: "haiku".into(),
+            task_type: "qa".into(),
+            quality: 0.8,
+            pass_rate: 0.8,
+            avg_cost_usd: 0.01,
+            p50_latency_ms: None,
+            p95_latency_ms: None,
+            n_runs: 2,
+            n_cases: 100,
+            quality_variance: None,
+            judge_provider: None,
+            rubric_fingerprint: None,
+            determinism: None,
+            frozen_dataset: Default::default(),
             significance_tested: Default::default(),
         };
         let rejected = |mutate: fn(&mut lighttrack_core::ModelDigestEntry)| {
@@ -985,7 +1108,10 @@ mod tests {
         // The believable end of the range still lands.
         let mut e = base();
         e.n_cases = MAX_CASES_PER_ENTRY;
-        assert!(sanitize_entry("c", e, now, &a).is_ok(), "the ceiling itself is accepted");
+        assert!(
+            sanitize_entry("c", e, now, &a).is_ok(),
+            "the ceiling itself is accepted"
+        );
     }
 
     #[test]
@@ -996,28 +1122,53 @@ mod tests {
         )
         .unwrap();
         let e = |provider: &str, model: &str| lighttrack_core::ModelDigestEntry {
-            provider: provider.into(), model: model.into(), task_type: "qa".into(),
-            quality: 0.8, pass_rate: 0.8, avg_cost_usd: 0.01,
-            p50_latency_ms: None, p95_latency_ms: None, n_runs: 1, n_cases: 10,
-            quality_variance: None, judge_provider: None, rubric_fingerprint: None,
-            determinism: None, frozen_dataset: Default::default(),
+            provider: provider.into(),
+            model: model.into(),
+            task_type: "qa".into(),
+            quality: 0.8,
+            pass_rate: 0.8,
+            avg_cost_usd: 0.01,
+            p50_latency_ms: None,
+            p95_latency_ms: None,
+            n_runs: 1,
+            n_cases: 10,
+            quality_variance: None,
+            judge_provider: None,
+            rubric_fingerprint: None,
+            determinism: None,
+            frozen_dataset: Default::default(),
             significance_tested: Default::default(),
         };
         // provider/ prefix stripped + dated variant collapsed + provider synonym mapped.
         let s = sanitize_entry("c", e("openai", "openai/gpt-4o-2024-08-06"), now, &a).unwrap();
-        assert_eq!((s.provider.as_str(), s.model.as_str()), ("openai", "gpt-4o"));
+        assert_eq!(
+            (s.provider.as_str(), s.model.as_str()),
+            ("openai", "gpt-4o")
+        );
         let s = sanitize_entry("c", e("azure-openai", "gpt-4o"), now, &a).unwrap();
         assert_eq!(s.provider, "openai");
     }
 
     #[test]
     fn judge_provider_classification() {
-        assert_eq!(judge_provider_of("anthropic/claude-haiku-4-5").as_deref(), Some("anthropic"));
+        assert_eq!(
+            judge_provider_of("anthropic/claude-haiku-4-5").as_deref(),
+            Some("anthropic")
+        );
         assert_eq!(judge_provider_of("haiku").as_deref(), Some("anthropic"));
         assert_eq!(judge_provider_of("gpt-4o").as_deref(), Some("openai"));
-        assert_eq!(judge_provider_of("openai/o3-mini").as_deref(), Some("openai"));
-        assert_eq!(judge_provider_of("gemini-1.5-pro").as_deref(), Some("google"));
-        assert_eq!(judge_provider_of("some-local-llm").as_deref(), Some("unknown"));
+        assert_eq!(
+            judge_provider_of("openai/o3-mini").as_deref(),
+            Some("openai")
+        );
+        assert_eq!(
+            judge_provider_of("gemini-1.5-pro").as_deref(),
+            Some("google")
+        );
+        assert_eq!(
+            judge_provider_of("some-local-llm").as_deref(),
+            Some("unknown")
+        );
         assert_eq!(judge_provider_of("  "), None);
     }
 }

@@ -22,10 +22,17 @@ pub(crate) fn insert_event(rest: &Rest, ev: &LlmEvent) -> Result<()> {
 }
 
 pub(crate) fn get_event(rest: &Rest, id: &str) -> Result<Option<LlmEvent>> {
-    rest.get_doc(COLL, id)?.as_ref().map(from_fields).transpose()
+    rest.get_doc(COLL, id)?
+        .as_ref()
+        .map(from_fields)
+        .transpose()
 }
 
-pub(crate) fn list_events(rest: &Rest, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
+pub(crate) fn list_events(
+    rest: &Rest,
+    project: Option<&str>,
+    limit: usize,
+) -> Result<Vec<LlmEvent>> {
     let filters = project_filter(project);
     let docs = rest.query(COLL, &filters, Some(("ts", true)), Some(limit))?;
     docs.iter().map(from_fields).collect()
@@ -73,7 +80,11 @@ pub(crate) fn cost_summary_windowed(
         row.cost_usd += ff64(m, "cost_usd").unwrap_or(0.0);
     }
     let mut rows: Vec<CostRow> = agg.into_values().collect();
-    rows.sort_by(|a, b| b.cost_usd.partial_cmp(&a.cost_usd).unwrap_or(std::cmp::Ordering::Equal));
+    rows.sort_by(|a, b| {
+        b.cost_usd
+            .partial_cmp(&a.cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(rows)
 }
 
@@ -92,7 +103,11 @@ fn fold_usage(u: &mut Usage, m: &serde_json::Map<String, serde_json::Value>) {
     }
     let client_reported = fstr(m, "metadata")
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("cost_source").and_then(|c| c.as_str()).map(|c| c == "client"))
+        .and_then(|v| {
+            v.get("cost_source")
+                .and_then(|c| c.as_str())
+                .map(|c| c == "client")
+        })
         .unwrap_or(false);
     if client_reported {
         u.client_cost_usd += cost.unwrap_or(0.0);
@@ -137,7 +152,10 @@ pub(crate) fn list_events_filtered(
         filters.push(("ts", "LESS_THAN", json!(fmt_ts(u))));
     }
     let docs = rest.query(COLL, &filters, None, None)?;
-    let mut events = docs.iter().map(from_fields).collect::<Result<Vec<LlmEvent>>>()?;
+    let mut events = docs
+        .iter()
+        .map(from_fields)
+        .collect::<Result<Vec<LlmEvent>>>()?;
     if let Some(p) = &filter.provider {
         events.retain(|e| e.provider.as_str() == p);
     }
@@ -162,11 +180,17 @@ pub(crate) fn list_events_filtered(
     }
     let next_cursor = if events.len() > limit {
         events.truncate(limit);
-        events.last().map(|e| encode_event_cursor(&fmt_ts(e.ts), &e.id))
+        events
+            .last()
+            .map(|e| encode_event_cursor(&fmt_ts(e.ts), &e.id))
     } else {
         None
     };
-    Ok(EventPage { events, next_cursor, total: None })
+    Ok(EventPage {
+        events,
+        next_cursor,
+        total: None,
+    })
 }
 
 /// Rolling usage restricted to one scope dimension. The project+window slice is served by the same
@@ -219,7 +243,9 @@ pub(crate) fn usage_by_scope(
     kind: &str,
 ) -> Result<Vec<ScopeUsage>> {
     if !LimitScope::KINDS.contains(&kind) {
-        return Err(StoreError::Other(format!("unknown scope dimension '{kind}'")));
+        return Err(StoreError::Other(format!(
+            "unknown scope dimension '{kind}'"
+        )));
     }
     let filters = vec![
         ("project_id", "EQUAL", json!(project)),
@@ -230,10 +256,15 @@ pub(crate) fn usage_by_scope(
     for m in &docs {
         fold_usage(agg.entry(scope_value(m, kind)).or_default(), m);
     }
-    let mut rows: Vec<ScopeUsage> =
-        agg.into_iter().map(|(value, usage)| ScopeUsage { value, usage }).collect();
+    let mut rows: Vec<ScopeUsage> = agg
+        .into_iter()
+        .map(|(value, usage)| ScopeUsage { value, usage })
+        .collect();
     rows.sort_by(|a, b| {
-        b.usage.cost_usd.partial_cmp(&a.usage.cost_usd).unwrap_or(std::cmp::Ordering::Equal)
+        b.usage
+            .cost_usd
+            .partial_cmp(&a.usage.cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     Ok(rows)
 }
@@ -273,7 +304,11 @@ pub(crate) fn usecase_costs(
         row.cost_usd += ff64(m, "cost_usd").unwrap_or(0.0);
     }
     let mut rows: Vec<UseCaseCostRow> = agg.into_values().collect();
-    rows.sort_by(|a, b| b.cost_usd.partial_cmp(&a.cost_usd).unwrap_or(std::cmp::Ordering::Equal));
+    rows.sort_by(|a, b| {
+        b.cost_usd
+            .partial_cmp(&a.cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(rows)
 }
 
@@ -297,8 +332,14 @@ fn to_fields(ev: &LlmEvent) -> Result<Fields> {
     m.insert("operation".into(), json!(ev.operation.as_str()));
     m.insert("input_tokens".into(), json!(ev.usage.input as i64));
     m.insert("output_tokens".into(), json!(ev.usage.output as i64));
-    m.insert("cached_input_tokens".into(), json!(ev.usage.cached_input.map(|v| v as i64)));
-    m.insert("reasoning_tokens".into(), json!(ev.usage.reasoning.map(|v| v as i64)));
+    m.insert(
+        "cached_input_tokens".into(),
+        json!(ev.usage.cached_input.map(|v| v as i64)),
+    );
+    m.insert(
+        "reasoning_tokens".into(),
+        json!(ev.usage.reasoning.map(|v| v as i64)),
+    );
     m.insert("cost_usd".into(), json!(ev.cost_usd));
     m.insert("latency_ms".into(), json!(ev.latency_ms.map(|v| v as i64)));
     m.insert("status".into(), json!(ev.status.as_str()));

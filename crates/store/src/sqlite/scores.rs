@@ -89,7 +89,10 @@ pub(super) fn list_by_trace(
 
 /// `COLS` with each column qualified by `alias` (for joins that share column names across tables).
 fn prefixed_cols(alias: &str) -> String {
-    COLS.split(", ").map(|c| format!("{alias}.{c}")).collect::<Vec<_>>().join(", ")
+    COLS.split(", ")
+        .map(|c| format!("{alias}.{c}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(super) fn list(conn: &Connection, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
@@ -119,11 +122,16 @@ pub(super) fn scored_event_ids(conn: &Connection, event_ids: &[String]) -> Resul
     if event_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = std::iter::repeat("?").take(event_ids.len()).collect::<Vec<_>>().join(",");
+    let placeholders = std::iter::repeat("?")
+        .take(event_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
     let sql = format!("SELECT DISTINCT event_id FROM scores WHERE event_id IN ({placeholders})");
     let mut stmt = conn.prepare(&sql)?;
-    let bound: Vec<&dyn rusqlite::ToSql> =
-        event_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+    let bound: Vec<&dyn rusqlite::ToSql> = event_ids
+        .iter()
+        .map(|s| s as &dyn rusqlite::ToSql)
+        .collect();
     let ids = stmt
         .query_map(bound.as_slice(), |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -169,10 +177,9 @@ fn map_raw(row: &Row) -> rusqlite::Result<ScoreRaw> {
 fn from_raw(r: ScoreRaw) -> Result<Score> {
     // A detail blob written by a newer/other writer must not sink the whole listing: an unreadable
     // one degrades to `None` (the score's scalar is still true) rather than erroring the query.
-    let detail = r
-        .8
-        .as_deref()
-        .and_then(|j| serde_json::from_str::<ScoreDetail>(j).ok());
+    let detail =
+        r.8.as_deref()
+            .and_then(|j| serde_json::from_str::<ScoreDetail>(j).ok());
     Ok(Score {
         id: r.0,
         project_id: r.1,

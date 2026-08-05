@@ -17,7 +17,11 @@ pub(crate) fn list(v: &Value) -> Option<String> {
         ("Rubric id", Align::Left),
     ]);
     for r in rows {
-        let dims = r.get("dimensions").and_then(Value::as_array).map(|a| a.len()).unwrap_or(0);
+        let dims = r
+            .get("dimensions")
+            .and_then(Value::as_array)
+            .map(|a| a.len())
+            .unwrap_or(0);
         t.row(vec![
             trunc(s(r, "name"), 28),
             dims.to_string(),
@@ -48,7 +52,9 @@ pub(crate) fn detail(v: &Value) -> Option<String> {
         ("Measures", Align::Left),
     ]);
     for d in dims {
-        let floor = opt_f(d, "floor").map(|x| format!("{x:.2}")).unwrap_or_else(|| "—".into());
+        let floor = opt_f(d, "floor")
+            .map(|x| format!("{x:.2}"))
+            .unwrap_or_else(|| "—".into());
         t.row(vec![
             s(d, "key").to_string(),
             format!("{:.2}", opt_f(d, "weight").unwrap_or(1.0)),

@@ -158,10 +158,20 @@ pub(crate) async fn post_traces(
         .map_err(|e| ApiError::internal(format!("batch response encode error: {e}")))?;
 
     let mut accepted = 0usize;
-    for item in body.get("results").and_then(Value::as_array).into_iter().flatten() {
+    for item in body
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         let k = item.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-        let Some(&i) = span_of_event.get(k) else { continue };
-        let status = item.get("status").and_then(Value::as_str).unwrap_or("invalid");
+        let Some(&i) = span_of_event.get(k) else {
+            continue;
+        };
+        let status = item
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("invalid");
         let (status, code) = match status {
             "accepted" => {
                 accepted += 1;
@@ -203,6 +213,12 @@ fn finish(accepted: usize, results: Vec<SpanOutcome>) -> OtlpResponse {
     });
     OtlpResponse {
         partial_success,
-        lighttrack: Summary { accepted, unmapped, rejected, invalid, results },
+        lighttrack: Summary {
+            accepted,
+            unmapped,
+            rejected,
+            invalid,
+            results,
+        },
     }
 }

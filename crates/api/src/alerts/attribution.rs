@@ -77,7 +77,9 @@ pub(crate) fn fetch(
     let cost_rows = store
         .cost_summary_windowed(Some(project), Some(since), None)
         .unwrap_or_default();
-    let usecase_rows = store.usecase_costs(Some(project), Some(since)).unwrap_or_default();
+    let usecase_rows = store
+        .usecase_costs(Some(project), Some(since))
+        .unwrap_or_default();
     compose(&cost_rows, &usecase_rows, scope)
 }
 
@@ -94,7 +96,10 @@ pub(crate) fn compose(
         None => {
             let total = sum(cost_rows.iter().map(|r| r.cost_usd));
             let items = group_models(cost_rows.iter(), usecase_rows);
-            Attribution { contributors: rank(items, total), scope_note: None }
+            Attribution {
+                contributors: rank(items, total),
+                scope_note: None,
+            }
         }
         Some(s @ LimitScope::Provider(p)) => {
             let rows = cost_rows.iter().filter(|r| &r.provider == p);
@@ -106,14 +111,19 @@ pub(crate) fn compose(
             let rows: Vec<_> = usecase_rows.iter().filter(|r| &r.model == m).collect();
             let total = sum(rows.iter().map(|r| r.cost_usd));
             let items = group_by(rows.iter().map(|r| {
-                (r.name.clone().unwrap_or_else(|| "(unnamed)".to_string()), r.cost_usd)
+                (
+                    r.name.clone().unwrap_or_else(|| "(unnamed)".to_string()),
+                    r.cost_usd,
+                )
             }));
             scoped(rank(items, total), s)
         }
         Some(s @ LimitScope::Name(n)) => {
             // Within a use-case cap, the contributors are the models serving that use-case.
-            let rows: Vec<_> =
-                usecase_rows.iter().filter(|r| r.name.as_deref() == Some(n.as_str())).collect();
+            let rows: Vec<_> = usecase_rows
+                .iter()
+                .filter(|r| r.name.as_deref() == Some(n.as_str()))
+                .collect();
             let total = sum(rows.iter().map(|r| r.cost_usd));
             let items = group_by(rows.iter().map(|r| (r.model.clone(), r.cost_usd)));
             scoped(rank(items, total), s)
@@ -153,7 +163,11 @@ fn annotate(model: &str, usecase_rows: &[UseCaseCostRow]) -> String {
     let top = usecase_rows
         .iter()
         .filter(|r| r.model == model && r.name.is_some())
-        .max_by(|a, b| a.cost_usd.partial_cmp(&b.cost_usd).unwrap_or(std::cmp::Ordering::Equal));
+        .max_by(|a, b| {
+            a.cost_usd
+                .partial_cmp(&b.cost_usd)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     match top.and_then(|r| r.name.as_deref()) {
         Some(name) => format!("{model} ({name})"),
         None => model.to_string(),
@@ -179,7 +193,11 @@ fn rank(mut items: Vec<(String, f64)>, total: f64) -> Vec<Contributor> {
         .map(|(label, cost)| Contributor {
             label,
             cost_usd: cost,
-            share_pct: if total > 0.0 { cost / total * 100.0 } else { 0.0 },
+            share_pct: if total > 0.0 {
+                cost / total * 100.0
+            } else {
+                0.0
+            },
         })
         .collect()
 }
@@ -192,7 +210,10 @@ fn scoped(contributors: Vec<Contributor>, scope: &LimitScope) -> Attribution {
     } else {
         format!("within scope {label}")
     };
-    Attribution { contributors, scope_note: Some(note) }
+    Attribution {
+        contributors,
+        scope_note: Some(note),
+    }
 }
 
 fn sum(iter: impl Iterator<Item = f64>) -> f64 {

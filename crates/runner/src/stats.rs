@@ -39,15 +39,30 @@ impl Summary {
     pub(crate) fn of(xs: &[f64]) -> Summary {
         let n = xs.len();
         if n == 0 {
-            return Summary { n: 0, mean: 0.0, stdev: 0.0, stderr: 0.0 };
+            return Summary {
+                n: 0,
+                mean: 0.0,
+                stdev: 0.0,
+                stderr: 0.0,
+            };
         }
         let mean = xs.iter().sum::<f64>() / n as f64;
         if n < 2 {
-            return Summary { n, mean, stdev: 0.0, stderr: 0.0 };
+            return Summary {
+                n,
+                mean,
+                stdev: 0.0,
+                stderr: 0.0,
+            };
         }
         let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0);
         let stdev = var.sqrt();
-        Summary { n, mean, stdev, stderr: stdev / (n as f64).sqrt() }
+        Summary {
+            n,
+            mean,
+            stdev,
+            stderr: stdev / (n as f64).sqrt(),
+        }
     }
 
     /// Lower/upper bound of the ~95% CI on the mean (mean ± 1.96·stderr).
@@ -195,7 +210,10 @@ mod tests {
         assert!(approx(stability(&[0.0, 1.0]), 0.0));
         assert!(approx(stability(&[-0.5, 1.0]), 0.0));
         // Known moderate spread: 0.6,0.9,0.7 → pop σ ≈ 0.12472 → 1 − 0.24944 ≈ 0.75056.
-        assert!(approx(stability(&[0.6, 0.9, 0.7]), 1.0 - 2.0 * (14.0f64 / 900.0).sqrt()));
+        assert!(approx(
+            stability(&[0.6, 0.9, 0.7]),
+            1.0 - 2.0 * (14.0f64 / 900.0).sqrt()
+        ));
     }
 
     #[test]

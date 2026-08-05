@@ -54,7 +54,11 @@ pub(crate) fn call(
     let resp = req.send()?;
     let status = resp.status();
     let text = resp.text()?;
-    let table = wants_table(cli.json, status.is_success(), std::io::stdout().is_terminal());
+    let table = wants_table(
+        cli.json,
+        status.is_success(),
+        std::io::stdout().is_terminal(),
+    );
     println!("{}", present(&text, kind, table)?);
     if !status.is_success() {
         eprintln!("HTTP {}", status.as_u16());
@@ -99,7 +103,8 @@ mod tests {
     /// A body a renderer does understand is rendered — the branch that makes `--json` meaningful.
     #[test]
     fn known_kind_renders_a_table() {
-        let body = r#"[{"id":"p1","name":"demo","enabled":true,"created_at":"2026-01-01T00:00:00Z"}]"#;
+        let body =
+            r#"[{"id":"p1","name":"demo","enabled":true,"created_at":"2026-01-01T00:00:00Z"}]"#;
         let table = present(body, "list_projects", true).expect("present");
         assert!(table.contains("demo") && !table.starts_with('['));
         // Same body, table off → raw JSON.

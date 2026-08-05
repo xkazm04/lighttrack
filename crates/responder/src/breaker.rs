@@ -86,9 +86,14 @@ impl Breaker {
         // Global rolling-hour spawn cap.
         {
             let recent = self.investigate_recent.lock().unwrap();
-            let count = recent.iter().filter(|t| now.duration_since(**t) < HOUR).count();
+            let count = recent
+                .iter()
+                .filter(|t| now.duration_since(**t) < HOUR)
+                .count();
             if count as u32 >= max_per_hour {
-                return Err(format!("hourly investigation cap reached ({max_per_hour}/h)"));
+                return Err(format!(
+                    "hourly investigation cap reached ({max_per_hour}/h)"
+                ));
             }
         }
 
@@ -107,7 +112,10 @@ impl Breaker {
         };
 
         // Admitted — record cooldown + hourly counters.
-        self.last_investigate.lock().unwrap().insert(project.to_string(), now);
+        self.last_investigate
+            .lock()
+            .unwrap()
+            .insert(project.to_string(), now);
         {
             let mut recent = self.investigate_recent.lock().unwrap();
             recent.retain(|t| now.duration_since(*t) < HOUR);
@@ -130,7 +138,10 @@ impl Breaker {
     ) -> Result<(), String> {
         let now = Instant::now();
         let recent = self.recent.lock().unwrap();
-        let count = recent.iter().filter(|t| now.duration_since(**t) < HOUR).count();
+        let count = recent
+            .iter()
+            .filter(|t| now.duration_since(**t) < HOUR)
+            .count();
         if count as u32 >= max_per_hour {
             return Err(format!("hourly auto-fix cap reached ({max_per_hour}/h)"));
         }
@@ -148,7 +159,10 @@ impl Breaker {
     /// Record that a fix was applied for `project` (updates cooldown + hourly counters).
     pub(crate) fn record(&self, project: &str) {
         let now = Instant::now();
-        self.last_act.lock().unwrap().insert(project.to_string(), now);
+        self.last_act
+            .lock()
+            .unwrap()
+            .insert(project.to_string(), now);
         let mut recent = self.recent.lock().unwrap();
         recent.retain(|t| now.duration_since(*t) < HOUR);
         recent.push(now);
@@ -194,8 +208,10 @@ mod tests {
         // fresh spawn for the same project.
         drop(g);
         assert!(b.try_admit_investigation("p", hour, 100).is_err()); // within cooldown
-        // ...and a zero cooldown lets it back in once nothing is in flight.
-        assert!(b.try_admit_investigation("p", Duration::from_secs(0), 100).is_ok());
+                                                                     // ...and a zero cooldown lets it back in once nothing is in flight.
+        assert!(b
+            .try_admit_investigation("p", Duration::from_secs(0), 100)
+            .is_ok());
     }
 
     #[test]

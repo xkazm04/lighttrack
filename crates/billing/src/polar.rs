@@ -52,8 +52,15 @@ impl PolarSource {
         Self::with_customer_key(secret, "userId")
     }
 
-    pub fn with_customer_key(secret: impl Into<String>, customer_meta_key: impl Into<String>) -> Self {
-        Self { secret: secret.into(), customer_meta_key: customer_meta_key.into(), fx: shared_fx() }
+    pub fn with_customer_key(
+        secret: impl Into<String>,
+        customer_meta_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            secret: secret.into(),
+            customer_meta_key: customer_meta_key.into(),
+            fx: shared_fx(),
+        }
     }
 
     /// Override the FX table (tests, and any programmatic seeding).
@@ -95,9 +102,13 @@ fn verify_signature(
     body: &[u8],
     now_unix: i64,
 ) -> Result<(), BillingError> {
-    let ts: i64 = timestamp.parse().map_err(|_| BillingError::Signature("bad timestamp".into()))?;
+    let ts: i64 = timestamp
+        .parse()
+        .map_err(|_| BillingError::Signature("bad timestamp".into()))?;
     if (now_unix - ts).abs() > TOLERANCE_SECS {
-        return Err(BillingError::Signature("timestamp outside tolerance".into()));
+        return Err(BillingError::Signature(
+            "timestamp outside tolerance".into(),
+        ));
     }
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
         .map_err(|_| BillingError::Signature("bad signing key".into()))?;
@@ -124,11 +135,15 @@ pub fn normalize(envelope: &Value, customer_meta_key: &str, fx: &FxTable) -> Vec
     let null = Value::Null;
     let data = envelope.get("data").unwrap_or(&null);
     match typ {
-        "order.paid" => normalize_order(data, customer_meta_key, fx).into_iter().collect(),
-        "order.refunded" => {
-            normalize_order_refund(data, customer_meta_key, fx).into_iter().collect()
-        }
-        "refund.created" => normalize_refund(data, customer_meta_key, fx).into_iter().collect(),
+        "order.paid" => normalize_order(data, customer_meta_key, fx)
+            .into_iter()
+            .collect(),
+        "order.refunded" => normalize_order_refund(data, customer_meta_key, fx)
+            .into_iter()
+            .collect(),
+        "refund.created" => normalize_refund(data, customer_meta_key, fx)
+            .into_iter()
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -140,7 +155,12 @@ pub fn normalize_order(obj: &Value, customer_meta_key: &str, fx: &FxTable) -> Op
     let subscription = obj.get("subscription_id").and_then(Value::as_str);
     let sub_obj = obj.get("subscription");
     let (period_start, period_end) = sub_obj
-        .map(|s| (rfc_dt(s.get("current_period_start")), rfc_dt(s.get("current_period_end"))))
+        .map(|s| {
+            (
+                rfc_dt(s.get("current_period_start")),
+                rfc_dt(s.get("current_period_end")),
+            )
+        })
         .unwrap_or((None, None));
     Some(RevenueEvent {
         id: format!("polar:{id}"),
@@ -171,7 +191,10 @@ pub fn normalize_order_refund(
     fx: &FxTable,
 ) -> Option<RevenueEvent> {
     let order_id = order_ref(obj)?;
-    let amount = obj.get("refunded_amount").and_then(Value::as_i64).or_else(|| amount_minor(obj))?;
+    let amount = obj
+        .get("refunded_amount")
+        .and_then(Value::as_i64)
+        .or_else(|| amount_minor(obj))?;
     if amount == 0 {
         return None;
     }
@@ -180,7 +203,11 @@ pub fn normalize_order_refund(
 
 /// A `refund.created` event (data is a Refund) → a refund record. Keyed on the Refund's `order_id`
 /// (not its own refund id) so it collapses onto the same row as the order's `order.refunded` delivery.
-pub fn normalize_refund(obj: &Value, customer_meta_key: &str, fx: &FxTable) -> Option<RevenueEvent> {
+pub fn normalize_refund(
+    obj: &Value,
+    customer_meta_key: &str,
+    fx: &FxTable,
+) -> Option<RevenueEvent> {
     let order_id = order_ref(obj)?;
     let amount = obj.get("amount").and_then(Value::as_i64)?;
     if amount == 0 {
@@ -248,7 +275,10 @@ fn product_id(obj: &Value) -> Option<String> {
 }
 
 fn currency(obj: &Value) -> String {
-    obj.get("currency").and_then(Value::as_str).unwrap_or("usd").to_uppercase()
+    obj.get("currency")
+        .and_then(Value::as_str)
+        .unwrap_or("usd")
+        .to_uppercase()
 }
 
 fn rfc_dt(v: Option<&Value>) -> Option<DateTime<Utc>> {
@@ -284,7 +314,10 @@ mod tests {
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
         mac.update(format!("{id}.{ts}.").as_bytes());
         mac.update(body);
-        format!("v1,{}", base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes()))
+        format!(
+            "v1,{}",
+            base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
+        )
     }
 
     fn lookup(id: &str, ts: i64, sig: &str) -> impl Fn(&str) -> Option<String> {
@@ -378,13 +411,20 @@ mod tests {
         let with_meta = json!({ "id": "o1", "total_amount": 1000, "currency": "usd",
             "customer_id": "cust_x", "metadata": { "userId": "user-42" } });
         assert_eq!(
-            normalize_order(&with_meta, "userId", &fx()).unwrap().customer_id.as_deref(),
+            normalize_order(&with_meta, "userId", &fx())
+                .unwrap()
+                .customer_id
+                .as_deref(),
             Some("user-42")
         );
         // no metadata.userId → fall back to Polar's customer_id.
-        let no_meta = json!({ "id": "o2", "total_amount": 1000, "currency": "usd", "customer_id": "cust_y" });
+        let no_meta =
+            json!({ "id": "o2", "total_amount": 1000, "currency": "usd", "customer_id": "cust_y" });
         assert_eq!(
-            normalize_order(&no_meta, "userId", &fx()).unwrap().customer_id.as_deref(),
+            normalize_order(&no_meta, "userId", &fx())
+                .unwrap()
+                .customer_id
+                .as_deref(),
             Some("cust_y")
         );
     }
@@ -447,13 +487,19 @@ mod tests {
         assert_eq!(order_refunded[0].id, refund_created[0].id);
         assert_eq!(refund_created[0].kind, RevenueKind::Refund);
         // external_id is canonical too, so the two deliveries don't fight over it on upsert.
-        assert_eq!(refund_created[0].external_id.as_deref(), Some("refund:ord_42"));
+        assert_eq!(
+            refund_created[0].external_id.as_deref(),
+            Some("refund:ord_42")
+        );
     }
 
     #[test]
     fn untracked_event_is_ignored() {
-        assert!(
-            normalize(&json!({ "type": "checkout.updated", "data": {} }), "userId", &fx()).is_empty()
-        );
+        assert!(normalize(
+            &json!({ "type": "checkout.updated", "data": {} }),
+            "userId",
+            &fx()
+        )
+        .is_empty());
     }
 }

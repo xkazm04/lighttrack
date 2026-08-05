@@ -86,7 +86,11 @@ async fn export(app: &Router, token: &str, body: Value) -> (StatusCode, Value) {
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let v: Value = if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+    let v: Value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
     (status, v)
 }
 
@@ -106,32 +110,64 @@ async fn canonical_export_round_trips_to_events() {
     let rows = store.list_events(Some("proj-a"), 10).unwrap();
     assert_eq!(rows.len(), 2, "only the GenAI spans became events");
 
-    let root = rows.iter().find(|e| e.span_id.as_deref() == Some("eee19b7ec3c1b174")).unwrap();
-    assert_eq!(root.trace_id.as_deref(), Some("5b8efff798038103d269b633813fc60c"));
+    let root = rows
+        .iter()
+        .find(|e| e.span_id.as_deref() == Some("eee19b7ec3c1b174"))
+        .unwrap();
+    assert_eq!(
+        root.trace_id.as_deref(),
+        Some("5b8efff798038103d269b633813fc60c")
+    );
     assert!(root.parent_span_id.is_none());
-    assert_eq!(root.id, "5b8efff798038103d269b633813fc60c-eee19b7ec3c1b174", "deterministic id");
+    assert_eq!(
+        root.id, "5b8efff798038103d269b633813fc60c-eee19b7ec3c1b174",
+        "deterministic id"
+    );
     assert_eq!(root.provider.as_str(), "anthropic");
-    assert_eq!(root.model, "claude-haiku-4-5", "request model drives pricing");
-    assert_eq!(root.metadata["otel"]["response_model"], "claude-haiku-4-5-20260101");
+    assert_eq!(
+        root.model, "claude-haiku-4-5",
+        "request model drives pricing"
+    );
+    assert_eq!(
+        root.metadata["otel"]["response_model"],
+        "claude-haiku-4-5-20260101"
+    );
     assert_eq!(root.metadata["otel"]["service_name"], "checkout-api");
     assert_eq!(root.usage.input, 1_000_000);
     assert_eq!(root.usage.output, 1_000_000);
     assert_eq!(root.latency_ms, Some(1500));
     assert_eq!(root.status, Status::Success);
-    assert_eq!(root.ts.timestamp(), 1_785_578_400, "startTimeUnixNano became the event timestamp");
+    assert_eq!(
+        root.ts.timestamp(),
+        1_785_578_400,
+        "startTimeUnixNano became the event timestamp"
+    );
     assert_eq!(root.source.as_deref(), Some("otlp"));
     // Priced from the DB book by the SHARED pipeline: 1M in @ $1 + 1M out @ $5 = $6.
-    assert!((root.cost_usd.unwrap() - 6.0).abs() < 1e-9, "{:?}", root.cost_usd);
+    assert!(
+        (root.cost_usd.unwrap() - 6.0).abs() < 1e-9,
+        "{:?}",
+        root.cost_usd
+    );
     assert_eq!(root.metadata["cost_source"], "book");
     // The prompt attribute landed in the redactable payload field, parsed out of its JSON string.
     assert_eq!(root.input.as_ref().unwrap()[0]["role"], "user");
 
     // The child span: legacy token aliases, numeric (not string) nanos, parent link, error status
     // classified as a timeout from the status message.
-    let child = rows.iter().find(|e| e.span_id.as_deref() == Some("eee19b7ec3c1b175")).unwrap();
+    let child = rows
+        .iter()
+        .find(|e| e.span_id.as_deref() == Some("eee19b7ec3c1b175"))
+        .unwrap();
     assert_eq!(child.parent_span_id.as_deref(), Some("eee19b7ec3c1b174"));
-    assert_eq!(child.usage.input, 10, "legacy gen_ai.usage.prompt_tokens accepted");
-    assert_eq!(child.usage.output, 5, "legacy gen_ai.usage.completion_tokens accepted");
+    assert_eq!(
+        child.usage.input, 10,
+        "legacy gen_ai.usage.prompt_tokens accepted"
+    );
+    assert_eq!(
+        child.usage.output, 5,
+        "legacy gen_ai.usage.completion_tokens accepted"
+    );
     assert_eq!(child.latency_ms, Some(250));
     assert_eq!(child.status, Status::Timeout);
     assert_eq!(child.error.as_deref(), Some("upstream request timed out"));
@@ -155,15 +191,25 @@ async fn non_genai_and_modelless_spans_are_rejected_with_codes() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK, "a fully-rejected export is still OTLP partial success");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a fully-rejected export is still OTLP partial success"
+    );
     let results = body["lighttrack"]["results"].as_array().unwrap();
     assert_eq!(results.len(), 2, "{body}");
     assert_eq!(results[0]["status"], "unmapped");
     assert_eq!(results[0]["code"], "not_genai", "{body}");
     assert_eq!(results[0]["index"], 0);
-    assert_eq!(results[1]["code"], "bad_request", "GenAI-shaped but no model: {body}");
+    assert_eq!(
+        results[1]["code"], "bad_request",
+        "GenAI-shaped but no model: {body}"
+    );
     assert_eq!(body["partialSuccess"]["rejectedSpans"], 2, "{body}");
-    assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty(), "nothing was stored");
+    assert!(
+        store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+        "nothing was stored"
+    );
 }
 
 #[tokio::test]
@@ -189,14 +235,20 @@ async fn otlp_ingest_respects_limits_and_redaction() {
 
     let (status, body) = export(&app, &key, fixture()).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["lighttrack"]["accepted"], 0, "an enforcing cap must reject OTLP spans: {body}");
+    assert_eq!(
+        body["lighttrack"]["accepted"], 0,
+        "an enforcing cap must reject OTLP spans: {body}"
+    );
     assert_eq!(body["lighttrack"]["rejected"], 2, "{body}");
     let results = body["lighttrack"]["results"].as_array().unwrap();
     assert!(
         results.iter().any(|r| r["code"] == "rate_limited"),
         "the batch taxonomy's code is surfaced per span: {body}"
     );
-    assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty(), "nothing stored over cap");
+    assert!(
+        store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+        "nothing stored over cap"
+    );
 
     // Same export without the cap: the prompt is scrubbed before it is persisted.
     let (state2, store2) = setup(Redactor::all());
@@ -205,8 +257,14 @@ async fn otlp_ingest_respects_limits_and_redaction() {
     let (s2, b2) = export(&app2, &key2, fixture()).await;
     assert_eq!(s2, StatusCode::OK, "{b2}");
     let stored = serde_json::to_string(&store2.list_events(Some("proj-a"), 10).unwrap()).unwrap();
-    assert!(!stored.contains("jane@example.com"), "raw PII persisted from an OTLP span: {stored}");
-    assert!(stored.contains("<EMAIL>"), "redaction marker missing: {stored}");
+    assert!(
+        !stored.contains("jane@example.com"),
+        "raw PII persisted from an OTLP span: {stored}"
+    );
+    assert!(
+        stored.contains("<EMAIL>"),
+        "redaction marker missing: {stored}"
+    );
 }
 
 #[tokio::test]
@@ -221,8 +279,15 @@ async fn a_replayed_export_does_not_double_count() {
     // the native replay path acknowledges both without writing them again.
     let (s2, b2) = export(&app, &key, fixture()).await;
     assert_eq!(s2, StatusCode::OK);
-    assert_eq!(b2["lighttrack"]["accepted"], 2, "a replay is acknowledged, not refused: {b2}");
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2, "no double-count");
+    assert_eq!(
+        b2["lighttrack"]["accepted"], 2,
+        "a replay is acknowledged, not refused: {b2}"
+    );
+    assert_eq!(
+        store.list_events(Some("proj-a"), 10).unwrap().len(),
+        2,
+        "no double-count"
+    );
 }
 
 #[tokio::test]
@@ -233,9 +298,10 @@ async fn a_project_key_scopes_otlp_spans_to_its_own_project() {
 
     // The span claims another project both by attribute and by query param; the key wins.
     let mut body = fixture();
-    body["resourceSpans"][0]["resource"]["attributes"].as_array_mut().unwrap().push(
-        json!({ "key": "lighttrack.project_id", "value": { "stringValue": "proj-b" } }),
-    );
+    body["resourceSpans"][0]["resource"]["attributes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "key": "lighttrack.project_id", "value": { "stringValue": "proj-b" } }));
     let req = Request::builder()
         .method("POST")
         .uri("/v1/traces?project=proj-b")
@@ -246,7 +312,10 @@ async fn a_project_key_scopes_otlp_spans_to_its_own_project() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    assert!(store.list_events(Some("proj-b"), 10).unwrap().is_empty(), "tenant boundary crossed");
+    assert!(
+        store.list_events(Some("proj-b"), 10).unwrap().is_empty(),
+        "tenant boundary crossed"
+    );
     assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
 }
 
@@ -288,7 +357,10 @@ async fn empty_export_is_a_clean_success() {
 
     let (status, body) = export(&app, &key, json!({ "resourceSpans": [] })).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body.get("partialSuccess").is_none(), "clean export omits partialSuccess: {body}");
+    assert!(
+        body.get("partialSuccess").is_none(),
+        "clean export omits partialSuccess: {body}"
+    );
     assert_eq!(body["lighttrack"]["accepted"], 0);
 }
 
@@ -347,19 +419,33 @@ async fn an_otel_trace_keeps_its_shape_when_non_genai_spans_are_dropped() {
 
     let (status, body) = export(&app, &key, nested_fixture()).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["lighttrack"]["accepted"], 2, "only the LLM spans are stored: {body}");
-    assert_eq!(body["lighttrack"]["unmapped"], 2, "the HTTP + tool spans are refused: {body}");
+    assert_eq!(
+        body["lighttrack"]["accepted"], 2,
+        "only the LLM spans are stored: {body}"
+    );
+    assert_eq!(
+        body["lighttrack"]["unmapped"], 2,
+        "the HTTP + tool spans are refused: {body}"
+    );
 
     // No phantom LLM events were invented for the dropped spans.
     let rows = store.list_events(Some("proj-a"), 10).unwrap();
     assert_eq!(rows.len(), 2, "the event table holds LLM calls only");
 
     // The LLM call under the dropped HTTP handler has no GenAI ancestor: a genuine root.
-    let plan = rows.iter().find(|e| e.span_id.as_deref() == Some("bbbb000000000002")).unwrap();
-    assert!(plan.parent_span_id.is_none() || plan.parent_span_id.as_deref() == Some("aaaa000000000001"));
+    let plan = rows
+        .iter()
+        .find(|e| e.span_id.as_deref() == Some("bbbb000000000002"))
+        .unwrap();
+    assert!(
+        plan.parent_span_id.is_none() || plan.parent_span_id.as_deref() == Some("aaaa000000000001")
+    );
 
     // The LLM call under the dropped TOOL span is reparented onto the plan call — the link survives.
-    let summarize = rows.iter().find(|e| e.span_id.as_deref() == Some("dddd000000000004")).unwrap();
+    let summarize = rows
+        .iter()
+        .find(|e| e.span_id.as_deref() == Some("dddd000000000004"))
+        .unwrap();
     assert_eq!(
         summarize.parent_span_id.as_deref(),
         Some("bbbb000000000002"),
@@ -372,11 +458,24 @@ async fn an_otel_trace_keeps_its_shape_when_non_genai_spans_are_dropped() {
 
     // And the trace reads as ONE connected tree rather than N roots.
     let trace = store
-        .get_trace(Some("proj-a"), "9f2c4d6e8a0b1c3d5e7f9a1b2c3d4e5f", lighttrack_store::MAX_TRACE_SPANS)
+        .get_trace(
+            Some("proj-a"),
+            "9f2c4d6e8a0b1c3d5e7f9a1b2c3d4e5f",
+            lighttrack_store::MAX_TRACE_SPANS,
+        )
         .unwrap()
         .expect("trace");
-    assert_eq!(trace.spans.len(), 1, "one root, not one per dropped parent: {:?}", trace.spans);
-    assert_eq!(trace.spans[0].children.len(), 1, "the summarize call nests under the plan call");
+    assert_eq!(
+        trace.spans.len(),
+        1,
+        "one root, not one per dropped parent: {:?}",
+        trace.spans
+    );
+    assert_eq!(
+        trace.spans[0].children.len(),
+        1,
+        "the summarize call nests under the plan call"
+    );
 }
 
 /// One logical trace that spans an OTel-instrumented service and an SDK-instrumented service. The
@@ -407,15 +506,27 @@ async fn a_mixed_otel_and_sdk_trace_is_one_trace() {
     assert_eq!(status, StatusCode::OK, "{v}");
 
     let trace = store
-        .get_trace(Some("proj-a"), "9f2c4d6e8a0b1c3d5e7f9a1b2c3d4e5f", lighttrack_store::MAX_TRACE_SPANS)
+        .get_trace(
+            Some("proj-a"),
+            "9f2c4d6e8a0b1c3d5e7f9a1b2c3d4e5f",
+            lighttrack_store::MAX_TRACE_SPANS,
+        )
         .unwrap()
         .expect("the OTel and SDK halves are one trace");
-    assert_eq!(trace.totals.spans, 3, "SDK span joined the OTel trace: {:?}", trace.spans);
+    assert_eq!(
+        trace.totals.spans, 3,
+        "SDK span joined the OTel trace: {:?}",
+        trace.spans
+    );
     assert_eq!(trace.spans.len(), 1, "still one connected tree");
     // The SDK span parented onto the OTel plan span despite the case difference.
     let plan = &trace.spans[0];
     assert_eq!(plan.event.span_id.as_deref(), Some("bbbb000000000002"));
-    assert_eq!(plan.children.len(), 2, "both the OTel and the SDK child hang off the plan call");
+    assert_eq!(
+        plan.children.len(),
+        2,
+        "both the OTel and the SDK child hang off the plan call"
+    );
 }
 
 /// A caller's own opaque trace id keeps its case — folding it would merge distinct traces and mangle
@@ -439,6 +550,12 @@ async fn a_non_w3c_trace_id_is_not_case_folded() {
         .await;
         assert_eq!(status, StatusCode::OK, "{v}");
     }
-    let upper = store.get_trace(Some("proj-a"), "Order-7", lighttrack_store::MAX_TRACE_SPANS).unwrap();
-    assert_eq!(upper.expect("kept verbatim").totals.spans, 1, "distinct opaque ids stay distinct");
+    let upper = store
+        .get_trace(Some("proj-a"), "Order-7", lighttrack_store::MAX_TRACE_SPANS)
+        .unwrap();
+    assert_eq!(
+        upper.expect("kept verbatim").totals.spans,
+        1,
+        "distinct opaque ids stay distinct"
+    );
 }

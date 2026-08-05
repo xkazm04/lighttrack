@@ -98,16 +98,20 @@ impl RejectionLedger {
         // Amortized prune (see `last_prune`): the map lock is already held, so the relaxed atomic is
         // only a cheap gate — a racing double-prune is harmless.
         let now_s = now.timestamp();
-        if now_s - self.last_prune.load(std::sync::atomic::Ordering::Relaxed) >= PRUNE_INTERVAL_SECS {
+        if now_s - self.last_prune.load(std::sync::atomic::Ordering::Relaxed) >= PRUNE_INTERVAL_SECS
+        {
             Self::prune(&mut map, now, self.ttl);
-            self.last_prune.store(now_s, std::sync::atomic::Ordering::Relaxed);
+            self.last_prune
+                .store(now_s, std::sync::atomic::Ordering::Relaxed);
         }
-        let e = map.entry((project.to_string(), metric, window, scope)).or_insert(Entry {
-            count: 0,
-            est_cost_usd: 0.0,
-            first_ts: now,
-            last_ts: now,
-        });
+        let e = map
+            .entry((project.to_string(), metric, window, scope))
+            .or_insert(Entry {
+                count: 0,
+                est_cost_usd: 0.0,
+                first_ts: now,
+                last_ts: now,
+            });
         e.count += 1;
         e.est_cost_usd += cost;
         e.last_ts = now;
@@ -151,8 +155,21 @@ mod tests {
     fn record_increments_count_and_folds_cost() {
         let led = RejectionLedger::new();
         let now = Utc::now();
-        assert_eq!(led.record("p", LimitMetric::CostUsd, LimitWindow::Day, None, 0.10, now), 1);
-        assert_eq!(led.record("p", LimitMetric::CostUsd, LimitWindow::Day, None, 0.05, t(now, 1)), 2);
+        assert_eq!(
+            led.record("p", LimitMetric::CostUsd, LimitWindow::Day, None, 0.10, now),
+            1
+        );
+        assert_eq!(
+            led.record(
+                "p",
+                LimitMetric::CostUsd,
+                LimitWindow::Day,
+                None,
+                0.05,
+                t(now, 1)
+            ),
+            2
+        );
         let stats = led.snapshot("p", t(now, 2));
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].count, 2);
@@ -166,7 +183,7 @@ mod tests {
         led.record("p", LimitMetric::CostUsd, LimitWindow::Day, None, 1.0, now);
         led.record("p", LimitMetric::Calls, LimitWindow::Day, None, 0.0, now); // other metric
         led.record("p", LimitMetric::CostUsd, LimitWindow::Hour, None, 2.0, now); // other window
-        // Same metric+window but a model scope → a distinct bucket, not folded into the project-wide one.
+                                                                                  // Same metric+window but a model scope → a distinct bucket, not folded into the project-wide one.
         led.record(
             "p",
             LimitMetric::CostUsd,
@@ -189,9 +206,18 @@ mod tests {
         led.record("p", LimitMetric::CostUsd, LimitWindow::Day, None, 1.0, base);
         // A hit 25h later prunes the (now-stale) original before recording the new one, so the count
         // resets rather than accumulating across the TTL boundary.
-        let count =
-            led.record("p", LimitMetric::CostUsd, LimitWindow::Day, None, 1.0, t(base, 25 * 3600));
-        assert_eq!(count, 1, "stale bucket should have been pruned, restarting the count");
+        let count = led.record(
+            "p",
+            LimitMetric::CostUsd,
+            LimitWindow::Day,
+            None,
+            1.0,
+            t(base, 25 * 3600),
+        );
+        assert_eq!(
+            count, 1,
+            "stale bucket should have been pruned, restarting the count"
+        );
         // A snapshot far in the future prunes everything.
         assert!(led.snapshot("p", t(base, 60 * 3600)).is_empty());
     }

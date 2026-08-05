@@ -273,7 +273,13 @@ mod tests {
         assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(resp.headers().get("retry-after").unwrap(), "1");
         // The whole point of the distinction — a shed is never a rate limit.
-        assert_ne!(ErrorCode::Overloaded.status(), ErrorCode::RateLimited.status());
-        assert_ne!(ErrorCode::Overloaded.as_str(), ErrorCode::RateLimited.as_str());
+        assert_ne!(
+            ErrorCode::Overloaded.status(),
+            ErrorCode::RateLimited.status()
+        );
+        assert_ne!(
+            ErrorCode::Overloaded.as_str(),
+            ErrorCode::RateLimited.as_str()
+        );
     }
 }

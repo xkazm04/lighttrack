@@ -78,13 +78,19 @@ mod tests {
     fn strips_provider_prefix_and_collapses_dated_variants() {
         let a = table();
         // provider/ prefix stripped, then family collapse.
-        assert_eq!(a.normalize("openai", "openai/gpt-4o"), ("openai".into(), "gpt-4o".into()));
+        assert_eq!(
+            a.normalize("openai", "openai/gpt-4o"),
+            ("openai".into(), "gpt-4o".into())
+        );
         assert_eq!(
             a.normalize("openai", "gpt-4o-2024-08-06"),
             ("openai".into(), "gpt-4o".into())
         );
         // provider synonym mapped.
-        assert_eq!(a.normalize("azure-openai", "gpt-4o"), ("openai".into(), "gpt-4o".into()));
+        assert_eq!(
+            a.normalize("azure-openai", "gpt-4o"),
+            ("openai".into(), "gpt-4o".into())
+        );
         assert_eq!(
             a.normalize("google-vertex", "gemini-1.5-pro"),
             ("google".into(), "gemini-1.5-pro".into())
@@ -101,13 +107,22 @@ mod tests {
         );
         // Empty table normalizes nothing but still strips the prefix.
         let empty = ModelAliases::default();
-        assert_eq!(empty.normalize("openai", "openai/gpt-4o"), ("openai".into(), "gpt-4o".into()));
-        assert_eq!(empty.normalize("x", "y-2024-01-01"), ("x".into(), "y-2024-01-01".into()));
+        assert_eq!(
+            empty.normalize("openai", "openai/gpt-4o"),
+            ("openai".into(), "gpt-4o".into())
+        );
+        assert_eq!(
+            empty.normalize("x", "y-2024-01-01"),
+            ("x".into(), "y-2024-01-01".into())
+        );
     }
 
     #[test]
     fn case_insensitive_keys() {
         let a = table();
-        assert_eq!(a.normalize("Azure-OpenAI", "GPT-4O-2024-08-06"), ("openai".into(), "gpt-4o".into()));
+        assert_eq!(
+            a.normalize("Azure-OpenAI", "GPT-4O-2024-08-06"),
+            ("openai".into(), "gpt-4o".into())
+        );
     }
 }

@@ -57,7 +57,10 @@ fn duplicate_event_id_is_a_conflict_not_an_opaque_error() {
     );
     // The admission path guards the same insert, so a duplicate id through it is a Conflict too.
     let err2 = s.insert_event_checked(&e).unwrap_err();
-    assert!(matches!(err2, crate::StoreError::Conflict(_)), "got {err2:?}");
+    assert!(
+        matches!(err2, crate::StoreError::Conflict(_)),
+        "got {err2:?}"
+    );
     // Only the one row exists.
     assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 1);
 }
@@ -101,8 +104,15 @@ fn batch_admission_counts_prior_items_no_cap_bypass() {
     assert_eq!(outcomes.len(), 3);
     assert!(outcomes[0].as_ref().unwrap().admitted);
     assert!(outcomes[1].as_ref().unwrap().admitted);
-    assert!(!outcomes[2].as_ref().unwrap().admitted, "3rd item must be capped");
-    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 2, "only admitted rows stored");
+    assert!(
+        !outcomes[2].as_ref().unwrap().admitted,
+        "3rd item must be capped"
+    );
+    assert_eq!(
+        s.list_events(Some("p1"), 10).unwrap().len(),
+        2,
+        "only admitted rows stored"
+    );
 }
 
 #[test]
@@ -121,7 +131,10 @@ fn batch_reports_duplicate_id_as_conflict_without_aborting() {
         "duplicate id in-batch is a per-item Conflict, got {:?}",
         outcomes[1]
     );
-    assert!(outcomes[2].is_ok(), "a later item still processes after a sibling's conflict");
+    assert!(
+        outcomes[2].is_ok(),
+        "a later item still processes after a sibling's conflict"
+    );
     assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 2);
 }
 
@@ -143,7 +156,11 @@ fn keyset_pagination_is_stable_across_interleaved_inserts() {
     let filter = crate::EventFilter::default();
     let page1 = s.list_events_filtered(Some("p1"), &filter, 2).unwrap();
     assert_eq!(
-        page1.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+        page1
+            .events
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect::<Vec<_>>(),
         ["e5", "e4"]
     );
     let c1 = page1.next_cursor.expect("more rows remain");
@@ -152,17 +169,34 @@ fn keyset_pagination_is_stable_across_interleaved_inserts() {
     // next page continues strictly below e4, unaffected by e6.
     s.insert_event(&mk(6)).unwrap();
 
-    let f2 = crate::EventFilter { cursor: Some(c1), ..Default::default() };
+    let f2 = crate::EventFilter {
+        cursor: Some(c1),
+        ..Default::default()
+    };
     let page2 = s.list_events_filtered(Some("p1"), &f2, 2).unwrap();
     assert_eq!(
-        page2.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+        page2
+            .events
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect::<Vec<_>>(),
         ["e3", "e2"]
     );
     let c2 = page2.next_cursor.expect("one more row remains");
 
-    let f3 = crate::EventFilter { cursor: Some(c2), ..Default::default() };
+    let f3 = crate::EventFilter {
+        cursor: Some(c2),
+        ..Default::default()
+    };
     let page3 = s.list_events_filtered(Some("p1"), &f3, 2).unwrap();
-    assert_eq!(page3.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e1"]);
+    assert_eq!(
+        page3
+            .events
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect::<Vec<_>>(),
+        ["e1"]
+    );
     assert!(page3.next_cursor.is_none(), "last page has no cursor");
     // No duplicates, no skips across the session (e6 correctly excluded — it's newer than the cursor).
 }
@@ -183,8 +217,13 @@ fn filtered_listing_ands_all_predicates() {
     s.insert_event(&a).unwrap();
     s.insert_event(&b).unwrap();
 
-    let by_provider = crate::EventFilter { provider: Some("openai".into()), ..Default::default() };
-    let r = s.list_events_filtered(Some("p1"), &by_provider, 50).unwrap();
+    let by_provider = crate::EventFilter {
+        provider: Some("openai".into()),
+        ..Default::default()
+    };
+    let r = s
+        .list_events_filtered(Some("p1"), &by_provider, 50)
+        .unwrap();
     assert_eq!(r.events.len(), 1);
     assert_eq!(r.events[0].id, "b");
 
@@ -193,7 +232,9 @@ fn filtered_listing_ands_all_predicates() {
         name: Some("summarize".into()),
         ..Default::default()
     };
-    let r = s.list_events_filtered(Some("p1"), &by_model_and_name, 50).unwrap();
+    let r = s
+        .list_events_filtered(Some("p1"), &by_model_and_name, 50)
+        .unwrap();
     assert_eq!(r.events.len(), 1);
     assert_eq!(r.events[0].id, "a");
 
@@ -203,7 +244,11 @@ fn filtered_listing_ands_all_predicates() {
         name: Some("summarize".into()),
         ..Default::default()
     };
-    assert!(s.list_events_filtered(Some("p1"), &none, 50).unwrap().events.is_empty());
+    assert!(s
+        .list_events_filtered(Some("p1"), &none, 50)
+        .unwrap()
+        .events
+        .is_empty());
 }
 
 #[test]
@@ -223,11 +268,20 @@ fn windowed_filter_and_cost_summary_respect_since_inclusive_until_exclusive() {
     let until = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 3, 0, 0).unwrap();
 
     // [since, until): h2 only (h1 before since, h3 at until is excluded).
-    let f = crate::EventFilter { since: Some(since), until: Some(until), ..Default::default() };
+    let f = crate::EventFilter {
+        since: Some(since),
+        until: Some(until),
+        ..Default::default()
+    };
     let r = s.list_events_filtered(Some("p1"), &f, 50).unwrap();
-    assert_eq!(r.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["h2"]);
+    assert_eq!(
+        r.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+        ["h2"]
+    );
 
-    let costs = s.cost_summary_windowed(Some("p1"), Some(since), Some(until)).unwrap();
+    let costs = s
+        .cost_summary_windowed(Some("p1"), Some(since), Some(until))
+        .unwrap();
     assert_eq!(costs.len(), 1);
     assert_eq!(costs[0].calls, 1, "only h2 falls in the window");
 
@@ -239,9 +293,12 @@ fn windowed_filter_and_cost_summary_respect_since_inclusive_until_exclusive() {
 #[test]
 fn insert_list_cost_roundtrip() {
     let s = SqliteStore::open_in_memory().unwrap();
-    s.insert_event(&ev("p1", "claude-haiku-4-5", 100, 50, 0.001)).unwrap();
-    s.insert_event(&ev("p1", "claude-haiku-4-5", 200, 80, 0.002)).unwrap();
-    s.insert_event(&ev("p2", "claude-opus-4-8", 10, 5, 0.01)).unwrap();
+    s.insert_event(&ev("p1", "claude-haiku-4-5", 100, 50, 0.001))
+        .unwrap();
+    s.insert_event(&ev("p1", "claude-haiku-4-5", 200, 80, 0.002))
+        .unwrap();
+    s.insert_event(&ev("p2", "claude-opus-4-8", 10, 5, 0.01))
+        .unwrap();
 
     assert_eq!(s.list_events(None, 10).unwrap().len(), 3);
     let p1 = s.list_events(Some("p1"), 10).unwrap();
@@ -276,13 +333,18 @@ fn usecase_costs_groups_by_name_with_fallback_and_window() {
     // Grouped by (name, provider, model): summarize + classify + the un-named bucket = 3 rows.
     let rows = s.usecase_costs(Some("p1"), None).unwrap();
     assert_eq!(rows.len(), 3);
-    let summarize = rows.iter().find(|r| r.name.as_deref() == Some("summarize")).unwrap();
+    let summarize = rows
+        .iter()
+        .find(|r| r.name.as_deref() == Some("summarize"))
+        .unwrap();
     assert_eq!(summarize.calls, 2);
     assert_eq!(summarize.input_tokens, 300);
     assert_eq!(summarize.model, "claude-haiku-4-5");
     assert!((summarize.cost_usd - 0.003).abs() < 1e-9);
     // The un-named call rolls up under a name=None row (keyed by its model).
-    assert!(rows.iter().any(|r| r.name.is_none() && r.model == "gpt-4o-mini"));
+    assert!(rows
+        .iter()
+        .any(|r| r.name.is_none() && r.model == "gpt-4o-mini"));
 
     // Windowing: a call stamped 10 days ago is excluded by a 7-day `since`.
     let mut old = ev("p1", "claude-haiku-4-5", 1, 1, 0.5);
@@ -291,8 +353,14 @@ fn usecase_costs_groups_by_name_with_fallback_and_window() {
     s.insert_event(&old).unwrap();
     let since = Utc::now() - chrono::Duration::days(7);
     let windowed = s.usecase_costs(Some("p1"), Some(since)).unwrap();
-    let summ_win = windowed.iter().find(|r| r.name.as_deref() == Some("summarize")).unwrap();
-    assert_eq!(summ_win.calls, 2, "the 10-day-old call is outside the 7-day window");
+    let summ_win = windowed
+        .iter()
+        .find(|r| r.name.as_deref() == Some("summarize"))
+        .unwrap();
+    assert_eq!(
+        summ_win.calls, 2,
+        "the 10-day-old call is outside the 7-day window"
+    );
 }
 
 #[test]
@@ -322,18 +390,29 @@ fn trace_rollup_groups_events_and_scores() {
     // Listing is per-project and one row per trace, newest first.
     let traces = s.list_traces(Some("p1"), 10).unwrap();
     assert_eq!(traces.len(), 2, "two distinct p1 traces");
-    let t1 = traces.iter().find(|t| t.trace_id == "tr-1").expect("tr-1 present");
+    let t1 = traces
+        .iter()
+        .find(|t| t.trace_id == "tr-1")
+        .expect("tr-1 present");
     assert_eq!(t1.spans, 2);
     assert!((t1.cost_usd - 0.005).abs() < 1e-9);
     assert_eq!(t1.total_tokens, 430);
     assert_eq!(t1.models.len(), 2, "two distinct models in the trace");
 
     // The rollup nests child under root and totals the trace.
-    let trace = s.get_trace(Some("p1"), "tr-1", MAX_TRACE_SPANS).unwrap().expect("get_trace Some");
+    let trace = s
+        .get_trace(Some("p1"), "tr-1", MAX_TRACE_SPANS)
+        .unwrap()
+        .expect("get_trace Some");
     assert_eq!(trace.totals.spans, 2);
     assert_eq!(trace.spans.len(), 1, "single root span");
     assert_eq!(trace.spans[0].children.len(), 1, "child nests under root");
-    assert!(s.get_trace(Some("p1"), "nope", MAX_TRACE_SPANS).unwrap().is_none(), "unknown trace -> None");
+    assert!(
+        s.get_trace(Some("p1"), "nope", MAX_TRACE_SPANS)
+            .unwrap()
+            .is_none(),
+        "unknown trace -> None"
+    );
 
     // A per-call score on the child + a whole-trace score anchored to the root both surface via join.
     let mk_score = |event_id: &str, rubric: &str| Score {
@@ -352,10 +431,16 @@ fn trace_rollup_groups_events_and_scores() {
         cost_usd: Some(0.0001),
         created_at: Utc::now(),
     };
-    s.insert_score(&mk_score(&child.id, "call-quality")).unwrap();
-    s.insert_score(&mk_score(&root.id, "trace-coherence")).unwrap();
+    s.insert_score(&mk_score(&child.id, "call-quality"))
+        .unwrap();
+    s.insert_score(&mk_score(&root.id, "trace-coherence"))
+        .unwrap();
     let scores = s.list_trace_scores(Some("p1"), "tr-1").unwrap();
-    assert_eq!(scores.len(), 2, "both the per-call and whole-trace scores join to the trace");
+    assert_eq!(
+        scores.len(),
+        2,
+        "both the per-call and whole-trace scores join to the trace"
+    );
 }
 
 #[test]
@@ -376,8 +461,10 @@ fn list_and_detail_report_the_same_duration_and_status() {
         e.ts = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, sec).unwrap();
         e
     };
-    s.insert_event(&mk(0, "e0", 120, lighttrack_core::Status::Success)).unwrap();
-    s.insert_event(&mk(2, "e1", 750, lighttrack_core::Status::Error)).unwrap();
+    s.insert_event(&mk(0, "e0", 120, lighttrack_core::Status::Success))
+        .unwrap();
+    s.insert_event(&mk(2, "e1", 750, lighttrack_core::Status::Error))
+        .unwrap();
 
     let listed = s
         .list_traces(Some("p1"), 10)
@@ -385,10 +472,19 @@ fn list_and_detail_report_the_same_duration_and_status() {
         .into_iter()
         .find(|t| t.trace_id == "tr-dur")
         .expect("trace listed");
-    let detail = s.get_trace(Some("p1"), "tr-dur", MAX_TRACE_SPANS).unwrap().expect("detail");
+    let detail = s
+        .get_trace(Some("p1"), "tr-dur", MAX_TRACE_SPANS)
+        .unwrap()
+        .expect("detail");
 
-    assert_eq!(listed.duration_ms, 2750, "the last span's latency counts in the LIST too");
-    assert_eq!(listed.duration_ms, detail.duration_ms, "list and detail must agree on duration");
+    assert_eq!(
+        listed.duration_ms, 2750,
+        "the last span's latency counts in the LIST too"
+    );
+    assert_eq!(
+        listed.duration_ms, detail.duration_ms,
+        "list and detail must agree on duration"
+    );
     assert_eq!(listed.status, detail.status, "and on status");
     assert_eq!(listed.status, "error");
     assert_eq!(listed.spans, detail.totals.spans);
@@ -408,15 +504,24 @@ fn a_runaway_trace_is_clipped_and_says_so() {
         s.insert_event(&e).unwrap();
     }
 
-    let clipped = s.get_trace(Some("p1"), "tr-loop", 3).unwrap().expect("detail");
-    assert!(clipped.spans_truncated, "a clipped trace must never read as complete");
+    let clipped = s
+        .get_trace(Some("p1"), "tr-loop", 3)
+        .unwrap()
+        .expect("detail");
+    assert!(
+        clipped.spans_truncated,
+        "a clipped trace must never read as complete"
+    );
     assert_eq!(clipped.spans_total, 7, "the true span count is reported");
     assert_eq!(clipped.spans_logged, 3);
     assert_eq!(clipped.totals.spans, 3);
     // The head of the trace is what survives, so the entry-point span is still there to anchor a score.
     assert_eq!(clipped.root_event_id(), Some("e0"));
 
-    let whole = s.get_trace(Some("p1"), "tr-loop", MAX_TRACE_SPANS).unwrap().expect("detail");
+    let whole = s
+        .get_trace(Some("p1"), "tr-loop", MAX_TRACE_SPANS)
+        .unwrap()
+        .expect("detail");
     assert!(!whole.spans_truncated);
     assert_eq!((whole.spans_total, whole.spans_logged), (7, 7));
 }
@@ -442,21 +547,46 @@ fn colliding_trace_id_across_projects_stays_separate() {
         s.insert_event(e).unwrap();
     }
 
-    let mine = s.get_trace(Some("p1"), "req-1", MAX_TRACE_SPANS).unwrap().expect("p1 sees its own trace");
-    assert_eq!(mine.project_id, "p1", "the older foreign event must not claim the trace");
-    assert_eq!(mine.totals.spans, 1, "only p1's span is visible: {:?}", mine.spans);
-    assert!((mine.totals.cost_usd - 0.001).abs() < 1e-9, "no foreign cost leaks in");
+    let mine = s
+        .get_trace(Some("p1"), "req-1", MAX_TRACE_SPANS)
+        .unwrap()
+        .expect("p1 sees its own trace");
+    assert_eq!(
+        mine.project_id, "p1",
+        "the older foreign event must not claim the trace"
+    );
+    assert_eq!(
+        mine.totals.spans, 1,
+        "only p1's span is visible: {:?}",
+        mine.spans
+    );
+    assert!(
+        (mine.totals.cost_usd - 0.001).abs() < 1e-9,
+        "no foreign cost leaks in"
+    );
 
-    let theirs_view = s.get_trace(Some("p2"), "req-1", MAX_TRACE_SPANS).unwrap().expect("p2 sees its own trace");
+    let theirs_view = s
+        .get_trace(Some("p2"), "req-1", MAX_TRACE_SPANS)
+        .unwrap()
+        .expect("p2 sees its own trace");
     assert_eq!(theirs_view.totals.spans, 1);
     assert_eq!(theirs_view.project_id, "p2");
 
     // A third project sees nothing at all — not an empty-but-existing trace, None.
-    assert!(s.get_trace(Some("p3"), "req-1", MAX_TRACE_SPANS).unwrap().is_none());
+    assert!(s
+        .get_trace(Some("p3"), "req-1", MAX_TRACE_SPANS)
+        .unwrap()
+        .is_none());
 
     // Unscoped (admin/dev) keeps the deliberate cross-project view.
-    let merged = s.get_trace(None, "req-1", MAX_TRACE_SPANS).unwrap().expect("operator view");
-    assert_eq!(merged.totals.spans, 2, "admin/dev still see every project's spans");
+    let merged = s
+        .get_trace(None, "req-1", MAX_TRACE_SPANS)
+        .unwrap()
+        .expect("operator view");
+    assert_eq!(
+        merged.totals.spans, 2,
+        "admin/dev still see every project's spans"
+    );
 
     // Scores are scoped on the same terms.
     let score = Score {
@@ -481,7 +611,11 @@ fn colliding_trace_id_across_projects_stays_separate() {
         "p1 must not read p2's verdicts through a colliding trace id"
     );
     assert_eq!(s.list_trace_scores(Some("p2"), "req-1").unwrap().len(), 1);
-    assert_eq!(s.list_trace_scores(None, "req-1").unwrap().len(), 1, "operator view unchanged");
+    assert_eq!(
+        s.list_trace_scores(None, "req-1").unwrap().len(),
+        1,
+        "operator view unchanged"
+    );
 }
 
 #[test]
@@ -503,11 +637,24 @@ fn trace_list_and_detail_models_match_first_seen_order() {
     s.insert_event(&mk(2, "beta", "e2")).unwrap();
 
     let list = s.list_traces(Some("p1"), 10).unwrap();
-    let listed = list.iter().find(|t| t.trace_id == "tr-order").expect("trace listed");
-    let detail = s.get_trace(Some("p1"), "tr-order", MAX_TRACE_SPANS).unwrap().expect("trace detail");
+    let listed = list
+        .iter()
+        .find(|t| t.trace_id == "tr-order")
+        .expect("trace listed");
+    let detail = s
+        .get_trace(Some("p1"), "tr-order", MAX_TRACE_SPANS)
+        .unwrap()
+        .expect("trace detail");
 
-    assert_eq!(listed.models, vec!["beta".to_string(), "alpha".to_string()], "first-seen order");
-    assert_eq!(listed.models, detail.models, "list and detail agree on model ordering");
+    assert_eq!(
+        listed.models,
+        vec!["beta".to_string(), "alpha".to_string()],
+        "first-seen order"
+    );
+    assert_eq!(
+        listed.models, detail.models,
+        "list and detail agree on model ordering"
+    );
 }
 
 #[test]
@@ -530,7 +677,10 @@ fn trace_queries_use_indexes_not_full_scan() {
     // list_by_trace, unscoped (admin/dev): WHERE trace_id = ? — served by idx_events_trace (a
     // SEARCH, never a full SCAN).
     let by_trace = plan("SELECT id FROM events WHERE trace_id = 'x' ORDER BY ts ASC");
-    assert!(by_trace.contains("USING INDEX idx_events_trace"), "list_by_trace plan: {by_trace}");
+    assert!(
+        by_trace.contains("USING INDEX idx_events_trace"),
+        "list_by_trace plan: {by_trace}"
+    );
 
     // list_by_trace, project-scoped (the normal path): the composite idx_events_project_trace serves
     // both predicates, so scoping the read by project keeps it proportional to the trace. Left free
@@ -572,12 +722,21 @@ fn trace_filters_and_keyset_pagination() {
         e.ts = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, sec).unwrap();
         e
     };
-    s.insert_event(&mk("tr-a", 10, 0.01, Status::Success)).unwrap();
-    s.insert_event(&mk("tr-b", 20, 0.05, Status::Error)).unwrap();
-    s.insert_event(&mk("tr-c", 30, 0.10, Status::Success)).unwrap();
-    s.insert_event(&mk("tr-d", 40, 0.20, Status::Error)).unwrap();
+    s.insert_event(&mk("tr-a", 10, 0.01, Status::Success))
+        .unwrap();
+    s.insert_event(&mk("tr-b", 20, 0.05, Status::Error))
+        .unwrap();
+    s.insert_event(&mk("tr-c", 30, 0.10, Status::Success))
+        .unwrap();
+    s.insert_event(&mk("tr-d", 40, 0.20, Status::Error))
+        .unwrap();
 
-    let ids = |p: &crate::TracePage| p.traces.iter().map(|t| t.trace_id.clone()).collect::<Vec<_>>();
+    let ids = |p: &crate::TracePage| {
+        p.traces
+            .iter()
+            .map(|t| t.trace_id.clone())
+            .collect::<Vec<_>>()
+    };
 
     // Keyset page 1 (limit 2): newest `ended` first, with a next cursor.
     let f = TraceFilter::default();
@@ -588,50 +747,105 @@ fn trace_filters_and_keyset_pagination() {
     // Cursor stability across inserts: a brand-new *newer* trace (tr-e@50) and an older one
     // (tr-f@25) land after page 1. Continuing from the cursor returns only traces strictly older
     // than tr-c@30 — tr-e is not duplicated onto page 2, and nothing already returned reappears.
-    s.insert_event(&mk("tr-e", 50, 0.30, Status::Success)).unwrap();
-    s.insert_event(&mk("tr-f", 25, 0.02, Status::Success)).unwrap();
-    let f2 = TraceFilter { cursor: Some(cursor), ..Default::default() };
+    s.insert_event(&mk("tr-e", 50, 0.30, Status::Success))
+        .unwrap();
+    s.insert_event(&mk("tr-f", 25, 0.02, Status::Success))
+        .unwrap();
+    let f2 = TraceFilter {
+        cursor: Some(cursor),
+        ..Default::default()
+    };
     let p2 = s.list_traces_filtered(Some("p1"), &f2, 10).unwrap();
-    assert_eq!(ids(&p2), vec!["tr-f", "tr-b", "tr-a"], "keyset continues past cursor, no dup/skip");
+    assert_eq!(
+        ids(&p2),
+        vec!["tr-f", "tr-b", "tr-a"],
+        "keyset continues past cursor, no dup/skip"
+    );
     assert!(p2.next_cursor.is_none(), "last page has no cursor");
 
     // status filter (aggregate-level HAVING).
     let err = s
-        .list_traces_filtered(Some("p1"), &TraceFilter { status: Some("error".into()), ..Default::default() }, 10)
+        .list_traces_filtered(
+            Some("p1"),
+            &TraceFilter {
+                status: Some("error".into()),
+                ..Default::default()
+            },
+            10,
+        )
         .unwrap();
     assert_eq!(ids(&err), vec!["tr-d", "tr-b"]);
     let ok = s
-        .list_traces_filtered(Some("p1"), &TraceFilter { status: Some("success".into()), ..Default::default() }, 10)
+        .list_traces_filtered(
+            Some("p1"),
+            &TraceFilter {
+                status: Some("success".into()),
+                ..Default::default()
+            },
+            10,
+        )
         .unwrap();
     assert_eq!(ids(&ok), vec!["tr-e", "tr-c", "tr-f", "tr-a"]);
 
     // min_cost filter.
     let costly = s
-        .list_traces_filtered(Some("p1"), &TraceFilter { min_cost: Some(0.10), ..Default::default() }, 10)
+        .list_traces_filtered(
+            Some("p1"),
+            &TraceFilter {
+                min_cost: Some(0.10),
+                ..Default::default()
+            },
+            10,
+        )
         .unwrap();
     assert_eq!(ids(&costly), vec!["tr-e", "tr-d", "tr-c"]);
 
     // since/until on the `ended` bound.
     let since = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, 26).unwrap();
     let recent = s
-        .list_traces_filtered(Some("p1"), &TraceFilter { since: Some(since), ..Default::default() }, 10)
+        .list_traces_filtered(
+            Some("p1"),
+            &TraceFilter {
+                since: Some(since),
+                ..Default::default()
+            },
+            10,
+        )
         .unwrap();
     assert_eq!(ids(&recent), vec!["tr-e", "tr-d", "tr-c"], "ended >= 26");
     let until = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, 26).unwrap();
     let older = s
-        .list_traces_filtered(Some("p1"), &TraceFilter { until: Some(until), ..Default::default() }, 10)
+        .list_traces_filtered(
+            Some("p1"),
+            &TraceFilter {
+                until: Some(until),
+                ..Default::default()
+            },
+            10,
+        )
         .unwrap();
     assert_eq!(ids(&older), vec!["tr-f", "tr-b", "tr-a"], "ended < 26");
 
     // filter + cursor combined: paginate the error traces one at a time.
     let e1 = s
-        .list_traces_filtered(Some("p1"), &TraceFilter { status: Some("error".into()), ..Default::default() }, 1)
+        .list_traces_filtered(
+            Some("p1"),
+            &TraceFilter {
+                status: Some("error".into()),
+                ..Default::default()
+            },
+            1,
+        )
         .unwrap();
     assert_eq!(ids(&e1), vec!["tr-d"]);
     let e2 = s
         .list_traces_filtered(
             Some("p1"),
-            &TraceFilter { status: Some("error".into()), cursor: e1.next_cursor, ..Default::default() },
+            &TraceFilter {
+                status: Some("error".into()),
+                cursor: e1.next_cursor,
+                ..Default::default()
+            },
             1,
         )
         .unwrap();
@@ -658,13 +872,23 @@ fn trace_since_prunes_to_in_window_spans() {
 
     let since = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, 15).unwrap();
     let page = s
-        .list_traces_filtered(Some("p1"), &TraceFilter { since: Some(since), ..Default::default() }, 10)
+        .list_traces_filtered(
+            Some("p1"),
+            &TraceFilter {
+                since: Some(since),
+                ..Default::default()
+            },
+            10,
+        )
         .unwrap();
     // Set membership stays correct (ended = :32 >= :15), but the rollup reflects only in-window spans.
     assert_eq!(page.traces.len(), 1);
     let t = &page.traces[0];
     assert_eq!(t.spans, 1, "pre-window span pruned from the rollup");
-    assert!((t.cost_usd - 2.0).abs() < 1e-9, "only in-window cost counted");
+    assert!(
+        (t.cost_usd - 2.0).abs() < 1e-9,
+        "only in-window cost counted"
+    );
 }
 
 #[test]
@@ -696,7 +920,13 @@ fn projects_keys_limits_usage() {
         revoked: false,
     };
     s.create_api_key(&key).unwrap();
-    assert_eq!(s.find_api_key_by_prefix("abc12345").unwrap().unwrap().project_id, "p1");
+    assert_eq!(
+        s.find_api_key_by_prefix("abc12345")
+            .unwrap()
+            .unwrap()
+            .project_id,
+        "p1"
+    );
     assert!(s.find_api_key_by_prefix("zzz").unwrap().is_none());
 
     let rule = LimitRule {
@@ -713,10 +943,14 @@ fn projects_keys_limits_usage() {
     s.create_limit_rule(&rule).unwrap();
     assert_eq!(s.list_limit_rules("p1", true).unwrap().len(), 1);
 
-    s.insert_event(&ev("p1", "claude-haiku-4-5", 1000, 500, 0.0035)).unwrap();
-    s.insert_event(&ev("p1", "claude-haiku-4-5", 2000, 200, 0.00165)).unwrap();
+    s.insert_event(&ev("p1", "claude-haiku-4-5", 1000, 500, 0.0035))
+        .unwrap();
+    s.insert_event(&ev("p1", "claude-haiku-4-5", 2000, 200, 0.00165))
+        .unwrap();
 
-    let u = s.usage_since("p1", LimitWindow::Hour.since(Utc::now())).unwrap();
+    let u = s
+        .usage_since("p1", LimitWindow::Hour.since(Utc::now()))
+        .unwrap();
     assert_eq!(u.calls, 2);
     assert_eq!(u.tokens, 3700);
     assert!((u.cost_usd - 0.00515).abs() < 1e-9);
@@ -776,7 +1010,13 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
         for _ in 0..(rng() % 4) {
             id_counter += 1;
             let offset = (rng() % (80 * 24 * 3600)) as i64 - (40 * 24 * 3600);
-            let mut e = ev("proj", models[(rng() % 3) as usize], rng() % 100, rng() % 100, (rng() % 40) as f64 * 0.25);
+            let mut e = ev(
+                "proj",
+                models[(rng() % 3) as usize],
+                rng() % 100,
+                rng() % 100,
+                (rng() % 40) as f64 * 0.25,
+            );
             e.id = format!("e-{id_counter}");
             e.provider = providers[(rng() % 2) as usize];
             e.name = names[(rng() % 3) as usize].map(|s| s.to_string());
@@ -816,12 +1056,19 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
                 let want = match sc {
                     None => super::events::usage_since(&conn, "proj", w.since(now)).unwrap(),
                     Some(scope) => {
-                        super::events::usage_since_scoped(&conn, "proj", w.since(now), scope).unwrap()
+                        super::events::usage_since_scoped(&conn, "proj", w.since(now), scope)
+                            .unwrap()
                     }
                 };
                 assert_eq!(got.calls, want.calls, "calls: round {round} {w:?} {sc:?}");
-                assert_eq!(got.tokens, want.tokens, "tokens: round {round} {w:?} {sc:?}");
-                assert_eq!(got.cost_usd, want.cost_usd, "cost: round {round} {w:?} {sc:?}");
+                assert_eq!(
+                    got.tokens, want.tokens,
+                    "tokens: round {round} {w:?} {sc:?}"
+                );
+                assert_eq!(
+                    got.cost_usd, want.cost_usd,
+                    "cost: round {round} {w:?} {sc:?}"
+                );
                 assert_eq!(
                     got.unpriced_calls, want.unpriced_calls,
                     "unpriced: round {round} {w:?} {sc:?}"
@@ -856,16 +1103,21 @@ fn usage_cache_evicts_events_leaving_the_window() {
     }
     let win = LimitWindow::Hour;
     // now = 02:30 → window [01:30, 02:30): only "c" (02:00) is in range.
-    let u = cache.usage(&conn, "p", win, None, base + Duration::minutes(150)).unwrap();
+    let u = cache
+        .usage(&conn, "p", win, None, base + Duration::minutes(150))
+        .unwrap();
     assert_eq!(u.calls, 1);
     assert_eq!(u.cost_usd, 1.0);
     // now = 05:00 → window [04:00, 05:00): all three have aged out; total snaps back to exactly zero.
-    let u = cache.usage(&conn, "p", win, None, base + Duration::hours(5)).unwrap();
+    let u = cache
+        .usage(&conn, "p", win, None, base + Duration::hours(5))
+        .unwrap();
     assert_eq!(u.calls, 0);
     assert_eq!(u.tokens, 0);
     assert_eq!(u.cost_usd, 0.0);
     // Cross-check the reference agrees at both points.
-    let want = super::events::usage_since(&conn, "p", win.since(base + Duration::hours(5))).unwrap();
+    let want =
+        super::events::usage_since(&conn, "p", win.since(base + Duration::hours(5))).unwrap();
     assert_eq!(want.calls, 0);
 }
 
@@ -891,7 +1143,10 @@ fn a_skewed_client_ts_cannot_move_a_budget_window() {
 
     // Hour window ending at `now`: all three arrived inside it, whatever they claim about themselves.
     let u = s.usage_since("p1", now - Duration::hours(1)).unwrap();
-    assert_eq!(u.calls, 3, "a backdated or future-dated event must not escape the live window");
+    assert_eq!(
+        u.calls, 3,
+        "a backdated or future-dated event must not escape the live window"
+    );
     assert_eq!(u.cost_usd, 3.0);
 
     // And the old, exploitable reading — "window it by the client's ts" — would have seen exactly one
@@ -902,7 +1157,10 @@ fn a_skewed_client_ts_cannot_move_a_budget_window() {
         .into_iter()
         .filter(|e| e.ts >= now - Duration::hours(1) && e.ts <= now)
         .count();
-    assert_eq!(by_client_ts, 1, "sanity: the client-ts view really is the corruptible one");
+    assert_eq!(
+        by_client_ts, 1,
+        "sanity: the client-ts view really is the corruptible one"
+    );
 
     // Once the window has moved past arrival time, all three age out together — no straggler pinned
     // in place by a future `ts`.
@@ -916,15 +1174,39 @@ fn a_skewed_client_ts_cannot_move_a_budget_window() {
 fn seed_query_corpus(s: &SqliteStore, n: u32) {
     use chrono::{TimeZone, Utc as CU};
     for i in 1..=n {
-        let mut e = ev("p1", if i % 2 == 0 { "gpt-4o" } else { "claude-haiku-4-5" }, 1, 1, 0.0);
+        let mut e = ev(
+            "p1",
+            if i % 2 == 0 {
+                "gpt-4o"
+            } else {
+                "claude-haiku-4-5"
+            },
+            1,
+            1,
+            0.0,
+        );
         e.id = format!("e{i}");
-        e.ts = CU.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap() + chrono::Duration::seconds(i as i64);
+        e.ts =
+            CU.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap() + chrono::Duration::seconds(i as i64);
         e.received_at = e.ts;
-        e.provider = if i % 2 == 0 { Provider::OpenAi } else { Provider::Anthropic };
-        e.status = if i % 3 == 0 { Status::Error } else { Status::Success };
-        e.tags = if i % 4 == 0 { vec!["prod".into()] } else { vec!["production".into()] };
+        e.provider = if i % 2 == 0 {
+            Provider::OpenAi
+        } else {
+            Provider::Anthropic
+        };
+        e.status = if i % 3 == 0 {
+            Status::Error
+        } else {
+            Status::Success
+        };
+        e.tags = if i % 4 == 0 {
+            vec!["prod".into()]
+        } else {
+            vec!["production".into()]
+        };
         e.cost_usd = Some(i as f64 * 0.01);
-        e.metadata = serde_json::json!({ "customer_id": if i % 5 == 0 { "acme" } else { "other" } });
+        e.metadata =
+            serde_json::json!({ "customer_id": if i % 5 == 0 { "acme" } else { "other" } });
         s.insert_event(&e).unwrap();
     }
 }
@@ -936,7 +1218,10 @@ fn extended_event_filters_answer_the_operator_questions() {
     let f = |mk: crate::EventFilter| s.list_events_filtered(Some("p1"), &mk, 100).unwrap();
 
     // "Which calls errored?" — every 3rd of 20.
-    let errored = f(crate::EventFilter { status: Some("error".into()), ..Default::default() });
+    let errored = f(crate::EventFilter {
+        status: Some("error".into()),
+        ..Default::default()
+    });
     assert_eq!(errored.events.len(), 6);
     assert!(errored.events.iter().all(|e| e.status == Status::Error));
 
@@ -948,24 +1233,38 @@ fn extended_event_filters_answer_the_operator_questions() {
     });
     assert_eq!(acme.events.len(), 4);
     // Key-presence alone matches everything that carries it.
-    let any_customer =
-        f(crate::EventFilter { metadata_key: Some("customer_id".into()), ..Default::default() });
+    let any_customer = f(crate::EventFilter {
+        metadata_key: Some("customer_id".into()),
+        ..Default::default()
+    });
     assert_eq!(any_customer.events.len(), 20);
-    assert!(f(crate::EventFilter { metadata_key: Some("nope".into()), ..Default::default() })
-        .events
-        .is_empty());
+    assert!(f(crate::EventFilter {
+        metadata_key: Some("nope".into()),
+        ..Default::default()
+    })
+    .events
+    .is_empty());
 
     // "Which cost more than $0.155?" — inclusive lower bound. (Off a round tenth on purpose: the
     // costs here are i*0.01 in f64, so a threshold that lands exactly on a stored value would be
     // testing float representation rather than the filter.)
-    let pricey = f(crate::EventFilter { min_cost: Some(0.155), ..Default::default() });
+    let pricey = f(crate::EventFilter {
+        min_cost: Some(0.155),
+        ..Default::default()
+    });
     assert_eq!(pricey.events.len(), 5, "e16..e20 at $0.16..$0.20");
     assert!(pricey.events.iter().all(|e| e.cost_usd.unwrap() >= 0.155));
 
     // Tag matching is array MEMBERSHIP: "prod" must not match the event tagged "production".
-    let prod = f(crate::EventFilter { tag: Some("prod".into()), ..Default::default() });
+    let prod = f(crate::EventFilter {
+        tag: Some("prod".into()),
+        ..Default::default()
+    });
     assert_eq!(prod.events.len(), 5, "every 4th");
-    assert!(prod.events.iter().all(|e| e.tags == vec!["prod".to_string()]));
+    assert!(prod
+        .events
+        .iter()
+        .all(|e| e.tags == vec!["prod".to_string()]));
 
     // "How many match at all?" without paging the whole set: the total is over the MATCH SET, and is
     // independent of the page limit.
@@ -981,7 +1280,11 @@ fn extended_event_filters_answer_the_operator_questions() {
         )
         .unwrap();
     assert_eq!(counted.events.len(), 2, "page respects the limit");
-    assert_eq!(counted.total, Some(6), "total counts the whole match set, not the page");
+    assert_eq!(
+        counted.total,
+        Some(6),
+        "total counts the whole match set, not the page"
+    );
     // Not asked for → not computed.
     assert_eq!(errored.total, None);
 
@@ -991,9 +1294,15 @@ fn extended_event_filters_answer_the_operator_questions() {
         status: Some("error".into()),
         ..Default::default()
     });
-    assert!(anded.events.iter().all(|e| e.provider == Provider::OpenAi
-        && e.status == Status::Error));
-    assert_eq!(anded.events.len(), 3, "even AND divisible-by-3 within 1..=20: 6,12,18");
+    assert!(anded
+        .events
+        .iter()
+        .all(|e| e.provider == Provider::OpenAi && e.status == Status::Error));
+    assert_eq!(
+        anded.events.len(),
+        3,
+        "even AND divisible-by-3 within 1..=20: 6,12,18"
+    );
 }
 
 #[test]
@@ -1005,9 +1314,18 @@ fn keyset_paging_is_exact_under_every_new_filter_combination() {
     seed_query_corpus(&s, 20);
 
     let combos: Vec<crate::EventFilter> = vec![
-        crate::EventFilter { status: Some("error".into()), ..Default::default() },
-        crate::EventFilter { tag: Some("prod".into()), ..Default::default() },
-        crate::EventFilter { min_cost: Some(0.05), ..Default::default() },
+        crate::EventFilter {
+            status: Some("error".into()),
+            ..Default::default()
+        },
+        crate::EventFilter {
+            tag: Some("prod".into()),
+            ..Default::default()
+        },
+        crate::EventFilter {
+            min_cost: Some(0.05),
+            ..Default::default()
+        },
         crate::EventFilter {
             metadata_key: Some("customer_id".into()),
             metadata_value: Some("acme".into()),
@@ -1035,11 +1353,18 @@ fn keyset_paging_is_exact_under_every_new_filter_combination() {
         let mut got: Vec<String> = Vec::new();
         let mut cursor = None;
         loop {
-            let f = crate::EventFilter { cursor: cursor.clone(), ..base.clone() };
+            let f = crate::EventFilter {
+                cursor: cursor.clone(),
+                ..base.clone()
+            };
             let page = s.list_events_filtered(Some("p1"), &f, 2).unwrap();
             assert!(page.events.len() <= 2, "combo {i}: page over limit");
             if base.with_total {
-                assert_eq!(page.total, Some(want.len() as u64), "combo {i}: total is cursor-independent");
+                assert_eq!(
+                    page.total,
+                    Some(want.len() as u64),
+                    "combo {i}: total is cursor-independent"
+                );
             }
             got.extend(page.events.iter().map(|e| e.id.clone()));
             match page.next_cursor {
@@ -1047,7 +1372,10 @@ fn keyset_paging_is_exact_under_every_new_filter_combination() {
                 None => break,
             }
         }
-        assert_eq!(got, want, "combo {i}: paged traversal must equal the unpaged result");
+        assert_eq!(
+            got, want,
+            "combo {i}: paged traversal must equal the unpaged result"
+        );
         let uniq: std::collections::HashSet<_> = got.iter().collect();
         assert_eq!(uniq.len(), got.len(), "combo {i}: a row was served twice");
     }
@@ -1077,28 +1405,59 @@ fn high_cardinality_event_filters_seek_an_index_instead_of_scanning() {
             "SELECT id FROM events WHERE project_id = 'p1' AND {col} = 'x' \
              ORDER BY ts DESC, id DESC LIMIT 51"
         ));
-        assert!(plan.contains(idx), "{col} filter should seek {idx}, plan was: {plan}");
+        assert!(
+            plan.contains(idx),
+            "{col} filter should seek {idx}, plan was: {plan}"
+        );
         assert!(
             plan.contains("SEARCH"),
             "{col} filter should be an index SEARCH, not a SCAN: {plan}"
         );
-        assert!(!plan.contains("SCAN events"), "{col} filter fell back to a table scan: {plan}");
+        assert!(
+            !plan.contains("SCAN events"),
+            "{col} filter fell back to a table scan: {plan}"
+        );
     }
 }
 
 #[test]
 fn unported_backends_refuse_extended_filters_rather_than_answering_wrongly() {
     // The trait default must never hand back an unfiltered page as if it had honored the predicate.
-    let plain = crate::EventFilter { model: Some("m".into()), ..Default::default() };
-    assert_eq!(plain.unsupported_extension(), None, "the original fields stay universally supported");
+    let plain = crate::EventFilter {
+        model: Some("m".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        plain.unsupported_extension(),
+        None,
+        "the original fields stay universally supported"
+    );
     for f in [
-        crate::EventFilter { status: Some("error".into()), ..Default::default() },
-        crate::EventFilter { tag: Some("prod".into()), ..Default::default() },
-        crate::EventFilter { metadata_key: Some("customer_id".into()), ..Default::default() },
-        crate::EventFilter { min_cost: Some(1.0), ..Default::default() },
-        crate::EventFilter { with_total: true, ..Default::default() },
+        crate::EventFilter {
+            status: Some("error".into()),
+            ..Default::default()
+        },
+        crate::EventFilter {
+            tag: Some("prod".into()),
+            ..Default::default()
+        },
+        crate::EventFilter {
+            metadata_key: Some("customer_id".into()),
+            ..Default::default()
+        },
+        crate::EventFilter {
+            min_cost: Some(1.0),
+            ..Default::default()
+        },
+        crate::EventFilter {
+            with_total: true,
+            ..Default::default()
+        },
     ] {
-        assert!(f.unsupported_extension().is_some(), "{f:?} must be flagged as an extension");
+        assert!(
+            f.unsupported_extension().is_some(),
+            "{f:?} must be flagged as an extension"
+        );
     }
 }
 
@@ -1124,7 +1483,10 @@ fn usage_cache_load_uses_rowid_range_not_full_scan() {
         plan.contains("USING INTEGER PRIMARY KEY"),
         "incremental load should be a rowid range scan, got: {plan}"
     );
-    assert!(!plan.contains("SCAN events"), "load must not full-scan events, got: {plan}");
+    assert!(
+        !plan.contains("SCAN events"),
+        "load must not full-scan events, got: {plan}"
+    );
 }
 
 #[test]
@@ -1132,7 +1494,9 @@ fn insert_event_checked_enforces_caps() {
     let s = SqliteStore::open_in_memory().unwrap();
 
     // No rules: admitted and recorded.
-    let a = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 100, 50, 1.0)).unwrap();
+    let a = s
+        .insert_event_checked(&ev("p1", "claude-haiku-4-5", 100, 50, 1.0))
+        .unwrap();
     assert!(a.admitted);
     assert!(a.statuses.is_empty());
 
@@ -1149,17 +1513,27 @@ fn insert_event_checked_enforces_caps() {
         scope: None,
     })
     .unwrap();
-    let blocked = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
+    let blocked = s
+        .insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 0.0))
+        .unwrap();
     assert!(!blocked.admitted, "Block rejects the over-cap event");
     assert!(blocked.statuses.iter().any(|st| st.rejects_ingest()));
 
     // The rejected event is not recorded: still exactly one event for p1.
-    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 1, "rejected event not persisted");
-    let u = s.usage_since("p1", LimitWindow::Hour.since(Utc::now())).unwrap();
+    assert_eq!(
+        s.list_events(Some("p1"), 10).unwrap().len(),
+        1,
+        "rejected event not persisted"
+    );
+    let u = s
+        .usage_since("p1", LimitWindow::Hour.since(Utc::now()))
+        .unwrap();
     assert_eq!(u.calls, 1);
 
     // A different project is unaffected by p1's cap.
-    let other = s.insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
+    let other = s
+        .insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0))
+        .unwrap();
     assert!(other.admitted, "limits are per-project");
 }
 
@@ -1209,20 +1583,32 @@ fn limit_rule_update_delete_and_toggle() {
         scope: None,
     };
     s.create_limit_rule(&block).unwrap();
-    let a = s.insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
+    let a = s
+        .insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0))
+        .unwrap();
     assert!(a.admitted, "a disabled rule does not enforce");
-    assert!(a.statuses.is_empty(), "disabled rules aren't even evaluated");
+    assert!(
+        a.statuses.is_empty(),
+        "disabled rules aren't even evaluated"
+    );
     // Enable it, and the next event is blocked (usage-with-event = 1 >= 1).
     let mut on = block.clone();
     on.enabled = true;
     assert!(s.update_limit_rule(&on).unwrap());
-    let b = s.insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
+    let b = s
+        .insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0))
+        .unwrap();
     assert!(!b.admitted, "enabling the rule enforces the cap");
 
     // Delete removes it from evaluation entirely.
     assert!(s.delete_limit_rule("r-block").unwrap());
-    assert!(!s.delete_limit_rule("r-block").unwrap(), "second delete finds nothing");
-    let c = s.insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
+    assert!(
+        !s.delete_limit_rule("r-block").unwrap(),
+        "second delete finds nothing"
+    );
+    let c = s
+        .insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0))
+        .unwrap();
     assert!(c.admitted, "a deleted rule no longer enforces");
     assert!(s.list_limit_rules("p2", false).unwrap().is_empty());
 }
@@ -1243,15 +1629,26 @@ fn warn_at_round_trips_and_admission_reports_warning() {
     })
     .unwrap();
     // warn_at persists through the store.
-    assert_eq!(s.get_limit_rule("r-warn").unwrap().unwrap().warn_at, Some(0.8));
-    assert_eq!(s.list_limit_rules("p1", true).unwrap()[0].warn_at, Some(0.8));
+    assert_eq!(
+        s.get_limit_rule("r-warn").unwrap().unwrap().warn_at,
+        Some(0.8)
+    );
+    assert_eq!(
+        s.list_limit_rules("p1", true).unwrap()[0].warn_at,
+        Some(0.8)
+    );
 
     // An event putting usage at 0.85 (>= warn_at 0.8, < threshold 1.0) reports warning, not breach,
     // and is admitted (warnings never enforce).
-    let a = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 10, 5, 0.85)).unwrap();
+    let a = s
+        .insert_event_checked(&ev("p1", "claude-haiku-4-5", 10, 5, 0.85))
+        .unwrap();
     assert!(a.admitted);
     let st = &a.statuses[0];
-    assert!(st.warning && !st.breached, "crossing warn_at warns without breaching");
+    assert!(
+        st.warning && !st.breached,
+        "crossing warn_at warns without breaching"
+    );
 }
 
 #[test]
@@ -1289,16 +1686,31 @@ fn scoped_cap_rejects_only_matching_dimension() {
 
     // A different model is unaffected by gpt-4o's cap, even after gpt-4o is capped: the scoped rule
     // doesn't apply to it (no matching status, admitted).
-    let other = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 0.0)).unwrap();
-    assert!(other.admitted, "a scoped cap on model A must not reject model B");
-    assert!(other.statuses.is_empty(), "the non-matching scoped rule isn't evaluated for model B");
+    let other = s
+        .insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 0.0))
+        .unwrap();
+    assert!(
+        other.admitted,
+        "a scoped cap on model A must not reject model B"
+    );
+    assert!(
+        other.statuses.is_empty(),
+        "the non-matching scoped rule isn't evaluated for model B"
+    );
 
     // The scoped usage counts only gpt-4o rows: one gpt-4o admitted + one claude admitted = the
     // scoped total is 1 (the blocked gpt-4o wasn't stored).
     let scoped = s
-        .usage_since_scoped("p1", LimitWindow::Hour.since(Utc::now()), &LimitScope::Model("gpt-4o".into()))
+        .usage_since_scoped(
+            "p1",
+            LimitWindow::Hour.since(Utc::now()),
+            &LimitScope::Model("gpt-4o".into()),
+        )
         .unwrap();
-    assert_eq!(scoped.calls, 1, "only the one admitted gpt-4o row counts toward the model scope");
+    assert_eq!(
+        scoped.calls, 1,
+        "only the one admitted gpt-4o row counts toward the model scope"
+    );
 }
 
 #[test]
@@ -1314,13 +1726,25 @@ fn a_per_key_cap_binds_only_its_own_key_and_usage_is_visible_before_it_breaches(
     // No rule yet: per-key usage must already be answerable — the whole point is to size a budget
     // BEFORE writing one.
     for _ in 0..3 {
-        assert!(s.insert_event_checked(&keyed("k-staging", 1.0)).unwrap().admitted);
+        assert!(
+            s.insert_event_checked(&keyed("k-staging", 1.0))
+                .unwrap()
+                .admitted
+        );
     }
-    assert!(s.insert_event_checked(&keyed("k-prod", 1.0)).unwrap().admitted);
+    assert!(
+        s.insert_event_checked(&keyed("k-prod", 1.0))
+            .unwrap()
+            .admitted
+    );
     // An event with no key at all folds into the `None` bucket rather than vanishing — including a
     // row whose `metadata` is NULL outright, which is what every event predating key attribution
     // looks like. `json_extract` over a NULL column must not error or drop the row.
-    assert!(s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 4.0)).unwrap().admitted);
+    assert!(
+        s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 4.0))
+            .unwrap()
+            .admitted
+    );
     let mut legacy = ev("p1", "claude-haiku-4-5", 1, 1, 1.0);
     legacy.metadata = serde_json::Value::Null;
     assert!(s.insert_event_checked(&legacy).unwrap().admitted);
@@ -1328,17 +1752,34 @@ fn a_per_key_cap_binds_only_its_own_key_and_usage_is_visible_before_it_breaches(
     let since = LimitWindow::Hour.since(Utc::now());
     let by_key = s.usage_by_scope("p1", since, "api_key").unwrap();
     let find = |v: Option<&str>| {
-        by_key.iter().find(|r| r.value.as_deref() == v).unwrap_or_else(|| panic!("{v:?} missing"))
+        by_key
+            .iter()
+            .find(|r| r.value.as_deref() == v)
+            .unwrap_or_else(|| panic!("{v:?} missing"))
     };
     assert_eq!(find(Some("k-staging")).usage.calls, 3);
     assert_eq!(find(Some("k-staging")).usage.cost_usd, 3.0);
     assert_eq!(find(Some("k-prod")).usage.calls, 1);
-    assert_eq!(find(None).usage.cost_usd, 5.0, "unattributed traffic keeps its own bucket");
-    assert_eq!(find(None).usage.calls, 2, "a NULL-metadata legacy row is counted, not dropped");
+    assert_eq!(
+        find(None).usage.cost_usd,
+        5.0,
+        "unattributed traffic keeps its own bucket"
+    );
+    assert_eq!(
+        find(None).usage.calls,
+        2,
+        "a NULL-metadata legacy row is counted, not dropped"
+    );
     // The parts sum to the project total — a breakdown that silently drops rows is a lie.
     let total = s.usage_since("p1", since).unwrap();
-    assert_eq!(by_key.iter().map(|r| r.usage.calls).sum::<i64>(), total.calls);
-    assert_eq!(by_key.iter().map(|r| r.usage.cost_usd).sum::<f64>(), total.cost_usd);
+    assert_eq!(
+        by_key.iter().map(|r| r.usage.calls).sum::<i64>(),
+        total.calls
+    );
+    assert_eq!(
+        by_key.iter().map(|r| r.usage.cost_usd).sum::<f64>(),
+        total.cost_usd
+    );
 
     // Now the cap: $5/hour on the staging key only.
     s.create_limit_rule(&LimitRule {
@@ -1360,14 +1801,30 @@ fn a_per_key_cap_binds_only_its_own_key_and_usage_is_visible_before_it_breaches(
     );
 
     // The production key is untouched by staging's cap, however much it spends...
-    assert!(s.insert_event_checked(&keyed("k-prod", 500.0)).unwrap().admitted);
+    assert!(
+        s.insert_event_checked(&keyed("k-prod", 500.0))
+            .unwrap()
+            .admitted
+    );
     // ...and so is un-keyed traffic (it matches no key scope).
-    assert!(s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 99.0)).unwrap().admitted);
+    assert!(
+        s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 99.0))
+            .unwrap()
+            .admitted
+    );
     // Staging is at $3; +$1 admits, the next $1 reaches $5 and is refused.
-    assert!(s.insert_event_checked(&keyed("k-staging", 1.0)).unwrap().admitted);
+    assert!(
+        s.insert_event_checked(&keyed("k-staging", 1.0))
+            .unwrap()
+            .admitted
+    );
     let blocked = s.insert_event_checked(&keyed("k-staging", 1.0)).unwrap();
     assert!(!blocked.admitted, "the staging key hit its own $5 cap");
-    assert_eq!(blocked.statuses.len(), 1, "only the matching scoped rule is evaluated");
+    assert_eq!(
+        blocked.statuses.len(),
+        1,
+        "only the matching scoped rule is evaluated"
+    );
 }
 
 #[test]
@@ -1391,11 +1848,25 @@ fn a_customer_scoped_cap_reads_the_billing_linkage() {
         e.metadata = serde_json::json!({ "customer_id": c });
         e
     };
-    assert!(s.insert_event_checked(&for_customer("acme")).unwrap().admitted);
-    assert!(!s.insert_event_checked(&for_customer("acme")).unwrap().admitted);
-    assert!(s.insert_event_checked(&for_customer("other")).unwrap().admitted);
     assert!(
-        s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 0.0)).unwrap().admitted,
+        s.insert_event_checked(&for_customer("acme"))
+            .unwrap()
+            .admitted
+    );
+    assert!(
+        !s.insert_event_checked(&for_customer("acme"))
+            .unwrap()
+            .admitted
+    );
+    assert!(
+        s.insert_event_checked(&for_customer("other"))
+            .unwrap()
+            .admitted
+    );
+    assert!(
+        s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 1, 1, 0.0))
+            .unwrap()
+            .admitted,
         "untagged traffic is not charged to a customer cap"
     );
 }
@@ -1403,7 +1874,9 @@ fn a_customer_scoped_cap_reads_the_billing_linkage() {
 #[test]
 fn usage_by_scope_rejects_an_unknown_dimension() {
     let s = SqliteStore::open_in_memory().unwrap();
-    assert!(s.usage_by_scope("p1", LimitWindow::Hour.since(Utc::now()), "nope").is_err());
+    assert!(s
+        .usage_by_scope("p1", LimitWindow::Hour.since(Utc::now()), "nope")
+        .is_err());
     // Every advertised kind is queryable.
     for k in lighttrack_core::LimitScope::KINDS {
         s.usage_by_scope("p1", LimitWindow::Hour.since(Utc::now()), k)
@@ -1427,10 +1900,18 @@ fn insert_event_checked_alert_never_blocks() {
     })
     .unwrap();
     // Way over the Alert threshold, but Alert is observe-only: admitted + recorded, breach reported.
-    let a = s.insert_event_checked(&ev("p1", "claude-haiku-4-5", 100, 50, 5.0)).unwrap();
+    let a = s
+        .insert_event_checked(&ev("p1", "claude-haiku-4-5", 100, 50, 5.0))
+        .unwrap();
     assert!(a.admitted, "Alert action does not block");
-    assert!(a.statuses.iter().any(|st| st.breached), "breach is still reported");
-    assert!(!a.statuses.iter().any(|st| st.rejects_ingest()), "Alert breach never rejects");
+    assert!(
+        a.statuses.iter().any(|st| st.breached),
+        "breach is still reported"
+    );
+    assert!(
+        !a.statuses.iter().any(|st| st.rejects_ingest()),
+        "Alert breach never rejects"
+    );
     assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 1);
 }
 
@@ -1462,9 +1943,13 @@ fn job_queue_claim_finish() {
     assert_eq!(claimed.attempts, 1);
     assert_eq!(claimed.payload["benchmark_id"], "b1");
 
-    assert!(s.claim_job(now - chrono::Duration::seconds(1)).unwrap().is_none());
+    assert!(s
+        .claim_job(now - chrono::Duration::seconds(1))
+        .unwrap()
+        .is_none());
 
-    s.finish_job("j1", "done", &serde_json::json!({ "run_id": "r1" }), None).unwrap();
+    s.finish_job("j1", "done", &serde_json::json!({ "run_id": "r1" }), None)
+        .unwrap();
     let got = s.get_job("j1").unwrap().unwrap();
     assert_eq!(got.status, "done");
     assert_eq!(got.result["run_id"], "r1");
@@ -1570,7 +2055,10 @@ fn relay_lease_settle_success_roundtrip() {
     assert!(s.lease_relay_tasks("dev-1", 600, 5).unwrap().is_empty());
 
     let done = s
-        .settle_relay_task(&t.id, &RelayOutcome::Succeeded(serde_json::json!({ "ok": true })))
+        .settle_relay_task(
+            &t.id,
+            &RelayOutcome::Succeeded(serde_json::json!({ "ok": true })),
+        )
         .unwrap()
         .unwrap();
     assert_eq!(done.status, "succeeded");
@@ -1657,7 +2145,10 @@ fn relay_expired_lease_is_reclaimed_or_dead_lettered() {
     assert_eq!(dead.len(), 1);
     assert_eq!(dead[0].id, last.id);
     assert_eq!(dead[0].status, "dead");
-    assert_eq!(dead[0].error.as_deref(), Some("lease expired without a result"));
+    assert_eq!(
+        dead[0].error.as_deref(),
+        Some("lease expired without a result")
+    );
     assert!(s.sweep_relay_dead().unwrap().is_empty()); // idempotent
 
     // … while the one with attempts to spare is re-leased on attempt 2.
@@ -1677,7 +2168,10 @@ fn relay_idempotency_key_is_unique_per_project() {
 
     let found = s.find_relay_task_by_key("p1", "order-42").unwrap().unwrap();
     assert_eq!(found.id, t.id);
-    assert!(s.find_relay_task_by_key("p2", "order-42").unwrap().is_none());
+    assert!(s
+        .find_relay_task_by_key("p2", "order-42")
+        .unwrap()
+        .is_none());
 
     // Same (project, key) again violates the partial unique index.
     let mut dup = relay_task("p1", "xprice/summary", 4);
@@ -1689,8 +2183,18 @@ fn relay_idempotency_key_is_unique_per_project() {
     s.create_relay_task(&other).unwrap();
     assert_eq!(s.list_relay_tasks(None, None, 10).unwrap().len(), 2);
     assert_eq!(s.list_relay_tasks(Some("p1"), None, 10).unwrap().len(), 1);
-    assert_eq!(s.list_relay_tasks(Some("p1"), Some("queued"), 10).unwrap().len(), 1);
-    assert_eq!(s.list_relay_tasks(Some("p1"), Some("dead"), 10).unwrap().len(), 0);
+    assert_eq!(
+        s.list_relay_tasks(Some("p1"), Some("queued"), 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        s.list_relay_tasks(Some("p1"), Some("dead"), 10)
+            .unwrap()
+            .len(),
+        0
+    );
 }
 
 /// Verdict provenance survives a write/read cycle intact: a multi-dimension, multi-sample rubric
@@ -1711,7 +2215,11 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
                 weight: 3.0,
                 floor: Some(0.5),
                 floor_hit: false,
-                reasoning: vec!["sample one".into(), "sample two".into(), "sample three".into()],
+                reasoning: vec![
+                    "sample one".into(),
+                    "sample two".into(),
+                    "sample three".into(),
+                ],
             },
             ScoreDim {
                 key: "safety".into(),
@@ -1755,8 +2263,15 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
     assert_eq!(listed.len(), 1);
     let got = listed[0].detail.as_ref().expect("detail must round-trip");
     assert_eq!(got, &detail, "every field survives the JSON column");
-    assert_eq!(got.dimensions[0].reasoning.len(), 3, "all k samples' reasoning kept");
-    assert!(got.dimensions[1].floor_hit, "the gating floor is auditable after the fact");
+    assert_eq!(
+        got.dimensions[0].reasoning.len(),
+        3,
+        "all k samples' reasoning kept"
+    );
+    assert!(
+        got.dimensions[1].floor_hit,
+        "the gating floor is auditable after the fact"
+    );
 
     // A score posted without provenance still stores and reads back cleanly (additive, nullable).
     let mut bare = score.clone();
@@ -1800,7 +2315,9 @@ fn a_database_predating_run_scoped_cases_migrates_on_open() {
     let legacy = s.list_scores(Some("p1"), 10).unwrap();
     assert_eq!(legacy.len(), 1);
     assert_eq!(legacy[0].id, "legacy-1");
-    assert!(legacy[0].run_id.is_none() && legacy[0].case_index.is_none() && legacy[0].detail.is_none());
+    assert!(
+        legacy[0].run_id.is_none() && legacy[0].case_index.is_none() && legacy[0].detail.is_none()
+    );
 
     // And the widened table serves the new query.
     let mut fresh = legacy[0].clone();
@@ -1846,17 +2363,30 @@ fn a_database_predating_job_failure_accounting_migrates_on_open() {
 
     // The pre-existing job reads back, with the new counters defaulted rather than missing.
     let old = s.get_job("old-1").unwrap().expect("legacy job survives");
-    assert_eq!((old.status.as_str(), old.failures, old.stale_reclaims), ("queued", 0, 0));
+    assert_eq!(
+        (old.status.as_str(), old.failures, old.stale_reclaims),
+        ("queued", 0, 0)
+    );
 
     // …and the widened table serves the statements that now reference the new columns.
-    let claimed = s.claim_job(Utc::now()).unwrap().expect("claim the legacy job");
+    let claimed = s
+        .claim_job(Utc::now())
+        .unwrap()
+        .expect("claim the legacy job");
     assert_eq!(claimed.id, "old-1");
-    assert_eq!((claimed.attempts, claimed.failures, claimed.stale_reclaims), (1, 0, 0));
-    s.finish_job("old-1", "failed", &Value::Null, Some("boom")).unwrap();
+    assert_eq!(
+        (claimed.attempts, claimed.failures, claimed.stale_reclaims),
+        (1, 0, 0)
+    );
+    s.finish_job("old-1", "failed", &Value::Null, Some("boom"))
+        .unwrap();
     assert_eq!(s.get_job("old-1").unwrap().unwrap().failures, 1);
-    assert_eq!(s.cancel_job("old-1").unwrap().unwrap(), lighttrack_core::JobCancel::AlreadyFinished {
-        status: "failed".into(),
-    });
+    assert_eq!(
+        s.cancel_job("old-1").unwrap().unwrap(),
+        lighttrack_core::JobCancel::AlreadyFinished {
+            status: "failed".into(),
+        }
+    );
 
     // Re-opening an already-migrated database is a no-op, not a duplicate-column failure.
     drop(s);
@@ -1891,7 +2421,10 @@ fn cancel_is_race_safe_against_stale_reclaim() {
     // no matter how stale the cutoff.
     s.create_job(&mk("a")).unwrap();
     assert_eq!(s.cancel_job("a").unwrap(), Some(JobCancel::Cancelled));
-    assert!(s.claim_job(Utc::now()).unwrap().is_none(), "a cancelled job is not claimable");
+    assert!(
+        s.claim_job(Utc::now()).unwrap().is_none(),
+        "a cancelled job is not claimable"
+    );
 
     // Order B — claim first, then cancel: the job goes to `cancelling`, which the reclaim path (with
     // a cutoff that makes EVERY claim stale) must not pick up. Before this change the claim matched
@@ -1902,7 +2435,9 @@ fn cancel_is_race_safe_against_stale_reclaim() {
     assert_eq!(claimed.id, "b");
     assert_eq!(s.cancel_job("b").unwrap(), Some(JobCancel::Cancelling));
     assert!(
-        s.claim_job(Utc::now() + chrono::Duration::seconds(1)).unwrap().is_none(),
+        s.claim_job(Utc::now() + chrono::Duration::seconds(1))
+            .unwrap()
+            .is_none(),
         "a cancelling job must never be reclaimed as stale"
     );
     let after = s.get_job("b").unwrap().unwrap();
@@ -1911,10 +2446,19 @@ fn cancel_is_race_safe_against_stale_reclaim() {
     assert_eq!(after.stale_reclaims, 0);
 
     // The worker notices and finishes it as cancelled — with no error, so no retry is consumed.
-    s.finish_job("b", "cancelled", &serde_json::json!({ "partial": true }), None).unwrap();
+    s.finish_job(
+        "b",
+        "cancelled",
+        &serde_json::json!({ "partial": true }),
+        None,
+    )
+    .unwrap();
     let done = s.get_job("b").unwrap().unwrap();
     assert_eq!((done.status.as_str(), done.failures), ("cancelled", 0));
-    assert!(s.claim_job(Utc::now() + chrono::Duration::seconds(1)).unwrap().is_none());
+    assert!(s
+        .claim_job(Utc::now() + chrono::Duration::seconds(1))
+        .unwrap()
+        .is_none());
 }
 
 /// Build a project + one enforcing cost cap, for the unpriced-traffic admission tests.
@@ -1956,15 +2500,32 @@ fn an_unpriced_model_cannot_walk_past_a_cost_cap() {
     let mut e = ev("p1", "brand-new-model", 1000, 1000, 0.0);
     e.cost_usd = None;
     let a = s.insert_event_checked(&e).unwrap();
-    assert!(!a.admitted, "unpriceable traffic must not be admitted under an enforcing cost cap");
-    assert!(a.statuses.iter().any(|st| st.unpriceable() && st.rejects_ingest()));
-    assert!(!a.statuses.iter().any(|st| st.breached), "it is unmeasurable, not over budget");
-    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 0, "and it was not recorded");
+    assert!(
+        !a.admitted,
+        "unpriceable traffic must not be admitted under an enforcing cost cap"
+    );
+    assert!(a
+        .statuses
+        .iter()
+        .any(|st| st.unpriceable() && st.rejects_ingest()));
+    assert!(
+        !a.statuses.iter().any(|st| st.breached),
+        "it is unmeasurable, not over budget"
+    );
+    assert_eq!(
+        s.list_events(Some("p1"), 10).unwrap().len(),
+        0,
+        "and it was not recorded"
+    );
 
     // (b) With priced traffic in the window, an unpriced call is charged the mean priced cost
     // ($0.20/call here) instead of $0.00 — so the cap fills and eventually bites.
     for _ in 0..4 {
-        assert!(s.insert_event_checked(&ev("p1", "priced", 10, 10, 0.20)).unwrap().admitted);
+        assert!(
+            s.insert_event_checked(&ev("p1", "priced", 10, 10, 0.20))
+                .unwrap()
+                .admitted
+        );
     }
     let mut admitted_unpriced = 0;
     let mut rejected_unpriced = 0;
@@ -1977,20 +2538,33 @@ fn an_unpriced_model_cannot_walk_past_a_cost_cap() {
             rejected_unpriced += 1;
         }
     }
-    assert!(rejected_unpriced > 0, "unpriced traffic must eventually trip the $1.00 cap");
+    assert!(
+        rejected_unpriced > 0,
+        "unpriced traffic must eventually trip the $1.00 cap"
+    );
     assert!(admitted_unpriced < 20, "it cannot all be free");
     // Sanity: the stored cost never grew (we never wrote a phantom price onto an event row).
-    let u = s.usage_since("p1", LimitWindow::Hour.since(Utc::now())).unwrap();
-    assert!((u.cost_usd - 0.80).abs() < 1e-9, "stored cost is only the four priced calls");
-    assert_eq!(u.unpriced_calls, admitted_unpriced, "unpriced calls are counted, not priced");
+    let u = s
+        .usage_since("p1", LimitWindow::Hour.since(Utc::now()))
+        .unwrap();
+    assert!(
+        (u.cost_usd - 0.80).abs() < 1e-9,
+        "stored cost is only the four priced calls"
+    );
+    assert_eq!(
+        u.unpriced_calls, admitted_unpriced,
+        "unpriced calls are counted, not priced"
+    );
 }
 
 #[test]
 fn cost_evidence_reports_imputation_and_the_client_reported_share() {
     let s = cost_capped_store(100.0); // high cap: nothing breaches, we only inspect the evidence
-    // Two priced calls ($0.50 total) and one client-self-reported ($0.25), plus one unpriced.
-    s.insert_event_checked(&ev("p1", "m", 10, 10, 0.25)).unwrap();
-    s.insert_event_checked(&ev("p1", "m", 10, 10, 0.25)).unwrap();
+                                      // Two priced calls ($0.50 total) and one client-self-reported ($0.25), plus one unpriced.
+    s.insert_event_checked(&ev("p1", "m", 10, 10, 0.25))
+        .unwrap();
+    s.insert_event_checked(&ev("p1", "m", 10, 10, 0.25))
+        .unwrap();
     let mut c = ev("p1", "m", 10, 10, 0.25);
     c.metadata = serde_json::json!({ "cost_source": "client" });
     s.insert_event_checked(&c).unwrap();
@@ -2008,9 +2582,14 @@ fn cost_evidence_reports_imputation_and_the_client_reported_share() {
     assert!(!e.unpriceable);
     // Mean priced cost = 0.75 / 3 = 0.25, charged once for the single unpriced call.
     assert!((e.imputed_cost_usd - 0.25).abs() < 1e-9);
-    assert!((e.client_reported_cost_usd - 0.25).abs() < 1e-9, "the self-reported share is visible");
+    assert!(
+        (e.client_reported_cost_usd - 0.25).abs() < 1e-9,
+        "the self-reported share is visible"
+    );
     // The stored sum is untouched; only the limit view adds the imputation.
-    let u = s.usage_since("p1", LimitWindow::Hour.since(Utc::now())).unwrap();
+    let u = s
+        .usage_since("p1", LimitWindow::Hour.since(Utc::now()))
+        .unwrap();
     assert!((u.cost_usd - 0.75).abs() < 1e-9);
     assert!((u.cost_for_limits() - 1.00).abs() < 1e-9);
 }
@@ -2036,7 +2615,11 @@ fn calls_and_tokens_caps_are_untouched_by_unpriced_traffic() {
         let mut e = ev("p1", "unknown-model", 10, 10, 0.0);
         e.cost_usd = None;
         let a = s.insert_event_checked(&e).unwrap();
-        assert_eq!(a.admitted, i < 2, "the calls cap bites at 3, unaffected by pricing");
+        assert_eq!(
+            a.admitted,
+            i < 2,
+            "the calls cap bites at 3, unaffected by pricing"
+        );
         assert!(a.statuses.iter().all(|st| st.cost_evidence.is_none()));
     }
 }

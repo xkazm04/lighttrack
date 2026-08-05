@@ -104,7 +104,11 @@ pub(crate) fn verdict(
         if s.n < 2 {
             v.scalar_fallback = true;
             v.method = "scalar";
-            v.status = if s.mean + EPS < b { "regressed" } else { "passed" };
+            v.status = if s.mean + EPS < b {
+                "regressed"
+            } else {
+                "passed"
+            };
             v.caveats.push(format!(
                 "scalar fallback: n={} gives no stderr, so this is a bare mean compare, not a test",
                 s.n
@@ -112,7 +116,11 @@ pub(crate) fn verdict(
         } else {
             v.method = "unpaired-ci";
             let upper = s.mean + z_crit * s.stderr;
-            v.status = if upper + EPS < b { "regressed" } else { "passed" };
+            v.status = if upper + EPS < b {
+                "regressed"
+            } else {
+                "passed"
+            };
         }
         // Bullet 3 of the honesty ledger: `baseline_score` is a scalar with no recorded stderr, so
         // this test treats it as a known constant. It is not one — it came from a run with its own
@@ -163,7 +171,10 @@ pub(crate) fn verdict(
 /// reader can't identify is indistinguishable from an uncorrected one.
 pub(crate) fn annotate_verdict(report: &mut Value, v: &SigVerdict) {
     let correction = if v.comparisons > 1 {
-        json!(format!("Bonferroni (m={}, family-wise α={ALPHA})", v.comparisons))
+        json!(format!(
+            "Bonferroni (m={}, family-wise α={ALPHA})",
+            v.comparisons
+        ))
     } else {
         json!("none (single comparison)")
     };
@@ -187,11 +198,19 @@ pub(crate) fn annotate_verdict(report: &mut Value, v: &SigVerdict) {
 /// were scored on, at α corrected over every pair a "best" claim implicitly chose between
 /// (`m·(m−1)/2` — the claim is post-hoc, so the whole family counts). Returns
 /// `(mean_delta, p, significant)`; `None` when the two targets weren't scored on the same cases.
-pub(crate) fn superiority(top: &[f64], runner_up: &[f64], n_targets: usize) -> Option<(f64, f64, bool)> {
+pub(crate) fn superiority(
+    top: &[f64],
+    runner_up: &[f64],
+    n_targets: usize,
+) -> Option<(f64, f64, bool)> {
     let deltas = paired_deltas(top, runner_up)?;
     let (mean_delta, _z, p) = paired_z(&deltas)?;
     let pairs = n_targets * n_targets.saturating_sub(1) / 2;
-    Some((mean_delta, p, mean_delta > 0.0 && p < bonferroni_alpha(ALPHA, pairs.max(1))))
+    Some((
+        mean_delta,
+        p,
+        mean_delta > 0.0 && p < bonferroni_alpha(ALPHA, pairs.max(1)),
+    ))
 }
 
 #[cfg(test)]
@@ -204,8 +223,14 @@ mod tests {
 
     #[test]
     fn paired_deltas_refuses_mismatched_case_sets() {
-        assert_eq!(paired_deltas(&[0.8, 0.9], &[0.7, 0.7]), Some(vec![0.8 - 0.7, 0.9 - 0.7]));
-        assert!(paired_deltas(&[0.8, 0.9], &[0.7]).is_none(), "different n → no pairing");
+        assert_eq!(
+            paired_deltas(&[0.8, 0.9], &[0.7, 0.7]),
+            Some(vec![0.8 - 0.7, 0.9 - 0.7])
+        );
+        assert!(
+            paired_deltas(&[0.8, 0.9], &[0.7]).is_none(),
+            "different n → no pairing"
+        );
         assert!(paired_deltas(&[], &[]).is_none(), "nothing to pair");
     }
 
@@ -223,7 +248,10 @@ mod tests {
         assert!(paired_z(&[0.1]).is_none());
         // A perfectly consistent shift has zero stderr: that is maximal evidence, not a discard.
         let (mean, z, p) = paired_z(&[-0.1, -0.1, -0.1]).unwrap();
-        assert!(near(mean, -0.1, 1e-12) && z < -1e6 && p == 0.0, "got z={z} p={p}");
+        assert!(
+            near(mean, -0.1, 1e-12) && z < -1e6 && p == 0.0,
+            "got z={z} p={p}"
+        );
         // …and a perfectly consistent *no* change is z = 0, p = 1.
         let (_, z, p) = paired_z(&[0.0, 0.0, 0.0]).unwrap();
         assert!(z == 0.0 && near(p, 1.0, 1e-6));
@@ -237,7 +265,10 @@ mod tests {
         let s = Summary::of(&run);
         // Unpaired alone: the CI on the mean straddles the baseline → "passed" (no evidence).
         let unpaired = verdict(Some(0.6625), &s, None, 1);
-        assert_eq!(unpaired.status, "passed", "between-case spread swamps a real 0.08 drop");
+        assert_eq!(
+            unpaired.status, "passed",
+            "between-case spread swamps a real 0.08 drop"
+        );
         // Paired: every delta is exactly −0.08 → overwhelming evidence → regressed.
         let deltas = paired_deltas(&run, &base).unwrap();
         let paired = verdict(Some(0.6625), &s, Some(&deltas), 1);
@@ -264,17 +295,30 @@ mod tests {
         // significant once corrected across 6 targets (z_crit 2.638). mean 0.5, stderr 0.05,
         // baseline 0.61 → upper(m=1) = 0.5 + 1.96·0.05 = 0.598 < 0.61 → regressed.
         //                → upper(m=6) = 0.5 + 2.638·0.05 = 0.6319 > 0.61 → passed.
-        let s = Summary { n: 25, mean: 0.5, stdev: 0.25, stderr: 0.05 };
+        let s = Summary {
+            n: 25,
+            mean: 0.5,
+            stdev: 0.25,
+            stderr: 0.05,
+        };
         assert_eq!(verdict(Some(0.61), &s, None, 1).status, "regressed");
         let corrected = verdict(Some(0.61), &s, None, 6);
-        assert_eq!(corrected.status, "passed", "one of six targets needs stronger evidence");
+        assert_eq!(
+            corrected.status, "passed",
+            "one of six targets needs stronger evidence"
+        );
         assert!(near(corrected.alpha, 0.05 / 6.0, 1e-12));
         assert!(
             corrected.caveats.iter().any(|c| c.contains("Bonferroni")),
             "the correction must be disclosed, not silently applied"
         );
         // A genuinely large regression still trips at m = 6 — the gate is not disarmed.
-        let bad = Summary { n: 25, mean: 0.5, stdev: 0.25, stderr: 0.05 };
+        let bad = Summary {
+            n: 25,
+            mean: 0.5,
+            stdev: 0.25,
+            stderr: 0.05,
+        };
         assert_eq!(verdict(Some(0.80), &bad, None, 6).status, "regressed");
     }
 
@@ -284,7 +328,9 @@ mod tests {
         let v = verdict(Some(0.6), &s, None, 1);
         assert!(v.caveats.iter().any(|c| c.contains("known constant")));
         assert!(
-            v.caveats.iter().any(|c| c.contains("no comparable previous run")),
+            v.caveats
+                .iter()
+                .any(|c| c.contains("no comparable previous run")),
             "the unpaired fallback must be flagged as such"
         );
         // No baseline at all → nothing claimed, no caveats about a comparison that didn't happen.
@@ -300,8 +346,14 @@ mod tests {
         let run = [0.1, 0.1, 0.1, 0.1];
         let deltas = paired_deltas(&run, &base).unwrap();
         let v = verdict(None, &Summary::of(&run), Some(&deltas), 1);
-        assert_eq!(v.status, "no_baseline", "a benchmark with no baseline opted out of gating");
-        assert!(near(v.mean_delta.unwrap(), -0.8, 1e-9), "…but the drop is still reported");
+        assert_eq!(
+            v.status, "no_baseline",
+            "a benchmark with no baseline opted out of gating"
+        );
+        assert!(
+            near(v.mean_delta.unwrap(), -0.8, 1e-9),
+            "…but the drop is still reported"
+        );
         assert!(v.caveats.iter().any(|c| c.contains("does not gate")));
     }
 
@@ -312,7 +364,10 @@ mod tests {
         let b = [0.79, 0.72, 0.88, 0.61, 0.84];
         let (delta, p, significant) = superiority(&a, &b, 2).unwrap();
         assert!(delta > 0.0 && delta < 0.02);
-        assert!(!significant, "a 0.01 gap with overlapping noise is not a winner (p={p})");
+        assert!(
+            !significant,
+            "a 0.01 gap with overlapping noise is not a winner (p={p})"
+        );
         // A consistent 0.15 lead on every case IS separation.
         let a2: Vec<f64> = b.iter().map(|x| x + 0.15).collect();
         let (delta, _p, significant) = superiority(&a2, &b, 2).unwrap();

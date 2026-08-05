@@ -90,7 +90,10 @@ async fn trace_rollup_lists_aggregates_and_nests_spans() {
     assert_eq!(rows.len(), 1, "one trace: {list}");
     assert_eq!(rows[0]["trace_id"], "tr-1");
     assert_eq!(rows[0]["spans"], 3);
-    assert!((rows[0]["cost_usd"].as_f64().unwrap() - 0.007).abs() < 1e-9, "{list}");
+    assert!(
+        (rows[0]["cost_usd"].as_f64().unwrap() - 0.007).abs() < 1e-9,
+        "{list}"
+    );
 
     // Detail nests the spans into a single chain and totals them.
     let (status, detail) = get(&app, &key, "/v1/traces/tr-1").await;
@@ -101,7 +104,10 @@ async fn trace_rollup_lists_aggregates_and_nests_spans() {
     assert_eq!(spans.len(), 1, "single root");
     assert_eq!(spans[0]["event"]["id"], root, "root is the parentless span");
     assert_eq!(spans[0]["children"].as_array().unwrap().len(), 1);
-    assert!(detail["scores"].as_array().unwrap().is_empty(), "no scores yet");
+    assert!(
+        detail["scores"].as_array().unwrap().is_empty(),
+        "no scores yet"
+    );
 
     // An unknown trace is 404.
     let (status, _) = get(&app, &key, "/v1/traces/missing").await;
@@ -129,7 +135,10 @@ async fn list_and_detail_agree_on_duration_and_status() {
     let now = chrono::Utc::now();
     let t0 = (now - chrono::Duration::seconds(30)).to_rfc3339();
     let t2 = (now - chrono::Duration::seconds(28)).to_rfc3339();
-    for body in [span(&t0, "s1", 120, "success"), span(&t2, "s2", 750, "error")] {
+    for body in [
+        span(&t0, "s1", 120, "success"),
+        span(&t2, "s2", 750, "error"),
+    ] {
         let (status, v) = ingest(&app, &key, body).await;
         assert_eq!(status, StatusCode::OK, "{v}");
     }
@@ -138,8 +147,14 @@ async fn list_and_detail_agree_on_duration_and_status() {
     let row = &list.as_array().unwrap()[0];
     let (_, detail) = get(&app, &key, "/v1/traces/tr-dur").await;
 
-    assert_eq!(row["duration_ms"], 2750, "the trailing span's latency counts in the list: {list}");
-    assert_eq!(row["duration_ms"], detail["duration_ms"], "list vs detail duration");
+    assert_eq!(
+        row["duration_ms"], 2750,
+        "the trailing span's latency counts in the list: {list}"
+    );
+    assert_eq!(
+        row["duration_ms"], detail["duration_ms"],
+        "list vs detail duration"
+    );
     assert_eq!(row["status"], detail["status"], "list vs detail status");
     assert_eq!(row["status"], "error");
     // A complete trace still says so explicitly.
@@ -172,13 +187,20 @@ async fn score_whole_trace_anchors_to_root_and_surfaces_in_detail() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{score}");
-    assert_eq!(score["event_id"], root, "whole-trace score anchors to the root span");
+    assert_eq!(
+        score["event_id"], root,
+        "whole-trace score anchors to the root span"
+    );
     assert_eq!(score["project_id"], "proj-a");
 
     // It now shows up in the trace detail's scores.
     let (_, detail) = get(&app, &key, "/v1/traces/tr-1").await;
     let scores = detail["scores"].as_array().unwrap();
-    assert_eq!(scores.len(), 1, "the whole-trace score joins back to the trace: {detail}");
+    assert_eq!(
+        scores.len(),
+        1,
+        "the whole-trace score joins back to the trace: {detail}"
+    );
     assert_eq!(scores[0]["rubric"], "trace-coherence");
 }
 
@@ -213,20 +235,33 @@ async fn a_verdict_records_its_coverage_and_a_changed_trace_reads_stale() {
     let (status, posted) = score(&app, &key).await;
     assert_eq!(status, StatusCode::OK, "{posted}");
     let cov = &posted["detail"]["coverage"];
-    assert_eq!(cov["spans"], 1, "the verdict records the trace it judged: {posted}");
+    assert_eq!(
+        cov["spans"], 1,
+        "the verdict records the trace it judged: {posted}"
+    );
     assert_eq!(cov["root_event_id"], root_id);
     let digest = cov["digest"].as_str().unwrap().to_string();
-    assert_eq!(digest.len(), 16, "content fingerprint of the judged exchange: {posted}");
+    assert_eq!(
+        digest.len(),
+        16,
+        "content fingerprint of the judged exchange: {posted}"
+    );
 
     // Nothing has moved yet: the verdict covers the trace, so nothing is reported.
     let (_, detail) = get(&app, &key, "/v1/traces/tr-cov").await;
-    assert!(detail["scores"][0]["stale"].is_null(), "a current verdict is not stale: {detail}");
+    assert!(
+        detail["scores"][0]["stale"].is_null(),
+        "a current verdict is not stale: {detail}"
+    );
 
     // A late child span lands. The trace is wider than the verdict, but the judged root exchange is
     // byte-identical.
     ingest_span(&app, &key, "tr-cov", "s2", Some("s1"), 0.002).await;
     let (_, detail) = get(&app, &key, "/v1/traces/tr-cov").await;
-    assert_eq!(detail["totals"]["spans"], 2, "the late span is folded into the read: {detail}");
+    assert_eq!(
+        detail["totals"]["spans"], 2,
+        "the late span is folded into the read: {detail}"
+    );
     assert_eq!(detail["scores"][0]["stale"]["reason"], "grown", "{detail}");
     assert_eq!(detail["scores"][0]["stale"]["scored_spans"], 1);
     assert_eq!(detail["scores"][0]["stale"]["current_spans"], 2);
@@ -238,13 +273,20 @@ async fn a_verdict_records_its_coverage_and_a_changed_trace_reads_stale() {
     let (status, v) = ingest(&app, &key, late_root).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     let (_, detail) = get(&app, &key, "/v1/traces/tr-cov").await;
-    assert_eq!(detail["scores"][0]["stale"]["reason"], "changed", "{detail}");
+    assert_eq!(
+        detail["scores"][0]["stale"]["reason"], "changed",
+        "{detail}"
+    );
 
     // Re-scoring the trace writes a verdict whose coverage matches the trace as it now reads, and
     // that one is not stale — so a corrected trace does not stay flagged forever.
     let (status, posted) = score(&app, &key).await;
     assert_eq!(status, StatusCode::OK, "{posted}");
-    assert_ne!(posted["detail"]["coverage"]["digest"], json!(digest), "a new exchange, a new digest");
+    assert_ne!(
+        posted["detail"]["coverage"]["digest"],
+        json!(digest),
+        "a new exchange, a new digest"
+    );
     let (_, detail) = get(&app, &key, "/v1/traces/tr-cov").await;
     let scores = detail["scores"].as_array().unwrap();
     assert_eq!(scores.len(), 2, "{detail}");
@@ -270,16 +312,24 @@ async fn a_per_call_verdict_carries_no_whole_trace_coverage() {
         &key,
         "POST",
         "/v1/traces/tr-call/score",
-        Some(json!({ "rubric": "faithfulness", "value": 0.5, "scored_by": "judge",
-                     "event_id": child })),
+        Some(
+            json!({ "rubric": "faithfulness", "value": 0.5, "scored_by": "judge",
+                     "event_id": child }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{posted}");
-    assert!(posted["detail"].is_null(), "a per-call score gets no trace coverage: {posted}");
+    assert!(
+        posted["detail"].is_null(),
+        "a per-call score gets no trace coverage: {posted}"
+    );
 
     ingest_span(&app, &key, "tr-call", "s3", Some("s1"), 0.004).await;
     let (_, detail) = get(&app, &key, "/v1/traces/tr-call").await;
-    assert!(detail["scores"][0]["stale"].is_null(), "not a whole-trace verdict: {detail}");
+    assert!(
+        detail["scores"][0]["stale"].is_null(),
+        "not a whole-trace verdict: {detail}"
+    );
 }
 
 #[tokio::test]
@@ -299,7 +349,10 @@ async fn project_key_cannot_read_another_projects_trace() {
     // And B's listing doesn't include A's trace.
     let (status, list) = get(&app, &key_b, "/v1/traces").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(list.as_array().unwrap().is_empty(), "cross-tenant trace leaked: {list}");
+    assert!(
+        list.as_array().unwrap().is_empty(),
+        "cross-tenant trace leaked: {list}"
+    );
 }
 
 /// The collision case: two projects legitimately reuse the same natural trace id (a shared upstream
@@ -321,23 +374,44 @@ async fn colliding_trace_id_never_merges_across_projects() {
     let (status, a_detail) = get(&app, &key_a, "/v1/traces/req-1").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(a_detail["project_id"], "proj-a");
-    assert_eq!(a_detail["totals"]["spans"], 1, "B's span leaked into A's trace: {a_detail}");
-    assert_eq!(a_detail["spans"].as_array().unwrap()[0]["event"]["id"], a_root);
+    assert_eq!(
+        a_detail["totals"]["spans"], 1,
+        "B's span leaked into A's trace: {a_detail}"
+    );
+    assert_eq!(
+        a_detail["spans"].as_array().unwrap()[0]["event"]["id"],
+        a_root
+    );
     assert!((a_detail["totals"]["cost_usd"].as_f64().unwrap() - 0.001).abs() < 1e-9);
 
     let (status, b_detail) = get(&app, &key_b, "/v1/traces/req-1").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(b_detail["project_id"], "proj-b", "the older foreign span must not claim the trace");
-    assert_eq!(b_detail["totals"]["spans"], 1, "A's span leaked into B's trace: {b_detail}");
-    assert_eq!(b_detail["spans"].as_array().unwrap()[0]["event"]["id"], b_root);
+    assert_eq!(
+        b_detail["project_id"], "proj-b",
+        "the older foreign span must not claim the trace"
+    );
+    assert_eq!(
+        b_detail["totals"]["spans"], 1,
+        "A's span leaked into B's trace: {b_detail}"
+    );
+    assert_eq!(
+        b_detail["spans"].as_array().unwrap()[0]["event"]["id"],
+        b_root
+    );
 
     // List: each side's rollup counts only its own spans.
     for (key, cost) in [(&key_a, 0.001), (&key_b, 0.050)] {
         let (_, list) = get(&app, key, "/v1/traces").await;
         let rows = list.as_array().unwrap();
         assert_eq!(rows.len(), 1, "{list}");
-        assert_eq!(rows[0]["spans"], 1, "cross-project spans merged into the listing: {list}");
-        assert!((rows[0]["cost_usd"].as_f64().unwrap() - cost).abs() < 1e-9, "{list}");
+        assert_eq!(
+            rows[0]["spans"], 1,
+            "cross-project spans merged into the listing: {list}"
+        );
+        assert!(
+            (rows[0]["cost_usd"].as_f64().unwrap() - cost).abs() < 1e-9,
+            "{list}"
+        );
     }
 
     // Whole-trace scoring anchors to the caller's own root, never the foreign one, and each side's
@@ -352,7 +426,10 @@ async fn colliding_trace_id_never_merges_across_projects() {
     .await;
     assert_eq!(status, StatusCode::OK, "{score}");
     assert_eq!(score["project_id"], "proj-b");
-    assert_eq!(score["event_id"], b_root, "score anchored to the foreign project's root span");
+    assert_eq!(
+        score["event_id"], b_root,
+        "score anchored to the foreign project's root span"
+    );
 
     let (_, a_detail) = get(&app, &key_a, "/v1/traces/req-1").await;
     assert!(

@@ -16,7 +16,15 @@ pub(super) fn create(conn: &Connection, d: &Dataset) -> Result<()> {
     conn.execute(
         "INSERT INTO datasets (id, project_id, name, version, frozen, source, created_at) \
          VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![d.id, d.project_id, d.name, d.version as i64, d.frozen as i64, d.source, fmt_ts(d.created_at)],
+        params![
+            d.id,
+            d.project_id,
+            d.name,
+            d.version as i64,
+            d.frozen as i64,
+            d.source,
+            fmt_ts(d.created_at)
+        ],
     )?;
     Ok(())
 }
@@ -29,8 +37,9 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Dataset>> {
 }
 
 pub(super) fn list(conn: &Connection, project: &str) -> Result<Vec<Dataset>> {
-    let sql =
-        format!("SELECT {DATASET_COLS} FROM datasets WHERE project_id = ?1 ORDER BY created_at DESC");
+    let sql = format!(
+        "SELECT {DATASET_COLS} FROM datasets WHERE project_id = ?1 ORDER BY created_at DESC"
+    );
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
         .query_map(params![project], map_dataset)?
@@ -58,8 +67,15 @@ pub(super) fn create_item(conn: &Connection, item: &DatasetItem) -> Result<()> {
          (id, dataset_id, input, output, expected, context, tags, source_event_id, anonymization) \
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![
-            item.id, item.dataset_id, item.input, item.output, item.expected, item.context, tags,
-            item.source_event_id, anon,
+            item.id,
+            item.dataset_id,
+            item.input,
+            item.output,
+            item.expected,
+            item.context,
+            tags,
+            item.source_event_id,
+            anon,
         ],
     )?;
     Ok(())

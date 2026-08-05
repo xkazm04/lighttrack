@@ -41,7 +41,10 @@ pub struct FxTable {
 
 impl Default for FxTable {
     fn default() -> Self {
-        Self { base: "USD".to_string(), rates: HashMap::new() }
+        Self {
+            base: "USD".to_string(),
+            rates: HashMap::new(),
+        }
     }
 }
 
@@ -116,11 +119,20 @@ impl FxTable {
         let cur = currency.to_uppercase();
         let major = minor_units as f64 / minor_divisor(&cur);
         if cur == self.base {
-            return UsdAmount { amount_usd: major, converted: true };
+            return UsdAmount {
+                amount_usd: major,
+                converted: true,
+            };
         }
         match self.rates.get(&cur) {
-            Some(rate) => UsdAmount { amount_usd: major * rate, converted: true },
-            None => UsdAmount { amount_usd: major, converted: false },
+            Some(rate) => UsdAmount {
+                amount_usd: major * rate,
+                converted: true,
+            },
+            None => UsdAmount {
+                amount_usd: major,
+                converted: false,
+            },
         }
     }
 
@@ -215,6 +227,10 @@ mod tests {
         assert!(!t.is_convertible("BAD"), "zero rate dropped");
         // A stray USD inside rates must not shadow the base's implicit 1.0.
         let a = t.to_usd(100, "USD");
-        assert!((a.amount_usd - 1.0).abs() < 1e-9, "USD stays 1:1, got {}", a.amount_usd);
+        assert!(
+            (a.amount_usd - 1.0).abs() < 1e-9,
+            "USD stays 1:1, got {}",
+            a.amount_usd
+        );
     }
 }

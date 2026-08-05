@@ -53,7 +53,11 @@ impl SimAssumptions {
             return Err("at least one of `price_per_mtok` or `flat_monthly` is required");
         }
         let window_days = (until - since).num_seconds() as f64 / 86_400.0;
-        Ok(SimAssumptions { price_per_mtok, flat_monthly, window_days })
+        Ok(SimAssumptions {
+            price_per_mtok,
+            flat_monthly,
+            window_days,
+        })
     }
 }
 
@@ -168,11 +172,18 @@ mod tests {
     }
 
     fn cost(customer: Option<&str>, cost_usd: f64, calls: i64) -> CostByDimension {
-        CostByDimension { key: customer.map(str::to_string), calls, cost_usd }
+        CostByDimension {
+            key: customer.map(str::to_string),
+            calls,
+            cost_usd,
+        }
     }
 
     fn toks(customer: Option<&str>, tokens: i64) -> TokensByDimension {
-        TokensByDimension { key: customer.map(str::to_string), tokens }
+        TokensByDimension {
+            key: customer.map(str::to_string),
+            tokens,
+        }
     }
 
     fn window() -> (DateTime<Utc>, DateTime<Utc>) {
@@ -190,11 +201,21 @@ mod tests {
     #[test]
     fn window_days_drives_proration() {
         // A 30-day window prorates a flat fee at 1.0; a 15-day window at 0.5.
-        let a = SimAssumptions::new(None, Some(30.0), t("2026-06-01T00:00:00Z"), t("2026-07-01T00:00:00Z"))
-            .unwrap();
+        let a = SimAssumptions::new(
+            None,
+            Some(30.0),
+            t("2026-06-01T00:00:00Z"),
+            t("2026-07-01T00:00:00Z"),
+        )
+        .unwrap();
         assert!((a.window_days - 30.0).abs() < 1e-9);
-        let b = SimAssumptions::new(None, Some(30.0), t("2026-06-01T00:00:00Z"), t("2026-06-16T00:00:00Z"))
-            .unwrap();
+        let b = SimAssumptions::new(
+            None,
+            Some(30.0),
+            t("2026-06-01T00:00:00Z"),
+            t("2026-06-16T00:00:00Z"),
+        )
+        .unwrap();
         assert!((b.window_days - 15.0).abs() < 1e-9);
     }
 
@@ -211,10 +232,15 @@ mod tests {
     #[test]
     fn simulated_revenue_and_delta_vs_actual() {
         let (s, u) = window(); // 30-day window → proration 1.0
-        // acme: real revenue $20, cost $1, 1M tokens. Simulate $5/Mtok + $10 flat → $15 revenue.
+                               // acme: real revenue $20, cost $1, 1M tokens. Simulate $5/Mtok + $10 flat → $15 revenue.
         let a = SimAssumptions::new(Some(5.0), Some(10.0), s, u).unwrap();
         let rows = compute_margin_simulation(
-            &[rev("acme", 20.0, RevenueKind::OneTime, "2026-06-10T00:00:00Z")],
+            &[rev(
+                "acme",
+                20.0,
+                RevenueKind::OneTime,
+                "2026-06-10T00:00:00Z",
+            )],
             &[cost(Some("acme"), 1.0, 3)],
             &[toks(Some("acme"), 1_000_000)],
             a,
@@ -263,7 +289,10 @@ mod tests {
         let rows = compute_margin_simulation(
             &[],
             &[cost(Some("light"), 0.5, 5), cost(Some("heavy"), 90.0, 900)],
-            &[toks(Some("light"), 1_000_000), toks(Some("heavy"), 1_000_000)],
+            &[
+                toks(Some("light"), 1_000_000),
+                toks(Some("heavy"), 1_000_000),
+            ],
             a,
             MarginDimension::Customer,
             s,

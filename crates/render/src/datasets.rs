@@ -23,7 +23,10 @@ pub(crate) fn list(v: &Value) -> Option<String> {
             trunc(s(r, "name"), 28),
             u(r, "version").to_string(),
             if frozen { "🔒".into() } else { "—".into() },
-            opt_s(r, "source").filter(|x| !x.is_empty()).map(|x| trunc(x, 18)).unwrap_or_else(|| "—".into()),
+            opt_s(r, "source")
+                .filter(|x| !x.is_empty())
+                .map(|x| trunc(x, 18))
+                .unwrap_or_else(|| "—".into()),
             short_ts(s(r, "created_at")),
             s(r, "id").to_string(),
         ]);
@@ -40,14 +43,21 @@ pub(crate) fn detail(v: &Value) -> Option<String> {
     let mut out = format!(
         "### Dataset `{}` {}\n\n",
         s(v, "name"),
-        if frozen { "🔒 frozen" } else { "✏️ editable" }
+        if frozen {
+            "🔒 frozen"
+        } else {
+            "✏️ editable"
+        }
     );
     out.push_str(&format!("- **Id:** {id}\n"));
     out.push_str(&format!("- **Version:** {}\n", u(v, "version")));
     if let Some(src) = opt_s(v, "source").filter(|x| !x.is_empty()) {
         out.push_str(&format!("- **Source:** {src}\n"));
     }
-    out.push_str(&format!("- **Created:** {}\n", short_ts(s(v, "created_at"))));
+    out.push_str(&format!(
+        "- **Created:** {}\n",
+        short_ts(s(v, "created_at"))
+    ));
     Some(out)
 }
 
@@ -71,9 +81,18 @@ pub(crate) fn items(v: &Value) -> Option<String> {
         let tags = r
             .get("tags")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","))
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
             .unwrap_or_default();
-        let tags_cell = if tags.is_empty() { "—".into() } else { trunc(&tags, 18) };
+        let tags_cell = if tags.is_empty() {
+            "—".into()
+        } else {
+            trunc(&tags, 18)
+        };
         t.row(vec![
             (i + 1).to_string(),
             trunc(s(r, "input"), 40),

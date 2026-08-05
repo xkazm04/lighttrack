@@ -36,7 +36,9 @@ pub(super) async fn deliver_bench_run(http: &Client, url: &str, r: &BenchRunAler
         Ok(resp) if !resp.status().is_success() => {
             tracing::warn!(channel = "webhook", event = "bench_run", status = %resp.status(), "alert delivery rejected")
         }
-        Err(e) => tracing::warn!(channel = "webhook", event = "bench_run", error = %e, "alert delivery failed"),
+        Err(e) => {
+            tracing::warn!(channel = "webhook", event = "bench_run", error = %e, "alert delivery failed")
+        }
         _ => {}
     }
 }
@@ -65,7 +67,13 @@ pub(super) async fn deliver_breaches(
         )
         .await;
         post_ntfy(cfg, http, "LightTrack limit breach", &msg).await;
-        post_resend(cfg, http, &format!("LightTrack: limit breach in '{}'", b.project_id), &msg).await;
+        post_resend(
+            cfg,
+            http,
+            &format!("LightTrack: limit breach in '{}'", b.project_id),
+            &msg,
+        )
+        .await;
     }
 }
 
@@ -77,14 +85,26 @@ pub(super) async fn deliver_warnings(cfg: &AlertConfig, http: &Client, warnings:
         let msg = warning_message(w);
         post_webhook(cfg, http, "limit_warning", &msg, json!({ "warning": w })).await;
         post_ntfy(cfg, http, "LightTrack limit warning", &msg).await;
-        post_resend(cfg, http, &format!("LightTrack: approaching limit in '{}'", w.project_id), &msg)
-            .await;
+        post_resend(
+            cfg,
+            http,
+            &format!("LightTrack: approaching limit in '{}'", w.project_id),
+            &msg,
+        )
+        .await;
     }
 }
 
 pub(super) async fn deliver_forecast(cfg: &AlertConfig, http: &Client, alerts: &[ForecastAlert]) {
     for a in alerts {
-        post_webhook(cfg, http, "forecast_alert", &a.message, json!({ "forecast": a })).await;
+        post_webhook(
+            cfg,
+            http,
+            "forecast_alert",
+            &a.message,
+            json!({ "forecast": a }),
+        )
+        .await;
         post_ntfy(cfg, http, "LightTrack forecast", &a.message).await;
         post_resend(cfg, http, "LightTrack: spend forecast alert", &a.message).await;
     }
@@ -108,7 +128,13 @@ pub(super) async fn deliver_relay_dead(cfg: &AlertConfig, http: &Client, tasks: 
         }});
         post_webhook(cfg, http, "relay_task_dead", &msg, trimmed).await;
         post_ntfy(cfg, http, "LightTrack relay task dead", &msg).await;
-        post_resend(cfg, http, &format!("LightTrack: relay task dead in '{}'", t.project_id), &msg).await;
+        post_resend(
+            cfg,
+            http,
+            &format!("LightTrack: relay task dead in '{}'", t.project_id),
+            &msg,
+        )
+        .await;
     }
 }
 
@@ -126,7 +152,13 @@ pub(super) async fn deliver_error_spike(cfg: &AlertConfig, http: &Client, s: &Er
     }});
     post_webhook(cfg, http, "error_spike", &msg, extra).await;
     post_ntfy(cfg, http, "LightTrack error spike", &msg).await;
-    post_resend(cfg, http, &format!("LightTrack: error spike in '{}'", s.project_id), &msg).await;
+    post_resend(
+        cfg,
+        http,
+        &format!("LightTrack: error spike in '{}'", s.project_id),
+        &msg,
+    )
+    .await;
 }
 
 pub(super) async fn deliver_score_drop(cfg: &AlertConfig, http: &Client, d: &ScoreDrop) {
@@ -142,7 +174,13 @@ pub(super) async fn deliver_score_drop(cfg: &AlertConfig, http: &Client, d: &Sco
     }});
     post_webhook(cfg, http, "score_drop", &msg, extra).await;
     post_ntfy(cfg, http, "LightTrack quality regression", &msg).await;
-    post_resend(cfg, http, &format!("LightTrack: quality regression in '{}'", d.project_id), &msg).await;
+    post_resend(
+        cfg,
+        http,
+        &format!("LightTrack: quality regression in '{}'", d.project_id),
+        &msg,
+    )
+    .await;
 }
 
 fn warning_message(w: &LimitStatus) -> String {
@@ -150,11 +188,21 @@ fn warning_message(w: &LimitStatus) -> String {
     format!(
         "LightTrack warning: project '{}' is approaching its {:?}/{:?} limit — current {:.4} is \
          {:.0}% of threshold {:.4} (warns at {:.0}%). No traffic has been blocked.",
-        w.project_id, w.metric, w.window, w.current, w.ratio * 100.0, w.threshold, warn_pct
+        w.project_id,
+        w.metric,
+        w.window,
+        w.current,
+        w.ratio * 100.0,
+        w.threshold,
+        warn_pct
     )
 }
 
-fn breach_message(b: &LimitStatus, rejected: Option<&u64>, attribution: Option<&Attribution>) -> String {
+fn breach_message(
+    b: &LimitStatus,
+    rejected: Option<&u64>,
+    attribution: Option<&Attribution>,
+) -> String {
     let tail = match rejected {
         Some(n) => format!(" — {n} ingest attempt(s) rejected so far in this window"),
         None => String::new(),
@@ -165,7 +213,9 @@ fn breach_message(b: &LimitStatus, rejected: Option<&u64>, attribution: Option<&
         None => String::new(),
     };
     // What drove the spend: top contributors over the breached window (empty when unavailable).
-    let spenders = attribution.and_then(|a| a.message_tail()).unwrap_or_default();
+    let spenders = attribution
+        .and_then(|a| a.message_tail())
+        .unwrap_or_default();
     format!(
         "LightTrack alert: project '{}'{scope} breached {:?}/{:?} limit — current {:.4} >= threshold \
          {:.4} ({:.0}% of limit), action={:?}{tail}.{spenders}",
@@ -184,7 +234,9 @@ async fn post_webhook(cfg: &AlertConfig, http: &Client, event: &str, msg: &str, 
         }
     }
     match http.post(url).json(&body).send().await {
-        Ok(r) if !r.status().is_success() => tracing::warn!(channel = "webhook", event, status = %r.status(), "alert delivery rejected"),
+        Ok(r) if !r.status().is_success() => {
+            tracing::warn!(channel = "webhook", event, status = %r.status(), "alert delivery rejected")
+        }
         Err(e) => tracing::warn!(channel = "webhook", event, error = %e, "alert delivery failed"),
         _ => {}
     }
@@ -199,7 +251,9 @@ async fn post_ntfy(cfg: &AlertConfig, http: &Client, title: &str, msg: &str) {
         .header("Priority", "high")
         .body(msg.to_string());
     match req.send().await {
-        Ok(r) if !r.status().is_success() => tracing::warn!(channel = "ntfy", status = %r.status(), "alert delivery rejected"),
+        Ok(r) if !r.status().is_success() => {
+            tracing::warn!(channel = "ntfy", status = %r.status(), "alert delivery rejected")
+        }
         Err(e) => tracing::warn!(channel = "ntfy", error = %e, "alert delivery failed"),
         _ => {}
     }

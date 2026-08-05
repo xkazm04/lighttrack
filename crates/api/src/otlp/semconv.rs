@@ -40,12 +40,20 @@ pub(crate) struct SpanReject {
 
 impl SpanReject {
     fn new(code: &'static str, reason: impl Into<String>) -> Self {
-        Self { code, reason: reason.into() }
+        Self {
+            code,
+            reason: reason.into(),
+        }
     }
 }
 
-const PROVIDER_KEYS: &[&str] =
-    &["gen_ai.provider.name", "gen_ai.system", "llm.provider", "llm.system", "ai.model.provider"];
+const PROVIDER_KEYS: &[&str] = &[
+    "gen_ai.provider.name",
+    "gen_ai.system",
+    "llm.provider",
+    "llm.system",
+    "ai.model.provider",
+];
 const MODEL_KEYS: &[&str] = &[
     "gen_ai.request.model",
     "gen_ai.response.model",
@@ -53,8 +61,11 @@ const MODEL_KEYS: &[&str] = &[
     "llm.request.model",
     "ai.model.id",
 ];
-const OPERATION_KEYS: &[&str] =
-    &["gen_ai.operation.name", "llm.operation.name", "openinference.span.kind"];
+const OPERATION_KEYS: &[&str] = &[
+    "gen_ai.operation.name",
+    "llm.operation.name",
+    "openinference.span.kind",
+];
 const INPUT_TOKEN_KEYS: &[&str] = &[
     "gen_ai.usage.input_tokens",
     "gen_ai.usage.prompt_tokens",
@@ -79,14 +90,29 @@ const REASONING_TOKEN_KEYS: &[&str] = &[
     "gen_ai.usage.output_reasoning_tokens",
     "llm.token_count.completion_details.reasoning",
 ];
-const COST_KEYS: &[&str] = &["gen_ai.usage.cost", "gen_ai.usage.total_cost", "llm.usage.total_cost"];
-const PROMPT_KEYS: &[&str] =
-    &["gen_ai.input.messages", "gen_ai.prompt", "llm.prompts", "input.value"];
-const COMPLETION_KEYS: &[&str] =
-    &["gen_ai.output.messages", "gen_ai.completion", "llm.completions", "output.value"];
+const COST_KEYS: &[&str] = &[
+    "gen_ai.usage.cost",
+    "gen_ai.usage.total_cost",
+    "llm.usage.total_cost",
+];
+const PROMPT_KEYS: &[&str] = &[
+    "gen_ai.input.messages",
+    "gen_ai.prompt",
+    "llm.prompts",
+    "input.value",
+];
+const COMPLETION_KEYS: &[&str] = &[
+    "gen_ai.output.messages",
+    "gen_ai.completion",
+    "llm.completions",
+    "output.value",
+];
 
 /// Map one flattened span onto an `LlmEvent`, or reject it with a code.
-pub(crate) fn map_span(fs: &FlatSpan<'_>, default_project: Option<&str>) -> Result<LlmEvent, SpanReject> {
+pub(crate) fn map_span(
+    fs: &FlatSpan<'_>,
+    default_project: Option<&str>,
+) -> Result<LlmEvent, SpanReject> {
     if !is_genai(fs) {
         return Err(SpanReject::new(
             "not_genai",
@@ -106,8 +132,18 @@ pub(crate) fn map_span(fs: &FlatSpan<'_>, default_project: Option<&str>) -> Resu
         })?
         .to_string();
 
-    let start = fs.span.start_time_unix_nano.as_ref().and_then(|n| n.as_i128()).and_then(from_nanos);
-    let end = fs.span.end_time_unix_nano.as_ref().and_then(|n| n.as_i128()).and_then(from_nanos);
+    let start = fs
+        .span
+        .start_time_unix_nano
+        .as_ref()
+        .and_then(|n| n.as_i128())
+        .and_then(from_nanos);
+    let end = fs
+        .span
+        .end_time_unix_nano
+        .as_ref()
+        .and_then(|n| n.as_i128())
+        .and_then(from_nanos);
     let latency_ms = match (start, end) {
         (Some(s), Some(e)) if e >= s => Some((e - s).num_milliseconds().max(0) as u64),
         _ => None,
@@ -142,13 +178,22 @@ pub(crate) fn map_span(fs: &FlatSpan<'_>, default_project: Option<&str>) -> Resu
             .filter(|s| !s.is_empty()),
         operation: operation_of(fs),
         usage: TokenUsage {
-            input: fs.first(INPUT_TOKEN_KEYS).and_then(|v| v.as_u64()).unwrap_or(0),
-            output: fs.first(OUTPUT_TOKEN_KEYS).and_then(|v| v.as_u64()).unwrap_or(0),
+            input: fs
+                .first(INPUT_TOKEN_KEYS)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            output: fs
+                .first(OUTPUT_TOKEN_KEYS)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
             cached_input: fs.first(CACHED_TOKEN_KEYS).and_then(|v| v.as_u64()),
             reasoning: fs.first(REASONING_TOKEN_KEYS).and_then(|v| v.as_u64()),
         },
         // Only an explicitly exported cost is honored; otherwise `prepare_event` prices from the book.
-        cost_usd: fs.first(COST_KEYS).and_then(|v| v.as_f64()).filter(|c| c.is_finite() && *c >= 0.0),
+        cost_usd: fs
+            .first(COST_KEYS)
+            .and_then(|v| v.as_f64())
+            .filter(|c| c.is_finite() && *c >= 0.0),
         latency_ms,
         status,
         error,
@@ -173,7 +218,10 @@ fn is_genai(fs: &FlatSpan<'_>) -> bool {
 /// Deterministic id so a re-exported span replays instead of duplicating. Falls back to a fresh id
 /// only when the exporter omitted both ids (which no conforming SDK does).
 fn event_id(fs: &FlatSpan<'_>) -> String {
-    match (nonempty(fs.span.trace_id.as_deref()), nonempty(fs.span.span_id.as_deref())) {
+    match (
+        nonempty(fs.span.trace_id.as_deref()),
+        nonempty(fs.span.span_id.as_deref()),
+    ) {
         (Some(t), Some(s)) => format!("{t}-{s}"),
         (None, Some(s)) => s,
         _ => new_id(),
@@ -240,7 +288,9 @@ fn status_of(fs: &FlatSpan<'_>) -> (Status, Option<String>) {
         Some(s) if s.is_error() => s,
         _ => return (Status::Success, None),
     };
-    let err_type = fs.first(&["error.type", "exception.type"]).and_then(|v| v.as_str());
+    let err_type = fs
+        .first(&["error.type", "exception.type"])
+        .and_then(|v| v.as_str());
     let message = st
         .message
         .as_deref()
@@ -248,9 +298,12 @@ fn status_of(fs: &FlatSpan<'_>) -> (Status, Option<String>) {
         .map(str::to_string)
         .or_else(|| exception_message(fs))
         .or_else(|| err_type.map(str::to_string));
-    let haystack =
-        format!("{} {}", err_type.unwrap_or_default(), message.clone().unwrap_or_default())
-            .to_ascii_lowercase();
+    let haystack = format!(
+        "{} {}",
+        err_type.unwrap_or_default(),
+        message.clone().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
     let status = if haystack.contains("timeout") || haystack.contains("timed out") {
         Status::Timeout
     } else {
@@ -289,12 +342,31 @@ fn metadata_of(fs: &FlatSpan<'_>) -> Value {
         }
     };
     put("system", fs.first(PROVIDER_KEYS).and_then(|v| v.as_str()));
-    put("request_model", fs.attr("gen_ai.request.model").and_then(|v| v.as_str()));
-    put("response_model", fs.attr("gen_ai.response.model").and_then(|v| v.as_str()));
-    put("response_id", fs.attr("gen_ai.response.id").and_then(|v| v.as_str()));
-    put("operation", fs.first(OPERATION_KEYS).and_then(|v| v.as_str()));
+    put(
+        "request_model",
+        fs.attr("gen_ai.request.model").and_then(|v| v.as_str()),
+    );
+    put(
+        "response_model",
+        fs.attr("gen_ai.response.model").and_then(|v| v.as_str()),
+    );
+    put(
+        "response_id",
+        fs.attr("gen_ai.response.id").and_then(|v| v.as_str()),
+    );
+    put(
+        "operation",
+        fs.first(OPERATION_KEYS).and_then(|v| v.as_str()),
+    );
     put("scope", fs.scope);
-    put("service_name", fs.attr("service.name").and_then(|v| v.as_str()));
+    put(
+        "service_name",
+        fs.attr("service.name").and_then(|v| v.as_str()),
+    );
     put("span_name", fs.span.name.as_deref());
-    Value::Object([("otel".to_string(), Value::Object(otel))].into_iter().collect())
+    Value::Object(
+        [("otel".to_string(), Value::Object(otel))]
+            .into_iter()
+            .collect(),
+    )
 }

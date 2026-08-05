@@ -31,7 +31,10 @@ struct Inner {
 
 impl SeenWebhooks {
     pub(crate) fn new(capacity: usize) -> Self {
-        Self { capacity: capacity.max(1), inner: Mutex::new(Inner::default()) }
+        Self {
+            capacity: capacity.max(1),
+            inner: Mutex::new(Inner::default()),
+        }
     }
 
     /// Record `key` as seen and report whether it was **already** present (a duplicate delivery).
@@ -90,7 +93,7 @@ mod tests {
         assert!(!seen.check_and_insert("a"));
         assert!(!seen.check_and_insert("b"));
         assert!(!seen.check_and_insert("c")); // over cap → evicts the oldest, "a"
-        // "b" and "c" are still within the window (a re-check doesn't disturb the FIFO order).
+                                              // "b" and "c" are still within the window (a re-check doesn't disturb the FIFO order).
         assert!(seen.check_and_insert("c"));
         assert!(seen.check_and_insert("b"));
         // "a" was evicted, so it reads as new again.

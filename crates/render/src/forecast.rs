@@ -101,7 +101,10 @@ fn margins_table(v: &Value) -> Option<String> {
         ("Turns unprofitable", Align::Right),
     ]);
     for r in rows {
-        let profitable = r.get("currently_profitable").and_then(Value::as_bool).unwrap_or(false);
+        let profitable = r
+            .get("currently_profitable")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let turns = if profitable {
             eta(opt_f(r, "eta_unprofitable_days"))
         } else {
@@ -125,7 +128,11 @@ fn alerts_block(v: &Value) -> Option<String> {
     }
     let mut out = String::from("**Pre-emptive alerts**\n\n");
     for a in rows {
-        let glyph = if s(a, "severity") == "high" { "🔴" } else { "🟡" };
+        let glyph = if s(a, "severity") == "high" {
+            "🔴"
+        } else {
+            "🟡"
+        };
         out.push_str(&format!("- {glyph} {}\n", s(a, "message")));
     }
     Some(out)

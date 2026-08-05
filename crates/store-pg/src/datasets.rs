@@ -32,11 +32,13 @@ pub(crate) async fn create(pool: &PgPool, d: &Dataset) -> Result<()> {
 }
 
 pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Dataset>> {
-    let row = sqlx::query(&format!("SELECT {DATASET_COLS} FROM datasets WHERE id = $1"))
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+    let row = sqlx::query(&format!(
+        "SELECT {DATASET_COLS} FROM datasets WHERE id = $1"
+    ))
+    .bind(id.to_string())
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     row.as_ref().map(dataset_from_row).transpose()
 }
 
@@ -84,11 +86,13 @@ pub(crate) async fn create_item(pool: &PgPool, item: &DatasetItem) -> Result<()>
 }
 
 pub(crate) async fn list_items(pool: &PgPool, dataset_id: &str) -> Result<Vec<DatasetItem>> {
-    let rows = sqlx::query(&format!("SELECT {ITEM_COLS} FROM dataset_items WHERE dataset_id = $1"))
-        .bind(dataset_id.to_string())
-        .fetch_all(pool)
-        .await
-        .map_err(pgerr)?;
+    let rows = sqlx::query(&format!(
+        "SELECT {ITEM_COLS} FROM dataset_items WHERE dataset_id = $1"
+    ))
+    .bind(dataset_id.to_string())
+    .fetch_all(pool)
+    .await
+    .map_err(pgerr)?;
     rows.iter().map(item_from_row).collect()
 }
 

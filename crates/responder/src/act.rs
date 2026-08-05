@@ -65,7 +65,13 @@ pub(crate) async fn run_act(
     let safe: String = spike
         .project_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let branch = format!("lt-fix/{safe}-{ts}");
     if !git::checkout_new(&entry.repo, &branch).await {
@@ -74,21 +80,34 @@ pub(crate) async fn run_act(
 
     let prompt = build_fix_prompt(entry, spike, diagnosis);
     // No tool allowlist: the fix run needs edit + test tools, gated by act_permission_mode (acceptEdits).
-    let run = claude::run(cfg, &entry.repo, &cfg.defaults.act_permission_mode, &[], &prompt).await;
+    let run = claude::run(
+        cfg,
+        &entry.repo,
+        &cfg.defaults.act_permission_mode,
+        &[],
+        &prompt,
+    )
+    .await;
 
     let applied = git::has_changes(&entry.repo).await;
     let mut tests = None;
     let notes;
     if applied {
         breaker.record(&spike.project_id);
-        git::add_commit(&entry.repo, &format!("lt-responder auto-fix: {} ({ts})", spike.project_id))
-            .await;
+        git::add_commit(
+            &entry.repo,
+            &format!("lt-responder auto-fix: {} ({ts})", spike.project_id),
+        )
+        .await;
         if let Some(cmd) = &entry.test_cmd {
             tests = Some(run_test(&entry.repo, cmd, cfg.defaults.timeout_secs).await);
         }
         notes = run.text;
     } else {
-        notes = format!("no changes applied (claude judged no confident fix):\n\n{}", run.text);
+        notes = format!(
+            "no changes applied (claude judged no confident fix):\n\n{}",
+            run.text
+        );
     }
 
     // Always put the user's working copy back the way we found it.
@@ -114,7 +133,9 @@ async fn run_test(repo: &str, test_cmd: &str, timeout_secs: u64) -> bool {
         c.arg("-c").arg(test_cmd);
         c
     };
-    cmd.current_dir(repo).stdin(Stdio::null()).kill_on_drop(true);
+    cmd.current_dir(repo)
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
     matches!(
         tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await,
         Ok(Ok(o)) if o.status.success()

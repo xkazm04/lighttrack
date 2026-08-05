@@ -19,7 +19,11 @@ pub(crate) fn run(cfg: &AgentConfig, once: bool) -> Result<()> {
         model: String::new(), // per-action models; the engine default is never used
         bare: false,          // subscription OAuth — the whole point of the relay
     };
-    let clients = cfg.sources.iter().map(Client::new).collect::<Result<Vec<_>>>()?;
+    let clients = cfg
+        .sources
+        .iter()
+        .map(Client::new)
+        .collect::<Result<Vec<_>>>()?;
 
     loop {
         let mut worked = false;
@@ -30,7 +34,11 @@ pub(crate) fn run(cfg: &AgentConfig, once: bool) -> Result<()> {
                         worked = true;
                         println!(
                             "[{}] task {} ({}) attempt {}/{}",
-                            client.name, task.id, task.action_type, task.attempts, task.max_attempts
+                            client.name,
+                            task.id,
+                            task.action_type,
+                            task.attempts,
+                            task.max_attempts
                         );
                         let report = exec::execute(cfg, &engine, &task);
                         match report.status {

@@ -30,7 +30,10 @@ pub const DETERMINISM_LEVELS: &[&str] = &["exact", "best-effort", "sampled"];
 /// Clamp a contributed determinism stamp to [`DETERMINISM_LEVELS`]; anything else ⇒ `None`.
 pub fn canon_determinism(s: &str) -> Option<String> {
     let s = s.trim().to_lowercase();
-    DETERMINISM_LEVELS.iter().find(|l| **l == s).map(|l| l.to_string())
+    DETERMINISM_LEVELS
+        .iter()
+        .find(|l| **l == s)
+        .map(|l| l.to_string())
 }
 
 /// Rank, strongest first. Unknown labels sort weakest so a fold can never *strengthen* a claim.
@@ -160,12 +163,18 @@ mod tests {
 
     #[test]
     fn determinism_folds_to_the_weakest_and_silence_absorbs() {
-        assert_eq!(weakest_determinism(Some("exact"), Some("sampled")).as_deref(), Some("sampled"));
+        assert_eq!(
+            weakest_determinism(Some("exact"), Some("sampled")).as_deref(),
+            Some("sampled")
+        );
         assert_eq!(
             weakest_determinism(Some("exact"), Some("best-effort")).as_deref(),
             Some("best-effort")
         );
-        assert_eq!(weakest_determinism(Some("exact"), Some("exact")).as_deref(), Some("exact"));
+        assert_eq!(
+            weakest_determinism(Some("exact"), Some("exact")).as_deref(),
+            Some("exact")
+        );
         // An unrecorded run cannot vouch for the recorded ones.
         assert!(weakest_determinism(Some("exact"), None).is_none());
         assert!(weakest_determinism(None, None).is_none());
@@ -174,16 +183,28 @@ mod tests {
     #[test]
     fn unknown_labels_never_become_a_level() {
         assert_eq!(canon_determinism(" Exact ").as_deref(), Some("exact"));
-        assert_eq!(canon_determinism("best-effort").as_deref(), Some("best-effort"));
+        assert_eq!(
+            canon_determinism("best-effort").as_deref(),
+            Some("best-effort")
+        );
         assert!(canon_determinism("perfectly-reproducible").is_none());
         assert!(canon_determinism("").is_none());
     }
 
     #[test]
     fn coverage_degrades_on_any_disagreement_or_silence() {
-        assert_eq!(Coverage::of(Some(true)).fold(Coverage::of(Some(true))), Coverage::All);
-        assert_eq!(Coverage::of(Some(false)).fold(Coverage::of(Some(false))), Coverage::None);
-        assert_eq!(Coverage::of(Some(true)).fold(Coverage::of(Some(false))), Coverage::Mixed);
+        assert_eq!(
+            Coverage::of(Some(true)).fold(Coverage::of(Some(true))),
+            Coverage::All
+        );
+        assert_eq!(
+            Coverage::of(Some(false)).fold(Coverage::of(Some(false))),
+            Coverage::None
+        );
+        assert_eq!(
+            Coverage::of(Some(true)).fold(Coverage::of(Some(false))),
+            Coverage::Mixed
+        );
         // Agreement resting on silence is not agreement.
         assert_eq!(Coverage::All.fold(Coverage::Unknown), Coverage::Mixed);
         assert_eq!(Coverage::Unknown.fold(Coverage::Unknown), Coverage::Unknown);
@@ -197,7 +218,10 @@ mod tests {
         }
         // Unknown stores as NULL and reads back as Unknown — no backfill for v1/v2 rows.
         assert!(Coverage::Unknown.to_tag().is_none());
-        assert_eq!(Coverage::from_tag("whatever-the-poster-typed"), Coverage::Unknown);
+        assert_eq!(
+            Coverage::from_tag("whatever-the-poster-typed"),
+            Coverage::Unknown
+        );
     }
 
     #[test]
@@ -214,7 +238,11 @@ mod tests {
             ..uniform.clone()
         };
         assert!(mixed.is_mixed());
-        assert!(RowRigor { frozen_dataset: Coverage::Mixed, ..uniform }.is_mixed());
+        assert!(RowRigor {
+            frozen_dataset: Coverage::Mixed,
+            ..uniform
+        }
+        .is_mixed());
     }
 
     #[test]

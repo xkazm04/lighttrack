@@ -23,7 +23,10 @@ fn winner_line(best: Option<&Value>, fallback: Option<(&str, f64)>) -> Option<St
     };
     let label = s(b, "label");
     let mean = f(b, "mean");
-    let correction = b.get("correction").and_then(Value::as_str).unwrap_or("uncorrected");
+    let correction = b
+        .get("correction")
+        .and_then(Value::as_str)
+        .unwrap_or("uncorrected");
     let p = b.get("p_value").and_then(Value::as_f64);
     if b.get("significant").and_then(Value::as_bool) == Some(true) {
         let runner_up = s(b, "runner_up");
@@ -37,8 +40,12 @@ fn winner_line(best: Option<&Value>, fallback: Option<(&str, f64)>) -> Option<St
         .get("note")
         .and_then(Value::as_str)
         .unwrap_or("no significant difference from the runner-up");
-    let p_txt = p.map(|p| format!(" (p={p:.4}; {correction})")).unwrap_or_default();
-    Some(format!("\nHighest mean: {label} ({mean:.2}) — {note}{p_txt}.\n"))
+    let p_txt = p
+        .map(|p| format!(" (p={p:.4}; {correction})"))
+        .unwrap_or_default();
+    Some(format!(
+        "\nHighest mean: {label} ({mean:.2}) — {note}{p_txt}.\n"
+    ))
 }
 
 pub(crate) fn leaderboard(v: &Value) -> Option<String> {
@@ -74,7 +81,9 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
             format!("{:.2}", f(r, "agreement")),
             money(f(r, "gen_cost_usd")),
             money(f(r, "judge_cost_usd")),
-            opt_u(r, "p50_latency_ms").map(|m| format!("{m}ms")).unwrap_or_else(|| "—".into()),
+            opt_u(r, "p50_latency_ms")
+                .map(|m| format!("{m}ms"))
+                .unwrap_or_else(|| "—".into()),
             errored.to_string(),
         ]);
     }
@@ -84,7 +93,9 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
     if v.get("budget_halted").and_then(Value::as_bool) == Some(true) {
         let spent = f(v, "spend_usd");
         let limit = v.get("budget_limit_usd").and_then(Value::as_f64);
-        let cap = limit.map(|l| format!(" (limit {})", money(l))).unwrap_or_default();
+        let cap = limit
+            .map(|l| format!(" (limit {})", money(l)))
+            .unwrap_or_default();
         out.push_str(&format!(
             "\n**PARTIAL — the run was halted at its spend ceiling after {}{cap}; some cases were \
              never judged.**\n",
@@ -93,7 +104,11 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
     }
     // Unpriced models make every $ column a lower bound. Surfaced here rather than only inside each
     // run report's nested array, which nobody reading the table ever opens.
-    if let Some(w) = v.get("price_warnings").and_then(Value::as_array).filter(|w| !w.is_empty()) {
+    if let Some(w) = v
+        .get("price_warnings")
+        .and_then(Value::as_array)
+        .filter(|w| !w.is_empty())
+    {
         let models: Vec<&str> = w.iter().filter_map(Value::as_str).collect();
         out.push_str(&format!(
             "\n_No price book entry for {} — the $ columns are a lower bound._\n",
@@ -120,8 +135,14 @@ mod tests {
             "price_warnings": ["zz/yy"],
         }))
         .unwrap();
-        assert!(md.contains("**PARTIAL"), "a halted run must not read as a finished one");
-        assert!(md.contains("$12.50") && md.contains("$12.00"), "spend and ceiling are both shown");
+        assert!(
+            md.contains("**PARTIAL"),
+            "a halted run must not read as a finished one"
+        );
+        assert!(
+            md.contains("$12.50") && md.contains("$12.00"),
+            "spend and ceiling are both shown"
+        );
         assert!(md.contains("zz/yy") && md.contains("lower bound"));
     }
 
@@ -144,7 +165,10 @@ mod tests {
         let line = winner_line(Some(&claim), None).unwrap();
         assert!(line.contains("**Best: gpt-4o (0.91)**"));
         assert!(line.contains("significantly ahead of haiku"));
-        assert!(line.contains("p=0.0012") && line.contains("Bonferroni"), "the method is named");
+        assert!(
+            line.contains("p=0.0012") && line.contains("Bonferroni"),
+            "the method is named"
+        );
     }
 
     #[test]
@@ -157,7 +181,10 @@ mod tests {
             "correction": "Bonferroni over 1 target pair(s), family-wise α=0.05",
         });
         let line = winner_line(Some(&claim), None).unwrap();
-        assert!(!line.contains("**Best"), "an undecidable ranking must not be bolded as a winner");
+        assert!(
+            !line.contains("**Best"),
+            "an undecidable ranking must not be bolded as a winner"
+        );
         assert!(line.contains("Highest mean: a (0.87)"));
         assert!(line.contains("no significant difference"));
     }

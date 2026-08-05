@@ -81,9 +81,16 @@ pub(crate) fn between_sources(weights: &[f64], qualities: &[f64]) -> Between {
         return Between { tau2: None, sum_p2 };
     }
     let mean: f64 = p.iter().zip(qualities).map(|(pi, q)| pi * q).sum();
-    let raw: f64 = p.iter().zip(qualities).map(|(pi, q)| pi * (q - mean).powi(2)).sum();
+    let raw: f64 = p
+        .iter()
+        .zip(qualities)
+        .map(|(pi, q)| pi * (q - mean).powi(2))
+        .sum();
     let corrected = raw * k as f64 / (k as f64 - 1.0);
-    Between { tau2: Some(corrected.max(0.0)), sum_p2 }
+    Between {
+        tau2: Some(corrected.max(0.0)),
+        sum_p2,
+    }
 }
 
 #[cfg(test)]
@@ -129,7 +136,7 @@ mod tests {
         let b = between_sources(&[500.0], &[0.9]);
         assert!(b.tau2.is_none(), "k=1 has no between-source evidence");
         assert!(b.spread().is_none(), "…and nothing to display");
-        approx(b.se2(), 0.0, );
+        approx(b.se2(), 0.0);
         approx(b.sum_p2, 1.0);
     }
 

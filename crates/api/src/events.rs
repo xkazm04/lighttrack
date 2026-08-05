@@ -101,7 +101,9 @@ fn stamp_api_key(ev: &mut LlmEvent, key_id: Option<&str>) {
         }
         (v, Some(id)) if v.is_null() => {
             *v = Value::Object(
-                [("api_key_id".to_string(), Value::String(id.to_string()))].into_iter().collect(),
+                [("api_key_id".to_string(), Value::String(id.to_string()))]
+                    .into_iter()
+                    .collect(),
             );
         }
         // Null metadata with no key, or non-object metadata (client-owned scalar/array — it can hold
@@ -122,7 +124,9 @@ fn mark_cost_source(ev: &mut LlmEvent, client_supplied: bool) {
         Value::Object(m) => {
             m.insert("cost_source".to_string(), src);
         }
-        v @ Value::Null => *v = Value::Object([("cost_source".to_string(), src)].into_iter().collect()),
+        v @ Value::Null => {
+            *v = Value::Object([("cost_source".to_string(), src)].into_iter().collect())
+        }
         _ => {} // non-object, non-null metadata is client-owned: don't clobber it
     }
 }
@@ -131,9 +135,17 @@ fn mark_cost_source(ev: &mut LlmEvent, client_supplied: bool) {
 /// deliver breach alerts, count a rejected event into the rejection ledger, and (for an admitted
 /// non-success call) feed error-spike detection. Returns the breached statuses so the caller can
 /// shape its response (429 vs. observe-only flag).
-pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) -> Vec<LimitStatus> {
-    let breached: Vec<LimitStatus> =
-        admission.statuses.iter().filter(|s| s.breached).cloned().collect();
+pub(crate) fn on_admission(
+    st: &AppState,
+    ev: &LlmEvent,
+    admission: &Admission,
+) -> Vec<LimitStatus> {
+    let breached: Vec<LimitStatus> = admission
+        .statuses
+        .iter()
+        .filter(|s| s.breached)
+        .cloned()
+        .collect();
     for b in &breached {
         tracing::warn!(
             project_id = %b.project_id,
@@ -173,8 +185,12 @@ pub(crate) fn on_admission(st: &AppState, ev: &LlmEvent, admission: &Admission) 
     // breaching — the operator's early heads-up before the cap actually bites. Only when admitted, so
     // the usage the warning reports genuinely includes a recorded event (a rejected event isn't stored).
     if admission.admitted {
-        let warnings: Vec<LimitStatus> =
-            admission.statuses.iter().filter(|s| s.warning).cloned().collect();
+        let warnings: Vec<LimitStatus> = admission
+            .statuses
+            .iter()
+            .filter(|s| s.warning)
+            .cloned()
+            .collect();
         if !warnings.is_empty() {
             st.alerts.notify_warnings(&warnings);
         }
@@ -201,8 +217,14 @@ fn record_rejection(
     // Every status that turned this event away, hard stop or graduated shed alike — otherwise the
     // ledger would go blind exactly while throttling is doing its job.
     for b in statuses.iter().filter(|s| s.rejects_ingest() || s.shedding) {
-        let count =
-            st.rejections.record(&b.project_id, b.metric, b.window, b.scope.clone(), cost, now);
+        let count = st.rejections.record(
+            &b.project_id,
+            b.metric,
+            b.window,
+            b.scope.clone(),
+            cost,
+            now,
+        );
         counts.insert(b.alert_key(), count);
     }
     counts
@@ -292,7 +314,10 @@ pub(crate) struct IngestResponse {
 /// The proximity pair returned on an accepted write: the worst usage ratio across the rules that
 /// applied, and the strongest shedding pressure among them.
 fn proximity(statuses: &[LimitStatus]) -> (Option<f64>, Option<f64>) {
-    let ratio = statuses.iter().map(|s| s.ratio).fold(None::<f64>, |a, r| Some(a.map_or(r, |a| a.max(r))));
+    let ratio = statuses
+        .iter()
+        .map(|s| s.ratio)
+        .fold(None::<f64>, |a, r| Some(a.map_or(r, |a| a.max(r))));
     let shed = statuses
         .iter()
         .map(|s| s.shed_fraction)
@@ -428,7 +453,10 @@ pub(crate) struct EventsParams {
 
 /// Whether a query-string flag reads as set: `1` / `true` / `yes` (case-insensitive).
 fn is_truthy(v: Option<&str>) -> bool {
-    matches!(v.map(str::trim), Some("1") | Some("true") | Some("TRUE") | Some("yes"))
+    matches!(
+        v.map(str::trim),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes")
+    )
 }
 
 /// Parse an optional RFC3339 query param into a UTC instant, 400 on malformed input.
@@ -601,9 +629,14 @@ pub(crate) async fn get_event_by_id(
     let ev = spawn_db(move || store.get_event(&id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("event '{id}' not found")))?;
-    if let Principal::Project { project_id: pid, .. } = &p {
+    if let Principal::Project {
+        project_id: pid, ..
+    } = &p
+    {
         if &ev.project_id != pid {
-            return Err(ApiError::forbidden("key not authorized for that event's project"));
+            return Err(ApiError::forbidden(
+                "key not authorized for that event's project",
+            ));
         }
     }
     Ok(Json(ev))

@@ -69,7 +69,11 @@ pub(crate) fn estimate_compare(
     let mut usd = 0.0;
     for t in targets {
         let (c, priced) = price_gen_cost_checked(
-            prices, &t.provider, &t.model, Some(EST_GEN_IN), Some(EST_GEN_OUT),
+            prices,
+            &t.provider,
+            &t.model,
+            Some(EST_GEN_IN),
+            Some(EST_GEN_OUT),
         );
         if !priced {
             unpriced.insert(format!("{}/{}", t.provider, t.model));
@@ -102,8 +106,8 @@ pub(crate) struct Budget {
 impl Budget {
     /// `limit_usd <= 0` (or non-finite) disables the ceiling.
     pub(crate) fn new(limit_usd: f64) -> Self {
-        let limit_micros = (limit_usd.is_finite() && limit_usd > 0.0)
-            .then(|| (limit_usd * MICROS).round() as u64);
+        let limit_micros =
+            (limit_usd.is_finite() && limit_usd > 0.0).then(|| (limit_usd * MICROS).round() as u64);
         Budget {
             limit_micros,
             spent_micros: AtomicU64::new(0),
@@ -120,7 +124,8 @@ impl Budget {
         if !usd.is_finite() || usd <= 0.0 {
             return;
         }
-        self.spent_micros.fetch_add((usd * MICROS).round() as u64, Ordering::Relaxed);
+        self.spent_micros
+            .fetch_add((usd * MICROS).round() as u64, Ordering::Relaxed);
     }
 
     pub(crate) fn spent_usd(&self) -> f64 {
@@ -165,7 +170,15 @@ mod tests {
 
     #[test]
     fn estimate_counts_every_paid_call_in_the_matrix() {
-        let e = estimate_compare(&[], &[target("a", "m"), target("b", "m")], 200, 10, 2, "o", "j");
+        let e = estimate_compare(
+            &[],
+            &[target("a", "m"), target("b", "m")],
+            200,
+            10,
+            2,
+            "o",
+            "j",
+        );
         // 2 targets × 200 cases × 10 candidates = 4000 generations…
         assert_eq!(e.gen_calls, 4000);
         // …each judged twice = 8000 judge calls. This is the fat-finger case the gate exists for.
@@ -174,15 +187,28 @@ mod tests {
 
     #[test]
     fn estimate_prices_from_the_book_and_flags_misses() {
-        let prices = vec![price("a", "m", 1_000.0, 1_000.0), price("o", "j", 1_000.0, 1_000.0)];
+        let prices = vec![
+            price("a", "m", 1_000.0, 1_000.0),
+            price("o", "j", 1_000.0, 1_000.0),
+        ];
         // $1000/Mtok both ways ⇒ a 1k-in/0.5k-out generation is $1.5; a 1.5k/0.4k judge call $1.9.
         let e = estimate_compare(&prices, &[target("a", "m")], 2, 1, 1, "o", "j");
-        assert!((e.usd - (2.0 * 1.5 + 2.0 * 1.9)).abs() < 1e-9, "got {}", e.usd);
+        assert!(
+            (e.usd - (2.0 * 1.5 + 2.0 * 1.9)).abs() < 1e-9,
+            "got {}",
+            e.usd
+        );
         assert!(e.unpriced.is_empty());
         // An unpriced target contributes $0 — so the estimate is a LOWER bound and says so.
         let e = estimate_compare(&prices, &[target("zz", "yy")], 2, 1, 1, "o", "j");
-        assert_eq!(e.unpriced.iter().cloned().collect::<Vec<_>>(), vec!["zz/yy".to_string()]);
-        assert!(e.line().contains("≥$"), "an unpriced matrix must not print a tilde estimate");
+        assert_eq!(
+            e.unpriced.iter().cloned().collect::<Vec<_>>(),
+            vec!["zz/yy".to_string()]
+        );
+        assert!(
+            e.line().contains("≥$"),
+            "an unpriced matrix must not print a tilde estimate"
+        );
     }
 
     #[test]
@@ -202,7 +228,10 @@ mod tests {
         assert!(!b.exhausted());
         assert!((b.spent_usd() - 0.4).abs() < 1e-9);
         b.spend(0.6);
-        assert!(b.exhausted(), "spend == limit is exhausted (the next case would overshoot)");
+        assert!(
+            b.exhausted(),
+            "spend == limit is exhausted (the next case would overshoot)"
+        );
         // Exhausted alone isn't "partial" — a run that spent its last cent on the LAST case is
         // complete. Only skipping work marks it.
         assert!(!b.halted());

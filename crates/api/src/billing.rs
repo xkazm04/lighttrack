@@ -26,16 +26,20 @@ pub(crate) async fn post_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, ApiError> {
-    let source = st
-        .billing
-        .get(&provider)
-        .ok_or_else(|| ApiError::not_found(format!("billing provider '{provider}' is not configured")))?;
+    let source = st.billing.get(&provider).ok_or_else(|| {
+        ApiError::not_found(format!("billing provider '{provider}' is not configured"))
+    })?;
     let project = q
         .project
         .ok_or_else(|| ApiError::bad_request("webhook URL must include ?project=<id>"))?;
 
     let now = chrono::Utc::now().timestamp();
-    let lookup = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let lookup = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
     let mut events = source
         .verify_webhook(&lookup, &body, now)
         .map_err(|e| ApiError::unauthorized(e.to_string()))?;
@@ -50,7 +54,10 @@ pub(crate) async fn post_webhook(
     {
         let store = st.store.clone();
         let project_id = project.clone();
-        if spawn_db(move || store.get_project(&project_id)).await?.is_none() {
+        if spawn_db(move || store.get_project(&project_id))
+            .await?
+            .is_none()
+        {
             return Err(ApiError::not_found(format!(
                 "project '{project}' does not exist (check the webhook URL's ?project=)"
             )));

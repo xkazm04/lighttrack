@@ -50,7 +50,11 @@ pub(super) struct ReadPool {
 impl ReadPool {
     /// A pool that hands out nothing — callers fall back to the write connection.
     pub(super) fn disabled() -> Self {
-        Self { idle: Mutex::new(Vec::new()), free: Condvar::new(), size: 0 }
+        Self {
+            idle: Mutex::new(Vec::new()),
+            free: Condvar::new(),
+            size: 0,
+        }
     }
 
     /// Open `size` read-only connections against an already-migrated database file.
@@ -64,7 +68,11 @@ impl ReadPool {
             c.busy_timeout(BUSY_TIMEOUT)?;
             conns.push(c);
         }
-        Ok(Self { idle: Mutex::new(conns), free: Condvar::new(), size })
+        Ok(Self {
+            idle: Mutex::new(conns),
+            free: Condvar::new(),
+            size,
+        })
     }
 
     #[cfg(test)]
@@ -80,7 +88,10 @@ impl ReadPool {
         let mut idle = self.idle.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
             if let Some(conn) = idle.pop() {
-                return Some(Pooled { pool: self, conn: Some(conn) });
+                return Some(Pooled {
+                    pool: self,
+                    conn: Some(conn),
+                });
             }
             idle = self.free.wait(idle).unwrap_or_else(PoisonError::into_inner);
         }
@@ -97,14 +108,20 @@ pub(super) struct Pooled<'a> {
 impl Deref for Pooled<'_> {
     type Target = Connection;
     fn deref(&self) -> &Connection {
-        self.conn.as_ref().expect("pooled connection taken only in Drop")
+        self.conn
+            .as_ref()
+            .expect("pooled connection taken only in Drop")
     }
 }
 
 impl Drop for Pooled<'_> {
     fn drop(&mut self) {
         if let Some(conn) = self.conn.take() {
-            let mut idle = self.pool.idle.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut idle = self
+                .pool
+                .idle
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             idle.push(conn);
             drop(idle);
             self.pool.free.notify_one();

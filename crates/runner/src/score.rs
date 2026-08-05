@@ -10,7 +10,9 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use lighttrack_core::LlmEvent;
-use lighttrack_engine::{build_judge_prompt, parse_judge_spec, run_judge, EngineConfig, JudgeOutcome};
+use lighttrack_engine::{
+    build_judge_prompt, parse_judge_spec, run_judge, EngineConfig, JudgeOutcome,
+};
 
 use crate::cli::Cli;
 use crate::http::{get, post};
@@ -31,7 +33,10 @@ pub(crate) fn score_recent(
     jobs: usize,
 ) -> Result<()> {
     if interval > 0 {
-        println!("online scoring every {interval}s (judge={}, limit={limit})", engine.model);
+        println!(
+            "online scoring every {interval}s (judge={}, limit={limit})",
+            engine.model
+        );
     }
     loop {
         score_once(cli, http, engine, rubric, project, limit, jobs)?;
@@ -98,11 +103,16 @@ fn score_once(
             outcome.verdict.score,
             outcome.verdict.max,
             outcome.verdict.pass,
-            outcome.cost_usd.map(|c| format!("${c:.5}")).unwrap_or_else(|| "n/a".into()),
+            outcome
+                .cost_usd
+                .map(|c| format!("${c:.5}"))
+                .unwrap_or_else(|| "n/a".into()),
             outcome.verdict.reasoning
         );
     }
-    println!("scored {scored}, skipped {skipped} (already-scored or no content) of {total} fetched");
+    println!(
+        "scored {scored}, skipped {skipped} (already-scored or no content) of {total} fetched"
+    );
     Ok(scored)
 }
 

@@ -203,7 +203,9 @@ impl AnyValue {
         if let Some(d) = self.double_value {
             return (d >= 0.0).then_some(d as u64);
         }
-        self.string_value.as_deref().and_then(|s| s.trim().parse::<u64>().ok())
+        self.string_value
+            .as_deref()
+            .and_then(|s| s.trim().parse::<u64>().ok())
     }
 
     pub fn as_f64(&self) -> Option<f64> {
@@ -213,7 +215,9 @@ impl AnyValue {
         if let Some(n) = &self.int_value {
             return n.as_f64();
         }
-        self.string_value.as_deref().and_then(|s| s.trim().parse::<f64>().ok())
+        self.string_value
+            .as_deref()
+            .and_then(|s| s.trim().parse::<f64>().ok())
     }
 
     /// Plain-JSON projection, used for payload attributes (prompts/completions). A string that is
@@ -233,10 +237,16 @@ impl AnyValue {
             return Value::Bool(b);
         }
         if let Some(d) = self.double_value {
-            return serde_json::Number::from_f64(d).map(Value::Number).unwrap_or(Value::Null);
+            return serde_json::Number::from_f64(d)
+                .map(Value::Number)
+                .unwrap_or(Value::Null);
         }
         if let Some(n) = &self.int_value {
-            return n.as_i128().and_then(|v| i64::try_from(v).ok()).map(Value::from).unwrap_or(Value::Null);
+            return n
+                .as_i128()
+                .and_then(|v| i64::try_from(v).ok())
+                .map(Value::from)
+                .unwrap_or(Value::Null);
         }
         if let Some(a) = &self.array_value {
             return Value::Array(a.values.iter().map(AnyValue::to_json).collect());
@@ -245,7 +255,15 @@ impl AnyValue {
             let m: Map<String, Value> = kv
                 .values
                 .iter()
-                .map(|k| (k.key.clone(), k.value.as_ref().map(AnyValue::to_json).unwrap_or(Value::Null)))
+                .map(|k| {
+                    (
+                        k.key.clone(),
+                        k.value
+                            .as_ref()
+                            .map(AnyValue::to_json)
+                            .unwrap_or(Value::Null),
+                    )
+                })
                 .collect();
             return Value::Object(m);
         }

@@ -106,7 +106,13 @@ pub(crate) async fn update_progress(pool: &PgPool, id: &str, progress: &str) -> 
     Ok(())
 }
 
-pub(crate) async fn finish(pool: &PgPool, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()> {
+pub(crate) async fn finish(
+    pool: &PgPool,
+    id: &str,
+    status: &str,
+    result: &Value,
+    error: Option<&str>,
+) -> Result<()> {
     let result_s = json_or_null(result)?;
     // An error means the job RAN and the work failed → it consumes the retry budget (`failures`).
     // A clean finish, including a cancellation, never does.
@@ -115,14 +121,14 @@ pub(crate) async fn finish(pool: &PgPool, id: &str, status: &str, result: &Value
                 failures = failures + (CASE WHEN $4::text IS NULL THEN 0 ELSE 1 END) \
          WHERE id = $1",
     )
-        .bind(id.to_string())
-        .bind(status.to_string())
-        .bind(result_s)
-        .bind(error.map(str::to_string))
-        .bind(fmt_ts(Utc::now()))
-        .execute(pool)
-        .await
-        .map_err(pgerr)?;
+    .bind(id.to_string())
+    .bind(status.to_string())
+    .bind(result_s)
+    .bind(error.map(str::to_string))
+    .bind(fmt_ts(Utc::now()))
+    .execute(pool)
+    .await
+    .map_err(pgerr)?;
     Ok(())
 }
 
@@ -147,10 +153,12 @@ pub(crate) async fn list(pool: &PgPool, status: Option<&str>, limit: usize) -> R
             .await
         }
         None => {
-            sqlx::query(&format!("SELECT {COLS} FROM jobs ORDER BY created_at DESC LIMIT $1"))
-                .bind(limit as i64)
-                .fetch_all(pool)
-                .await
+            sqlx::query(&format!(
+                "SELECT {COLS} FROM jobs ORDER BY created_at DESC LIMIT $1"
+            ))
+            .bind(limit as i64)
+            .fetch_all(pool)
+            .await
         }
     }
     .map_err(pgerr)?;

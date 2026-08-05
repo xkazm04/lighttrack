@@ -11,12 +11,21 @@ pub fn task_type_from(name: &str, hint: Option<&str>) -> String {
         ("summarization", &["summ", "tldr", "abstract"]),
         ("translation", &["translat", "localiz", "i18n"]),
         ("extraction", &["extract", "parse", "ner", "entit"]),
-        ("classification", &["classif", "categor", "intent", "sentiment", "moderation"]),
-        ("coding", &["code", "coding", "program", "sql", "bug", "refactor"]),
+        (
+            "classification",
+            &["classif", "categor", "intent", "sentiment", "moderation"],
+        ),
+        (
+            "coding",
+            &["code", "coding", "program", "sql", "bug", "refactor"],
+        ),
         ("rag", &["rag", "retriev", "grounded", "citation"]),
         ("reasoning", &["reason", "math", "logic", "plan", "agent"]),
         ("qa", &["qa", "question", "answer", "faq", "support"]),
-        ("generation", &["generat", "writ", "draft", "compose", "creative"]),
+        (
+            "generation",
+            &["generat", "writ", "draft", "compose", "creative"],
+        ),
     ];
     for (label, keys) in table {
         if keys.iter().any(|k| hay.contains(k)) {
@@ -33,7 +42,10 @@ mod tests {
 
     #[test]
     fn classifier_returns_fixed_vocabulary() {
-        assert_eq!(task_type_from("Nightly summarization eval", None), "summarization");
+        assert_eq!(
+            task_type_from("Nightly summarization eval", None),
+            "summarization"
+        );
         assert_eq!(task_type_from("SQL bug-fix bench", None), "coding");
         assert_eq!(task_type_from("Customer FAQ answering", None), "qa");
         assert_eq!(task_type_from("Grounded RAG citations", None), "rag");

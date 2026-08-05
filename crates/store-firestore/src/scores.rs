@@ -21,7 +21,9 @@ pub(crate) fn insert_score(rest: &Rest, s: &Score) -> Result<()> {
     // Verdict provenance as a JSON string field (as on the SQL backends) — read back whole with the
     // score and never filtered on, so it needs no Firestore map/index.
     let detail = match &s.detail {
-        Some(d) if !d.is_empty() => Some(serde_json::to_string(d).map_err(lighttrack_store::StoreError::from)?),
+        Some(d) if !d.is_empty() => {
+            Some(serde_json::to_string(d).map_err(lighttrack_store::StoreError::from)?)
+        }
         _ => None,
     };
     m.insert("detail".into(), json!(detail));

@@ -27,7 +27,11 @@ const RECURRENCE_KEY: &str = "schedule_interval_secs";
 /// Read a benchmark's opt-in recurrence interval (seconds) from its `target`, or `None` when unset —
 /// including a matrix/array `target` that can't carry it. Zero is treated as disabled.
 pub(crate) fn recurrence_secs(bench: &Benchmark) -> Option<u64> {
-    bench.target.get(RECURRENCE_KEY).and_then(Value::as_u64).filter(|s| *s > 0)
+    bench
+        .target
+        .get(RECURRENCE_KEY)
+        .and_then(Value::as_u64)
+        .filter(|s| *s > 0)
 }
 
 /// Whether a recurring benchmark is due to run now. Pure, so it is unit-testable in isolation:
@@ -66,10 +70,23 @@ pub(crate) fn check_and_enqueue(cli: &Cli, http: &reqwest::blocking::Client) -> 
             };
             let has_job = inflight.contains(&b.id);
             // Skip the run-history fetch when a job is already in flight (it can't be due anyway).
-            let last = if has_job { None } else { latest_run_time(cli, http, &b.id)? };
+            let last = if has_job {
+                None
+            } else {
+                latest_run_time(cli, http, &b.id)?
+            };
             if is_due(interval, last, has_job, now) {
-                post(cli, http, &format!("/v1/benchmarks/{}/enqueue", b.id), &json!({ "samples": 1 }))?;
-                println!("recurrence: enqueued bench_run for {} ({})", short(&b.id), b.name);
+                post(
+                    cli,
+                    http,
+                    &format!("/v1/benchmarks/{}/enqueue", b.id),
+                    &json!({ "samples": 1 }),
+                )?;
+                println!(
+                    "recurrence: enqueued bench_run for {} ({})",
+                    short(&b.id),
+                    b.name
+                );
                 enqueued += 1;
             }
         }
@@ -119,12 +136,21 @@ mod tests {
 
     #[test]
     fn reads_interval_from_target() {
-        assert_eq!(recurrence_secs(&bench(json!({ "schedule_interval_secs": 3600 }))), Some(3600));
+        assert_eq!(
+            recurrence_secs(&bench(json!({ "schedule_interval_secs": 3600 }))),
+            Some(3600)
+        );
         // Zero / missing / null / a matrix array all read as "no recurrence".
-        assert_eq!(recurrence_secs(&bench(json!({ "schedule_interval_secs": 0 }))), None);
+        assert_eq!(
+            recurrence_secs(&bench(json!({ "schedule_interval_secs": 0 }))),
+            None
+        );
         assert_eq!(recurrence_secs(&bench(json!({ "endpoint": "x" }))), None);
         assert_eq!(recurrence_secs(&bench(json!(null))), None);
-        assert_eq!(recurrence_secs(&bench(json!([{ "provider": "o", "model": "m" }]))), None);
+        assert_eq!(
+            recurrence_secs(&bench(json!([{ "provider": "o", "model": "m" }]))),
+            None
+        );
     }
 
     #[test]
@@ -132,22 +158,42 @@ mod tests {
         let now = Utc::now();
         assert!(!is_due(0, None, false, now)); // interval 0 = disabled
         assert!(!is_due(3600, None, true, now)); // in-flight job → don't stack
-        assert!(!is_due(3600, Some(now - Duration::seconds(10_000)), true, now)); // stale but in-flight
+        assert!(!is_due(
+            3600,
+            Some(now - Duration::seconds(10_000)),
+            true,
+            now
+        )); // stale but in-flight
     }
 
     #[test]
     fn due_when_never_run_or_older_than_interval() {
         let now = Utc::now();
         assert!(is_due(3600, None, false, now)); // never run
-        assert!(is_due(3600, Some(now - Duration::seconds(3601)), false, now)); // just past interval
+        assert!(is_due(
+            3600,
+            Some(now - Duration::seconds(3601)),
+            false,
+            now
+        )); // just past interval
         assert!(is_due(3600, Some(now - Duration::days(2)), false, now)); // long past
     }
 
     #[test]
     fn not_due_within_interval() {
         let now = Utc::now();
-        assert!(!is_due(3600, Some(now - Duration::seconds(100)), false, now));
+        assert!(!is_due(
+            3600,
+            Some(now - Duration::seconds(100)),
+            false,
+            now
+        ));
         // Exactly at the boundary counts as due (>=).
-        assert!(is_due(3600, Some(now - Duration::seconds(3600)), false, now));
+        assert!(is_due(
+            3600,
+            Some(now - Duration::seconds(3600)),
+            false,
+            now
+        ));
     }
 }

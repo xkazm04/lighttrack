@@ -90,7 +90,10 @@ mod tests {
         let calls = Cell::new(0u32);
         let out: Result<u32> = with_retry(|| {
             calls.set(calls.get() + 1);
-            Err(EngineError::ServerError { who: "test".into(), status: 503 })
+            Err(EngineError::ServerError {
+                who: "test".into(),
+                status: 503,
+            })
         });
         assert!(out.is_err());
         assert_eq!(calls.get(), MAX_TRIES, "should give up after MAX_TRIES");
@@ -101,7 +104,10 @@ mod tests {
         let calls = Cell::new(0u32);
         let out: Result<u32> = with_retry(|| {
             calls.set(calls.get() + 1);
-            Err(EngineError::Auth { who: "test".into(), status: 401 })
+            Err(EngineError::Auth {
+                who: "test".into(),
+                status: 401,
+            })
         });
         assert!(out.is_err());
         assert_eq!(calls.get(), 1, "auth failure is not retried");

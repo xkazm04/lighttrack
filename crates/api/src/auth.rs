@@ -146,11 +146,7 @@ pub fn verify_key(stored: &str, full_key: &str) -> bool {
 /// Generate a new API key (high-entropy, ~244 bits from two UUIDv4 secrets).
 pub fn generate_key() -> GeneratedKey {
     let prefix = new_id().replace('-', "")[..8].to_string();
-    let secret = format!(
-        "{}{}",
-        new_id().replace('-', ""),
-        new_id().replace('-', "")
-    );
+    let secret = format!("{}{}", new_id().replace('-', ""), new_id().replace('-', ""));
     let full_key = format!("lt_{prefix}_{secret}");
     let key_hash = stored_hash(&full_key);
     GeneratedKey {
@@ -209,7 +205,7 @@ mod tests {
         assert!(!secret_eq("", "s3cret"));
         assert!(!secret_eq("abc", "cba")); // same bytes, different order
         assert!(!secret_eq("s3cret", "S3CRET")); // case is significant
-        // Long, realistic key material: equal compares true, a single flipped last byte false.
+                                                 // Long, realistic key material: equal compares true, a single flipped last byte false.
         let k = generate_key().full_key;
         let mut flipped = k.clone();
         flipped.pop();

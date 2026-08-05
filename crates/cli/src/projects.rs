@@ -9,9 +9,13 @@ use crate::http::call;
 
 pub(crate) fn run(cli: &Cli, action: &ProjectsCmd) -> Result<()> {
     match action {
-        ProjectsCmd::Create { name } => {
-            call(cli, Method::POST, "/v1/projects", Some(json!({ "name": name })), "")
-        }
+        ProjectsCmd::Create { name } => call(
+            cli,
+            Method::POST,
+            "/v1/projects",
+            Some(json!({ "name": name })),
+            "",
+        ),
         ProjectsCmd::List => call(cli, Method::GET, "/v1/projects", None, "list_projects"),
     }
 }

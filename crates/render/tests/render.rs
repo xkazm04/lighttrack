@@ -216,5 +216,8 @@ fn margin_report_flags_unprofitable() {
 fn unknown_kind_falls_back_to_none() {
     assert!(render("no_such_tool", &json!({"x":1})).is_none());
     // empty collections render a friendly note rather than an empty table
-    assert_eq!(render("list_projects", &json!([])).unwrap(), "_No projects._");
+    assert_eq!(
+        render("list_projects", &json!([])).unwrap(),
+        "_No projects._"
+    );
 }

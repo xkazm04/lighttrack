@@ -15,7 +15,10 @@ pub(crate) fn create_job(rest: &Rest, j: &Job) -> Result<()> {
 }
 
 pub(crate) fn get_job(rest: &Rest, id: &str) -> Result<Option<Job>> {
-    rest.get_doc("jobs", id)?.as_ref().map(from_fields).transpose()
+    rest.get_doc("jobs", id)?
+        .as_ref()
+        .map(from_fields)
+        .transpose()
 }
 
 pub(crate) fn list_jobs(rest: &Rest, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
@@ -72,15 +75,26 @@ pub(crate) fn cancel_job(rest: &Rest, id: &str) -> Result<Option<JobCancel>> {
         let Some(doc) = doc_by_id(rest, id)? else {
             return Ok(None);
         };
-        let name = doc.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-        let update_time =
-            doc.get("updateTime").and_then(Value::as_str).unwrap_or_default().to_string();
+        let name = doc
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let update_time = doc
+            .get("updateTime")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         let fields = decode_doc(&doc);
         let status = freq(&fields, "status")?;
         let (next, outcome) = match status.as_str() {
             "queued" => ("cancelled", JobCancel::Cancelled),
             "running" => ("cancelling", JobCancel::Cancelling),
-            other => return Ok(Some(JobCancel::AlreadyFinished { status: other.into() })),
+            other => {
+                return Ok(Some(JobCancel::AlreadyFinished {
+                    status: other.into(),
+                }))
+            }
         };
         let mut m = Fields::new();
         m.insert("status".into(), json!(next));
@@ -98,7 +112,10 @@ pub(crate) fn cancel_job(rest: &Rest, id: &str) -> Result<Option<JobCancel>> {
 
 fn doc_by_id(rest: &Rest, id: &str) -> Result<Option<Value>> {
     let filters: Vec<(&str, &str, Value)> = vec![("id", "EQUAL", json!(id))];
-    Ok(rest.query_raw("jobs", &filters, None, Some(1))?.into_iter().next())
+    Ok(rest
+        .query_raw("jobs", &filters, None, Some(1))?
+        .into_iter()
+        .next())
 }
 
 /// Claim the oldest `queued` (or stale `running`) job atomically: read a candidate, then commit the
@@ -117,8 +134,16 @@ pub(crate) fn claim_job(rest: &Rest, stale_before: DateTime<Utc>) -> Result<Opti
         let Some(doc) = candidate else {
             return Ok(None);
         };
-        let name = doc.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-        let update_time = doc.get("updateTime").and_then(Value::as_str).unwrap_or_default().to_string();
+        let name = doc
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let update_time = doc
+            .get("updateTime")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         let fields = decode_doc(&doc);
         let attempts = fi64(&fields, "attempts").unwrap_or(0) + 1;
         // Reclaiming a `running` job means its worker never finished: a WORKER DEATH, counted apart
@@ -137,7 +162,13 @@ pub(crate) fn claim_job(rest: &Rest, stale_before: DateTime<Utc>) -> Result<Opti
             claim.insert("error".into(), json!(JOB_ERROR_WORKER_LOST));
         }
 
-        let mut mask = vec!["status", "claimed_at", "updated_at", "attempts", "stale_reclaims"];
+        let mut mask = vec![
+            "status",
+            "claimed_at",
+            "updated_at",
+            "attempts",
+            "stale_reclaims",
+        ];
         if reclaimed {
             mask.push("error");
         }
@@ -172,7 +203,10 @@ fn oldest_stale(rest: &Rest, stale: &str) -> Result<Option<Value>> {
         ("status", "EQUAL", json!("running")),
         ("claimed_at", "LESS_THAN", json!(stale)),
     ];
-    Ok(rest.query_raw("jobs", &filters, None, Some(1))?.into_iter().next())
+    Ok(rest
+        .query_raw("jobs", &filters, None, Some(1))?
+        .into_iter()
+        .next())
 }
 
 fn to_fields(j: &Job) -> Result<Fields> {

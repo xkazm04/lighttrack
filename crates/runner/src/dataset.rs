@@ -22,7 +22,11 @@ pub(crate) fn build_dataset(
     n: usize,
     llm_scrub: bool,
 ) -> Result<()> {
-    let events: Vec<LlmEvent> = get(cli, http, &format!("/v1/events?project={project}&limit={n}"))?;
+    let events: Vec<LlmEvent> = get(
+        cli,
+        http,
+        &format!("/v1/events?project={project}&limit={n}"),
+    )?;
     if build_from_events(cli, http, engine, project, name, &events, llm_scrub)? == 0 {
         println!("no events with input to sample; nothing built");
     }
@@ -65,8 +69,11 @@ pub(crate) fn build_from_events(
     let (mut built, mut total_redactions) = (0u32, 0usize);
     let method = if llm_scrub { "regex+llm" } else { "regex" };
     for ev in with_input {
-        let (input_clean, r_in) =
-            scrub_text(&value_to_text(ev.input.as_ref().unwrap()), llm_scrub, engine)?;
+        let (input_clean, r_in) = scrub_text(
+            &value_to_text(ev.input.as_ref().unwrap()),
+            llm_scrub,
+            engine,
+        )?;
         let (output_clean, r_out) = match ev.output.as_ref() {
             Some(o) => {
                 let (c, r) = scrub_text(&value_to_text(o), llm_scrub, engine)?;
@@ -88,8 +95,15 @@ pub(crate) fn build_from_events(
         println!("  + item from {} ({redactions} redactions)", short(&ev.id));
     }
 
-    post(cli, http, &format!("/v1/datasets/{dsid}/freeze"), &json!({}))?;
-    println!("built dataset {dsid} '{name}': {built} items, {total_redactions} total redactions, frozen");
+    post(
+        cli,
+        http,
+        &format!("/v1/datasets/{dsid}/freeze"),
+        &json!({}),
+    )?;
+    println!(
+        "built dataset {dsid} '{name}': {built} items, {total_redactions} total redactions, frozen"
+    );
     Ok(built)
 }
 
@@ -108,7 +122,10 @@ Return ONLY the rewritten text, with no preamble.\n\nTEXT:\n{out}"
         let outcome = run_text(engine, &prompt).context("LLM anonymization (claude -p) failed")?;
         let trimmed = outcome.text.trim();
         if !trimmed.is_empty() {
-            let added = trimmed.matches('<').count().saturating_sub(out.matches('<').count());
+            let added = trimmed
+                .matches('<')
+                .count()
+                .saturating_sub(out.matches('<').count());
             out = trimmed.to_string();
             redactions += added;
         }

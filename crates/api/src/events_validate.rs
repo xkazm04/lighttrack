@@ -48,7 +48,10 @@ pub(crate) struct Rejection {
 
 impl Rejection {
     fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 }
 
@@ -114,20 +117,28 @@ impl IngestPolicy {
         // The legacy symmetric knob wins when set (including `0`, which is the explicit "off" switch
         // an operator ingesting historical archives needs).
         if let Some(sym) = env_i64(ENV_MAX_TS_SKEW) {
-            return Self { max_future_secs: sym.max(0), max_past_secs: sym.max(0) };
+            return Self {
+                max_future_secs: sym.max(0),
+                max_past_secs: sym.max(0),
+            };
         }
         Self {
             max_future_secs: env_i64(ENV_MAX_TS_SKEW_FUTURE)
                 .unwrap_or(DEFAULT_SKEW_FUTURE_SECS)
                 .max(0),
-            max_past_secs: env_i64(ENV_MAX_TS_SKEW_PAST).unwrap_or(DEFAULT_SKEW_PAST_SECS).max(0),
+            max_past_secs: env_i64(ENV_MAX_TS_SKEW_PAST)
+                .unwrap_or(DEFAULT_SKEW_PAST_SECS)
+                .max(0),
         }
     }
 
     /// Validate one event against `now`, returning the first failing rule as a coded [`Rejection`].
     pub(crate) fn validate(&self, ev: &LlmEvent, now: DateTime<Utc>) -> Result<(), Rejection> {
         if ev.model.trim().is_empty() {
-            return Err(Rejection::new(ErrorCode::BadRequest, "`model` must not be empty"));
+            return Err(Rejection::new(
+                ErrorCode::BadRequest,
+                "`model` must not be empty",
+            ));
         }
         // A `provider` outside the modeled variants deserializes to `Unknown` and is ACCEPTED:
         // observability must ingest traffic from providers we haven't modeled yet (mistral, bedrock,
@@ -165,7 +176,9 @@ impl IngestPolicy {
 }
 
 fn env_i64(key: &str) -> Option<i64> {
-    std::env::var(key).ok().and_then(|s| s.trim().parse::<i64>().ok())
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok())
 }
 
 /// The process-wide ingest policy, resolved once from the environment.
@@ -193,7 +206,10 @@ mod tests {
     }
 
     fn disabled_skew() -> IngestPolicy {
-        IngestPolicy { max_future_secs: 0, max_past_secs: 0 }
+        IngestPolicy {
+            max_future_secs: 0,
+            max_past_secs: 0,
+        }
     }
 
     #[test]
@@ -234,16 +250,25 @@ mod tests {
 
     #[test]
     fn ts_skew_enforced_rejects_backdated_and_future_events_with_distinct_codes() {
-        let pol = IngestPolicy { max_future_secs: 3600, max_past_secs: 3600 };
+        let pol = IngestPolicy {
+            max_future_secs: 3600,
+            max_past_secs: 3600,
+        };
         let now = Utc::now();
         // Within the window: accepted.
         let recent = ev(json!({ "ts": (now - chrono::Duration::minutes(30)).to_rfc3339() }));
         assert!(pol.validate(&recent, now).is_ok());
         // Too far in the past / future — separately identifiable, never one blurred "bad ts".
         let old = ev(json!({ "ts": (now - chrono::Duration::hours(5)).to_rfc3339() }));
-        assert_eq!(pol.validate(&old, now).unwrap_err().code, ErrorCode::TsTooOld);
+        assert_eq!(
+            pol.validate(&old, now).unwrap_err().code,
+            ErrorCode::TsTooOld
+        );
         let ahead = ev(json!({ "ts": (now + chrono::Duration::hours(5)).to_rfc3339() }));
-        assert_eq!(pol.validate(&ahead, now).unwrap_err().code, ErrorCode::TsTooNew);
+        assert_eq!(
+            pol.validate(&ahead, now).unwrap_err().code,
+            ErrorCode::TsTooNew
+        );
     }
 
     #[test]
@@ -255,10 +280,19 @@ mod tests {
         };
         let now = Utc::now();
         let day_old = ev(json!({ "ts": (now - chrono::Duration::days(1)).to_rfc3339() }));
-        assert!(pol.validate(&day_old, now).is_ok(), "a day-old backfill is legitimate");
+        assert!(
+            pol.validate(&day_old, now).is_ok(),
+            "a day-old backfill is legitimate"
+        );
         let hour_ahead = ev(json!({ "ts": (now + chrono::Duration::hours(1)).to_rfc3339() }));
-        assert_eq!(pol.validate(&hour_ahead, now).unwrap_err().code, ErrorCode::TsTooNew);
+        assert_eq!(
+            pol.validate(&hour_ahead, now).unwrap_err().code,
+            ErrorCode::TsTooNew
+        );
         let ancient = ev(json!({ "ts": "2000-01-01T00:00:00Z" }));
-        assert_eq!(pol.validate(&ancient, now).unwrap_err().code, ErrorCode::TsTooOld);
+        assert_eq!(
+            pol.validate(&ancient, now).unwrap_err().code,
+            ErrorCode::TsTooOld
+        );
     }
 }

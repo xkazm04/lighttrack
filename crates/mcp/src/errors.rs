@@ -26,9 +26,9 @@ pub(crate) fn map_error(raw: &str) -> String {
 /// The one-line remediation for a status class, or `None` when the body speaks for itself.
 fn guidance(code: u16) -> Option<&'static str> {
     match code {
-        401 | 403 => Some(
-            "authentication failed — set LIGHTTRACK_KEY (and an admin key for write tools).",
-        ),
+        401 | 403 => {
+            Some("authentication failed — set LIGHTTRACK_KEY (and an admin key for write tools).")
+        }
         404 => Some("not found — check the id (list it first with the matching list_* tool)."),
         429 => None, // the breach body names the limit that was hit
         c if c >= 500 => {
@@ -55,7 +55,10 @@ mod tests {
             let out = map_error(&format!("HTTP {code}: {{\"error\":\"nope\"}}"));
             assert!(out.contains("authentication failed"), "{out}");
             assert!(out.contains("LIGHTTRACK_KEY"));
-            assert!(out.contains("{\"error\":\"nope\"}"), "body preserved: {out}");
+            assert!(
+                out.contains("{\"error\":\"nope\"}"),
+                "body preserved: {out}"
+            );
         }
     }
 
@@ -89,9 +92,15 @@ mod tests {
     fn promotion_409_leads_with_a_gate_verdict() {
         let body = "{\"error\":{\"message\":\"promotion blocked: benchmark mean 0.720 regressed below baseline 0.800 (pass force=true to override)\"}}";
         let out = map_error(&format!("HTTP 409: {body}"));
-        assert!(out.contains("promotion blocked by the benchmark regression gate"), "{out}");
+        assert!(
+            out.contains("promotion blocked by the benchmark regression gate"),
+            "{out}"
+        );
         assert!(out.contains("force=true"));
-        assert!(out.contains("regressed below baseline 0.800"), "original body preserved: {out}");
+        assert!(
+            out.contains("regressed below baseline 0.800"),
+            "original body preserved: {out}"
+        );
     }
 
     #[test]
@@ -112,7 +121,10 @@ mod tests {
 
     #[test]
     fn non_http_errors_pass_through() {
-        assert_eq!(map_error("missing required argument: id"), "error: missing required argument: id");
+        assert_eq!(
+            map_error("missing required argument: id"),
+            "error: missing required argument: id"
+        );
         assert_eq!(
             map_error("error sending request for url"),
             "error: error sending request for url"

@@ -99,7 +99,9 @@ pub(crate) fn run(cli: &Cli, action: &LimitsCmd) -> Result<()> {
             )),
             "",
         ),
-        LimitsCmd::Delete { id } => call(cli, Method::DELETE, &format!("/v1/limits/{id}"), None, ""),
+        LimitsCmd::Delete { id } => {
+            call(cli, Method::DELETE, &format!("/v1/limits/{id}"), None, "")
+        }
         LimitsCmd::List { project } => call(
             cli,
             Method::GET,
@@ -127,9 +129,18 @@ mod tests {
 
     #[test]
     fn scope_json_picks_the_one_dimension_that_is_set() {
-        assert_eq!(scope_json(&s("openai"), &None, &None), json!({ "provider": "openai" }));
-        assert_eq!(scope_json(&None, &s("gpt-4o"), &None), json!({ "model": "gpt-4o" }));
-        assert_eq!(scope_json(&None, &None, &s("summarize")), json!({ "name": "summarize" }));
+        assert_eq!(
+            scope_json(&s("openai"), &None, &None),
+            json!({ "provider": "openai" })
+        );
+        assert_eq!(
+            scope_json(&None, &s("gpt-4o"), &None),
+            json!({ "model": "gpt-4o" })
+        );
+        assert_eq!(
+            scope_json(&None, &None, &s("summarize")),
+            json!({ "name": "summarize" })
+        );
     }
 
     /// An unscoped rule must send `null`, not `{}` — the API reads a missing scope as "whole

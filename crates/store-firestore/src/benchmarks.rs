@@ -25,7 +25,10 @@ pub(crate) fn create_benchmark(rest: &Rest, b: &Benchmark) -> Result<()> {
 }
 
 pub(crate) fn get_benchmark(rest: &Rest, id: &str) -> Result<Option<Benchmark>> {
-    rest.get_doc("benchmarks", id)?.as_ref().map(bench_from).transpose()
+    rest.get_doc("benchmarks", id)?
+        .as_ref()
+        .map(bench_from)
+        .transpose()
 }
 
 pub(crate) fn list_benchmarks(rest: &Rest, project: &str) -> Result<Vec<Benchmark>> {
@@ -45,9 +48,18 @@ pub(crate) fn create_benchmark_run(rest: &Rest, r: &BenchmarkRun) -> Result<()> 
     m.insert("pass_rate".into(), json!(r.pass_rate));
     m.insert("cost_usd".into(), json!(r.cost_usd));
     m.insert("status".into(), json!(r.status));
-    m.insert("p50_latency_ms".into(), json!(r.p50_latency_ms.map(|v| v as i64)));
-    m.insert("p95_latency_ms".into(), json!(r.p95_latency_ms.map(|v| v as i64)));
-    m.insert("total_tokens".into(), json!(r.total_tokens.map(|v| v as i64)));
+    m.insert(
+        "p50_latency_ms".into(),
+        json!(r.p50_latency_ms.map(|v| v as i64)),
+    );
+    m.insert(
+        "p95_latency_ms".into(),
+        json!(r.p95_latency_ms.map(|v| v as i64)),
+    );
+    m.insert(
+        "total_tokens".into(),
+        json!(r.total_tokens.map(|v| v as i64)),
+    );
     m.insert("report".into(), json!(json_or_null_str(&r.report)?));
     rest.put_doc("benchmark_runs", &r.id, &m)
 }

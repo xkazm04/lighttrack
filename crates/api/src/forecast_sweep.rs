@@ -64,8 +64,12 @@ impl SweepConfig {
         }
         Some(SweepConfig {
             interval: Duration::from_secs(secs.max(MIN_INTERVAL_SECS)),
-            horizon: env_u64(ENV_HORIZON).unwrap_or(DEFAULT_HORIZON as u64).clamp(1, 90) as u32,
-            lookback: env_u64(ENV_LOOKBACK).unwrap_or(DEFAULT_LOOKBACK as u64).clamp(2, 90) as u32,
+            horizon: env_u64(ENV_HORIZON)
+                .unwrap_or(DEFAULT_HORIZON as u64)
+                .clamp(1, 90) as u32,
+            lookback: env_u64(ENV_LOOKBACK)
+                .unwrap_or(DEFAULT_LOOKBACK as u64)
+                .clamp(2, 90) as u32,
         })
     }
 }
@@ -96,7 +100,10 @@ pub(crate) fn spawn(st: AppState, cfg: Option<SweepConfig>) {
             ticker.tick().await;
             let n = sweep_once(&st).await;
             if n > 0 {
-                tracing::info!(raised = n, "forecast sweep raised pre-emptive alerts (cooldown decides delivery)");
+                tracing::info!(
+                    raised = n,
+                    "forecast sweep raised pre-emptive alerts (cooldown decides delivery)"
+                );
             }
         }
     });
@@ -124,7 +131,9 @@ pub(crate) async fn sweep_once(st: &AppState) -> usize {
                 st.alerts.notify_forecast(&alerts);
             }
             Ok(_) => {}
-            Err(e) => tracing::warn!(project_id = %p.id, error = %e, "forecast sweep failed for a project"),
+            Err(e) => {
+                tracing::warn!(project_id = %p.id, error = %e, "forecast sweep failed for a project")
+            }
         }
         // Be a polite background citizen: hand the runtime back between projects so a hundred-project
         // instance can't monopolize a worker while ingest is waiting.
@@ -142,8 +151,14 @@ async fn forecast_alerts_for(
     // Horizon/lookback are read per project rather than captured at spawn, so the loop and a direct
     // call (test, or a future manual trigger) can never disagree about the shape of the projection.
     let (horizon, lookback) = SweepConfig::from_env()
-        .map_or((DEFAULT_HORIZON, DEFAULT_LOOKBACK), |c| (c.horizon, c.lookback));
-    Ok(compute_forecast(st, project, MarginDimension::Customer, horizon, lookback).await?.alerts)
+        .map_or((DEFAULT_HORIZON, DEFAULT_LOOKBACK), |c| {
+            (c.horizon, c.lookback)
+        });
+    Ok(
+        compute_forecast(st, project, MarginDimension::Customer, horizon, lookback)
+            .await?
+            .alerts,
+    )
 }
 
 fn env_u64(key: &str) -> Option<u64> {
@@ -177,7 +192,12 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             name: None,
             operation: Operation::Chat,
-            usage: TokenUsage { input: 1000, output: 500, cached_input: None, reasoning: None },
+            usage: TokenUsage {
+                input: 1000,
+                output: 500,
+                cached_input: None,
+                reasoning: None,
+            },
             cost_usd: Some(cost),
             latency_ms: Some(10),
             status: Status::Success,
@@ -199,7 +219,9 @@ mod tests {
         for d in 0..10 {
             let days_ago = 9 - d;
             let per_day = 1.0 + d as f64 * 4.0;
-            store.insert_event(&event("proj-a", days_ago, per_day)).unwrap();
+            store
+                .insert_event(&event("proj-a", days_ago, per_day))
+                .unwrap();
         }
         store
             .create_limit_rule(&LimitRule {
@@ -218,7 +240,10 @@ mod tests {
         // No router is built and no request is made anywhere in this test — the sweep is the only
         // thing that runs, and it must still produce the alert.
         let produced = sweep_once(&state).await;
-        assert!(produced > 0, "the scheduled sweep must raise the budget-ETA alert on its own");
+        assert!(
+            produced > 0,
+            "the scheduled sweep must raise the budget-ETA alert on its own"
+        );
     }
 
     #[tokio::test]
@@ -226,7 +251,9 @@ mod tests {
         let (state, store) = setup(Redactor::off());
         crate::tests_ingest::make_key(&store, "proj-a");
         for d in 0..10 {
-            store.insert_event(&event("proj-a", 9 - d, 1.0 + d as f64 * 4.0)).unwrap();
+            store
+                .insert_event(&event("proj-a", 9 - d, 1.0 + d as f64 * 4.0))
+                .unwrap();
         }
         store
             .create_limit_rule(&LimitRule {
@@ -246,11 +273,21 @@ mod tests {
         // `forecast:<project>:<kind>:<subject>` with nothing identifying *how* the forecast was
         // triggered — so a sweep every few minutes cannot turn a sustained forecast into a stream of
         // identical notifications, and enabling the sweep cannot double an operator's volume.
-        let alerts = forecast_alerts_for(&state, "proj-a").await.ok().expect("forecast computes");
+        let alerts = forecast_alerts_for(&state, "proj-a")
+            .await
+            .ok()
+            .expect("forecast computes");
         assert!(!alerts.is_empty());
         for a in &alerts {
-            assert!(!a.dedup_key().contains("sweep"), "the key must not fork by trigger: {}", a.dedup_key());
-            assert!(state.alerts.should_send_key(&a.dedup_key()), "first presentation sends");
+            assert!(
+                !a.dedup_key().contains("sweep"),
+                "the key must not fork by trigger: {}",
+                a.dedup_key()
+            );
+            assert!(
+                state.alerts.should_send_key(&a.dedup_key()),
+                "first presentation sends"
+            );
         }
         for a in &alerts {
             assert!(
@@ -260,7 +297,9 @@ mod tests {
             );
         }
         assert!(
-            state.alerts.should_send_key("forecast:proj-a:budget_breach:some-other-rule"),
+            state
+                .alerts
+                .should_send_key("forecast:proj-a:budget_breach:some-other-rule"),
             "an unrelated key is unaffected"
         );
     }
@@ -283,7 +322,11 @@ mod tests {
         // Env-driven, and this test process sets nothing: the default stance is pull-only.
         assert!(SweepConfig::from_env().is_none());
         assert!(describe(None).starts_with("off"));
-        let cfg = SweepConfig { interval: Duration::from_secs(300), horizon: 14, lookback: 14 };
+        let cfg = SweepConfig {
+            interval: Duration::from_secs(300),
+            horizon: 14,
+            lookback: 14,
+        };
         assert!(describe(Some(cfg)).contains("every 300s"));
     }
 }

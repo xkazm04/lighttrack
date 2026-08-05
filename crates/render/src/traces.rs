@@ -32,19 +32,30 @@ pub(crate) fn list(v: &Value) -> Option<String> {
         let models = r
             .get("models")
             .and_then(Value::as_array)
-            .map(|m| m.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
+            .map(|m| {
+                m.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
             .unwrap_or_default();
         t.row(vec![
             when_cell,
             u(r, "spans").to_string(),
             commafy(u(r, "total_tokens")),
-            opt_f(r, "cost_usd").map(money).unwrap_or_else(|| "—".into()),
+            opt_f(r, "cost_usd")
+                .map(money)
+                .unwrap_or_else(|| "—".into()),
             dur(opt_u(r, "duration_ms").unwrap_or(0)),
             trunc(&models, 28),
             trunc(s(r, "trace_id"), 28),
         ]);
     }
-    Some(format!("**{} trace(s)** (newest first)\n\n{}", rows.len(), t.render()))
+    Some(format!(
+        "**{} trace(s)** (newest first)\n\n{}",
+        rows.len(),
+        t.render()
+    ))
 }
 
 pub(crate) fn tree(v: &Value) -> Option<String> {
@@ -67,7 +78,10 @@ pub(crate) fn tree(v: &Value) -> Option<String> {
     out.push_str(&format!("- **When:** {when} · {timing}\n"));
     // A clipped trace says so on the Spans line — every number below it covers the retained spans
     // only, so it must never read as a complete trace.
-    let truncated = v.get("spans_truncated").and_then(Value::as_bool).unwrap_or(false);
+    let truncated = v
+        .get("spans_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let spans_line = if truncated {
         format!(
             "{} of {} (⚠ truncated — totals below cover the shown spans only)",
@@ -87,7 +101,11 @@ pub(crate) fn tree(v: &Value) -> Option<String> {
     if let Some(c) = opt_f(totals, "cost_usd") {
         out.push_str(&format!("- **Cost:** {}\n", money(c)));
     }
-    if let Some(models) = v.get("models").and_then(Value::as_array).filter(|m| !m.is_empty()) {
+    if let Some(models) = v
+        .get("models")
+        .and_then(Value::as_array)
+        .filter(|m| !m.is_empty())
+    {
         let joined: Vec<&str> = models.iter().filter_map(Value::as_str).collect();
         out.push_str(&format!("- **Models:** {}\n", joined.join(", ")));
     }
@@ -96,14 +114,22 @@ pub(crate) fn tree(v: &Value) -> Option<String> {
         out.push_str(&format!("- **Errors:** {errors}\n"));
     }
 
-    if let Some(spans) = v.get("spans").and_then(Value::as_array).filter(|s| !s.is_empty()) {
+    if let Some(spans) = v
+        .get("spans")
+        .and_then(Value::as_array)
+        .filter(|s| !s.is_empty())
+    {
         out.push_str("\n**Spans:**\n");
         for node in spans {
             render_node(node, 0, &mut out);
         }
     }
 
-    if let Some(scores) = v.get("scores").and_then(Value::as_array).filter(|s| !s.is_empty()) {
+    if let Some(scores) = v
+        .get("scores")
+        .and_then(Value::as_array)
+        .filter(|s| !s.is_empty())
+    {
         out.push_str("\n**Scores:**\n");
         for sc in scores {
             let value = opt_f(sc, "value").unwrap_or(0.0);
@@ -134,7 +160,9 @@ fn stale_note(score: &Value) -> String {
     };
     let (scored, current) = (u(stale, "scored_spans"), u(stale, "current_spans"));
     match s(stale, "reason") {
-        "changed" => format!(" ⚠ stale — the judged exchange changed since ({scored} → {current} spans)"),
+        "changed" => {
+            format!(" ⚠ stale — the judged exchange changed since ({scored} → {current} spans)")
+        }
         "grown" => format!(" ⚠ stale — trace grew since ({scored} → {current} spans)"),
         other if !other.is_empty() => format!(" ⚠ stale ({other})"),
         _ => String::new(),
@@ -154,7 +182,9 @@ fn render_node(node: &Value, depth: usize, out: &mut String) {
         .get("usage")
         .map(|x| (u(x, "input"), u(x, "output")))
         .unwrap_or((0, 0));
-    let cost = opt_f(ev, "cost_usd").map(money).unwrap_or_else(|| "—".into());
+    let cost = opt_f(ev, "cost_usd")
+        .map(money)
+        .unwrap_or_else(|| "—".into());
     // Waterfall placement: `@<offset>ms +<latency>ms`. Offset/latency live on the span node (with
     // latency mirrored from the event); fall back to the event for older payloads.
     let offset = opt_u(node, "offset_ms").unwrap_or(0);
@@ -165,20 +195,34 @@ fn render_node(node: &Value, depth: usize, out: &mut String) {
     let model = {
         let provider = s(ev, "provider");
         let m = s(ev, "model");
-        if provider.is_empty() { m.to_string() } else { format!("{provider}/{m}") }
+        if provider.is_empty() {
+            m.to_string()
+        } else {
+            format!("{provider}/{m}")
+        }
     };
     // Label = the call-site `name` when set (the only thing that tells one span from another in an
     // agent run where every call hits the same model), else the provider/model. When a name is
     // present the model trails as a dim segment so both are visible. A non-`chat` operation is
     // appended, matching the single-event detail view.
     let name = s(ev, "name");
-    let label = if name.is_empty() { format!("`{}`", trunc(&model, 30)) } else {
+    let label = if name.is_empty() {
+        format!("`{}`", trunc(&model, 30))
+    } else {
         format!("`{}` · {}", trunc(name, 30), trunc(&model, 24))
     };
     let op = s(ev, "operation");
-    let op_seg = if op.is_empty() || op == "chat" { String::new() } else { format!(" ({op})") };
+    let op_seg = if op.is_empty() || op == "chat" {
+        String::new()
+    } else {
+        format!(" ({op})")
+    };
     // Two events reported the same span_id: distinct calls that would otherwise read as one span.
-    let dup_seg = if node.get("duplicate_span_id").and_then(Value::as_bool).unwrap_or(false) {
+    let dup_seg = if node
+        .get("duplicate_span_id")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         " ⧉ dup span id"
     } else {
         ""
@@ -188,7 +232,11 @@ fn render_node(node: &Value, depth: usize, out: &mut String) {
     // (tree → id → payloads). Emitted last so line width stays stable.
     let id_seg = {
         let id = s(ev, "id");
-        if id.is_empty() { String::new() } else { format!(" · `{}`", trunc(id, 10)) }
+        if id.is_empty() {
+            String::new()
+        } else {
+            format!(" · `{}`", trunc(id, 10))
+        }
     };
     out.push_str(&format!(
         "{indent}- {glyph} {label}{op_seg} · @{offset}ms {lat} · {}/{} tok · {cost}{id_seg}{dup_seg}\n",
@@ -259,11 +307,17 @@ mod tests {
         let md = tree(&v).unwrap();
         assert!(md.contains("### Trace `tr-1`"));
         assert!(md.contains("**Spans:**"));
-        assert!(md.contains("  - ✅"), "child span is indented one level: {md}");
+        assert!(
+            md.contains("  - ✅"),
+            "child span is indented one level: {md}"
+        );
         // Waterfall placement per node + total compute time in the header.
         assert!(md.contains("@0ms +120ms"), "root waterfall: {md}");
         assert!(md.contains("@120ms +80ms"), "child waterfall: {md}");
-        assert!(md.contains("compute"), "header shows total compute time: {md}");
+        assert!(
+            md.contains("compute"),
+            "header shows total compute time: {md}"
+        );
         assert!(md.contains("**Scores:**"));
         assert!(md.contains("coherence"));
         // Not an object / no id -> no render.
@@ -287,8 +341,14 @@ mod tests {
             "scores": []
         });
         let md = tree(&v).unwrap();
-        assert!(md.contains("5000 of 9000"), "clipped span count shown: {md}");
-        assert!(md.contains("truncated"), "a clipped trace must not read as complete: {md}");
+        assert!(
+            md.contains("5000 of 9000"),
+            "clipped span count shown: {md}"
+        );
+        assert!(
+            md.contains("truncated"),
+            "a clipped trace must not read as complete: {md}"
+        );
         assert!(md.contains("dup span id"), "duplicate span id marked: {md}");
     }
 
@@ -311,9 +371,18 @@ mod tests {
               "stale": { "reason": "changed", "scored_spans": 1, "current_spans": 4 } }
         ])))
         .unwrap();
-        assert!(md.contains("grew: 0.90 by judge ⚠ stale — trace grew since (2 → 4 spans)"), "{md}");
-        assert!(md.contains("the judged exchange changed since (1 → 4 spans)"), "{md}");
-        assert!(md.contains("fresh: 0.90 by judge\n"), "a current verdict is unmarked: {md}");
+        assert!(
+            md.contains("grew: 0.90 by judge ⚠ stale — trace grew since (2 → 4 spans)"),
+            "{md}"
+        );
+        assert!(
+            md.contains("the judged exchange changed since (1 → 4 spans)"),
+            "{md}"
+        );
+        assert!(
+            md.contains("fresh: 0.90 by judge\n"),
+            "a current verdict is unmarked: {md}"
+        );
     }
 
     #[test]
@@ -342,16 +411,31 @@ mod tests {
         });
         let md = tree(&v).unwrap();
         // Named steps, not anonymized model bullets.
-        assert!(md.contains("`plan-next-step`"), "root labelled by name: {md}");
+        assert!(
+            md.contains("`plan-next-step`"),
+            "root labelled by name: {md}"
+        );
         assert!(md.contains("`rerank-docs`"), "child labelled by name: {md}");
         // Model still visible as a trailing segment.
-        assert!(md.contains("claude-sonnet-4-5"), "model retained alongside the name: {md}");
+        assert!(
+            md.contains("claude-sonnet-4-5"),
+            "model retained alongside the name: {md}"
+        );
         // Non-chat operation surfaced (chat is the silent default).
-        assert!(md.contains("(embedding)"), "non-default operation shown: {md}");
+        assert!(
+            md.contains("(embedding)"),
+            "non-default operation shown: {md}"
+        );
         assert!(!md.contains("(chat)"), "chat is the silent default: {md}");
         // Copy-paste drill-down handle.
-        assert!(md.contains("`e-plan-8f…`") || md.contains("e-plan-8f"), "short event id shown: {md}");
+        assert!(
+            md.contains("`e-plan-8f…`") || md.contains("e-plan-8f"),
+            "short event id shown: {md}"
+        );
         // The failure reason the glyph alone withheld, on its own sub-bullet.
-        assert!(md.contains("⚠ provider 529: overloaded"), "error message surfaced: {md}");
+        assert!(
+            md.contains("⚠ provider 529: overloaded"),
+            "error message surfaced: {md}"
+        );
     }
 }

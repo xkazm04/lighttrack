@@ -92,9 +92,27 @@ fn ingest_under_read_load() {
     println!("\n{READERS} reader threads, {SEED_EVENTS} seeded events, {WRITES} measured writes\n");
     // The middle row is the honest "before": WAL was already engaged in practice, because the schema
     // batch opens with `PRAGMA journal_mode = WAL` — it was simply never read back or relied upon.
-    measure("rollback journal, no pool", OpenOpts { wal: false, read_pool: 0 });
-    let before = measure("before: WAL, single mutex", OpenOpts { wal: true, read_pool: 0 });
-    let after = measure("after: WAL + read pool", OpenOpts { wal: true, read_pool: 4 });
+    measure(
+        "rollback journal, no pool",
+        OpenOpts {
+            wal: false,
+            read_pool: 0,
+        },
+    );
+    let before = measure(
+        "before: WAL, single mutex",
+        OpenOpts {
+            wal: true,
+            read_pool: 0,
+        },
+    );
+    let after = measure(
+        "after: WAL + read pool",
+        OpenOpts {
+            wal: true,
+            read_pool: 4,
+        },
+    );
     println!(
         "\nvs. before — ingest x{:.2}   p95 x{:.2} (lower is better)   reads x{:.2}\n",
         after.writes_per_sec / before.writes_per_sec,

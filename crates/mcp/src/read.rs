@@ -129,18 +129,34 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "get_event" => bind(args, "event", |id| c.get(&format!("/v1/events/{id}"))),
         "get_trace" => bind(args, "trace", |id| c.get(&format!("/v1/traces/{id}"))),
         "list_scores" => c.get(&list_path("/v1/scores", args)),
-        "get_limit_status" => bind(args, "project", |p| c.get(&format!("/v1/limits/status?project={p}"))),
-        "list_limits" => bind(args, "project", |p| c.get(&format!("/v1/projects/{p}/limits"))),
+        "get_limit_status" => bind(args, "project", |p| {
+            c.get(&format!("/v1/limits/status?project={p}"))
+        }),
+        "list_limits" => bind(args, "project", |p| {
+            c.get(&format!("/v1/projects/{p}/limits"))
+        }),
         "list_prices" => c.get("/v1/prices"),
-        "list_benchmarks" => bind(args, "project", |p| c.get(&format!("/v1/projects/{p}/benchmarks"))),
+        "list_benchmarks" => bind(args, "project", |p| {
+            c.get(&format!("/v1/projects/{p}/benchmarks"))
+        }),
         "get_benchmark" => bind(args, "benchmark", |b| c.get(&format!("/v1/benchmarks/{b}"))),
-        "get_benchmark_runs" => bind(args, "benchmark", |b| c.get(&format!("/v1/benchmarks/{b}/runs"))),
-        "check_benchmark_gate" => bind(args, "benchmark", |b| c.get(&format!("/v1/benchmarks/{b}/gate"))),
+        "get_benchmark_runs" => bind(args, "benchmark", |b| {
+            c.get(&format!("/v1/benchmarks/{b}/runs"))
+        }),
+        "check_benchmark_gate" => bind(args, "benchmark", |b| {
+            c.get(&format!("/v1/benchmarks/{b}/gate"))
+        }),
         "get_usecases" => c.get(&usecases_path(args)),
-        "list_datasets" => bind(args, "project", |p| c.get(&format!("/v1/projects/{p}/datasets"))),
+        "list_datasets" => bind(args, "project", |p| {
+            c.get(&format!("/v1/projects/{p}/datasets"))
+        }),
         "get_dataset" => bind(args, "dataset", |d| c.get(&format!("/v1/datasets/{d}"))),
-        "list_dataset_items" => bind(args, "dataset", |d| c.get(&format!("/v1/datasets/{d}/items"))),
-        "list_rubrics" => bind(args, "project", |p| c.get(&format!("/v1/projects/{p}/rubrics"))),
+        "list_dataset_items" => bind(args, "dataset", |d| {
+            c.get(&format!("/v1/datasets/{d}/items"))
+        }),
+        "list_rubrics" => bind(args, "project", |p| {
+            c.get(&format!("/v1/projects/{p}/rubrics"))
+        }),
         "get_rubric" => bind(args, "rubric", |r| c.get(&format!("/v1/rubrics/{r}"))),
         "list_jobs" => c.get(&jobs_path(args)),
         "get_job" => bind(args, "job", |j| c.get(&format!("/v1/jobs/{j}"))),
@@ -167,7 +183,11 @@ pub(crate) fn dispatch_paged(
 }
 
 /// Extract a required string arg and run `f` with it, or return a clear error.
-fn bind(args: &Value, key: &str, f: impl FnOnce(&str) -> Result<Value, String>) -> Result<Value, String> {
+fn bind(
+    args: &Value,
+    key: &str,
+    f: impl FnOnce(&str) -> Result<Value, String>,
+) -> Result<Value, String> {
     match args.get(key).and_then(Value::as_str) {
         Some(v) => f(v),
         None => Err(format!("missing required argument: {key}")),
@@ -195,7 +215,11 @@ fn list_path(base: &str, args: &Value) -> String {
 /// client, which interpolates query values directly).
 fn push_str_params(p: &mut String, args: &Value, keys: &[&str]) {
     for k in keys {
-        if let Some(v) = args.get(*k).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        if let Some(v) = args
+            .get(*k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
             p.push_str(&format!("&{k}={v}"));
         }
     }
@@ -208,7 +232,9 @@ fn events_path(args: &Value) -> String {
     push_str_params(
         &mut p,
         args,
-        &["project", "since", "until", "provider", "model", "trace_id", "name", "cursor"],
+        &[
+            "project", "since", "until", "provider", "model", "trace_id", "name", "cursor",
+        ],
     );
     p
 }
@@ -217,7 +243,11 @@ fn events_path(args: &Value) -> String {
 fn traces_path(args: &Value) -> String {
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20);
     let mut p = format!("/v1/traces?limit={limit}");
-    push_str_params(&mut p, args, &["project", "since", "until", "status", "cursor"]);
+    push_str_params(
+        &mut p,
+        args,
+        &["project", "since", "until", "status", "cursor"],
+    );
     if let Some(mc) = args.get("min_cost").and_then(Value::as_f64) {
         p.push_str(&format!("&min_cost={mc}"));
     }
@@ -265,7 +295,13 @@ fn jobs_path(args: &Value) -> String {
 fn collective_path(args: &Value) -> String {
     let mut p = "/v1/collective/leaderboard".to_string();
     let mut sep = '?';
-    for k in ["task_type", "provider", "determinism", "frozen_dataset", "significance_tested"] {
+    for k in [
+        "task_type",
+        "provider",
+        "determinism",
+        "frozen_dataset",
+        "significance_tested",
+    ] {
         if let Some(v) = args.get(k).and_then(Value::as_str) {
             p.push_str(&format!("{sep}{k}={v}"));
             sep = '&';
@@ -286,7 +322,11 @@ fn usecases_path(args: &Value) -> String {
     let mut p = "/v1/usecases".to_string();
     let mut sep = '?';
     for k in ["project", "since"] {
-        if let Some(v) = args.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        if let Some(v) = args
+            .get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
             p.push_str(&format!("{sep}{k}={v}"));
             sep = '&';
         }
@@ -313,8 +353,13 @@ mod tests {
         }));
         assert!(p.starts_with("/v1/events?limit=100"));
         for frag in [
-            "&project=p1", "&since=2026-01-01T00:00:00Z", "&until=2026-02-01T00:00:00Z",
-            "&provider=openai", "&model=gpt-4o", "&trace_id=t-9", "&name=summarize",
+            "&project=p1",
+            "&since=2026-01-01T00:00:00Z",
+            "&until=2026-02-01T00:00:00Z",
+            "&provider=openai",
+            "&model=gpt-4o",
+            "&trace_id=t-9",
+            "&name=summarize",
             "&cursor=deadbeef",
         ] {
             assert!(p.contains(frag), "missing {frag} in {p}");
@@ -341,7 +386,10 @@ mod tests {
 
     #[test]
     fn usecases_path_requires_project_and_optional_since() {
-        assert_eq!(usecases_path(&json!({ "project": "p1" })), "/v1/usecases?project=p1");
+        assert_eq!(
+            usecases_path(&json!({ "project": "p1" })),
+            "/v1/usecases?project=p1"
+        );
         assert_eq!(
             usecases_path(&json!({ "project": "p1", "since": "2026-01-01T00:00:00Z" })),
             "/v1/usecases?project=p1&since=2026-01-01T00:00:00Z"
@@ -363,7 +411,11 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap().to_string())
             .collect();
-        for n in ["check_benchmark_gate", "get_usecases", "get_collective_digest"] {
+        for n in [
+            "check_benchmark_gate",
+            "get_usecases",
+            "get_collective_digest",
+        ] {
             assert!(names.contains(&n.to_string()), "{n} missing");
         }
     }

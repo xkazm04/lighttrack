@@ -37,9 +37,12 @@ fn main() -> Result<()> {
         Cmd::Events { project, limit } => usage::events(&cli, project, *limit),
         Cmd::Traces { project, limit } => usage::traces(&cli, project, *limit),
         Cmd::Trace { id } => usage::trace(&cli, id),
-        Cmd::Margin { by, project, since, until } => {
-            usage::margin(&cli, by, project, since, until)
-        }
+        Cmd::Margin {
+            by,
+            project,
+            since,
+            until,
+        } => usage::margin(&cli, by, project, since, until),
         Cmd::Collective { action } => collective::run(&cli, action),
     }
 }

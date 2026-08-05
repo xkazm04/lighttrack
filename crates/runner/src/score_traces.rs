@@ -160,11 +160,19 @@ fn run_cycle(
     for ts in collect_sampled(cli, http, p, &cutoff)? {
         let detail: Value = get(cli, http, &format!("/v1/traces/{}", ts.trace_id))?;
         let root = detail.pointer("/spans/0/event");
-        let root_id = root.and_then(|e| e.get("id")).and_then(Value::as_str).unwrap_or("");
+        let root_id = root
+            .and_then(|e| e.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let already = trace_already_scored(&detail, label, root_id);
         // Final gate through the same pure decision, now with the real already-scored flag.
-        if !should_score(&ts.trace_id, ts.status == "error", p.sample_every, p.errors_always, already)
-        {
+        if !should_score(
+            &ts.trace_id,
+            ts.status == "error",
+            p.sample_every,
+            p.errors_always,
+            already,
+        ) {
             continue;
         }
         // The root exchange: judge the whole request's in/out. Skip a trace whose root has no output.
@@ -172,8 +180,14 @@ fn run_cycle(
             Some(o) => o,
             None => continue,
         };
-        let input = root.and_then(|e| text_field(e, "input")).unwrap_or_default();
-        eligible.push(Eligible { trace_id: ts.trace_id, input, output });
+        let input = root
+            .and_then(|e| text_field(e, "input"))
+            .unwrap_or_default();
+        eligible.push(Eligible {
+            trace_id: ts.trace_id,
+            input,
+            output,
+        });
     }
 
     // Judge concurrently (unbudgeted, read-only); post in fetch order so output is deterministic.
@@ -188,7 +202,12 @@ fn run_cycle(
             "rubric": label, "value": v.value, "max": v.max, "pass": v.pass,
             "reasoning": v.reasoning, "scored_by": v.scored_by, "cost_usd": v.cost_usd,
         });
-        post(cli, http, &format!("/v1/traces/{}/score", e.trace_id), &body)?;
+        post(
+            cli,
+            http,
+            &format!("/v1/traces/{}/score", e.trace_id),
+            &body,
+        )?;
         scored += 1;
         println!(
             "  - trace {} score={:.2}/{:.0} pass={} :: {}",
@@ -216,8 +235,10 @@ fn collect_sampled(
     let mut cursor: Option<String> = None;
     let page = p.limit.clamp(1, 200);
     while considered < p.limit {
-        let mut path =
-            format!("/v1/traces?project={}&until={}&limit={}", p.project, cutoff, page);
+        let mut path = format!(
+            "/v1/traces?project={}&until={}&limit={}",
+            p.project, cutoff, page
+        );
         if let Some(c) = &cursor {
             path.push_str(&format!("&cursor={c}"));
         }
@@ -230,8 +251,13 @@ fn collect_sampled(
                 break;
             }
             considered += 1;
-            if should_score(&t.trace_id, t.status == "error", p.sample_every, p.errors_always, false)
-            {
+            if should_score(
+                &t.trace_id,
+                t.status == "error",
+                p.sample_every,
+                p.errors_always,
+                false,
+            ) {
                 out.push(t);
             }
         }
@@ -268,8 +294,10 @@ fn judge_one(engine: &EngineConfig, judge: &Judge, input: &str, output: &str) ->
                 pass: o.pass,
                 // The judge's own words for the weakest dimension — a template restating the
                 // rubric's shape tells a reader nothing they couldn't already compute.
-                reasoning: crate::provenance::weakest_reasoning(&crate::provenance::rubric_detail(&o))
-                    .unwrap_or_else(|| format!("rubric '{}' ({} dims)", r.name, o.dimensions.len())),
+                reasoning: crate::provenance::weakest_reasoning(&crate::provenance::rubric_detail(
+                    &o,
+                ))
+                .unwrap_or_else(|| format!("rubric '{}' ({} dims)", r.name, o.dimensions.len())),
                 scored_by: o.model,
                 cost_usd: o.cost_usd,
             })
@@ -376,11 +404,16 @@ mod tests {
         let big_n = 1_000_000;
         assert!(should_score("some-error-trace", true, big_n, true, false));
         // ...but a success trace outside the sample is not.
-        let outside = (0..).map(|i| format!("s-{i}")).find(|id| !fnv1a(id).is_multiple_of(big_n as u64)).unwrap();
+        let outside = (0..)
+            .map(|i| format!("s-{i}"))
+            .find(|id| !fnv1a(id).is_multiple_of(big_n as u64))
+            .unwrap();
         assert!(!should_score(&outside, false, big_n, true, false));
         // And without --errors-always, an out-of-sample error trace is not judged either.
-        let err_outside =
-            (0..).map(|i| format!("e-{i}")).find(|id| !fnv1a(id).is_multiple_of(big_n as u64)).unwrap();
+        let err_outside = (0..)
+            .map(|i| format!("e-{i}"))
+            .find(|id| !fnv1a(id).is_multiple_of(big_n as u64))
+            .unwrap();
         assert!(!should_score(&err_outside, true, big_n, false, false));
     }
 
@@ -393,8 +426,14 @@ mod tests {
         }
         // A coarse 1/4 sample keeps a strict subset — not none, not all — and is deterministic.
         let ids: Vec<String> = (0..400).map(|i| format!("trace-{i}")).collect();
-        let picked = ids.iter().filter(|id| should_score(id, false, 4, false, false)).count();
-        assert!(picked > 0 && picked < ids.len(), "1/4 sample picked {picked}/400");
+        let picked = ids
+            .iter()
+            .filter(|id| should_score(id, false, 4, false, false))
+            .count();
+        assert!(
+            picked > 0 && picked < ids.len(),
+            "1/4 sample picked {picked}/400"
+        );
         // Same input → same decision (stable across "cycles").
         assert_eq!(
             should_score("trace-7", false, 4, false, false),
@@ -420,9 +459,7 @@ mod tests {
 
     #[test]
     fn only_a_changed_exchange_reopens_a_scored_trace() {
-        let with_stale = |stale: Value| {
-            json!({ "scores": [{ "rubric": "helpfulness", "event_id": "root-1", "stale": stale }] })
-        };
+        let with_stale = |stale: Value| json!({ "scores": [{ "rubric": "helpfulness", "event_id": "root-1", "stale": stale }] });
         // The judged root exchange itself moved → the verdict no longer covers, so re-score.
         assert!(!trace_already_scored(
             &with_stale(json!({ "reason": "changed", "scored_spans": 1, "current_spans": 4 })),
@@ -459,6 +496,9 @@ mod tests {
         assert_eq!(text_field(&ev, "output"), None);
         assert_eq!(text_field(&ev, "missing"), None);
         // Non-string content is rendered as compact JSON.
-        assert_eq!(text_field(&json!({ "input": { "q": 1 } }), "input").as_deref(), Some(r#"{"q":1}"#));
+        assert_eq!(
+            text_field(&json!({ "input": { "q": 1 } }), "input").as_deref(),
+            Some(r#"{"q":1}"#)
+        );
     }
 }

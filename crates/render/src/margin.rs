@@ -7,7 +7,11 @@ use crate::md::{commafy, f, money, opt_f, opt_s, pct, s, short_ts, sparkline, u,
 pub(crate) fn report(v: &Value) -> Option<String> {
     let rows = v.get("rows")?.as_array()?;
     let dim = s(v, "dimension");
-    let label = if dim == "product" { "Product" } else { "Customer" };
+    let label = if dim == "product" {
+        "Product"
+    } else {
+        "Customer"
+    };
     let window = format!("{} → {}", short_ts(s(v, "since")), short_ts(s(v, "until")));
     if rows.is_empty() {
         return Some(format!(
@@ -51,7 +55,11 @@ pub(crate) fn report(v: &Value) -> Option<String> {
 /// `get_margin_trend` — a compact per-key margin sparkline table plus window totals.
 pub(crate) fn trend(v: &Value) -> Option<String> {
     let dim = s(v, "dimension");
-    let label = if dim == "product" { "Product" } else { "Customer" };
+    let label = if dim == "product" {
+        "Product"
+    } else {
+        "Customer"
+    };
     let days = u(v, "days");
     let series = v.get("series")?.as_array()?;
     let totals = v.get("totals");
@@ -92,7 +100,9 @@ pub(crate) fn trend(v: &Value) -> Option<String> {
     let total_keys = u(v, "key_count");
     out.push_str(&tbl.render());
     if total_keys as usize > shown {
-        out.push_str(&format!("\n_Showing top {shown} of {total_keys} by |margin|._\n"));
+        out.push_str(&format!(
+            "\n_Showing top {shown} of {total_keys} by |margin|._\n"
+        ));
     }
     Some(out)
 }
@@ -101,7 +111,11 @@ pub(crate) fn trend(v: &Value) -> Option<String> {
 pub(crate) fn simulate(v: &Value) -> Option<String> {
     let rows = v.get("rows")?.as_array()?;
     let dim = s(v, "dimension");
-    let label = if dim == "product" { "Product" } else { "Customer" };
+    let label = if dim == "product" {
+        "Product"
+    } else {
+        "Customer"
+    };
     let window = format!("{} → {}", short_ts(s(v, "since")), short_ts(s(v, "until")));
 
     let assumptions = v.get("assumptions");
@@ -115,7 +129,11 @@ pub(crate) fn simulate(v: &Value) -> Option<String> {
     if let Some(fl) = flat {
         model.push(format!("{}/mo (prorated ×{:.2})", money(fl), days / 30.0));
     }
-    let model = if model.is_empty() { "—".to_string() } else { model.join(" + ") };
+    let model = if model.is_empty() {
+        "—".to_string()
+    } else {
+        model.join(" + ")
+    };
 
     let mut out = format!("### Pricing what-if by {dim} · {window}\n\n_Simulated model: {model}. Read-only — nothing was written._\n\n");
     if rows.is_empty() {
@@ -261,10 +279,19 @@ mod tests {
             ]
         });
         let out = super::simulate(&v).expect("renders");
-        assert!(out.contains("Actual margin") && out.contains("Sim. margin"), "both columns present");
-        assert!(out.contains("+$13.00"), "positive delta gets an explicit + sign");
+        assert!(
+            out.contains("Actual margin") && out.contains("Sim. margin"),
+            "both columns present"
+        );
+        assert!(
+            out.contains("+$13.00"),
+            "positive delta gets an explicit + sign"
+        );
         assert!(out.contains("$8.00/Mtok"), "echoes the token rate");
-        assert!(out.contains("Read-only"), "flags the what-if as non-persisting");
+        assert!(
+            out.contains("Read-only"),
+            "flags the what-if as non-persisting"
+        );
     }
 
     #[test]

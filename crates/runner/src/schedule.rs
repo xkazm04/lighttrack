@@ -59,7 +59,11 @@ fn run_cycle(
     name_prefix: &str,
     llm_scrub: bool,
 ) -> Result<Option<String>> {
-    let events: Vec<LlmEvent> = get(cli, http, &format!("/v1/events?project={project}&limit={n}"))?;
+    let events: Vec<LlmEvent> = get(
+        cli,
+        http,
+        &format!("/v1/events?project={project}&limit={n}"),
+    )?;
     // Watermark = newest event that carries an input (events come back newest-first).
     let name = match cycle_name(name_prefix, &events) {
         Some(n) => n,
@@ -108,7 +112,10 @@ mod tests {
             event("xyz", Some("later")),
         ];
         // Newest-first: the first event carrying an input wins; id is shortened to 8 chars.
-        assert_eq!(cycle_name("online", &events).as_deref(), Some("online-abcdef01"));
+        assert_eq!(
+            cycle_name("online", &events).as_deref(),
+            Some("online-abcdef01")
+        );
     }
 
     #[test]
@@ -121,6 +128,9 @@ mod tests {
     #[test]
     fn honors_custom_prefix() {
         let events = vec![event("deadbeefcafe", Some("x"))];
-        assert_eq!(cycle_name("nightly", &events).as_deref(), Some("nightly-deadbeef"));
+        assert_eq!(
+            cycle_name("nightly", &events).as_deref(),
+            Some("nightly-deadbeef")
+        );
     }
 }

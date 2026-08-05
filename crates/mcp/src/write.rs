@@ -151,17 +151,34 @@ fn wtool(name: &str, desc: &str, schema: Value, idempotent: bool) -> Value {
 pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Value, String>> {
     let r = match name {
         "enqueue_benchmark" => match need(args, "benchmark") {
-            Ok(b) => c.post(&format!("/v1/benchmarks/{b}/enqueue"), &pick(args, &["samples", "heal"])),
+            Ok(b) => c.post(
+                &format!("/v1/benchmarks/{b}/enqueue"),
+                &pick(args, &["samples", "heal"]),
+            ),
             Err(e) => Err(e),
         },
-        "create_project" => post_with(c, args, &["name"], &["name", "redaction"], "/v1/projects".to_string()),
+        "create_project" => post_with(
+            c,
+            args,
+            &["name"],
+            &["name", "redaction"],
+            "/v1/projects".to_string(),
+        ),
         "create_dataset" => match need(args, "project") {
-            Ok(p) => post_with(c, args, &["name"], &["name", "source"], format!("/v1/projects/{p}/datasets")),
+            Ok(p) => post_with(
+                c,
+                args,
+                &["name"],
+                &["name", "source"],
+                format!("/v1/projects/{p}/datasets"),
+            ),
             Err(e) => Err(e),
         },
         "add_dataset_item" => match need(args, "dataset") {
             Ok(d) => post_with(
-                c, args, &["input"],
+                c,
+                args,
+                &["input"],
                 &["input", "output", "expected", "context", "tags"],
                 format!("/v1/datasets/{d}/items"),
             ),
@@ -173,7 +190,9 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         },
         "create_rubric" => match need(args, "project") {
             Ok(p) => post_with(
-                c, args, &["name", "dimensions"],
+                c,
+                args,
+                &["name", "dimensions"],
                 &["name", "dimensions", "threshold"],
                 format!("/v1/projects/{p}/rubrics"),
             ),
@@ -181,15 +200,28 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         },
         "create_benchmark" => match need(args, "project") {
             Ok(p) => post_with(
-                c, args, &["name"],
-                &["name", "rubric", "rubric_id", "judge_model", "dataset_ref", "dataset", "targets", "baseline_score"],
+                c,
+                args,
+                &["name"],
+                &[
+                    "name",
+                    "rubric",
+                    "rubric_id",
+                    "judge_model",
+                    "dataset_ref",
+                    "dataset",
+                    "targets",
+                    "baseline_score",
+                ],
                 format!("/v1/projects/{p}/benchmarks"),
             ),
             Err(e) => Err(e),
         },
         "create_limit" => match need(args, "project") {
             Ok(p) => post_with(
-                c, args, &["metric", "window", "threshold"],
+                c,
+                args,
+                &["metric", "window", "threshold"],
                 &["metric", "window", "threshold", "action"],
                 format!("/v1/projects/{p}/limits"),
             ),
@@ -197,8 +229,18 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         },
         "update_limit" => match need(args, "id") {
             Ok(id) => post_put(
-                c, args, &["metric", "window", "threshold"],
-                &["metric", "window", "threshold", "action", "enabled", "warn_at", "scope"],
+                c,
+                args,
+                &["metric", "window", "threshold"],
+                &[
+                    "metric",
+                    "window",
+                    "threshold",
+                    "action",
+                    "enabled",
+                    "warn_at",
+                    "scope",
+                ],
                 format!("/v1/limits/{id}"),
             ),
             Err(e) => Err(e),
@@ -214,7 +256,15 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
                     Some(e) => Err(e),
                     None => c.put(
                         &format!("/v1/prices/{p}/{m}"),
-                        &pick(args, &["input_per_mtok", "output_per_mtok", "cached_input_per_mtok", "source_url"]),
+                        &pick(
+                            args,
+                            &[
+                                "input_per_mtok",
+                                "output_per_mtok",
+                                "cached_input_per_mtok",
+                                "source_url",
+                            ],
+                        ),
                     ),
                 }
             }
@@ -226,7 +276,13 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
 }
 
 /// POST `body_keys` from `args` to `path`, after asserting `required` are present.
-fn post_with(c: &Client, args: &Value, required: &[&str], body_keys: &[&str], path: String) -> Result<Value, String> {
+fn post_with(
+    c: &Client,
+    args: &Value,
+    required: &[&str],
+    body_keys: &[&str],
+    path: String,
+) -> Result<Value, String> {
     match missing(args, required) {
         Some(e) => Err(e),
         None => c.post(&path, &pick(args, body_keys)),
@@ -234,7 +290,13 @@ fn post_with(c: &Client, args: &Value, required: &[&str], body_keys: &[&str], pa
 }
 
 /// PUT `body_keys` from `args` to `path`, after asserting `required` are present (replace semantics).
-fn post_put(c: &Client, args: &Value, required: &[&str], body_keys: &[&str], path: String) -> Result<Value, String> {
+fn post_put(
+    c: &Client,
+    args: &Value,
+    required: &[&str],
+    body_keys: &[&str],
+    path: String,
+) -> Result<Value, String> {
     match missing(args, required) {
         Some(e) => Err(e),
         None => c.put(&path, &pick(args, body_keys)),
@@ -292,7 +354,10 @@ mod tests {
         }
         // Both replace/remove a rule by id → idempotent from the caller's view.
         for t in tools() {
-            if matches!(t["name"].as_str(), Some("update_limit") | Some("delete_limit")) {
+            if matches!(
+                t["name"].as_str(),
+                Some("update_limit") | Some("delete_limit")
+            ) {
                 assert_eq!(t["annotations"]["idempotentHint"], json!(true));
                 assert_eq!(t["annotations"]["readOnlyHint"], json!(false));
             }

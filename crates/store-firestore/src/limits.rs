@@ -35,7 +35,11 @@ pub(crate) fn create_limit_rule(rest: &Rest, r: &LimitRule) -> Result<()> {
     rest.put_doc(COLL, &r.id, &limit_fields(r)?)
 }
 
-pub(crate) fn list_limit_rules(rest: &Rest, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
+pub(crate) fn list_limit_rules(
+    rest: &Rest,
+    project: &str,
+    only_enabled: bool,
+) -> Result<Vec<LimitRule>> {
     let mut filters: Vec<(&str, &str, Value)> = vec![("project_id", "EQUAL", json!(project))];
     if only_enabled {
         filters.push(("enabled", "EQUAL", json!(1_i64)));

@@ -49,7 +49,9 @@ pub(super) fn reparent_past_dropped_spans(
         .collect();
 
     for ev in events.iter_mut() {
-        let Some(parent) = ev.parent_span_id.clone() else { continue };
+        let Some(parent) = ev.parent_span_id.clone() else {
+            continue;
+        };
         if mapped.contains(&parent) {
             continue; // the parent became an event: the link already holds
         }
@@ -85,7 +87,9 @@ fn nearest_mapped_ancestor(
 /// Keep the exporter's own parent id under `metadata.otel`, beside the rest of the OTel provenance,
 /// so a synthesized link is visible as synthesized rather than passing for what was exported.
 fn record_original_parent(ev: &mut LlmEvent, original: &str) {
-    let Some(map) = ev.metadata.as_object_mut() else { return };
+    let Some(map) = ev.metadata.as_object_mut() else {
+        return;
+    };
     let otel = map
         .entry("otel".to_string())
         .or_insert_with(|| serde_json::Value::Object(Default::default()));

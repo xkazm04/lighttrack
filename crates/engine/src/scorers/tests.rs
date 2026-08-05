@@ -22,7 +22,10 @@ fn exact_defaults_to_the_case_reference_and_ignores_case() {
     let d = json!({ "key": "answer", "description": "", "kind": "exact" });
     let (s, why) = ok(d.clone(), Some("Paris"), "  paris ");
     assert_eq!(s, 1.0, "trim + case-insensitive by default: {why}");
-    assert!(why.contains("expected `Paris`") && why.ends_with("→ pass"), "{why}");
+    assert!(
+        why.contains("expected `Paris`") && why.ends_with("→ pass"),
+        "{why}"
+    );
     assert_eq!(ok(d, Some("Paris"), "Berlin").0, 0.0);
 }
 
@@ -39,8 +42,12 @@ fn exact_can_demand_case_sensitivity_and_its_own_target() {
 
 #[test]
 fn exact_without_any_target_is_an_operator_error() {
-    let err = score(json!({ "key": "a", "description": "", "kind": "exact" }), None, "x")
-        .expect_err("no target must not be a silent 0.0");
+    let err = score(
+        json!({ "key": "a", "description": "", "kind": "exact" }),
+        None,
+        "x",
+    )
+    .expect_err("no target must not be a silent 0.0");
     match err {
         EngineError::Other(m) => assert!(m.contains("has no target") && m.contains("'a'"), "{m}"),
         other => panic!("expected Other, got {other:?}"),
@@ -53,7 +60,10 @@ fn contains_looks_for_a_substring() {
         "key": "cites", "description": "", "kind": "contains",
         "check": { "expect": "doi:10.1000" }
     });
-    assert_eq!(ok(d.clone(), None, "see doi:10.1000/xyz for details").0, 1.0);
+    assert_eq!(
+        ok(d.clone(), None, "see doi:10.1000/xyz for details").0,
+        1.0
+    );
     let (s, why) = ok(d, None, "no citation here");
     assert_eq!(s, 0.0);
     assert!(why.contains("looked for `doi:10.1000`"), "{why}");
@@ -72,7 +82,11 @@ fn regex_matches_unanchored_and_case_insensitively_by_default() {
 #[test]
 fn regex_misconfiguration_is_an_operator_error() {
     assert!(matches!(
-        score(json!({ "key": "f", "description": "", "kind": "regex" }), None, "x"),
+        score(
+            json!({ "key": "f", "description": "", "kind": "regex" }),
+            None,
+            "x"
+        ),
         Err(EngineError::Other(_))
     ));
     assert!(matches!(
@@ -94,10 +108,16 @@ fn numeric_respects_tolerance_and_explains_itself() {
     let (s, why) = ok(d.clone(), None, "41.6");
     assert_eq!(s, 0.0);
     assert!(
-        why.contains("expected `42`") && why.contains("got `41.6`") && why.contains("tolerance 0.1"),
+        why.contains("expected `42`")
+            && why.contains("got `41.6`")
+            && why.contains("tolerance 0.1"),
         "a mechanical verdict must be auditable: {why}"
     );
-    assert_eq!(ok(d.clone(), None, "The total is 41.95 dollars.").0, 1.0, "within tolerance");
+    assert_eq!(
+        ok(d.clone(), None, "The total is 41.95 dollars.").0,
+        1.0,
+        "within tolerance"
+    );
     let (s, why) = ok(d, None, "no digits at all");
     assert_eq!(s, 0.0);
     assert!(why.contains("no number"), "{why}");
@@ -106,7 +126,11 @@ fn numeric_respects_tolerance_and_explains_itself() {
 #[test]
 fn numeric_target_must_be_a_number() {
     assert!(matches!(
-        score(json!({ "key": "n", "description": "", "kind": "numeric" }), Some("about ten"), "10"),
+        score(
+            json!({ "key": "n", "description": "", "kind": "numeric" }),
+            Some("about ten"),
+            "10"
+        ),
         Err(EngineError::Other(_))
     ));
 }
@@ -158,7 +182,10 @@ fn evaluate_all_covers_only_deterministic_dimensions_in_rubric_order() {
     .expect("rubric");
     assert!(has_llm_dims(&r));
     let det = evaluate_all(&r, Some("{\"a\":1}"), "{\"a\":1}").expect("evaluate");
-    assert_eq!(det.iter().map(|d| d.key.as_str()).collect::<Vec<_>>(), ["answer", "json"]);
+    assert_eq!(
+        det.iter().map(|d| d.key.as_str()).collect::<Vec<_>>(),
+        ["answer", "json"]
+    );
     assert!(det.iter().all(|d| d.score == 1.0));
 }
 
@@ -180,6 +207,9 @@ fn long_values_are_snipped_in_the_reasoning() {
         None,
         &long,
     );
-    assert!(why.contains('…'), "an oversized value must be marked as truncated: {why}");
+    assert!(
+        why.contains('…'),
+        "an oversized value must be marked as truncated: {why}"
+    );
     assert!(why.chars().count() < 300, "reasoning stayed bounded");
 }

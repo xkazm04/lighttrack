@@ -36,7 +36,10 @@ impl StripeSource {
     }
 
     pub fn with_fx(secret: impl Into<String>, fx: Arc<FxTable>) -> Self {
-        Self { secret: secret.into(), fx }
+        Self {
+            secret: secret.into(),
+            fx,
+        }
     }
 }
 
@@ -61,7 +64,12 @@ impl BillingSource for StripeSource {
 }
 
 /// Verify Stripe's `t=…,v1=…` signature header.
-fn verify_signature(secret: &str, header: &str, body: &[u8], now_unix: i64) -> Result<(), BillingError> {
+fn verify_signature(
+    secret: &str,
+    header: &str,
+    body: &[u8],
+    now_unix: i64,
+) -> Result<(), BillingError> {
     let (mut t, mut v1) = (None, None);
     for part in header.split(',') {
         if let Some((k, val)) = part.split_once('=') {
@@ -74,11 +82,16 @@ fn verify_signature(secret: &str, header: &str, body: &[u8], now_unix: i64) -> R
     }
     let t = t.ok_or_else(|| BillingError::Signature("missing timestamp".into()))?;
     let v1 = v1.ok_or_else(|| BillingError::Signature("missing v1 signature".into()))?;
-    let ts: i64 = t.parse().map_err(|_| BillingError::Signature("bad timestamp".into()))?;
+    let ts: i64 = t
+        .parse()
+        .map_err(|_| BillingError::Signature("bad timestamp".into()))?;
     if (now_unix - ts).abs() > TOLERANCE_SECS {
-        return Err(BillingError::Signature("timestamp outside tolerance".into()));
+        return Err(BillingError::Signature(
+            "timestamp outside tolerance".into(),
+        ));
     }
-    let expected = decode_hex(v1).ok_or_else(|| BillingError::Signature("bad hex signature".into()))?;
+    let expected =
+        decode_hex(v1).ok_or_else(|| BillingError::Signature("bad hex signature".into()))?;
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
         .map_err(|_| BillingError::Signature("bad signing key".into()))?;
     mac.update(t.as_bytes());
@@ -127,7 +140,10 @@ pub fn normalize_invoice(obj: &Value, fx: &FxTable) -> Option<RevenueEvent> {
         project_id: String::new(),
         source: "stripe".into(),
         external_id: Some(id.to_string()),
-        customer_id: obj.get("customer").and_then(Value::as_str).map(str::to_string),
+        customer_id: obj
+            .get("customer")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         product_id: line
             .and_then(|l| l.pointer("/price/product"))
             .and_then(Value::as_str)
@@ -154,7 +170,10 @@ pub fn normalize_refund(obj: &Value, fx: &FxTable) -> Option<RevenueEvent> {
         project_id: String::new(),
         source: "stripe".into(),
         external_id: Some(format!("refund:{id}")),
-        customer_id: obj.get("customer").and_then(Value::as_str).map(str::to_string),
+        customer_id: obj
+            .get("customer")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         product_id: None,
         amount_usd: fx.to_usd(refunded, currency).amount_usd,
         currency: currency.to_uppercase(),
@@ -201,7 +220,10 @@ mod tests {
     /// A header-lookup closure returning `header` for `Stripe-Signature` (case-insensitive).
     fn lookup(header: &str) -> impl Fn(&str) -> Option<String> {
         let header = header.to_string();
-        move |name: &str| name.eq_ignore_ascii_case("stripe-signature").then(|| header.clone())
+        move |name: &str| {
+            name.eq_ignore_ascii_case("stripe-signature")
+                .then(|| header.clone())
+        }
     }
 
     /// Produce a valid `Stripe-Signature` header for `body` at time `t` with `secret`.
@@ -256,7 +278,9 @@ mod tests {
         let header = sign(secret, now, &body);
         let mut tampered = body.clone();
         tampered[0] ^= 0x01;
-        assert!(StripeSource::new(secret).verify_webhook(&lookup(&header), &tampered, now).is_err());
+        assert!(StripeSource::new(secret)
+            .verify_webhook(&lookup(&header), &tampered, now)
+            .is_err());
     }
 
     #[test]
@@ -264,7 +288,9 @@ mod tests {
         let body = invoice_envelope();
         let now = 1_780_000_100_i64;
         let header = sign("whsec_test", now, &body);
-        assert!(StripeSource::new("whsec_other").verify_webhook(&lookup(&header), &body, now).is_err());
+        assert!(StripeSource::new("whsec_other")
+            .verify_webhook(&lookup(&header), &body, now)
+            .is_err());
     }
 
     #[test]

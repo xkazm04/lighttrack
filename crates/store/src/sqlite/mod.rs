@@ -42,8 +42,8 @@ use serde_json::Value;
 
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
-    JobCancel, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome,
-    RelayTask, RevenueEvent, Rubric, Score, TokensByDimension, TraceSummary,
+    JobCancel, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
+    RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension, TraceSummary,
 };
 
 use crate::{
@@ -78,7 +78,10 @@ pub(crate) struct OpenOpts {
 
 impl Default for OpenOpts {
     fn default() -> Self {
-        Self { wal: true, read_pool: pool::configured_size() }
+        Self {
+            wal: true,
+            read_pool: pool::configured_size(),
+        }
     }
 }
 
@@ -172,7 +175,11 @@ impl SqliteStore {
 /// databases), so the answer has to be read back, not assumed — the read pool's correctness depends
 /// on it. `wal == false` forces the rollback journal, which only the comparison harness asks for.
 fn set_journal_mode(conn: &Connection, wal: bool) -> Result<bool> {
-    let sql = if wal { "PRAGMA journal_mode=WAL" } else { "PRAGMA journal_mode=DELETE" };
+    let sql = if wal {
+        "PRAGMA journal_mode=WAL"
+    } else {
+        "PRAGMA journal_mode=DELETE"
+    };
     let mode: String = conn.query_row(sql, [], |r| r.get(0))?;
     Ok(mode.eq_ignore_ascii_case("wal"))
 }
@@ -218,7 +225,10 @@ impl Store for SqliteStore {
                 Ok(tx) => tx,
                 Err(e) => {
                     let msg = format!("batch begin failed: {e}");
-                    return evs.iter().map(|_| Err(StoreError::Other(msg.clone()))).collect();
+                    return evs
+                        .iter()
+                        .map(|_| Err(StoreError::Other(msg.clone())))
+                        .collect();
                 }
             };
             let mut rules_by_project: std::collections::HashMap<&str, Vec<LimitRule>> =
@@ -244,7 +254,10 @@ impl Store for SqliteStore {
                 // The in-memory usage cache may now over-count the uncommitted events — the safe
                 // direction (over-enforcement), and it re-syncs from the table on its next rebuild.
                 let msg = format!("batch commit failed: {e}");
-                return evs.iter().map(|_| Err(StoreError::Other(msg.clone()))).collect();
+                return evs
+                    .iter()
+                    .map(|_| Err(StoreError::Other(msg.clone())))
+                    .collect();
             }
             out
         })
@@ -477,7 +490,13 @@ impl Store for SqliteStore {
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
         self.with(|c| jobs::update_progress(c, id, progress))
     }
-    fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()> {
+    fn finish_job(
+        &self,
+        id: &str,
+        status: &str,
+        result: &Value,
+        error: Option<&str>,
+    ) -> Result<()> {
         self.with(|c| jobs::finish(c, id, status, result, error))
     }
     fn get_job(&self, id: &str) -> Result<Option<Job>> {
@@ -583,7 +602,12 @@ impl Store for SqliteStore {
     ) -> Result<Vec<RelayTask>> {
         self.read(|c| relay::list(c, project, status, limit))
     }
-    fn lease_relay_tasks(&self, device: &str, lease_secs: i64, max: usize) -> Result<Vec<RelayTask>> {
+    fn lease_relay_tasks(
+        &self,
+        device: &str,
+        lease_secs: i64,
+        max: usize,
+    ) -> Result<Vec<RelayTask>> {
         self.with(|c| relay::lease(c, device, lease_secs, max))
     }
     fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {

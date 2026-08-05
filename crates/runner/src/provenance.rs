@@ -199,10 +199,16 @@ mod tests {
     #[test]
     fn weakest_reasoning_quotes_the_judge_not_a_template() {
         let d = detail(
-            vec![dim("correctness", 0.9, &["nails it"]), dim("safety", 0.2, &["unsafe advice"])],
+            vec![
+                dim("correctness", 0.9, &["nails it"]),
+                dim("safety", 0.2, &["unsafe advice"]),
+            ],
             1.0,
         );
-        assert_eq!(weakest_reasoning(&d).as_deref(), Some("safety: unsafe advice"));
+        assert_eq!(
+            weakest_reasoning(&d).as_deref(),
+            Some("safety: unsafe advice")
+        );
     }
 
     #[test]
@@ -212,14 +218,27 @@ mod tests {
 
     #[test]
     fn merge_averages_values_and_keeps_every_candidates_reasoning() {
-        let a = detail(vec![dim("x", 0.8, &["a1", "a2"]), dim("y", 0.4, &["ay"])], 1.0);
+        let a = detail(
+            vec![dim("x", 0.8, &["a1", "a2"]), dim("y", 0.4, &["ay"])],
+            1.0,
+        );
         let b = detail(vec![dim("x", 0.4, &["b1"]), dim("y", 0.6, &["by"])], 0.6);
         let m = merge_details(&[a, b]);
         assert_eq!(m.dimensions.len(), 2);
         assert_eq!(m.dimensions[0].key, "x", "first-seen key order");
-        assert!((m.dimensions[0].value - 0.6).abs() < 1e-9, "mean of 0.8 and 0.4");
-        assert_eq!(m.dimensions[0].reasoning, vec!["a1", "a2", "b1"], "nothing discarded");
-        assert!((m.agreement.unwrap() - 0.8).abs() < 1e-9, "agreement averages");
+        assert!(
+            (m.dimensions[0].value - 0.6).abs() < 1e-9,
+            "mean of 0.8 and 0.4"
+        );
+        assert_eq!(
+            m.dimensions[0].reasoning,
+            vec!["a1", "a2", "b1"],
+            "nothing discarded"
+        );
+        assert!(
+            (m.agreement.unwrap() - 0.8).abs() < 1e-9,
+            "agreement averages"
+        );
         assert_eq!(m.samples_requested, Some(4), "sample counters sum");
         assert_eq!(m.injection_suspected, Some(false));
     }
@@ -233,7 +252,11 @@ mod tests {
         dirty.position_bias = Some(true);
         dirty.determinism = Some("best-effort".into());
         let m = merge_details(&[clean, dirty]);
-        assert_eq!(m.injection_suspected, Some(true), "one dirty candidate taints the cell");
+        assert_eq!(
+            m.injection_suspected,
+            Some(true),
+            "one dirty candidate taints the cell"
+        );
         assert_eq!(m.position_bias, Some(true));
     }
 
@@ -266,10 +289,18 @@ mod determinism_tests {
 
     #[test]
     fn one_best_effort_candidate_downgrades_the_cell() {
-        let exact = ScoreDetail { determinism: Some("exact".into()), ..Default::default() };
-        let best = ScoreDetail { determinism: Some("best-effort".into()), ..Default::default() };
+        let exact = ScoreDetail {
+            determinism: Some("exact".into()),
+            ..Default::default()
+        };
+        let best = ScoreDetail {
+            determinism: Some("best-effort".into()),
+            ..Default::default()
+        };
         assert_eq!(
-            merge_details(&[exact.clone(), exact.clone()]).determinism.as_deref(),
+            merge_details(&[exact.clone(), exact.clone()])
+                .determinism
+                .as_deref(),
             Some("exact")
         );
         assert_eq!(
@@ -281,6 +312,10 @@ mod determinism_tests {
 
     #[test]
     fn absent_stamps_do_not_invent_one() {
-        assert!(merge_details(&[ScoreDetail::default(), ScoreDetail::default()]).determinism.is_none());
+        assert!(
+            merge_details(&[ScoreDetail::default(), ScoreDetail::default()])
+                .determinism
+                .is_none()
+        );
     }
 }

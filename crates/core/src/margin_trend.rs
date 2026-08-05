@@ -65,7 +65,11 @@ pub fn compute_margin_trend(
     top_n: usize,
 ) -> MarginTrend {
     let day_strings: Vec<String> = (0..days)
-        .map(|i| (start_day + Duration::days(i as i64)).format("%Y-%m-%d").to_string())
+        .map(|i| {
+            (start_day + Duration::days(i as i64))
+                .format("%Y-%m-%d")
+                .to_string()
+        })
         .collect();
 
     // revenue[key][day] — recognize each event over each one-day sub-window (identical rules to the
@@ -81,7 +85,10 @@ pub fn compute_margin_trend(
             let d1 = d0 + Duration::days(1);
             let amt = recognized_amount(r, d0, d1);
             if amt != 0.0 {
-                *rev.entry(key.clone()).or_default().entry(day.clone()).or_default() += amt;
+                *rev.entry(key.clone())
+                    .or_default()
+                    .entry(day.clone())
+                    .or_default() += amt;
             }
         }
     }
@@ -91,7 +98,11 @@ pub fn compute_margin_trend(
     let mut cost: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
     for c in daily_cost {
         if in_range.contains(c.day.as_str()) {
-            *cost.entry(c.key.clone()).or_default().entry(c.day.clone()).or_default() += c.cost_usd;
+            *cost
+                .entry(c.key.clone())
+                .or_default()
+                .entry(c.day.clone())
+                .or_default() += c.cost_usd;
         }
     }
 
@@ -106,10 +117,19 @@ pub fn compute_margin_trend(
     let totals = build_totals(&day_strings, &series);
 
     // Cap to the biggest movers by absolute margin (a large loss is as interesting as a large gain).
-    series.sort_by(|a, b| b.total_margin_usd.abs().total_cmp(&a.total_margin_usd.abs()));
+    series.sort_by(|a, b| {
+        b.total_margin_usd
+            .abs()
+            .total_cmp(&a.total_margin_usd.abs())
+    });
     series.truncate(top_n);
 
-    MarginTrend { series, totals, key_count, top_n }
+    MarginTrend {
+        series,
+        totals,
+        key_count,
+        top_n,
+    }
 }
 
 fn build_series(
@@ -199,7 +219,11 @@ mod tests {
     }
 
     fn cost(key: &str, day: &str, cost_usd: f64) -> DailyKeyCost {
-        DailyKeyCost { day: day.into(), key: key.into(), cost_usd }
+        DailyKeyCost {
+            day: day.into(),
+            key: key.into(),
+            cost_usd,
+        }
     }
 
     #[test]
@@ -207,7 +231,10 @@ mod tests {
         let r = rev("acme", 30.0, RevenueKind::OneTime, "2026-06-02T12:00:00Z");
         let tr = compute_margin_trend(
             &[r],
-            &[cost("acme", "2026-06-01", 1.0), cost("acme", "2026-06-02", 2.0)],
+            &[
+                cost("acme", "2026-06-01", 1.0),
+                cost("acme", "2026-06-02", 2.0),
+            ],
             MarginDimension::Customer,
             day("2026-06-01"),
             3,
@@ -216,9 +243,18 @@ mod tests {
         let s = &tr.series[0];
         assert_eq!(s.key, "acme");
         assert_eq!(s.points.len(), 3);
-        assert!((s.points[0].revenue_usd - 0.0).abs() < 1e-9, "day 1 no revenue");
-        assert!((s.points[1].revenue_usd - 30.0).abs() < 1e-9, "all $30 on day 2");
-        assert!((s.points[2].revenue_usd - 0.0).abs() < 1e-9, "day 3 no revenue");
+        assert!(
+            (s.points[0].revenue_usd - 0.0).abs() < 1e-9,
+            "day 1 no revenue"
+        );
+        assert!(
+            (s.points[1].revenue_usd - 30.0).abs() < 1e-9,
+            "all $30 on day 2"
+        );
+        assert!(
+            (s.points[2].revenue_usd - 0.0).abs() < 1e-9,
+            "day 3 no revenue"
+        );
         // Cost lands per day; margin = revenue − cost.
         assert!((s.points[0].margin_usd + 1.0).abs() < 1e-9);
         assert!((s.points[1].margin_usd - 28.0).abs() < 1e-9);
@@ -230,13 +266,30 @@ mod tests {
     #[test]
     fn subscription_amortizes_evenly_across_days() {
         // $40 covering exactly the 4-day window → $10 recognized each day.
-        let mut r = rev("acme", 40.0, RevenueKind::Subscription, "2026-06-01T00:00:00Z");
+        let mut r = rev(
+            "acme",
+            40.0,
+            RevenueKind::Subscription,
+            "2026-06-01T00:00:00Z",
+        );
         r.period_start = Some(t("2026-06-01T00:00:00Z"));
         r.period_end = Some(t("2026-06-05T00:00:00Z"));
-        let tr = compute_margin_trend(&[r], &[], MarginDimension::Customer, day("2026-06-01"), 4, 20);
+        let tr = compute_margin_trend(
+            &[r],
+            &[],
+            MarginDimension::Customer,
+            day("2026-06-01"),
+            4,
+            20,
+        );
         let s = &tr.series[0];
         for p in &s.points {
-            assert!((p.revenue_usd - 10.0).abs() < 1e-6, "day {} got {}", p.date, p.revenue_usd);
+            assert!(
+                (p.revenue_usd - 10.0).abs() < 1e-6,
+                "day {} got {}",
+                p.date,
+                p.revenue_usd
+            );
         }
         assert!((s.total_revenue_usd - 40.0).abs() < 1e-6);
     }
@@ -255,8 +308,14 @@ mod tests {
         );
         let s = &tr.series[0];
         assert!((s.points[0].revenue_usd - 20.0).abs() < 1e-9);
-        assert!((s.points[2].revenue_usd + 5.0).abs() < 1e-9, "refund subtracts on day 3");
-        assert!((s.total_revenue_usd - 15.0).abs() < 1e-9, "net revenue after refund");
+        assert!(
+            (s.points[2].revenue_usd + 5.0).abs() < 1e-9,
+            "refund subtracts on day 3"
+        );
+        assert!(
+            (s.total_revenue_usd - 15.0).abs() < 1e-9,
+            "net revenue after refund"
+        );
     }
 
     #[test]
@@ -264,13 +323,25 @@ mod tests {
         // Three customers; cap to 2. Totals must still reflect all three.
         let revenue = [
             rev("small", 1.0, RevenueKind::OneTime, "2026-06-01T00:00:00Z"),
-            rev("winner", 100.0, RevenueKind::OneTime, "2026-06-01T00:00:00Z"),
+            rev(
+                "winner",
+                100.0,
+                RevenueKind::OneTime,
+                "2026-06-01T00:00:00Z",
+            ),
         ];
         let costs = [
             cost("small", "2026-06-01", 0.5),
             cost("loser", "2026-06-01", 80.0), // big negative margin, no revenue
         ];
-        let tr = compute_margin_trend(&revenue, &costs, MarginDimension::Customer, day("2026-06-01"), 1, 2);
+        let tr = compute_margin_trend(
+            &revenue,
+            &costs,
+            MarginDimension::Customer,
+            day("2026-06-01"),
+            1,
+            2,
+        );
         assert_eq!(tr.key_count, 3, "small + winner + loser");
         assert_eq!(tr.series.len(), 2, "capped to top-2");
         let keys: Vec<&str> = tr.series.iter().map(|s| s.key.as_str()).collect();

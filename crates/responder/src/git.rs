@@ -6,7 +6,12 @@ use std::process::Output;
 use tokio::process::Command;
 
 async fn git(repo: &str, args: &[&str]) -> std::io::Result<Output> {
-    Command::new("git").arg("-C").arg(repo).args(args).output().await
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .await
 }
 
 fn ok(r: std::io::Result<Output>) -> bool {
@@ -26,7 +31,9 @@ pub(crate) async fn has_changes(repo: &str) -> bool {
 }
 
 pub(crate) async fn current_branch(repo: &str) -> Option<String> {
-    let o = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).await.ok()?;
+    let o = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .await
+        .ok()?;
     if !o.status.success() {
         return None;
     }

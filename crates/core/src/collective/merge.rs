@@ -94,9 +94,9 @@ struct Acc {
     lat_w: f64,
     p95_max: u64,
     runs: u32,
-    var_w: f64,      // Σ w·vᵢ over samples with a known variance — for the merge-side pooled CI
+    var_w: f64, // Σ w·vᵢ over samples with a known variance — for the merge-side pooled CI
     var_weight: f64, // Σ w over samples with a known variance
-    var_cases: u64,  // Σ raw cases over samples with a known variance (coverage test / SE)
+    var_cases: u64, // Σ raw cases over samples with a known variance (coverage test / SE)
     contributors: BTreeSet<String>,
     judge_providers: BTreeSet<String>,
     rubric_fps: BTreeSet<String>,
@@ -150,8 +150,16 @@ impl Acc {
         } else {
             s.determinism
         };
-        self.frozen = if self.seen { self.frozen.fold(s.frozen) } else { s.frozen };
-        self.tested = if self.seen { self.tested.fold(s.tested) } else { s.tested };
+        self.frozen = if self.seen {
+            self.frozen.fold(s.frozen)
+        } else {
+            s.frozen
+        };
+        self.tested = if self.seen {
+            self.tested.fold(s.tested)
+        } else {
+            s.tested
+        };
         if let Some(v) = s.dataset_version {
             self.dataset_versions.insert(v);
         }
@@ -181,13 +189,25 @@ impl Acc {
     }
 
     fn quality(&self) -> f64 {
-        if self.w <= 0.0 { 0.0 } else { self.q_w / self.w }
+        if self.w <= 0.0 {
+            0.0
+        } else {
+            self.q_w / self.w
+        }
     }
     fn pass_rate(&self) -> f64 {
-        if self.w <= 0.0 { 0.0 } else { self.p_w / self.w }
+        if self.w <= 0.0 {
+            0.0
+        } else {
+            self.p_w / self.w
+        }
     }
     fn cost(&self) -> f64 {
-        if self.w <= 0.0 { 0.0 } else { self.c_w / self.w }
+        if self.w <= 0.0 {
+            0.0
+        } else {
+            self.c_w / self.w
+        }
     }
     fn p50(&self) -> Option<u64> {
         (self.lat_w_total > 0.0).then(|| (self.lat_w / self.lat_w_total).round() as u64)
@@ -228,7 +248,11 @@ impl Acc {
 type Key = (String, String, String);
 
 fn key_of(provider: &str, model: &str, task_type: &str) -> Key {
-    (provider.to_string(), model.to_string(), task_type.to_string())
+    (
+        provider.to_string(),
+        model.to_string(),
+        task_type.to_string(),
+    )
 }
 
 /// Collapse a set of tags into a single digest-entry value: the sole tag when they agree, `"mixed"`
@@ -250,27 +274,30 @@ pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> 
         if s.n_cases == 0 {
             continue;
         }
-        groups.entry(key_of(&s.provider, &s.model, &s.task_type)).or_default().add(
-            Sample {
-                // Digest side: an instance pooling its own runs, so weight == cases (nothing to bound).
-                weight: s.n_cases as f64,
-                quality: s.quality,
-                pass_rate: s.pass_rate,
-                cost: s.cost_per_case_usd,
-                cases: s.n_cases,
-                p50: s.p50_latency_ms,
-                p95: s.p95_latency_ms,
-                runs: 1,
-                variance: None,
-                judge_provider: s.judge_provider.clone(),
-                rubric_fingerprint: s.rubric_fingerprint.clone(),
-                determinism: s.determinism.clone(),
-                frozen: Coverage::of(s.dataset_frozen),
-                tested: Coverage::of(s.significance_tested),
-                dataset_version: s.dataset_version,
-            },
-            None,
-        );
+        groups
+            .entry(key_of(&s.provider, &s.model, &s.task_type))
+            .or_default()
+            .add(
+                Sample {
+                    // Digest side: an instance pooling its own runs, so weight == cases (nothing to bound).
+                    weight: s.n_cases as f64,
+                    quality: s.quality,
+                    pass_rate: s.pass_rate,
+                    cost: s.cost_per_case_usd,
+                    cases: s.n_cases,
+                    p50: s.p50_latency_ms,
+                    p95: s.p95_latency_ms,
+                    runs: 1,
+                    variance: None,
+                    judge_provider: s.judge_provider.clone(),
+                    rubric_fingerprint: s.rubric_fingerprint.clone(),
+                    determinism: s.determinism.clone(),
+                    frozen: Coverage::of(s.dataset_frozen),
+                    tested: Coverage::of(s.significance_tested),
+                    dataset_version: s.dataset_version,
+                },
+                None,
+            );
     }
     let mut out: Vec<ModelDigestEntry> = groups
         .into_iter()
@@ -328,10 +355,16 @@ fn winsorized_weights(cases: &[f64]) -> Vec<f64> {
 /// cannot own a row (the realized share is disclosed as `max_source_share`). `n_contributors` counts
 /// the distinct sources and `n_cases` reports the raw evidence volume, uncapped. Rows aggregating
 /// fewer than `low_confidence_floor` cases are flagged (not hidden). Sorted by quality desc.
-pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32) -> Vec<LeaderboardRow> {
+pub fn merge_leaderboard(
+    entries: &[CollectiveEntry],
+    low_confidence_floor: u32,
+) -> Vec<LeaderboardRow> {
     let mut buckets: BTreeMap<Key, Vec<&CollectiveEntry>> = BTreeMap::new();
     for e in entries {
-        buckets.entry(key_of(&e.provider, &e.model, &e.task_type)).or_default().push(e);
+        buckets
+            .entry(key_of(&e.provider, &e.model, &e.task_type))
+            .or_default()
+            .push(e);
     }
     let groups: BTreeMap<Key, (Acc, f64, Between)> = buckets
         .into_iter()
@@ -373,33 +406,36 @@ pub fn merge_leaderboard(entries: &[CollectiveEntry], low_confidence_floor: u32)
         .collect();
     let mut out: Vec<LeaderboardRow> = groups
         .into_iter()
-        .map(|((provider, model, task_type), (a, max_source_share, between))| {
-            let judge_providers: Vec<String> = a.judge_providers.iter().cloned().collect();
-            let mixed_judges = (judge_providers.len() > 1).then(|| judge_providers.len() as u32);
-            let rigor = a.row_rigor();
-            let mixed_rigor = rigor.is_mixed();
-            LeaderboardRow {
-                provider,
-                model,
-                task_type,
-                quality: r3(a.quality()),
-                quality_ci95: a.quality_ci95(&between).map(r3),
-                source_spread: between.spread().map(r3),
-                pass_rate: r3(a.pass_rate()),
-                avg_cost_usd: r6(a.cost()),
-                p50_latency_ms: a.p50(),
-                p95_latency_ms: a.p95(),
-                low_confidence: a.cases < low_confidence_floor as u64,
-                judge_providers,
-                mixed_judges,
-                n_contributors: a.contributors.len() as u32,
-                n_runs: a.runs,
-                n_cases: a.cases as u32,
-                max_source_share: r3(max_source_share),
-                rigor,
-                mixed_rigor,
-            }
-        })
+        .map(
+            |((provider, model, task_type), (a, max_source_share, between))| {
+                let judge_providers: Vec<String> = a.judge_providers.iter().cloned().collect();
+                let mixed_judges =
+                    (judge_providers.len() > 1).then(|| judge_providers.len() as u32);
+                let rigor = a.row_rigor();
+                let mixed_rigor = rigor.is_mixed();
+                LeaderboardRow {
+                    provider,
+                    model,
+                    task_type,
+                    quality: r3(a.quality()),
+                    quality_ci95: a.quality_ci95(&between).map(r3),
+                    source_spread: between.spread().map(r3),
+                    pass_rate: r3(a.pass_rate()),
+                    avg_cost_usd: r6(a.cost()),
+                    p50_latency_ms: a.p50(),
+                    p95_latency_ms: a.p95(),
+                    low_confidence: a.cases < low_confidence_floor as u64,
+                    judge_providers,
+                    mixed_judges,
+                    n_contributors: a.contributors.len() as u32,
+                    n_runs: a.runs,
+                    n_cases: a.cases as u32,
+                    max_source_share: r3(max_source_share),
+                    rigor,
+                    mixed_rigor,
+                }
+            },
+        )
         .collect();
     sort_by_quality(&mut out, |r| (r.quality, &r.provider, &r.model));
     out
@@ -413,7 +449,9 @@ where
     v.sort_by(|a, b| {
         let (qa, pa, ma) = key(a);
         let (qb, pb, mb) = key(b);
-        qb.total_cmp(&qa).then_with(|| pa.cmp(pb)).then_with(|| ma.cmp(mb))
+        qb.total_cmp(&qa)
+            .then_with(|| pa.cmp(pb))
+            .then_with(|| ma.cmp(mb))
     });
 }
 
@@ -426,8 +464,8 @@ fn r6(x: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::DEFAULT_LOW_CONFIDENCE_CASES;
+    use super::*;
     use chrono::Utc;
 
     fn stat(provider: &str, model: &str, task: &str, q: f64, cost: f64, cases: u32) -> RunStat {
@@ -560,11 +598,17 @@ mod tests {
     fn v1_null_variance_yields_no_ci() {
         // Every contributor is v1 (variance None) → no CI can be formed (insufficient variance data).
         let rows = merge_leaderboard(
-            &[entry("a", "haiku", 0.8, 100, None), entry("b", "haiku", 0.82, 100, None)],
+            &[
+                entry("a", "haiku", 0.8, 100, None),
+                entry("b", "haiku", 0.82, 100, None),
+            ],
             DEFAULT_LOW_CONFIDENCE_CASES,
         );
         assert_eq!(rows.len(), 1);
-        assert!(rows[0].quality_ci95.is_none(), "no variance anywhere → CI None");
+        assert!(
+            rows[0].quality_ci95.is_none(),
+            "no variance anywhere → CI None"
+        );
         assert!(!rows[0].low_confidence, "200 cases clears the floor");
     }
 
@@ -601,7 +645,10 @@ mod tests {
                 ],
                 DEFAULT_LOW_CONFIDENCE_CASES,
             );
-            (rows[0].quality_ci95.unwrap(), rows[0].source_spread.unwrap())
+            (
+                rows[0].quality_ci95.unwrap(),
+                rows[0].source_spread.unwrap(),
+            )
         };
         // Perfect agreement ⇒ τ̂² = 0 ⇒ the interval is exactly the old within-source one:
         //   SE = √(0.04/200) = 0.0141421 ⇒ CI = 0.0277186 → 0.028.
@@ -613,10 +660,16 @@ mod tests {
         let (disagree, spread_disagree) = ci_of(0.70, 0.94);
         assert_eq!(disagree, 0.237);
         assert_eq!(spread_disagree, 0.17, "√0.0288 = 0.169705…");
-        assert!(disagree > agree * 8.0, "disagreement dominates the interval, as it should");
+        assert!(
+            disagree > agree * 8.0,
+            "disagreement dominates the interval, as it should"
+        );
         // The middling gap sits between them — monotone in the disagreement, not in the case count.
         let (mid, _) = ci_of(0.78, 0.86);
-        assert!(agree < mid && mid < disagree, "agree {agree} < mid {mid} < disagree {disagree}");
+        assert!(
+            agree < mid && mid < disagree,
+            "agree {agree} < mid {mid} < disagree {disagree}"
+        );
     }
 
     #[test]
@@ -624,15 +677,27 @@ mod tests {
         // Two v1 contributors: no variance anywhere, so the refusal to fabricate a CI stands — but the
         // reader can still see that the sources are 0.4 apart. Before, the row said nothing at all.
         let rows = merge_leaderboard(
-            &[entry("a", "haiku", 0.60, 100, None), entry("b", "haiku", 1.00, 100, None)],
+            &[
+                entry("a", "haiku", 0.60, 100, None),
+                entry("b", "haiku", 1.00, 100, None),
+            ],
             DEFAULT_LOW_CONFIDENCE_CASES,
         );
-        assert!(rows[0].quality_ci95.is_none(), "the variance-coverage floor is untouched");
+        assert!(
+            rows[0].quality_ci95.is_none(),
+            "the variance-coverage floor is untouched"
+        );
         // raw τ² = 0.04, τ̂² = 0.08 ⇒ SD = 0.2828 → 0.283.
         assert_eq!(rows[0].source_spread, Some(0.283));
         // A single-source row has no between-source evidence — that is `None`, not "they all agree".
-        let rows = merge_leaderboard(&[entry("solo", "haiku", 0.9, 500, Some(0.04))], DEFAULT_LOW_CONFIDENCE_CASES);
-        assert!(rows[0].source_spread.is_none(), "k=1 spread is undefined, not zero");
+        let rows = merge_leaderboard(
+            &[entry("solo", "haiku", 0.9, 500, Some(0.04))],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert!(
+            rows[0].source_spread.is_none(),
+            "k=1 spread is undefined, not zero"
+        );
         // …and its interval is the within-source one alone: SE = √(0.04/500) ⇒ CI = 1.96·0.0089443.
         assert_eq!(rows[0].quality_ci95, Some(0.018));
     }
@@ -665,7 +730,10 @@ mod tests {
             ],
             DEFAULT_LOW_CONFIDENCE_CASES,
         );
-        assert!(rows[0].quality_ci95.is_none(), "thin variance coverage → no CI");
+        assert!(
+            rows[0].quality_ci95.is_none(),
+            "thin variance coverage → no CI"
+        );
     }
 
     #[test]
@@ -697,7 +765,10 @@ mod tests {
             DEFAULT_LOW_CONFIDENCE_CASES,
         );
         assert_eq!(rows[0].mixed_judges, Some(2));
-        assert_eq!(rows[0].judge_providers, vec!["anthropic".to_string(), "openai".to_string()]);
+        assert_eq!(
+            rows[0].judge_providers,
+            vec!["anthropic".to_string(), "openai".to_string()]
+        );
         // A single-judge bucket carries no mixed annotation.
         let rows = merge_leaderboard(
             &[judged("a", "haiku", 0.8, 50, None, Some("anthropic"))],
@@ -720,10 +791,20 @@ mod tests {
             ],
             DEFAULT_LOW_CONFIDENCE_CASES,
         );
-        assert_eq!(rows[0].max_source_share, 0.8, "the documented ceiling is realized exactly");
+        assert_eq!(
+            rows[0].max_source_share, 0.8,
+            "the documented ceiling is realized exactly"
+        );
         // 0.8·0.05 + 0.1·0.80 + 0.1·0.82 = 0.202.
-        assert!((rows[0].quality - 0.202).abs() < 1e-3, "got {}", rows[0].quality);
-        assert_eq!(rows[0].n_cases, 1_000_200, "raw evidence volume is reported truthfully");
+        assert!(
+            (rows[0].quality - 0.202).abs() < 1e-3,
+            "got {}",
+            rows[0].quality
+        );
+        assert_eq!(
+            rows[0].n_cases, 1_000_200,
+            "raw evidence volume is reported truthfully"
+        );
         assert_eq!(rows[0].n_contributors, 3);
     }
 
@@ -731,25 +812,46 @@ mod tests {
     fn sample_size_still_matters_and_honest_rows_are_untouched() {
         // The non-goal: 10k cases must still beat 10 by a wide margin (share ceiling 0.8, not 0.5).
         let rows = merge_leaderboard(
-            &[entry("big", "haiku", 0.90, 10_000, None), entry("small", "haiku", 0.10, 10, None)],
+            &[
+                entry("big", "haiku", 0.90, 10_000, None),
+                entry("small", "haiku", 0.10, 10, None),
+            ],
             DEFAULT_LOW_CONFIDENCE_CASES,
         );
-        assert!((rows[0].quality - 0.74).abs() < 1e-3, "got {}", rows[0].quality);
+        assert!(
+            (rows[0].quality - 0.74).abs() < 1e-3,
+            "got {}",
+            rows[0].quality
+        );
         assert_eq!(rows[0].max_source_share, 0.8);
         // Sources within 4× of each other are never touched: exactly the flat case-weighted mean.
         let rows = merge_leaderboard(
-            &[entry("a", "haiku", 0.60, 25, None), entry("b", "haiku", 0.90, 75, None)],
+            &[
+                entry("a", "haiku", 0.60, 25, None),
+                entry("b", "haiku", 0.90, 75, None),
+            ],
             DEFAULT_LOW_CONFIDENCE_CASES,
         );
-        assert!((rows[0].quality - 0.825).abs() < 1e-9, "got {}", rows[0].quality);
+        assert!(
+            (rows[0].quality - 0.825).abs() < 1e-9,
+            "got {}",
+            rows[0].quality
+        );
         assert_eq!(rows[0].max_source_share, 0.75, "no winsorization applied");
         // Beyond 4×, the ceiling bites — 90/10 becomes 80/20. That is the bound doing its job: a row
         // that is 90% one instance is that instance's private eval on a collective billboard.
         let rows = merge_leaderboard(
-            &[entry("a", "haiku", 0.60, 10, None), entry("b", "haiku", 0.90, 90, None)],
+            &[
+                entry("a", "haiku", 0.60, 10, None),
+                entry("b", "haiku", 0.90, 90, None),
+            ],
             DEFAULT_LOW_CONFIDENCE_CASES,
         );
-        assert!((rows[0].quality - 0.84).abs() < 1e-9, "got {}", rows[0].quality);
+        assert!(
+            (rows[0].quality - 0.84).abs() < 1e-9,
+            "got {}",
+            rows[0].quality
+        );
         assert_eq!(rows[0].max_source_share, 0.8);
         // Within ONE contributor, sample size is still respected exactly — the digest pools its own
         // runs with no ceiling at all (10 cases at 0.6 + 90 at 0.9 ⇒ 0.87).
@@ -762,7 +864,10 @@ mod tests {
         );
         assert!((d[0].quality - 0.87).abs() < 1e-9, "got {}", d[0].quality);
         // A single-source row is left alone entirely (the contributor floor decides its fate).
-        let rows = merge_leaderboard(&[entry("solo", "haiku", 0.5, 5000, None)], DEFAULT_LOW_CONFIDENCE_CASES);
+        let rows = merge_leaderboard(
+            &[entry("solo", "haiku", 0.5, 5000, None)],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
         assert_eq!(rows[0].max_source_share, 1.0);
         assert_eq!(rows[0].n_cases, 5000);
     }
@@ -790,16 +895,27 @@ mod tests {
         let d = build_digest(&[rigorous(0.8), sloppy], 5);
         assert_eq!(d[0].determinism.as_deref(), Some("sampled"));
         assert_eq!(d[0].frozen_dataset, Coverage::Mixed);
-        assert_eq!(d[0].significance_tested, Coverage::Mixed, "silence is not agreement");
+        assert_eq!(
+            d[0].significance_tested,
+            Coverage::Mixed,
+            "silence is not agreement"
+        );
         // Two *versions* of a frozen dataset are two case sets: the "one immutable pin" claim fails
         // even though every run reported frozen=true. The version integers never leave the instance.
         let mut v4 = rigorous(0.9);
         v4.dataset_version = Some(4);
         let d = build_digest(&[rigorous(0.8), v4], 5);
-        assert_eq!(d[0].frozen_dataset, Coverage::Mixed, "version drift breaks the pin claim");
+        assert_eq!(
+            d[0].frozen_dataset,
+            Coverage::Mixed,
+            "version drift breaks the pin claim"
+        );
         // …and the version itself is nowhere on the wire.
         let json = serde_json::to_string(&d[0]).unwrap();
-        assert!(!json.contains("version"), "dataset version must not be published: {json}");
+        assert!(
+            !json.contains("version"),
+            "dataset version must not be published: {json}"
+        );
     }
 
     #[test]
@@ -811,7 +927,10 @@ mod tests {
             e.significance_tested = Coverage::All;
             e
         };
-        let rows = merge_leaderboard(&[rigorous("a"), rigorous("b")], DEFAULT_LOW_CONFIDENCE_CASES);
+        let rows = merge_leaderboard(
+            &[rigorous("a"), rigorous("b")],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
         assert_eq!(rows[0].rigor.determinism.as_deref(), Some("exact"));
         assert_eq!(rows[0].rigor.determinism_levels, vec!["exact".to_string()]);
         assert_eq!(rows[0].rigor.frozen_dataset, Coverage::All);
@@ -821,8 +940,15 @@ mod tests {
         sloppy.determinism = Some("sampled".into());
         sloppy.frozen_dataset = Coverage::None;
         let rows = merge_leaderboard(&[rigorous("a"), sloppy], DEFAULT_LOW_CONFIDENCE_CASES);
-        assert_eq!(rows[0].rigor.determinism.as_deref(), Some("sampled"), "headline is the weakest");
-        assert_eq!(rows[0].rigor.determinism_levels, vec!["exact".to_string(), "sampled".into()]);
+        assert_eq!(
+            rows[0].rigor.determinism.as_deref(),
+            Some("sampled"),
+            "headline is the weakest"
+        );
+        assert_eq!(
+            rows[0].rigor.determinism_levels,
+            vec!["exact".to_string(), "sampled".into()]
+        );
         assert_eq!(rows[0].rigor.frozen_dataset, Coverage::Mixed);
         assert!(rows[0].mixed_rigor);
         // A v1/v2 contributor (no rigor at all) merges as Unknown — never orphaned by the v3 bump.
@@ -830,8 +956,14 @@ mod tests {
             &[rigorous("a"), entry("legacy", "haiku", 0.8, 100, None)],
             DEFAULT_LOW_CONFIDENCE_CASES,
         );
-        assert_eq!(rows[0].n_contributors, 2, "the v2 contribution still counts");
-        assert!(rows[0].rigor.determinism.is_none(), "one silent source voids the claim");
+        assert_eq!(
+            rows[0].n_contributors, 2,
+            "the v2 contribution still counts"
+        );
+        assert!(
+            rows[0].rigor.determinism.is_none(),
+            "one silent source voids the claim"
+        );
         assert_eq!(rows[0].rigor.frozen_dataset, Coverage::Mixed);
     }
 

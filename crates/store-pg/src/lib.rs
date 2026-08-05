@@ -31,8 +31,8 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use tokio::runtime::Runtime;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, LimitRule,
-    JobCancel, LimitScope, LlmEvent, ModelPriceRow, Project, RelayOutcome, RelayTask, RevenueEvent,
+    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, JobCancel,
+    LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, RelayOutcome, RelayTask, RevenueEvent,
     Rubric, Score, TraceSummary,
 };
 use lighttrack_store::{
@@ -90,10 +90,12 @@ impl Store for PgStore {
         true
     }
     fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
-        self.rt.block_on(admission::insert_event_checked(&self.pool, ev))
+        self.rt
+            .block_on(admission::insert_event_checked(&self.pool, ev))
     }
     fn insert_events_checked(&self, evs: &[LlmEvent]) -> Vec<Result<Admission>> {
-        self.rt.block_on(admission::insert_events_checked(&self.pool, evs))
+        self.rt
+            .block_on(admission::insert_events_checked(&self.pool, evs))
     }
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
         self.rt.block_on(events::list(&self.pool, project, limit))
@@ -104,7 +106,8 @@ impl Store for PgStore {
         filter: &EventFilter,
         limit: usize,
     ) -> Result<EventPage> {
-        self.rt.block_on(events::list_filtered(&self.pool, project, filter, limit))
+        self.rt
+            .block_on(events::list_filtered(&self.pool, project, filter, limit))
     }
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
         self.rt.block_on(events::cost_summary(&self.pool, project))
@@ -115,17 +118,21 @@ impl Store for PgStore {
         since: Option<DateTime<Utc>>,
         until: Option<DateTime<Utc>>,
     ) -> Result<Vec<CostRow>> {
-        self.rt.block_on(events::cost_summary_windowed(&self.pool, project, since, until))
+        self.rt.block_on(events::cost_summary_windowed(
+            &self.pool, project, since, until,
+        ))
     }
     fn usecase_costs(
         &self,
         project: Option<&str>,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<UseCaseCostRow>> {
-        self.rt.block_on(events::usecase_costs(&self.pool, project, since))
+        self.rt
+            .block_on(events::usecase_costs(&self.pool, project, since))
     }
     fn usage_since(&self, project: &str, since: DateTime<Utc>) -> Result<Usage> {
-        self.rt.block_on(events::usage_since(&self.pool, project, since))
+        self.rt
+            .block_on(events::usage_since(&self.pool, project, since))
     }
     fn usage_since_scoped(
         &self,
@@ -133,7 +140,9 @@ impl Store for PgStore {
         since: DateTime<Utc>,
         scope: &LimitScope,
     ) -> Result<Usage> {
-        self.rt.block_on(events::usage_since_scoped(&self.pool, project, since, scope))
+        self.rt.block_on(events::usage_since_scoped(
+            &self.pool, project, since, scope,
+        ))
     }
     fn usage_by_scope(
         &self,
@@ -141,7 +150,8 @@ impl Store for PgStore {
         since: DateTime<Utc>,
         kind: &str,
     ) -> Result<Vec<ScopeUsage>> {
-        self.rt.block_on(events::usage_by_scope(&self.pool, project, since, kind))
+        self.rt
+            .block_on(events::usage_by_scope(&self.pool, project, since, kind))
     }
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
         self.rt.block_on(events::get(&self.pool, id))
@@ -155,7 +165,8 @@ impl Store for PgStore {
         true
     }
     fn list_traces(&self, project: Option<&str>, limit: usize) -> Result<Vec<TraceSummary>> {
-        self.rt.block_on(traces::list_summaries(&self.pool, project, limit))
+        self.rt
+            .block_on(traces::list_summaries(&self.pool, project, limit))
     }
     fn list_traces_filtered(
         &self,
@@ -163,7 +174,9 @@ impl Store for PgStore {
         filter: &TraceFilter,
         limit: usize,
     ) -> Result<TracePage> {
-        self.rt.block_on(traces::list_summaries_filtered(&self.pool, project, filter, limit))
+        self.rt.block_on(traces::list_summaries_filtered(
+            &self.pool, project, filter, limit,
+        ))
     }
     fn list_trace_events(
         &self,
@@ -171,10 +184,13 @@ impl Store for PgStore {
         trace_id: &str,
         max_spans: usize,
     ) -> Result<TraceEvents> {
-        self.rt.block_on(traces::list_by_trace(&self.pool, project, trace_id, max_spans))
+        self.rt.block_on(traces::list_by_trace(
+            &self.pool, project, trace_id, max_spans,
+        ))
     }
     fn list_trace_scores(&self, project: Option<&str>, trace_id: &str) -> Result<Vec<Score>> {
-        self.rt.block_on(traces::list_scores_by_trace(&self.pool, project, trace_id))
+        self.rt
+            .block_on(traces::list_scores_by_trace(&self.pool, project, trace_id))
     }
 
     // --- projects / api keys / limits ---
@@ -191,7 +207,8 @@ impl Store for PgStore {
         self.rt.block_on(projects::create_key(&self.pool, k))
     }
     fn find_api_key_by_prefix(&self, prefix: &str) -> Result<Option<ApiKey>> {
-        self.rt.block_on(projects::find_key_by_prefix(&self.pool, prefix))
+        self.rt
+            .block_on(projects::find_key_by_prefix(&self.pool, prefix))
     }
     fn touch_api_key(&self, id: &str, when: DateTime<Utc>) -> Result<()> {
         self.rt.block_on(projects::touch_key(&self.pool, id, when))
@@ -200,13 +217,15 @@ impl Store for PgStore {
         self.rt.block_on(projects::list_keys(&self.pool, project))
     }
     fn set_api_key_revoked(&self, id: &str, revoked: bool) -> Result<bool> {
-        self.rt.block_on(projects::set_key_revoked(&self.pool, id, revoked))
+        self.rt
+            .block_on(projects::set_key_revoked(&self.pool, id, revoked))
     }
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()> {
         self.rt.block_on(projects::create_limit(&self.pool, r))
     }
     fn list_limit_rules(&self, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
-        self.rt.block_on(projects::list_limits(&self.pool, project, only_enabled))
+        self.rt
+            .block_on(projects::list_limits(&self.pool, project, only_enabled))
     }
     fn get_limit_rule(&self, id: &str) -> Result<Option<LimitRule>> {
         self.rt.block_on(projects::get_limit(&self.pool, id))
@@ -231,10 +250,12 @@ impl Store for PgStore {
         project: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Score>> {
-        self.rt.block_on(scores::list_by_run(&self.pool, run_id, project, limit))
+        self.rt
+            .block_on(scores::list_by_run(&self.pool, run_id, project, limit))
     }
     fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
-        self.rt.block_on(scores::scored_event_ids(&self.pool, event_ids))
+        self.rt
+            .block_on(scores::scored_event_ids(&self.pool, event_ids))
     }
 
     // --- prices ---
@@ -259,7 +280,8 @@ impl Store for PgStore {
         self.rt.block_on(benchmarks::create_run(&self.pool, r))
     }
     fn list_benchmark_runs(&self, benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
-        self.rt.block_on(benchmarks::list_runs(&self.pool, benchmark_id))
+        self.rt
+            .block_on(benchmarks::list_runs(&self.pool, benchmark_id))
     }
 
     // --- datasets ---
@@ -273,13 +295,15 @@ impl Store for PgStore {
         self.rt.block_on(datasets::list(&self.pool, project))
     }
     fn set_dataset_frozen(&self, id: &str, frozen: bool) -> Result<()> {
-        self.rt.block_on(datasets::set_frozen(&self.pool, id, frozen))
+        self.rt
+            .block_on(datasets::set_frozen(&self.pool, id, frozen))
     }
     fn create_dataset_item(&self, item: &DatasetItem) -> Result<()> {
         self.rt.block_on(datasets::create_item(&self.pool, item))
     }
     fn list_dataset_items(&self, dataset_id: &str) -> Result<Vec<DatasetItem>> {
-        self.rt.block_on(datasets::list_items(&self.pool, dataset_id))
+        self.rt
+            .block_on(datasets::list_items(&self.pool, dataset_id))
     }
 
     // --- rubrics ---
@@ -304,10 +328,18 @@ impl Store for PgStore {
         self.rt.block_on(jobs::cancel(&self.pool, id))
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
-        self.rt.block_on(jobs::update_progress(&self.pool, id, progress))
+        self.rt
+            .block_on(jobs::update_progress(&self.pool, id, progress))
     }
-    fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()> {
-        self.rt.block_on(jobs::finish(&self.pool, id, status, result, error))
+    fn finish_job(
+        &self,
+        id: &str,
+        status: &str,
+        result: &Value,
+        error: Option<&str>,
+    ) -> Result<()> {
+        self.rt
+            .block_on(jobs::finish(&self.pool, id, status, result, error))
     }
     fn get_job(&self, id: &str) -> Result<Option<Job>> {
         self.rt.block_on(jobs::get(&self.pool, id))
@@ -324,7 +356,8 @@ impl Store for PgStore {
         self.rt.block_on(relay::get(&self.pool, id))
     }
     fn find_relay_task_by_key(&self, project: &str, key: &str) -> Result<Option<RelayTask>> {
-        self.rt.block_on(relay::find_by_key(&self.pool, project, key))
+        self.rt
+            .block_on(relay::find_by_key(&self.pool, project, key))
     }
     fn list_relay_tasks(
         &self,
@@ -332,10 +365,17 @@ impl Store for PgStore {
         status: Option<&str>,
         limit: usize,
     ) -> Result<Vec<RelayTask>> {
-        self.rt.block_on(relay::list(&self.pool, project, status, limit))
+        self.rt
+            .block_on(relay::list(&self.pool, project, status, limit))
     }
-    fn lease_relay_tasks(&self, device: &str, lease_secs: i64, max: usize) -> Result<Vec<RelayTask>> {
-        self.rt.block_on(relay::lease(&self.pool, device, lease_secs, max))
+    fn lease_relay_tasks(
+        &self,
+        device: &str,
+        lease_secs: i64,
+        max: usize,
+    ) -> Result<Vec<RelayTask>> {
+        self.rt
+            .block_on(relay::lease(&self.pool, device, lease_secs, max))
     }
     fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {
         self.rt.block_on(relay::sweep_dead(&self.pool))
@@ -354,7 +394,8 @@ impl Store for PgStore {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<RevenueEvent>> {
-        self.rt.block_on(revenue::list(&self.pool, project, since, until))
+        self.rt
+            .block_on(revenue::list(&self.pool, project, since, until))
     }
     fn cost_by_dimension(
         &self,
@@ -363,6 +404,8 @@ impl Store for PgStore {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
-        self.rt.block_on(revenue::cost_by_dimension(&self.pool, project, dim, since, until))
+        self.rt.block_on(revenue::cost_by_dimension(
+            &self.pool, project, dim, since, until,
+        ))
     }
 }

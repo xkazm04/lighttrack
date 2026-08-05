@@ -72,7 +72,11 @@ pub(crate) async fn list_summaries(
     project: Option<&str>,
     limit: usize,
 ) -> Result<Vec<TraceSummary>> {
-    Ok(list_summaries_filtered(pool, project, &TraceFilter::default(), limit).await?.traces)
+    Ok(
+        list_summaries_filtered(pool, project, &TraceFilter::default(), limit)
+            .await?
+            .traces,
+    )
 }
 
 /// Filtered, keyset-paginated trace summaries (newest `ended` first), paging on `(ended, trace_id)`
@@ -90,8 +94,7 @@ pub(crate) async fn list_summaries_filtered(
     limit: usize,
 ) -> Result<TracePage> {
     let mut args: Vec<Arg> = Vec::new();
-    let mut conds: Vec<String> =
-        vec!["trace_id IS NOT NULL".into(), "trace_id <> ''".into()];
+    let mut conds: Vec<String> = vec!["trace_id IS NOT NULL".into(), "trace_id <> ''".into()];
     if let Some(p) = project {
         args.push(Arg::S(p.to_string()));
         conds.push(format!("project_id = ${}", args.len()));
@@ -123,7 +126,9 @@ pub(crate) async fn list_summaries_filtered(
         args.push(Arg::S(cid));
         let j = args.len();
         // Strictly after (ended, trace_id) in DESC order.
-        having.push(format!("(MAX(ts) < ${i} OR (MAX(ts) = ${i} AND trace_id < ${j}))"));
+        having.push(format!(
+            "(MAX(ts) < ${i} OR (MAX(ts) = ${i} AND trace_id < ${j}))"
+        ));
     }
 
     // Over-fetch by one so a further page is detected without a second COUNT.
@@ -139,17 +144,28 @@ pub(crate) async fn list_summaries_filtered(
          ORDER BY ended DESC, trace_id DESC LIMIT ${limit_ph}",
         conds.join(" AND ")
     );
-    let rows = bind_all(sqlx::query(&sql), &args).fetch_all(pool).await.map_err(pgerr)?;
-    let mut summaries = rows.iter().map(summary_from_row).collect::<Result<Vec<_>>>()?;
+    let rows = bind_all(sqlx::query(&sql), &args)
+        .fetch_all(pool)
+        .await
+        .map_err(pgerr)?;
+    let mut summaries = rows
+        .iter()
+        .map(summary_from_row)
+        .collect::<Result<Vec<_>>>()?;
 
     let next_cursor = if summaries.len() as i64 > limit as i64 {
         summaries.truncate(limit);
-        summaries.last().map(|t| encode_event_cursor(&fmt_ts(t.ended_at), &t.trace_id))
+        summaries
+            .last()
+            .map(|t| encode_event_cursor(&fmt_ts(t.ended_at), &t.trace_id))
     } else {
         None
     };
     attach_models(pool, project, &mut summaries).await?;
-    Ok(TracePage { traces: summaries, next_cursor })
+    Ok(TracePage {
+        traces: summaries,
+        next_cursor,
+    })
 }
 
 /// Fill each summary's `models` with the trace's distinct models in first-seen (min-ts) order — the
@@ -203,8 +219,15 @@ fn summary_from_row(row: &PgRow) -> Result<TraceSummary> {
     let errors: i64 = row.try_get(9).map_err(pgerr)?;
     let started_at = parse_ts(&started)?;
     let ended_at = parse_ts(&ended)?;
-    let last_finish = Utc.timestamp_millis_opt(finish_ms).single().unwrap_or(ended_at);
-    let shape = TraceShape { started_at, last_finish, errors: errors as usize };
+    let last_finish = Utc
+        .timestamp_millis_opt(finish_ms)
+        .single()
+        .unwrap_or(ended_at);
+    let shape = TraceShape {
+        started_at,
+        last_finish,
+        errors: errors as usize,
+    };
     Ok(TraceSummary {
         trace_id: row.try_get(0).map_err(pgerr)?,
         project_id: row.try_get(1).map_err(pgerr)?,
@@ -238,9 +261,7 @@ pub(crate) async fn list_by_trace(
     // lets Postgres infer the parameter's type from a NULL bind.
     let where_clause = "WHERE trace_id = $1 AND ($2::text IS NULL OR project_id = $2)";
     let fetch = (max_spans as i64).saturating_add(1);
-    let sql = format!(
-        "SELECT {EVENT_COLS} FROM events {where_clause} ORDER BY ts ASC LIMIT $3"
-    );
+    let sql = format!("SELECT {EVENT_COLS} FROM events {where_clause} ORDER BY ts ASC LIMIT $3");
     let scope = project.map(|p| p.to_string());
     let rows = sqlx::query(&sql)
         .bind(trace_id.to_string())
@@ -249,7 +270,10 @@ pub(crate) async fn list_by_trace(
         .fetch_all(pool)
         .await
         .map_err(pgerr)?;
-    let mut events = rows.iter().map(event_from_row).collect::<Result<Vec<_>>>()?;
+    let mut events = rows
+        .iter()
+        .map(event_from_row)
+        .collect::<Result<Vec<_>>>()?;
 
     if events.len() as i64 <= max_spans as i64 {
         let total = events.len();
@@ -265,7 +289,10 @@ pub(crate) async fn list_by_trace(
         .map_err(pgerr)?
         .try_get(0)
         .map_err(pgerr)?;
-    Ok(TraceEvents { events, total: total as usize })
+    Ok(TraceEvents {
+        events,
+        total: total as usize,
+    })
 }
 
 /// Scores attached to any event within a trace, newest first. A score links to a trace transitively

@@ -61,7 +61,10 @@ pub(crate) fn load(actions_dir: &str, action_type: &str) -> Result<Action> {
     validate_action_type(action_type)?;
     let dir: PathBuf = Path::new(actions_dir).join(action_type);
     if !dir.is_dir() {
-        bail!("no action '{action_type}' in library '{actions_dir}' (expected {})", dir.display());
+        bail!(
+            "no action '{action_type}' in library '{actions_dir}' (expected {})",
+            dir.display()
+        );
     }
     let spec_path = dir.join("action.toml");
     let spec: ActionSpec = if spec_path.exists() {
@@ -79,7 +82,11 @@ pub(crate) fn load(actions_dir: &str, action_type: &str) -> Result<Action> {
         ),
         None => None,
     };
-    Ok(Action { spec, prompt_template, schema })
+    Ok(Action {
+        spec,
+        prompt_template,
+        schema,
+    })
 }
 
 /// Substitute `{{…}}` placeholders: `{{params.<dotted.path>}}` reads from the task payload
@@ -146,7 +153,9 @@ pub(crate) fn expand_env(s: &str) -> Result<String> {
 }
 
 /// Header maps with env expansion applied to every value.
-pub(crate) fn expand_headers(headers: &BTreeMap<String, String>) -> Result<BTreeMap<String, String>> {
+pub(crate) fn expand_headers(
+    headers: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
     headers
         .iter()
         .map(|(k, v)| Ok((k.clone(), expand_env(v)?)))
@@ -211,7 +220,10 @@ mod tests {
     #[test]
     fn expand_env_fills_and_fails_loudly() {
         std::env::set_var("LT_TEST_TOKEN", "s3cret");
-        assert_eq!(expand_env("Bearer ${LT_TEST_TOKEN}").unwrap(), "Bearer s3cret");
+        assert_eq!(
+            expand_env("Bearer ${LT_TEST_TOKEN}").unwrap(),
+            "Bearer s3cret"
+        );
         assert!(expand_env("${LT_TEST_MISSING_VAR}").is_err());
         assert_eq!(expand_env("plain").unwrap(), "plain");
     }

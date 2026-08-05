@@ -24,8 +24,7 @@ use crate::event::LlmEvent;
 /// case is meaningful there, and folding it would merge distinct traces and mangle an id the operator
 /// reads back.
 pub fn normalize_trace_ref(id: &str) -> String {
-    let is_w3c_hex =
-        matches!(id.len(), 16 | 32) && id.chars().all(|c| c.is_ascii_hexdigit());
+    let is_w3c_hex = matches!(id.len(), 16 | 32) && id.chars().all(|c| c.is_ascii_hexdigit());
     if is_w3c_hex {
         id.to_ascii_lowercase()
     } else {
@@ -64,7 +63,11 @@ impl TraceShape {
             .iter()
             .filter(|e| e.status != crate::event::Status::Success)
             .count();
-        Some(TraceShape { started_at, last_finish, errors })
+        Some(TraceShape {
+            started_at,
+            last_finish,
+            errors,
+        })
     }
 
     /// Wall-clock milliseconds from the trace's start to its last finish.
@@ -405,7 +408,11 @@ fn build_forest(events: Vec<LlmEvent>, trace_start: DateTime<Utc>) -> Vec<TraceS
     let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut roots: Vec<usize> = Vec::new();
     for (i, e) in events.iter().enumerate() {
-        match e.parent_span_id.as_deref().and_then(|p| owner.get(p).copied()) {
+        match e
+            .parent_span_id
+            .as_deref()
+            .and_then(|p| owner.get(p).copied())
+        {
             // A real parent that isn't the node itself: nest under it.
             Some(p) if p != i => children.entry(p).or_default().push(i),
             // No parent, dangling parent, or self-parent: a root span.
@@ -416,7 +423,11 @@ fn build_forest(events: Vec<LlmEvent>, trace_start: DateTime<Utc>) -> Vec<TraceS
     let mut slots: Vec<Option<LlmEvent>> = events.into_iter().map(Some).collect();
     let mut visited: HashSet<usize> = HashSet::new();
     let mut forest = Vec::with_capacity(roots.len());
-    let ctx = ForestCtx { children: &children, duplicate: &duplicate, trace_start };
+    let ctx = ForestCtx {
+        children: &children,
+        duplicate: &duplicate,
+        trace_start,
+    };
     for r in roots {
         if let Some(node) = take_subtree(r, &mut slots, &mut visited, &ctx) {
             forest.push(node);
@@ -495,7 +506,12 @@ mod tests {
             model: format!("m-{span}"),
             name: None,
             operation: Default::default(),
-            usage: TokenUsage { input: 10, output: 5, cached_input: None, reasoning: None },
+            usage: TokenUsage {
+                input: 10,
+                output: 5,
+                cached_input: None,
+                reasoning: None,
+            },
             cost_usd: Some(cost),
             latency_ms: Some(100),
             status,
@@ -527,7 +543,10 @@ mod tests {
         assert_eq!(t.totals.output_tokens, 15);
         assert_eq!(t.totals.total_tokens, 45);
         assert_eq!(t.totals.errors, 1);
-        assert_eq!(t.status, "error", "any errored span flips the trace to error");
+        assert_eq!(
+            t.status, "error",
+            "any errored span flips the trace to error"
+        );
         assert_eq!(t.trace_id, "t1");
         assert_eq!(t.project_id, "p1");
     }
@@ -550,7 +569,10 @@ mod tests {
         assert_eq!(root.children[0].event.span_id.as_deref(), Some("b"));
         assert_eq!(root.children[1].event.span_id.as_deref(), Some("c"));
         assert_eq!(root.children[0].children.len(), 1, "d nests under b");
-        assert_eq!(root.children[0].children[0].event.span_id.as_deref(), Some("d"));
+        assert_eq!(
+            root.children[0].children[0].event.span_id.as_deref(),
+            Some("d")
+        );
         assert_eq!(t.root_event_id(), Some("e-a"));
     }
 
@@ -562,7 +584,11 @@ mod tests {
             ev("b", Some("ghost"), 1, 0.0, Status::Success),
         ];
         let t = Trace::from_events(evs).unwrap();
-        assert_eq!(t.spans.len(), 2, "dangling-parent span is treated as a root");
+        assert_eq!(
+            t.spans.len(),
+            2,
+            "dangling-parent span is treated as a root"
+        );
     }
 
     #[test]
@@ -574,7 +600,10 @@ mod tests {
         ];
         let t = Trace::from_events(evs).unwrap();
         let count = count_nodes(&t.spans);
-        assert_eq!(count, 2, "every span surfaces exactly once despite the cycle");
+        assert_eq!(
+            count, 2,
+            "every span surfaces exactly once despite the cycle"
+        );
     }
 
     #[test]
@@ -598,8 +627,14 @@ mod tests {
             ev("b", Some("a"), 2, 0.0, Status::Success),
         ];
         let t = Trace::from_events(evs).unwrap();
-        assert_eq!(t.duration_ms, 2100, "final span's latency is no longer dropped");
-        assert_eq!(t.totals.total_latency_ms, 200, "compute time sums per-span latency");
+        assert_eq!(
+            t.duration_ms, 2100,
+            "final span's latency is no longer dropped"
+        );
+        assert_eq!(
+            t.totals.total_latency_ms, 200,
+            "compute time sums per-span latency"
+        );
     }
 
     #[test]
@@ -613,7 +648,10 @@ mod tests {
         assert!(t.spans_truncated, "a clipped trace must say so");
         assert_eq!(t.spans_total, 3);
         assert_eq!(t.spans_logged, 2);
-        assert_eq!(t.totals.spans, 2, "derived numbers cover the retained spans only");
+        assert_eq!(
+            t.totals.spans, 2,
+            "derived numbers cover the retained spans only"
+        );
 
         // The untruncated case carries the same three fields, saying "complete".
         let whole = Trace::from_events(vec![ev("a", None, 0, 0.0, Status::Success)]).unwrap();
@@ -639,7 +677,11 @@ mod tests {
             .filter(|s| s.duplicate_span_id)
             .map(|s| s.event.id.as_str())
             .collect();
-        assert_eq!(flagged, vec!["e-a2"], "only the later claimant is flagged: {flagged:?}");
+        assert_eq!(
+            flagged,
+            vec!["e-a2"],
+            "only the later claimant is flagged: {flagged:?}"
+        );
         // c parents under the FIRST "a", not the duplicate.
         let first = t.spans.iter().find(|s| s.event.id == "e-a").unwrap();
         assert_eq!(first.children.len(), 1);
@@ -647,11 +689,14 @@ mod tests {
     }
 
     fn flatten(spans: &[TraceSpan]) -> Vec<&TraceSpan> {
-        spans.iter().flat_map(|s| {
-            let mut v = vec![s];
-            v.extend(flatten(&s.children));
-            v
-        }).collect()
+        spans
+            .iter()
+            .flat_map(|s| {
+                let mut v = vec![s];
+                v.extend(flatten(&s.children));
+                v
+            })
+            .collect()
     }
 
     #[test]
@@ -661,7 +706,10 @@ mod tests {
         let mut b = ev("b", Some("a"), 1, 0.0, Status::Success);
         b.latency_ms = None;
         let t = Trace::from_events(vec![a, b]).unwrap();
-        assert_eq!(t.duration_ms, 1000, "no latency -> plain wall clock, no panic");
+        assert_eq!(
+            t.duration_ms, 1000,
+            "no latency -> plain wall clock, no panic"
+        );
         assert_eq!(t.totals.total_latency_ms, 0);
         assert_eq!(t.spans[0].latency_ms, None);
     }
@@ -675,7 +723,10 @@ mod tests {
         let mut b = ev("b", Some("a"), 1, 0.0, Status::Success);
         b.latency_ms = Some(500);
         let t = Trace::from_events(vec![a, b]).unwrap();
-        assert_eq!(t.duration_ms, 5000, "duration is the last-finishing span, not the last-started");
+        assert_eq!(
+            t.duration_ms, 5000,
+            "duration is the last-finishing span, not the last-started"
+        );
         assert_eq!(t.totals.total_latency_ms, 5500);
     }
 
@@ -687,7 +738,11 @@ mod tests {
         assert_eq!(t.duration_ms, 350);
         assert_eq!(t.spans.len(), 1);
         assert_eq!(t.spans[0].offset_ms, 0, "root sits at the trace start");
-        assert_eq!(t.spans[0].latency_ms, Some(350), "latency mirrored onto the node");
+        assert_eq!(
+            t.spans[0].latency_ms,
+            Some(350),
+            "latency mirrored onto the node"
+        );
     }
 
     #[test]
@@ -714,7 +769,12 @@ mod tests {
         assert_eq!(cov.spans, 2);
         assert_eq!(cov.root_event_id, "e-a");
         assert!(!cov.truncated);
-        assert_eq!(cov.digest.len(), 16, "fixed-width hex digest: {}", cov.digest);
+        assert_eq!(
+            cov.digest.len(),
+            16,
+            "fixed-width hex digest: {}",
+            cov.digest
+        );
         // Same trace -> same digest, so a quiet trace never looks changed.
         assert_eq!(cov, t.coverage());
     }
@@ -762,15 +822,19 @@ mod tests {
         ])
         .unwrap()
         .coverage();
-        let clipped = Trace::from_events_bounded(
-            vec![a, ev("b", Some("a"), 1, 0.0, Status::Success)],
-            3,
-        )
-        .unwrap()
-        .coverage();
+        let clipped =
+            Trace::from_events_bounded(vec![a, ev("b", Some("a"), 1, 0.0, Status::Success)], 3)
+                .unwrap()
+                .coverage();
 
-        assert_eq!(whole.digest, clipped.digest, "the cap must not read as a content change");
-        assert_eq!(clipped.spans, 3, "spans_total is the true count, not the clipped one");
+        assert_eq!(
+            whole.digest, clipped.digest,
+            "the cap must not read as a content change"
+        );
+        assert_eq!(
+            clipped.spans, 3,
+            "spans_total is the true count, not the clipped one"
+        );
         assert!(clipped.truncated, "the clipped read is recorded as such");
         assert_eq!(whole.drift(&clipped), TraceDrift::None);
     }
@@ -780,7 +844,10 @@ mod tests {
         // A verdict written before coverage existed (or by a third party) records no digest: it may
         // be reported as stale on size, but never as materially changed — we would be spending a
         // judge call on a guess.
-        let legacy = TraceCoverage { spans: 2, ..Default::default() };
+        let legacy = TraceCoverage {
+            spans: 2,
+            ..Default::default()
+        };
         let now = TraceCoverage {
             spans: 2,
             root_event_id: "e-a".into(),
@@ -788,7 +855,10 @@ mod tests {
             truncated: false,
         };
         assert_eq!(legacy.drift(&now), TraceDrift::None);
-        assert_eq!(legacy.drift(&TraceCoverage { spans: 3, ..now }), TraceDrift::Grown);
+        assert_eq!(
+            legacy.drift(&TraceCoverage { spans: 3, ..now }),
+            TraceDrift::Grown
+        );
     }
 
     #[test]

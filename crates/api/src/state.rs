@@ -86,7 +86,10 @@ impl RedactionCache {
             .unwrap_or(DEFAULT_POLICY_TTL);
         let now = Instant::now();
         let entries = warm.into_iter().map(|(k, v)| (k, (v, now))).collect();
-        Self { entries: RwLock::new(entries), ttl }
+        Self {
+            entries: RwLock::new(entries),
+            ttl,
+        }
     }
 
     /// The cached policy for `pid`, or `None` when absent or expired.

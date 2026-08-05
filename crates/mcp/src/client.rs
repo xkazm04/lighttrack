@@ -17,7 +17,9 @@ impl Client {
         Self {
             base: std::env::var("LIGHTTRACK_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8787".into()),
-            key: std::env::var("LIGHTTRACK_KEY").ok().filter(|s| !s.is_empty()),
+            key: std::env::var("LIGHTTRACK_KEY")
+                .ok()
+                .filter(|s| !s.is_empty()),
             http: reqwest::blocking::Client::new(),
         }
     }

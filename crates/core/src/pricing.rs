@@ -201,7 +201,10 @@ impl PriceBook {
     ) -> Option<&ModelPrice> {
         // A mode-specific variant (e.g. batch rate) wins when present; else fall through to standard.
         if let Some(suffix) = mode.suffix() {
-            if let Some(p) = self.entries.get(&Self::key(provider, &format!("{model}{suffix}"))) {
+            if let Some(p) = self
+                .entries
+                .get(&Self::key(provider, &format!("{model}{suffix}")))
+            {
                 return Some(p);
             }
         }
@@ -268,7 +271,9 @@ mod tests {
             reasoning: None,
         };
         // billable input 500k @1.0 = 0.5, cached 500k @0.1 = 0.05, output 1M @5.0 = 5.0
-        let c = b.cost_usd(Provider::Anthropic, "claude-haiku-4-5", &usage).unwrap();
+        let c = b
+            .cost_usd(Provider::Anthropic, "claude-haiku-4-5", &usage)
+            .unwrap();
         assert!((c - 5.55).abs() < 1e-9, "got {c}");
     }
 
@@ -282,11 +287,17 @@ mod tests {
 
     #[test]
     fn unknown_model_is_none() {
-        assert!(book().cost_usd(Provider::OpenAi, "nope", &TokenUsage::default()).is_none());
+        assert!(book()
+            .cost_usd(Provider::OpenAi, "nope", &TokenUsage::default())
+            .is_none());
     }
 
     fn variant_book() -> PriceBook {
-        let r = |i, o| ModelPrice { input_per_mtok: i, output_per_mtok: o, cached_input_per_mtok: None };
+        let r = |i, o| ModelPrice {
+            input_per_mtok: i,
+            output_per_mtok: o,
+            cached_input_per_mtok: None,
+        };
         let mut m = HashMap::new();
         m.insert("google/gemini-2.5-pro".to_string(), r(1.25, 10.0)); // <=200k
         m.insert("google/gemini-2.5-pro@in>200000".to_string(), r(2.5, 15.0)); // >200k
@@ -296,17 +307,26 @@ mod tests {
     }
 
     fn usage(input: u64, output: u64) -> TokenUsage {
-        TokenUsage { input, output, cached_input: None, reasoning: None }
+        TokenUsage {
+            input,
+            output,
+            cached_input: None,
+            reasoning: None,
+        }
     }
 
     #[test]
     fn prompt_length_tier() {
         let b = variant_book();
         // 100k input → base rate 1.25/Mtok
-        let lo = b.cost_usd(Provider::Google, "gemini-2.5-pro", &usage(100_000, 0)).unwrap();
+        let lo = b
+            .cost_usd(Provider::Google, "gemini-2.5-pro", &usage(100_000, 0))
+            .unwrap();
         assert!((lo - 100_000.0 * 1.25 / 1e6).abs() < 1e-12, "got {lo}");
         // 300k input → long-context rate 2.5/Mtok
-        let hi = b.cost_usd(Provider::Google, "gemini-2.5-pro", &usage(300_000, 0)).unwrap();
+        let hi = b
+            .cost_usd(Provider::Google, "gemini-2.5-pro", &usage(300_000, 0))
+            .unwrap();
         assert!((hi - 300_000.0 * 2.5 / 1e6).abs() < 1e-12, "got {hi}");
     }
 
@@ -315,13 +335,19 @@ mod tests {
         let b = variant_book();
         let u = usage(1_000_000, 1_000_000);
         // batch mode → @batch row (1.25 in + 5.0 out)
-        let batch = b.cost_usd_mode(Provider::OpenAi, "gpt-4o", &u, PricingMode::Batch).unwrap();
+        let batch = b
+            .cost_usd_mode(Provider::OpenAi, "gpt-4o", &u, PricingMode::Batch)
+            .unwrap();
         assert!((batch - 6.25).abs() < 1e-9, "got {batch}");
         // standard → base (2.5 + 10.0)
-        let std = b.cost_usd_mode(Provider::OpenAi, "gpt-4o", &u, PricingMode::Standard).unwrap();
+        let std = b
+            .cost_usd_mode(Provider::OpenAi, "gpt-4o", &u, PricingMode::Standard)
+            .unwrap();
         assert!((std - 12.5).abs() < 1e-9, "got {std}");
         // flex has no @flex row → falls back to standard base
-        let flex = b.cost_usd_mode(Provider::OpenAi, "gpt-4o", &u, PricingMode::Flex).unwrap();
+        let flex = b
+            .cost_usd_mode(Provider::OpenAi, "gpt-4o", &u, PricingMode::Flex)
+            .unwrap();
         assert!((flex - 12.5).abs() < 1e-9, "got {flex}");
     }
 }

@@ -288,7 +288,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(e.ts.to_rfc3339(), "2000-01-01T00:00:00+00:00");
-        assert!(e.received_at.year() > 2020, "received_at must be server-stamped, not client-supplied");
+        assert!(
+            e.received_at.year() > 2020,
+            "received_at must be server-stamped, not client-supplied"
+        );
         // …and it still round-trips out on reads.
         let v = serde_json::to_value(&e).unwrap();
         assert!(v.get("received_at").is_some());

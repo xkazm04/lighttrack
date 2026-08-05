@@ -119,15 +119,20 @@ async fn admit_one(
         if usages.contains_key(&key) {
             continue;
         }
-        let u = usage_in_tx(&mut *conn, &ev.project_id, r.window.since(now), r.scope.as_ref()).await?;
+        let u = usage_in_tx(
+            &mut *conn,
+            &ev.project_id,
+            r.window.since(now),
+            r.scope.as_ref(),
+        )
+        .await?;
         usages.insert(key, u);
     }
-    let admission =
-        evaluate_admission(rules, ev, event_contribution(ev), |w, scope| {
-            usages.get(&(w, scope.cloned())).copied().ok_or_else(|| {
-                StoreError::Other("admission: usage for an applicable rule was not prefetched".into())
-            })
-        })?;
+    let admission = evaluate_admission(rules, ev, event_contribution(ev), |w, scope| {
+        usages.get(&(w, scope.cloned())).copied().ok_or_else(|| {
+            StoreError::Other("admission: usage for an applicable rule was not prefetched".into())
+        })
+    })?;
     if admission.admitted {
         insert_query(ev)?
             .execute(&mut *conn)
@@ -172,7 +177,9 @@ pub(crate) async fn insert_events_checked(
     }
     let all = |e: StoreError| -> Vec<Result<Admission>> {
         let msg = e.to_string();
-        evs.iter().map(|_| Err(StoreError::Other(msg.clone()))).collect()
+        evs.iter()
+            .map(|_| Err(StoreError::Other(msg.clone())))
+            .collect()
     };
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,

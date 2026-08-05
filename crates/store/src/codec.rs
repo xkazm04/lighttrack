@@ -107,8 +107,7 @@ mod tests {
         // The whole point of the fixed-width format: string `ORDER BY` == time order.
         let earlier = fmt_ts(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
         let later = fmt_ts(
-            Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap()
-                + chrono::Duration::nanoseconds(1),
+            Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap() + chrono::Duration::nanoseconds(1),
         );
         let much_later = fmt_ts(Utc.with_ymd_and_hms(2026, 12, 31, 23, 59, 59).unwrap());
         assert!(earlier < later);
@@ -148,7 +147,10 @@ mod tests {
         let ts = "2026-05-31T00:07:14.110948400Z";
         let id = "ev-123";
         let c = encode_event_cursor(ts, id);
-        assert_eq!(decode_event_cursor(&c), Some((ts.to_string(), id.to_string())));
+        assert_eq!(
+            decode_event_cursor(&c),
+            Some((ts.to_string(), id.to_string()))
+        );
         assert_eq!(decode_event_cursor(""), None);
         assert_eq!(decode_event_cursor("zz"), None);
         assert_eq!(decode_event_cursor("abc"), None); // odd length

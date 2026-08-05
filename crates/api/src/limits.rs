@@ -90,7 +90,10 @@ pub(crate) async fn create_limit(
 
     let store = st.store.clone();
     let pid_check = pid.clone();
-    if spawn_db(move || store.get_project(&pid_check)).await?.is_none() {
+    if spawn_db(move || store.get_project(&pid_check))
+        .await?
+        .is_none()
+    {
         return Err(ApiError::not_found(format!("project '{pid}' not found")));
     }
 
@@ -160,7 +163,10 @@ pub(crate) async fn update_limit(
     let r2 = rule.clone();
     // The row exists (we just read it); a `false` here means a concurrent delete raced us.
     if !spawn_db(move || store.update_limit_rule(&r2)).await? {
-        return Err(ApiError::not_found(format!("limit rule '{}' not found", rule.id)));
+        return Err(ApiError::not_found(format!(
+            "limit rule '{}' not found",
+            rule.id
+        )));
     }
     Ok(Json(rule))
 }

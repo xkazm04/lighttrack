@@ -25,9 +25,9 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, JobCancel, LimitRule,
-    LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent, Rubric,
-    Score, TraceSummary,
+    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, JobCancel,
+    LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent,
+    Rubric, Score, TraceSummary,
 };
 use lighttrack_store::{
     insert_event_checked_nonatomic, insert_events_checked_nonatomic, Admission, CostRow,
@@ -59,7 +59,9 @@ impl FirestoreStore {
             Ok(h) if !h.trim().is_empty() => (format!("http://{}", h.trim()), None),
             _ => (
                 "https://firestore.googleapis.com".to_string(),
-                std::env::var("GOOGLE_OAUTH_TOKEN").ok().filter(|s| !s.is_empty()),
+                std::env::var("GOOGLE_OAUTH_TOKEN")
+                    .ok()
+                    .filter(|s| !s.is_empty()),
             ),
         };
         let base = format!("{host}/v1/projects/{project}/databases/(default)/documents");
@@ -302,7 +304,13 @@ impl Store for FirestoreStore {
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
         jobs::update_job_progress(&self.rest, id, progress)
     }
-    fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>) -> Result<()> {
+    fn finish_job(
+        &self,
+        id: &str,
+        status: &str,
+        result: &Value,
+        error: Option<&str>,
+    ) -> Result<()> {
         jobs::finish_job(&self.rest, id, status, result, error)
     }
     fn get_job(&self, id: &str) -> Result<Option<Job>> {
@@ -374,7 +382,10 @@ mod tests {
     fn the_trace_surface_refuses_rather_than_reading_empty() {
         let store = FirestoreStore::connect("firestore://demo").expect("connect");
         assert!(!store.serves_traces());
-        assert!(matches!(store.list_traces(Some("p"), 10), Err(StoreError::Unsupported(_))));
+        assert!(matches!(
+            store.list_traces(Some("p"), 10),
+            Err(StoreError::Unsupported(_))
+        ));
         assert!(matches!(
             store.list_traces_filtered(Some("p"), &lighttrack_store::TraceFilter::default(), 10),
             Err(StoreError::Unsupported(_))
@@ -383,7 +394,13 @@ mod tests {
             store.list_trace_events(Some("p"), "t", 10),
             Err(StoreError::Unsupported(_))
         ));
-        assert!(matches!(store.list_trace_scores(Some("p"), "t"), Err(StoreError::Unsupported(_))));
-        assert!(matches!(store.get_trace(Some("p"), "t", 10), Err(StoreError::Unsupported(_))));
+        assert!(matches!(
+            store.list_trace_scores(Some("p"), "t"),
+            Err(StoreError::Unsupported(_))
+        ));
+        assert!(matches!(
+            store.get_trace(Some("p"), "t", 10),
+            Err(StoreError::Unsupported(_))
+        ));
     }
 }

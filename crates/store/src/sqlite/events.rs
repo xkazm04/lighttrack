@@ -14,7 +14,7 @@ use lighttrack_core::{
 use super::usage_cache::UsageCache;
 use crate::codec::{decode_event_cursor, encode_event_cursor, fmt_ts, parse_enum, parse_ts};
 use crate::{
-    event_contribution, evaluate_admission, Admission, CostRow, EventFilter, EventPage, Result,
+    evaluate_admission, event_contribution, Admission, CostRow, EventFilter, EventPage, Result,
     ScopeUsage, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
@@ -120,9 +120,14 @@ pub(super) fn insert_checked_with_rules(
     Ok(admission)
 }
 
-pub(super) fn list(conn: &Connection, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
+pub(super) fn list(
+    conn: &Connection,
+    project: Option<&str>,
+    limit: usize,
+) -> Result<Vec<LlmEvent>> {
     let raws: Vec<RawEvent> = if let Some(p) = project {
-        let sql = format!("SELECT {COLS} FROM events WHERE project_id = ?1 ORDER BY ts DESC LIMIT ?2");
+        let sql =
+            format!("SELECT {COLS} FROM events WHERE project_id = ?1 ORDER BY ts DESC LIMIT ?2");
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
             .query_map(params![p, limit as i64], map_raw)?
@@ -194,7 +199,8 @@ fn build_predicates(project: Option<&str>, filter: &EventFilter) -> Predicates {
     if let Some(t) = &filter.tag {
         // Membership in the stored JSON array — not `tags LIKE '%x%'`, which would match "prod"
         // inside "production" and quietly answer a different question than the one asked.
-        conds.push("EXISTS (SELECT 1 FROM json_each(events.tags) WHERE json_each.value = ?)".into());
+        conds
+            .push("EXISTS (SELECT 1 FROM json_each(events.tags) WHERE json_each.value = ?)".into());
         args.push(Box::new(t.clone()));
     }
     if let Some(k) = &filter.metadata_key {
@@ -242,7 +248,10 @@ pub(super) fn list_filtered(
         None
     };
 
-    let Predicates { mut conds, mut args } = base;
+    let Predicates {
+        mut conds,
+        mut args,
+    } = base;
     if let Some(cursor) = &filter.cursor {
         let (cts, cid) = decode_event_cursor(cursor)
             .ok_or_else(|| StoreError::Other(format!("invalid cursor {cursor:?}")))?;
@@ -260,14 +269,15 @@ pub(super) fn list_filtered(
     // Over-fetch by one so we can tell whether another page exists without a second COUNT query.
     let fetch = (limit as i64).saturating_add(1);
     args.push(Box::new(fetch));
-    let sql =
-        format!("SELECT {COLS} FROM events {where_clause}ORDER BY ts DESC, id DESC LIMIT ?");
+    let sql = format!("SELECT {COLS} FROM events {where_clause}ORDER BY ts DESC, id DESC LIMIT ?");
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
         .query_map(params_from_iter(args.iter()), map_raw)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut events =
-        raws.into_iter().map(from_raw).collect::<Result<Vec<LlmEvent>>>()?;
+    let mut events = raws
+        .into_iter()
+        .map(from_raw)
+        .collect::<Result<Vec<LlmEvent>>>()?;
 
     let next_cursor = if events.len() as i64 > limit as i64 {
         events.truncate(limit);
@@ -277,7 +287,11 @@ pub(super) fn list_filtered(
     } else {
         None
     };
-    Ok(EventPage { events, next_cursor, total })
+    Ok(EventPage {
+        events,
+        next_cursor,
+        total,
+    })
 }
 
 pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LlmEvent>> {
@@ -310,15 +324,17 @@ pub(super) fn list_by_trace(
     let (from, scope) = match project {
         Some(p) => {
             args.push(Box::new(p.to_string()));
-            ("events INDEXED BY idx_events_project_trace", "AND project_id = ?2 ")
+            (
+                "events INDEXED BY idx_events_project_trace",
+                "AND project_id = ?2 ",
+            )
         }
         None => ("events", ""),
     };
     let where_clause = format!("WHERE trace_id = ?1 {scope}");
     // Fetch one past the cap: cheaper than a COUNT on the overwhelmingly common untruncated trace.
     let fetch = (max_spans as i64).saturating_add(1);
-    let sql =
-        format!("SELECT {COLS} FROM {from} {where_clause}ORDER BY ts ASC LIMIT {fetch}");
+    let sql = format!("SELECT {COLS} FROM {from} {where_clause}ORDER BY ts ASC LIMIT {fetch}");
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
         .query_map(params_from_iter(args.iter()), map_raw)?
@@ -333,7 +349,10 @@ pub(super) fn list_by_trace(
     let count_sql = format!("SELECT COUNT(*) FROM {from} {where_clause}");
     let mut count_stmt = conn.prepare(&count_sql)?;
     let total: i64 = count_stmt.query_row(params_from_iter(args.iter()), |r| r.get(0))?;
-    Ok(TraceEvents { events, total: total as usize })
+    Ok(TraceEvents {
+        events,
+        total: total as usize,
+    })
 }
 
 /// Per-trace rollups (one row per `trace_id`), most-recent activity first. Aggregated in SQL so
@@ -448,7 +467,10 @@ pub(super) fn list_trace_summaries_filtered(
         None
     };
     attach_models(conn, project, &mut summaries)?;
-    Ok(TracePage { traces: summaries, next_cursor })
+    Ok(TracePage {
+        traces: summaries,
+        next_cursor,
+    })
 }
 
 /// Fill each summary's `models` with the trace's distinct models in first-seen (min-ts) order — the
@@ -466,8 +488,15 @@ fn attach_models(
     if summaries.is_empty() {
         return Ok(());
     }
-    let placeholders = std::iter::repeat("?").take(summaries.len()).collect::<Vec<_>>().join(",");
-    let scope = if project.is_some() { "AND project_id = ? " } else { "" };
+    let placeholders = std::iter::repeat("?")
+        .take(summaries.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let scope = if project.is_some() {
+        "AND project_id = ? "
+    } else {
+        ""
+    };
     // Group to one row per (trace, model) with that model's first timestamp, then order globally by
     // that first timestamp; pushing rows in that order builds each trace's list in first-seen order.
     let sql = format!(
@@ -475,8 +504,10 @@ fn attach_models(
          (SELECT trace_id, model, MIN(ts) AS mt FROM events WHERE trace_id IN ({placeholders}) \
           {scope}GROUP BY trace_id, model) ORDER BY mt ASC"
     );
-    let mut args: Vec<Box<dyn ToSql>> =
-        summaries.iter().map(|s| Box::new(s.trace_id.clone()) as Box<dyn ToSql>).collect();
+    let mut args: Vec<Box<dyn ToSql>> = summaries
+        .iter()
+        .map(|s| Box::new(s.trace_id.clone()) as Box<dyn ToSql>)
+        .collect();
     if let Some(p) = project {
         args.push(Box::new(p.to_string()));
     }
@@ -540,7 +571,11 @@ fn trace_summary_from_raw(r: TraceSummaryRaw) -> Result<TraceSummary> {
         .timestamp_millis_opt(r.finish_ms)
         .single()
         .unwrap_or(ended_at);
-    let shape = TraceShape { started_at, last_finish, errors: r.errors as usize };
+    let shape = TraceShape {
+        started_at,
+        last_finish,
+        errors: r.errors as usize,
+    };
     Ok(TraceSummary {
         trace_id: r.trace_id,
         project_id: r.project_id,
@@ -579,14 +614,18 @@ pub(super) fn cost_summary(conn: &Connection, project: Option<&str>) -> Result<V
              GROUP BY project_id, provider, model ORDER BY cost DESC"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let v = stmt.query_map(params![p], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let v = stmt
+            .query_map(params![p], map)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         v
     } else {
         let sql = format!(
             "SELECT {cols} FROM events GROUP BY project_id, provider, model ORDER BY cost DESC"
         );
         let mut stmt = conn.prepare(&sql)?;
-        let v = stmt.query_map([], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let v = stmt
+            .query_map([], map)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         v
     };
     Ok(rows)
@@ -885,27 +924,36 @@ pub(super) fn usecase_costs(
     // `stmt` outlives the borrow — mirrors `cost_summary` above.
     let rows = match (project, since_str.as_deref()) {
         (Some(p), Some(s)) => {
-            let sql = format!("SELECT {cols} FROM events WHERE project_id = ?1 AND ts >= ?2 {tail}");
+            let sql =
+                format!("SELECT {cols} FROM events WHERE project_id = ?1 AND ts >= ?2 {tail}");
             let mut stmt = conn.prepare(&sql)?;
-            let v = stmt.query_map(params![p, s], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let v = stmt
+                .query_map(params![p, s], map)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             v
         }
         (Some(p), None) => {
             let sql = format!("SELECT {cols} FROM events WHERE project_id = ?1 {tail}");
             let mut stmt = conn.prepare(&sql)?;
-            let v = stmt.query_map(params![p], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let v = stmt
+                .query_map(params![p], map)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             v
         }
         (None, Some(s)) => {
             let sql = format!("SELECT {cols} FROM events WHERE ts >= ?1 {tail}");
             let mut stmt = conn.prepare(&sql)?;
-            let v = stmt.query_map(params![s], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let v = stmt
+                .query_map(params![s], map)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             v
         }
         (None, None) => {
             let sql = format!("SELECT {cols} FROM events {tail}");
             let mut stmt = conn.prepare(&sql)?;
-            let v = stmt.query_map([], map)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let v = stmt
+                .query_map([], map)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
             v
         }
     };

@@ -150,7 +150,10 @@ pub(crate) async fn create_key(
 
     let store = st.store.clone();
     let pid_check = pid.clone();
-    if spawn_db(move || store.get_project(&pid_check)).await?.is_none() {
+    if spawn_db(move || store.get_project(&pid_check))
+        .await?
+        .is_none()
+    {
         return Err(ApiError::not_found(format!("project '{pid}' not found")));
     }
 
@@ -204,7 +207,10 @@ pub(crate) async fn list_keys(
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
     let store = st.store.clone();
     let pid_check = pid.clone();
-    if spawn_db(move || store.get_project(&pid_check)).await?.is_none() {
+    if spawn_db(move || store.get_project(&pid_check))
+        .await?
+        .is_none()
+    {
         return Err(ApiError::not_found(format!("project '{pid}' not found")));
     }
     let store = st.store.clone();

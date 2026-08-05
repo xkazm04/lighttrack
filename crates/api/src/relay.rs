@@ -20,7 +20,9 @@ use lighttrack_core::{
 
 use crate::auth::Principal;
 use crate::error::ApiError;
-use crate::guards::{authenticate, bearer, ensure_can_admin, resolve_ingest_project, resolve_read_project};
+use crate::guards::{
+    authenticate, bearer, ensure_can_admin, resolve_ingest_project, resolve_read_project,
+};
 use crate::state::{spawn_db, AppState};
 
 /// Device endpoints (lease / result) authenticate with the enrolled device key
@@ -64,7 +66,9 @@ pub(crate) async fn enqueue_task(
     if let Some(key) = req.idempotency_key.clone() {
         let store = st.store.clone();
         let project2 = project.clone();
-        if let Some(existing) = spawn_db(move || store.find_relay_task_by_key(&project2, &key)).await? {
+        if let Some(existing) =
+            spawn_db(move || store.find_relay_task_by_key(&project2, &key)).await?
+        {
             return Ok(Json(existing));
         }
     }
@@ -77,7 +81,10 @@ pub(crate) async fn enqueue_task(
         payload: req.payload,
         status: "queued".to_string(),
         attempts: 0,
-        max_attempts: req.max_attempts.unwrap_or(RELAY_DEFAULT_MAX_ATTEMPTS).max(1),
+        max_attempts: req
+            .max_attempts
+            .unwrap_or(RELAY_DEFAULT_MAX_ATTEMPTS)
+            .max(1),
         retry_interval_secs: req
             .retry_interval_secs
             .unwrap_or(RELAY_DEFAULT_RETRY_INTERVAL_SECS),
@@ -107,7 +114,10 @@ pub(crate) async fn get_task(
     let task = spawn_db(move || store.get_relay_task(&id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("relay task '{id}' not found")))?;
-    if let Principal::Project { project_id: pid, .. } = &p {
+    if let Principal::Project {
+        project_id: pid, ..
+    } = &p
+    {
         if *pid != task.project_id {
             return Err(ApiError::forbidden("key not authorized for that project"));
         }
@@ -174,7 +184,8 @@ pub(crate) async fn lease_tasks(
     // device's tasks are reclaimable the same day.
     let lease_secs = req.lease_secs.clamp(60, 21_600);
     let max = req.max.clamp(1, 20);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(req.wait_secs.min(25));
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(req.wait_secs.min(25));
     loop {
         // Sweep first so exhausted expired leases dead-letter (and alert) instead of lingering.
         let store = st.store.clone();
@@ -224,7 +235,9 @@ pub(crate) async fn post_result(
     let outcome = match req.status.as_str() {
         "succeeded" => RelayOutcome::Succeeded(req.result.clone()),
         "failed" => RelayOutcome::Failed(
-            req.error.clone().unwrap_or_else(|| "unspecified error".to_string()),
+            req.error
+                .clone()
+                .unwrap_or_else(|| "unspecified error".to_string()),
         ),
         "deferred" => RelayOutcome::Deferred {
             retry_after_secs: req.retry_after_secs,
@@ -260,7 +273,9 @@ pub(crate) async fn post_result(
         // that routinely echoes the task payload it failed on — so the PII scrub every other door
         // applies has to be applied here explicitly, or `docs/RELAY.md`'s claim that "ingest
         // redaction applies" is false exactly where a failure dumps the payload into the DB.
-        let redacted = st.redact.redact_event(&mut ev, lighttrack_core::Redaction::None);
+        let redacted = st
+            .redact
+            .redact_event(&mut ev, lighttrack_core::Redaction::None);
         if redacted > 0 {
             tracing::debug!(
                 project_id = %ev.project_id,
@@ -293,7 +308,10 @@ fn relay_run_event(st: &AppState, task: &RelayTask, req: &ResultReq) -> LlmEvent
         ts: Utc::now(),
         received_at: Utc::now(),
         provider: Provider::Anthropic,
-        model: req.model.clone().unwrap_or_else(|| "claude-code".to_string()),
+        model: req
+            .model
+            .clone()
+            .unwrap_or_else(|| "claude-code".to_string()),
         name: Some("relay-run".to_string()),
         operation: Operation::Chat,
         usage: TokenUsage {
@@ -304,7 +322,11 @@ fn relay_run_event(st: &AppState, task: &RelayTask, req: &ResultReq) -> LlmEvent
         },
         cost_usd: Some(st.relay_flat_cost),
         latency_ms: req.latency_ms,
-        status: if failed { Status::Error } else { Status::Success },
+        status: if failed {
+            Status::Error
+        } else {
+            Status::Success
+        },
         error: if failed { req.error.clone() } else { None },
         input: None,
         output: None,

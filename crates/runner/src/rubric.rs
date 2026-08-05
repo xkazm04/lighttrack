@@ -50,9 +50,16 @@ pub(crate) fn run_rubric_benchmark(
     let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
     // Deterministic dimensions are checked locally: they cost no tokens and are never sampled, so
     // say how many of the rubric's dimensions the judge model is actually paid to score.
-    let mechanical = rubric.dimensions.iter().filter(|d| !d.kind.is_llm()).count();
+    let mechanical = rubric
+        .dimensions
+        .iter()
+        .filter(|d| !d.kind.is_llm())
+        .count();
     let dims_note = if mechanical > 0 {
-        format!("{} dims, {mechanical} deterministic", rubric.dimensions.len())
+        format!(
+            "{} dims, {mechanical} deterministic",
+            rubric.dimensions.len()
+        )
     } else {
         format!("{} dims", rubric.dimensions.len())
     };
@@ -96,7 +103,15 @@ pub(crate) fn run_rubric_benchmark(
         let r = match &cases[i].output {
             None => CaseResult::NoOutput,
             Some(output) => match run_rubric_judge(
-                engine, &jp, &jm, &rubric, &cases[i].input, cases[i].expected.as_deref(), output, samples, 1,
+                engine,
+                &jp,
+                &jm,
+                &rubric,
+                &cases[i].input,
+                cases[i].expected.as_deref(),
+                output,
+                samples,
+                1,
             ) {
                 Ok(o) => CaseResult::Judged(Box::new(o)),
                 Err(e) => CaseResult::Errored(e.to_string()),
@@ -112,7 +127,11 @@ pub(crate) fn run_rubric_benchmark(
             CaseResult::NoOutput => {
                 // A case that HAS an output but produced no verdict was skipped by the
                 // cancellation, not by missing data — don't blame the dataset for an operator stop.
-                let why = if cancelled && cases[i].output.is_some() { "run cancelled" } else { "no output" };
+                let why = if cancelled && cases[i].output.is_some() {
+                    "run cancelled"
+                } else {
+                    "no output"
+                };
                 println!("  case {} skipped ({why})", i + 1);
                 continue;
             }
@@ -130,7 +149,9 @@ pub(crate) fn run_rubric_benchmark(
             sample_failures += o.parse_failures;
             eprintln!(
                 "  case {}: {}/{} judge samples were unparseable and dropped from the mean",
-                i + 1, o.parse_failures, o.samples
+                i + 1,
+                o.parse_failures,
+                o.samples
             );
         }
         overall_sum += o.overall;
@@ -138,7 +159,14 @@ pub(crate) fn run_rubric_benchmark(
         if o.pass {
             passes += 1;
         }
-        let (jc, priced) = cost_or_book(o.cost_usd, &prices, &jp, &jm, o.input_tokens, o.output_tokens);
+        let (jc, priced) = cost_or_book(
+            o.cost_usd,
+            &prices,
+            &jp,
+            &jm,
+            o.input_tokens,
+            o.output_tokens,
+        );
         if !priced {
             price_warnings.insert(format!("{jp}/{jm}"));
         }
@@ -158,7 +186,12 @@ pub(crate) fn run_rubric_benchmark(
             .map(|d| format!("{}={:.2}", d.key, d.score))
             .collect::<Vec<_>>()
             .join(" ");
-        println!("  case {}: overall={:.2} pass={} [{dim_str}]", i + 1, o.overall, o.pass);
+        println!(
+            "  case {}: overall={:.2} pass={} [{dim_str}]",
+            i + 1,
+            o.overall,
+            o.pass
+        );
         if o.injection_suspected {
             injected += 1;
             eprintln!(
@@ -168,7 +201,11 @@ pub(crate) fn run_rubric_benchmark(
             );
         }
         if !o.pass {
-            if let Some(w) = o.dimensions.iter().min_by(|a, b| a.score.total_cmp(&b.score)) {
+            if let Some(w) = o
+                .dimensions
+                .iter()
+                .min_by(|a, b| a.score.total_cmp(&b.score))
+            {
                 failing.push(json!({
                     "index": i + 1, "overall": o.overall, "weakest": w.key, "reasoning": w.reasoning()
                 }));
@@ -190,22 +227,35 @@ pub(crate) fn run_rubric_benchmark(
         // Best-effort (as in compare/simple): a transient post failure is counted, not fatal, and
         // never silent.
         if let Err(e) = post(cli, http, "/v1/scores", &score) {
-            eprintln!("  case {}: score post failed (verdict not persisted): {e}", i + 1);
+            eprintln!(
+                "  case {}: score post failed (verdict not persisted): {e}",
+                i + 1
+            );
             score_post_failures += 1;
         }
     }
 
-    let mean = if judged > 0 { overall_sum / judged as f64 } else { 0.0 };
-    let pass_rate = if judged > 0 { passes as f64 / judged as f64 } else { 0.0 };
+    let mean = if judged > 0 {
+        overall_sum / judged as f64
+    } else {
+        0.0
+    };
+    let pass_rate = if judged > 0 {
+        passes as f64 / judged as f64
+    } else {
+        0.0
+    };
     let (p50, p95) = percentiles(&mut latencies);
 
     let dim_means: Vec<Value> = rubric
         .dimensions
         .iter()
-        .map(|d| json!({
-            "key": d.key, "mean": dim_mean(&dim_sums, &d.key, judged),
-            "weight": d.weight, "kind": d.kind.as_str(),
-        }))
+        .map(|d| {
+            json!({
+                "key": d.key, "mean": dim_mean(&dim_sums, &d.key, judged),
+                "weight": d.weight, "kind": d.kind.as_str(),
+            })
+        })
         .collect();
     let weakest = rubric
         .dimensions
@@ -225,7 +275,10 @@ pub(crate) fn run_rubric_benchmark(
     for d in &rubric.dimensions {
         let m = dim_mean(&dim_sums, &d.key, judged);
         if m < 0.6 {
-            recs.push(format!("Improve '{}' ({}): mean {m:.2} below 0.6.", d.key, d.description));
+            recs.push(format!(
+                "Improve '{}' ({}): mean {m:.2} below 0.6.",
+                d.key, d.description
+            ));
         }
     }
     if mechanical == rubric.dimensions.len() && mechanical > 0 {
@@ -273,39 +326,55 @@ Review those candidates — their scores are attacker-adjacent."
     recs.push(if mean >= rubric.threshold {
         format!("Overall {mean:.2} meets threshold {:.2}.", rubric.threshold)
     } else {
-        format!("Overall {mean:.2} is below threshold {:.2}.", rubric.threshold)
+        format!(
+            "Overall {mean:.2} is below threshold {:.2}.",
+            rubric.threshold
+        )
     });
 
-    let healing = if heal {
-        let dims_txt = rubric
-            .dimensions
-            .iter()
-            .map(|d| format!("{} (w{}) mean {:.2}", d.key, d.weight, dim_mean(&dim_sums, &d.key, judged)))
-            .collect::<Vec<_>>()
-            .join("; ");
-        let prompt = format!(
+    let healing =
+        if heal {
+            let dims_txt = rubric
+                .dimensions
+                .iter()
+                .map(|d| {
+                    format!(
+                        "{} (w{}) mean {:.2}",
+                        d.key,
+                        d.weight,
+                        dim_mean(&dim_sums, &d.key, judged)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            let prompt =
+                format!(
             "You are an LLM evaluation consultant. Benchmark '{}' scored overall {mean:.2} \
 (threshold {:.2}, pass rate {:.0}%). Per-dimension means: {dims_txt}. {} of {judged} cases failed. \
 In 3-5 concise bullet points, recommend concrete fixes (prompt changes, model choice, rubric \
 clarifications) targeting the weakest dimensions. Return only the bullets.",
             bench.name, rubric.threshold, pass_rate * 100.0, judged - passes
         );
-        match run_text(engine, &prompt) {
-            Ok(t) => Some(t.text.trim().to_string()),
-            Err(e) => {
-                eprintln!("healing pass failed: {e}");
-                None
+            match run_text(engine, &prompt) {
+                Ok(t) => Some(t.text.trim().to_string()),
+                Err(e) => {
+                    eprintln!("healing pass failed: {e}");
+                    None
+                }
             }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     // Significance-aware verdict (CI-excludes-baseline for n≥2, scalar fallback otherwise).
     let summary = Summary::of(&scores);
     let (verdict_status, scalar_fallback) = significance_verdict(bench.baseline_score, &summary);
     // A cancelled run judged only part of its dataset — it never reads as a finished one.
-    let status = if cancelled { "cancelled" } else { verdict_status };
+    let status = if cancelled {
+        "cancelled"
+    } else {
+        verdict_status
+    };
 
     let mut report = json!({
         "rubric": rubric.name, "threshold": rubric.threshold, "samples": samples,
@@ -359,6 +428,9 @@ clarifications) targeting the weakest dimensions. Return only the bullets.",
         "p50_latency_ms": p50, "p95_latency_ms": p95, "total_tokens": total_tokens, "report": report,
     });
     let stored = post(cli, http, "/v1/benchmark-runs", &run)?;
-    println!("\nrecorded run {}", stored.get("id").and_then(|v| v.as_str()).unwrap_or("?"));
+    println!(
+        "\nrecorded run {}",
+        stored.get("id").and_then(|v| v.as_str()).unwrap_or("?")
+    );
     Ok(status.to_string())
 }

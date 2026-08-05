@@ -61,7 +61,9 @@ pub(super) fn list(conn: &Connection, project: &str, only_enabled: bool) -> Resu
 pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LimitRule>> {
     let sql = format!("SELECT {COLS} FROM limit_rules WHERE id = ?1");
     let mut stmt = conn.prepare(&sql)?;
-    stmt.query_row(params![id], map_limit).optional().map_err(Into::into)
+    stmt.query_row(params![id], map_limit)
+        .optional()
+        .map_err(Into::into)
 }
 
 /// Update a rule's mutable columns in place (matched by id); `project_id` is left untouched. Returns
@@ -103,7 +105,10 @@ fn map_limit(row: &Row) -> rusqlite::Result<LimitRule> {
         action: parse_enum::<LimitAction>(&row.get::<_, String>(5)?),
         enabled: row.get::<_, i64>(6)? != 0,
         warn_at: row.get(7)?,
-        scope: match (row.get::<_, Option<String>>(8)?, row.get::<_, Option<String>>(9)?) {
+        scope: match (
+            row.get::<_, Option<String>>(8)?,
+            row.get::<_, Option<String>>(9)?,
+        ) {
             (Some(kind), Some(value)) => LimitScope::from_parts(&kind, value),
             _ => None,
         },

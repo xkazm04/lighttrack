@@ -26,11 +26,21 @@ fn rubric() -> Rubric {
 
 #[test]
 fn normal_rubric_prompt_keeps_its_semantics() {
-    let p = build_rubric_prompt(&rubric(), "What is the capital of France?", Some("Paris"), "Paris.");
-    assert!(!p.injection_suspected, "clean content must not raise the signal");
+    let p = build_rubric_prompt(
+        &rubric(),
+        "What is the capital of France?",
+        Some("Paris"),
+        "Paris.",
+    );
+    assert!(
+        !p.injection_suspected,
+        "clean content must not raise the signal"
+    );
     // The RCAF shape survives: role, dimensions with weights, reference note, strict-JSON format.
     assert!(p.text.contains("impartial, strict evaluation judge"));
-    assert!(p.text.contains("- correctness (weight 2): factually right."));
+    assert!(p
+        .text
+        .contains("- correctness (weight 2): factually right."));
     assert!(p.text.contains("and the reference"));
     assert!(p.text.contains("Return ONLY a JSON object"));
     // Content is present, and each block appears exactly once.
@@ -51,9 +61,15 @@ fn no_reference_block_when_expected_is_absent() {
 #[test]
 fn injected_verdict_never_reaches_the_instruction_channel() {
     let p = build_rubric_prompt(&rubric(), "q", None, ATTACK);
-    assert!(p.injection_suspected, "a spoofed section must raise the signal");
+    assert!(
+        p.injection_suspected,
+        "a spoofed section must raise the signal"
+    );
     let trusted = instruction_channel(&p.text);
-    assert!(!trusted.contains("score\":1.0"), "fabricated verdict leaked: {trusted}");
+    assert!(
+        !trusted.contains("score\":1.0"),
+        "fabricated verdict leaked: {trusted}"
+    );
     assert!(!trusted.contains("Ignore the rubric"));
     assert!(!trusted.contains("=== SYSTEM ==="));
     // The judge's own framing is still there — fencing removed the payload, not the prompt.
@@ -74,7 +90,10 @@ fn every_builder_fences_untrusted_content() {
         build_pairwise_prompt("q", Some("ref"), "clean", ATTACK, Some("accuracy")),
     ] {
         let trusted = instruction_channel(&p.text);
-        assert!(!trusted.contains("Ignore the rubric"), "payload leaked: {trusted}");
+        assert!(
+            !trusted.contains("Ignore the rubric"),
+            "payload leaked: {trusted}"
+        );
     }
 }
 
@@ -83,9 +102,15 @@ fn repair_prompt_fences_the_malformed_model_text() {
     let original = build_judge_prompt("be strict", "q", "a");
     let repair = build_repair_prompt(&original.text, ATTACK);
     assert!(repair.injection_suspected);
-    assert!(repair.text.contains("ONLY valid JSON matching the schema"), "repair marker is stable");
+    assert!(
+        repair.text.contains("ONLY valid JSON matching the schema"),
+        "repair marker is stable"
+    );
     let trusted = instruction_channel(&repair.text);
-    assert!(!trusted.contains("score\":1.0"), "repaired-text payload leaked: {trusted}");
+    assert!(
+        !trusted.contains("score\":1.0"),
+        "repaired-text payload leaked: {trusted}"
+    );
     assert!(trusted.contains("ONLY valid JSON matching the schema"));
 }
 

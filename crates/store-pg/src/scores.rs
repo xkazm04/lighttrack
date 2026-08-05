@@ -8,14 +8,17 @@ use lighttrack_store::Result;
 
 use crate::util::{fmt_ts, parse_ts, pgerr};
 
-pub(crate) const COLS: &str = "id, project_id, event_id, rubric, value, \"max\", pass, reasoning, detail, \
+pub(crate) const COLS: &str =
+    "id, project_id, event_id, rubric, value, \"max\", pass, reasoning, detail, \
     run_id, case_index, scored_by, cost_usd, created_at";
 
 pub(crate) async fn insert(pool: &PgPool, s: &Score) -> Result<()> {
     // Verdict provenance rides as JSON in one column (as on SQLite): it is read back whole with the
     // score and never filtered on, so a per-dimension table would buy nothing but joins.
     let detail = match &s.detail {
-        Some(d) if !d.is_empty() => Some(serde_json::to_string(d).map_err(lighttrack_store::StoreError::from)?),
+        Some(d) if !d.is_empty() => {
+            Some(serde_json::to_string(d).map_err(lighttrack_store::StoreError::from)?)
+        }
         _ => None,
     };
     sqlx::query(
@@ -79,10 +82,12 @@ pub(crate) async fn list(pool: &PgPool, project: Option<&str>, limit: usize) -> 
             .await
         }
         None => {
-            sqlx::query(&format!("SELECT {COLS} FROM scores ORDER BY created_at DESC LIMIT $1"))
-                .bind(limit as i64)
-                .fetch_all(pool)
-                .await
+            sqlx::query(&format!(
+                "SELECT {COLS} FROM scores ORDER BY created_at DESC LIMIT $1"
+            ))
+            .bind(limit as i64)
+            .fetch_all(pool)
+            .await
         }
     }
     .map_err(pgerr)?;
@@ -95,13 +100,16 @@ pub(crate) async fn scored_event_ids(pool: &PgPool, event_ids: &[String]) -> Res
     if event_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let rows =
-        sqlx::query("SELECT DISTINCT event_id FROM scores WHERE event_id = ANY($1) AND event_id IS NOT NULL")
-            .bind(event_ids)
-            .fetch_all(pool)
-            .await
-            .map_err(pgerr)?;
-    rows.iter().map(|r| r.try_get::<String, _>(0).map_err(pgerr)).collect()
+    let rows = sqlx::query(
+        "SELECT DISTINCT event_id FROM scores WHERE event_id = ANY($1) AND event_id IS NOT NULL",
+    )
+    .bind(event_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(pgerr)?;
+    rows.iter()
+        .map(|r| r.try_get::<String, _>(0).map_err(pgerr))
+        .collect()
 }
 
 pub(crate) fn from_row(row: &PgRow) -> Result<Score> {
@@ -120,11 +128,17 @@ pub(crate) fn from_row(row: &PgRow) -> Result<Score> {
         rubric: row.try_get(3).map_err(pgerr)?,
         value: row.try_get(4).map_err(pgerr)?,
         max: row.try_get(5).map_err(pgerr)?,
-        pass: row.try_get::<Option<i64>, _>(6).map_err(pgerr)?.map(|v| v != 0),
+        pass: row
+            .try_get::<Option<i64>, _>(6)
+            .map_err(pgerr)?
+            .map(|v| v != 0),
         reasoning: row.try_get(7).map_err(pgerr)?,
         detail,
         run_id: row.try_get(9).map_err(pgerr)?,
-        case_index: row.try_get::<Option<i64>, _>(10).map_err(pgerr)?.map(|i| i as u32),
+        case_index: row
+            .try_get::<Option<i64>, _>(10)
+            .map_err(pgerr)?
+            .map(|i| i as u32),
         scored_by: row.try_get(11).map_err(pgerr)?,
         cost_usd: row.try_get(12).map_err(pgerr)?,
         created_at: parse_ts(&created_at)?,
@@ -143,8 +157,22 @@ mod tests {
         let names = select_list_names(COLS);
         assert_eq!(
             names,
-            ["id", "project_id", "event_id", "rubric", "value", "\"max\"", "pass", "reasoning",
-             "detail", "run_id", "case_index", "scored_by", "cost_usd", "created_at"]
+            [
+                "id",
+                "project_id",
+                "event_id",
+                "rubric",
+                "value",
+                "\"max\"",
+                "pass",
+                "reasoning",
+                "detail",
+                "run_id",
+                "case_index",
+                "scored_by",
+                "cost_usd",
+                "created_at"
+            ]
         );
     }
 

@@ -95,7 +95,12 @@ impl Bucket {
     /// by an `EXPLAIN QUERY PLAN` test) — never a full window aggregate. The result is bounded by the
     /// events committed since the last check; project and scope are matched in Rust so the planner
     /// can't fall back to the `(project_id, ts)` index and scan the whole project instead.
-    fn load_new(&mut self, conn: &Connection, project: &str, scope: Option<&LimitScope>) -> Result<()> {
+    fn load_new(
+        &mut self,
+        conn: &Connection,
+        project: &str,
+        scope: Option<&LimitScope>,
+    ) -> Result<()> {
         let mut stmt = conn.prepare(
             "SELECT rowid, project_id, provider, model, name, COALESCE(received_at, ts), cost_usd, \
              (input_tokens + output_tokens), json_extract(metadata,'$.cost_source'), \
@@ -132,7 +137,11 @@ impl Bucket {
                 calls: 1,
                 tokens: r.tokens,
                 unpriced_calls: i64::from(r.cost.is_none()),
-                client_cost_usd: if r.cost_source.as_deref() == Some("client") { cost } else { 0.0 },
+                client_cost_usd: if r.cost_source.as_deref() == Some("client") {
+                    cost
+                } else {
+                    0.0
+                },
             };
             self.total = self.total.plus(contrib);
             self.items.insert((r.received_at, r.rowid), contrib);

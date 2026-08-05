@@ -89,7 +89,9 @@ pub(crate) async fn post_batch(
     let principal = authenticate(&st, &headers).await?;
 
     if evs.is_empty() {
-        return Err(ApiError::bad_request("batch must contain at least one event"));
+        return Err(ApiError::bad_request(
+            "batch must contain at least one event",
+        ));
     }
     let cap = events_validate::max_batch();
     if evs.len() > cap {
@@ -210,7 +212,10 @@ pub(crate) async fn post_batch(
                         index,
                         id: Some(ev.id.clone()),
                         code: "conflict",
-                        reason: format!("event '{}' already exists with a different payload", ev.id),
+                        reason: format!(
+                            "event '{}' already exists with a different payload",
+                            ev.id
+                        ),
                     },
                 }
             }
@@ -231,7 +236,10 @@ pub(crate) async fn post_batch(
     }
 
     // Every slot is now filled (valid items from admission, invalid ones from preparation).
-    let results: Vec<BatchItem> = results.into_iter().map(|o| o.expect("slot filled")).collect();
+    let results: Vec<BatchItem> = results
+        .into_iter()
+        .map(|o| o.expect("slot filled"))
+        .collect();
     let (mut accepted, mut rejected, mut invalid) = (0, 0, 0);
     for r in &results {
         match r {
@@ -240,5 +248,10 @@ pub(crate) async fn post_batch(
             BatchItem::Invalid { .. } => invalid += 1,
         }
     }
-    Ok(Json(BatchResponse { accepted, rejected, invalid, results }))
+    Ok(Json(BatchResponse {
+        accepted,
+        rejected,
+        invalid,
+        results,
+    }))
 }

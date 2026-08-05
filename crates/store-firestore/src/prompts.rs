@@ -19,18 +19,28 @@ pub(crate) fn update_prompt(rest: &Rest, p: &Prompt) -> Result<()> {
     m.insert("benchmark_id".into(), json!(p.benchmark_id));
     m.insert("labels".into(), json!(serde_json::to_string(&p.labels)?));
     m.insert("updated_at".into(), json!(fmt_ts(p.updated_at)));
-    rest.patch_fields("prompts", &p.id, &m, &["benchmark_id", "labels", "updated_at"])
+    rest.patch_fields(
+        "prompts",
+        &p.id,
+        &m,
+        &["benchmark_id", "labels", "updated_at"],
+    )
 }
 
 pub(crate) fn get_prompt(rest: &Rest, project: &str, name: &str) -> Result<Option<Prompt>> {
-    let filters: Vec<(&str, &str, Value)> =
-        vec![("project_id", "EQUAL", json!(project)), ("name", "EQUAL", json!(name))];
+    let filters: Vec<(&str, &str, Value)> = vec![
+        ("project_id", "EQUAL", json!(project)),
+        ("name", "EQUAL", json!(name)),
+    ];
     let docs = rest.query("prompts", &filters, None, Some(1))?;
     docs.first().map(prompt_from).transpose()
 }
 
 pub(crate) fn get_prompt_by_id(rest: &Rest, id: &str) -> Result<Option<Prompt>> {
-    rest.get_doc("prompts", id)?.as_ref().map(prompt_from).transpose()
+    rest.get_doc("prompts", id)?
+        .as_ref()
+        .map(prompt_from)
+        .transpose()
 }
 
 pub(crate) fn list_prompts(rest: &Rest, project: &str) -> Result<Vec<Prompt>> {

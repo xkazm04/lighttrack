@@ -13,8 +13,12 @@ use serde_json::{json, Map, Value};
 
 use crate::client::Client;
 
-const WRITE_NAMES: &[&str] =
-    &["record_score", "score_trace", "create_prompt_version", "promote_prompt"];
+const WRITE_NAMES: &[&str] = &[
+    "record_score",
+    "score_trace",
+    "create_prompt_version",
+    "promote_prompt",
+];
 
 /// True if `name` is one of this module's write tools.
 pub(crate) fn is_write_tool(name: &str) -> bool {
@@ -108,7 +112,11 @@ pub(crate) fn read_dispatch(c: &Client, name: &str, args: &Value) -> Option<Resu
 }
 
 /// Route a write tool. `None` if `name` is not one of ours.
-pub(crate) fn write_dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Value, String>> {
+pub(crate) fn write_dispatch(
+    c: &Client,
+    name: &str,
+    args: &Value,
+) -> Option<Result<Value, String>> {
     let r = match name {
         "record_score" => match score_body(args, None) {
             Ok(body) => c.post("/v1/scores", &body),
@@ -133,7 +141,11 @@ fn get_prompt_path(project: &str, name: &str, args: &Value) -> String {
     let mut p = format!("/v1/projects/{project}/prompts/{name}");
     if let Some(v) = args.get("version").and_then(Value::as_u64) {
         p.push_str(&format!("?version={v}"));
-    } else if let Some(l) = args.get("label").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+    } else if let Some(l) = args
+        .get("label")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
         p.push_str(&format!("?label={l}"));
     }
     p
@@ -147,16 +159,31 @@ fn score_body(args: &Value, trace: Option<&str>) -> Result<Value, String> {
         return Err(e);
     }
     let mut m = Map::new();
-    copy(&mut m, args, &["rubric", "value", "max", "pass", "reasoning", "cost_usd"]);
+    copy(
+        &mut m,
+        args,
+        &["rubric", "value", "max", "pass", "reasoning", "cost_usd"],
+    );
     // `event` is the agent-facing name; the API field is `event_id`.
-    if let Some(ev) = args.get("event").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+    if let Some(ev) = args
+        .get("event")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
         m.insert("event_id".into(), json!(ev));
     }
-    let scored_by = args.get("scored_by").and_then(Value::as_str).filter(|s| !s.is_empty());
+    let scored_by = args
+        .get("scored_by")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
     m.insert("scored_by".into(), json!(scored_by.unwrap_or("mcp")));
     // A trace supplies its own project; a bare score may need an explicit one (admin key).
     if trace.is_none() {
-        if let Some(p) = args.get("project").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        if let Some(p) = args
+            .get("project")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
             m.insert("project_id".into(), json!(p));
         }
     }
@@ -181,7 +208,10 @@ fn create_prompt_version(c: &Client, args: &Value) -> Result<Value, String> {
             let mut create_body = version_body;
             create_body.insert("name".into(), json!(name));
             copy(&mut create_body, args, &["benchmark_id"]);
-            c.post(&format!("/v1/projects/{project}/prompts"), &Value::Object(create_body))
+            c.post(
+                &format!("/v1/projects/{project}/prompts"),
+                &Value::Object(create_body),
+            )
         }
         other => other,
     }
@@ -197,7 +227,10 @@ fn promote_prompt(c: &Client, args: &Value) -> Result<Value, String> {
     }
     let mut body = Map::new();
     copy(&mut body, args, &["label", "version", "force"]);
-    c.post(&format!("/v1/projects/{project}/prompts/{name}/promote"), &Value::Object(body))
+    c.post(
+        &format!("/v1/projects/{project}/prompts/{name}/promote"),
+        &Value::Object(body),
+    )
 }
 
 fn rtool(name: &str, desc: &str, schema: Value) -> Value {
@@ -272,10 +305,15 @@ mod tests {
         for n in WRITE_NAMES {
             assert!(is_write_tool(n), "{n} should be a write tool");
         }
-        let listed: Vec<String> =
-            write_tools().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
+        let listed: Vec<String> = write_tools()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
         for n in WRITE_NAMES {
-            assert!(listed.contains(&n.to_string()), "{n} missing from write_tools()");
+            assert!(
+                listed.contains(&n.to_string()),
+                "{n} missing from write_tools()"
+            );
         }
         assert!(!is_write_tool("list_prompts"), "reads are not gated");
     }
@@ -290,7 +328,12 @@ mod tests {
     #[test]
     fn write_annotations_flag_not_read_only() {
         for t in write_tools() {
-            assert_eq!(t["annotations"]["readOnlyHint"], json!(false), "{}", t["name"]);
+            assert_eq!(
+                t["annotations"]["readOnlyHint"],
+                json!(false),
+                "{}",
+                t["name"]
+            );
         }
     }
 
@@ -301,13 +344,18 @@ mod tests {
             .chain(write_tools())
             .map(|t| t["name"].as_str().unwrap().to_string())
             .collect();
-        assert!(!all.iter().any(|n| n.contains("key")), "must never expose key-minting");
+        assert!(
+            !all.iter().any(|n| n.contains("key")),
+            "must never expose key-minting"
+        );
     }
 
     #[test]
     fn score_body_requires_rubric_and_value() {
         assert!(score_body(&json!({}), None).unwrap_err().contains("rubric"));
-        assert!(score_body(&json!({ "rubric": "helpfulness" }), None).unwrap_err().contains("value"));
+        assert!(score_body(&json!({ "rubric": "helpfulness" }), None)
+            .unwrap_err()
+            .contains("value"));
     }
 
     #[test]
@@ -346,7 +394,11 @@ mod tests {
             "/v1/projects/p/prompts/greeting?label=production"
         );
         assert_eq!(
-            get_prompt_path("p", "greeting", &json!({ "label": "production", "version": 2 })),
+            get_prompt_path(
+                "p",
+                "greeting",
+                &json!({ "label": "production", "version": 2 })
+            ),
             "/v1/projects/p/prompts/greeting?version=2"
         );
     }
@@ -355,16 +407,30 @@ mod tests {
     fn dispatch_validates_required_before_http() {
         // `need`/`missing` fail first, so no request touches the client's base URL.
         let c = Client::from_env();
-        assert!(read_dispatch(&c, "list_prompts", &json!({})).unwrap().unwrap_err().contains("project"));
-        assert!(write_dispatch(&c, "record_score", &json!({})).unwrap().unwrap_err().contains("rubric"));
-        assert!(write_dispatch(&c, "promote_prompt", &json!({ "project": "p", "name": "n" }))
+        assert!(read_dispatch(&c, "list_prompts", &json!({}))
             .unwrap()
             .unwrap_err()
-            .contains("label"));
-        assert!(write_dispatch(&c, "create_prompt_version", &json!({ "project": "p", "name": "n" }))
+            .contains("project"));
+        assert!(write_dispatch(&c, "record_score", &json!({}))
             .unwrap()
             .unwrap_err()
-            .contains("content"));
+            .contains("rubric"));
+        assert!(write_dispatch(
+            &c,
+            "promote_prompt",
+            &json!({ "project": "p", "name": "n" })
+        )
+        .unwrap()
+        .unwrap_err()
+        .contains("label"));
+        assert!(write_dispatch(
+            &c,
+            "create_prompt_version",
+            &json!({ "project": "p", "name": "n" })
+        )
+        .unwrap()
+        .unwrap_err()
+        .contains("content"));
     }
 
     #[test]

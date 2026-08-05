@@ -40,11 +40,13 @@ pub(crate) async fn create(pool: &PgPool, b: &Benchmark) -> Result<()> {
 }
 
 pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Benchmark>> {
-    let row = sqlx::query(&format!("SELECT {BENCH_COLS} FROM benchmarks WHERE id = $1"))
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+    let row = sqlx::query(&format!(
+        "SELECT {BENCH_COLS} FROM benchmarks WHERE id = $1"
+    ))
+    .bind(id.to_string())
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     row.as_ref().map(bench_from_row).transpose()
 }
 
@@ -135,9 +137,18 @@ fn run_from_row(row: &PgRow) -> Result<BenchmarkRun> {
         pass_rate: row.try_get(6).map_err(pgerr)?,
         cost_usd: row.try_get(7).map_err(pgerr)?,
         status: row.try_get(8).map_err(pgerr)?,
-        p50_latency_ms: row.try_get::<Option<i64>, _>(9).map_err(pgerr)?.map(|v| v as u64),
-        p95_latency_ms: row.try_get::<Option<i64>, _>(10).map_err(pgerr)?.map(|v| v as u64),
-        total_tokens: row.try_get::<Option<i64>, _>(11).map_err(pgerr)?.map(|v| v as u64),
+        p50_latency_ms: row
+            .try_get::<Option<i64>, _>(9)
+            .map_err(pgerr)?
+            .map(|v| v as u64),
+        p95_latency_ms: row
+            .try_get::<Option<i64>, _>(10)
+            .map_err(pgerr)?
+            .map(|v| v as u64),
+        total_tokens: row
+            .try_get::<Option<i64>, _>(11)
+            .map_err(pgerr)?
+            .map(|v| v as u64),
         report: val_or_null(report)?,
     })
 }

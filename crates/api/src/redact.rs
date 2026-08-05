@@ -62,7 +62,10 @@ impl Redactor {
         // An exported-but-empty value is a deployment accident (`FOO=${MISSING}` in a compose file),
         // not an instruction to store raw PII — it takes the safe default like a truly unset var.
         if t.is_empty() {
-            return Self { mode: Mode::All, defaulted: true };
+            return Self {
+                mode: Mode::All,
+                defaulted: true,
+            };
         }
         let mode = if t.eq_ignore_ascii_case("off") || t == "0" {
             Mode::Off
@@ -76,7 +79,10 @@ impl Redactor {
                     .collect(),
             )
         };
-        Self { mode, defaulted: false }
+        Self {
+            mode,
+            defaulted: false,
+        }
     }
 
     fn enabled_for(&self, project: &str) -> bool {
@@ -214,11 +220,17 @@ pub(crate) fn apply_policy(ev: &mut LlmEvent, policy: Redaction) -> bool {
 impl Redactor {
     /// Test constructor: redaction disabled.
     pub(crate) fn off() -> Self {
-        Self { mode: Mode::Off, defaulted: false }
+        Self {
+            mode: Mode::Off,
+            defaulted: false,
+        }
     }
     /// Test constructor: redact every project.
     pub(crate) fn all() -> Self {
-        Self { mode: Mode::All, defaulted: false }
+        Self {
+            mode: Mode::All,
+            defaulted: false,
+        }
     }
     /// Test constructor: exactly what an operator who configured nothing gets. Distinct from
     /// [`Redactor::all`] so an end-to-end test asserts the *default*, not a posture it opted into.
@@ -275,18 +287,26 @@ mod tests {
         // storing raw prompts. `from_raw(None)` is exactly what `from_env` sees when the var is unset.
         for unset in [None, Some(""), Some("   ")] {
             let r = Redactor::from_raw(unset);
-            assert!(r.enabled_for("anything"), "unset/blank must scrub: {unset:?}");
+            assert!(
+                r.enabled_for("anything"),
+                "unset/blank must scrub: {unset:?}"
+            );
             assert!(r.defaulted, "{unset:?}");
             assert_eq!(r.describe(), "all projects (default)");
             let mut ev = event("p1", json!("mail jane@example.com"), json!("clean"));
             assert!(r.redact_event(&mut ev, Redaction::None) > 0);
-            assert!(!serde_json::to_string(&ev).unwrap().contains("jane@example.com"));
+            assert!(!serde_json::to_string(&ev)
+                .unwrap()
+                .contains("jane@example.com"));
         }
 
         // The opt-out still exists and still means off — an operator who wants raw text keeps it.
         for off in ["off", "OFF", " Off ", "0"] {
             let r = Redactor::from_raw(Some(off));
-            assert!(!r.enabled_for("anything"), "explicit off must not scrub: {off}");
+            assert!(
+                !r.enabled_for("anything"),
+                "explicit off must not scrub: {off}"
+            );
             assert!(!r.defaulted);
             assert_eq!(r.describe(), "off");
             let mut ev = event("p1", json!("mail jane@example.com"), json!("clean"));
@@ -315,9 +335,15 @@ mod tests {
         // test in this binary can observe the mutation half-applied.
         let saved = std::env::var(ENV_REDACT).ok();
         std::env::remove_var(ENV_REDACT);
-        assert!(Redactor::from_env().enabled_for("p1"), "unset env must scrub");
+        assert!(
+            Redactor::from_env().enabled_for("p1"),
+            "unset env must scrub"
+        );
         std::env::set_var(ENV_REDACT, "off");
-        assert!(!Redactor::from_env().enabled_for("p1"), "env=off must not scrub");
+        assert!(
+            !Redactor::from_env().enabled_for("p1"),
+            "env=off must not scrub"
+        );
         match saved {
             Some(v) => std::env::set_var(ENV_REDACT, v),
             None => std::env::remove_var(ENV_REDACT),
@@ -332,7 +358,11 @@ mod tests {
 
         let mut dropped = event("p1", json!("jane@example.com"), json!("x"));
         assert!(apply_policy(&mut dropped, Redaction::Drop));
-        assert_eq!(scrubbing.redact_event(&mut dropped, Redaction::Drop), 0, "nothing left to scrub");
+        assert_eq!(
+            scrubbing.redact_event(&mut dropped, Redaction::Drop),
+            0,
+            "nothing left to scrub"
+        );
         assert!(dropped.input.is_none() && dropped.output.is_none());
 
         let mut hashed = event("p1", json!("jane@example.com"), json!("x"));
@@ -379,20 +409,40 @@ mod tests {
 
     #[test]
     fn policy_hash_replaces_payloads_with_digests() {
-        let mut ev = event("p1", json!({ "q": "secret prompt" }), json!("secret answer"));
+        let mut ev = event(
+            "p1",
+            json!({ "q": "secret prompt" }),
+            json!("secret answer"),
+        );
         assert!(apply_policy(&mut ev, Redaction::Hash));
         let input = ev.input.clone().unwrap();
         let output = ev.output.clone().unwrap();
-        let ih = input.get("sha256").and_then(Value::as_str).expect("input digest");
-        let oh = output.get("sha256").and_then(Value::as_str).expect("output digest");
+        let ih = input
+            .get("sha256")
+            .and_then(Value::as_str)
+            .expect("input digest");
+        let oh = output
+            .get("sha256")
+            .and_then(Value::as_str)
+            .expect("output digest");
         assert_eq!(ih.len(), 64);
         assert_ne!(ih, oh, "different payloads hash differently");
         let blob = serde_json::to_string(&ev).unwrap();
-        assert!(!blob.contains("secret"), "no plaintext survives hashing: {blob}");
+        assert!(
+            !blob.contains("secret"),
+            "no plaintext survives hashing: {blob}"
+        );
         // Same payload → same digest (presence/diff semantics).
         let mut ev2 = event("p1", json!({ "q": "secret prompt" }), json!("x"));
         apply_policy(&mut ev2, Redaction::Hash);
-        assert_eq!(ev2.input.unwrap().get("sha256").and_then(Value::as_str).unwrap(), ih);
+        assert_eq!(
+            ev2.input
+                .unwrap()
+                .get("sha256")
+                .and_then(Value::as_str)
+                .unwrap(),
+            ih
+        );
     }
 
     #[test]

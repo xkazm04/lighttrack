@@ -8,9 +8,7 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{
-    new_id, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun,
-};
+use lighttrack_core::{new_id, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun};
 
 use crate::alerts::BenchRunAlert;
 use crate::auth::Principal;
@@ -82,12 +80,14 @@ fn embed_recurrence(target: serde_json::Value, secs: u64) -> Result<serde_json::
 /// (null / object / string) are legacy free-form and pass through untouched.
 fn validate_target_matrix(target: &serde_json::Value) -> Result<(), String> {
     if target.is_array() {
-        serde_json::from_value::<Vec<BenchTarget>>(target.clone()).map(|_| ()).map_err(|e| {
-            format!(
-                "`target` is an array but not a valid comparison matrix \
+        serde_json::from_value::<Vec<BenchTarget>>(target.clone())
+            .map(|_| ())
+            .map_err(|e| {
+                format!(
+                    "`target` is an array but not a valid comparison matrix \
                  (expected [{{provider, model, system_prompt?, label?}}, ...]): {e}"
-            )
-        })
+                )
+            })
     } else {
         Ok(())
     }
@@ -156,7 +156,10 @@ pub(crate) async fn load_benchmark_authorized(
     let bench = spawn_db(move || store.get_benchmark(&id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("benchmark '{id}' not found")))?;
-    if let Principal::Project { project_id: pid, .. } = p {
+    if let Principal::Project {
+        project_id: pid, ..
+    } = p
+    {
         if &bench.project_id != pid {
             return Err(ApiError::forbidden("key not authorized for that benchmark"));
         }
@@ -229,7 +232,13 @@ pub(crate) struct GateResponse {
 /// significance `n`, else `n_cases`.
 pub(crate) fn decide_gate(runs: &[BenchmarkRun], baseline: Option<f64>) -> GateResponse {
     let Some(run) = runs.iter().find(|r| r.finished_at.is_some()) else {
-        return GateResponse { status: "no_runs".into(), run_id: None, mean: None, baseline, n: None };
+        return GateResponse {
+            status: "no_runs".into(),
+            run_id: None,
+            mean: None,
+            baseline,
+            n: None,
+        };
     };
     let status = match run.status.as_str() {
         "passed" => "pass",
@@ -279,7 +288,12 @@ mod tests {
     use serde_json::json;
 
     /// Build a run via serde so the test doesn't hand-construct every field.
-    fn run(status: &str, finished: bool, mean: Option<f64>, report: serde_json::Value) -> BenchmarkRun {
+    fn run(
+        status: &str,
+        finished: bool,
+        mean: Option<f64>,
+        report: serde_json::Value,
+    ) -> BenchmarkRun {
         let mut v = json!({
             "id": format!("run-{status}"), "benchmark_id": "b", "started_at": "2026-01-01T00:00:00.000000000Z",
             "n_cases": 5, "mean_score": mean, "status": status, "report": report,
@@ -301,13 +315,22 @@ mod tests {
 
     #[test]
     fn gate_maps_honest_statuses() {
-        let g = decide_gate(&[run("passed", true, Some(0.9), json!({ "n": 30 }))], Some(0.8));
+        let g = decide_gate(
+            &[run("passed", true, Some(0.9), json!({ "n": 30 }))],
+            Some(0.8),
+        );
         assert_eq!(g.status, "pass");
         assert_eq!(g.n, Some(30)); // report n wins over n_cases
         assert_eq!(g.run_id.as_deref(), Some("run-passed"));
 
-        assert_eq!(decide_gate(&[run("regressed", true, Some(0.5), json!(null))], Some(0.8)).status, "regressed");
-        assert_eq!(decide_gate(&[run("no_baseline", true, Some(0.5), json!(null))], None).status, "no_baseline");
+        assert_eq!(
+            decide_gate(&[run("regressed", true, Some(0.5), json!(null))], Some(0.8)).status,
+            "regressed"
+        );
+        assert_eq!(
+            decide_gate(&[run("no_baseline", true, Some(0.5), json!(null))], None).status,
+            "no_baseline"
+        );
     }
 
     #[test]
@@ -323,8 +346,14 @@ mod tests {
     #[test]
     fn gate_legacy_status_falls_back_to_scalar() {
         // "completed" predates honest statuses → scalar mean-vs-baseline compare.
-        assert_eq!(decide_gate(&[run("completed", true, Some(0.5), json!(null))], Some(0.8)).status, "regressed");
-        assert_eq!(decide_gate(&[run("completed", true, Some(0.9), json!(null))], Some(0.8)).status, "pass");
+        assert_eq!(
+            decide_gate(&[run("completed", true, Some(0.5), json!(null))], Some(0.8)).status,
+            "regressed"
+        );
+        assert_eq!(
+            decide_gate(&[run("completed", true, Some(0.9), json!(null))], Some(0.8)).status,
+            "pass"
+        );
         // No baseline → no_baseline; n falls back to n_cases when the report has none.
         let g = decide_gate(&[run("completed", true, Some(0.9), json!(null))], None);
         assert_eq!(g.status, "no_baseline");
@@ -350,7 +379,9 @@ mod tests {
 
     #[test]
     fn valid_matrix_ok_malformed_rejected() {
-        assert!(validate_target_matrix(&json!([{ "provider": "openai", "model": "gpt-4o" }])).is_ok());
+        assert!(
+            validate_target_matrix(&json!([{ "provider": "openai", "model": "gpt-4o" }])).is_ok()
+        );
         // Missing required `provider` → rejected (would otherwise silently degrade to simple mode).
         assert!(validate_target_matrix(&json!([{ "model": "x" }])).is_err());
         assert!(validate_target_matrix(&json!(["nope"])).is_err());
@@ -359,7 +390,10 @@ mod tests {
     #[test]
     fn embed_recurrence_into_object_and_null() {
         // Null target becomes a fresh object carrying the interval.
-        assert_eq!(embed_recurrence(json!(null), 3600).unwrap(), json!({ "schedule_interval_secs": 3600 }));
+        assert_eq!(
+            embed_recurrence(json!(null), 3600).unwrap(),
+            json!({ "schedule_interval_secs": 3600 })
+        );
         // An existing free-form object keeps its keys and gains the interval.
         assert_eq!(
             embed_recurrence(json!({ "endpoint": "https://x" }), 60).unwrap(),
@@ -370,7 +404,9 @@ mod tests {
     #[test]
     fn embed_recurrence_rejects_matrix_and_scalars() {
         // A comparison matrix (array) has no room for a sibling key → hard error, not a silent drop.
-        assert!(embed_recurrence(json!([{ "provider": "openai", "model": "gpt-4o" }]), 60).is_err());
+        assert!(
+            embed_recurrence(json!([{ "provider": "openai", "model": "gpt-4o" }]), 60).is_err()
+        );
         assert!(embed_recurrence(json!("legacy-string"), 60).is_err());
     }
 }

@@ -7,8 +7,8 @@
 
 mod error;
 pub mod fx;
-mod registry;
 pub mod polar;
+mod registry;
 pub mod stripe;
 
 pub use error::BillingError;

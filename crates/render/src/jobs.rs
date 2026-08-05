@@ -54,10 +54,16 @@ pub(crate) fn detail(v: &Value) -> Option<String> {
     if let Some(e) = opt_s(v, "error").filter(|e| !e.is_empty()) {
         out.push_str(&format!("- **Error:** {e}\n"));
     }
-    out.push_str(&format!("- **Updated:** {}\n", short_ts(s(v, "updated_at"))));
+    out.push_str(&format!(
+        "- **Updated:** {}\n",
+        short_ts(s(v, "updated_at"))
+    ));
     if let Some(res) = v.get("result").filter(|r| !r.is_null()) {
         let pretty = serde_json::to_string_pretty(res).unwrap_or_default();
-        out.push_str(&format!("\n**Result:**\n```json\n{}\n```\n", trunc(&pretty, 1500)));
+        out.push_str(&format!(
+            "\n**Result:**\n```json\n{}\n```\n",
+            trunc(&pretty, 1500)
+        ));
     }
     Some(out)
 }

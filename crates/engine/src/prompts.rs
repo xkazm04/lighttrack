@@ -23,11 +23,17 @@ impl Prompt {
     /// A prompt with no untrusted content — the scoring math's fixtures, which need no fence.
     #[cfg(test)]
     pub(crate) fn plain(text: impl Into<String>) -> Self {
-        Prompt { text: text.into(), injection_suspected: false }
+        Prompt {
+            text: text.into(),
+            injection_suspected: false,
+        }
     }
 
     fn fenced(text: String, fence: &Fence) -> Self {
-        Prompt { text, injection_suspected: fence.injection_suspected() }
+        Prompt {
+            text,
+            injection_suspected: fence.injection_suspected(),
+        }
     }
 }
 
@@ -212,7 +218,10 @@ pub fn build_rubric_prompt(
             } else {
                 format!(" Anchors: {}", d.anchors.join("; "))
             };
-            format!("- {} (weight {}): {}.{}", d.key, d.weight, d.description, anchors)
+            format!(
+                "- {} (weight {}): {}.{}",
+                d.key, d.weight, d.description, anchors
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");

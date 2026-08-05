@@ -31,7 +31,9 @@ fn scan(dir: &Path, needle: &str, violations: &mut Vec<String>) {
         if path.extension().is_none_or(|e| e != "rs") {
             continue;
         }
-        let Ok(content) = fs::read_to_string(&path) else { continue };
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
         for (start, _) in content.match_indices(needle) {
             // The args live within a short window after the call; a compliant call always fits.
             let window = &content[start..content.len().min(start + 120)];

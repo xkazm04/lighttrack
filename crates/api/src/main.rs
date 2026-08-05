@@ -199,8 +199,11 @@ async fn main() -> anyhow::Result<()> {
 
     // The Postgres store calls `block_on` internally, which panics if run on the async main thread.
     // Do the connect + seeding on a blocking thread; the request handlers already use spawn_blocking.
-    type StartupState =
-        (Arc<dyn Store + Send + Sync>, PriceBook, std::collections::HashMap<String, Redaction>);
+    type StartupState = (
+        Arc<dyn Store + Send + Sync>,
+        PriceBook,
+        std::collections::HashMap<String, Redaction>,
+    );
     let (store, book, redaction_policies) = tokio::task::spawn_blocking(
         move || -> anyhow::Result<StartupState> {
             let store: Arc<dyn Store + Send + Sync> = match &database_url {
@@ -256,7 +259,9 @@ async fn main() -> anyhow::Result<()> {
     let collective = Arc::new(collective::Collective::from_env());
     let collective_desc = collective.describe();
     collective.warn_if_hub_is_weak(auth_mode);
-    let seen_webhooks = Arc::new(idempotency::SeenWebhooks::new(idempotency::DEFAULT_CAPACITY));
+    let seen_webhooks = Arc::new(idempotency::SeenWebhooks::new(
+        idempotency::DEFAULT_CAPACITY,
+    ));
     let rejections = Arc::new(rejections::RejectionLedger::new());
     let ingest_guard = Arc::new(shed::IngestGuard::from_env());
     let shed_desc = ingest_guard.describe();
@@ -322,8 +327,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
     // Load shedding is layered onto the ingest POST *methods* only: a bounded write path is what
     // keeps the server responsive under overload, while the operator's own reads (including
     // `/v1/ingest/status`, the surface that says whether we ARE shedding) stay answerable.
-    let shed_ingest =
-        axum::middleware::from_fn_with_state(state.clone(), shed::ingest_admission);
+    let shed_ingest = axum::middleware::from_fn_with_state(state.clone(), shed::ingest_admission);
     Router::new()
         .route("/health", get(health))
         .route(
@@ -357,7 +361,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/costs", get(events::get_costs))
         .route("/v1/costs/prompts", get(events::get_prompt_costs))
         .route("/v1/usecases", get(events::get_usecases))
-        .route("/v1/scores", post(scores::post_score).get(scores::get_scores))
+        .route(
+            "/v1/scores",
+            post(scores::post_score).get(scores::get_scores),
+        )
         .route("/v1/prices", get(prices::get_prices))
         .route("/v1/prices/:provider/:model", put(prices::put_price))
         .route(
@@ -380,7 +387,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
             post(benchmarks::create_benchmark).get(benchmarks::list_benchmarks),
         )
         .route("/v1/benchmarks/:id", get(benchmarks::get_benchmark))
-        .route("/v1/benchmarks/:id/runs", get(benchmarks::list_benchmark_runs))
+        .route(
+            "/v1/benchmarks/:id/runs",
+            get(benchmarks::list_benchmark_runs),
+        )
         .route("/v1/benchmarks/:id/gate", get(benchmarks::benchmark_gate))
         .route("/v1/benchmark-runs", post(benchmarks::post_benchmark_run))
         .route("/v1/benchmarks/:id/enqueue", post(jobs::enqueue_benchmark))
@@ -393,14 +403,20 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/projects/:id/prompts/:name/versions",
             post(prompts::add_version).get(prompts::list_versions),
         )
-        .route("/v1/projects/:id/prompts/:name/promote", post(prompts::promote))
+        .route(
+            "/v1/projects/:id/prompts/:name/promote",
+            post(prompts::promote),
+        )
         .route("/v1/jobs", get(jobs::list_jobs))
         .route("/v1/jobs/claim", post(jobs::claim_job))
         .route("/v1/jobs/:id", get(jobs::get_job))
         .route("/v1/jobs/:id/cancel", post(jobs::cancel_job))
         .route("/v1/jobs/:id/progress", post(jobs::job_progress))
         .route("/v1/jobs/:id/finish", post(jobs::job_finish))
-        .route("/v1/projects", post(projects::create_project).get(projects::list_projects))
+        .route(
+            "/v1/projects",
+            post(projects::create_project).get(projects::list_projects),
+        )
         .route("/v1/projects/:id", put(projects::update_project))
         .route(
             "/v1/projects/:id/keys",
@@ -417,7 +433,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/limits/status", get(limits::limits_status))
         .route("/v1/limits/usage", get(limits_usage::usage_by_scope))
-        .route("/v1/relay/tasks", post(relay::enqueue_task).get(relay::list_tasks))
+        .route(
+            "/v1/relay/tasks",
+            post(relay::enqueue_task).get(relay::list_tasks),
+        )
         .route("/v1/relay/tasks/:id", get(relay::get_task))
         .route("/v1/relay/tasks/:id/result", post(relay::post_result))
         .route("/v1/relay/lease", post(relay::lease_tasks))
@@ -430,8 +449,14 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/billing/:provider/webhook", post(billing::post_webhook))
         .route("/v1/collective/digest", get(collective::get_digest))
         .route("/v1/collective/ingest", post(collective::post_ingest))
-        .route("/v1/collective/leaderboard", get(collective::get_leaderboard))
-        .route("/v1/collective/contribution", delete(collective::delete_contribution))
+        .route(
+            "/v1/collective/leaderboard",
+            get(collective::get_leaderboard),
+        )
+        .route(
+            "/v1/collective/contribution",
+            delete(collective::delete_contribution),
+        )
         .with_state(state)
 }
 

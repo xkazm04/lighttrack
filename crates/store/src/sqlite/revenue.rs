@@ -107,13 +107,16 @@ pub(super) fn cost_by_dimension(
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map(params![project, fmt_ts(since), fmt_ts(until)], |row: &Row| {
-            Ok(CostByDimension {
-                key: row.get::<_, Option<String>>(0)?,
-                calls: row.get(1)?,
-                cost_usd: row.get(2)?,
-            })
-        })?
+        .query_map(
+            params![project, fmt_ts(since), fmt_ts(until)],
+            |row: &Row| {
+                Ok(CostByDimension {
+                    key: row.get::<_, Option<String>>(0)?,
+                    calls: row.get(1)?,
+                    cost_usd: row.get(2)?,
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -143,12 +146,15 @@ pub(super) fn tokens_by_dimension(
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map(params![project, fmt_ts(since), fmt_ts(until)], |row: &Row| {
-            Ok(TokensByDimension {
-                key: row.get::<_, Option<String>>(0)?,
-                tokens: row.get(1)?,
-            })
-        })?
+        .query_map(
+            params![project, fmt_ts(since), fmt_ts(until)],
+            |row: &Row| {
+                Ok(TokensByDimension {
+                    key: row.get::<_, Option<String>>(0)?,
+                    tokens: row.get(1)?,
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -277,7 +283,8 @@ mod tests {
 
     fn conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch(include_str!("../../../../schema/sqlite/001_init.sql")).unwrap();
+        c.execute_batch(include_str!("../../../../schema/sqlite/001_init.sql"))
+            .unwrap();
         c
     }
 
@@ -296,9 +303,10 @@ mod tests {
         let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
         // rusqlite insists every placeholder is bound; the values don't shape the plan.
         let rows = stmt
-            .query_map(params!["p1", "2026-01-01T00:00:00Z", "2027-01-01T00:00:00Z"], |r| {
-                r.get::<_, String>(3)
-            })
+            .query_map(
+                params!["p1", "2026-01-01T00:00:00Z", "2027-01-01T00:00:00Z"],
+                |r| r.get::<_, String>(3),
+            )
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
@@ -349,16 +357,32 @@ mod tests {
         // Revenue: acme pays $20, heavy pays $99.
         for r in [
             RevenueEvent {
-                id: "r1".into(), project_id: "p1".into(), source: "manual".into(),
-                external_id: None, customer_id: Some("acme".into()), product_id: None,
-                amount_usd: 20.0, currency: "USD".into(), kind: RevenueKind::OneTime,
-                period_start: None, period_end: None, ts: parse_ts("2026-06-10T00:00:00Z").unwrap(),
+                id: "r1".into(),
+                project_id: "p1".into(),
+                source: "manual".into(),
+                external_id: None,
+                customer_id: Some("acme".into()),
+                product_id: None,
+                amount_usd: 20.0,
+                currency: "USD".into(),
+                kind: RevenueKind::OneTime,
+                period_start: None,
+                period_end: None,
+                ts: parse_ts("2026-06-10T00:00:00Z").unwrap(),
             },
             RevenueEvent {
-                id: "r2".into(), project_id: "p1".into(), source: "manual".into(),
-                external_id: None, customer_id: Some("heavy".into()), product_id: None,
-                amount_usd: 99.0, currency: "USD".into(), kind: RevenueKind::OneTime,
-                period_start: None, period_end: None, ts: parse_ts("2026-06-12T00:00:00Z").unwrap(),
+                id: "r2".into(),
+                project_id: "p1".into(),
+                source: "manual".into(),
+                external_id: None,
+                customer_id: Some("heavy".into()),
+                product_id: None,
+                amount_usd: 99.0,
+                currency: "USD".into(),
+                kind: RevenueKind::OneTime,
+                period_start: None,
+                period_end: None,
+                ts: parse_ts("2026-06-12T00:00:00Z").unwrap(),
             },
         ] {
             insert(&c, &r).unwrap();
@@ -381,10 +405,18 @@ mod tests {
 
     fn rev(id: &str, amount: f64) -> RevenueEvent {
         RevenueEvent {
-            id: id.into(), project_id: "p1".into(), source: "stripe".into(),
-            external_id: Some(format!("ext-{id}")), customer_id: Some("acme".into()),
-            product_id: None, amount_usd: amount, currency: "USD".into(), kind: RevenueKind::OneTime,
-            period_start: None, period_end: None, ts: parse_ts("2026-06-10T00:00:00Z").unwrap(),
+            id: id.into(),
+            project_id: "p1".into(),
+            source: "stripe".into(),
+            external_id: Some(format!("ext-{id}")),
+            customer_id: Some("acme".into()),
+            product_id: None,
+            amount_usd: amount,
+            currency: "USD".into(),
+            kind: RevenueKind::OneTime,
+            period_start: None,
+            period_end: None,
+            ts: parse_ts("2026-06-10T00:00:00Z").unwrap(),
         }
     }
 
@@ -426,7 +458,14 @@ mod tests {
     }
 
     /// A tagged event with an explicit provider/model/name, for the per-customer breakdown tests.
-    fn ev_full(customer: &str, provider: &str, model: &str, name: &str, cost: f64, ts: &str) -> LlmEvent {
+    fn ev_full(
+        customer: &str,
+        provider: &str,
+        model: &str,
+        name: &str,
+        cost: f64,
+        ts: &str,
+    ) -> LlmEvent {
         serde_json::from_value(json!({
             "id": format!("e-{customer}-{provider}-{name}-{ts}"), "project_id": "p1",
             "provider": provider, "model": model, "name": name,
@@ -440,11 +479,39 @@ mod tests {
     fn customer_breakdown_by_model_and_name_is_scoped_to_the_customer() {
         let c = conn();
         for e in [
-            ev_full("acme", "anthropic", "claude-haiku-4-5", "chat", 0.50, "2026-06-10T00:00:00Z"),
-            ev_full("acme", "anthropic", "claude-haiku-4-5", "chat", 0.30, "2026-06-11T00:00:00Z"),
-            ev_full("acme", "openai", "gpt-5.4", "summarize", 2.00, "2026-06-12T00:00:00Z"),
+            ev_full(
+                "acme",
+                "anthropic",
+                "claude-haiku-4-5",
+                "chat",
+                0.50,
+                "2026-06-10T00:00:00Z",
+            ),
+            ev_full(
+                "acme",
+                "anthropic",
+                "claude-haiku-4-5",
+                "chat",
+                0.30,
+                "2026-06-11T00:00:00Z",
+            ),
+            ev_full(
+                "acme",
+                "openai",
+                "gpt-5.4",
+                "summarize",
+                2.00,
+                "2026-06-12T00:00:00Z",
+            ),
             // Another customer's traffic must NOT leak into acme's breakdown.
-            ev_full("other", "openai", "gpt-5.4", "summarize", 9.99, "2026-06-12T00:00:00Z"),
+            ev_full(
+                "other",
+                "openai",
+                "gpt-5.4",
+                "summarize",
+                9.99,
+                "2026-06-12T00:00:00Z",
+            ),
         ] {
             super::super::events::insert(&c, &e).unwrap();
         }
@@ -456,9 +523,15 @@ mod tests {
         assert_eq!(by_model.len(), 2);
         assert_eq!(by_model[0].key, "openai/gpt-5.4");
         assert!((by_model[0].cost_usd - 2.0).abs() < 1e-9);
-        let haiku = by_model.iter().find(|r| r.key == "anthropic/claude-haiku-4-5").unwrap();
+        let haiku = by_model
+            .iter()
+            .find(|r| r.key == "anthropic/claude-haiku-4-5")
+            .unwrap();
         assert_eq!(haiku.calls, 2);
-        assert!((haiku.cost_usd - 0.80).abs() < 1e-9, "acme haiku cost summed, 'other' excluded");
+        assert!(
+            (haiku.cost_usd - 0.80).abs() < 1e-9,
+            "acme haiku cost summed, 'other' excluded"
+        );
 
         let by_name = customer_cost_by_name(&c, Some("p1"), "acme", since, until).unwrap();
         assert_eq!(by_name.len(), 2);
@@ -466,7 +539,10 @@ mod tests {
         assert_eq!(chat.calls, 2);
         assert!((chat.cost_usd - 0.80).abs() < 1e-9);
         let summ = by_name.iter().find(|r| r.key == "summarize").unwrap();
-        assert!((summ.cost_usd - 2.0).abs() < 1e-9, "only acme's summarize, not other's $9.99");
+        assert!(
+            (summ.cost_usd - 2.0).abs() < 1e-9,
+            "only acme's summarize, not other's $9.99"
+        );
     }
 
     #[test]
@@ -474,9 +550,30 @@ mod tests {
         let c = conn();
         // acme: two calls (10+5 each = 15 tokens each → 30); other: one call (15 tokens); one untagged.
         for e in [
-            ev_full("acme", "anthropic", "claude-haiku-4-5", "chat", 0.5, "2026-06-10T00:00:00Z"),
-            ev_full("acme", "anthropic", "claude-haiku-4-5", "chat", 0.3, "2026-06-11T00:00:00Z"),
-            ev_full("other", "openai", "gpt-5.4", "summarize", 9.99, "2026-06-12T00:00:00Z"),
+            ev_full(
+                "acme",
+                "anthropic",
+                "claude-haiku-4-5",
+                "chat",
+                0.5,
+                "2026-06-10T00:00:00Z",
+            ),
+            ev_full(
+                "acme",
+                "anthropic",
+                "claude-haiku-4-5",
+                "chat",
+                0.3,
+                "2026-06-11T00:00:00Z",
+            ),
+            ev_full(
+                "other",
+                "openai",
+                "gpt-5.4",
+                "summarize",
+                9.99,
+                "2026-06-12T00:00:00Z",
+            ),
         ] {
             super::super::events::insert(&c, &e).unwrap();
         }
@@ -493,11 +590,20 @@ mod tests {
         let until = parse_ts("2026-07-01T00:00:00Z").unwrap();
         let rows = tokens_by_dimension(&c, Some("p1"), "customer", since, until).unwrap();
 
-        let acme = rows.iter().find(|r| r.key.as_deref() == Some("acme")).unwrap();
+        let acme = rows
+            .iter()
+            .find(|r| r.key.as_deref() == Some("acme"))
+            .unwrap();
         assert_eq!(acme.tokens, 30, "two calls of 15 tokens each");
-        let other = rows.iter().find(|r| r.key.as_deref() == Some("other")).unwrap();
+        let other = rows
+            .iter()
+            .find(|r| r.key.as_deref() == Some("other"))
+            .unwrap();
         assert_eq!(other.tokens, 15);
         let untagged = rows.iter().find(|r| r.key.is_none()).unwrap();
-        assert_eq!(untagged.tokens, 100, "untagged usage groups under the NULL key");
+        assert_eq!(
+            untagged.tokens, 100,
+            "untagged usage groups under the NULL key"
+        );
     }
 }

@@ -22,7 +22,10 @@ pub(crate) fn list(allow_writes: bool) -> Value {
 /// Handle `tools/call`, returning MCP tool-result content (text + isError).
 pub(crate) fn call(c: &Client, allow_writes: bool, params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-    let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let args = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
 
     // Paged read tools carry a keyset cursor out-of-band (the `X-Next-Cursor` header), so they route
     // through their own dispatch that returns `(body, next_cursor)`.

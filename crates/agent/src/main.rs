@@ -18,7 +18,10 @@ use anyhow::Result;
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "lt-agent", about = "LightTrack device agent: run relay tasks with the local Claude Code CLI")]
+#[command(
+    name = "lt-agent",
+    about = "LightTrack device agent: run relay tasks with the local Claude Code CLI"
+)]
 struct Cli {
     /// Path to the agent config (TOML).
     #[arg(long, default_value = "agent.toml")]
@@ -36,7 +39,11 @@ fn main() -> Result<()> {
         "lt-agent v{}  device={} sources={} actions={} poll={}s",
         env!("CARGO_PKG_VERSION"),
         cfg.device,
-        cfg.sources.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(","),
+        cfg.sources
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
         cfg.actions_dir,
         cfg.poll_secs,
     );

@@ -30,7 +30,12 @@ pub(super) fn ev(project: &str) -> LlmEvent {
         model: "claude-haiku-4-5".into(),
         name: None,
         operation: Operation::Chat,
-        usage: TokenUsage { input: 10, output: 5, cached_input: None, reasoning: None },
+        usage: TokenUsage {
+            input: 10,
+            output: 5,
+            cached_input: None,
+            reasoning: None,
+        },
         cost_usd: Some(0.001),
         latency_ms: Some(12),
         status: Status::Success,
@@ -44,7 +49,9 @@ pub(super) fn ev(project: &str) -> LlmEvent {
 }
 
 fn journal_mode(c: &Connection) -> String {
-    c.query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0)).unwrap().to_lowercase()
+    c.query_row("PRAGMA journal_mode", [], |r| r.get::<_, String>(0))
+        .unwrap()
+        .to_lowercase()
 }
 
 #[test]
@@ -57,14 +64,21 @@ fn wal_is_engaged_on_disk_and_seen_by_pooled_readers() {
     // Asserted, not merely requested: read the pragma back on the write connection…
     assert_eq!(s.with(journal_mode), "wal");
     // …and on a pooled reader, which is a different connection to the same file.
-    let reader = s.readers.acquire().expect("read pool should be enabled for a file database");
+    let reader = s
+        .readers
+        .acquire()
+        .expect("read pool should be enabled for a file database");
     assert_eq!(journal_mode(&reader), "wal");
     drop(reader);
     assert!(s.readers.size() > 0);
 
     // The sidecars WAL implies really are on disk (packaging/backup must copy them, or checkpoint).
     let wal = path.with_file_name("lt.db-wal");
-    assert!(wal.exists(), "expected the -wal sidecar at {}", wal.display());
+    assert!(
+        wal.exists(),
+        "expected the -wal sidecar at {}",
+        wal.display()
+    );
 }
 
 #[test]
@@ -114,10 +128,16 @@ fn reads_see_a_consistent_snapshot_while_a_write_transaction_is_open() {
     let waited = t0.elapsed();
 
     // Isolation: the five uncommitted rows are invisible — no half-applied batch can be read.
-    assert_eq!(seen, 1, "a read observed rows from an uncommitted write transaction");
+    assert_eq!(
+        seen, 1,
+        "a read observed rows from an uncommitted write transaction"
+    );
     // Concurrency: this is the assertion that fails on the old single-mutex store, where the read
     // could not even start until the writer let go.
-    assert!(waited < HELD / 2, "read blocked behind the open write transaction for {waited:?}");
+    assert!(
+        waited < HELD / 2,
+        "read blocked behind the open write transaction for {waited:?}"
+    );
 
     writer.join().unwrap();
     assert_eq!(s.list_events(None, 1_000).unwrap().len(), 6);
@@ -138,7 +158,11 @@ fn readers_never_observe_a_half_applied_batch_admission() {
             let mut polls = 0usize;
             while !stop.load(Ordering::Relaxed) {
                 let n = s.list_events(None, 100_000).unwrap().len();
-                assert_eq!(n % BATCH, 0, "read saw {n} events — a batch was partially visible");
+                assert_eq!(
+                    n % BATCH,
+                    0,
+                    "read saw {n} events — a batch was partially visible"
+                );
                 polls += 1;
             }
             polls
@@ -181,16 +205,23 @@ fn a_pre_wal_database_upgrades_cleanly_on_open() {
             [],
         )
         .unwrap();
-        let mode: String =
-            c.query_row("PRAGMA journal_mode=DELETE", [], |r| r.get::<_, String>(0))
-                .unwrap()
-                .to_lowercase();
+        let mode: String = c
+            .query_row("PRAGMA journal_mode=DELETE", [], |r| r.get::<_, String>(0))
+            .unwrap()
+            .to_lowercase();
         assert_eq!(mode, "delete", "fixture must start out pre-WAL");
     }
 
     let s = SqliteStore::open(&path).unwrap();
-    assert_eq!(s.with(journal_mode), "wal", "opening an existing database must upgrade it to WAL");
-    assert!(s.readers.size() > 0, "the pool must come up on a migrated legacy database");
+    assert_eq!(
+        s.with(journal_mode),
+        "wal",
+        "opening an existing database must upgrade it to WAL"
+    );
+    assert!(
+        s.readers.size() > 0,
+        "the pool must come up on a migrated legacy database"
+    );
 
     // The legacy row survived and was backfilled (arrival time = event time), and it is readable
     // through the pool.
@@ -208,7 +239,10 @@ fn a_disabled_pool_still_serves_reads_through_the_write_connection() {
     let dir = tempfile::tempdir().unwrap();
     let s = SqliteStore::open_with(
         dir.path().join("lt.db"),
-        super::OpenOpts { wal: false, read_pool: 0 },
+        super::OpenOpts {
+            wal: false,
+            read_pool: 0,
+        },
     )
     .unwrap();
     assert_eq!(s.readers.size(), 0);

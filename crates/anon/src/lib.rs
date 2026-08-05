@@ -31,7 +31,10 @@ fn rules() -> &'static [Rule] {
             placeholder: ph,
         };
         vec![
-            r(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", "<EMAIL>"),
+            r(
+                r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
+                "<EMAIL>",
+            ),
             r(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b", "<IBAN>"),
             r(r"\b\d{3}-\d{2}-\d{4}\b", "<SSN>"),
             r(r"\bsk-[A-Za-z0-9_\-]{16,}\b", "<SECRET>"),
