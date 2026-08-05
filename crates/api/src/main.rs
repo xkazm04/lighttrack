@@ -218,20 +218,15 @@ async fn main() -> anyhow::Result<()> {
 
             // Seed the price book from pricing.json on first run; thereafter the DB is the source of truth.
             if store.list_prices()?.is_empty() {
-                let seed = match std::fs::read_to_string(&pricing) {
-                    Ok(s) => PriceBook::from_json_str(&s).unwrap_or_else(|e| {
-                        tracing::warn!(path = %pricing, error = %e, "pricing parse error; seeding an empty price book");
-                        PriceBook::default()
-                    }),
-                    Err(_) => {
-                        tracing::warn!(path = %pricing, "pricing file not found; seeding an empty price book");
-                        PriceBook::default()
-                    }
-                };
+                let (seed, from) = crate::prices::seed_book(&pricing);
                 for row in seed.rows() {
                     store.upsert_price(&row)?;
                 }
-                tracing::info!(count = seed.len(), "seeded model prices into the DB");
+                let source = match from {
+                    crate::prices::PriceSeed::File => pricing.clone(),
+                    crate::prices::PriceSeed::Embedded => "compiled-in default".to_string(),
+                };
+                tracing::info!(count = seed.len(), source = %source, "seeded model prices into the DB");
             }
             let book = PriceBook::from_rows(&store.list_prices()?);
             // Warm the per-project persistence-policy cache here too: this closure is the one
