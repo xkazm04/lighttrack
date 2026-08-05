@@ -35,7 +35,7 @@ your laptop or any cloud.
 Two commands, no signup, no config. This is the whole loop — send a call, get it back priced.
 
 ```bash
-docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/lighttrack:v0.0.6
+docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/lighttrack:v0.0.7
 
 curl -X POST localhost:8787/v1/events -H 'content-type: application/json' \
   -d '{"provider":"openai","model":"gpt-4o-mini","operation":"chat","status":"success",
@@ -59,7 +59,7 @@ one) — without either, an event has nothing to attribute to.
 
 ### Container (published & public)
 ```bash
-docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/lighttrack:v0.0.6
+docker run -p 8787:8787 -v lt-data:/data ghcr.io/xkazm04/lighttrack:v0.0.7
 curl localhost:8787/health        # -> ok
 ```
 The image bundles **all backends** (SQLite by default; set `LIGHTTRACK_DATABASE_URL` for
@@ -155,7 +155,7 @@ and mount the **directory**, not the single file. Reads come from a connection p
   client (see below).
 
 ## Status
-**v0.0.6 — early but functional, and published** (latest tag on the
+**v0.0.7 — early but functional, and published** (latest tag on the
 [Releases](https://github.com/xkazm04/lighttrack/releases) page). Implemented: the core data plane
 (events / traces / cost / limits / scores), **all three store backends** (SQLite / Postgres /
 Firestore), the multi-provider judge + benchmark engine, scheduled online sampling
