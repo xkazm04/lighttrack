@@ -69,17 +69,91 @@ pub(crate) fn ensure_can_admin(p: &Principal) -> Result<(), ApiError> {
     }
 }
 
+/// Where a keyless dev-mode caller's events land when they name no project. Dev mode only — see
+/// [`resolve_ingest_project`].
+pub(crate) const DEV_DEFAULT_PROJECT: &str = "default";
+
+/// The 400 for an ingest that cannot be attributed to any project. Names both fixes, because the
+/// failure is silent from the caller's side (the SDKs buffer and swallow it) and "project_id is
+/// required" told nobody *how* to supply one.
+pub(crate) const NO_PROJECT_MSG: &str =
+    "project_id is required: set it on the event (SDKs read LIGHTTRACK_PROJECT), or present a \
+     project API key — POST /v1/projects then POST /v1/projects/:id/keys — which derives the \
+     project server-side";
+
 /// Which project an ingested event belongs to. A project key forces its own project.
 pub(crate) fn resolve_ingest_project(p: &Principal, body_project: &str) -> Result<String, ApiError> {
     match p {
         Principal::Project { project_id, .. } => Ok(project_id.clone()),
+        // The zero-config first run: dev mode, no key, no project named. Rejecting it with a 400 is
+        // what made the documented quickstart fail *silently* — the SDKs swallow the error, so the
+        // user sees no events and no reason. Attribute it to a real default project instead.
+        //
+        // This cannot widen enforced-mode behaviour: `authenticate` only ever produces
+        // `Principal::Dev` under `AuthMode::Dev` (enforced mode 401s a missing/unknown token long
+        // before here), and an `Admin` principal — the one identity that exists in both modes —
+        // still falls through to the 400 below.
+        Principal::Dev if body_project.trim().is_empty() => Ok(DEV_DEFAULT_PROJECT.to_string()),
         Principal::Admin | Principal::Dev => {
             if body_project.trim().is_empty() {
-                Err(ApiError::bad_request("project_id is required"))
+                Err(ApiError::bad_request(NO_PROJECT_MSG))
             } else {
                 Ok(body_project.to_string())
             }
         }
+    }
+}
+
+/// [`resolve_ingest_project`] for the event front doors, plus the create-if-missing that makes the
+/// dev default a *real* row in the project registry.
+///
+/// The store read costs one extra query, but only on the path that took the dev default (dev mode,
+/// no key, no project named) — keyed and explicitly-projected ingest never reaches it.
+pub(crate) async fn resolve_ingest_project_ensuring(
+    st: &AppState,
+    p: &Principal,
+    body_project: &str,
+) -> Result<String, ApiError> {
+    let pid = resolve_ingest_project(p, body_project)?;
+    if matches!(p, Principal::Dev) && body_project.trim().is_empty() {
+        ensure_dev_default_project(st).await;
+    }
+    Ok(pid)
+}
+
+/// Create [`DEV_DEFAULT_PROJECT`] if it isn't there yet, and say so once — on stderr, so an operator
+/// who named no project can find where their events went.
+///
+/// Best-effort by design: no ingest step depends on the row existing (an event carries its own
+/// `project_id` and there is no foreign key), so a failure here — including losing the create race
+/// to a concurrent first event — must never turn a good event into an error. The row exists so the
+/// project shows up in `GET /v1/projects`, can be given limits, and can be opened in the UI.
+async fn ensure_dev_default_project(st: &AppState) {
+    let store = st.store.clone();
+    match spawn_db(move || store.get_project(DEV_DEFAULT_PROJECT)).await {
+        Ok(Some(_)) => return,
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("[DEV] could not look up project '{DEV_DEFAULT_PROJECT}': {e}");
+            return;
+        }
+    }
+    let proj = lighttrack_core::Project {
+        id: DEV_DEFAULT_PROJECT.to_string(),
+        name: DEV_DEFAULT_PROJECT.to_string(),
+        enabled: true,
+        redaction: lighttrack_core::Redaction::None,
+        collective_opt_in: false,
+        created_at: Utc::now(),
+    };
+    match crate::projects::insert_project(st, &proj).await {
+        Ok(()) => eprintln!(
+            "[DEV] an event arrived with no project_id and no API key: created project \
+             '{DEV_DEFAULT_PROJECT}' and attributed it there. Set project_id on the event (SDKs \
+             read LIGHTTRACK_PROJECT) or mint a project key to send it elsewhere. Dev mode only — \
+             under LIGHTTRACK_AUTH_MODE=enforced this request would be a 400."
+        ),
+        Err(e) => eprintln!("[DEV] could not create project '{DEV_DEFAULT_PROJECT}': {e}"),
     }
 }
 
@@ -98,5 +172,46 @@ pub(crate) fn resolve_read_project(
             Ok(Some(pid.clone()))
         }
         Principal::Admin | Principal::Dev => Ok(requested.map(str::to_string)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project_principal() -> Principal {
+        Principal::Project { project_id: "proj-a".into(), key_id: "key-1".into() }
+    }
+
+    /// `ApiError` is deliberately not `Debug` (it is a wire envelope, not a diagnostic), so flatten
+    /// it to its `Display` form for assertions.
+    fn resolved(p: &Principal, body: &str) -> Result<String, String> {
+        resolve_ingest_project(p, body).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn dev_principal_falls_back_to_the_default_project_but_admin_never_does() {
+        // The dev fallback exists so the documented first run works; it is reachable ONLY through
+        // `Principal::Dev`, which `authenticate` produces only under `AuthMode::Dev`.
+        assert_eq!(resolved(&Principal::Dev, "").unwrap(), DEV_DEFAULT_PROJECT);
+        assert_eq!(resolved(&Principal::Dev, "   ").unwrap(), DEV_DEFAULT_PROJECT);
+        // A named project still wins — the default never overrides an explicit one.
+        assert_eq!(resolved(&Principal::Dev, "mine").unwrap(), "mine");
+
+        // Admin is the one principal that exists in BOTH modes, so it must keep refusing: this is
+        // what stops the dev convenience from leaking into an enforced deployment.
+        assert_eq!(
+            resolved(&Principal::Admin, "").unwrap_err(),
+            format!("bad_request: {NO_PROJECT_MSG}")
+        );
+        assert!(resolved(&Principal::Admin, " ").is_err());
+        assert_eq!(resolved(&Principal::Admin, "mine").unwrap(), "mine");
+    }
+
+    #[test]
+    fn a_project_key_forces_its_own_project() {
+        // Unchanged by the dev fallback: a key ignores the body, blank or not.
+        assert_eq!(resolved(&project_principal(), "").unwrap(), "proj-a");
+        assert_eq!(resolved(&project_principal(), "proj-b").unwrap(), "proj-a");
     }
 }

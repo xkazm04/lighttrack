@@ -17,7 +17,7 @@ use lighttrack_store::{Admission, StoreError};
 use crate::error::ApiError;
 use crate::events::{breach_reason, on_admission, prepare_event, same_logical_event};
 use crate::events_validate;
-use crate::guards::{authenticate, resolve_ingest_project};
+use crate::guards::{authenticate, resolve_ingest_project_ensuring, NO_PROJECT_MSG};
 use crate::state::{spawn_db, AppState};
 
 /// One item's outcome, tagged so a client can branch on `status`:
@@ -107,15 +107,17 @@ pub(crate) async fn post_batch(
     let mut valid_idx: Vec<usize> = Vec::new();
     for (i, mut ev) in evs.into_iter().enumerate() {
         let item_id = (!ev.id.is_empty()).then(|| ev.id.clone());
-        let pid = match resolve_ingest_project(&principal, &ev.project_id) {
+        // Same resolution as the single-event door, dev default included: a batching SDK must not be
+        // the one client that still fails silently on a zero-config first run.
+        let pid = match resolve_ingest_project_ensuring(&st, &principal, &ev.project_id).await {
             Ok(p) => p,
-            // The only failure mode: an admin/dev caller left project_id blank on this item.
+            // The only failure mode: an admin (or an enforced-mode caller) left project_id blank.
             Err(_) => {
                 results.push(Some(BatchItem::Invalid {
                     index: i,
                     id: item_id,
                     code: "bad_request",
-                    reason: "project_id is required".to_string(),
+                    reason: NO_PROJECT_MSG.to_string(),
                 }));
                 continue;
             }

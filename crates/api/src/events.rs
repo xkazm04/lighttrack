@@ -16,7 +16,7 @@ use lighttrack_store::{Admission, CostRow, EventFilter, StoreError, UseCaseCostR
 use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::events_validate::{policy, Rejection};
-use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
+use crate::guards::{authenticate, resolve_ingest_project_ensuring, resolve_read_project};
 use crate::state::{spawn_db, AppState};
 
 /// Scope one event to its project, validate it, enforce the project's payload-persistence policy,
@@ -316,7 +316,7 @@ pub(crate) async fn post_event(
     Json(mut ev): Json<LlmEvent>,
 ) -> Result<Json<IngestResponse>, ApiError> {
     let principal = authenticate(&st, &headers).await?;
-    let pid = resolve_ingest_project(&principal, &ev.project_id)?;
+    let pid = resolve_ingest_project_ensuring(&st, &principal, &ev.project_id).await?;
     let persistence = crate::state::redaction_policy_for(&st, &pid).await?;
     prepare_event(&st, &mut ev, &pid, principal.key_id(), persistence)?;
 

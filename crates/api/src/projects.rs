@@ -39,13 +39,20 @@ pub(crate) async fn create_project(
         collective_opt_in: req.collective_opt_in,
         created_at: Utc::now(),
     };
+    insert_project(&st, &proj).await?;
+    Ok(Json(proj))
+}
+
+/// Write a project row and prime the ingest-path policy cache — the two steps that must always
+/// happen together, so a project's persistence policy (hash/drop) is enforced from its very first
+/// event rather than from the next cache expiry. Shared by the admin endpoint above and the
+/// dev-default bootstrap in [`crate::guards`], so there is one creation path, not two.
+pub(crate) async fn insert_project(st: &AppState, proj: &Project) -> Result<(), ApiError> {
     let store = st.store.clone();
     let pc = proj.clone();
     spawn_db(move || store.create_project(&pc)).await?;
-    // Keep the ingest-path policy cache current, so the new project's persistence policy (hash/drop)
-    // is enforced from its very first event.
     st.redaction_policies.put(&proj.id, proj.redaction);
-    Ok(Json(proj))
+    Ok(())
 }
 
 /// Mutable fields of a project. Every field is optional: an omitted one is left as-is, so a caller

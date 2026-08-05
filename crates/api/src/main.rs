@@ -136,6 +136,8 @@ mod traces;
 #[cfg(test)]
 mod tests_collective;
 #[cfg(test)]
+mod tests_dev_mode;
+#[cfg(test)]
 mod tests_forecast;
 #[cfg(test)]
 mod tests_ingest;
