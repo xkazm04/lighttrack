@@ -72,16 +72,22 @@ class Diagnostics:
 
 
 def no_project_message(base_url: str) -> str:
-    """The first-run trap: no project *and* no API key, so the server cannot infer one and will
-    reject every event with 400. Detected before the network call, so the user is told immediately.
+    """No project *and* no API key: the server has nothing to attribute these events to, so where
+    they land depends on how it is configured. Reported before the network call, so the user learns
+    it on the very first call rather than after a round trip.
+
+    Deliberately not phrased as a failure. A dev-mode server files unattributed events under a
+    `default` project, so this is a "you may not be getting what you expect" notice, not an error;
+    only an authenticating server actually turns them away.
 
     Messages stay ASCII-only: they are written to whatever console the host app happens to have, and
     a cp1252 Windows terminal turns a stray em dash into mojibake."""
     return (
-        "events are being dropped: no project is configured, and without an API key the server "
-        "cannot infer one, so it will reject them with HTTP 400 'project_id is required'. Fix: set "
-        "LIGHTTRACK_PROJECT=<your-project-id> (or LightTrack(project='...')), or set LIGHTTRACK_KEY "
-        f"to a project API key, which pins the project server-side. Target: {base_url}"
+        "no project is configured, so these events are not attributed: a dev-mode server files them "
+        "under the 'default' project, and a server with authentication enabled rejects them. To "
+        "choose where they land, set LIGHTTRACK_PROJECT=<your-project-id> (or "
+        "LightTrack(project='...')), or set LIGHTTRACK_KEY to a project API key, which pins the "
+        f"project server-side. Target: {base_url}"
     )
 
 

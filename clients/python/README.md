@@ -12,13 +12,14 @@ pip install ./clients/python      # or: pip install lighttrack-client (once publ
 
 ## Configure
 
-**Every event needs a project.** The server derives it from a project key, or takes it from the
-event — so with no key you must set `LIGHTTRACK_PROJECT`, or ingest fails with
-`400 project_id is required`. Set one of these before your first call:
+**Where do my events land?** Every event is attributed to a project. A **project key** pins it
+server-side; otherwise the event has to name one. With neither, a **dev-mode** server files events
+under a `default` project — fine for a first run — while a server with **authentication enabled**
+rejects them. Set one of these as soon as you want events somewhere specific:
 
 ```bash
 export LIGHTTRACK_URL=http://127.0.0.1:8787   # default; override for a remote server
-export LIGHTTRACK_PROJECT=demo                # required in dev mode / with an admin key
+export LIGHTTRACK_PROJECT=demo                # choose the project (also needed with an admin key)
 # ...or instead: export LIGHTTRACK_KEY=lt_...  # a project key pins the project server-side
 ```
 
@@ -46,12 +47,12 @@ automatically. See `example.py` for a runnable demo and the repo's `clients/READ
 (never stdout, which your app may be using as a protocol channel):
 
 ```
-[lighttrack] events are being dropped: no project is configured, and without an API key the server
-cannot infer one, so it will reject them with HTTP 400 'project_id is required'. Fix: set
-LIGHTTRACK_PROJECT=<your-project-id> ...
+[lighttrack] no project is configured, so these events are not attributed: a dev-mode server files
+them under the 'default' project, and a server with authentication enabled rejects them. To choose
+where they land, set LIGHTTRACK_PROJECT=<your-project-id> ...
 ```
 
-That case is detected *before* the request, so it appears on your very first `track*`. Warnings are
+That case is reported *before* the request, so it appears on your very first `track*`. Warnings are
 rate-limited to one line per error kind per 60 s, so a hot loop costs one line, not thousands.
 
 Silence them with `LIGHTTRACK_QUIET=1` or `LightTrack(quiet=True)`.

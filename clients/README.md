@@ -58,13 +58,14 @@ Read from the environment (or pass explicitly to the constructor):
 - `LIGHTTRACK_URL` — API base URL (default `http://127.0.0.1:8787`).
 - `LIGHTTRACK_KEY` — a project or admin key (`Bearer`). With a **project key**, the project is
   derived server-side. Empty values are ignored.
-- `LIGHTTRACK_PROJECT` — project id to stamp on events. **Required** in dev mode (no key) or when
-  using an **admin key**; ignored when a project key already pins the project.
+- `LIGHTTRACK_PROJECT` — project id to stamp on events. Needed when using an **admin key**, and the
+  way to choose a project in dev mode; ignored when a project key already pins the project.
 - `LIGHTTRACK_QUIET` — set to `1` to silence the SDK's failure diagnostics (see below).
 
-**Every event needs a project.** The server derives it from a project key, or takes it from the
-event — so with no key you must set `LIGHTTRACK_PROJECT`, or ingest fails with
-`400 project_id is required`. The minimum that works:
+**Where do my events land?** Every event is attributed to a project. A **project key** pins it
+server-side; otherwise the event has to name one. With neither, a **dev-mode** server files events
+under a `default` project — fine for a first run — while a server with **authentication enabled**
+rejects them. So set one of these as soon as you want events somewhere specific:
 
 ```bash
 export LIGHTTRACK_URL=http://127.0.0.1:8787
@@ -78,14 +79,13 @@ writes one actionable line to stderr (`console.warn` in TypeScript, never stdout
 cause and the fix:
 
 ```
-[lighttrack] events are being dropped: no project is configured, and without an API key the server
-cannot infer one, so it will reject them with HTTP 400 'project_id is required'. Fix: set
-LIGHTTRACK_PROJECT=<your-project-id> ...
+[lighttrack] event not sent to http://127.0.0.1:8787/v1/events: HTTP 400 project_id is required...
+The server has no project for this event. Fix: set LIGHTTRACK_PROJECT=<your-project-id> ...
 ```
 
-The unconfigured-project case is caught **before** the network call, so it surfaces on the very first
-`track*`. Warnings are rate-limited to **one line per error kind per 60 s** (a repeat reports how many
-were suppressed), so a hot loop of failing calls costs one line, not thousands.
+The unattributed-project case is reported **before** the network call, so it surfaces on the very
+first `track*`. Warnings are rate-limited to **one line per error kind per 60 s** (a repeat reports
+how many were suppressed), so a hot loop of failing calls costs one line, not thousands.
 
 To turn them off entirely: `LIGHTTRACK_QUIET=1`, or per client — `LightTrack(quiet=True)` (Python),
 `new LightTrack({ quiet: true })` (TypeScript), `Client::from_env().quiet(true)` (Rust).
