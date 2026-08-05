@@ -40,7 +40,7 @@ pub(crate) fn list(
         .into_iter()
         .filter(|r| recognizable(r, since, until))
         .collect();
-    out.sort_by(|a, b| b.ts.cmp(&a.ts));
+    out.sort_by_key(|r| std::cmp::Reverse(r.ts));
     Ok(out)
 }
 

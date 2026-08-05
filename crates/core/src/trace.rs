@@ -295,7 +295,7 @@ impl Trace {
             return None;
         }
         // Oldest first: drives chronological child ordering and first-seen model order.
-        events.sort_by(|a, b| a.ts.cmp(&b.ts));
+        events.sort_by_key(|a| a.ts);
 
         let trace_id = events
             .iter()
