@@ -83,11 +83,19 @@ by `trace_id` and refuses with **501 `unsupported`** (see `docs/FIRESTORE.md`) �
 ## `projects`
 | Field | Type | Notes |
 |---|---|---|
-| `id` | string | |
+| `id` | string | caller-choosable at create; else a server-minted UUID (see below) |
 | `name` | string | |
 | `enabled` | bool | |
 | `redaction` | string | `none` \| `hash` \| `drop` — how to store prompts/outputs |
 | `created_at` | timestamp | immutable |
+
+`POST /v1/projects` accepts an optional `id` and uses it verbatim; omit it and the server mints a
+UUID. A supplied id must be 1–64 characters, first an ASCII letter or digit, then letters, digits,
+`-`, `_` or `.` — the alphabet that is unambiguous in a URL path segment, a `?project=` value, a
+`LIGHTTRACK_PROJECT` env var and a Firestore document id at once. A malformed id is a `400` naming
+the rule; an id already taken is a `409`. It is never silently replaced, because the id is what the
+caller must type into the very next request (`POST /v1/projects/<id>/keys`) — the dev-mode bootstrap
+already creates a readable `default` project, and this is the same privilege for everyone else.
 
 Mutable fields are editable via `PUT /v1/projects/:id` (admin; omitted fields are left as-is). The
 ingest path caches `redaction` per project so it doesn't pay a store read per event; because that field
