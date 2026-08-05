@@ -1,8 +1,8 @@
 //! Revenue records + LLM-cost-by-billing-dimension (profit tracking), Postgres backend.
 //!
 //! `metadata` is stored as a JSON string in a TEXT column (mirroring SQLite), so cost is grouped via
-//! `(metadata::jsonb)->>'customer_id'`. Summing `events.cost_usd` is COGS-correct by construction:
-//! judge/benchmark spend lives in `scores`, not `events`.
+//! `(NULLIF(metadata,'')::jsonb)->>'customer_id'`. Summing `events.cost_usd` is COGS-correct by
+//! construction: judge/benchmark spend lives in `scores`, not `events`.
 
 use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgRow};
@@ -79,6 +79,22 @@ fn dim_key(dim: &str) -> &'static str {
     }
 }
 
+/// The guarded extraction every `metadata` read in this crate uses. `::jsonb` **raises** on invalid
+/// JSON, and a raise here fails the whole margin/cost query rather than skewing one bucket — so the
+/// one malformed value a hand-edited or legacy row realistically carries, the empty string, is
+/// mapped to NULL first. Identical to `events::cols::USAGE_COLS` and `events::usage::scope_expr`;
+/// see the note in `events/cols.rs` for why the guard stops at `NULLIF` and no wider.
+const META: &str = "NULLIF(metadata,'')::jsonb";
+
+fn cost_sql(key: &str) -> String {
+    format!(
+        "SELECT ({META})->>'{key}' AS k, COUNT(*)::bigint AS calls, \
+         COALESCE(SUM(cost_usd),0.0) AS cost FROM events \
+         WHERE ($1::text IS NULL OR project_id = $1) AND ts >= $2 AND ts < $3 \
+         GROUP BY ({META})->>'{key}'"
+    )
+}
+
 pub(crate) async fn cost_by_dimension(
     pool: &PgPool,
     project: Option<&str>,
@@ -86,13 +102,7 @@ pub(crate) async fn cost_by_dimension(
     since: DateTime<Utc>,
     until: DateTime<Utc>,
 ) -> Result<Vec<CostByDimension>> {
-    let key = dim_key(dim);
-    let sql = format!(
-        "SELECT (metadata::jsonb)->>'{key}' AS k, COUNT(*)::bigint AS calls, \
-         COALESCE(SUM(cost_usd),0.0) AS cost FROM events \
-         WHERE ($1::text IS NULL OR project_id = $1) AND ts >= $2 AND ts < $3 \
-         GROUP BY (metadata::jsonb)->>'{key}'"
-    );
+    let sql = cost_sql(dim_key(dim));
     let rows = sqlx::query(&sql)
         .bind(project.map(|s| s.to_string()))
         .bind(fmt_ts(since))
@@ -159,5 +169,21 @@ mod tests {
         assert_eq!(dim_key(""), "customer_id");
         assert_eq!(dim_key("nonsense"), "customer_id");
         assert_eq!(dim_key("'; DROP TABLE events; --"), "customer_id");
+    }
+
+    /// `metadata::jsonb` **raises** on invalid JSON, so a bare cast lets one malformed row fail the
+    /// whole margin query — and it read differently here than on the events path, which has always
+    /// guarded with `NULLIF`. Both the projection and the `GROUP BY` must carry the guard: a
+    /// `GROUP BY` expression is evaluated over every candidate row, so guarding only the projection
+    /// fixes nothing. `tests/metadata_guard.rs` proves the behavior against a live Postgres.
+    #[test]
+    fn the_metadata_extraction_is_guarded_in_both_the_projection_and_the_group_by() {
+        let sql = cost_sql("customer_id");
+        assert_eq!(
+            sql.matches("NULLIF(metadata,'')::jsonb").count(),
+            2,
+            "{sql}"
+        );
+        assert!(!sql.contains("(metadata::jsonb)"), "bare cast: {sql}");
     }
 }
