@@ -190,3 +190,7 @@ powers the `lt` CLI (tables on a TTY; `--json` to opt out) and the `lt-runner be
   subscription — it meters against a separate monthly **Agent SDK credit** (Max 20x = $200/mo, no rollover)
   at API rates. LightTrack's judge runs against that credit. See [`docs/DECISIONS.md`](docs/DECISIONS.md).
 - The **judge engine is unbudgeted** by design; **limits apply only to monitored (incoming) traffic**.
+
+## License
+Dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option — the
+same `MIT OR Apache-2.0` the workspace and client SDK manifests declare.

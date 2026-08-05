@@ -18,7 +18,7 @@
     "test": "tsx --test src/*.test.ts"
   },
   "keywords": ["llm", "observability", "openai", "anthropic", "gemini", "lighttrack"],
-  "license": "MIT",
+  "license": "MIT OR Apache-2.0",
   "devDependencies": {
     "@types/node": "^20.0.0",
     "tsx": "^4.19.0",
