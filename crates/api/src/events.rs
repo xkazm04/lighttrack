@@ -447,16 +447,22 @@ pub(crate) struct EventsParams {
     cursor: Option<String>,
     /// When `1`/`true`, return only the most recent events that do not yet have a score (the online
     /// scorer's work list). Uses a scoped anti-join, so it stays correct however large `scores` grows;
-    /// ignores the filter/cursor params (project + limit only).
-    unscored: Option<bool>,
+    /// ignores the filter/cursor params (project + limit only). A string for the same reason as
+    /// `count` above — this was typed `bool` while the docs promised `1`, so the runner's
+    /// `?unscored=1` 400'd and online scoring could not make a single judge call.
+    unscored: Option<String>,
 }
 
-/// Whether a query-string flag reads as set: `1` / `true` / `yes` (case-insensitive).
+/// Whether a query-string flag reads as set: `1` / `true` / `yes`, case-insensitive (the doc said
+/// case-insensitive while the match arms only spelled out `TRUE`, so `True`/`Yes` were rejected).
+///
+/// Anything else — absent, `0`, `false`, or a typo — reads as *unset* rather than being a 400. These
+/// are opt-in flags: the honest answer to "I could not parse your flag" is the behaviour you get
+/// without the flag, and a hard reject would re-create the failure this helper exists to avoid.
 fn is_truthy(v: Option<&str>) -> bool {
-    matches!(
-        v.map(str::trim),
-        Some("1") | Some("true") | Some("TRUE") | Some("yes")
-    )
+    v.map(str::trim).is_some_and(|s| {
+        s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
+    })
 }
 
 /// Parse an optional RFC3339 query param into a UTC instant, 400 on malformed input.
@@ -517,7 +523,7 @@ pub(crate) async fn get_events(
 
     // Unscored work-list mode: a scoped anti-join (project + limit only), no filter/cursor. Bare
     // array, no next-cursor — the online scorer pages by re-asking after it has scored a batch.
-    if q.unscored == Some(true) {
+    if is_truthy(q.unscored.as_deref()) {
         let events =
             spawn_db(move || store.list_unscored_events(project.as_deref(), limit)).await?;
         return Ok(Json(events).into_response());

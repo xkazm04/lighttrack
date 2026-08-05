@@ -1226,6 +1226,92 @@ async fn events_can_be_asked_the_questions_that_matter_over_http() {
 }
 
 #[tokio::test]
+async fn the_unscored_work_list_accepts_every_spelling_its_docs_promise() {
+    // `unscored` was typed `Option<bool>` while its doc comment promised "`1`/`true`", so the
+    // runner's `GET /v1/events?unscored=1` — the one request online scoring makes — came back 400
+    // "provided string was not `true` or `false`". The headline feature could not judge a single
+    // event. Pin every spelling the docs promise, and pin that the flag still *filters*.
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    for id in ["scored-1", "todo-1"] {
+        let (s, b) = ingest(
+            &app,
+            &key,
+            json!({
+                "id": id, "provider": "anthropic", "model": "claude-haiku-4-5",
+                "usage": { "input": 1, "output": 1 }, "cost_usd": 0.01,
+                "input": { "q": "hi" }, "output": "there"
+            }),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{b}");
+    }
+    // Judge one of them, so the anti-join has something to exclude.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/scores")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {key}"))
+        .body(Body::from(
+            json!({
+                "event_id": "scored-1", "rubric": "helpfulness",
+                "value": 0.9, "scored_by": "claude-haiku-4-5"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    let ids = |v: &Value| {
+        let mut out: Vec<String> = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap().to_string())
+            .collect();
+        out.sort();
+        out
+    };
+
+    // Every spelling the doc comment promises reaches the work list — `1` above all, since that is
+    // what `lt-runner score` actually sends.
+    // `%201%20` = " 1 " — a flag surviving surrounding whitespace, which `is_truthy` trims.
+    for spelling in ["1", "true", "yes", "TRUE", "True", "Yes", "%201%20"] {
+        let (s, _, _, v) = query_events(&app, &key, &format!("unscored={spelling}")).await;
+        assert_eq!(s, StatusCode::OK, "unscored={spelling:?} must not 400: {v}");
+        assert_eq!(
+            ids(&v),
+            ["todo-1"],
+            "unscored={spelling:?} must return only the unjudged event"
+        );
+    }
+
+    // An unparseable value reads as *unset*, not as a 400: these are opt-in flags, and the honest
+    // answer to "I could not parse your flag" is the behaviour you get without it. Rejecting would
+    // rebuild the exact wall this fix tore down, on a param whose whole job is to be forgiving.
+    // (Contrast `status=nonsense`, which IS a 400 — there an unknown value would silently *narrow*
+    // the result set, so an empty page would lie. Here a false reading only *widens* it.)
+    for garbage in ["", "0", "false", "no", "ture", "%20"] {
+        let (s, _, _, v) = query_events(&app, &key, &format!("unscored={garbage}")).await;
+        assert_eq!(
+            s,
+            StatusCode::OK,
+            "unscored={garbage:?} reads as unset: {v}"
+        );
+        assert_eq!(
+            ids(&v),
+            ["scored-1", "todo-1"],
+            "unscored={garbage:?} must behave as though the flag were absent"
+        );
+    }
+}
+
+#[tokio::test]
 async fn duplicate_event_id_returns_409() {
     let (state, store) = setup(Redactor::off());
     let key = make_key(&store, "proj-a");
