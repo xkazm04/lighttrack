@@ -159,6 +159,26 @@ jobs:
           shared-key: ci
       - run: cargo test --workspace
 
+  # The Rust SDK is a DETACHED cargo project (its own empty `[workspace]`), depending on
+  # lighttrack-core by path. `cargo test --workspace` above therefore never touches it — which is
+  # precisely how it drifted out of compiling when core's Score and LlmEvent gained fields. It is a
+  # shipped artifact, so CI has to exercise it or nothing will.
+  clients-rust:
+    name: cargo test (rust sdk)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # reqwest pulls native-tls here too.
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/rust
+          shared-key: clients-rust
+      - run: cargo test --manifest-path clients/rust/Cargo.toml
+
   # ── Required checks ───────────────────────────────────────────────────────────────────────────
   # Both gates are BLOCKING. The pre-existing fmt/clippy debt these jobs were once advisory for is
   # gone: the tree is stock-rustfmt clean and `clippy -D warnings` passes workspace-wide across all
