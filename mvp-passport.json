@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "generatedAt": "2026-08-05",
   "generatedBy": "personas mvp",
-  "verdict": "go-with-risks",
+  "verdict": "go",
   "launchShape": "public-oss-self-host",
   "phases": {
     "P0": "partial",
@@ -155,17 +155,24 @@
       "note": "Product is telemetry-free, verified by grep across crates and clients. Adoption signal is GitHub counters only, currently zero."
     },
     "launch-gate": {
-      "level": "partial",
+      "level": "met",
       "tool": null,
       "skippedByChoice": false,
-      "acceptedPartial": true,
-      "note": "scripts/smoke.sh drives the real artifact through health, project, key, ingest, and a cost assertion; verified against a built image with six negative controls. It gates docker.yml pre-push, but docker.yml and release.yml only trigger on v* tags, so neither has executed on GitHub yet. Cutting the next tag is the first real test."
+      "acceptedPartial": false,
+      "note": "Proven on v0.0.7, the first successful release run in repo history. docker.yml smoke-gated both arch legs pre-push (real project, minted key, ingested event, cost_usd=0.00045 from the book on amd64 and arm64); release.yml built all four platforms including the first x86_64-apple-darwin asset ever shipped, and the verify job passed. The published Windows binary was then downloaded and run from a config-less directory: cost priced, source 'compiled-in default'."
     }
   },
+  "release": {
+    "latest": "v0.0.7",
+    "cutAt": "2026-08-05",
+    "assets": 4,
+    "imageTags": ["v0.0.7", "latest"],
+    "note": "latest and v0.0.7 share digest sha256:9581c137. First release with a complete four-platform asset set since v0.0.2."
+  },
   "acceptedRisks": [
-    "The tag-triggered pipeline (docker smoke gate, macos-15-intel release leg, release asset-verify job) has never run on GitHub. Cutting v0.0.7 is what proves it.",
-    "clippy is now a blocking gate against a floating stable toolchain, so a future Rust release can red-wall CI with no code change. This already happened once during the run (local 1.94 vs CI 1.97).",
+    "clippy is a blocking gate against a floating stable toolchain, so a future Rust release can red-wall CI with no code change. This happened once during the run (local 1.94 vs CI 1.97); the operator chose to accept it rather than pin.",
     "No rollback has been rehearsed, and no public production URL for LightTrack itself is verifiable from the repo.",
-    "No rate limiting on auth-bearing routes."
+    "No rate limiting on auth-bearing routes.",
+    "The Python and TypeScript SDKs are still unexercised by CI; only clients/rust has a job."
   ]
 }
