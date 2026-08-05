@@ -1735,11 +1735,23 @@ fn app_with_calls_rule(
     threshold: f64,
     warn_at: Option<f64>,
 ) -> (Router, String, Arc<SqliteStore>) {
+    app_with_calls_rule_id(&new_id(), action, threshold, warn_at)
+}
+
+/// [`app_with_calls_rule`] with the rule's **id** chosen by the caller. The shed lottery hashes
+/// `(rule_id, event_id)`, so a test that needs a decided verdict rather than a sampled one has to pin
+/// both halves — a random rule id makes the outcome a coin flip even with pinned events.
+fn app_with_calls_rule_id(
+    rule_id: &str,
+    action: LimitAction,
+    threshold: f64,
+    warn_at: Option<f64>,
+) -> (Router, String, Arc<SqliteStore>) {
     let (state, store) = setup(Redactor::off());
     let key = make_key(&store, "proj-a");
     store
         .create_limit_rule(&LimitRule {
-            id: new_id(),
+            id: rule_id.to_string(),
             project_id: "proj-a".into(),
             metric: LimitMetric::Calls,
             window: LimitWindow::Hour,
@@ -1865,10 +1877,24 @@ async fn a_shed_is_ledgered_and_is_never_confusable_with_server_overload() {
     // Shedding for *budget* is 429 `rate_limited`; shedding for *server saturation* is 503
     // `overloaded` (shed.rs). They must stay distinct — and a budget shed must still be attributed
     // in the rejection ledger, or the operator surface goes blind exactly when throttling engages.
-    let (app, key, _store) = app_with_calls_rule(LimitAction::Throttle, 10.0, Some(0.3));
+    //
+    // The shed verdict is a hash of `(rule_id, event_id)` (`core::limits::shed_ticket`), so **both**
+    // are pinned. With a random rule id and server-minted event ids this loop sheds nothing about 1
+    // run in 160 — and then asserts that nothing happened, a red build with no bug behind it.
+    //
+    // Pinned, the ladder is decided rather than sampled: usage including the candidate walks 1..9
+    // against a threshold of 10 with the ramp starting at 0.3, so the shed fraction each event faces
+    // is 0, 0, 0, 1/7, 2/7, 3/7, 4/7, 5/7, 5/7 — and these nine tickets clear or miss their own
+    // fraction by at least 0.40, admitting `ev-0`..`ev-6` and shedding `ev-7` and `ev-8` every time.
+    // If the ramp or the hash ever changes, re-pin (any pair whose tickets land the same way will
+    // do); do not weaken the assertion back into a sampled one.
+    let (app, key, _store) =
+        app_with_calls_rule_id("pinned-throttle-21", LimitAction::Throttle, 10.0, Some(0.3));
     let mut shed_seen = 0;
-    for _ in 0..9 {
-        let (s, _, body) = ingest_with_headers(&app, &key, one_call()).await;
+    for i in 0..9 {
+        let mut ev = one_call();
+        ev["id"] = json!(format!("ev-{i}"));
+        let (s, _, body) = ingest_with_headers(&app, &key, ev).await;
         if s == StatusCode::TOO_MANY_REQUESTS {
             shed_seen += 1;
             assert_eq!(
@@ -1878,7 +1904,10 @@ async fn a_shed_is_ledgered_and_is_never_confusable_with_server_overload() {
             assert_ne!(s, StatusCode::SERVICE_UNAVAILABLE);
         }
     }
-    assert!(shed_seen > 0);
+    assert_eq!(
+        shed_seen, 2,
+        "the pinned ladder sheds exactly ev-7 and ev-8"
+    );
 
     let (s, body) = get_limits_status(&app, &key, "proj-a").await;
     assert_eq!(s, StatusCode::OK);
