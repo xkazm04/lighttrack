@@ -553,6 +553,61 @@ async fn pii_is_redacted_before_the_row_is_stored() {
     assert!(stored.contains("<EMAIL>"), "redaction marker missing: {stored}");
 }
 
+/// The D14 behavior change, asserted through the wired router rather than the unit under it: an
+/// instance whose operator configured *nothing* scrubs PII on every ingest door, and the `hash`
+/// persistence policy still produces a usable digest under that default.
+#[tokio::test]
+async fn an_unconfigured_instance_scrubs_pii_on_every_ingest_door() {
+    let (state, store) = setup(Redactor::defaulted());
+    let key = make_key(&store, "proj-a");
+    let hash_key = make_key_with_redaction(&store, "proj-hash", Redaction::Hash);
+    let app = crate::build_router(state);
+
+    let pii = json!({
+        "provider": "anthropic", "model": "claude-haiku-4-5",
+        "usage": { "input": 10, "output": 5 }, "cost_usd": 0.0,
+        "input": { "q": "email jane@example.com" },
+        "output": "card 4111 1111 1111 1111",
+        "error": "upstream rejected jane@example.com",
+        "tags": ["cust:jane@example.com"]
+    });
+
+    // Door 1: POST /v1/events.
+    let (status, _) = ingest(&app, &key, pii.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Door 2: POST /v1/events/batch — same pipeline, so the same floor must apply.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/events/batch")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {key}"))
+        .body(Body::from(json!([pii]).to_string()))
+        .unwrap();
+    assert_eq!(app.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
+
+    let rows = store.list_events(Some("proj-a"), 10).unwrap();
+    assert_eq!(rows.len(), 2, "both doors stored an event");
+    for ev in &rows {
+        let stored = serde_json::to_string(ev).unwrap();
+        assert!(!stored.contains("jane@example.com"), "raw email persisted: {stored}");
+        assert!(!stored.contains("4111"), "raw card persisted: {stored}");
+        assert!(stored.contains("<EMAIL>"), "redaction marker missing: {stored}");
+    }
+
+    // A `hash` project keeps a real 64-hex digest: the scrub must not treat the digest it was handed
+    // as a secret and collapse every payload to the same marker (which is what "32+ hex chars is a
+    // secret" would do if the two layers were not ordered against each other).
+    let (status, _) = ingest(&app, &hash_key, pii).await;
+    assert_eq!(status, StatusCode::OK);
+    let ev = store.list_events(Some("proj-hash"), 10).unwrap().pop().unwrap();
+    let digest = ev.input.as_ref().and_then(|v| v.get("sha256")).and_then(Value::as_str);
+    assert_eq!(digest.map(str::len), Some(64), "hash policy lost its digest: {:?}", ev.input);
+    // …while the surfaces no persistence policy covers are still scrubbed.
+    assert!(!ev.error.as_deref().unwrap_or_default().contains("jane@example.com"));
+    assert!(!ev.tags.iter().any(|t| t.contains("jane@example.com")));
+}
+
 #[tokio::test]
 async fn enforcing_actions_reject_ingest_and_do_not_store() {
     // Both enforcing actions reject the over-cap event with HTTP 429 and never record it.

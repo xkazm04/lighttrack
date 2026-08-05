@@ -41,16 +41,21 @@ pub(crate) fn prepare_event(
     normalize_ids(ev);
     stamp_api_key(ev, key_id);
     policy().validate(ev, now)?;
+    // Both redaction lines below are `debug`, not `info`: they fire once per ingested event, and with
+    // the PII scrub now on by default (D14) an `info` line per event would be the single loudest thing
+    // in the log. That redaction is running belongs in the startup posture line, not in a per-event
+    // repeat; at `debug` they are still there when you are chasing a mangled payload.
+    //
     // 1. The project's stored persistence policy (hash/drop) — the setting the projects API accepts
     // and the operator table displays, now actually enforced. Applied before the PII scrub: `drop`
     // removes the payloads outright; `hash` leaves nothing scrubbable.
     if crate::redact::apply_policy(ev, persistence) {
-        eprintln!("[REDACT] project={pid} event={} applied persistence policy {persistence:?}", ev.id);
+        tracing::debug!(project_id = %pid, event_id = %ev.id, policy = ?persistence, "applied payload persistence policy");
     }
-    // 2. Optional env-configured floor: scrub structured PII from what remains before it is stored.
-    let redacted = st.redact.redact_event(ev);
+    // 2. Env-configured floor: scrub structured PII from what remains before it is stored.
+    let redacted = st.redact.redact_event(ev, persistence);
     if redacted > 0 {
-        eprintln!("[REDACT] project={pid} event={} redacted {redacted} PII span(s)", ev.id);
+        tracing::debug!(project_id = %pid, event_id = %ev.id, spans = redacted, "scrubbed PII spans from an ingested event");
     }
     let client_supplied = ev.cost_usd.is_some();
     {

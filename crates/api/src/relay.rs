@@ -253,7 +253,23 @@ pub(crate) async fn post_result(
     // flat relay price (docs/RELAY.md). Always recorded — enforcing limits exist to cap metered
     // spend, and this run already happened on the flat-rate subscription. Deferred ⇒ no run.
     if prior.status == "leased" && req.status != "deferred" {
-        let ev = relay_run_event(&st, &task, &req);
+        let mut ev = relay_run_event(&st, &task, &req);
+        // This is the one door that writes an event without going through `events::prepare_event`,
+        // and that is deliberate: the event is server-generated, so it needs no validation, costing
+        // or limit admission (see below). What it does carry is `error` — device-supplied free text
+        // that routinely echoes the task payload it failed on — so the PII scrub every other door
+        // applies has to be applied here explicitly, or `docs/RELAY.md`'s claim that "ingest
+        // redaction applies" is false exactly where a failure dumps the payload into the DB.
+        let redacted = st.redact.redact_event(&mut ev, lighttrack_core::Redaction::None);
+        if redacted > 0 {
+            tracing::debug!(
+                project_id = %ev.project_id,
+                event_id = %ev.id,
+                task_id = %task.id,
+                spans = redacted,
+                "scrubbed PII from a relay run event",
+            );
+        }
         let store = st.store.clone();
         spawn_db(move || store.insert_event(&ev)).await?;
         // A failure that exhausted the attempts just dead-lettered the task — page the owner.

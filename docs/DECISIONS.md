@@ -187,3 +187,41 @@ trace now reads **404, not 403** (it is invisible, which also removes the existe
 project-scoped SQLite read carries an `INDEXED BY idx_events_project_trace` — left free the planner
 picks `idx_events_project_ts` (it satisfies `ORDER BY ts` without a sort) and filters `trace_id` across
 the whole project, which is the wrong shape for a trace read.
+
+## D14 — Ingest scrubs PII unless an operator says otherwise (2026-08-05)
+
+`LIGHTTRACK_REDACT_INGEST` defaulted to `off`. An operator who deployed LightTrack and configured
+nothing therefore stored every captured `input`, `output`, `error` and `tag` exactly as the application
+sent it — emails, card numbers, whatever was in the prompt — and found out about it at a compliance
+questionnaire rather than at boot. That is the wrong shape for a *self-hosted* tool: the person who
+never read `redact.rs` is precisely the person the default has to protect, and "we didn't tell it to
+keep your customers' PII, it just did" is not a defensible position for an observability product.
+
+**Unset now means scrub every project.** `off` still exists and still means off, so an operator who
+wants raw text (debugging exact prompts, a regulated environment with its own controls, a dataset
+build that needs the original) keeps it with one env var — the difference is that storing raw PII is
+now a decision someone made, not one nobody made. `all` / a CSV of project ids are unchanged. An
+exported-but-empty value takes the safe default too: `LIGHTTRACK_REDACT_INGEST=${MISSING}` in a
+Compose file is an accident, not consent.
+
+*This is a behavior change for existing deployments*, including instances already carrying production
+traffic, so it is announced rather than slipped in: `Redactor::log_posture` writes one line at every
+boot saying which posture is active and whether it came from the default (`info` when scrubbing,
+`warn` when off — the configuration that puts raw customer PII in a database should be the loud one).
+Nothing rewrites history: rows already stored are untouched, and a deployment that wants the old
+behavior sets `off` and gets it on the next restart.
+
+*One coupling had to be fixed for this to be safe.* The PII scrub treats 32+ hex characters as a
+secret, and the `hash` persistence policy stores payloads as a 64-char sha256 digest — so with
+scrubbing on, every hashed payload collapsed to the same `<SECRET>` marker and `hash`'s entire promise
+(presence and change-detection without content) silently evaporated. Latent before, because it needed
+an operator to opt into both; the default flip would have made it the *standard* pairing. The two
+layers are now ordered against each other: `Redactor::redact_event` takes the persistence policy and
+skips the payloads when the policy already replaced them, while still scrubbing `error` and `tags`,
+which no persistence policy covers.
+
+*Implication:* every ingest door must go through the scrub, not just the plain one. `POST /v1/events`,
+`POST /v1/events/batch` and the OTLP `POST /v1/traces` already shared `events::prepare_event`; the
+relay-settle path (`POST /v1/relay/tasks/:id/result`) wrote its run event straight to the store and
+was bypassing it, which made `docs/RELAY.md`'s claim that "ingest redaction applies" false exactly
+where a device failure dumps the payload it failed on into `error`. It now scrubs explicitly.

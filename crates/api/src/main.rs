@@ -93,7 +93,8 @@
 //!      LIGHTTRACK_BENCH_WEBHOOK (benchmark-run completion webhook; falls back to LIGHTTRACK_ALERT_WEBHOOK),
 //!      LIGHTTRACK_LOG (level or full tracing filter directive; default `info`, falls back to RUST_LOG),
 //!      LIGHTTRACK_LOG_FORMAT (json — the default, one indexed JSON object per line on stdout — | text),
-//!      LIGHTTRACK_REDACT_INGEST (off | all | csv of project_ids — scrub PII from input/output; see redact),
+//!      LIGHTTRACK_REDACT_INGEST (unset/all = scrub PII from every project — the DEFAULT since D14 —
+//!        | off = store client text verbatim | csv of project_ids = scrub only those; see redact),
 //!      LIGHTTRACK_COLLECTIVE_ID (opaque source id — hashed before contribution),
 //!      LIGHTTRACK_COLLECTIVE_ACCEPT (1|true — this instance is a leaderboard hub; off by default),
 //!      LIGHTTRACK_COLLECTIVE_ALLOW_ANON (1|true — hub accepts keyless pushes under one shared
@@ -296,6 +297,9 @@ async fn main() -> anyhow::Result<()> {
         "lighttrack-api v{} listening on http://{bind}",
         env!("CARGO_PKG_VERSION"),
     );
+    // Redaction is a *storage* posture: what an operator believes is in the DB has to match what is
+    // actually in it, and the default changed (D14). Its own line, at a level that matches the risk.
+    state.redact.log_posture();
     // `auth=Dev` in the banner above is one field among many; an unauthenticated server deserves a
     // block you cannot skim past, so that one stays a raw multi-line stderr shout rather than
     // becoming a JSON string with `\n`s in it.
