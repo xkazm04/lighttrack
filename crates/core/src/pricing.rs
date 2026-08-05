@@ -213,7 +213,7 @@ impl PriceBook {
         let mut best: Option<(u64, &ModelPrice)> = None;
         for (k, v) in &self.entries {
             if let Some(n) = k.strip_prefix(&prefix).and_then(|s| s.parse::<u64>().ok()) {
-                if input_tokens > n && best.map_or(true, |(b, _)| n > b) {
+                if input_tokens > n && best.is_none_or(|(b, _)| n > b) {
                     best = Some((n, v));
                 }
             }

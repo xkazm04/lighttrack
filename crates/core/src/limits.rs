@@ -119,37 +119,27 @@ impl LimitScope {
 /// Whether a rule's optional scope admits an event with these dimensions. `None` (unscoped) always
 /// matches — identical to pre-scope behavior.
 pub fn scope_matches(scope: Option<&LimitScope>, dims: &ScopeDims<'_>) -> bool {
-    scope.map_or(true, |s| s.matches(dims))
+    scope.is_none_or(|s| s.matches(dims))
 }
 
 /// What a limit measures over its window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LimitMetric {
+    #[default]
     CostUsd,
     Calls,
     Tokens,
 }
 
-impl Default for LimitMetric {
-    fn default() -> Self {
-        LimitMetric::CostUsd
-    }
-}
-
 /// Rolling window a limit is evaluated over.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LimitWindow {
     Hour,
+    #[default]
     Day,
     Month,
-}
-
-impl Default for LimitWindow {
-    fn default() -> Self {
-        LimitWindow::Day
-    }
 }
 
 impl LimitWindow {
@@ -193,18 +183,13 @@ impl LimitWindow {
 ///
 /// Both enforcing tiers reject at ingest admission (the event is not recorded). Inline *pre-call*
 /// blocking still requires the future gateway/proxy mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LimitAction {
+    #[default]
     Alert,
     Throttle,
     Block,
-}
-
-impl Default for LimitAction {
-    fn default() -> Self {
-        LimitAction::Alert
-    }
 }
 
 impl LimitAction {

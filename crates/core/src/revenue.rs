@@ -3,23 +3,18 @@ use serde::{Deserialize, Serialize};
 
 /// How a revenue record is recognized. `amount_usd` is always a non-negative magnitude; `Refund`
 /// flips its sign at recognition time, so refunds/credits reduce recognized revenue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RevenueKind {
     /// Recurring subscription; amortized across `[period_start, period_end]`.
     Subscription,
     /// One-off charge recognized at `ts`.
+    #[default]
     OneTime,
     /// Usage-based charge recognized at `ts`.
     Usage,
     /// Refund/credit — subtracts from recognized revenue.
     Refund,
-}
-
-impl Default for RevenueKind {
-    fn default() -> Self {
-        RevenueKind::OneTime
-    }
 }
 
 impl RevenueKind {

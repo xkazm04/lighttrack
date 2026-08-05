@@ -122,8 +122,7 @@ pub(super) fn scored_event_ids(conn: &Connection, event_ids: &[String]) -> Resul
     if event_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = std::iter::repeat("?")
-        .take(event_ids.len())
+    let placeholders = std::iter::repeat_n("?", event_ids.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!("SELECT DISTINCT event_id FROM scores WHERE event_id IN ({placeholders})");

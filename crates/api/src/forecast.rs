@@ -5,6 +5,7 @@
 //! trending unprofitable?* The math is pure ([`lighttrack_core::forecast`]); this module is wiring —
 //! pull the daily series + limits + revenue, project, shape JSON, and fire best-effort alerts.
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use axum::{
@@ -211,8 +212,10 @@ async fn gather(
         let rules = store.list_limit_rules(&proj, true)?;
         let mut window_usage: HashMap<LimitWindow, Usage> = HashMap::new();
         for r in &rules {
-            if !window_usage.contains_key(&r.window) {
-                window_usage.insert(r.window, store.usage_since(&proj, r.window.since(until))?);
+            // Vacant-entry form rather than `or_insert_with`: the value is a fallible store call and
+            // the closure could not propagate `?`.
+            if let Entry::Vacant(e) = window_usage.entry(r.window) {
+                e.insert(store.usage_since(&proj, r.window.since(until))?);
             }
         }
         let revenue = store.list_revenue_events(Some(&proj), since, until)?;

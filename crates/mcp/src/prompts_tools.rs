@@ -275,7 +275,7 @@ fn need(args: &Value, key: &str) -> Result<String, String> {
 fn missing(args: &Value, required: &[&str]) -> Option<String> {
     required
         .iter()
-        .find(|k| args.get(**k).map_or(true, Value::is_null))
+        .find(|k| args.get(**k).is_none_or(Value::is_null))
         .map(|k| format!("missing required argument: {k}"))
 }
 

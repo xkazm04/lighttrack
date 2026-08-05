@@ -5,10 +5,10 @@
 //! to the operator exactly once, at creation.
 //!
 //! Auth modes:
-//!   - `dev`      : relaxed. Requests with no key act as [`Principal::Dev`]; a valid project key is
-//!                  still honored. Intended for local development.
-//!   - `enforced` : every protected route needs either the admin key (=> [`Principal::Admin`]) or a
-//!                  valid project key (=> [`Principal::Project`]); otherwise 401.
+//! - `dev`: relaxed. Requests with no key act as [`Principal::Dev`]; a valid project key is still
+//!   honored. Intended for local development.
+//! - `enforced`: every protected route needs either the admin key (=> [`Principal::Admin`]) or a
+//!   valid project key (=> [`Principal::Project`]); otherwise 401.
 
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;

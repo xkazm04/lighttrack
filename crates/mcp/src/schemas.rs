@@ -42,54 +42,6 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
     Some(s)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::output_schema;
-
-    #[test]
-    fn new_tools_declare_an_output_schema() {
-        for t in [
-            "check_benchmark_gate",
-            "get_usecases",
-            "get_forecast",
-            "get_collective_digest",
-        ] {
-            assert!(
-                output_schema(t).is_some(),
-                "{t} should declare an outputSchema"
-            );
-        }
-    }
-
-    #[test]
-    fn prompt_read_tools_declare_output_schemas() {
-        assert!(output_schema("list_prompts").unwrap()["properties"]
-            .get("items")
-            .is_some());
-        let resolved = output_schema("get_prompt").unwrap();
-        assert!(resolved["properties"].get("content").is_some());
-        assert!(resolved["properties"].get("version").is_some());
-    }
-
-    #[test]
-    fn limit_status_schema_carries_the_rejected_block() {
-        let s = output_schema("get_limit_status").expect("schema present");
-        let props = &s["properties"];
-        assert!(props.get("statuses").is_some());
-        assert!(
-            props.get("rejected").is_some(),
-            "rejected block must be schema'd"
-        );
-    }
-
-    #[test]
-    fn gate_schema_enumerates_the_four_verdicts() {
-        let s = output_schema("check_benchmark_gate").unwrap();
-        let variants = s["properties"]["status"]["enum"].as_array().unwrap();
-        assert_eq!(variants.len(), 4);
-    }
-}
-
 /// `tool_rendered` wraps a top-level array under `items`; mirror that here.
 fn list_of(item: Value) -> Value {
     json!({
@@ -392,4 +344,52 @@ fn collective_resp() -> Value {
             })) }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::output_schema;
+
+    #[test]
+    fn new_tools_declare_an_output_schema() {
+        for t in [
+            "check_benchmark_gate",
+            "get_usecases",
+            "get_forecast",
+            "get_collective_digest",
+        ] {
+            assert!(
+                output_schema(t).is_some(),
+                "{t} should declare an outputSchema"
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_read_tools_declare_output_schemas() {
+        assert!(output_schema("list_prompts").unwrap()["properties"]
+            .get("items")
+            .is_some());
+        let resolved = output_schema("get_prompt").unwrap();
+        assert!(resolved["properties"].get("content").is_some());
+        assert!(resolved["properties"].get("version").is_some());
+    }
+
+    #[test]
+    fn limit_status_schema_carries_the_rejected_block() {
+        let s = output_schema("get_limit_status").expect("schema present");
+        let props = &s["properties"];
+        assert!(props.get("statuses").is_some());
+        assert!(
+            props.get("rejected").is_some(),
+            "rejected block must be schema'd"
+        );
+    }
+
+    #[test]
+    fn gate_schema_enumerates_the_four_verdicts() {
+        let s = output_schema("check_benchmark_gate").unwrap();
+        let variants = s["properties"]["status"]["enum"].as_array().unwrap();
+        assert_eq!(variants.len(), 4);
+    }
 }

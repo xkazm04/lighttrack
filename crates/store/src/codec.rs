@@ -55,7 +55,7 @@ pub fn encode_event_cursor(ts: &str, id: &str) -> String {
 /// Decode a cursor minted by [`encode_event_cursor`] back into `(ts, id)`; `None` if it isn't valid
 /// hex of a `ts|id` pair.
 pub fn decode_event_cursor(s: &str) -> Option<(String, String)> {
-    if s.is_empty() || s.len() % 2 != 0 {
+    if s.is_empty() || !s.len().is_multiple_of(2) {
         return None;
     }
     let bytes: Option<Vec<u8>> = (0..s.len())

@@ -488,8 +488,7 @@ fn attach_models(
     if summaries.is_empty() {
         return Ok(());
     }
-    let placeholders = std::iter::repeat("?")
-        .take(summaries.len())
+    let placeholders = std::iter::repeat_n("?", summaries.len())
         .collect::<Vec<_>>()
         .join(",");
     let scope = if project.is_some() {

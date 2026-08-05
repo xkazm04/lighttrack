@@ -159,16 +159,18 @@ jobs:
           shared-key: ci
       - run: cargo test --workspace
 
-  # ── Lint + format ─────────────────────────────────────────────────────────────────────────────
-  # Run at the requested strictness (`clippy -D warnings`, `fmt --check`) so the true state is always
-  # visible in CI, but NON-BLOCKING for now: the tree predates these gates and carries pre-existing
-  # fmt/clippy debt that can't be cleaned here without colliding with in-flight work. Once a dedicated
-  # cleanup PR makes both green, drop `continue-on-error` and mark these as required too.
+  # ── Required checks ───────────────────────────────────────────────────────────────────────────
+  # Both gates are BLOCKING. The pre-existing fmt/clippy debt these jobs were once advisory for is
+  # gone: the tree is stock-rustfmt clean and `clippy -D warnings` passes workspace-wide across all
+  # targets. Keeping them advisory now would only let the debt come back. Mark
+  # `cargo clippy -D warnings` and `cargo fmt --check` as required status checks for main.
+  #
+  # There is deliberately no `rustfmt.toml` — stock defaults, so plain `cargo fmt` locally produces
+  # exactly what this job checks. Do not add one without changing this comment.
   clippy:
-    name: cargo clippy -D warnings (advisory)
+    name: cargo clippy -D warnings
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Install build deps
@@ -182,10 +184,9 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   fmt:
-    name: cargo fmt --check (advisory)
+    name: cargo fmt --check
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -199,11 +200,12 @@ jobs:
   # no automated view of whether it was shipping a crate with a published CVE — for software that
   # stores other people's prompts and completions (SECURITY.md), that was the gap worth closing.
   #
-  # NON-BLOCKING ON PURPOSE, and for a different reason than clippy/fmt above: those are advisory
-  # because of pre-existing debt in *our* code, which a cleanup PR can retire. This one is advisory
-  # because its input is a database that changes without us — a RUSTSEC entry published overnight
-  # against a transitive dependency would wall every unrelated PR until someone lands a bump. That
-  # trade (a red pipeline for everyone vs. a visible warning) is wrong for a one-maintainer project.
+  # NON-BLOCKING ON PURPOSE, and for a different reason than clippy/fmt above: those were advisory
+  # only while *our* code carried debt, and became blocking the moment a cleanup retired it. This one
+  # stays advisory because its input is a database that changes without us — a RUSTSEC entry
+  # published overnight against a transitive dependency would wall every unrelated PR until someone
+  # lands a bump. That trade (a red pipeline for everyone vs. a visible warning) is wrong for a
+  # one-maintainer project.
   #
   # TIGHTEN IT WHEN: the split becomes worthwhile — `check bans licenses sources` is deterministic
   # given Cargo.lock (it only changes when *we* change dependencies) and should become a blocking

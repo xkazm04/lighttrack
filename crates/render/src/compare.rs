@@ -71,7 +71,7 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
         let label = s(r, "label");
         let mean = f(r, "mean");
         let errored = u(r, "errored");
-        if errored < n_cases && best.map_or(true, |(_, bm)| mean > bm) {
+        if errored < n_cases && best.is_none_or(|(_, bm)| mean > bm) {
             best = Some((label, mean));
         }
         t.row(vec![

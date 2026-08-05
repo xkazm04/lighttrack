@@ -31,6 +31,10 @@ use crate::util::{
     percentiles, stamp_determinism,
 };
 
+/// One target's leaderboard row, in column order:
+/// `(label, mean, pass_rate, gen_cost, judge_cost, p50_ms, errored, agreement)`.
+type LeaderboardCells = (String, f64, f64, f64, f64, u64, u32, f64);
+
 /// One `(target, case)` cell's independent result: the candidate scores/agreements plus this cell's
 /// cost/latency/token contributions. Computed in parallel, then folded in case order so the per-target
 /// leaderboard, posted scores, and printed log are byte-identical at any `--jobs`.
@@ -345,8 +349,7 @@ pub(crate) fn run_compare(
     // error rate — not the per-test one — is what an operator actually experiences.
     let m = targets.len().max(1);
 
-    // (label, mean, pass_rate, gen_cost, judge_cost, p50_ms, errored, agreement)
-    let mut rows: Vec<(String, f64, f64, f64, f64, u64, u32, f64)> = Vec::new();
+    let mut rows: Vec<LeaderboardCells> = Vec::new();
     // Per-target verdicts vs the benchmark baseline, rolled up into one honest run-level status below.
     let mut statuses: Vec<String> = Vec::new();
     // Per-target case scores, kept so the leaderboard's "best" claim can be tested — paired, on the

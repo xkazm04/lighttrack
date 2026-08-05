@@ -5,13 +5,14 @@ use serde_json::Value;
 use crate::pricing::{PriceBook, PricingMode};
 
 /// LLM provider. `Unknown` captures anything we don't model yet (its pricing lookups miss → `None`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     OpenAi,
     Anthropic,
     Google,
     #[serde(other)]
+    #[default]
     Unknown,
 }
 
@@ -32,16 +33,11 @@ impl std::fmt::Display for Provider {
     }
 }
 
-impl Default for Provider {
-    fn default() -> Self {
-        Provider::Unknown
-    }
-}
-
 /// The kind of operation. `Other` catches anything unmodeled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Operation {
+    #[default]
     Chat,
     Completion,
     Embedding,
@@ -60,16 +56,11 @@ impl Operation {
     }
 }
 
-impl Default for Operation {
-    fn default() -> Self {
-        Operation::Chat
-    }
-}
-
 /// Call outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
+    #[default]
     Success,
     Error,
     Timeout,
@@ -82,12 +73,6 @@ impl Status {
             Status::Error => "error",
             Status::Timeout => "timeout",
         }
-    }
-}
-
-impl Default for Status {
-    fn default() -> Self {
-        Status::Success
     }
 }
 

@@ -410,7 +410,7 @@ pub fn merge_leaderboard(
             |((provider, model, task_type), (a, max_source_share, between))| {
                 let judge_providers: Vec<String> = a.judge_providers.iter().cloned().collect();
                 let mixed_judges =
-                    (judge_providers.len() > 1).then(|| judge_providers.len() as u32);
+                    (judge_providers.len() > 1).then_some(judge_providers.len() as u32);
                 let rigor = a.row_rigor();
                 let mixed_rigor = rigor.is_mixed();
                 LeaderboardRow {

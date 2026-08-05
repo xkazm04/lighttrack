@@ -2,21 +2,16 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// How prompt/output payloads are persisted for a project.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Redaction {
     /// Store payloads as sent.
+    #[default]
     None,
     /// Store only a hash of payloads (presence/diff without content).
     Hash,
     /// Never persist payloads.
     Drop,
-}
-
-impl Default for Redaction {
-    fn default() -> Self {
-        Redaction::None
-    }
 }
 
 /// A monitored application / tenant.

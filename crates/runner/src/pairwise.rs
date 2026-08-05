@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn ranking_order_is_by_win_rate_desc_stable() {
         // Two targets tied on win-rate keep their original index order.
-        let standings = vec![
+        let standings = [
             Standing {
                 wins: 1,
                 losses: 1,

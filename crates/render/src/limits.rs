@@ -130,7 +130,7 @@ pub(crate) fn list(v: &Value) -> Option<String> {
         let warn = r
             .get("warn_at")
             .and_then(Value::as_f64)
-            .map(|w| pct(w))
+            .map(pct)
             .unwrap_or_else(|| "—".to_string());
         let enabled = r.get("enabled").and_then(Value::as_bool).unwrap_or(true);
         t.row(vec![
