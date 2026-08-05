@@ -225,3 +225,17 @@ which no persistence policy covers.
 relay-settle path (`POST /v1/relay/tasks/:id/result`) wrote its run event straight to the store and
 was bypassing it, which made `docs/RELAY.md`'s claim that "ingest redaction applies" false exactly
 where a device failure dumps the payload it failed on into `error`. It now scrubs explicitly.
+
+*Addendum — the scrubber's precision became a correctness property the moment the default flipped.*
+`lighttrack-anon`'s phone rule was `\+?\d[\d\s().\-]{8,}\d`, which matched any ISO date, any
+dotted/dashed version and any "date time" run: a support prompt containing no PII at all was stored
+as `"…an item bought on <PHONE>, and do I pay return shipping?"`, and the card rule ate its own
+trailing space (`card <CC>was`). Under the old opt-in default this was collateral an operator had
+chosen; unset-means-scrub makes it everyone's. It is also the one class of defect this product cannot
+observe: the judge reads the *stored* text, and in a walkthrough it scored the mangled sentence 0.88
+against the clean one's 0.85 without remarking on the missing date — no score, alert or dashboard
+will ever surface it. So the rules now resolve ambiguity toward **under-matching**: phone recognizes
+four explicit shapes (`+CC` grouped, `+CC` solid E.164, parenthesized area code, NANP 3-3-4) and `.`
+is a separator only inside the tight 3-3-4 grouping, which drops dot-separated European numbers and
+bare separator-less digit runs. A redaction we miss is legible to whoever reads the row; a sentence
+we rewrote is not, and it silently becomes the evidence every downstream score is computed from.

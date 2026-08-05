@@ -6,6 +6,12 @@
 //! (names, orgs, locations) is left to the optional LLM pass in the runner.
 //!
 //! Rules run in a fixed order (most specific → least) so e.g. an IP isn't eaten by the phone rule.
+//!
+//! **Precision is the point.** Scrubbed text is what gets stored, and the stored text is what the
+//! LLM judge later reads — so an over-broad rule does not merely lose a date, it silently rewrites
+//! the evidence downstream scoring is computed from, and nothing in a score, alert or dashboard ever
+//! reveals it. Where a shape is ambiguous these rules deliberately **under-match**: a redaction we
+//! miss is visible to whoever reads the row, a sentence we mangle is not.
 
 use std::sync::OnceLock;
 
@@ -40,9 +46,32 @@ fn rules() -> &'static [Rule] {
             r(r"\bsk-[A-Za-z0-9_\-]{16,}\b", "<SECRET>"),
             r(r"\bAKIA[0-9A-Z]{12,}\b", "<SECRET>"),
             r(r"\b[0-9a-fA-F]{32,}\b", "<SECRET>"),
-            r(r"\b(?:\d[ \-]?){13,19}\b", "<CC>"),
-            r(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", "<IP>"),
-            r(r"\+?\d[\d\s().\-]{8,}\d", "<PHONE>"),
+            // A leading `+` is a phone signal no card number carries, so the two E.164 shapes are
+            // tried before the card rule — otherwise a 13+ digit international number types as <CC>.
+            r(
+                r"\+\d{1,3}(?:[ \-](?:\(\d{1,4}\)|\d{2,4})){2,5}\b",
+                "<PHONE>",
+            ),
+            r(r"\+\d{1,3}[ \-]?\d{7,14}\b", "<PHONE>"),
+            // Anchored on a digit at *both* ends: the old `(?:\d[ \-]?){13,19}` let the last
+            // repetition swallow its trailing separator, so `card 4111 1111 1111 1111 was` came back
+            // as `card <CC>was`.
+            r(r"\b\d(?:[ \-]?\d){12,18}\b", "<CC>"),
+            // Real octets only. `\d{1,3}` also claimed impossible quads (999.999.999.999), which is
+            // pure corruption — nothing rejected here was ever an address.
+            r(
+                r"\b(?:25[0-5]|2[0-4]\d|[01]?\d\d?)(?:\.(?:25[0-5]|2[0-4]\d|[01]?\d\d?)){3}\b",
+                "<IP>",
+            ),
+            // Phone, the non-`+` shapes. These replace `\+?\d[\d\s().\-]{8,}\d`, which matched any
+            // ISO date (2026-07-01), any dotted/dashed version (1.2.3-4.5.6) and ran across
+            // whitespace into a following time. `.` is a separator only in the tight 3-3-4 grouping;
+            // everywhere else it is what made version strings and quads collateral.
+            r(
+                r"\(\d{2,4}\)[ \-]?\d{2,4}(?:[ \-]?\d{2,4}){1,3}\b",
+                "<PHONE>",
+            ),
+            r(r"\b\d{3}[ \-.]\d{3}[ \-.]\d{4}\b", "<PHONE>"),
         ]
     })
 }

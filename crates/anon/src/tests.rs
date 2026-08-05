@@ -6,6 +6,12 @@
 //! output finds zero matches (no raw PII shape survives). The mixed-corpus test exercises the
 //! rule-ordering claim at scale (an IP must not be eaten by the phone/CC rules), and the guards
 //! pin down false positives (a `1.2.3` version must not be mangled into `<CC>`).
+//!
+//! The false-positive guards carry equal weight to the no-leak invariant here, because they are the
+//! only thing watching that side: a leaked address is discoverable in the stored row, whereas text
+//! the scrubber rewrote reads as ordinary prose to every consumer downstream, the judge included.
+//! The strings in [`iso_dates_and_versions_are_not_phone_numbers`] and
+//! [`card_redaction_preserves_surrounding_whitespace`] are the observed corruptions, verbatim.
 
 use super::*;
 
@@ -180,25 +186,56 @@ fn gen_ip(rng: &mut Rng) -> String {
     )
 }
 
+/// Only the four shapes the phone rules recognize. The rules are deliberately conservative — a
+/// bare digit run with no `+`, no parens and no 3-3-4 grouping is indistinguishable from a date or
+/// a version, so it is left alone — and this generator states that contract.
 fn gen_phone(rng: &mut Rng) -> String {
-    let mut s = String::new();
-    if rng.chance(2) {
-        s.push('+');
+    match rng.below(4) {
+        // "+420 123 456 789" — country code plus separated groups.
+        0 => {
+            let mut s = String::from("+");
+            push_rand(rng, &mut s, DIGITS, 1, 3);
+            for _ in 0..rng.between(2, 5) {
+                s.push(*rng.pick(&[' ', '-']));
+                push_rand(rng, &mut s, DIGITS, 2, 4);
+            }
+            s
+        }
+        // "+14155552671" / "+420 123456789" — E.164 with at most one separator.
+        1 => {
+            let mut s = String::from("+");
+            push_rand(rng, &mut s, DIGITS, 1, 3);
+            if rng.chance(2) {
+                s.push(*rng.pick(&[' ', '-']));
+            }
+            push_rand(rng, &mut s, DIGITS, 7, 12);
+            s
+        }
+        // "(415) 555-2671" — parenthesized area code.
+        2 => {
+            let mut s = String::from("(");
+            push_rand(rng, &mut s, DIGITS, 2, 4);
+            s.push(')');
+            for i in 0..rng.between(2, 4) {
+                if i > 0 || rng.chance(2) {
+                    s.push(*rng.pick(&[' ', '-']));
+                }
+                push_rand(rng, &mut s, DIGITS, 2, 4);
+            }
+            s
+        }
+        // "415-555-2671" — NANP 3-3-4.
+        _ => {
+            let sep = *rng.pick(&[' ', '-', '.']);
+            let mut s = String::new();
+            push_chars(rng, &mut s, DIGITS, 3);
+            s.push(sep);
+            push_chars(rng, &mut s, DIGITS, 3);
+            s.push(sep);
+            push_chars(rng, &mut s, DIGITS, 4);
+            s
+        }
     }
-    push_rand(rng, &mut s, DIGITS, 2, 4); // country / first group
-    if rng.chance(3) {
-        s.push(' ');
-        s.push('(');
-        push_rand(rng, &mut s, DIGITS, 2, 3);
-        s.push(')');
-    }
-    // ≥3 further groups keeps the matched region above the phone rule's ~10-char floor (shorter
-    // number fragments are deliberately ignored as too ambiguous to be a phone number).
-    for _ in 0..rng.between(3, 4) {
-        s.push(*rng.pick(&[' ', '-']));
-        push_rand(rng, &mut s, DIGITS, 2, 4);
-    }
-    s
 }
 
 /// A named PII-shape generator: `(kind, fn)`.
@@ -330,10 +367,105 @@ fn benign_text_is_not_over_redacted() {
         "commit a1b2c3d landed", // short hex, below the 32-char secret threshold
         "let total_count_of_all_active_users = 0", // long identifier, not a hex secret
         "pi is roughly 3.14159",
+        "the run finished +100000 rows ahead", // a signed count, not an E.164 number
+        "999.999.999.999 is not an address",   // impossible quad, so not an <IP> either
     ];
     for text in clean {
         let s = scrub(text);
         assert_eq!(s.text, text, "over-redacted {text:?} -> {:?}", s.text);
         assert_eq!(s.redactions, 0, "{text:?}");
+    }
+}
+
+/// The one ambiguity the shapes cannot resolve, pinned so it is a known cost rather than a
+/// surprise: a four-component version string *is* a well-formed dotted quad, and no regex can tell
+/// `4.10.2.1` the release from `4.10.2.1` the host. It types as `<IP>`. Three-component versions —
+/// overwhelmingly the common case, and the one the old rules also mangled — are safe.
+#[test]
+fn four_component_versions_are_indistinguishable_from_addresses() {
+    assert_eq!(scrub("build 4.10.2.1 shipped").text, "build <IP> shipped");
+    assert_eq!(scrub("build 4.10.2 shipped").redactions, 0);
+}
+
+/// Regression, verbatim. The old phone rule `\+?\d[\d\s().\-]{8,}\d` matched *any* run of ten-odd
+/// digit-ish characters, so every ISO date and dotted version in captured text became `<PHONE>`.
+/// This is the defect no downstream signal can surface: a judge scored the mangled sentence 0.88
+/// and the clean one 0.85 without ever remarking on the vanished date.
+#[test]
+fn iso_dates_and_versions_are_not_phone_numbers() {
+    for text in [
+        "2026-07-01",
+        "2024-11-30",
+        "1.2.3-4.5.6",
+        "What is the return window for an item bought on 2026-07-01, and do I pay return shipping?",
+        "the window runs 2026-07-01 to 2026-07-08",
+        "ISO 8601 timestamp 2026-07-01T12:00:00Z",
+        "e2e run 2026-07-01 12:34:56",
+        "upgraded from 1.2.3-4.5.6 to 1.2.4-4.5.6",
+    ] {
+        let s = scrub(text);
+        assert_eq!(s.text, text, "mangled {text:?} -> {:?}", s.text);
+        assert_eq!(s.redactions, 0, "{text:?}");
+    }
+}
+
+/// Regression, verbatim. The card rule's last repetition (`\d[ \-]?`) consumed its trailing
+/// separator, welding the placeholder to the next word: `card <CC>was`.
+#[test]
+fn card_redaction_preserves_surrounding_whitespace() {
+    let s = scrub("card 4111 1111 1111 1111 was");
+    assert_eq!(s.text, "card <CC> was");
+    assert_eq!(s.redactions, 1);
+
+    // Hyphen grouping and a trailing hyphen-as-punctuation must survive too.
+    assert_eq!(scrub("card 4111-1111-1111-1111 was").text, "card <CC> was");
+    assert_eq!(scrub("pay 4111111111111111 now").text, "pay <CC> now");
+}
+
+#[test]
+fn real_phone_formats_are_still_redacted() {
+    for phone in [
+        "+420 123 456 789",  // E.164, grouped
+        "+420123456789",     // E.164, solid
+        "+420 123456789",    // E.164, one separator
+        "+1 415 555 2671",   // US with country code
+        "+1 (415) 555-2671", // US with country code and area parens
+        "+44 20 7946 0958",  // UK
+        "(415) 555-2671",    // US, parenthesized area code
+        "415-555-2671",      // NANP
+        "415 555 2671",
+        "415.555.2671",
+    ] {
+        let s = scrub(phone);
+        assert_eq!(s.text, "<PHONE>", "phone {phone:?} -> {:?}", s.text);
+        assert_eq!(s.redactions, 1, "{phone:?}");
+        // …and in prose, with the surrounding words intact.
+        let in_prose = scrub(&format!("call {phone} tomorrow"));
+        assert_eq!(in_prose.text, "call <PHONE> tomorrow", "{phone:?}");
+    }
+}
+
+#[test]
+fn other_pii_shapes_are_still_redacted_in_prose() {
+    let cases = [
+        (
+            "mail bob.smith+tag@example.co.uk today",
+            "mail <EMAIL> today",
+        ),
+        ("ssn 123-45-6789 on file", "ssn <SSN> on file"),
+        ("iban DE89370400440532013000 please", "iban <IBAN> please"),
+        (
+            "key sk-abcd1234efgh5678ijkl rotated",
+            "key <SECRET> rotated",
+        ),
+        ("role AKIAIOSFODNN7EXAMPLE removed", "role <SECRET> removed"),
+        (
+            "token 0123456789abcdef0123456789abcdef expired",
+            "token <SECRET> expired",
+        ),
+        ("host 192.168.100.200 down", "host <IP> down"),
+    ];
+    for (raw, expected) in cases {
+        assert_eq!(scrub(raw).text, expected, "{raw:?}");
     }
 }
