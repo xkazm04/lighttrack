@@ -46,8 +46,17 @@ pub(crate) struct CreateBenchmarkReq {
     schedule_interval_secs: Option<u64>,
 }
 
+/// Judging is the one call in this product whose quality *is* the product, and it is deliberately
+/// unbudgeted (D4). Measured on a 12-item golden set with a 3-dimension rubric, a small judge was the
+/// worst on every axis that matters: it compressed good and bad answers toward the middle (0.80 vs
+/// 0.35, against opus@xhigh's 0.95 vs 0.32), correlated worst with the human labels (0.745 vs 0.844),
+/// and scored a genuinely good answer below the pass threshold. Default to the strong judge and let
+/// an operator trade down explicitly.
+///
+/// Note the standing caveat: prefer a judge family *different* from the generator you are grading, or
+/// self-preference bias creeps into the verdict.
 fn default_judge_model() -> String {
-    "haiku".to_string()
+    "opus@xhigh".to_string()
 }
 
 /// Reserved key under a benchmark's free-form `target` object carrying its opt-in recurrence interval

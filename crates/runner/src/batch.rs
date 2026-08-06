@@ -25,6 +25,29 @@ const CHARS_PER_TOKEN: usize = 4;
 /// the model plenty of room for the rubric, the boundary contract and N verdicts' worth of output.
 const DEFAULT_MAX_CHARS: usize = 200_000;
 
+/// Budgeted output tokens per judged dimension, per case: a score plus a sentence of reasoning, with
+/// room for a verbose judge. A high-effort model (`opus@xhigh`) writes several times more than a
+/// terse one, which is exactly how a batch dies: the input fits, the *response* does not, the JSON
+/// truncates, and the whole call is unparseable. Measured against that failure, not guessed.
+const OUT_TOKENS_PER_DIM: usize = 220;
+
+/// Default ceiling on a batch's projected response. Well under any current model's output limit,
+/// because the cost of being wrong is losing every case in the batch at once.
+const DEFAULT_MAX_OUT_TOKENS: usize = 16_000;
+
+/// How many cases can share a call before their combined verdicts risk overrunning the response.
+///
+/// Output scales with `cases × llm_dimensions`, so a 6-dimension rubric packs far fewer cases than a
+/// 1-dimension one at the same nominal `--batch`. Deterministic dimensions cost nothing here: they
+/// are never narrated to the model and never appear in its response.
+pub(crate) fn cases_per_response(rubric: &Rubric, max_out_tokens: usize) -> usize {
+    let dims = rubric.dimensions.iter().filter(|d| d.kind.is_llm()).count();
+    if dims == 0 {
+        return usize::MAX; // nothing is asked of the model, so nothing can overrun
+    }
+    (max_out_tokens / (dims * OUT_TOKENS_PER_DIM)).max(1)
+}
+
 /// How much of a batch's budget a case consumes.
 fn case_chars(c: &BenchmarkCase) -> usize {
     c.input.len()
@@ -63,11 +86,20 @@ pub(crate) fn plan(cases: &[BenchmarkCase], max_cases: usize, max_chars: usize) 
 
 /// The size budget, overridable for operators whose judge model has a smaller or larger window.
 pub(crate) fn max_chars_from_env() -> usize {
-    std::env::var("LIGHTTRACK_BATCH_MAX_CHARS")
+    env_usize("LIGHTTRACK_BATCH_MAX_CHARS", DEFAULT_MAX_CHARS)
+}
+
+/// The response budget, overridable the same way.
+pub(crate) fn max_out_tokens_from_env() -> usize {
+    env_usize("LIGHTTRACK_BATCH_MAX_OUT_TOKENS", DEFAULT_MAX_OUT_TOKENS)
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_MAX_CHARS)
+        .unwrap_or(default)
 }
 
 /// Estimated tokens of case content in a batch — reported so an operator can see what was packed.
@@ -93,7 +125,18 @@ pub(crate) fn judge_batched(
     batch: usize,
     ctl: &RunControl,
 ) -> Vec<CaseResult> {
-    let groups = plan(cases, batch, max_chars_from_env());
+    // The operator asks for a batch size; the rubric decides what the response can actually carry.
+    // Overrunning the output is the one failure that costs every case in the batch at once, so the
+    // ceiling is enforced here rather than left as advice.
+    let by_output = cases_per_response(rubric, max_out_tokens_from_env());
+    let effective = batch.min(by_output);
+    if effective < batch {
+        println!(
+            "  batch reduced {batch} -> {effective}: {} LLM dimension(s) would push {batch} verdicts past the response budget",
+            rubric.dimensions.iter().filter(|d| d.kind.is_llm()).count()
+        );
+    }
+    let groups = plan(cases, effective, max_chars_from_env());
     let n_cases = cases.len();
     if let Some(first) = groups.first() {
         println!(
@@ -204,6 +247,42 @@ mod tests {
             expected: None,
             output: output.map(|o| o.to_string()),
         }
+    }
+
+    fn rubric_with(llm_dims: usize) -> Rubric {
+        let dims: Vec<_> = (0..llm_dims)
+            .map(|i| serde_json::json!({ "key": format!("d{i}"), "description": "d", "weight": 1.0 }))
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "name": "r", "threshold": 0.5, "dimensions": dims
+        }))
+        .unwrap()
+    }
+
+    /// Output scales with cases x dimensions, so a wide rubric must pack fewer cases per call. This
+    /// is the ceiling that was missing when a 3-dimension rubric on a verbose judge lost an entire
+    /// batch to a truncated response.
+    #[test]
+    fn the_response_budget_shrinks_the_batch_as_the_rubric_widens() {
+        let narrow = cases_per_response(&rubric_with(1), 16_000);
+        let wide = cases_per_response(&rubric_with(8), 16_000);
+        assert!(
+            narrow > wide,
+            "a wider rubric must pack fewer cases ({narrow} vs {wide})"
+        );
+        assert!(wide >= 1, "the ceiling must never reach zero cases");
+    }
+
+    /// A rubric the model is never asked about cannot overrun its response.
+    #[test]
+    fn an_all_deterministic_rubric_has_no_response_ceiling() {
+        let r: Rubric = serde_json::from_value(serde_json::json!({
+            "name": "det", "threshold": 0.5,
+            "dimensions": [{ "key": "e", "description": "d", "weight": 1.0,
+                             "kind": "contains", "check": { "expect": "x" } }]
+        }))
+        .unwrap();
+        assert_eq!(cases_per_response(&r, 16_000), usize::MAX);
     }
 
     #[test]

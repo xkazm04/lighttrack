@@ -99,9 +99,21 @@ pub(crate) fn compare(
     });
 
     // --- the method under test: the same items, batched ---------------------------------------
+    // Clamp exactly as `bench --batch` does. A calibration that measured a batch size the benchmark
+    // would never actually use would be worse than none: it would bless a method nobody runs.
+    let by_output =
+        crate::batch::cases_per_response(rubric, crate::batch::max_out_tokens_from_env());
+    let effective = batch.min(by_output);
+    if effective < batch {
+        println!(
+            "  batch reduced {batch} -> {effective}: {} LLM dimension(s) would push {batch} \
+             verdicts past the response budget (this is what `bench --batch {batch}` would do too)",
+            rubric.dimensions.iter().filter(|d| d.kind.is_llm()).count()
+        );
+    }
     let groups: Vec<Vec<usize>> = (0..items.len())
         .collect::<Vec<_>>()
-        .chunks(batch)
+        .chunks(effective)
         .map(<[usize]>::to_vec)
         .collect();
     println!("  judging batched ({} call(s))...", groups.len());
@@ -138,36 +150,57 @@ pub(crate) fn compare(
 
     // --- pair them up, dropping any item either method failed to score ------------------------
     let mut by_index: Vec<Option<(f64, f64)>> = (0..items.len()).map(|_| None).collect();
+    let mut batch_err: Vec<Option<String>> = (0..items.len()).map(|_| None).collect();
     for (i, r) in batched.into_iter().flatten() {
-        if let Ok(v) = r {
-            by_index[i] = Some(v);
+        match r {
+            Ok(v) => by_index[i] = Some(v),
+            Err(e) => batch_err[i] = Some(e.to_string()),
         }
     }
 
     let mut pairs: Vec<Paired> = Vec::new();
     let (mut single_cost, mut batched_cost) = (0.0, 0.0);
-    let mut dropped = 0usize;
+    // A dropped item is evidence, not noise. Silently reporting a count hid a whole batch call
+    // failing wholesale — which is itself a finding about batching at that size, and the single most
+    // useful thing this command can tell an operator when it happens.
+    let mut drops: Vec<String> = Vec::new();
     for (i, s) in single.into_iter().enumerate() {
+        let label = items[i]
+            .note
+            .clone()
+            .unwrap_or_else(|| format!("#{}", i + 1));
         match (s, by_index[i]) {
             (Ok((sv, sc)), Some((bv, bc))) => {
                 single_cost += sc;
                 batched_cost += bc;
                 pairs.push(Paired {
-                    label: items[i]
-                        .note
-                        .clone()
-                        .unwrap_or_else(|| format!("#{}", i + 1)),
+                    label,
                     single: sv,
                     batched: bv,
                 });
             }
             // An item only one method could score tells us nothing about the difference between
             // them, and averaging over a different set on each side would fake the comparison.
-            _ => dropped += 1,
+            (Err(e), _) => drops.push(format!("{label}: single judging failed — {e}")),
+            (Ok(_), None) => drops.push(format!(
+                "{label}: batched judging produced no verdict — {}",
+                batch_err[i].as_deref().unwrap_or("no reason recorded")
+            )),
         }
     }
-    if dropped > 0 {
-        println!("  note: {dropped} item(s) dropped — one of the two methods produced no verdict.");
+    if !drops.is_empty() {
+        println!(
+            "\n  {} of {} item(s) dropped (scored by only one method):",
+            drops.len(),
+            items.len()
+        );
+        for d in &drops {
+            println!("    {d}");
+        }
+        println!(
+            "  A batch failing as a whole is a result about batch={batch}, not a glitch: it means \
+             the response could not be produced or parsed at that size."
+        );
     }
     if pairs.len() < 2 {
         anyhow::bail!(
@@ -202,7 +235,7 @@ pub(crate) fn compare(
         batched_cost,
     };
     print_items(&pairs, threshold);
-    print_report(&cmp, threshold, batch);
+    print_report(&cmp, threshold, effective);
     Ok(cmp)
 }
 

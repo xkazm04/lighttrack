@@ -10,7 +10,12 @@ pub(crate) struct Cli {
     #[arg(long, env = "LIGHTTRACK_KEY")]
     pub(crate) key: Option<String>,
     /// Default judge spec `[provider/]model` for score/score-text (benchmarks use their own).
-    #[arg(long, env = "LIGHTTRACK_JUDGE_MODEL", default_value = "haiku")]
+    ///
+    /// A trailing `@<effort>` (low|medium|high|xhigh|max) sets the CLI reasoning effort, e.g.
+    /// `opus@xhigh`. The judge is unbudgeted by design: a cheap judge discriminates poorly — on a
+    /// 12-item golden set haiku separated good from bad by only 0.45 where opus@xhigh managed 0.63,
+    /// and it failed a genuinely good answer. Trade down deliberately, not by default.
+    #[arg(long, env = "LIGHTTRACK_JUDGE_MODEL", default_value = "opus@xhigh")]
     pub(crate) model: String,
     /// Path to the claude executable. On Windows the default auto-resolves the npm `claude.exe`
     /// (the `claude.cmd`/`.ps1` shims can't be invoked directly from a child process).
