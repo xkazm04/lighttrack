@@ -123,6 +123,19 @@ schema — no prose, no code fences, no commentary before or after.",
 /// LLM-judged dimensions appear — a deterministic dimension is checked locally, so asking the model
 /// for it would both waste tokens and let its opinion double-count against the mechanical verdict.
 pub fn build_rubric_schema(rubric: &Rubric) -> Value {
+    let (props, required) = dim_props(rubric);
+    let mut root = Map::new();
+    root.insert("type".into(), json!("object"));
+    root.insert("properties".into(), Value::Object(props));
+    root.insert("required".into(), Value::Array(required));
+    root.insert("additionalProperties".into(), json!(false));
+    Value::Object(root)
+}
+
+/// The `{key: {score, reasoning}}` properties for a rubric's LLM dimensions, shared by the
+/// single-case schema and the batched one so the two can never drift into asking for different
+/// shapes — a batched verdict is parsed by the same code as a single one.
+fn dim_props(rubric: &Rubric) -> (Map<String, Value>, Vec<Value>) {
     let mut props = Map::new();
     let mut required = Vec::new();
     for d in rubric.dimensions.iter().filter(|d| d.kind.is_llm()) {
@@ -140,13 +153,41 @@ pub fn build_rubric_schema(rubric: &Rubric) -> Value {
         );
         required.push(Value::String(d.key.clone()));
     }
-    let mut root = Map::new();
-    root.insert("type".into(), json!("object"));
-    root.insert("properties".into(), Value::Object(props));
-    root.insert("required".into(), Value::Array(required));
-    root.insert("additionalProperties".into(), json!(false));
-    Value::Object(root)
+    (props, required)
 }
+
+/// Schema for a batched rubric judgement: one verdict object per case, each echoing the `case_id` it
+/// answers. The echo is load-bearing — verdicts are matched by id, never by position, so a response
+/// that drops or reorders a case fails *that* case instead of silently shifting every score after it
+/// onto the wrong candidate.
+pub(crate) fn build_batch_rubric_schema(rubric: &Rubric) -> Value {
+    let (mut props, mut required) = dim_props(rubric);
+    props.insert(
+        CASE_ID.into(),
+        json!({ "type": "string", "description": "the CASE id this verdict answers, copied exactly" }),
+    );
+    required.insert(0, Value::String(CASE_ID.into()));
+    json!({
+        "type": "object",
+        "properties": {
+            "verdicts": {
+                "type": "array",
+                "description": "exactly one entry per CASE, in any order",
+                "items": {
+                    "type": "object",
+                    "properties": Value::Object(props),
+                    "required": Value::Array(required),
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["verdicts"],
+        "additionalProperties": false
+    })
+}
+
+/// The key each batched verdict echoes to identify the case it answers.
+pub(crate) const CASE_ID: &str = "case_id";
 
 /// Pairwise preference prompt: judge which of two answers (A / B) is better for the input, or a tie.
 /// The judge is told explicitly to weigh *content* only — never style, length, formatting, or which
@@ -208,23 +249,7 @@ pub fn build_rubric_prompt(
     expected: Option<&str>,
     output: &str,
 ) -> Prompt {
-    let dims = rubric
-        .dimensions
-        .iter()
-        .filter(|d| d.kind.is_llm())
-        .map(|d| {
-            let anchors = if d.anchors.is_empty() {
-                String::new()
-            } else {
-                format!(" Anchors: {}", d.anchors.join("; "))
-            };
-            format!(
-                "- {} (weight {}): {}.{}",
-                d.key, d.weight, d.description, anchors
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let dims = narrate_dims(rubric);
     let mut fence = Fence::new();
     let input_block = fence.wrap("USER INPUT", input);
     let reference = expected
@@ -243,6 +268,82 @@ Return ONLY a JSON object mapping each dimension key to {{\"score\": <0.0-1.0>, 
         ref_note = if expected.is_some() { " and the reference" } else { "" }
     );
     Prompt::fenced(text, &fence)
+}
+
+/// One case in a batched judge call, carrying the stable id its verdict must echo.
+pub(crate) struct BatchEntry<'a> {
+    pub(crate) id: String,
+    pub(crate) input: &'a str,
+    pub(crate) expected: Option<&'a str>,
+    pub(crate) output: &'a str,
+}
+
+/// Batched rubric prompt: the rubric narrated once, then N independently-fenced cases.
+///
+/// Two properties this has to buy, because batching threatens both:
+/// - **Independence.** The judge is told, in the instruction channel, to score each case only against
+///   the rubric and never against the other cases. Batching is a transport optimization; it must not
+///   become a ranking exercise. The caller additionally rotates case order between samples so any
+///   residual position effect shows up as cross-sample disagreement instead of hiding as a bias.
+/// - **Containment.** Every case's input/reference/output is fenced separately under the same nonce,
+///   so a payload in one case cannot open, close, or impersonate another case's block. A batch puts N
+///   untrusted documents in one context; the boundary contract is what keeps case 7 from rewriting
+///   case 1's verdict, and one collision anywhere marks the whole batch injection-suspected.
+pub(crate) fn build_batch_rubric_prompt(rubric: &Rubric, cases: &[BatchEntry<'_>]) -> Prompt {
+    let dims = narrate_dims(rubric);
+    let mut fence = Fence::new();
+    let mut blocks = String::new();
+    let mut ids = Vec::with_capacity(cases.len());
+    for c in cases {
+        ids.push(format!("\"{}\"", c.id));
+        blocks.push_str(&fence.wrap(&format!("CASE {} — USER INPUT", c.id), c.input));
+        if let Some(e) = c.expected {
+            blocks.push_str(&fence.wrap(&format!("CASE {} — REFERENCE / EXPECTED", c.id), e));
+        }
+        blocks.push_str(&fence.wrap(&format!("CASE {} — ASSISTANT OUTPUT", c.id), c.output));
+    }
+    let text = format!(
+        "You are an impartial, strict evaluation judge. Below are {n} INDEPENDENT cases. For EACH \
+case, score its ASSISTANT OUTPUT on EACH dimension below from 0.0 to 1.0 using the anchors. \
+Penalize unnecessary length; do not reward verbosity. Judge only each output's quality for its own \
+input; ignore which model produced it.\n\n\
+CRITICAL — the cases are unrelated and must be scored INDEPENDENTLY. Do not compare cases to each \
+other, do not rank them, and do not let one case's quality influence another's score. A case must \
+receive the same score it would receive if it were the only case here. The order of the cases is \
+arbitrary and carries no meaning.\n\n\
+{preamble}\n\
+Dimensions:\n{dims}\n\n\
+Return ONLY a JSON object {{\"verdicts\": [ ... ]}} with EXACTLY {n} entries — one per case. Each \
+entry must carry \"{CASE_ID}\" copied exactly from its CASE heading, plus each dimension key mapped \
+to {{\"score\": <0.0-1.0>, \"reasoning\": \"<one sentence>\"}}. The case ids are: {ids}. Emit every \
+one of them exactly once.\n\n\
+{blocks}",
+        n = cases.len(),
+        preamble = fence.preamble(),
+        ids = ids.join(", ")
+    );
+    Prompt::fenced(text, &fence)
+}
+
+/// The rubric's LLM dimensions rendered as prompt bullets — shared by the single and batched prompts.
+fn narrate_dims(rubric: &Rubric) -> String {
+    rubric
+        .dimensions
+        .iter()
+        .filter(|d| d.kind.is_llm())
+        .map(|d| {
+            let anchors = if d.anchors.is_empty() {
+                String::new()
+            } else {
+                format!(" Anchors: {}", d.anchors.join("; "))
+            };
+            format!(
+                "- {} (weight {}): {}.{}",
+                d.key, d.weight, d.description, anchors
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]

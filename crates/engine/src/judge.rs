@@ -35,6 +35,22 @@ struct ProviderGen<'a> {
     schema: Option<Value>,
 }
 
+/// Build the production generator for a schema-enforced judge call. Shared with [`batch`], whose
+/// calls must reach the provider through exactly this path — same determinism request, same dispatch.
+pub(crate) fn provider_gen<'a>(
+    cfg: &'a EngineConfig,
+    provider: &'a str,
+    model: &'a str,
+    schema: Value,
+) -> impl Generator + 'a {
+    ProviderGen {
+        cfg,
+        provider,
+        model,
+        schema: Some(schema),
+    }
+}
+
 impl Generator for ProviderGen<'_> {
     fn generate(&self, _index: usize, prompt: &str) -> Result<GenOutcome> {
         // A verdict is a measurement: judge calls request deterministic sampling (temperature 0 +
@@ -73,6 +89,14 @@ fn parse_sample(raw: &str, rubric: &Rubric) -> Result<SampleDims> {
             "no JSON object in rubric judge output: {raw}"
         )));
     }
+    parse_sample_value(&out, rubric)
+}
+
+/// Read one already-extracted verdict object into per-dimension scores. Split from [`parse_sample`]
+/// so a batched response's entries — which arrive as elements of an array, not as whole documents —
+/// are read by exactly the same rules as a single verdict.
+pub(crate) fn parse_sample_value(out: &Value, rubric: &Rubric) -> Result<SampleDims> {
+    let raw = out;
     let mut dims = Vec::with_capacity(rubric.dimensions.len());
     // Only the dimensions the model was actually asked about; deterministic ones are scored locally.
     for d in rubric.dimensions.iter().filter(|d| d.kind.is_llm()) {
@@ -386,6 +410,9 @@ fn aggregate(
     };
 
     Ok(RubricOutcome {
+        // Judged alone unless a batched caller stamps its size afterwards — aggregate itself is
+        // batch-agnostic on purpose, so no verdict is scored by different code for having shared a call.
+        batch_size: None,
         dimensions,
         overall,
         pass,
@@ -404,6 +431,8 @@ fn aggregate(
         determinism: Determinism::BestEffort,
     })
 }
+
+pub(crate) mod batch;
 
 #[cfg(test)]
 mod tests;

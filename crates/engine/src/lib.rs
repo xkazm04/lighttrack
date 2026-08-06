@@ -31,6 +31,7 @@ use thiserror::Error;
 
 pub use claude::{resolve_claude_bin, run_raw, RawOutcome};
 pub use family::{model_family, same_family};
+pub use judge::batch::{run_rubric_batch, BatchCase};
 pub use judge::{parse_judge_spec, run_judge, run_rubric_judge, run_text};
 pub use pairwise::{run_pairwise, PairwiseOutcome, PairwiseVerdict, PairwiseWinner};
 pub use prompts::{
@@ -245,6 +246,14 @@ pub struct RubricOutcome {
     pub injection_suspected: bool,
     /// The weakest determinism stamp across this case's samples (including repair re-asks).
     pub determinism: Determinism,
+    /// How many cases shared the provider call that produced this verdict. `None` = judged alone.
+    ///
+    /// This is a **methodology stamp, not a statistic**. A judge that saw N cases at once may have
+    /// anchored on them, so a batched score is not interchangeable with an unbatched one and the two
+    /// must not be compared as if the difference were quality. It also qualifies the money: with
+    /// `Some(n)`, `cost_usd` and the token counts are this case's *share* of one indivisible call,
+    /// not a measurement of it, while `latency_ms` is the whole batch's wall clock.
+    pub batch_size: Option<u32>,
 }
 
 /// The result of generating one candidate output from a target.

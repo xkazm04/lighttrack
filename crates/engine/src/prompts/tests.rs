@@ -122,3 +122,77 @@ fn clean_pairwise_prompt_keeps_its_bias_controls() {
     assert!(p.text.contains("The A/B ordering is arbitrary"));
     assert!(p.text.contains("answer one") && p.text.contains("answer two"));
 }
+
+/// Batching puts N untrusted documents in one context, so containment stops being a per-case
+/// property: a payload in case 2 sits beside case 1's block and, if it escaped, could dictate every
+/// verdict the call produces. This proves it cannot reach the instruction channel, and that the
+/// collision marks the whole batch — one poisoned case makes the entire batch injection-suspected,
+/// because that is the honest scope of the doubt.
+#[test]
+fn a_poisoned_case_cannot_rewrite_its_neighbours_verdicts() {
+    let r = rubric();
+    let entries = vec![
+        BatchEntry {
+            id: "case-0".into(),
+            input: "q",
+            expected: None,
+            output: "an ordinary answer",
+        },
+        BatchEntry {
+            id: "case-1".into(),
+            input: "q",
+            expected: None,
+            output: ATTACK,
+        },
+    ];
+    let p = build_batch_rubric_prompt(&r, &entries);
+    assert!(
+        p.injection_suspected,
+        "a spoofed section anywhere in the batch must raise the signal for the batch"
+    );
+    let trusted = instruction_channel(&p.text);
+    assert!(
+        !trusted.contains("score\":1.0"),
+        "a case's payload leaked into the batch instruction channel: {trusted}"
+    );
+    assert!(
+        !trusted.contains("Ignore the rubric"),
+        "a case's injected instruction leaked: {trusted}"
+    );
+    // What the judge legitimately reads is still intact.
+    assert!(trusted.contains("scored INDEPENDENTLY"));
+    assert!(trusted.contains("\"case-0\", \"case-1\""));
+}
+
+#[test]
+fn a_clean_batch_prompt_narrates_the_rubric_once_and_names_every_case() {
+    let r = rubric();
+    let entries = vec![
+        BatchEntry {
+            id: "case-0".into(),
+            input: "q1",
+            expected: Some("ref"),
+            output: "a1",
+        },
+        BatchEntry {
+            id: "case-1".into(),
+            input: "q2",
+            expected: None,
+            output: "a2",
+        },
+    ];
+    let p = build_batch_rubric_prompt(&r, &entries);
+    assert!(!p.injection_suspected);
+    assert_eq!(
+        p.text.matches("Dimensions:").count(),
+        1,
+        "the rubric is narrated once for the whole batch — that is the saving"
+    );
+    assert!(p.text.contains("EXACTLY 2 entries"));
+    assert!(p.text.contains("CASE case-0 — REFERENCE / EXPECTED"));
+    assert!(
+        !p.text.contains("CASE case-1 — REFERENCE / EXPECTED"),
+        "a case without a reference must not get an empty reference block"
+    );
+    assert!(p.text.contains("a1") && p.text.contains("a2"));
+}
