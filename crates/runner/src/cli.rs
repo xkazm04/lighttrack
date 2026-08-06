@@ -123,6 +123,16 @@ pub(crate) enum Cmd {
         /// average their scores, to average out generation variance.
         #[arg(long, default_value_t = 1)]
         gen_samples: u32,
+        /// Judge this many cases per provider call instead of one (rubric mode). Amortizes the
+        /// per-call context — the bulk of a judge run's tokens — across the batch.
+        ///
+        /// This is a METHODOLOGY change, not just a speed knob: a judge that sees N cases at once
+        /// may anchor on them, so batched scores are not interchangeable with unbatched ones and
+        /// every verdict records the batch size it was produced under. Measure the effect on your
+        /// own rubric with `calibrate --compare-batch` before trusting it, and do not compare a
+        /// batched run against an unbatched baseline. Default 1 (each case judged alone).
+        #[arg(long, default_value_t = 1)]
+        batch: usize,
         /// Add an LLM-generated recommendations/"healing" paragraph to the report (rubric mode).
         #[arg(long)]
         heal: bool,
@@ -165,6 +175,14 @@ pub(crate) enum Cmd {
         /// Self-consistency: judge each item this many times and average (rubric mode).
         #[arg(long, default_value_t = 1)]
         samples: u32,
+        /// Measure what batched judging does to THIS rubric: judge every item both singly and in
+        /// batches of N, then report the paired difference. Requires --rubric-id.
+        ///
+        /// Run this before trusting `bench --batch`. Batching amortizes the per-call context but
+        /// lets the judge see several cases at once, and whether that shifts your scores depends on
+        /// your rubric and judge model — so it is measured, not assumed.
+        #[arg(long)]
+        compare_batch: Option<usize>,
         /// Optional path to write the full JSON report.
         #[arg(long)]
         report: Option<String>,

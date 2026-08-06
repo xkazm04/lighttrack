@@ -23,7 +23,7 @@ use crate::util::{
 
 /// One case's judged result: no candidate output, a judged rubric outcome, or an unparseable judge
 /// response (carried as a message for the in-order skip log).
-enum CaseResult {
+pub(crate) enum CaseResult {
     NoOutput,
     Judged(Box<RubricOutcome>),
     Errored(String),
@@ -40,6 +40,10 @@ pub(crate) fn run_rubric_benchmark(
     samples: u32,
     heal: bool,
     jobs: usize,
+    // Cases per judge call. `<= 1` judges each case alone (the default and the reference method);
+    // higher amortizes the per-call context across a batch. See `crate::batch` for what that
+    // changes about the measurement.
+    batch: usize,
     report_extra: Option<&serde_json::Value>,
     ctl: &crate::runctl::RunControl,
 ) -> Result<String> {
@@ -96,30 +100,34 @@ pub(crate) fn run_rubric_benchmark(
     // A cancellation stops the run at a case boundary: not-yet-started cases are skipped (never
     // interrupted mid-call), and what was judged is kept and marked partial.
     let n_cases = cases.len();
-    let results: Vec<CaseResult> = parallel_map(n_cases, jobs, |i| {
-        if ctl.cancelled() {
-            return CaseResult::NoOutput;
-        }
-        let r = match &cases[i].output {
-            None => CaseResult::NoOutput,
-            Some(output) => match run_rubric_judge(
-                engine,
-                &jp,
-                &jm,
-                &rubric,
-                &cases[i].input,
-                cases[i].expected.as_deref(),
-                output,
-                samples,
-                1,
-            ) {
-                Ok(o) => CaseResult::Judged(Box::new(o)),
-                Err(e) => CaseResult::Errored(e.to_string()),
-            },
-        };
-        ctl.tick(n_cases);
-        r
-    });
+    let results: Vec<CaseResult> = if batch > 1 {
+        crate::batch::judge_batched(engine, &jp, &jm, &rubric, cases, samples, jobs, batch, ctl)
+    } else {
+        parallel_map(n_cases, jobs, |i| {
+            if ctl.cancelled() {
+                return CaseResult::NoOutput;
+            }
+            let r = match &cases[i].output {
+                None => CaseResult::NoOutput,
+                Some(output) => match run_rubric_judge(
+                    engine,
+                    &jp,
+                    &jm,
+                    &rubric,
+                    &cases[i].input,
+                    cases[i].expected.as_deref(),
+                    output,
+                    samples,
+                    1,
+                ) {
+                    Ok(o) => CaseResult::Judged(Box::new(o)),
+                    Err(e) => CaseResult::Errored(e.to_string()),
+                },
+            };
+            ctl.tick(n_cases);
+            r
+        })
+    };
     let cancelled = ctl.cancelled();
 
     for (i, result) in results.into_iter().enumerate() {

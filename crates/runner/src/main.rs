@@ -7,10 +7,12 @@
 //! Layout: `cli` (args), `http` (API client), `util` (helpers), `judge_spec` (the `--rubric` /
 //! `--rubric-id` contract), `score`, `dataset`, `bench` (+`compare`, `rubric`), `serve`.
 
+mod batch;
 mod bench;
 mod billing;
 mod budget;
 mod calibrate;
+mod calibrate_batch;
 mod calibrate_watch;
 mod cli;
 mod compare;
@@ -117,6 +119,7 @@ fn main() -> Result<()> {
             benchmark,
             samples,
             gen_samples,
+            batch,
             heal,
             gate,
             pairwise,
@@ -128,6 +131,7 @@ fn main() -> Result<()> {
                 benchmark,
                 *samples,
                 *gen_samples,
+                *batch,
                 *heal,
                 *pairwise,
                 cli.jobs,
@@ -198,6 +202,7 @@ fn main() -> Result<()> {
             threshold,
             kappa_bar,
             samples,
+            compare_batch,
             report,
             watch,
             once,
@@ -223,6 +228,21 @@ fn main() -> Result<()> {
                 if code != 0 {
                     std::process::exit(code);
                 }
+                Ok(())
+            } else if let Some(batch) = *compare_batch {
+                let rid = rubric_id.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("--compare-batch needs --rubric-id: batching is only implemented for structured rubrics")
+                })?;
+                let rubric = calibrate::resolve_rubric(&cli, &http, Some(rid))?
+                    .ok_or_else(|| anyhow::anyhow!("rubric {rid} not found"))?;
+                let items = calibrate::load_items(file)?;
+                let prices: Vec<lighttrack_core::ModelPriceRow> =
+                    http::get(&cli, &http, "/v1/prices").unwrap_or_default();
+                let (jp, jm) = lighttrack_engine::parse_judge_spec(&cli.model);
+                calibrate_batch::compare(
+                    &engine, &jp, &jm, &rubric, &items, batch, *samples, cli.jobs, *threshold,
+                    &prices,
+                )?;
                 Ok(())
             } else {
                 calibrate::calibrate(

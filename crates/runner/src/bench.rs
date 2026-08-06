@@ -113,6 +113,7 @@ pub(crate) fn run_benchmark(
     benchmark_id: &str,
     samples: u32,
     gen_samples: u32,
+    batch: usize,
     heal: bool,
     pairwise: bool,
     jobs: usize,
@@ -187,6 +188,7 @@ pub(crate) fn run_benchmark(
             samples,
             heal,
             jobs,
+            batch,
             report_extra,
             ctl,
         );

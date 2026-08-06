@@ -8,7 +8,7 @@
 //!   behind any "B beats A" claim.
 
 mod normal;
-mod paired;
+pub(crate) mod paired;
 
 use serde_json::{json, Value};
 

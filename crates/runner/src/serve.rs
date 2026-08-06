@@ -242,6 +242,10 @@ fn process_job(
                 bid,
                 samples,
                 gen_samples,
+                // Queued runs judge unbatched. These are the runs most likely to be compared against
+                // a stored baseline, and batching is a methodology change — opting a queue into it
+                // silently would make a gate verdict mean something different without anyone asking.
+                1,
                 heal,
                 pairwise,
                 jobs,
