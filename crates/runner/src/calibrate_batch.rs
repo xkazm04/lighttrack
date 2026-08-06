@@ -28,6 +28,7 @@ use lighttrack_core::CalibrationItem;
 
 /// One item judged both ways.
 struct Paired {
+    label: String,
     single: f64,
     batched: f64,
 }
@@ -152,6 +153,10 @@ pub(crate) fn compare(
                 single_cost += sc;
                 batched_cost += bc;
                 pairs.push(Paired {
+                    label: items[i]
+                        .note
+                        .clone()
+                        .unwrap_or_else(|| format!("#{}", i + 1)),
                     single: sv,
                     batched: bv,
                 });
@@ -196,8 +201,31 @@ pub(crate) fn compare(
         single_cost,
         batched_cost,
     };
+    print_items(&pairs, threshold);
     print_report(&cmp, threshold, batch);
     Ok(cmp)
+}
+
+/// Per-item, so the *shape* of the difference is visible — a uniform lift, a few wild cases, or
+/// leniency concentrated on the answers that should have scored worst. The aggregate cannot show
+/// that, and the shape is what tells an operator whether they trust the method.
+fn print_items(pairs: &[Paired], threshold: f64) {
+    println!(
+        "
+  {:<12}  {:>7}  {:>7}  {:>8}  flip",
+        "item", "single", "batch", "delta"
+    );
+    for p in pairs {
+        let flipped = (p.single >= threshold) != (p.batched >= threshold);
+        println!(
+            "  {:<12}  {:>7.3}  {:>7.3}  {:>+8.3}  {}",
+            p.label,
+            p.single,
+            p.batched,
+            p.batched - p.single,
+            if flipped { "FLIP" } else { "" }
+        );
+    }
 }
 
 fn print_report(c: &BatchComparison, threshold: f64, batch: usize) {
@@ -229,35 +257,62 @@ fn print_report(c: &BatchComparison, threshold: f64, batch: usize) {
         None => println!("  paired p: n/a (no spread to test)"),
     }
 
-    // The verdict is deliberately conservative. A benchmark's whole value is that its numbers are
-    // comparable over time; a method that quietly moves them is worse than a slow one.
+    // The verdict is deliberately conservative, and deliberately does NOT lead with the p-value.
+    //
+    // A golden set is small by nature, so the paired test is underpowered: a real, large shift can
+    // sit at p ≈ 0.06 purely for want of items. Reading that as "the aggregate held" is exactly the
+    // wrong inference — absence of significance is not evidence of absence, and a benchmark tool
+    // that says "looks fine" because n was too small to prove otherwise is worse than useless.
+    // So effect size decides, and the p-value only ever *adds* doubt.
+    let flip_rate = c.flips as f64 / c.n as f64;
+    let underpowered = c.n < 30;
     let systematic = c.p.is_some_and(|p| p < 0.05);
+    let big_shift = c.mean_delta.abs() > 0.05;
+    let scattered = c.mean_abs_delta > 0.10;
+
     println!();
-    if systematic {
+    if systematic || big_shift || flip_rate > 0.25 {
         println!(
-            "  VERDICT: batching at {batch} SHIFTS this rubric's scores systematically \
-             (mean {:+.4}, p<0.05). Do not mix batched and unbatched runs on one benchmark. \
-             Either keep judging singly, or re-baseline and batch everything from now on.",
-            c.mean_delta
+            "  VERDICT: batching at {batch} CHANGES this rubric's scores. Mean {:+.4}, \
+             per-case |Δ| {:.4}, {} of {} cases crossed the pass/fail line.",
+            c.mean_delta, c.mean_abs_delta, c.flips, c.n
         );
-    } else if c.mean_abs_delta > 0.05 || c.flips > 0 {
         println!(
-            "  VERDICT: the aggregate held, but individual verdicts moved (mean |Δ| {:.4}, \
-             {} flip(s)). Safe for tracking a mean over time; not safe if you act on \
-             case-level pass/fail.",
-            c.mean_abs_delta, c.flips
+            "  Do not batch this rubric, and do not compare a batched run to an unbatched \
+             baseline. If you want the throughput, re-baseline and batch everything from then on \
+             — and re-run this check first at a smaller batch size."
+        );
+        if !systematic && underpowered {
+            println!(
+                "  (The paired test did not reach p<0.05, but with only {} items it could not be \
+                 expected to. The effect size is what condemns it, not the p-value.)",
+                c.n
+            );
+        }
+    } else if scattered || c.flips > 0 {
+        println!(
+            "  VERDICT: the mean is stable but individual verdicts move (per-case |Δ| {:.4}, \
+             {} flip(s) of {}). Usable for tracking an aggregate over time; NOT usable if you act \
+             on case-level pass/fail.",
+            c.mean_abs_delta, c.flips, c.n
         );
     } else {
         println!(
             "  VERDICT: no detectable difference at batch={batch} for this rubric \
-             (mean |Δ| {:.4}, no flips, no significant shift). Batching looks safe here — \
-             re-check when the rubric or judge model changes.",
-            c.mean_abs_delta
+             (mean {:+.4}, per-case |Δ| {:.4}, no flips). Batching looks safe here.",
+            c.mean_delta, c.mean_abs_delta
         );
+        if underpowered {
+            println!(
+                "  Caveat: {} items is a small set. This says the effect is not large; it cannot \
+                 say it is zero.",
+                c.n
+            );
+        }
     }
     println!(
-        "  Note: this is one rubric on one judge with {} item(s). It does not license batching \
-         everywhere.",
+        "  Note: one rubric, one judge, {} item(s), batch={batch}. It does not license batching \
+         elsewhere, and a rubric or judge change invalidates it.",
         c.n
     );
 }
