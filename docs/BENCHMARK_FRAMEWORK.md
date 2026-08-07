@@ -37,9 +37,9 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
   Each needs credentials; see *Open decisions*.
 - **Generation vs judging are separated.** The judge model should differ in family from the generator to
   avoid **self-preference bias** (§3) — now detected and recorded per run, not just advised. Default
-  judge = Claude Haiku, via the bare Anthropic Messages API when `ANTHROPIC_API_KEY` is set and via
-  `claude -p` otherwise (D12); when judging Claude outputs, prefer pairwise + randomized order, or a
-  neutral judge.
+  judge = **`opus@xhigh`** (§3b, D15), via the bare Anthropic Messages API when `ANTHROPIC_API_KEY` is
+  set and via `claude -p` otherwise (D12); when judging Claude outputs, prefer pairwise + randomized
+  order, or a neutral judge.
 - **Output:** a comparison table — for each dimension and overall: score, pass-rate, **p50/p95 latency**,
   **tokens**, **$ cost** — so "best" is a quality/latency/cost trade-off, not just quality.
 
@@ -282,6 +282,70 @@ cases by dimension/pattern); **recommendations** — concrete, actionable: e.g. 
 multi-part questions → add a checklist step to prompt v2", "switch judge off same-family to cut
 self-preference", "Haiku within 3% of Sonnet at 1/5 cost → prefer Haiku". Regression vs baseline +
 quality/cost/latency trade-off called out explicitly.
+
+### 3b. Choosing the judge model
+The judge is **unbudgeted** (D4), so pick it for discrimination, not price. Measured on a 12-item
+golden set against the 3-dimension rubric above, judged one case per call:
+
+| judge | MAE vs human | corr | good avg | bad avg | **spread** | cost / 12 |
+|---|---|---|---|---|---|---|
+| **`opus@xhigh`** *(default)* | **0.144** | **0.844** | 0.950 | 0.317 | 0.633 | $1.60 |
+| `sonnet@medium` | 0.172 | 0.773 | 0.883 | 0.241 | 0.642 | $1.63 |
+| `haiku` | 0.180 | 0.745 | 0.800 | 0.348 | **0.452** | $0.36 |
+| `fable@medium` | 0.201 | 0.785 | 0.967 | 0.350 | 0.617 | $4.52 |
+
+**Spread — the gap between what a judge gives good answers and what it gives bad ones — is the number
+that matters.** A judge with a narrow spread cannot separate quality from deflection at *any*
+threshold, and every scorecard, gate verdict and collective digest inherits the error. Haiku scored a
+correct, complete, concise answer 0.600 (below its own 0.70 pass line) and gave evasive non-answers
+0.22. Fable failed differently and more dangerously: healthy extremes, but generous in the middle,
+passing a half-answer at 0.733 and a factually **wrong** answer at 0.750.
+
+A trailing `@<effort>` (`low|medium|high|xhigh|max`) sets the CLI reasoning effort — `opus@xhigh`
+reasons hard while candidate generation stays at its default. `sonnet@medium` is the honest budget
+option: same cost as Opus at this size, and it passed nothing sub-standard. Caveats: n=12, one rubric,
+one domain, human labels are ours; and an Opus judge grading Claude candidates is same-family, so
+prefer pairwise with randomized order there (§2, D15).
+
+### 3c. Batched judging (`--batch N`) — throughput bought with measurement fidelity
+A verdict is ~200 tokens of judgement on ~59k tokens of provider context, and judging costs
+`cases × samples` invocations — so a benchmark's spend is overhead, not judgement. `bench --batch N`
+judges N cases per call, cutting call count ~N× (on a subscription: wall clock and rate-limit
+headroom rather than money).
+
+It is a **transport** change and nothing more: a batched response is split back into one parsed
+sample per case and aggregated by the same code path, so no verdict is scored differently for having
+shared a call. Verdicts are matched by an echoed `case_id`, never by position — a dropped entry fails
+its own case rather than sliding every later verdict onto the wrong candidate. Each case is fenced
+separately under one nonce, and a collision anywhere marks the whole batch. Batch size is clamped by
+both an input budget and a projected **response** budget (`cases × llm_dimensions`), so a wide rubric
+packs fewer cases at the same nominal `--batch` — an overrun truncates the JSON and costs every case
+in the batch at once.
+
+**It also moves the scores, so it is off by default.** Same 12 items, batch=4:
+
+| judge | mean Δ | per-case \|Δ\| | pass/fail flips |
+|---|---|---|---|
+| `haiku` | +0.197 | 0.219 | 7/12 |
+| `sonnet@medium` | +0.091 | 0.119 | 0/12 |
+| `opus@xhigh` | +0.070 | 0.070 | 0/12 |
+| `fable@medium` | +0.052 | 0.060 | 3/12 |
+
+On Haiku the batched scores collapsed onto tiers (all good items exactly 1.000, all half-answers
+0.833, both wrong ones 0.700) — the judge graded the batch on a curve despite an explicit instruction
+not to. That is largely a weak-judge artifact: it disappears on Sonnet and Opus, which flip no cases
+at all. The effect is dose-dependent (haiku at batch=2: +0.113, 2 flips).
+
+Rules that keep it honest:
+- **Measure before trusting**: `lt-runner calibrate --file golden.jsonl --rubric-id <id>
+  --compare-batch 4` judges the same items both ways and reports the paired difference (§CALIBRATION).
+- **Never compare a batched run to an unbatched baseline** — the difference is method, not quality.
+  Batching is deterministic for a fixed dataset, so the path to the throughput is to re-baseline once
+  and batch everything from then on.
+- Every verdict records its `batch_size`; cost is **amortized** (one indivisible call divided by the
+  batch) while `latency_ms` stays the batch's real wall clock.
+- Queued runs (`lt-runner serve`) are pinned **unbatched** — they are the runs a gate compares against
+  a stored baseline.
 
 ## 4. Async benchmark queue (non-blocking)  (#4)
 Benchmark runs must never block ingestion. A **jobs** table + a worker loop in `lt-runner`:

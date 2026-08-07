@@ -329,6 +329,15 @@ fn print_report(c: &BatchComparison, threshold: f64, batch: usize) {
              on case-level pass/fail.",
             c.mean_abs_delta, c.flips, c.n
         );
+        // This verdict also rests on a shift NOT being detected, so it carries the same caveat as
+        // the clean one: at this size, "the mean held" is a statement about power as much as effect.
+        if underpowered {
+            println!(
+                "  Caveat: {} items is a small set. \"The mean is stable\" means no shift was \
+                 detected, not that none exists.",
+                c.n
+            );
+        }
     } else {
         println!(
             "  VERDICT: no detectable difference at batch={batch} for this rubric \

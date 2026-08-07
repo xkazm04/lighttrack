@@ -136,3 +136,49 @@ Configure the server-side channel on the **API** (see `docs/ALERTS.md`); the rel
 | `--project <id>` | project to attach scores to / scope the history read (else derived from the API key) | — |
 | `--threshold <t>` | pass/fail cutoff for binarizing scores (drives κ) | `0.7` |
 | `--samples <n>` | judge each item n× and average (rubric mode) | `1` |
+
+## Batch comparison (`--compare-batch N`)
+
+A different question from κ. Calibration asks *does the judge agree with a human?*; this asks *does
+judging N cases per call give the same answer as judging them one at a time?* Batching amortizes the
+~59k-token per-call context across a batch (§3c of BENCHMARK_FRAMEWORK), but a judge that sees several
+cases at once may anchor on them — and whether that matters depends on your rubric, your judge and how
+alike your cases are. So it is measured, not assumed.
+
+```bash
+lt-runner calibrate --file golden.jsonl --rubric-id <id> --compare-batch 4 --threshold 0.7
+```
+
+Requires `--rubric-id`: batching is only implemented for structured rubrics. The file is the ordinary
+calibration format, so `human_score` must still be present to parse — but this mode **ignores its
+value**, because it compares the judge against itself rather than against a human. A set you already
+calibrated is therefore the natural one to reuse.
+
+The design is **paired**: the same items go through both methods, so every difference is a method
+difference rather than a sampling one, and `stats::paired` applies directly. It reports every item,
+then four numbers:
+
+| number | what it decides |
+|---|---|
+| per-case mean \|Δ\| | how much an individual verdict moves — matters if you read case-level scores |
+| mean Δ + paired p | whether the *aggregate* moved — matters for a gate, which compares means |
+| pass/fail flips | how many cases crossed the rubric's threshold; a 0.02 move is irrelevant unless it crossed |
+| calls / cost | what you are buying |
+
+**The per-item table is the point.** An aggregate cannot show the *shape* of a difference. On a weak
+judge the batched scores collapsed onto tiers — every good answer on exactly 1.000, every half-answer
+on 0.833 — which is a judge grading on a curve, not a small bias, and only the table makes it visible.
+
+Two deliberate behaviours worth knowing:
+
+- **The verdict leads with effect size, not the p-value.** A golden set is small, so the paired test is
+  underpowered by construction: a real, large shift can sit at p ≈ 0.06 for want of items. Reading that
+  as "no effect" is exactly backwards, and a tool that says "looks fine" because it could not detect
+  the problem is worse than useless. Whenever a verdict rests on *not* having detected a shift and
+  `n < 30`, it prints the low-power caveat alongside it.
+- **A dropped item names its reason.** If a whole batch call fails — a truncated response is the usual
+  cause — that is a *result about batching at that size*, not a glitch to summarize as a count.
+
+The batch size is clamped by the same response budget `bench --batch` uses (`cases × llm_dimensions`),
+and the report names the size actually measured. A calibration that blessed a batch size the benchmark
+would never run would be worse than none.

@@ -239,3 +239,91 @@ four explicit shapes (`+CC` grouped, `+CC` solid E.164, parenthesized area code,
 is a separator only inside the tight 3-3-4 grouping, which drops dot-separated European numbers and
 bare separator-less digit runs. A redaction we miss is legible to whoever reads the row; a sentence
 we rewrote is not, and it silently becomes the evidence every downstream score is computed from.
+
+## D15 — The default judge is `opus@xhigh` (2026-08-06)
+The judge was Claude Haiku (D12's default, cheapest of the aliases). Judging is the one call in this
+product whose quality *is* the product, and D4 already declares it **unbudgeted** — so "cheapest" was
+never the right default; it was just the one nobody had measured. Measured now, on a 12-item golden
+set (three genuinely good answers, three half-answers, two padded, two factually wrong, two evasive)
+against a 3-dimension weighted rubric, each item judged alone:
+
+| judge | MAE vs human | corr | good avg | bad avg | **spread** | agree@0.7 | cost / 12 |
+|---|---|---|---|---|---|---|---|
+| **opus@xhigh** | **0.144** | **0.844** | 0.950 | 0.317 | 0.633 | 9/12 | $1.60 |
+| sonnet@medium | 0.172 | 0.773 | 0.883 | 0.241 | 0.642 | 10/12 | $1.63 |
+| haiku | 0.180 | 0.745 | 0.800 | 0.348 | **0.452** | 10/12 | $0.36 |
+| fable@medium | 0.201 | 0.785 | 0.967 | 0.350 | 0.617 | 8/12 | $4.52 |
+
+**Haiku's defect is discrimination, not noise.** It compresses good and bad toward the middle — 0.452
+of separation where the larger judges manage 0.63 — and it scored a correct, complete, concise answer
+**0.600, under its own 0.70 pass line**, while handing evasive non-answers 0.22. A judge that cannot
+tell a good answer from a deflection is not a cheap judge, it is a broken instrument, and every
+scorecard, gate verdict and collective digest downstream inherits the error.
+
+**Fable was tried and rejected** (2026-08-07). It has the worst MAE of the four — worse than Haiku —
+at 2.8× Opus's cost, and its failure is the dangerous kind: it is generous *in the middle*, exactly
+where the discriminating decisions live. It passed a half-answer at 0.733 and a **factually wrong**
+answer at 0.750; Opus passed one sub-standard item, Sonnet and Haiku none. High extremes hid it — its
+good/bad spread looks healthy — so only the per-item view exposed it.
+
+*Implication.* `default_judge_model()` (new benchmarks) and the runner's `--model` both resolve to
+`opus@xhigh`; the `@effort` suffix has always been supported by the CLI path (D12), so this is a
+default change, not new machinery. Judging gets materially more expensive per call — which D4 already
+sanctions — and an operator who wants to trade down now does so explicitly. **Sonnet at medium is the
+honest budget option**: 0.172 MAE for the same money as Opus at this size, and it passed nothing
+sub-standard.
+
+*Residuals, recorded rather than glossed.* (1) §3's standing advice is to judge with a family
+**different** from the generator; an Opus judge grading Claude-generated candidates is same-family, so
+self-preference bias applies and pairwise-with-randomized-order remains the right tool there. (2) The
+binary `agree@0.7` column does **not** favor Opus (9/12 vs 10/12) — at n=12 a threshold count is coarse
+and turns on where the human labels sit relative to one line, which is why MAE, correlation and spread
+carry the decision instead. (3) n=12, one rubric, one domain, and the human labels are **ours**; that
+is the weakest link in the table and the reason this is a default, not a law.
+
+## D16 — Batched judging is opt-in, and a batched score is not an unbatched one (2026-08-06)
+A verdict is ~200 tokens of judgement carried on ~59k tokens of provider context (D9's auto-loaded
+context, measured again here at ~55k cached + 4k created). Judging costs `cases × samples`
+invocations, so a benchmark's spend is overhead, not judgement. `bench --batch N` judges N cases per
+call; on a subscription the 4× drop in call count buys wall clock and rate-limit headroom rather than
+money.
+
+**Batching is a transport change and is implemented as one.** A batched response is split back into
+one parsed sample per case and handed to the *same* aggregation — weights, floors,
+agreement-over-LLM-dimensions-only, determinism folding — so no verdict is scored by different code
+for having shared a call. Three hazards are designed against, not hoped away:
+- **Misattribution.** Verdicts are matched by an echoed `case_id`, never by position. A dropped entry
+  fails its own case instead of sliding every later verdict onto the wrong candidate — a silent,
+  plausible corruption nothing downstream could catch.
+- **Injection.** N untrusted documents now share one context, so a payload in one case could rewrite
+  its neighbours' verdicts. Each case is fenced separately under one nonce and a collision anywhere
+  marks the whole batch; proven against the instruction channel, not asserted.
+- **Response overrun.** Output scales with `cases × llm_dimensions`. The first high-effort run lost an
+  entire batch to truncated JSON, so batch size is clamped by a projected response budget as well as
+  an input budget — a wide rubric packs fewer cases at the same nominal `--batch`.
+
+**But it changes the measurement, and that is why it stays off by default.** Same 12 items, same
+rubric, batch=4:
+
+| judge | mean Δ | per-case \|Δ\| | pass/fail flips |
+|---|---|---|---|
+| haiku | +0.197 | 0.219 | 7/12 |
+| sonnet@medium | +0.091 | 0.119 | 0/12 |
+| opus@xhigh | +0.070 | 0.070 | 0/12 |
+| fable@medium | +0.052 | 0.060 | 3/12 |
+
+On Haiku the batched scores **collapsed onto tiers** — all three good items on exactly 1.000, all
+three half-answers on 0.833, both wrong ones on 0.700 — while single judging produced spread
+continuous values. The judge graded the batch on a curve despite an explicit instruction not to. The
+effect is dose-dependent (haiku at batch=2: +0.113, 2 flips) and largely a *weak-judge* artifact: it
+vanishes on Sonnet and Opus. Fable inverts the lesson — it has the smallest deltas and the second-most
+flips, because its lenient scores cluster against the 0.70 line, so anything tips them across.
+
+*Implication.* Off by default (`--batch 1`). Queued runs via `serve` are pinned unbatched: they are
+the runs compared against a stored `baseline_score`, and opting a queue into a methodology change
+silently would move a gate verdict without anyone asking. Every verdict records the `batch_size` it
+was produced under, its cost is marked amortized (one indivisible call divided by the batch) while
+latency stays the batch's real wall clock, and `calibrate --compare-batch N` measures the shift on
+*your* rubric before you trust it. **Never compare a batched run to an unbatched baseline** — the
+difference is method, not quality. Batching is deterministic for a fixed dataset, so the honest path
+to the throughput is to re-baseline once and batch everything from then on.
