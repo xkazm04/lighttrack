@@ -153,6 +153,11 @@ fn compose(
             .partial_cmp(&a.usage.cost_for_limits())
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.usage.calls.cmp(&a.usage.calls))
+            // Final deterministic tiebreaker on the unique scope value: without it, rows tied on
+            // (cost, calls) keep the store's implementation-defined order, so which of two exactly-
+            // tied scopes is dropped at the `truncate(limit)` boundary varies across identical
+            // requests. `value` is the row's unique dimension key, so this makes truncation stable.
+            .then_with(|| a.value.cmp(&b.value))
     });
     let truncated = rows.len() > limit;
     rows.truncate(limit);
@@ -337,11 +342,20 @@ mod tests {
             &keys,
             10,
         );
-        assert_eq!(r.entries[0].label.as_deref(), Some("staging (ab12cd)"));
-        assert_eq!(
-            r.entries[1].label, None,
-            "an unknown id gets no invented label"
-        );
+        // Rows are tied on (cost, calls); the deterministic value tiebreaker orders them by scope
+        // value, so resolve by value rather than by a now-fixed index.
+        let staging = r
+            .entries
+            .iter()
+            .find(|e| e.value.as_deref() == Some("k-staging"))
+            .expect("staging row present");
+        assert_eq!(staging.label.as_deref(), Some("staging (ab12cd)"));
+        let gone = r
+            .entries
+            .iter()
+            .find(|e| e.value.as_deref() == Some("k-gone"))
+            .expect("unknown-id row present");
+        assert_eq!(gone.label, None, "an unknown id gets no invented label");
         // The stored hash is never anywhere in the payload — the label is name + non-secret prefix.
         let body = serde_json::to_string(&r).unwrap();
         assert!(
@@ -360,4 +374,32 @@ mod tests {
         assert_eq!(r.entries.len(), 2);
         assert!(r.truncated);
     }
+
+    #[test]
+    fn truncation_boundary_is_deterministic_under_ties() {
+        // Two scopes tied on (cost, calls); only one survives limit=1. Which one must NOT depend on
+        // the order the store handed them to us — otherwise identical requests drop different rows.
+        let forward = resp(
+            vec![row(Some("k-b"), 5.0, 2), row(Some("k-a"), 5.0, 2)],
+            &[],
+            &[],
+            1,
+        );
+        let reversed = resp(
+            vec![row(Some("k-a"), 5.0, 2), row(Some("k-b"), 5.0, 2)],
+            &[],
+            &[],
+            1,
+        );
+        assert!(forward.truncated && reversed.truncated);
+        assert_eq!(forward.entries.len(), 1);
+        assert_eq!(reversed.entries.len(), 1);
+        // Order-independent survivor, and it is the value-sorted one ("k-a" < "k-b").
+        assert_eq!(forward.entries[0].value.as_deref(), Some("k-a"));
+        assert_eq!(
+            forward.entries[0].value, reversed.entries[0].value,
+            "the surviving scope at the truncation boundary must not depend on store row order"
+        );
+    }
+
 }
