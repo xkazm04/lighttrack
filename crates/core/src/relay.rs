@@ -14,6 +14,50 @@ pub const RELAY_DEFAULT_MAX_ATTEMPTS: u32 = 4;
 /// Delay between attempts: 5 hours — one Claude subscription usage window.
 pub const RELAY_DEFAULT_RETRY_INTERVAL_SECS: u32 = 18_000;
 
+/// The one authority for a [`RelayTask`]'s lifecycle vocabulary.
+///
+/// The persisted `RelayTask::status` stays a `String` for schema/back-compat (an out-of-vocabulary
+/// row read from an older store deserializes rather than hard-failing), but this enum is what mints
+/// and validates those literals so the vocabulary can be *enumerated* — a list filter can reject an
+/// unknown value instead of silently returning an empty page, and a new state added here forces
+/// every `match` that folds over `ALL` to consider it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayStatus {
+    /// Enqueued and awaiting (or between) lease attempts.
+    Queued,
+    /// Held by a device under an unexpired lease.
+    Leased,
+    /// Terminal success.
+    Succeeded,
+    /// Terminal failure — `max_attempts` exhausted.
+    Dead,
+}
+
+impl RelayStatus {
+    /// Every status, so consumers can enumerate/validate the closed vocabulary.
+    pub const ALL: [RelayStatus; 4] = [
+        RelayStatus::Queued,
+        RelayStatus::Leased,
+        RelayStatus::Succeeded,
+        RelayStatus::Dead,
+    ];
+
+    /// The persisted/wire literal for this status.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RelayStatus::Queued => "queued",
+            RelayStatus::Leased => "leased",
+            RelayStatus::Succeeded => "succeeded",
+            RelayStatus::Dead => "dead",
+        }
+    }
+
+    /// Parse a wire literal back to a status, or `None` when it is not part of the vocabulary.
+    pub fn from_wire(s: &str) -> Option<RelayStatus> {
+        RelayStatus::ALL.into_iter().find(|v| v.as_str() == s)
+    }
+}
+
 /// One queued unit of device work. Status: `queued` | `leased` | `succeeded` | `dead`.
 /// A failed attempt goes back to `queued` (with `error` recorded and `next_attempt_at` pushed
 /// out) until `max_attempts` is exhausted, which flips it to `dead`.
@@ -63,7 +107,7 @@ pub struct RelayTask {
 }
 
 fn default_status() -> String {
-    "queued".to_string()
+    RelayStatus::Queued.as_str().to_string()
 }
 
 fn default_max_attempts() -> u32 {
@@ -88,4 +132,24 @@ pub enum RelayOutcome {
         retry_after_secs: Option<u32>,
         reason: Option<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relay_status_vocabulary_round_trips_and_rejects_outsiders() {
+        // Every enumerated status maps to a literal and back — the authority and its wire form agree.
+        for st in RelayStatus::ALL {
+            assert_eq!(RelayStatus::from_wire(st.as_str()), Some(st));
+        }
+        // A plausible-but-wrong term (a settle-vocabulary word that is NOT a task status) is rejected
+        // rather than silently accepted — this is what lets `?status=failed` 400 instead of paging
+        // empty.
+        assert_eq!(RelayStatus::from_wire("failed"), None);
+        assert_eq!(RelayStatus::from_wire("running"), None);
+        // The default a fresh task is minted with comes from the same authority.
+        assert_eq!(default_status(), RelayStatus::Queued.as_str());
+    }
 }

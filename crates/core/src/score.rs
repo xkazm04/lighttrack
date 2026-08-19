@@ -205,6 +205,13 @@ pub struct BenchmarkCase {
     pub output: Option<String>,
 }
 
+/// Reserved key under a benchmark's free-form `target` object carrying its opt-in recurrence
+/// interval in seconds. The API writes it (folding recurrence into `target` so the SQLite/Postgres
+/// schema stays untouched) and the runner reads it to decide due-ness — two crates that must agree
+/// on one spelling. Defined here as the single authority both import, so a rename can't leave one
+/// side silently reading `None` for every benchmark and stopping recurrence with no error.
+pub const RECURRENCE_KEY: &str = "schedule_interval_secs";
+
 /// A benchmark definition: a dataset + rubric + judge run repeatedly to track quality over time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Benchmark {

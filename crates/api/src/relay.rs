@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use lighttrack_core::{
-    new_id, LlmEvent, Operation, Provider, RelayOutcome, RelayTask, Status, TokenUsage,
+    new_id, LlmEvent, Operation, Provider, RelayOutcome, RelayStatus, RelayTask, Status, TokenUsage,
     RELAY_DEFAULT_MAX_ATTEMPTS, RELAY_DEFAULT_RETRY_INTERVAL_SECS,
 };
 
@@ -82,7 +82,7 @@ pub(crate) async fn enqueue_task(
         source: req.source,
         action_type: req.action_type,
         payload: req.payload,
-        status: "queued".to_string(),
+        status: RelayStatus::Queued.as_str().to_string(),
         attempts: 0,
         max_attempts: req
             .max_attempts
@@ -142,6 +142,21 @@ pub(crate) async fn list_tasks(
 ) -> Result<Json<Vec<RelayTask>>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
+    // Validate the status filter against the task-status authority, so a plausible-but-wrong term
+    // (e.g. `?status=failed`, a settle-vocabulary word that is not a task status) is a 400 rather
+    // than a silently-empty page — "no dead tasks" and "you filtered on a non-status" must differ.
+    if let Some(s) = q.status.as_deref() {
+        if RelayStatus::from_wire(s).is_none() {
+            let expected = RelayStatus::ALL
+                .iter()
+                .map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ");
+            return Err(ApiError::bad_request(format!(
+                "invalid 'status' {s:?}: expected {expected}"
+            )));
+        }
+    }
     let store = st.store.clone();
     let status = q.status;
     let limit = q.limit.unwrap_or(50).min(1000);
@@ -268,7 +283,7 @@ pub(crate) async fn post_result(
     // A terminal-outcome report on a live lease consumed a real Claude run: record it at the
     // flat relay price (docs/RELAY.md). Always recorded — enforcing limits exist to cap metered
     // spend, and this run already happened on the flat-rate subscription. Deferred ⇒ no run.
-    if prior.status == "leased" && req.status != "deferred" {
+    if prior.status == RelayStatus::Leased.as_str() && req.status != "deferred" {
         let mut ev = relay_run_event(&st, &task, &req);
         // This is the one door that writes an event without going through `events::prepare_event`,
         // and that is deliberate: the event is server-generated, so it needs no validation, costing
@@ -291,7 +306,7 @@ pub(crate) async fn post_result(
         let store = st.store.clone();
         spawn_db(move || store.insert_event(&ev)).await?;
         // A failure that exhausted the attempts just dead-lettered the task — page the owner.
-        if task.status == "dead" {
+        if task.status == RelayStatus::Dead.as_str() {
             st.alerts.notify_relay_dead(std::slice::from_ref(&task));
         }
     }

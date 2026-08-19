@@ -20,9 +20,7 @@ use crate::cli::Cli;
 use crate::http::{get, post};
 use crate::util::short;
 
-/// Reserved key under a benchmark's free-form `target` carrying its recurrence interval in seconds
-/// (kept in sync with the API's `benchmarks::RECURRENCE_KEY`).
-const RECURRENCE_KEY: &str = "schedule_interval_secs";
+use lighttrack_core::RECURRENCE_KEY;
 
 /// Read a benchmark's opt-in recurrence interval (seconds) from its `target`, or `None` when unset —
 /// including a matrix/array `target` that can't carry it. Zero is treated as disabled.

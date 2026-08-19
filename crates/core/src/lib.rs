@@ -51,13 +51,15 @@ pub use pricing::{ModelPrice, ModelPriceRow, PriceBook, PricingMode};
 pub use project::{ApiKey, Project, Redaction};
 pub use prompt::{Prompt, PromptVersion};
 pub use relay::{
-    RelayOutcome, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS, RELAY_DEFAULT_RETRY_INTERVAL_SECS,
+    RelayOutcome, RelayStatus, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS,
+    RELAY_DEFAULT_RETRY_INTERVAL_SECS,
 };
 pub use revenue::{RevenueEvent, RevenueKind};
 pub use rubric::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
 pub use score::{
     judge_verdict_schema, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, JudgeVerdict, Score,
     ScoreDetail, ScoreDim, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM, MAX_REASONING_CHARS,
+    RECURRENCE_KEY,
 };
 pub use trace::{
     normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,

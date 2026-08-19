@@ -59,10 +59,7 @@ fn default_judge_model() -> String {
     "opus@xhigh".to_string()
 }
 
-/// Reserved key under a benchmark's free-form `target` object carrying its opt-in recurrence interval
-/// (seconds). Benchmarks are stored as fixed columns with only `target` as free-form JSON, so
-/// recurrence rides there rather than in a new column — keeping the SQLite/Postgres schema untouched.
-const RECURRENCE_KEY: &str = "schedule_interval_secs";
+use lighttrack_core::RECURRENCE_KEY;
 
 /// Fold an opt-in recurrence interval into the stored `target`. Recurrence needs an object (or empty)
 /// target; a comparison-matrix target is a JSON array with no room for a sibling key, so that
