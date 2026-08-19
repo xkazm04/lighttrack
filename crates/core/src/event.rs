@@ -67,12 +67,21 @@ pub enum Status {
 }
 
 impl Status {
+    /// Every outcome, so a wire-filter validator can derive its accepted set from the enum rather
+    /// than hand-maintaining a parallel string list that drifts when a variant is added.
+    pub const ALL: [Status; 3] = [Status::Success, Status::Error, Status::Timeout];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Status::Success => "success",
             Status::Error => "error",
             Status::Timeout => "timeout",
         }
+    }
+
+    /// Parse a wire literal back to a [`Status`], or `None` when it is outside the vocabulary.
+    pub fn from_wire(s: &str) -> Option<Status> {
+        Status::ALL.into_iter().find(|v| v.as_str() == s)
     }
 }
 

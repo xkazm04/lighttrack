@@ -497,9 +497,17 @@ pub(crate) async fn get_events(
     if let Some(s) = q.status.as_deref() {
         // Reject an unknown outcome rather than answering with an empty page: "no errored calls"
         // and "you spelled the status wrong" must not look identical.
-        if !["success", "error", "timeout"].contains(&s) {
+        // The accepted set is derived from the `Status` enum (the vocabulary's one authority) rather
+        // than a hand-maintained literal list, so adding a `Status` variant cannot leave this filter
+        // silently rejecting a valid new outcome.
+        if lighttrack_core::Status::from_wire(s).is_none() {
+            let expected = lighttrack_core::Status::ALL
+                .iter()
+                .map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ");
             return Err(ApiError::bad_request(format!(
-                "invalid 'status' {s:?}: expected success | error | timeout"
+                "invalid 'status' {s:?}: expected {expected}"
             )));
         }
     }
