@@ -191,6 +191,12 @@ pub struct TraceTotals {
     /// `duration_ms` (which spans idle gaps but counts overlapping work once).
     #[serde(default)]
     pub total_latency_ms: u64,
+    /// Spans whose `cost_usd` was `None` (an unpriced model — absent from the price book), and so
+    /// contributed 0 to `cost_usd`. The ingest path keeps unpriced cost as `None` rather than a
+    /// phantom $0.00; a rollup that sums a nullable measure must likewise carry HOW MANY rows it
+    /// could not measure, so `cost_usd` is not read as a confident total when it is a lower bound.
+    #[serde(default)]
+    pub unpriced_spans: usize,
 }
 
 /// One node of a trace's span tree: an event and the spans whose parent it is.
@@ -362,6 +368,9 @@ fn totals_of(events: &[LlmEvent]) -> TraceTotals {
         ..Default::default()
     };
     for e in events {
+        if e.cost_usd.is_none() {
+            t.unpriced_spans += 1;
+        }
         t.cost_usd += e.cost_usd.unwrap_or(0.0);
         t.input_tokens += e.usage.input;
         t.output_tokens += e.usage.output;
@@ -870,4 +879,25 @@ mod tests {
     fn count_nodes(spans: &[TraceSpan]) -> usize {
         spans.iter().map(|s| 1 + count_nodes(&s.children)).sum()
     }
+
+    #[test]
+    fn totals_carry_the_unpriced_span_count_beside_the_cost_sum() {
+        // A trace where 2 of 3 spans use an unpriced model (cost_usd == None). The cost sum counts
+        // only the priced span — correct — but on its own it reads as a confident total. The rollup
+        // must ALSO say two spans were unmeasured, so the $ figure is understood as a lower bound.
+        let priced = ev("a", None, 0, 0.005, Status::Success);
+        let unpriced1 = LlmEvent {
+            cost_usd: None,
+            ..ev("b", Some("a"), 1, 0.0, Status::Success)
+        };
+        let unpriced2 = LlmEvent {
+            cost_usd: None,
+            ..ev("c", Some("a"), 2, 0.0, Status::Success)
+        };
+        let t = totals_of(&[priced, unpriced1, unpriced2]);
+        assert_eq!(t.spans, 3);
+        assert_eq!(t.unpriced_spans, 2, "two spans had no price and must be disclosed as such");
+        assert!((t.cost_usd - 0.005).abs() < 1e-9, "cost sums only the priced span");
+    }
+
 }
