@@ -77,6 +77,12 @@ pub(crate) struct MarginResponse {
     /// Human-facing note when `unconverted_currencies` is non-empty (rendered as a caveat).
     #[serde(skip_serializing_if = "Option::is_none")]
     currency_note: Option<String>,
+    /// Echoes the `?below=<pct>` filter when present. When set, `rows` — and the `total_*_usd`
+    /// figures summed over them — are the below-threshold (at-risk) cohort, NOT the full window;
+    /// carrying the predicate keeps a reader from mistaking a filtered subtotal for a window total.
+    /// Absent (omitted) when the request was unfiltered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    below: Option<f64>,
     rows: Vec<MarginRow>,
 }
 
@@ -149,6 +155,7 @@ pub(crate) async fn get_margin(
         total_margin_usd: round(total_revenue_usd - total_cost_usd),
         unconverted_currencies: unconverted,
         currency_note,
+        below: q.below,
         rows,
     }))
 }
@@ -495,4 +502,37 @@ mod tests {
         let idle = row("idle", 0.0, 0.0);
         assert!(filter_below(vec![idle], 50.0).is_empty());
     }
+
+    #[test]
+    fn margin_response_carries_the_below_predicate() {
+        // A filtered cohort response must SAY it was filtered — otherwise a below-threshold subtotal
+        // reads as a window-wide business total (the totals are summed over the filtered rows).
+        let filtered = MarginResponse {
+            dimension: "customer".into(),
+            since: Utc::now(),
+            until: Utc::now(),
+            total_revenue_usd: 100.0,
+            total_cost_usd: 90.0,
+            total_margin_usd: 10.0,
+            unconverted_currencies: vec![],
+            currency_note: None,
+            below: Some(20.0),
+            rows: vec![],
+        };
+        let v = serde_json::to_value(&filtered).unwrap();
+        assert_eq!(
+            v.get("below").and_then(|b| b.as_f64()),
+            Some(20.0),
+            "a filtered /v1/margin response must echo the `below` predicate"
+        );
+
+        // An unfiltered response omits it entirely (no phantom predicate on window-wide totals).
+        let unfiltered = MarginResponse { below: None, ..filtered };
+        let v = serde_json::to_value(&unfiltered).unwrap();
+        assert!(
+            v.get("below").is_none(),
+            "an unfiltered response must not carry a `below` field"
+        );
+    }
+
 }
