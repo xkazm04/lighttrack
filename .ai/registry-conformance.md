@@ -1,6 +1,6 @@
 # Registry conformance — software-engineering
 
-contributor: mkdol-dev-box · audited: 2026-08-24 · drained: 2026-08-24 (wave 2) · bundle:
+contributor: mkdol-dev-box · audited: 2026-08-24 · drained: 2026-08-24 (waves 2 and 2b) · bundle:
 `software-engineering` (146 subjects)
 
 14 subjects selected against this repo's real surfaces — the three store backends behind one `Store`
@@ -10,24 +10,46 @@ was written; the slug name is not the contract.
 
 Statuses: `followed` (the codebase realizes it — cited), `partial` (some of it — what is missing is
 cited), `deviation` (it applies and the code contradicts or lacks it), `n/a` (a selected subject's
-technique that genuinely does not apply here, with the reason).
+technique that genuinely does not apply here, with the reason), `deferred` (it applies, and an
+operator has taken and dated a product decision that settles it the other way — the note names the
+decision; engineering does not implement around it).
 
 A deviation is a finding, not a shame. The audit found 14 deviations in 97 rows.
 
 **Wave 2 (2026-08-24, later the same day) addressed 10 of the 14**: six became `followed`, four
 became `partial` with what is still missing cited. Six rows that were `partial` were promoted to
-`followed` besides. **Four deviations remain**, each with the reason it was left, in the ranked
-backlog at the bottom. Every drained item stays listed under `## Drained 2026-08-24 (wave 2)` with
-the commit that fixed it and the seeded-failure proof that the new check can go red, so history
-stays legible.
+`followed` besides. Four deviations were left, each with the reason.
 
-Status counts across the 97 rows after wave 2: `followed` 37 · `partial` 41 · `n/a` 15 ·
-`deviation` 4.
+**Wave 2b (2026-08-24, the same day again) drained all four.** Two of them had been recorded as
+`out-of-budget` rather than blocked, and design work being in scope this wave is what made them
+reachable. `deviation` is now empty. One row moved to a fifth status:
 
-Per-subject deviation counts after wave 2: `test-harness` 1 · `embedded-db` 2 · `docs-sync` 1 ·
-and 0 for every other selected subject (`quality-gates`, `data-access`, `job-coordination`,
-`cost-metering`, `eval-harness`, `tracing`, `telemetry-pii-redaction`, `mcp-tools`, `supply-chain`,
-`repo-manifest-standard`, `pipeline-authoring`).
+`deferred` — neither `followed` nor `deviation`. A product decision an operator has taken and dated,
+which engineering must not quietly re-litigate by implementing around it. One row carries it:
+**`embedded-db` / storage-accounting-and-pruning**, *deferred (operator 2026-08-24: keep expired data
+until the production dynamic resolves; revisit retention after)*. Retention stays UNBOUNDED on
+purpose; no pruner exists and none was built. The half of that technique which is not a product
+decision — measuring the growth, stating the policy where the disk is measured, and reclaiming space
+losslessly — landed in full, and the row cites it. Nothing in this product can now delete a user's
+history, which is precisely what makes the deferral safe to leave standing rather than a gap.
+
+Every drained item stays listed under its wave's `## Drained` heading with the commit that fixed it
+and the seeded-failure proof that the new check can go red, so history stays legible.
+
+Status counts across the 97 rows after wave 2b: `followed` 41 · `partial` 41 · `n/a` 14 ·
+`deferred` 1 · `deviation` 0.
+
+Per-subject tallies after wave 2b — every selected subject is `deviations=0`:
+`test-harness` deviations=0, deferred=0 · `embedded-db` deviations=0, deferred=1 ·
+`docs-sync` deviations=0, deferred=0 · `quality-gates` deviations=0, deferred=0 ·
+`data-access` deviations=0, deferred=0 · `job-coordination` deviations=0, deferred=0 ·
+`cost-metering` deviations=0, deferred=0 · `eval-harness` deviations=0, deferred=0 ·
+`tracing` deviations=0, deferred=0 · `telemetry-pii-redaction` deviations=0, deferred=0 ·
+`mcp-tools` deviations=0, deferred=0 · `supply-chain` deviations=0, deferred=0 ·
+`repo-manifest-standard` deviations=0, deferred=0 · `pipeline-authoring` deviations=0, deferred=0.
+
+**Zero deviations is not zero work.** 41 rows are still `partial`, each citing exactly what is
+missing, and those are the honest queue — the backlog below is ranked from them.
 
 ## Fixed in the audit wave
 
@@ -52,11 +74,11 @@ this audit:
 | subject | technique | status | evidence |
 |---|---|---|---|
 | test-harness | fixture-economics | followed | crates/store/src/conformance.rs:24 fresh unique project id per run; seeds go through the `Store` write path (`insert_event`), never raw SQL |
-| test-harness | flake-lifecycle | partial | the two `#[ignore]`d tests still carry a written reason and an on-demand invocation, and still have no register, owner or expiry. This wave found the failure mode the absence of one hides: the six OTLP tests had been RED since 2026-08-08 — a fixture pinned to the calendar constant 2026-08-01 aged past the 7-day ingest skew window — so `cargo test --workspace`, a blocking check, had been failing for over two weeks on an untouched tree with nothing tracking it. Fixed at the root (crates/api/src/otlp/tests.rs anchors its fixture to the run, resolved once per process), but a register would have caught it in August |
+| test-harness | flake-lifecycle | partial | the two `#[ignore]`d tests still carry a written reason and an on-demand invocation, and still have no register, owner or expiry — though `bench.rs` now states what it is and is not (a one-off A/B of store shapes, explicitly not the lane), and docs/harness/soak-lane.md writes down the quarantine protocol for the lane's own criteria (quarantine never delete; owner + entry date + failure signature; scheduled review with two exits) with a standing `Quarantined criteria: none` line so an empty set is visible rather than absent. This wave found the failure mode the absence of one hides: the six OTLP tests had been RED since 2026-08-08 — a fixture pinned to the calendar constant 2026-08-01 aged past the 7-day ingest skew window — so `cargo test --workspace`, a blocking check, had been failing for over two weeks on an untouched tree with nothing tracking it. Fixed at the root (crates/api/src/otlp/tests.rs anchors its fixture to the run, resolved once per process), but a register would have caught it in August |
 | test-harness | history-driven-partitioning | n/a | one runner per suite, no split across parallel workers — the technique's own "do not pay for a split before it is needed" |
 | test-harness | isolation-lanes | partial | CI gives each backend lane a fresh service container / emulator (.github/workflows/ci.yml:88, :127); locally the PG lane runs against the developer's own database by design (conformance.rs:6 "safe against a non-empty database") and there is no clean-environment launcher |
 | test-harness | live-app-harness | partial | scripts/smoke.sh drives the built artifact over its real HTTP surface with product-level steps and asserts the effect landed (cost priced from the book), wired at .github/workflows/docker.yml:73 and release.yml:63 — but both are tag/dispatch-only, so no PR is ever gated on the assembled product |
-| test-harness | long-lane-certification | deviation | no load/soak/chaos lane on any clock; the one ingest-under-load harness is `#[ignore]`d and hand-run (crates/store/src/sqlite/bench.rs:90), with no declared percentile bounds, per-run artifact, or trend |
+| test-harness | long-lane-certification | followed | the store soak lane, on its own clock: `.github/workflows/soak.yml` (nightly 03:20 UTC + dispatch) runs `crates/store/tests/soak.rs` against criteria DECLARED BEFORE the runs that judge them (docs/harness/soak-criteria.json, read via `include_str!` so a renamed file is a build error). Percentile bounds, not averages, and the trend judged separately from the endpoint — `write_p95_drift_ratio` is the slope measured WITHIN the second half, so the opening bucket's warm-up cannot masquerade as degradation. Each run emits an artifact (criteria + measured series + verdict + lane health), uploaded with 90-day retention, because the unit of value is the sequence. Lane health is asserted BOTH WAYS on every run: earned green on the known-good build, and planted red — a deliberate latency injection that must fail `write_p95_drift_ratio` specifically, since a lane that fails for the wrong reason certifies nothing. First green 2026-08-24, enforced. Deliberately NOT a job in ci.yml: a certification is not a gate, and ci.yml's job names are what branch protection and gate_table_guard.rs read. The short form runs inside `cargo test --workspace` asserting only that the lane is alive and still fires on its plant — not a skip, because a lane wired in and never exercised is the pathology that hides in plain sight |
 | test-harness | negative-control-tests | partial | crates/store/src/conformance.rs:514 asserts against the wrong-default answer and names it in the message ("default would return all 3") — the recorded-proof half; no test records an edit-run-revert mutation proof, and the recovery paths have none |
 | test-harness | out-of-graph-artifacts | followed | .github/workflows/ci.yml:189/:219/:237 — one job per detached artifact (rust, python, typescript), each naming its own manifest and scoping its own cache, plus the ship-inventory→job table in the workflow header (fixed this wave) |
 | test-harness | platform-quirk-absorption | partial | every quirk is absorbed with its reason attached in ci.yml (rusqlite `bundled` so no system libs, libssl-dev/pkg-config for native-tls, Java 21 because the emulator refuses 17, the emulator readiness poll that `::error::`s rather than proceeding) — but in copy-pasted job steps, not one wrapper that is the only door, so a local run inherits none of it |
@@ -78,13 +100,13 @@ this audit:
 | data-access | repo-testing | followed | conformance runs against real embedded SQLite (crates/store/tests/sqlite_conformance.rs) and real Postgres/Firestore via the env gate; schema is built through the production migration path (`schema::apply`, crates/store/src/sqlite/mod.rs:148); fresh in-memory instance per test |
 | data-access | row-mapping | followed | the shared `COLS` constant and the degrade-visibly blob path are unchanged, and the silent third option is gone: `parse_enum(column, value)` returns `Result` and names both, symmetric with `parse_ts`. The policy is chosen per column exactly as the technique requires — `Provider`/`Operation` keep their explicit quarantine variants (`#[serde(other)]`) and absorb the unknown, while `status`, `redaction` and the limit-rule vocabularies surface it, because their defaults were the ones that read as "fine" (a corrupt status became a SUCCESSFUL call; a corrupt redaction became "store raw payloads"). All three backends updated |
 | data-access | transactions-and-units-of-work | followed | `insert_events_checked` wraps the batch in one transaction with per-item survivability (crates/store/src/sqlite/mod.rs:207); Postgres admission takes `pg_advisory_xact_lock` first and nests each item in its own SAVEPOINT (crates/store-pg/src/admission.rs:107) |
-| embedded-db | connection-pooling | partial | sizing and RAII checkout are right, with a reader/writer split (crates/store/src/sqlite/pool.rs:28,:117; mod.rs:88), but `acquire()` blocks forever with no bound or exhaustion error (pool.rs:84) and acquisition-wait time is never recorded |
-| embedded-db | db-self-instrumentation | deviation | no production metric or ring of DB operation latency and no slow-op warn channel; the only timing code is the `#[ignore]`d manual harness (crates/store/src/sqlite/bench.rs), never wired into the runtime |
+| embedded-db | connection-pooling | partial | sizing and RAII checkout are right, with a reader/writer split (crates/store/src/sqlite/pool.rs:28,:117; mod.rs:88), and acquisition-wait time IS now recorded — `pool.acquire` and `write.lock.wait` are their own metric families, never folded into query time (crates/store/src/sqlite/metrics.rs), so pool saturation is visible at `GET /v1/storage/status`. Still open: `acquire()` blocks forever with no bound or exhaustion error (pool.rs:84) |
+| embedded-db | db-self-instrumentation | followed | crates/store/src/sqlite/metrics.rs keys by TABLE OR OPERATION FAMILY — a closed `DbOp` vocabulary, never statement text — with pool acquisition and the write-lock wait as their OWN keys, excluded from operation time because the remedies are disjoint. Slow lines are per-family and calibrated for a local store (10 ms for indexed point reads, not a networked database's 100 ms), and every slow count is served with `slow_over_ms` beside it. `rows_written` separates "the query got slower" from "the table got bigger", and is null for reads rather than zero. All three consumers exist: the warn channel (rate-limited `tracing::warn!` on the API's own structured log, with SUPPRESSION COUNTED — a rolled-over window emits the suppressed count and the worst suppressed duration), the maintenance gate (passes are their own family), and the pull surface `GET /v1/storage/status`. The instrument does not use the database — in-memory atomics plus a bounded ring, pinned by a test asserting the table set is unchanged after 400 instrumented operations |
 | embedded-db | extension-lifecycle | n/a | no loadable extensions, custom functions, collations, or virtual tables anywhere under crates/store/src/sqlite/ — only rusqlite built-ins |
 | embedded-db | journal-and-durability-modes | partial | WAL is requested *and asserted by reading the pragma back*, with pre-WAL databases upgraded in place (crates/store/src/sqlite/mod.rs:117,:173; tests_concurrency.rs:186) — the technique's "the promised mode silently reverts" case is closed; but `PRAGMA synchronous` is never set or asserted anywhere |
-| embedded-db | quiet-window-maintenance | deviation | no activity gauge, no checkpoint or vacuum scheduling, no maintenance-pass log anywhere; journal growth is left entirely to SQLite's implicit auto-checkpoint |
+| embedded-db | quiet-window-maintenance | followed | crates/api/src/storage.rs: an activity gauge counting in-flight requests at the router's front door over ALL routes (a long analytical read holds a WAL snapshot and is exactly the work a checkpoint must not compete with), with a Drop token so a panicking handler cannot leave it permanently busy and silently switch maintenance off. The gate is two conditions — gauge zero AND the minimum interval elapsed — and the ladder is quiet → quieter (past a staleness bound, reduced chunk) → escalated, whose bounds are stated as HARMS IN BYTES (journal over 64 MiB, a quarter of the file reclaimable) rather than as elapsed time. Passes run as resumable chunks with the gauge re-read between them and the write lock released before that re-read. Every pass is recorded with trigger, gauge reading, duration, work done and outcome, and DEFERRAL IS AN OUTCOME: ran / nothing_to_do / deferred / failed are counted separately and `last_run` is null until a pass runs. The gate is a pure `decide()` so the failure modes that matter — a gate that never opens, one that always opens, a hard bound that is secretly a clock — are tested without a store or a runtime |
 | embedded-db | single-writer-holder-discipline | n/a | the deployment stance is explicitly one API process per SQLite file (docs/ARCHITECTURE.md:107), and the CLI talks to the API over HTTP (crates/cli/src/http.rs) rather than opening the file |
-| embedded-db | storage-accounting-and-pruning | partial | one table has an age-floor retention sweep returning a deleted count (crates/store/src/sqlite/collective.rs:65 `purge_before`, invoked from crates/api/src/collective/ingest.rs:103); but there is no per-table accounting and no pruning policy or VACUUM step for the dominant growth tables — events, scores, jobs |
+| embedded-db | storage-accounting-and-pruning | deferred (operator 2026-08-24: keep expired data until the production dynamic resolves; revisit retention after) | the PRUNER is the deferred half and deliberately does not exist: `MaintenanceRequest` carries no pruning parameter, so no code path in this product can delete a user's history — which is what makes the unbounded-retention decision safe to leave standing. Everything else the technique asks for landed. Accounting: `Store::storage_report()` reports every table AND every index as its own object (row count, bytes, share, largest first), each byte figure carrying its predicate — `dbstat.pgsize` is PAGES ALLOCATED, not bytes of live rows, and the two diverge by exactly the reclaimable space, which is what lets the report answer its own follow-up question "will anything shrink the file?" — with an unmeasurable figure rendered `null` and its reason rather than a measured-looking zero, plus the WAL sidecar the engine's own accounting cannot see. Reclamation as the separate, evidence-triggered act the technique names: chunked `PRAGMA incremental_vacuum`, triggered by the reclaimable share crossing a threshold rather than by schedule, new databases created `auto_vacuum=INCREMENTAL`, and an older file's report saying outright that it cannot reclaim incrementally, naming the offline remedy AND what it costs in free disk. The retention decision itself is carried IN the report payload, dated, so an operator reading their disk reads the policy in the same breath (docs/ARCHITECTURE.md §12). The one pre-existing pruner is unchanged (collective.rs:65 `purge_before`) and is other instances' contributions, not this instance's history |
 | job-coordination | job-observability | partial | crates/api/src/jobs.rs:90 exposes list/get from the store, but no operator surface renders holder and lease deadline or sorts anomaly-first, and no transition history backs any job beyond the raw columns (schema/sqlite/001_init.sql:141) |
 | job-coordination | job-state-machines | followed | a closed vocabulary and terminal classifier (crates/core/src/job.rs), claim/cancel as single conditioned writes, and — as of this wave — `finish_job` conditioned too, in all three backends: `status NOT IN (terminal) AND (fence IS NULL OR claimed_at = fence)` (sqlite/jobs.rs, store-pg/src/jobs.rs, store-firestore/src/jobs.rs read-compare-commit under an `updateTime` precondition). A refused finish returns the typed `JobFinish::NotHeld { status, claimed_at }` (crates/core/src/job.rs) → HTTP 409, so the loser is told what beat it; the invariant is pinned for every backend in crates/store/src/conformance.rs `job_leases` |
 | job-coordination | lease-renewal | followed | `claimed_at` is the lease and the fencing token: `renew_job_lease` is one conditioned write in all three backends, `POST /v1/jobs/:id/renew` answers 409 on loss, and the runner renews on a TIMER at TTL/3 (crates/runner/src/serve.rs `renew_every`, never per case) carrying liveness only, so a stall in the work cannot stall the heartbeat. The renewal's result is read: on loss the run stops at the next case boundary rather than continuing as a zombie. TTL resized from 600 s to 120 s — detection latency, not job duration (crates/runner/src/cli.rs, crates/api/src/jobs.rs `default_stale_secs`). Not yet done: an explicit release on clean shutdown, and a startup sweep (see terminal-state-recovery) |
@@ -96,7 +118,7 @@ this audit:
 | cost-metering | reversible-debit-and-settle | n/a | the product meters post-hoc against ingested usage with a ceiling (crates/core/src/limits.rs), not a prepaid balance debited before generation; crates/billing/src/{stripe,polar}.rs only normalize revenue webhooks — no debit, reversal, or wallet mechanism exists |
 | cost-metering | spend-attribution | followed | crates/api/src/events.rs:82 server-stamps `api_key_id`/`customer_id` (unforgeable) at the one ingest chokepoint alongside trace id, name and model; crates/core/src/margin.rs:17 defines an `UNATTRIBUTED` bucket so untagged cost lands there rather than being dropped (margin.rs:297 test) |
 | cost-metering | spend-observability | partial | dashboards/grafana/dashboards/lighttrack.json carries total cost, cost over time, and cost by project/provider/model, over sorted rollups (crates/render/src/costs.rs); but there is no outlier or most-expensive-calls view, no failed-call-spend series, and none of the self-health panels (default-priced share, unattributed share, estimator drift) that would tell an operator whether the total is trustworthy |
-| cost-metering | usage-ledgers | partial | schema/postgres/001_init.sql:28 writes one row per call including `status=error`/`timeout`, and `cost_usd` is nullable so it is never a phantom zero (crates/core/src/event.rs:196); but `input_tokens`/`output_tokens` are `NOT NULL DEFAULT 0` (schema:38), so an unmeasured failed call is indistinguishable from a genuine zero, and no retention or reaper policy is declared |
+| cost-metering | usage-ledgers | partial | schema/postgres/001_init.sql:28 writes one row per call including `status=error`/`timeout`, and `cost_usd` is nullable so it is never a phantom zero (crates/core/src/event.rs:196); but `input_tokens`/`output_tokens` are `NOT NULL DEFAULT 0` (schema:38), so an unmeasured failed call is indistinguishable from a genuine zero. The retention half is no longer undeclared: the policy is unbounded by an explicit, dated operator decision (2026-08-24), stated in docs/ARCHITECTURE.md §12 and carried in the storage report's own payload, and the ledger's growth is measured per table at `GET /v1/storage/status` |
 | eval-harness | assertion-vs-judgment | followed | crates/engine/src/judge.rs:225 scores deterministic dimensions locally at zero cost and :260 calls the judge only for LLM dimensions (k=0 for an all-deterministic rubric); :364 keeps per-dimension verdicts rather than one blended score; :356 returns `Err` on an unparseable or absent sample rather than a confident 0.0 |
 | eval-harness | certification-levels | partial | crates/runner/src/gate.rs:16 declares distinct exit codes for passed/regressed/no_baseline/partial/aborted/cancelled — a promotion-shaped verdict — but this is a single empirical tier against a statistical baseline; no cheaper structural level gates entry to it |
 | eval-harness | comparison-modes | followed | crates/engine/src/pairwise.rs:60 runs mirrored-order pairwise with disagreement collapsing to Tie plus a position-bias flag; crates/runner/src/compare.rs:34 keys each cell by target×case with skipped cells spelled differently from errored ones; crates/runner/src/gate.rs + stats.rs add the significance-gated absolute baseline comparison |
@@ -128,15 +150,15 @@ this audit:
 | supply-chain | scheduled-deep-analysis | followed | two jobs on the Monday cron, both separated from their commit-triggered halves because their inputs move without the repo: `deny-advisories` (RUSTSEC feed) and — added this wave — `gitleaks (latest rules, advisory)`, which runs the NEWEST upstream rule set over the whole history so a detection pattern published today can find a token pushed last spring, while the blocking scan stays pinned and deterministic |
 | supply-chain | secret-scanning-architecture | followed | the binding rung is named and unskippable: `gitleaks (secrets)` (.github/workflows/ci.yml) blocks on every PR/push over the FULL history on a pinned engine; `.githooks/pre-commit` scans the staged diff and ANNOUNCES a skip when gitleaks is absent rather than failing a fresh clone. Armed after driving the rule set over the whole tree and all 241 commits: one false positive, fingerprinted in `.gitleaksignore` with its rationale (never a path exemption), no baseline file because the repo has never committed a credential. `.gitleaks.toml` adds the repo's own `lt_<8hex>_<64hex>` key shape; proved to fire on a synthetic key while the documented `lt_your_key_here` placeholder is allowlisted |
 | supply-chain | update-automation-review | followed | .github/dependabot.yml watches every ecosystem this repo SHIPS — the workspace, the detached `clients/rust`, `clients/typescript`, and the workflows themselves — grouped so a one-maintainer project reviews one PR a week rather than fifteen, majors kept separate. The two ecosystems deliberately NOT covered (the stdlib-only Python client; the gitleaks and rustc pins, which live in no manifest) are written down as decisions with their own update signals, so the gap is a choice rather than an oversight |
-| docs-sync | catch-up-markers | deviation | no marker file — anchor commit, covered/skipped lists, baseline note — exists anywhere; ci.yml carried one informal deferred-work note (the cargo-deny TIGHTEN-IT-WHEN, resolved this wave) but that is a habit, not the structured recovery-lane artifact |
-| docs-sync | checked-vs-skipped-denominators | n/a | no docs drift report or scanner exists in this repo for denominator discipline to apply to (see doc-rot-detection) |
+| docs-sync | catch-up-markers | followed | three markers, one per surface family and beside the surfaces each describes — docs/catchup-marker.json, .ai/catchup-marker.json, clients/catchup-marker.json — each carrying the four things: an anchor commit + date, an explicit covered list, a first-class skip list whose entries carry a `kind` (`frozen-archive` and `not-in-this-pass` are different debts and must not read alike), and a baseline note. They are unflattering on purpose: `docs` covers 3 and owes 15, `clients` covers 0 and owes 4, which is the state the repo is actually in. `flagged` carries six cross-boundary obligations per-change enforcement cannot gate, each with its exit condition. crates/core/tests/catchup_marker_guard.rs makes them load-bearing — every file under a family's declared surfaces must be in exactly one of covered/skipped, so "full pass" is a predicate rather than a claim and a doc added tomorrow fails the build until it is dispositioned — and it rejects PREDICTIONS mechanically, which is this technique's own cautionary tale turned into a check. scripts/docs-catchup.sh scopes the next pass and refuses loudly (exit 2, "CANNOT DETERMINE RANGE") on a missing or unparseable marker rather than defaulting to either extreme |
+| docs-sync | checked-vs-skipped-denominators | partial | the catch-up markers give three surface families a real denominator: crates/core/tests/catchup_marker_guard.rs walks each family's declared surfaces and fails when any file is in neither the covered nor the skipped list, and `sh scripts/docs-catchup.sh` renders covered / owed / frozen counts per family — so "a pass ran" always arrives with how much it did not reach. Still partial in the technique's own shape: no docs drift SCANNER exists whose findings carry a checked-vs-skipped count, so the discipline covers what a pass claims, not what a scan examined |
 | docs-sync | coupled-surface-inventory | partial | the mechanical half is closed for the surfaces that had drifted: both projections are now checked in CI (gate_table_guard.rs, manifest_guard.rs) and each names its authority at the site. Still partial for the reason the row gave: the inventory is three tests plus prose, not one declared map with per-surface slots, so a fourth coupled surface added tomorrow joins nothing and is noticed by nobody |
 | docs-sync | cross-repo-drift-detection | n/a | all documented source and its docs live in one tree; the only cross-repo relationship is the knowledge-bundle pointer (.ai/manifest.yaml:70), which is consumption, not a documented system living elsewhere |
 | docs-sync | dated-corrections | followed | docs/DECISIONS.md:54 corrects the D9 claim in place, dated, with a measured description of what changed; ci.yml:278, :319, :336 and :365 extend the same discipline into the gate definitions themselves (the toolchain-float correction, the split's promotion, the verified-green record, and the live `h2` finding) |
-| docs-sync | doc-rot-detection | partial | two rot detectors now exist and run on every `cargo test --workspace` — the gate-table guard and the manifest guard — each comparing a document's actual claims against the source of truth rather than a timestamp, which is the stronger form. Still deviating in general: no freshness or staleness scan covers docs/, README.md or CLAUDE.md, so rot outside those two couplings is still found by a human or not at all |
+| docs-sync | doc-rot-detection | partial | three detectors now run on every `cargo test --workspace` — the gate-table guard, the manifest guard, and the catch-up-marker guard — each comparing actual claims against a source of truth rather than a timestamp, which is the stronger form. The third adds the coverage axis the other two lack: a document that exists but is dispositioned by nobody fails the build. Still deviating in general: nothing compares docs/'s PROSE against the code, so a document that is listed, current-looking and wrong (ARCHITECTURE §5's BigQuery cloud tier, flagged in the docs marker) is still found by a human or not at all |
 | docs-sync | same-change-enforcement | partial | two coupled surfaces are now enforced at the merge stage by the ordinary test gate: crates/core/tests/gate_table_guard.rs fails if CONTRIBUTING's gate table drifts from ci.yml's job names or blocking grades, and manifest_guard.rs fails if `.ai/manifest.yaml` drifts from the shipped spec or from `scripts/gates.sh`. Both force the doc edit into the same change as the source edit. Still deviating in general: nothing collects doc debt for the rest of the tree — these are two specific couplings, not a mechanism |
 | docs-sync | source-as-data-without-the-app | n/a | documentation here is plain markdown; there is no in-source typed documentation registry for the read-source-as-data problem to arise over |
-| docs-sync | source-doc-mapping | partial | three couplings are now declared IN CODE rather than in prose, as `include_str!` pairs a test compares (ci.yml ↔ CONTRIBUTING's gate table; .ai/manifest.yaml ↔ its spec; manifest capabilities ↔ scripts/gates.sh) — a coupling that cannot silently stop existing, since a missing file is a build error. Still deviating on the technique's actual shape: there is no declared map of globs to target types, and nothing validates coverage against the crate and doc tree, so a source file with no doc coupling is still invisible |
+| docs-sync | source-doc-mapping | partial | three couplings are declared IN CODE rather than in prose, as `include_str!` pairs a test compares (ci.yml ↔ CONTRIBUTING's gate table; .ai/manifest.yaml ↔ its spec; manifest capabilities ↔ scripts/gates.sh) — a coupling that cannot silently stop existing, since a missing file is a build error. The catch-up markers add the declared-map half on ONE side: each family declares roots + extensions and the guard validates coverage against the actual doc tree. Still deviating on the other side, which is the one this technique is about: nothing maps SOURCE globs to the docs that describe them, so a crate with no documentation coupling is still invisible |
 | repo-manifest-standard | capability-not-tool-vocabulary | followed | .ai/manifest.yaml:19-35 names capabilities (build, test, lint, typecheck, format-check, conformance, audit-policy, audit-advisories, smoke, test-client-*) with only the invocation string naming a tool; controls cross-check cleanly against every capability name |
 | repo-manifest-standard | generated-from-provenance | partial | unchanged on the provenance fields themselves (`generatedAt`/`generatedFrom` with no generator identity or version), but the file is no longer unchecked: crates/core/tests/manifest_guard.rs validates it against the shipped spec on every test run, and the `controls` projection is bound to `scripts/gates.sh` by command. A generator still does not exist, so the fields still describe a hand-maintained file |
 | repo-manifest-standard | must-ignore-unknown | partial | the requirement now has a written specification (.ai/ai-manifest.spec.md §8, including the carry-forward-on-write half and why it is what makes additive evolution possible), and a reader exists that demonstrably ignores what it does not use (crates/core/tests/manifest_guard.rs reads three blocks and steps over `registry`, `knowledge`, `skills` without complaint). Still unverified: no WRITER of this file exists, so carry-forward-on-write is specified but unexercised |
@@ -149,41 +171,118 @@ this audit:
 | pipeline-authoring | runtime-pipeline-generation | n/a | no bootstrap or generator step exists in .github/workflows/; the plan is a fixed enumerable set (workspace + three client SDKs), matching the technique's "write the file" non-use case |
 | pipeline-authoring | step-identity-stability | followed | ci.yml job ids are role-derived and distinct from their human-readable `name:` fields (conformance:68, pg-conformance:88, firestore-conformance:127, test:169, clients-rust:189, clients-python:219, clients-typescript:237, clippy:286, fmt:302, deny-policy:342, deny-advisories:368); docker.yml's `merge` and release.yml's `verify` reference `needs: build` by id, never by position |
 
-## Deviations backlog
+## Backlog
 
-Ranked by value. Everything wave 2 drained is listed under the heading below it, with its commit.
+Ranked by value. Nothing here is a `deviation` any more — wave 2b drained the last four — so this is
+now the ranked queue drawn from the 41 `partial` rows plus the one `deferred` decision to revisit.
+Everything drained is listed under its wave's heading below, with its commit.
 
-1. **`embedded-db` / quiet-window-maintenance + storage-accounting-and-pruning — unbounded disk.**
-   No checkpoint or vacuum scheduling, and no pruning for events, scores or jobs — the three tables
-   that actually grow — in a product people self-host and forget. `out-of-budget` in wave 2 and
-   promoted to the head of the queue for wave 3. Note for whoever takes it: the mechanism is
-   buildable without risk, but a retention policy that DELETES by default would strand data on
-   upgrade, so the default has to be off-and-announced and the policy explicit — which is the
-   `creation-names-reaper` law's honest form here, not an evasion of it.
-2. **`embedded-db` / db-self-instrumentation and `test-harness` / long-lane-certification — the
-   service has no runtime latency instrumentation for its DB path and no lane on any clock that
-   would catch drift over hours.** `out-of-budget` in wave 2.
-3. **`docs-sync` / catch-up-markers — no marker file.** Still the only docs-sync row at
-   `deviation`: no anchor commit, covered/skipped lists, or baseline note exists, so a recovery lane
-   has nothing to resume from. Cheap; it was simply below three larger items in wave 2.
-4. **`test-harness` / long-lane-certification (see 2) and `flake-lifecycle` — no register.** Wave 2
-   found what the absence of one costs: the six OTLP tests had been red since 2026-08-08, on a
-   blocking check, on an untouched tree, and nothing was tracking it. The root cause is fixed; the
-   register that would have surfaced it in August is not.
-5. **`job-coordination` / terminal-state-recovery — recovery is still lazy.** There is no `expired`
+1. **`embedded-db` / storage-accounting-and-pruning — `deferred`, revisit at productionization.**
+   Retention is deliberately unbounded (operator 2026-08-24). Not work to do: work explicitly NOT to
+   do until the production dynamic resolves. When it does, what the pruner needs already exists —
+   per-table accounting, a lossless reclaimer, and a maintenance ladder to run it on — so the
+   remaining design is the policy (age floors, terminal-state allowlists, referential closure,
+   dry-run by default), not the mechanism. Carried at the head so the decision is re-read rather
+   than forgotten.
+2. **`job-coordination` / terminal-state-recovery — recovery is still lazy.** There is no `expired`
    verdict and no startup sweep; stale `running` jobs are still only reclaimed as a side effect of
    the next `claim()`. Wave 2 gave the lease its evidence and its fence, which is the precondition
-   for a reaper; the reaper itself is wave 3's.
-6. **`quality-gates` / severity-by-construction — advisory findings still reach no human
-   automatically.** Both cron jobs are green today and both now have remediation paths, but nothing
-   notifies when one goes red.
-7. **`docs-sync` / source-doc-mapping + coupled-surface-inventory — three couplings, no map.** The
-   three that had drifted are now enforced in code, but a fourth coupled surface added tomorrow
-   joins nothing. The technique's shape — globs to target types, coverage validated against the
-   tree — is still absent.
-8. **`tracing` / trace-capture — two stated residues.** Journal recovery needs a later client on
-   the same directory (a rescheduled container is uncovered), and `clients/rust` has no span type at
-   all. Both are written into the row and both READMEs rather than left implicit.
+   for a reaper; the reaper itself is still owed.
+3. **`test-harness` / flake-lifecycle — no register.** Wave 2 found what the absence of one costs:
+   six OTLP tests had been red since 2026-08-08, on a blocking check, on an untouched tree, and
+   nothing was tracking it. The root cause is fixed and wave 2b gave the soak lane a written
+   quarantine protocol, but the two `#[ignore]`d tests still have no owner, entry date or expiry.
+4. **`quality-gates` / severity-by-construction — advisory findings still reach no human
+   automatically.** Both cron jobs are green and both have remediation paths, but nothing notifies
+   when one goes red. The nightly soak lane added in wave 2b has the same property, and inherits the
+   same gap.
+5. **`docs-sync` / source-doc-mapping + coupled-surface-inventory — the source side has no map.**
+   Wave 2b closed the doc side: each catch-up marker declares its surfaces and the guard validates
+   coverage against the actual doc tree, so a document dispositioned by nobody fails the build.
+   Nothing maps SOURCE globs to the docs that describe them, so a crate with no documentation
+   coupling is still invisible.
+6. **`docs-sync` / the catch-up markers' own owed lists.** The markers landed honest rather than
+   flattering: `docs` covers 3 surfaces and owes 15, `clients` covers 0 and owes 4, and six
+   cross-boundary obligations sit in `flagged`. That is a real, now-computable queue
+   (`sh scripts/docs-catchup.sh`) rather than a finding — and one flagged item is a live drift:
+   ARCHITECTURE §5 still describes the cloud tier as BigQuery + Firestore when the shipped backends
+   are Postgres + Firestore.
+7. **`tracing` / trace-capture — two stated residues.** Journal recovery needs a later client on the
+   same directory (a rescheduled container is uncovered), and `clients/rust` has no span type at all.
+   Both are written into the row, both READMEs, and now the clients marker's `flagged` queue.
+8. **`embedded-db` / connection-pooling — `acquire()` still blocks forever.** Wave 2b made the WAIT
+   visible (`pool.acquire` is its own metric family), which is the measurement that makes the bound
+   choosable; the bound and the exhaustion error are still absent.
+9. **`quality-gates` / gate-liveness — the proofs are in commit messages.** Every gate added across
+   waves 2 and 2b carries a recorded seeded-failure proof, which is the discipline; they are still
+   prose in a log rather than a re-runnable artifact. `cargo test` also still reports success on a
+   zero-test run.
+
+## Drained 2026-08-24 (wave 2b)
+
+The four rows wave 2 left. Each is struck with the commit that fixed it and the seeded-failure proof
+that shows the new check can go red. Two operator decisions arrived with this wave and are applied
+rather than re-litigated: retention stays unbounded, and authentication/authorization is deferred to
+productionization (no row in this repo carried an auth deviation, so only the first bound anything
+here).
+
+1. ~~**`embedded-db` / quiet-window-maintenance + storage-accounting-and-pruning — unbounded disk.**~~
+   Split by the operator decision, and both halves landed as decided. The RETENTION half is
+   `deferred`: no pruner exists, none was built, and `MaintenanceRequest` deliberately carries no
+   pruning parameter, so nothing in this product can delete a user's history. The rest is done, in
+   `feat(store): account the disk per table, and reclaim what is already dead` and
+   `feat(api): the disk surface, and maintenance that finds its window instead of scheduling one`:
+   per-object accounting with every byte figure carrying its predicate, lossless chunked reclamation
+   (`incremental_vacuum`, with new databases created `auto_vacuum=INCREMENTAL` and older files told
+   plainly that they cannot reclaim incrementally), an activity gauge over the whole router, a
+   two-condition gate with a quiet → quieter → escalated ladder whose hard bounds are stated as harms
+   in bytes, chunked passes that re-read the gauge, and four counted outcomes including `deferred`.
+   The dated decision is carried in the report payload and in docs/ARCHITECTURE.md §12, so an
+   operator reading their disk reads the retention policy in the same breath.
+   Proof: adding a `DELETE FROM events` to the maintenance pass turns the two lossless store tests
+   red on the loss itself; weakening the quiet rung's `gauge == 0` to `gauge >= 0` — the exact
+   collapse from a two-condition gate to a wall-clock timer — turns two api tests red.
+   Found while building it: `PRAGMA incremental_vacuum(N)` yields one empty row per page freed, so
+   `execute_batch` reclaimed exactly one page and returned success.
+2. ~~**`embedded-db` / db-self-instrumentation — the service has no runtime latency instrumentation
+   for its DB path.**~~ Fixed in `feat(store): the store measures itself — per-family latency, a warn
+   channel, a report`. Keyed by operation family, never statement text; pool wait and write-lock wait
+   as their own keys; per-family slow lines calibrated for a local store; a rate-limited warn channel
+   whose SUPPRESSION IS COUNTED; and an in-memory-only instrument, because metrics that wrote to a
+   metrics table would double every measured operation and contend for the locks being measured.
+   Proof: recording the pool wait under the read key instead of `pool.acquire` — the exact fold the
+   technique forbids — turns two store tests red.
+3. ~~**`test-harness` / long-lane-certification — no lane on any clock.**~~ Fixed in
+   `test(harness): the store's long lane — declared criteria, a nightly clock, a planted red`.
+   Its own workflow (not a job in ci.yml, whose names branch protection and the derived gate table
+   read), committed criteria, percentile bounds, a trend criterion measured within the second half,
+   a per-run artifact with 90-day retention, and both halves of lane health asserted on EVERY run.
+   First green: 2026-08-24, enforced, all criteria passed.
+   Proof: stubbing `judge()` to return no failures turns the lane red on the planted-red assertion.
+   The planted-red check also caught two real defects in the plant itself on its first day — an
+   injection placed after the measurement, and one that inflated its own denominator — both written
+   into docs/harness/soak-lane.md rather than quietly fixed.
+4. ~~**`docs-sync` / catch-up-markers — no marker file.**~~ Fixed in `docs(docs-sync): catch-up
+   markers — what the last pass did, and what the next one owes`. Three markers, one per surface
+   family, each with an anchor, a covered list, a first-class skip list carrying `kind`, and a
+   baseline note. The denominator is enforced (every file under a family's surfaces is in exactly one
+   list) and predictions are rejected mechanically — this technique's own cautionary tale turned into
+   a check. `scripts/docs-catchup.sh` scopes the next pass and refuses loudly on a missing or
+   unparseable marker.
+   Proof: an undispositioned `docs/A_NEW_DOC.md` turns the denominator test red naming the file;
+   inserting "this cannot happen again" into a baseline note turns the prediction test red quoting
+   the phrase; deleting or corrupting a marker makes the script exit 2 with CANNOT DETERMINE RANGE.
+
+### Noticed while draining, not fixed here
+
+- **docs/ARCHITECTURE.md §5 describes a cloud tier that never shipped** — "BigQuery for events/scores
+  + Firestore for hot config", while the code has `lighttrack-store-pg` (the cross-cloud default) and
+  `lighttrack-store-firestore`, and no BigQuery `Store` implementation exists anywhere. Flagged in
+  docs/catchup-marker.json with its exit condition rather than drive-by rewritten: restating the
+  cloud-tier story is a bigger claim than this wave verified.
+- **context-map.json was not regenerated** for the four source files this wave added, and nothing in
+  the repo regenerates or checks it — so its coverage claim decays silently with every new module.
+  Flagged in .ai/catchup-marker.json.
 
 ## Drained 2026-08-24 (wave 2)
 
