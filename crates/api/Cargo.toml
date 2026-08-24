@@ -25,7 +25,7 @@ sha2 = "0.10"
 # via sha2 -> digest, so declaring it directly costs no extra build or supply-chain surface.
 subtle = "2"
 # Outbound HTTP for breach-alert delivery (webhook / ntfy). Default TLS (SChannel/OpenSSL).
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 # Structured diagnostics. `tracing` was already in this crate's dependency graph (tokio/reqwest emit
 # through it); declaring it directly plus a subscriber is what turns those events into output.
 tracing = "0.1"
