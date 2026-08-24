@@ -896,8 +896,13 @@ mod tests {
         };
         let t = totals_of(&[priced, unpriced1, unpriced2]);
         assert_eq!(t.spans, 3);
-        assert_eq!(t.unpriced_spans, 2, "two spans had no price and must be disclosed as such");
-        assert!((t.cost_usd - 0.005).abs() < 1e-9, "cost sums only the priced span");
+        assert_eq!(
+            t.unpriced_spans, 2,
+            "two spans had no price and must be disclosed as such"
+        );
+        assert!(
+            (t.cost_usd - 0.005).abs() < 1e-9,
+            "cost sums only the priced span"
+        );
     }
-
 }

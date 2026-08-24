@@ -51,9 +51,9 @@ pub(crate) fn classify(status: Option<&str>, error: Option<&str>) -> Class {
         .filter(|t| !t.is_empty())
         .collect();
     let http_context = tokens.iter().any(|t| *t == "http" || *t == "status");
-    let code_hit = TRANSIENT_CODES.iter().any(|code| {
-        tokens.contains(code) && (http_context || tokens.first() == Some(code))
-    });
+    let code_hit = TRANSIENT_CODES
+        .iter()
+        .any(|code| tokens.contains(code) && (http_context || tokens.first() == Some(code)));
     if code_hit {
         return Class::Transient;
     }
@@ -115,5 +115,4 @@ mod tests {
             Class::Transient
         );
     }
-
 }

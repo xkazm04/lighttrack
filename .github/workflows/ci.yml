@@ -9,16 +9,39 @@ name: ci
 # an ephemeral Postgres service container, and the Firestore emulator. Before, only SQLite ran (the
 # Postgres/Firestore tests are env-gated and skipped), so a codec or ORDER-BY divergence in the cloud
 # backends could ship undetected. Now each backend is its own required check.
+#
+# ── SHIP INVENTORY → GATING JOB ───────────────────────────────────────────────────────────────────
+# `cargo test --workspace` quantifies over the MEMBERS LIST in the root Cargo.toml, not over the
+# checkout, and it omits by default: nothing warns when a directory is not in it. So every artifact
+# that leaves this repository is listed here against the job that actually compiles and runs it.
+# Adding a shipped artifact means adding a row AND a job; a row reading "none" is a coverage hole,
+# not a note.
+#
+#   artifact                                  gated by
+#   ----------------------------------------  ----------------------------------------------------
+#   the 6 workspace binaries (api, runner,     `test` (+ `clippy`, `fmt`) — cargo workspace members
+#     mcp, cli, agent, responder) + libs
+#   clients/rust  (detached cargo workspace)   `clients-rust`
+#   clients/python (pip package)               `clients-python`
+#   clients/typescript (npm package)           `clients-typescript`
+#   the container image                        docker.yml (build only — not a suite)
+#   release binaries                           release.yml (tag-triggered build)
+#
+# The durable form of this is a check that walks the tree for package manifests and fails on any
+# manifest no job names; until that exists, this written list is the honest interim, and it is
+# carried here — beside the jobs — rather than in a doc, so it is read when the jobs are edited.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-  # Weekly sweep for the `cargo-deny` job only — every other job here is a pure function of the
+  # Weekly sweep for the `deny-advisories` job only — every other job here is a pure function of the
   # commit and learns nothing from being re-run on unchanged code. The advisory database is the
   # exception: a RUSTSEC entry can be published against a dependency we already ship, days after our
   # last commit, and a push-only trigger would never notice. Each sibling job is gated off on this
-  # event (see `if:` below) so the cron costs one runner, not seven.
+  # event (see `if:` below) so the cron costs one runner, not eleven. Note that `deny-policy` — the
+  # deterministic half of the same tool — is gated off with the rest: its verdict is fixed by
+  # Cargo.lock, so a Monday re-run on an unchanged commit could only repeat Friday's answer.
   # NB: GitHub disables scheduled workflows on a public repo after 60 days without a commit.
   schedule:
     - cron: "0 6 * * 1" # Mondays, 06:00 UTC
@@ -179,6 +202,70 @@ jobs:
           shared-key: clients-rust
       - run: cargo test --manifest-path clients/rust/Cargo.toml
 
+  # The Python SDK is out of graph in a way that is *less* visible than the Rust one: no cargo
+  # command was ever going to reach it, so there was not even a near-miss to notice. It is a shipped
+  # artifact (`pip install`), it has a real suite its README tells contributors to run — and until
+  # this job, no CI run invoked it. Same shape as the clients/rust drift above; the fix is the same,
+  # a job of its own named after the artifact.
+  #
+  # Two halves, deliberately:
+  #   build — `pip install ./clients/python` runs the hatchling backend over pyproject.toml, so a
+  #     wrong `[tool.hatch.build.targets.wheel] packages` list or broken metadata fails here rather
+  #     than at publish time. Compiling is not exercising, and packaging is not compiling.
+  #   run  — `discover -s clients/python/tests` puts ONLY that directory on sys.path, so
+  #     `import lighttrack` resolves to the wheel that was just installed, not to the adjacent
+  #     source tree. Running from `clients/python` (what the README documents for humans) would
+  #     shadow the install with the source dir and gate a different thing.
+  clients-python:
+    name: python suite (python sdk)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # pyproject declares `requires-python = ">=3.8"`; this pins the one version CI proves.
+          python-version: "3.11"
+          # No `cache: pip` on purpose: the client declares zero runtime dependencies (stdlib only),
+          # so there is nothing to restore and a cache key would only add a step that can go stale.
+      - name: Build and install the wheel
+        run: python -m pip install ./clients/python
+      - name: Run the suite against the installed wheel
+        run: python -m unittest discover -s clients/python/tests -v
+
+  # The TypeScript SDK, same story: a shipped npm package with a `test` script that no job ran.
+  clients-typescript:
+    name: npm test (typescript sdk)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/typescript
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # tsx and esbuild both declare `engines: node >=18`; 20 is the LTS we prove against.
+          node-version: "20"
+          # Scope the cache to this project's OWN lockfile — the detached client resolves its own
+          # dependency graph and must not share a key with anything else in the repo. (The cargo
+          # equivalent is `workspaces: clients/rust` + `shared-key: clients-rust` on the job above.)
+          # This path is relative to the workspace root, not to `working-directory`.
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      - run: npm ci
+      # `tsc -p tsconfig.json` — the build that produces the published `dist/`, and (because
+      # tsconfig `include`s all of `src`) a `strict` typecheck of the test files as well.
+      - run: npm run build
+      # `tsx --test src/*.test.ts` — the suite as package.json declares it.
+      - run: npm test
+      # Compiling is not exercising. `npm test` runs tsx over `src/`; it never loads the emitted
+      # `dist/`, which is what `main`/`exports` point consumers at. So load the published entry
+      # point the way a consumer does and assert the class is really exported — a rootDir/outDir
+      # slip or an exports-map typo that leaves `dist` unloadable passes every step above.
+      - name: Smoke the published entry point
+        run: node -e "import('./dist/index.js').then(m => { if (typeof m.LightTrack !== 'function') throw new Error('dist/index.js does not export LightTrack'); console.log('dist entry point loads'); })"
+
   # ── Required checks ───────────────────────────────────────────────────────────────────────────
   # Both gates are BLOCKING. The pre-existing fmt/clippy debt these jobs were once advisory for is
   # gone: the tree is stock-rustfmt clean and `clippy -D warnings` passes workspace-wide across all
@@ -187,6 +274,15 @@ jobs:
   #
   # There is deliberately no `rustfmt.toml` — stock defaults, so plain `cargo fmt` locally produces
   # exactly what this job checks. Do not add one without changing this comment.
+  #
+  # 2026-08-24, correction: "deterministic given the tree" is not quite true of these two, because
+  # `dtolnay/rust-toolchain@stable` FLOATS. There is no `rust-toolchain.toml` in this repo, so the
+  # same commit checked next month can be judged by a different rustfmt and a different clippy —
+  # which is the one property that is supposed to disqualify a gate from blocking. Observed, not
+  # theorized: on this date `cargo fmt --check` was red on six untouched files under rustfmt
+  # 1.9.0-stable, on a tree nobody had changed. The drift was reformatted in the same commit as
+  # this note. The real fix is to pin the toolchain so these gates become a function of the commit;
+  # until then they block on a moving ruler, and a sudden unexplained red here is that, not you.
   clippy:
     name: cargo clippy -D warnings
     if: github.event_name != 'schedule'
@@ -215,40 +311,67 @@ jobs:
       - run: cargo fmt --all -- --check
 
   # ── Supply chain ──────────────────────────────────────────────────────────────────────────────
-  # `cargo deny check all` = RUSTSEC advisories + license allow-list + duplicate/wildcard bans +
-  # crate-source pinning, configured in deny.toml at the repo root. Before this job the project had
-  # no automated view of whether it was shipping a crate with a published CVE — for software that
-  # stores other people's prompts and completions (SECURITY.md), that was the gap worth closing.
+  # `cargo deny` = RUSTSEC advisories + license allow-list + duplicate/wildcard bans + crate-source
+  # pinning, configured in deny.toml at the repo root. Before it, the project had no automated view
+  # of whether it was shipping a crate with a published CVE — for software that stores other
+  # people's prompts and completions (SECURITY.md), that was the gap worth closing.
   #
-  # NON-BLOCKING ON PURPOSE, and for a different reason than clippy/fmt above: those were advisory
-  # only while *our* code carried debt, and became blocking the moment a cleanup retired it. This one
-  # stays advisory because its input is a database that changes without us — a RUSTSEC entry
-  # published overnight against a transitive dependency would wall every unrelated PR until someone
-  # lands a bump. That trade (a red pipeline for everyone vs. a visible warning) is wrong for a
-  # one-maintainer project.
+  # This was ONE advisory job until 2026-08-24, when the split its own TIGHTEN-IT-WHEN called for
+  # was carried out. The reasoning, kept because the next maintainer will be tempted to re-litigate
+  # it on severity: advisory-vs-blocking is decided by whether the verdict is a function of THIS
+  # repository's contents, not by how serious the findings sound. `check all` bundled four checks
+  # of two different kinds behind one command, so the whole thing inherited the weakest grade and
+  # three deterministic checks went unenforced. Splitting grades each half on its own input.
   #
-  # TIGHTEN IT WHEN: the split becomes worthwhile — `check bans licenses sources` is deterministic
-  # given Cargo.lock (it only changes when *we* change dependencies) and should become a blocking
-  # job, leaving only `check advisories` advisory. Do that as its own change once someone is
-  # actually watching the advisory output; until then a single non-blocking job is the honest state.
+  # Both jobs use the upstream action rather than the `dtolnay/rust-toolchain` + `cargo …` idiom the
+  # rest of this file follows, because cargo-deny is not part of the toolchain: `cargo install
+  # cargo-deny` is a ~2.5 min from-source build that `Swatinem/rust-cache` does not cache (it
+  # installs to ~/.cargo/bin, not target/). The action ships a prebuilt binary. Same precedent as
+  # setup-java / setup-gcloud / action-gh-release elsewhere in this repo: purpose-built action for
+  # non-cargo tooling, pinned to a major tag.
+
+  # ── Required check ────────────────────────────────────────────────────────────────────────────
+  # BLOCKING. Its input is Cargo.lock: bans, licenses and sources can only change verdict when *we*
+  # change dependencies, so a failure here is always attributable to the change being gated and is
+  # always fixable inside the PR that caused it. Verified green on the tree at the time of the
+  # promotion (2026-08-24: `bans ok, licenses ok, sources ok`), so this blocks from day one with no
+  # debt period. Mark `cargo deny (policy)` as a required status check for main.
   #
-  # Uses the upstream action rather than the `dtolnay/rust-toolchain` + `cargo …` idiom the rest of
-  # this file follows, because cargo-deny is not part of the toolchain: `cargo install cargo-deny`
-  # is a ~2.5 min from-source build that `Swatinem/rust-cache` does not cache (it installs to
-  # ~/.cargo/bin, not target/). The action ships a prebuilt binary. Same precedent as setup-java /
-  # setup-gcloud / action-gh-release elsewhere in this repo: purpose-built action for non-cargo
-  # tooling, pinned to a major tag.
-  cargo-deny:
-    name: cargo deny (advisory)
+  # Gated off `schedule` like every other deterministic job: re-running it Monday on an unchanged
+  # commit could only reproduce the same answer.
+  deny-policy:
+    name: cargo deny (policy)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check bans licenses sources
+          # Replaces the action's default `--all-features` (a no-op here — no workspace crate
+          # declares a `[features]` table). `--locked` is the point: scan the dependency graph that
+          # is actually committed, and fail loudly if Cargo.lock is stale rather than silently
+          # auditing a resolved-on-the-fly graph that nobody ships.
+          arguments: --locked
+
+  # NON-BLOCKING, and permanently so — this is not a debt schedule waiting on a cleanup. Its input
+  # is the RUSTSEC database, which moves without us: an entry published overnight against a
+  # transitive dependency would wall every unrelated PR until someone lands a bump. No amount of
+  # work on this tree retires that property, so "revisit later" would be a promise nobody can
+  # discharge. For a one-maintainer project, a red board for everyone is the wrong trade.
+  #
+  # Its findings are real and someone has to read them: this is the job the Monday cron above
+  # exists for, and an advisory job nobody reads is not a supply-chain check at all. As of
+  # 2026-08-24 it is RED on `h2` (unbounded empty DATA frames) awaiting an upstream bump — which is
+  # exactly the finding that would have walled unrelated work had the old bundled job been promoted
+  # whole instead of split.
+  deny-advisories:
+    name: cargo deny (advisories, advisory)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check all
-          # Replaces the action's default `--all-features` (a no-op here — no workspace crate
-          # declares a `[features]` table). `--locked` is the point: scan the dependency graph that
-          # is actually committed, and fail loudly if Cargo.lock is stale rather than silently
-          # auditing a resolved-on-the-fly graph that nobody ships.
+          command: check advisories
           arguments: --locked

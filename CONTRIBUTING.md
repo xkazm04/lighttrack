@@ -95,6 +95,22 @@ anyway, but finding out on the PR is slower than finding out now.
 Unit tests live next to the code they cover (`#[cfg(test)] mod tests` in the same module), not in a
 parallel `tests/` tree. Integration-level suites (`tests/`) are for the conformance contracts.
 
+**`cargo test --workspace` does not reach the three client SDKs.** It ranges over the `members` list
+in the root `Cargo.toml`, and all three clients are outside it — `clients/rust` is its own detached
+cargo workspace, and the other two are not cargo at all. Each has its own CI job; run the one you
+touched locally:
+
+```bash
+cargo test --manifest-path clients/rust/Cargo.toml
+
+cd clients/python && python -m unittest discover tests
+
+cd clients/typescript && npm ci && npm run build && npm test
+```
+
+If you change `crates/core` types that a client mirrors, run all three — this is exactly how
+`clients/rust` once stopped compiling while every other check stayed green.
+
 ## Conventions
 
 These are enforced in review:
@@ -129,19 +145,54 @@ These are enforced in review:
 
 ## Pull requests
 
-CI runs on every PR to `main` (`.github/workflows/ci.yml`):
+CI runs on every PR to `main`. **`.github/workflows/ci.yml` is the authority on what blocks** — this
+table is a hand-maintained projection of it, so if the two ever disagree, believe the workflow and
+fix the table in the same PR:
 
-| Job | Blocking |
+| Job (check name) | Blocking |
 | --- | --- |
-| `sqlite conformance` | yes |
-| `postgres conformance` (ephemeral PG service container) | yes |
-| `firestore conformance` (gcloud emulator) | yes |
+| `sqlite conformance (required)` | yes |
+| `postgres conformance (required)` (ephemeral PG service container) | yes |
+| `firestore conformance (required)` (gcloud emulator) | yes |
 | `cargo test --workspace` | yes |
-| `cargo clippy -D warnings` | advisory — the tree has pre-existing debt |
-| `cargo fmt --check` | advisory, same reason |
+| `cargo test (rust sdk)` — the detached `clients/rust` project | yes |
+| `python suite (python sdk)` — builds the wheel, runs `clients/python/tests` against it | yes |
+| `npm test (typescript sdk)` — `npm ci` + `tsc` + the suite + a `dist/` load smoke | yes |
+| `cargo clippy -D warnings` | yes |
+| `cargo fmt --check` | yes |
+| `cargo deny (policy)` — bans, licenses, crate sources | yes |
+| `cargo deny (advisories, advisory)` — RUSTSEC feed | **no** — see below |
 
-Clippy and fmt being advisory is not a licence to add debt: run `cargo fmt` on the files you touched
-and keep clippy quiet on new code.
+Clippy and fmt **block**. They were advisory while the tree carried pre-existing debt; that debt was
+retired, the tree is stock-rustfmt clean and passes `clippy -D warnings` workspace-wide, and the
+gates were promoted so it cannot come back. There is deliberately no `rustfmt.toml`, so plain
+`cargo fmt` locally produces exactly what the job checks.
+
+One caveat worth knowing before you blame your own diff: the toolchain is **not pinned** (no
+`rust-toolchain.toml`; CI installs whatever `stable` currently is). A new stable can therefore
+reformat or re-lint code nobody touched — on 2026-08-24 `cargo fmt --check` went red on six
+untouched files exactly this way. If fmt or clippy fails on lines your change never went near, run
+`cargo fmt --all` / read the new lint, and say so in the PR; it is the ruler that moved.
+
+`cargo deny` is split into two jobs on purpose, and the axis is **what each half reads**, not how
+serious its findings sound:
+
+- **`cargo deny (policy)` blocks.** Bans, licenses and crate sources are a function of `Cargo.lock` —
+  the verdict only changes when *you* change dependencies, so a failure is yours and is fixable in
+  the PR that caused it.
+- **`cargo deny (advisories, advisory)` does not block, permanently.** It reads the RUSTSEC
+  database, which moves without us: an entry published overnight against a transitive dependency
+  would otherwise wall every unrelated PR until someone lands a bump. This is not a debt schedule
+  waiting on a cleanup — no work in this repo retires it. It runs on its own Monday cron (a
+  push-only trigger would never see an advisory published during a quiet week) and its output is
+  meant to be read, not ignored; an advisory job nobody reads is not a supply-chain check at all.
+
+The three client SDKs each get their own job because each is a **detached project**: `clients/rust`
+is its own cargo workspace, and the Python and TypeScript clients are not cargo at all, so
+`cargo test --workspace` reaches none of them. They are shipped artifacts, and `clients/rust` has
+already once stopped compiling — silently, against a green board — after `lighttrack-core` gained
+fields. Anything else this repo ships must get a job of its own too; see the ship-inventory list in
+the `ci.yml` header.
 
 Keep PRs scoped to one thing. Fill in the PR template — which crates, which tests you actually ran,
 and whether backend parity is affected. "Tests: none" is an acceptable answer for a docs-only change

@@ -23,8 +23,16 @@ capabilities:
   typecheck: { command: "cargo check --workspace --all-targets", verified: false }
   format-check: { command: "cargo fmt --all -- --check", verified: false }
   conformance: { command: "cargo test -p lighttrack-store --test sqlite_conformance", verified: false }
-  audit: { command: "cargo deny check all --locked", verified: false }
+  # `--locked` is a global flag and must precede the subcommand; `cargo deny check all --locked`
+  # is rejected by cargo-deny 0.20 ("unexpected argument '--locked' found").
+  audit-policy: { command: "cargo deny --locked check bans licenses sources", verified: true }
+  audit-advisories: { command: "cargo deny --locked check advisories", verified: true }
   smoke: { command: "sh scripts/smoke.sh http://127.0.0.1:8787", verified: false }
+  # cargo test --workspace ranges over the root Cargo.toml members list, which excludes all three
+  # detached client SDKs. Each ships to users and needs its own command.
+  test-client-rust: { command: "cargo test --manifest-path clients/rust/Cargo.toml", verified: false }
+  test-client-python: { command: "python -m pip install ./clients/python && python -m unittest discover -s clients/python/tests", verified: true }
+  test-client-typescript: { command: "cd clients/typescript && npm ci && npm run build && npm test", verified: true }
 
 # Pointers — these subsystems can change format underneath without breaking this contract.
 paths:
@@ -38,11 +46,23 @@ boundaries:
   neverTouch: [target/, Cargo.lock]
   secretsFrom: ".env via dotenvy (git-ignored); the GitHub remote is PUBLIC — never commit an API key"
 
-# The control model: where each capability is PRIMARILY enforced. All four store/test jobs plus
-# clippy and fmt are required checks on main; cargo-deny is deliberately advisory.
+# The control model: where each capability is PRIMARILY enforced. `.github/workflows/ci.yml` is the
+# authority; this is a projection of it and must be updated in the same change as the workflow.
+# Everything below blocks except `audit-advisories`, which reads the RUSTSEC feed — an input that
+# moves without this repository, so it can never be made green by work here and must not wall a PR.
 controls:
-  ciHardPass: [test, conformance, lint, format-check]
-  ciAdvisory: [audit]
+  ciHardPass:
+    [
+      test,
+      conformance,
+      lint,
+      format-check,
+      audit-policy,
+      test-client-rust,
+      test-client-python,
+      test-client-typescript,
+    ]
+  ciAdvisory: [audit-advisories]
 
 # The organization's AI registry — knowledge bundles this repo consumes and the skill
 # marketplace it installs from. Unknown fields MUST be ignored by a reader.

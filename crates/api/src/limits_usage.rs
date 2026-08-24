@@ -401,5 +401,4 @@ mod tests {
             "the surviving scope at the truncation boundary must not depend on store row order"
         );
     }
-
 }

@@ -527,12 +527,14 @@ mod tests {
         );
 
         // An unfiltered response omits it entirely (no phantom predicate on window-wide totals).
-        let unfiltered = MarginResponse { below: None, ..filtered };
+        let unfiltered = MarginResponse {
+            below: None,
+            ..filtered
+        };
         let v = serde_json::to_value(&unfiltered).unwrap();
         assert!(
             v.get("below").is_none(),
             "an unfiltered response must not carry a `below` field"
         );
     }
-
 }
