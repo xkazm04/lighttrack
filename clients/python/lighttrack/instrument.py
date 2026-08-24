@@ -130,24 +130,63 @@ def _ms(t0: float) -> int:
     return int((time.perf_counter() - t0) * 1000)
 
 
+class _InFlight:
+    """What was decided when a call STARTED: its place in the trace, and its journal breadcrumb.
+
+    Identity is minted at the start, not at the end, so the breadcrumb a crash leaves behind and the
+    event a completion sends are the SAME span rather than two accounts of one call.
+    """
+
+    __slots__ = ("trace_id", "span_id", "parent_span_id", "key")
+
+    def __init__(self, trace_id: str, span_id: str, parent_span_id: Optional[str],
+                 key: Optional[int]) -> None:
+        self.trace_id = trace_id
+        self.span_id = span_id
+        self.parent_span_id = parent_span_id
+        self.key = key
+
+
+def _begin(lt: LightTrack, provider: str, operation: str, model: Optional[str]) -> _InFlight:
+    """Claim the call's trace identity and write its crash-surviving breadcrumb, BEFORE the provider
+    call runs.
+
+    Without this, an auto-instrumented call was recorded only after the provider returned or raised,
+    so a process killed mid-call left no record of it at all — the identical defect `Span` had, on
+    the path most users actually take (`import lighttrack.auto` instruments everything). Never
+    raises: a journal that broke a host call would be worse than the gap it closes.
+    """
+    sid, psid = _span_ids()
+    trace_id = current_trace_id() or _new_id()
+    key = None
+    try:
+        key = lt.journal.begin({
+            "p": provider, "m": model, "op": operation,
+            "tr": trace_id, "sp": sid, "ps": psid,
+        })
+    except Exception:
+        pass
+    return _InFlight(trace_id, sid, psid, key)
+
+
 def _record(lt: LightTrack, provider: str, extract: Extract, operation: str,
-            fallback_model: Optional[str], latency_ms: int, resp: Any, error: Optional[BaseException]) -> None:
+            fallback_model: Optional[str], latency_ms: int, resp: Any,
+            error: Optional[BaseException], flight: _InFlight) -> None:
     """Emit one span for a (possibly failed) provider call. Never raises."""
     try:
         model, inp, out, cached = fallback_model, 0, 0, None
         if resp is not None:
             m, inp, out, cached = extract(resp)
             model = m or fallback_model
-        sid, psid = _span_ids()
         lt.track(
             provider, model,
             input_tokens=inp, output_tokens=out, cached_input=cached,
             operation=operation, latency_ms=latency_ms,
             status="error" if error is not None else None,
             error=str(error) if error is not None else None,
-            trace_id=current_trace_id() or _new_id(),
-            span_id=sid,
-            parent_span_id=psid,
+            trace_id=flight.trace_id,
+            span_id=flight.span_id,
+            parent_span_id=flight.parent_span_id,
         )
     except Exception:
         pass  # instrumentation must never break the host app
@@ -175,24 +214,30 @@ def _wrap(lt: LightTrack, fn: Callable, provider: str, extract: Extract, operati
     if is_async:
         async def awrapper(*args: Any, **kwargs: Any) -> Any:
             t0 = time.perf_counter()
+            flight = _begin(lt, provider, operation, fallback(args, kwargs))
             try:
                 resp = await fn(*args, **kwargs)
             except BaseException as e:  # noqa: BLE001 - record then re-raise
-                _record(lt, provider, extract, operation, fallback(args, kwargs), _ms(t0), None, e)
+                _record(lt, provider, extract, operation, fallback(args, kwargs), _ms(t0), None, e, flight)
                 raise
-            _record(lt, provider, extract, operation, fallback(args, kwargs), _ms(t0), resp, None)
+            finally:
+                lt.journal.settle(flight.key)
+            _record(lt, provider, extract, operation, fallback(args, kwargs), _ms(t0), resp, None, flight)
             return resp
 
         wrapper: Callable = awrapper
     else:
         def wrapper(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
             t0 = time.perf_counter()
+            flight = _begin(lt, provider, operation, fallback(args, kwargs))
             try:
                 resp = fn(*args, **kwargs)
             except BaseException as e:  # noqa: BLE001 - record then re-raise
-                _record(lt, provider, extract, operation, fallback(args, kwargs), _ms(t0), None, e)
+                _record(lt, provider, extract, operation, fallback(args, kwargs), _ms(t0), None, e, flight)
                 raise
-            _record(lt, provider, extract, operation, fallback(args, kwargs), _ms(t0), resp, None)
+            finally:
+                lt.journal.settle(flight.key)
+            _record(lt, provider, extract, operation, fallback(args, kwargs), _ms(t0), resp, None, flight)
             return resp
 
     wrapper._lighttrack_wrapped = True  # type: ignore[attr-defined]

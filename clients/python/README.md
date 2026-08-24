@@ -41,6 +41,23 @@ lt.close()                                  # flush at shutdown (auto-runs at ex
 `with LightTrack() as lt:` flushes on exit. `lt.span(provider, model)` times a call and tracks it
 automatically. See `example.py` for a runnable demo and the repo's `clients/README.md` for details.
 
+### Calls that die mid-flight
+
+An event carries usage and an outcome, so it is sent when the call *finishes*. That alone would mean
+a process killed mid-call (OOM killer, SIGKILL, a container eviction) leaves no record of a call that
+definitely happened and definitely cost money — the exact calls you most want afterwards.
+
+So a span also writes a small **crash-surviving breadcrumb** when it opens, and retires it on every
+exit path. The next LightTrack client to start with the same journal directory re-reports anything
+left unsettled, as `status="error"` with the reason spelled out and a `lighttrack:unsettled-span`
+tag — never as a clean zero-cost success, because nothing ever reported an outcome.
+
+Knobs, and the honest limit: `LIGHTTRACK_JOURNAL=0` (or `LightTrack(journal=False)`) turns it off;
+`LIGHTTRACK_JOURNAL_DIR` chooses where breadcrumbs live; `LIGHTTRACK_JOURNAL_ORPHAN_SECS` (default
+300) is how long another process's journal must sit untouched before it is treated as abandoned.
+Recovery needs a later client to see that directory — a container that dies and is rescheduled onto
+fresh storage is not covered unless you point the directory at a mounted volume.
+
 ## Why don't I see my events?
 
 `track*` never raises — but it is not silent. A failed send writes one actionable line to **stderr**

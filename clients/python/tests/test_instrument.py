@@ -11,12 +11,14 @@ Run from `clients/python`:  `python -m unittest discover tests`
 import unittest
 
 from lighttrack.instrument import (
+    _begin,
     _record,
     current_span_id,
     current_trace_id,
     span,
     trace,
 )
+from lighttrack.journal import SpanJournal
 
 
 class FakeClient:
@@ -24,14 +26,19 @@ class FakeClient:
 
     def __init__(self):
         self.calls = []
+        # Disabled journal: these tests are about trace linkage, and a real one would write files.
+        self.journal = SpanJournal(enabled=False)
 
     def track(self, provider, model, **kw):
         self.calls.append(kw)
 
 
 def rec(lt, model="m"):
-    # resp=None -> extract is never called; we assert linkage, not usage.
-    _record(lt, "openai", lambda r: (None, 0, 0, None), "chat", model, 5, None, None)
+    # One call, the way the wrapper makes it: identity is claimed when the call STARTS (`_begin`),
+    # then the outcome is recorded against that same identity. resp=None -> extract is never called;
+    # we assert linkage, not usage.
+    flight = _begin(lt, "openai", "chat", model)
+    _record(lt, "openai", lambda r: (None, 0, 0, None), "chat", model, 5, None, None, flight)
 
 
 class SpanLinkageTests(unittest.TestCase):

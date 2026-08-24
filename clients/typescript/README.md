@@ -46,6 +46,26 @@ await lt.flush();                                   // await in-flight sends bef
 `lt.span(provider, model)` returns a span; call `span.setOpenAI(resp); span.end()` to record latency
 automatically. See `example.ts` and the repo's `clients/README.md`.
 
+### Calls that die mid-flight
+
+An event carries usage and an outcome, so it is sent when the call *finishes*. That alone would mean
+a process killed mid-call (OOM killer, SIGKILL, a container eviction) leaves no record of a call that
+definitely happened and definitely cost money — the exact calls you most want afterwards.
+
+So opening a span also writes a small **crash-surviving breadcrumb**, retired on every exit path
+(success and failure alike). The next client constructed with the same journal directory re-reports
+anything left unsettled, as `status: "error"` with the reason spelled out and a
+`lighttrack:unsettled-span` tag — never as a clean zero-cost success, because nothing ever reported
+an outcome. `await lt.recovered` resolves with how many were re-reported; `await lt.close()` drains
+sends and retires this process's journal on an orderly exit.
+
+Knobs, and the honest limit: `LIGHTTRACK_JOURNAL=0` (or `new LightTrack({ journal: false })`) turns
+it off; `LIGHTTRACK_JOURNAL_DIR` chooses where breadcrumbs live; `LIGHTTRACK_JOURNAL_ORPHAN_MS`
+(default 300000) is how long another process's journal must sit untouched before it is treated as
+abandoned. It is a no-op outside Node — a browser has nowhere to leave a breadcrumb — and recovery
+needs a later client to see that directory, so a container rescheduled onto fresh storage is not
+covered unless the directory is a mounted volume.
+
 ## Why don't I see my events?
 
 `track*` never throws — but it is not silent. A failed send emits one actionable line via

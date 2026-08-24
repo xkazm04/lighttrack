@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .diagnostics import Diagnostics, no_project_message, send_failure_message, truncate
+from .journal import RECOVERED_TAG, SpanJournal, unsettled_error
 
 _DEFAULT_URL = "http://127.0.0.1:8787"
 
@@ -169,9 +170,14 @@ class LightTrack:
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None, *,
                  project: Optional[str] = None, source: Optional[str] = None,
                  tags: Optional[list] = None, enabled: bool = True, async_: bool = True,
-                 timeout: float = 2.0, max_queue: int = 1000, quiet: Optional[bool] = None):
+                 timeout: float = 2.0, max_queue: int = 1000, quiet: Optional[bool] = None,
+                 journal: Optional[bool] = None, journal_dir: Optional[str] = None):
         """`quiet=True` (or `LIGHTTRACK_QUIET=1`) suppresses the stderr diagnostics that a dropped or
-        rejected event otherwise reports; `None` defers to the env var."""
+        rejected event otherwise reports; `None` defers to the env var.
+
+        `journal=False` (or `LIGHTTRACK_JOURNAL=0`) turns off the crash-surviving breadcrumb that
+        makes a call which began but never reported an outcome recoverable — see `journal.py` for
+        what that costs and what it buys."""
         self.base_url = (base_url or os.environ.get("LIGHTTRACK_URL", _DEFAULT_URL)).rstrip("/")
         self.api_key = api_key or os.environ.get("LIGHTTRACK_KEY") or None
         # A project key derives the project server-side; set `project` only for dev mode (no key) or
@@ -186,10 +192,16 @@ class LightTrack:
         self._q: "queue.Queue[Optional[tuple]]" = queue.Queue(maxsize=max_queue)
         self._closed = False
         self._worker: Optional[threading.Thread] = None
+        self.journal = SpanJournal(enabled=journal, directory=journal_dir)
         if enabled and async_:
             self._worker = threading.Thread(target=self._run, name="lighttrack", daemon=True)
             self._worker.start()
             atexit.register(self.close)
+        if enabled:
+            # Report the calls a previous process began and never settled, before anything else this
+            # client sends. This is the whole point of the journal: it is a *later* client on the
+            # same machine that turns a killed process's in-flight calls back into records.
+            self.recover_unsettled_spans()
 
     # ---- public API ----
     def track(self, provider: str, model: Optional[str], *, name: Optional[str] = None, input_tokens: int = 0,
@@ -312,6 +324,46 @@ class LightTrack:
                 return task
             time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
+    def recover_unsettled_spans(self) -> int:
+        """Turn every abandoned journal breadcrumb into a real event and return how many were sent.
+
+        Called automatically at construction; exposed so a supervisor that never constructs a
+        client in the crashed process's place can still drain the journal. The emitted event says
+        `status="error"` with an explicit unsettled reason — never `success`, never a fabricated
+        zero-token, zero-cost call, because nothing reported an outcome (the world stopped).
+        """
+        sent = 0
+        try:
+            records = self.journal.recover()
+        except Exception:
+            return 0
+        for rec in records:
+            try:
+                self.track(
+                    rec.get("p") or "unknown",
+                    rec.get("m"),
+                    name=rec.get("n"),
+                    operation=rec.get("op"),
+                    status="error",
+                    error=unsettled_error(rec),
+                    trace_id=rec.get("tr"),
+                    span_id=rec.get("sp"),
+                    parent_span_id=rec.get("ps"),
+                    tags=[RECOVERED_TAG],
+                    project=rec.get("pj"),
+                )
+                sent += 1
+            except Exception:
+                continue
+        if sent:
+            self.diag.warn(
+                "unsettled-spans",
+                f"recovered {sent} call(s) that began but never reported an outcome (a previous "
+                f"process was killed mid-call). They are recorded with status=error and the "
+                f"'{RECOVERED_TAG}' tag; their token counts and cost are unknown, not zero.",
+            )
+        return sent
+
     def span(self, provider: str, model: Optional[str], **kw) -> "Span":
         """Time a call and auto-track on exit: `with lt.span("openai","gpt-4o") as s: ...; s.set_openai(resp)`."""
         return Span(self, provider, model, **kw)
@@ -343,6 +395,9 @@ class LightTrack:
             self.flush()
             self._q.put(None)  # sentinel: stop the worker
             self._worker.join(timeout=self.timeout + 1.0)
+        # An orderly shutdown retires its own breadcrumbs; the stale window is the price of *crash*
+        # detection and there is no reason to pay it on a clean exit.
+        self.journal.close()
 
     def __enter__(self) -> "LightTrack":
         return self
@@ -422,7 +477,12 @@ class LightTrack:
 
 
 class Span:
-    """A timing context manager that tracks one call on exit (latency measured automatically)."""
+    """A timing context manager that tracks one call on exit (latency measured automatically).
+
+    The event is still sent on exit — that is when the usage and the outcome are known. What
+    changed: `__enter__` also writes a crash-surviving breadcrumb (see `journal.py`), so a process
+    killed between enter and exit no longer erases the call entirely. Exit retires the breadcrumb.
+    """
 
     def __init__(self, client: LightTrack, provider: str, model: Optional[str], **kw):
         self._c = client
@@ -431,9 +491,20 @@ class Span:
         self._kw = kw
         self._usage = {"input_tokens": 0, "output_tokens": 0, "cached_input": None}
         self._t0: Optional[float] = None
+        self._jkey: Optional[int] = None
 
     def __enter__(self) -> "Span":
         self._t0 = time.perf_counter()
+        self._jkey = self._c.journal.begin({
+            "p": self._provider,
+            "m": self._model,
+            "n": self._kw.get("name"),
+            "op": self._kw.get("operation"),
+            "tr": self._kw.get("trace_id"),
+            "sp": self._kw.get("span_id"),
+            "ps": self._kw.get("parent_span_id"),
+            "pj": self._kw.get("project"),
+        })
         return self
 
     def set_usage(self, input_tokens: int = 0, output_tokens: int = 0, cached_input: Optional[int] = None) -> "Span":
@@ -457,11 +528,18 @@ class Span:
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         latency = int((time.perf_counter() - self._t0) * 1000) if self._t0 is not None else None
-        self._c.track(
-            self._provider, self._model, latency_ms=latency,
-            status="error" if exc_type else None,
-            error=str(exc) if exc else None,
-            input_tokens=self._usage["input_tokens"], output_tokens=self._usage["output_tokens"],
-            cached_input=self._usage["cached_input"], **self._kw,
-        )
+        try:
+            self._c.track(
+                self._provider, self._model, latency_ms=latency,
+                status="error" if exc_type else None,
+                error=str(exc) if exc else None,
+                input_tokens=self._usage["input_tokens"], output_tokens=self._usage["output_tokens"],
+                cached_input=self._usage["cached_input"], **self._kw,
+            )
+        finally:
+            # The breadcrumb is retired on EVERY exit path — success, provider error, cancellation.
+            # An unretired breadcrumb would resurface later as a phantom unsettled call, which is a
+            # measuring instrument lying in the other direction.
+            self._c.journal.settle(self._jkey)
+            self._jkey = None
         return False  # never suppress the caller's exception

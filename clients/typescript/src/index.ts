@@ -14,6 +14,7 @@
  */
 
 import { Diagnostics, noProjectMessage, sendFailureMessage, truncate } from "./diagnostics.ts";
+import { RECOVERED_TAG, SpanJournal, unsettledError } from "./journal.ts";
 
 export type ProviderName = "openai" | "anthropic" | "google" | (string & {});
 
@@ -53,6 +54,16 @@ export interface LightTrackConfig {
    * Defaults to the `LIGHTTRACK_QUIET` env var (`1`/`true`/`yes`/`on`).
    */
   quiet?: boolean;
+  /**
+   * Write a crash-surviving breadcrumb when a span opens, so a process killed mid-call still leaves
+   * a record of it (see journal.ts). Defaults on in Node, via `LIGHTTRACK_JOURNAL` (`0` to disable);
+   * always a no-op where there is no `node:fs`.
+   */
+  journal?: boolean;
+  /** Where breadcrumbs live. Defaults to `LIGHTTRACK_JOURNAL_DIR`, else a temp subdirectory. A
+   * process that may be rescheduled onto fresh storage should point this at a mounted volume, or
+   * accept that its in-flight calls are not recoverable. */
+  journalDir?: string;
 }
 
 const DEFAULT_URL = "http://127.0.0.1:8787";
@@ -237,6 +248,15 @@ export class LightTrack {
   private inflight: Set<Promise<void>> = new Set();
   /** Rate-limited failure reporting (see diagnostics.ts). Exposed for tests / custom silencing. */
   readonly diag: Diagnostics;
+  /** Crash-surviving breadcrumbs for in-flight calls (see journal.ts). Exposed so `Span` and any
+   * host-side wrapper can open and retire one. */
+  readonly journal: SpanJournal;
+  /**
+   * The startup sweep for calls a PREVIOUS process began and never settled, resolving with how many
+   * were re-reported. Exposed (rather than fired and forgotten) so a caller that needs the recovery
+   * to have landed — a test, or a supervisor draining a crashed worker's journal — can await it.
+   */
+  readonly recovered: Promise<number>;
 
   constructor(cfg: LightTrackConfig = {}) {
     this.baseUrl = (cfg.baseUrl ?? env("LIGHTTRACK_URL") ?? DEFAULT_URL).replace(/\/+$/, "");
@@ -247,6 +267,52 @@ export class LightTrack {
     this.enabled = cfg.enabled ?? true;
     this.timeoutMs = cfg.timeoutMs ?? 2000;
     this.diag = new Diagnostics({ quiet: cfg.quiet });
+    this.journal = new SpanJournal({ enabled: cfg.journal, dir: cfg.journalDir });
+    // Report the calls a PREVIOUS process began and never settled, before anything else this client
+    // sends. That is the whole point of the journal: a later client on the same machine is what
+    // turns a killed process's in-flight calls back into records.
+    this.recovered = this.enabled ? this.recoverUnsettledSpans() : Promise.resolve(0);
+  }
+
+  /**
+   * Turn every abandoned journal breadcrumb into a real event; resolves with how many were sent.
+   *
+   * Runs automatically at construction; exposed so a supervisor that never constructs a client in
+   * the crashed process's place can still drain the journal. The emitted event says
+   * `status: "error"` with an explicit unsettled reason — never `success`, and never a fabricated
+   * zero-token, zero-cost call, because nothing reported an outcome (the world stopped).
+   */
+  async recoverUnsettledSpans(): Promise<number> {
+    let sent = 0;
+    let records: Awaited<ReturnType<SpanJournal["recover"]>>;
+    try {
+      records = await this.journal.recover();
+    } catch {
+      return 0;
+    }
+    for (const rec of records) {
+      this.track(rec.p ?? "unknown", rec.m, {
+        name: rec.n,
+        operation: rec.op,
+        status: "error",
+        error: unsettledError(rec),
+        traceId: rec.tr,
+        spanId: rec.sp,
+        parentSpanId: rec.ps,
+        project: rec.pj,
+        tags: [RECOVERED_TAG],
+      });
+      sent += 1;
+    }
+    if (sent) {
+      this.diag.warn(
+        "unsettled-spans",
+        `recovered ${sent} call(s) that began but never reported an outcome (a previous process was ` +
+          `killed mid-call). They are recorded with status=error and the '${RECOVERED_TAG}' tag; ` +
+          `their token counts and cost are unknown, not zero.`,
+      );
+    }
+    return sent;
   }
 
   /** Record one LLM call. Returns immediately; the send is fire-and-forget. */
@@ -380,6 +446,13 @@ export class LightTrack {
     await Promise.allSettled([...this.inflight]);
   }
 
+  /** Orderly shutdown: drain in-flight sends, then retire this process's journal. The stale window
+   * exists to detect crashes; paying it on a clean exit is pure waste. */
+  async close(): Promise<void> {
+    await this.flush();
+    this.journal.close();
+  }
+
   /** Synchronous-style request for functional calls (relay): returns parsed JSON, throws on error. */
   private async request(method: string, path: string, body?: Record<string, unknown>): Promise<unknown> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -456,6 +529,13 @@ export class LightTrack {
   }
 }
 
+/**
+ * A call in flight.
+ *
+ * The event is still sent on `end()` — that is when the usage and the outcome are known. What
+ * changed: construction also writes a crash-surviving breadcrumb (see journal.ts), so a process
+ * killed between `span()` and `end()` no longer erases the call entirely. `end()` retires it.
+ */
 export class Span {
   private client: LightTrack;
   private provider: ProviderName;
@@ -466,6 +546,7 @@ export class Span {
     outputTokens: 0,
   };
   private model?: string;
+  private journalKey?: number;
 
   constructor(client: LightTrack, provider: ProviderName, model: string | undefined, opts: TrackOptions) {
     this.client = client;
@@ -473,6 +554,17 @@ export class Span {
     this.opts = opts;
     this.model = model;
     this.startedAt = Date.now();
+    this.journalKey = client.journal.begin({
+      p: provider,
+      m: model,
+      n: opts.name,
+      op: opts.operation,
+      tr: opts.traceId,
+      sp: opts.spanId,
+      ps: opts.parentSpanId,
+      pj: opts.project,
+      t: this.startedAt,
+    });
   }
 
   setUsage(inputTokens: number, outputTokens: number, cachedInput?: number): this {
@@ -500,20 +592,31 @@ export class Span {
 
   /** Finish the span: measure latency and track. Pass an error to record a failed call. */
   end(error?: unknown): void {
-    this.client.track(this.provider, this.model, {
-      ...this.opts,
-      latencyMs: Date.now() - this.startedAt,
-      inputTokens: this.usage.inputTokens,
-      outputTokens: this.usage.outputTokens,
-      cachedInput: this.usage.cachedInput,
-      status: error ? "error" : this.opts.status,
-      error: error ? String(error) : this.opts.error,
-    });
+    try {
+      this.client.track(this.provider, this.model, {
+        ...this.opts,
+        latencyMs: Date.now() - this.startedAt,
+        inputTokens: this.usage.inputTokens,
+        outputTokens: this.usage.outputTokens,
+        cachedInput: this.usage.cachedInput,
+        status: error ? "error" : this.opts.status,
+        error: error ? String(error) : this.opts.error,
+      });
+    } finally {
+      // Retired on EVERY exit path, success or failure. An unretired breadcrumb would resurface
+      // later as a phantom unsettled call — the measuring instrument lying in the other direction.
+      this.client.journal.settle(this.journalKey);
+      this.journalKey = undefined;
+    }
   }
 }
 
 // Rate-limited failure reporting (see diagnostics.ts) — exported so a host app can inspect or reuse it.
 export { Diagnostics, noProjectMessage, sendFailureMessage } from "./diagnostics.ts";
+
+// Crash-surviving breadcrumbs for in-flight calls (see journal.ts).
+export { SpanJournal, unsettled, unsettledError, RECOVERED_TAG, DEFAULT_ORPHAN_MS } from "./journal.ts";
+export type { JournalRecord, SpanJournalOptions } from "./journal.ts";
 
 // One-line auto-instrumentation + trace-context propagation (see instrument.ts).
 export {
