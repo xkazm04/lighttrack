@@ -146,8 +146,11 @@ These are enforced in review:
 ## Pull requests
 
 CI runs on every PR to `main`. **`.github/workflows/ci.yml` is the authority on what blocks** — this
-table is a hand-maintained projection of it, so if the two ever disagree, believe the workflow and
-fix the table in the same PR:
+table is a projection of it. It is no longer maintained on trust: `crates/core/tests/gate_table_guard.rs`
+reads both files and fails `cargo test --workspace` if a job is missing from the table, a row names a
+check that no longer exists, or the Blocking column disagrees with the workflow's `continue-on-error:`.
+Add a job, add its row, in the same PR — and spell the check name exactly, because branch protection
+is configured from these strings.
 
 | Job (check name) | Blocking |
 | --- | --- |
@@ -168,11 +171,17 @@ retired, the tree is stock-rustfmt clean and passes `clippy -D warnings` workspa
 gates were promoted so it cannot come back. There is deliberately no `rustfmt.toml`, so plain
 `cargo fmt` locally produces exactly what the job checks.
 
-One caveat worth knowing before you blame your own diff: the toolchain is **not pinned** (no
-`rust-toolchain.toml`; CI installs whatever `stable` currently is). A new stable can therefore
-reformat or re-lint code nobody touched — on 2026-08-24 `cargo fmt --check` went red on six
-untouched files exactly this way. If fmt or clippy fails on lines your change never went near, run
-`cargo fmt --all` / read the new lint, and say so in the PR; it is the ruler that moved.
+The toolchain is **pinned** in `rust-toolchain.toml` at the repo root, and that is the only place a
+Rust version is named — CI installs no toolchain of its own, it just runs cargo through rustup, which
+reads the pin. So fmt and clippy judge your commit with the same ruler on every machine and on every
+future re-run. (This was not always true: until 2026-08-24 CI floated `stable`, and a new stable went
+red on six files nobody had touched. If you ever see that shape of failure again, the pin has been
+bypassed — that is the bug, not your diff.)
+
+Bumping Rust is therefore a deliberate one-line change to `rust-toolchain.toml`. Do it in its own PR
+and land the fmt/clippy churn the new toolchain wants **in that same PR**, so it never ambushes
+unrelated work. Locally, `rustup` picks the pinned toolchain up automatically the first time you run
+cargo in this checkout.
 
 `cargo deny` is split into two jobs on purpose, and the axis is **what each half reads**, not how
 serious its findings sound:

@@ -30,6 +30,14 @@ name: ci
 # The durable form of this is a check that walks the tree for package manifests and fails on any
 # manifest no job names; until that exists, this written list is the honest interim, and it is
 # carried here — beside the jobs — rather than in a doc, so it is read when the jobs are edited.
+#
+# ── THE GATE TABLE IS DERIVED, NOT COPIED ─────────────────────────────────────────────────────────
+# CONTRIBUTING.md publishes a "Job (check name) | Blocking" table. It used to be a hand-copy, and it
+# had drifted. `crates/core/tests/gate_table_guard.rs` now reads THIS FILE and that table and fails
+# `cargo test --workspace` on any disagreement — a job with no row, a row with no job, or a Blocking
+# column that contradicts `continue-on-error:` here. Renaming a `name:` below therefore breaks the
+# suite until the doc follows, which is the point: these strings are also what branch protection
+# names as required checks.
 on:
   push:
     branches: [main]
@@ -73,7 +81,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # The ruler is pinned by rust-toolchain.toml (one address, repo root). rustup ships on the
+      # runner image and reads that file on the first cargo invocation, installing exactly the
+      # pinned toolchain + components — so no job here names a version that could drift from it.
+      - run: cargo --version
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci
@@ -112,7 +123,10 @@ jobs:
       # store-pg links native-tls (system OpenSSL); needed even against a plaintext local DB to build.
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
-      - uses: dtolnay/rust-toolchain@stable
+      # The ruler is pinned by rust-toolchain.toml (one address, repo root). rustup ships on the
+      # runner image and reads that file on the first cargo invocation, installing exactly the
+      # pinned toolchain + components — so no job here names a version that could drift from it.
+      - run: cargo --version
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci
@@ -141,7 +155,10 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: dtolnay/rust-toolchain@stable
+      # The ruler is pinned by rust-toolchain.toml (one address, repo root). rustup ships on the
+      # runner image and reads that file on the first cargo invocation, installing exactly the
+      # pinned toolchain + components — so no job here names a version that could drift from it.
+      - run: cargo --version
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci
@@ -176,7 +193,10 @@ jobs:
       # required to build/run the suite — store-pg uses runtime queries (no compile-time sqlx macros).
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
-      - uses: dtolnay/rust-toolchain@stable
+      # The ruler is pinned by rust-toolchain.toml (one address, repo root). rustup ships on the
+      # runner image and reads that file on the first cargo invocation, installing exactly the
+      # pinned toolchain + components — so no job here names a version that could drift from it.
+      - run: cargo --version
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci
@@ -195,7 +215,10 @@ jobs:
       # reqwest pulls native-tls here too.
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
-      - uses: dtolnay/rust-toolchain@stable
+      # The ruler is pinned by rust-toolchain.toml (one address, repo root). rustup ships on the
+      # runner image and reads that file on the first cargo invocation, installing exactly the
+      # pinned toolchain + components — so no job here names a version that could drift from it.
+      - run: cargo --version
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: clients/rust
@@ -275,14 +298,19 @@ jobs:
   # There is deliberately no `rustfmt.toml` — stock defaults, so plain `cargo fmt` locally produces
   # exactly what this job checks. Do not add one without changing this comment.
   #
-  # 2026-08-24, correction: "deterministic given the tree" is not quite true of these two, because
-  # `dtolnay/rust-toolchain@stable` FLOATS. There is no `rust-toolchain.toml` in this repo, so the
-  # same commit checked next month can be judged by a different rustfmt and a different clippy —
-  # which is the one property that is supposed to disqualify a gate from blocking. Observed, not
-  # theorized: on this date `cargo fmt --check` was red on six untouched files under rustfmt
-  # 1.9.0-stable, on a tree nobody had changed. The drift was reformatted in the same commit as
-  # this note. The real fix is to pin the toolchain so these gates become a function of the commit;
-  # until then they block on a moving ruler, and a sudden unexplained red here is that, not you.
+  # 2026-08-24, correction: "deterministic given the tree" was NOT true of these two, because
+  # `dtolnay/rust-toolchain@stable` FLOATS — the same commit checked next month could be judged by a
+  # different rustfmt and a different clippy, which is the one property that disqualifies a gate from
+  # blocking. Observed, not theorized: on that date `cargo fmt --check` went red on six untouched
+  # files under rustfmt 1.9.0-stable, on a tree nobody had changed.
+  #
+  # 2026-08-24, resolved (same day, later wave): `rust-toolchain.toml` now pins the channel, and
+  # every job in this file dropped its `dtolnay/rust-toolchain@stable` step. Nothing here names a
+  # Rust version: cargo is invoked through rustup, which reads the pin file and installs exactly
+  # what it says. These gates are functions of the commit again. A Rust bump is now a one-line diff
+  # to that file, and the fmt/clippy churn it causes lands in the bump commit instead of ambushing
+  # an unrelated PR. Do not reintroduce a toolchain step here — that would give the pin two
+  # addresses, and the workflow's would silently win for the tools it installs.
   clippy:
     name: cargo clippy -D warnings
     if: github.event_name != 'schedule'
@@ -291,9 +319,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      # The ruler is pinned by rust-toolchain.toml (one address, repo root). rustup ships on the
+      # runner image and reads that file on the first cargo invocation, installing exactly the
+      # pinned toolchain + components — so no job here names a version that could drift from it.
+      # Prints the clippy the gate is actually run with — the pinned one, from rust-toolchain.toml.
+      - run: cargo clippy --version
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci
@@ -305,9 +335,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      # The ruler is pinned by rust-toolchain.toml (one address, repo root). rustup ships on the
+      # runner image and reads that file on the first cargo invocation, installing exactly the
+      # pinned toolchain + components — so no job here names a version that could drift from it.
+      # Prints the rustfmt the gate is actually run with — the pinned one, from rust-toolchain.toml.
+      - run: cargo fmt --version
       - run: cargo fmt --all -- --check
 
   # ── Supply chain ──────────────────────────────────────────────────────────────────────────────

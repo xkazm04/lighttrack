@@ -1,0 +1,18 @@
+# The ruler the blocking gates are measured with, pinned so `cargo fmt --check` and
+# `cargo clippy -D warnings` are functions of THIS COMMIT and nothing else.
+#
+# Why this file exists (2026-08-24): CI installed whatever `stable` happened to be on the day it ran.
+# That makes fmt/clippy non-deterministic across time — the same commit judged clean in August can
+# be judged red in September because rustfmt changed its mind, which is the one property that
+# disqualifies a gate from blocking. It was not theoretical: on 2026-08-24 `cargo fmt --check` went
+# red on six files nobody had touched.
+#
+# `channel` is a single address. CI does NOT name a version anywhere: every job invokes cargo through
+# rustup, which reads this file and installs exactly what it says (see .github/workflows/ci.yml).
+# Bumping Rust is therefore a one-line, reviewable, revertible commit — and the fmt/clippy churn it
+# causes lands in that same commit rather than ambushing an unrelated PR.
+[toolchain]
+channel = "1.96.1"
+# Both blocking gates' tools, so a fresh clone and a fresh runner have them without a second step.
+components = ["rustfmt", "clippy"]
+profile = "minimal"
