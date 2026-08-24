@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 
-use lighttrack_core::ModelPriceRow;
+use lighttrack_core::{ModelPriceRow, PriceBook, Provider, TokenUsage};
 
 /// Comma-join a set of labels for a one-line log/warning.
 pub(crate) fn join_csv(items: &BTreeSet<String>) -> String {
@@ -112,8 +112,19 @@ pub(crate) fn aggregate_status(statuses: &[&str]) -> &'static str {
 }
 
 /// Cost of a call from the DB price book, plus whether the model was actually found in the book.
-/// `priced=false` means there was no book entry, so the token-based cost silently fell back to 0 —
-/// callers surface this as a run-report warning instead of recording a misleadingly-cheap run.
+/// `priced=false` means there was no book entry, so the token-based cost fell back to 0 — callers
+/// surface this as a run-report warning instead of recording a misleadingly-cheap run.
+///
+/// **There is one pricing authority, and it is [`PriceBook`].** This function used to be a second
+/// one: an exact `provider == p.provider && model == p.model` scan with a hand-rolled per-mtok
+/// multiply. It therefore disagreed with the ingest path on three things the book resolves —
+/// date-suffix families (`claude-haiku-4-5-20260101` → `claude-haiku-4-5`), batch/flex variants, and
+/// prompt-length tiers — and disagreed *silently*, because an unresolved model returns `0.0` and a
+/// zero looks like a cheap call rather than a missing price. That is the shape where a benchmark's
+/// spend report and the product's own cost rollup quietly stop agreeing about the same call.
+///
+/// Building the book per call is O(rows) over a table of a few hundred entries, which is nothing
+/// beside the LLM call being priced — and it is the price of having one authority rather than two.
 pub(crate) fn price_gen_cost_checked(
     prices: &[ModelPriceRow],
     provider: &str,
@@ -121,15 +132,16 @@ pub(crate) fn price_gen_cost_checked(
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
 ) -> (f64, bool) {
-    match prices
-        .iter()
-        .find(|p| p.provider == provider && p.model == model)
-    {
-        Some(p) => (
-            (input_tokens.unwrap_or(0) as f64) * p.input_per_mtok / 1_000_000.0
-                + (output_tokens.unwrap_or(0) as f64) * p.output_per_mtok / 1_000_000.0,
-            true,
-        ),
+    let book = PriceBook::from_rows(prices);
+    let usage = TokenUsage {
+        input: input_tokens.unwrap_or(0),
+        output: output_tokens.unwrap_or(0),
+        ..Default::default()
+    };
+    match book.cost_usd(Provider::from_wire(provider), model, &usage) {
+        Some(cost) => (cost, true),
+        // Unpriced stays `(0.0, false)`: the caller's contract is "0 with a warning", never a
+        // phantom cost. The distinction is the whole reason this returns a pair.
         None => (0.0, false),
     }
 }
@@ -384,5 +396,75 @@ mod tests {
         let s = now_ts();
         assert!(s.ends_with('Z'));
         assert_eq!(s.len(), "2026-05-31T00:07:14.110948400Z".len());
+    }
+
+    /// One pricing authority, held to it.
+    ///
+    /// The runner used to price with an exact `(provider, model)` string match and its own per-mtok
+    /// multiply, so it disagreed with the ingest path on every model whose price the book resolves
+    /// through a family, a variant, or a tier — and disagreed silently, because an unresolved model
+    /// returns 0.0 and a zero reads as a cheap call rather than a missing price. These cases are the
+    /// three resolutions the old scan could not do, each asserted against the book's own answer.
+    #[test]
+    fn the_runner_prices_through_the_one_price_book() {
+        let rows = |pairs: &[(&str, f64, f64)]| -> Vec<ModelPriceRow> {
+            pairs
+                .iter()
+                .map(|(m, i, o)| ModelPriceRow {
+                    provider: "anthropic".into(),
+                    model: (*m).into(),
+                    input_per_mtok: *i,
+                    output_per_mtok: *o,
+                    cached_input_per_mtok: None,
+                    effective_date: Utc::now(),
+                    source_url: None,
+                })
+                .collect()
+        };
+        let usage = |i: u64, o: u64| TokenUsage {
+            input: i,
+            output: o,
+            ..Default::default()
+        };
+        let same = |prices: &[ModelPriceRow], model: &str, i: u64, o: u64| {
+            let (runner, priced) =
+                price_gen_cost_checked(prices, "anthropic", model, Some(i), Some(o));
+            let book =
+                PriceBook::from_rows(prices).cost_usd(Provider::Anthropic, model, &usage(i, o));
+            assert_eq!(
+                priced,
+                book.is_some(),
+                "{model}: the runner and the book must agree on whether it is priced at all"
+            );
+            match book {
+                Some(b) => assert!(
+                    (runner - b).abs() < 1e-12,
+                    "{model}: runner priced {runner}, the book says {b}"
+                ),
+                None => assert_eq!(runner, 0.0, "{model}: unpriced is 0.0 with priced=false"),
+            }
+            (runner, priced)
+        };
+
+        // 1. Date-suffix family: the book trims `-20260101`; the old exact scan found nothing and
+        //    reported a free call.
+        let book = rows(&[("claude-haiku-4-5", 1.0, 5.0)]);
+        let (cost, priced) = same(&book, "claude-haiku-4-5-20260101", 1_000_000, 1_000_000);
+        assert!(priced, "a dated model name must resolve to its family");
+        assert!((cost - 6.0).abs() < 1e-12, "{cost}");
+
+        // 2. Prompt-length tier: above the threshold the tiered row applies.
+        let tiered = rows(&[("m", 1.0, 5.0), ("m@in>200000", 2.0, 10.0)]);
+        let (small, _) = same(&tiered, "m", 1_000, 0);
+        let (large, _) = same(&tiered, "m", 300_000, 0);
+        assert!(
+            large / 300.0 > small,
+            "the tier must bite above its threshold: {small} vs {large}"
+        );
+
+        // 3. Genuinely unpriced stays 0.0 AND false — a phantom zero cost and a real free call must
+        //    never be spelled the same way.
+        let (cost, priced) = same(&book, "a-model-nobody-priced", 1_000_000, 0);
+        assert_eq!((cost, priced), (0.0, false));
     }
 }

@@ -187,12 +187,17 @@ mod tests {
 
     #[test]
     fn estimate_prices_from_the_book_and_flags_misses() {
+        // Real provider names, because the price book's provider vocabulary is the `Provider` enum:
+        // a row whose provider is outside it keys under `unknown/` and is unreachable from every
+        // lookup path, ingest included. This test used to use "a"/"o", which only resolved while the
+        // runner had its own string-matching price lookup — the second pricing authority that is now
+        // gone. Its disappearance IS the fix, so the fixture moves to the shared vocabulary.
         let prices = vec![
-            price("a", "m", 1_000.0, 1_000.0),
-            price("o", "j", 1_000.0, 1_000.0),
+            price("openai", "m", 1_000.0, 1_000.0),
+            price("anthropic", "j", 1_000.0, 1_000.0),
         ];
         // $1000/Mtok both ways ⇒ a 1k-in/0.5k-out generation is $1.5; a 1.5k/0.4k judge call $1.9.
-        let e = estimate_compare(&prices, &[target("a", "m")], 2, 1, 1, "o", "j");
+        let e = estimate_compare(&prices, &[target("openai", "m")], 2, 1, 1, "anthropic", "j");
         assert!(
             (e.usd - (2.0 * 1.5 + 2.0 * 1.9)).abs() < 1e-9,
             "got {}",
@@ -200,10 +205,18 @@ mod tests {
         );
         assert!(e.unpriced.is_empty());
         // An unpriced target contributes $0 — so the estimate is a LOWER bound and says so.
-        let e = estimate_compare(&prices, &[target("zz", "yy")], 2, 1, 1, "o", "j");
+        let e = estimate_compare(
+            &prices,
+            &[target("google", "yy")],
+            2,
+            1,
+            1,
+            "anthropic",
+            "j",
+        );
         assert_eq!(
             e.unpriced.iter().cloned().collect::<Vec<_>>(),
-            vec!["zz/yy".to_string()]
+            vec!["google/yy".to_string()]
         );
         assert!(
             e.line().contains("≥$"),

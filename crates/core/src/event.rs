@@ -17,6 +17,21 @@ pub enum Provider {
 }
 
 impl Provider {
+    /// Parse a wire/DB provider literal. Anything outside the vocabulary becomes [`Provider::Unknown`]
+    /// — the explicit quarantine variant, not a silent coercion into a real provider.
+    ///
+    /// Exists so callers that hold a provider as a `&str` (a judge spec, a price-book row) reach the
+    /// same enum every other path uses, instead of comparing strings and quietly building a second
+    /// pricing or attribution vocabulary beside the first.
+    pub fn from_wire(s: &str) -> Provider {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "openai" => Provider::OpenAi,
+            "anthropic" => Provider::Anthropic,
+            "google" => Provider::Google,
+            _ => Provider::Unknown,
+        }
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Provider::OpenAi => "openai",
