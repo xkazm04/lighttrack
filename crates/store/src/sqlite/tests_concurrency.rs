@@ -4,7 +4,7 @@
 //! (b) snapshot-isolated from an in-flight write. Everything here needs a *file* database — an
 //! in-memory one is private to its connection and has no WAL, so it can't exercise the pool.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -152,8 +152,18 @@ fn readers_never_observe_a_half_applied_batch_admission() {
     let s = Arc::new(SqliteStore::open(dir.path().join("lt.db")).unwrap());
     let stop = Arc::new(AtomicBool::new(false));
 
+    // Live poll count, so the writer can WAIT for the reader to actually be reading before it starts.
+    // `polls > 0` used to be checked only after the join, which made it an assertion about the
+    // SCHEDULER rather than about the invariant: on a loaded machine the spawned thread could still
+    // be unscheduled when the writer finished its 800 inserts, and the test failed saying "the reader
+    // never ran" while the store had done nothing wrong. Observed 2026-08-24 once in twelve runs of
+    // the lib suite, after this wave added ~20 disk-heavy tests to the same binary. Waiting for the
+    // first poll makes the window real instead of hoped-for — and the wait has its own deadline, so
+    // a reader that genuinely cannot run still fails loudly rather than being papered over.
+    let polls_seen = Arc::new(AtomicUsize::new(0));
+
     let reader = {
-        let (s, stop) = (s.clone(), stop.clone());
+        let (s, stop, seen) = (s.clone(), stop.clone(), polls_seen.clone());
         thread::spawn(move || {
             let mut polls = 0usize;
             while !stop.load(Ordering::Relaxed) {
@@ -164,10 +174,20 @@ fn readers_never_observe_a_half_applied_batch_admission() {
                     "read saw {n} events — a batch was partially visible"
                 );
                 polls += 1;
+                seen.store(polls, Ordering::Relaxed);
             }
             polls
         })
     };
+
+    let waited_from = Instant::now();
+    while polls_seen.load(Ordering::Relaxed) == 0 {
+        assert!(
+            waited_from.elapsed() < Duration::from_secs(10),
+            "the reader never got a poll in 10s — the test would prove nothing, so it fails here              rather than after the fact"
+        );
+        thread::yield_now();
+    }
 
     for _ in 0..ROUNDS {
         let evs: Vec<LlmEvent> = (0..BATCH).map(|_| ev("p1")).collect();

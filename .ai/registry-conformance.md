@@ -273,6 +273,39 @@ here).
    inserting "this cannot happen again" into a baseline note turns the prediction test red quoting
    the phrase; deleting or corrupting a marker makes the script exit 2 with CANNOT DETERMINE RANGE.
 
+### Found and fixed while draining, not on the backlog
+
+- **A four-digit needle in a blocking gate was a latent coin flip.**
+  `tests_ingest::an_unconfigured_instance_scrubs_pii_on_every_ingest_door` asserted
+  `!stored.contains("4111")` — the leading digits of the test's card number — against the WHOLE
+  serialized event. That event carries RFC3339 timestamps at nanosecond precision, and this wave's CI
+  run drew `...T21:17:32.341118412Z`, which contains `4111`. A perfectly scrubbed row failed a
+  blocking check, on code that had not changed: the exact shape of a failure that gets re-run away
+  rather than diagnosed. The needle is now the whole card in both the spaced and compact forms, plus
+  a POSITIVE assertion that the `<CC>` marker is present — so the fix is tighter than what it
+  replaced rather than merely quieter, and an absent needle can no longer pass by meaning "the rule
+  never fired". Proof: disabling the card rule in `crates/anon` turns it red on the leak itself.
+  It is the same family as wave 2's OTLP finding — a blocking gate whose verdict depended on the
+  calendar — and the second one in two waves, which is the `flake-lifecycle` register's case made
+  twice.
+
+- **A concurrency test asserted on the scheduler, not on its invariant.**
+  `readers_never_observe_a_half_applied_batch_admission` spawned a reader, ran 800 inserts, joined,
+  and only THEN checked `polls > 0`. On a loaded machine the spawned thread could still be
+  unscheduled when the writer finished, so the test failed with "the reader never ran" while the
+  store had done nothing wrong — and it became reachable this wave, because ~20 disk-heavy tests
+  joined the same binary and changed how that binary competes for a core. Observed once in twelve
+  runs of the lib suite; zero in fourteen on the pre-wave commit, which is what made it this wave's
+  to fix rather than to inherit. The writer now WAITS for the reader's first poll, under its own
+  deadline, so the overlap the test claims is real instead of hoped-for and a reader that genuinely
+  cannot run still fails loudly. Proof: removing the reader's poll signal makes it fail on the new
+  deadline with that reason. Zero failures in twelve runs after.
+- **The lib suite's DiskFull cascade was the machine, not the code**, and is recorded because the
+  next person to see it should not go looking for a store bug: repeated full-suite runs filled
+  `target/debug/incremental` to 13 GB and left the volume with ~3 GB, at which point SQLite refused
+  every write with `DiskFull` across a dozen unrelated tests. Clearing the incremental cache restored
+  it; twelve consecutive green runs followed.
+
 ### Noticed while draining, not fixed here
 
 - **docs/ARCHITECTURE.md §5 describes a cloud tier that never shipped** — "BigQuery for events/scores

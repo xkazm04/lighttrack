@@ -743,10 +743,27 @@ async fn an_unconfigured_instance_scrubs_pii_on_every_ingest_door() {
             !stored.contains("jane@example.com"),
             "raw email persisted: {stored}"
         );
-        assert!(!stored.contains("4111"), "raw card persisted: {stored}");
+        // The needle is the WHOLE card, in both the spaced form that was sent and the compact form
+        // a normalizer could produce — not the leading `4111`.
+        //
+        // 2026-08-24: `!stored.contains("4111")` was this assertion for months, and it failed on CI
+        // against a perfectly scrubbed row. The serialized event carries RFC3339 timestamps with
+        // nanosecond precision, and `...T21:17:32.341118412Z` contains `4111`. A four-digit needle
+        // matched against a blob full of digits and hex is a coin flip with roughly a
+        // one-in-several-hundred face, on a blocking gate, on code that had not changed — which is
+        // the shape of a flake that gets re-run away rather than diagnosed. Both directions are now
+        // asserted, so this is tighter than what it replaced rather than merely quieter.
+        assert!(
+            !stored.contains("4111 1111 1111 1111") && !stored.contains("4111111111111111"),
+            "raw card persisted: {stored}"
+        );
         assert!(
             stored.contains("<EMAIL>"),
-            "redaction marker missing: {stored}"
+            "email redaction marker missing: {stored}"
+        );
+        assert!(
+            stored.contains("<CC>"),
+            "the card was neither persisted nor recognised — an absent needle proves nothing              unless the marker that should have replaced it is present: {stored}"
         );
     }
 
