@@ -1,7 +1,10 @@
 # .ai/manifest.yaml — the agent-facing contract for this repo.
 # Capabilities are tool-NEUTRAL (a name -> the command that fulfils it), heavy subsystems are
 # referenced by path, and unknown fields MUST be ignored — so this survives tool churn and schema
-# growth. Shape reference: the ai-manifest spec carried by the registry consumer lane.
+# growth. THE CONTRACT SHIPS BESIDE THIS FILE: .ai/ai-manifest.spec.md defines every key below and
+# what a conformant reader asserts about them. It used to say "the spec carried by the registry
+# consumer lane" — a pointer that resolved from no clone, and named no document that existed
+# anywhere. crates/core/tests/manifest_guard.rs holds this file to it on every `cargo test`.
 schema: ai-manifest
 schemaVersion: 0.1.0
 generatedAt: "2026-08-24"
@@ -43,6 +46,7 @@ capabilities:
 
 # Pointers — these subsystems can change format underneath without breaking this contract.
 paths:
+  spec: .ai/ai-manifest.spec.md
   contextMap: context-map.json
   docs: docs/
   workingAgreement: CLAUDE.md
