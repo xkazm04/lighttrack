@@ -68,6 +68,9 @@ pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
         // Empty cache: policies are back-filled lazily from the store on first sight, which is also
         // the path these tests exercise.
         redaction_policies: Arc::new(crate::state::RedactionCache::new(HashMap::new())),
+        activity: Arc::new(crate::storage::ActivityGauge::default()),
+        maintenance: Arc::new(crate::storage::Maintenance::default()),
+        maintenance_desc: "test fixture (no sweep task is spawned)".to_string(),
     };
     (state, store)
 }

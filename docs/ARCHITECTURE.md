@@ -323,3 +323,93 @@ call the identical function).
   `claude -p`), BigQuery + Firestore, Pub/Sub, Cloud Scheduler, Secret Manager. Looker Studio on BigQuery.
 
 See `docs/ROADMAP.md` for sequencing and `docs/DECISIONS.md` for the rationale behind each choice.
+Disk, retention and store maintenance are §12 below.
+
+## 12. Disk: accounting, retention, and quiet-window maintenance
+
+**Retention is deliberately unbounded — operator decision, 2026-08-24.** Nothing in this product
+deletes an event, a score, a job or a revenue row, at any age. There is no pruner, no age-floor sweep
+over the growing tables, and no delete-by-default policy, because keeping the data *is* the policy
+for now: the production timeline and the audience are unresolved, and a retention default that
+deleted would strand history on upgrade. The single exception is `collective_entries`, which a hub
+prunes past an age floor — those are *other instances'* contributions, not this instance's own
+history.
+
+That decision is a real cost, and this section exists so it is a cost somebody can see. Disk grows
+monotonically with ingest. Revisit retention when productionization resolves; until then the
+obligation engineering carries is that the growth is measured, stated, and never surprising.
+
+### What is measured — `GET /v1/storage/status` (admin)
+
+One surface, three things an operator would otherwise guess at:
+
+- **Per-object accounting.** Every table *and every index* as its own row: row count, bytes, share of
+  the file, largest first. "The database is 2 GB" triggers panic; "one table is 1.7 GB of it"
+  triggers a fix. Bytes come from SQLite's own page accounting (`dbstat.pgsize`) and every figure
+  carries that predicate — `pgsize` is **pages allocated**, free space inside them included, which is
+  *not* the same claim as bytes of live rows. The two diverge by exactly the reclaimable space, which
+  is what lets the report answer its own follow-up question ("will anything shrink the file?"). Where
+  the engine cannot be asked, bytes are `null` with the reason, never a measured-looking zero.
+- **The journal sidecar**, from the filesystem — the engine's page accounting cannot see it, and it
+  is a real part of what the store costs on disk. (WAL means the database is three files; back up the
+  directory. See §5.)
+- **The store's own latency**, keyed by operation family (`events.write`, `usage.read`,
+  `pool.acquire`, …). The accounting says which table is *big*, the metrics say which family is
+  *slow*, and the join of the two is the strongest prune-or-index signal the product can produce
+  about itself. Slow counts always travel with the threshold they crossed.
+- **The maintenance flight recorder** — every pass, *including every deferral*.
+
+### What maintenance does, and what it will never do
+
+Two acts, both **lossless**:
+
+- **Checkpoint** the write-ahead journal (passive; truncating once the sidecar passes 8 MiB), moving
+  already-committed pages into the database file.
+- **Incremental vacuum**: hand pages the engine has *already freed* back to the filesystem, 256 at a
+  time. Deleting rows never shrinks a SQLite file on its own — freed pages are recycled internally —
+  so reclamation is a separate, deliberate act, triggered by evidence from the accounting report
+  (reclaimable share crossing 25% of a file of at least 16 MiB), not by a schedule.
+
+`Store::maintenance_pass` has no pruning parameter. There is no code path in this product that can
+delete a user's history, which is what makes the unbounded-retention decision safe to leave standing.
+
+Databases created from 2026-08-24 are `auto_vacuum=INCREMENTAL`, which is fixed at creation and is
+what makes chunked reclamation possible at all. **An older file cannot reclaim incrementally**; its
+report says so in `reclaim_note`, names the offline remedy (stop the API, `VACUUM;`, optionally
+`PRAGMA auto_vacuum=INCREMENTAL; VACUUM;`) and states what that remedy costs in free disk — roughly
+twice the file size, worth checking before starting on a nearly-full volume.
+
+### The window is found, not scheduled
+
+Every pass is gated on an **activity gauge**: a live count of in-flight requests, incremented and
+decremented at the router's front door, over *all* routes (a long analytical read holds a WAL
+snapshot and is exactly the foreground work a checkpoint must not compete with). The gate is two
+conditions — the gauge reads zero **and** a minimum interval has elapsed. The interval bounds cost;
+the gauge bounds interference; either one alone is a known failure (a wall-clock timer that fires
+mid-request, or a busy loop that maintains in every momentary gap).
+
+Deferral has a ladder, so politeness cannot decay into no maintenance at all:
+
+| rung | opens when | chunk |
+| --- | --- | --- |
+| quiet | gauge is 0 and the minimum interval elapsed | full |
+| quieter | no quiet window past the staleness bound, gauge ≤ 1 | reduced |
+| escalated | the journal is over its hard bound, or ≥25% of the file is reclaimable | full, and it does not yield |
+
+The escalation bounds are stated as **harms in bytes**, never as elapsed time: "the journal exceeds
+64 MiB" is a reason a human can weigh; "it has been a week" is the wall clock sneaking back in.
+
+Long passes run as chunks with the gauge re-read between them, and the store's write lock is released
+before each re-read — the reverse order would leave a user waiting on the very check meant to protect
+them. A pass abandoned at a chunk boundary is merely incomplete, never inconsistent.
+
+`LIGHTTRACK_MAINTENANCE_SECS=0` switches the sweep off entirely. It is **on by default**, unlike the
+forecast sweep (§10a): that one turns a self-hosted process into an outbound notifier, which is a
+decision; this one keeps the process's own disk in order, which is upkeep.
+
+### Deferral is an outcome
+
+`ran`, `nothing_to_do`, `deferred` and `failed` are four different results and are counted
+separately. A log that recorded only successes could not tell a healthy store from a scheduler that
+had been deferring for a month — and the discovery would arrive as a disk-full report. `last_run` is
+`null` until a pass has actually run, because "never ran" is its own state, not a zero.

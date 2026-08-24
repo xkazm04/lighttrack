@@ -60,6 +60,17 @@ pub(crate) struct AppState {
     /// attacker could guess the (operator-chosen, possibly weak) admin key — see
     /// [`crate::auth_throttle`].
     pub(crate) auth_throttle: Arc<crate::auth_throttle::AuthThrottle>,
+    /// Live count of in-flight requests — the activity gauge the quiet-window maintenance sweep
+    /// gates on. Fed by a middleware over the WHOLE router (not just ingest), because a long
+    /// analytical read is exactly the foreground work a checkpoint must not compete with.
+    /// See [`crate::storage`].
+    pub(crate) activity: Arc<crate::storage::ActivityGauge>,
+    /// The maintenance flight recorder: every pass, including the deferred ones, behind
+    /// `GET /v1/storage/status`.
+    pub(crate) maintenance: Arc<crate::storage::Maintenance>,
+    /// The sweep's configuration as one readable line, so the status surface can say whether
+    /// anything will ever checkpoint this database.
+    pub(crate) maintenance_desc: String,
 }
 
 /// Env: how long a cached redaction policy may be served before it is re-read from the store.

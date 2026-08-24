@@ -8,6 +8,11 @@
 //!   GET  /health
 //!   POST /v1/events                      ingest one event (cost computed; limits evaluated)
 //!   GET  /v1/ingest/status               load-shedding view: in-flight depth + shed/timeout counts
+//!   GET  /v1/storage/status              (admin) disk accounting per table + index, the store's own
+//!                                        per-family latency, and the maintenance flight recorder —
+//!                                        including the passes that were DEFERRED. Retention is
+//!                                        deliberately unbounded (operator 2026-08-24); this is where
+//!                                        that growth is visible. See docs/ARCHITECTURE.md §12.
 //!   POST /v1/events/batch                ingest an array; per-item accepted|rejected|invalid (HTTP 200)
 //!   GET  /v1/events?project=&limit=&since=&until=&provider=&model=&trace_id=&name=
 //!                  &status=&tag=&meta=&min_cost=&count=&cursor=
@@ -96,6 +101,13 @@
 //!      LIGHTTRACK_FORECAST_SWEEP_SECS (cadence of the scheduled budget-ETA / margin-erosion alert
 //!        sweep; unset or 0 = off, floor 60s), LIGHTTRACK_FORECAST_SWEEP_HORIZON /
 //!        LIGHTTRACK_FORECAST_SWEEP_LOOKBACK (projection shape; default 14/14 days),
+//!      LIGHTTRACK_MAINTENANCE_SECS (how often the quiet-window maintenance gate is evaluated;
+//!        default 300, floor 30, 0 = no maintenance at all — the journal and the freelist then grow
+//!        unattended), LIGHTTRACK_MAINTENANCE_MIN_INTERVAL_SECS (minimum spacing between passes;
+//!        default 900), LIGHTTRACK_MAINTENANCE_STALE_SECS (how long deferral may continue before a
+//!        reduced-chunk pass is accepted against light traffic; default 3600),
+//!        LIGHTTRACK_MAINTENANCE_WAL_HARD_BYTES (journal size that is itself the harm, past which a
+//!        pass runs regardless of activity; default 64 MiB),
 //!      LIGHTTRACK_BENCH_WEBHOOK (benchmark-run completion webhook; falls back to LIGHTTRACK_ALERT_WEBHOOK),
 //!      LIGHTTRACK_LOG (level or full tracing filter directive; default `info`, falls back to RUST_LOG),
 //!      LIGHTTRACK_LOG_FORMAT (json — the default, one indexed JSON object per line on stdout — | text),
@@ -142,6 +154,7 @@ mod rubrics;
 mod scores;
 mod shed;
 mod state;
+mod storage;
 mod traces;
 
 #[cfg(test)]
@@ -158,6 +171,8 @@ mod tests_ingest;
 mod tests_limit_scope;
 #[cfg(test)]
 mod tests_relay;
+#[cfg(test)]
+mod tests_storage;
 #[cfg(test)]
 mod tests_traces;
 
@@ -271,6 +286,8 @@ async fn main() -> anyhow::Result<()> {
     let shed_desc = ingest_guard.describe();
     let auth_throttle = Arc::new(auth_throttle::AuthThrottle::from_env());
     let auth_throttle_desc = auth_throttle.describe();
+    let maintenance_cfg = storage::SweepConfig::from_env();
+    let maintenance_desc = storage::describe(maintenance_cfg);
     let state = AppState {
         store,
         prices: Arc::new(RwLock::new(book)),
@@ -287,6 +304,9 @@ async fn main() -> anyhow::Result<()> {
         ingest_guard,
         auth_throttle,
         redaction_policies: Arc::new(state::RedactionCache::new(redaction_policies)),
+        activity: Arc::new(storage::ActivityGauge::default()),
+        maintenance: Arc::new(storage::Maintenance::default()),
+        maintenance_desc: maintenance_desc.clone(),
     };
 
     let sweep = forecast_sweep::SweepConfig::from_env();
@@ -304,6 +324,7 @@ async fn main() -> anyhow::Result<()> {
         alerts = %alerts_desc,
         forecast_sweep = %sweep_desc,
         ingest = %shed_desc,
+        maintenance = %maintenance_desc,
         redact = %redact_desc,
         billing = %billing_desc,
         collective = %collective_desc,
@@ -321,6 +342,11 @@ async fn main() -> anyhow::Result<()> {
     // Pre-emptive forecast alerts on a timer (off unless configured). Detached: it never shares a
     // task with a request, and its store reads go to the blocking pool like any handler's.
     forecast_sweep::spawn(state.clone(), sweep);
+
+    // Quiet-window store maintenance: checkpoint the journal and hand already-freed pages back to
+    // the filesystem, gated on the activity gauge. Lossless — it never deletes a row — and every
+    // pass, including every deferral, lands in the flight recorder behind /v1/storage/status.
+    storage::spawn(state.clone(), maintenance_cfg);
 
     let app = build_router(state);
 
@@ -359,6 +385,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
                 .layer(shed_ingest.clone()),
         )
         .route("/v1/ingest/status", get(shed::get_ingest_status))
+        .route("/v1/storage/status", get(storage::get_storage_status))
         .route("/v1/events/:id", get(events::get_event_by_id))
         .route(
             "/v1/traces",
@@ -473,6 +500,15 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/collective/contribution",
             delete(collective::delete_contribution),
         )
+        // Over every route: the maintenance sweep's activity gauge. It must see ALL foreground work,
+        // not just the ingest doors — a long analytical read holds a WAL snapshot and is exactly the
+        // work a checkpoint should not compete with — so it is layered here rather than beside the
+        // ingest shed. The token decrements on drop, so a panicking or cancelled handler cannot
+        // leave the gauge permanently busy and silently switch maintenance off forever.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            storage::track_activity,
+        ))
         // Outermost, over every route: it only establishes the failed-auth throttle's view of *who*
         // is calling (the socket peer), which `guards::authenticate` then reads. Routes that never
         // authenticate — `/health`, the HMAC-signed billing webhook — are unaffected by it.

@@ -73,6 +73,9 @@ fn setup_k(
         ingest_guard: Arc::new(crate::shed::IngestGuard::from_env()),
         auth_throttle: Arc::new(crate::auth_throttle::AuthThrottle::from_env()),
         redaction_policies: Arc::new(crate::state::RedactionCache::new(HashMap::new())),
+        activity: Arc::new(crate::storage::ActivityGauge::default()),
+        maintenance: Arc::new(crate::storage::Maintenance::default()),
+        maintenance_desc: "test fixture (no sweep task is spawned)".to_string(),
     };
     (state, store)
 }
