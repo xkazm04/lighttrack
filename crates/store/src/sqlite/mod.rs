@@ -16,6 +16,7 @@ mod forecast;
 mod jobs;
 mod limits;
 mod maintenance;
+mod metrics;
 mod pool;
 mod prices;
 mod projects;
@@ -35,9 +36,12 @@ mod tests;
 mod tests_concurrency;
 #[cfg(test)]
 mod tests_maintenance;
+#[cfg(test)]
+mod tests_metrics;
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
@@ -51,10 +55,12 @@ use lighttrack_core::{
 };
 
 use crate::{
-    Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, EventFilter, EventPage,
-    MaintenancePass, MaintenanceRequest, Result, ScopeUsage, StorageReport, Store, StoreError,
-    TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, DbMetricsReport, EventFilter,
+    EventPage, MaintenancePass, MaintenanceRequest, Result, ScopeUsage, StorageReport, Store,
+    StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
+
+use metrics::DbOp;
 
 /// A **sargable** project predicate for `?1`-bound project queries. When a project is given this is an
 /// index-seekable equality (`project_id = ?1`), so a `WHERE project_pred(..) AND ts >= ?2 AND ts < ?3`
@@ -107,6 +113,10 @@ pub struct SqliteStore {
     /// is accounting for. `None` for an in-memory store — which has no file, and must not be given
     /// a plausible-looking path in a report an operator reads about disk.
     path: Option<PathBuf>,
+    /// The store's own instrumentation — in-memory rings keyed by operation family. Never a table:
+    /// an instrument that wrote to the database would double every measured operation and contend
+    /// for the locks it is measuring. See [`metrics`].
+    meter: metrics::Meter,
 }
 
 impl SqliteStore {
@@ -150,6 +160,7 @@ impl SqliteStore {
             readers,
             usage_cache: Mutex::new(usage_cache::UsageCache::default()),
             path: Some(path.to_path_buf()),
+            meter: metrics::Meter::default(),
         })
     }
 
@@ -163,20 +174,64 @@ impl SqliteStore {
             readers: pool::ReadPool::disabled(),
             usage_cache: Mutex::new(usage_cache::UsageCache::default()),
             path: None,
+            meter: metrics::Meter::default(),
         })
     }
 
     /// Run a closure with the locked **write** connection. Anything that mutates goes through here.
+    ///
+    /// Unkeyed — the operation is attributed to `other.write`. Prefer [`Self::with_op`] with the
+    /// family the call belongs to; this exists so that no operation is ever *invisible*, which is a
+    /// blind spot that reads as silence.
     fn with<R>(&self, f: impl FnOnce(&Connection) -> R) -> R {
-        f(&self.conn.lock().unwrap())
+        self.with_op(DbOp::OtherWrite, f)
+    }
+
+    /// [`Self::with`], attributed to a named operation family.
+    ///
+    /// The wait for the write connection is recorded under its OWN key and excluded from the
+    /// operation's time: waiting behind another writer and being slow yourself have disjoint
+    /// remedies, and folding them together indicts the wrong one.
+    fn with_op<R>(&self, op: DbOp, f: impl FnOnce(&Connection) -> R) -> R {
+        let queued = Instant::now();
+        let conn = self.conn.lock().unwrap();
+        self.meter
+            .record(DbOp::WriteLockWait, queued.elapsed(), None);
+        // `total_changes` separates "the query got slower" from "the table got bigger": a write
+        // family whose per-operation row count is climbing is a different finding from one whose
+        // duration is.
+        let rows_before = conn.total_changes();
+        let started = Instant::now();
+        let out = f(&conn);
+        self.meter.record(
+            op,
+            started.elapsed(),
+            Some(conn.total_changes().saturating_sub(rows_before)),
+        );
+        out
     }
 
     /// Run a **read-only** closure on a pooled connection, concurrently with any in-flight write.
-    /// Falls back to the write connection when the pool is disabled.
+    /// Falls back to the write connection when the pool is disabled. Unkeyed — see [`Self::with`].
     fn read<R>(&self, f: impl FnOnce(&Connection) -> R) -> R {
+        self.read_op(DbOp::OtherRead, f)
+    }
+
+    /// [`Self::read`], attributed to a named operation family. Pool acquisition is its own key for
+    /// the same reason the write-lock wait is.
+    fn read_op<R>(&self, op: DbOp, f: impl FnOnce(&Connection) -> R) -> R {
+        let queued = Instant::now();
         match self.readers.acquire() {
-            Some(c) => f(&c),
-            None => self.with(f),
+            Some(c) => {
+                self.meter.record(DbOp::PoolAcquire, queued.elapsed(), None);
+                let started = Instant::now();
+                let out = f(&c);
+                self.meter.record(op, started.elapsed(), None);
+                out
+            }
+            // No pool (in-memory, or WAL unavailable): the read serializes on the write connection,
+            // and `with_op` records both the wait and the operation.
+            None => self.with_op(op, f),
         }
     }
 }
@@ -202,7 +257,7 @@ impl Store for SqliteStore {
 
     // --- events ---
     fn insert_event(&self, ev: &LlmEvent) -> Result<()> {
-        self.with(|c| events::insert(c, ev))
+        self.with_op(DbOp::EventsWrite, |c| events::insert(c, ev))
     }
     fn admission_is_atomic(&self) -> bool {
         // One locked write connection (+ the usage-cache lock) spans check-count-insert, within a
@@ -213,7 +268,9 @@ impl Store for SqliteStore {
         // Lock the usage cache *before* the connection (consistent order in both admission methods,
         // so no deadlock) and hold both across the check-count-insert — one atomic critical section.
         let mut cache = self.usage_cache.lock().unwrap();
-        self.with(|c| events::insert_checked(c, &mut cache, ev))
+        self.with_op(DbOp::EventsWrite, |c| {
+            events::insert_checked(c, &mut cache, ev)
+        })
     }
     fn insert_events_checked(&self, evs: &[LlmEvent]) -> Vec<Result<Admission>> {
         // One critical section for the whole batch: the cache + connection locks are held across every
@@ -231,7 +288,7 @@ impl Store for SqliteStore {
         // Limit rules are also hoisted: fetched once per distinct project (a batch is single-project
         // by construction today) instead of re-queried per item.
         let mut cache = self.usage_cache.lock().unwrap();
-        self.with(|c| {
+        self.with_op(DbOp::EventsWrite, |c| {
             let tx = match c.unchecked_transaction() {
                 Ok(tx) => tx,
                 Err(e) => {
@@ -274,7 +331,7 @@ impl Store for SqliteStore {
         })
     }
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
-        self.read(|c| events::list(c, project, limit))
+        self.read_op(DbOp::EventsRead, |c| events::list(c, project, limit))
     }
     fn list_events_filtered(
         &self,
@@ -282,10 +339,12 @@ impl Store for SqliteStore {
         filter: &EventFilter,
         limit: usize,
     ) -> Result<EventPage> {
-        self.read(|c| events::list_filtered(c, project, filter, limit))
+        self.read_op(DbOp::EventsRead, |c| {
+            events::list_filtered(c, project, filter, limit)
+        })
     }
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
-        self.read(|c| events::cost_summary(c, project))
+        self.read_op(DbOp::UsageRead, |c| events::cost_summary(c, project))
     }
     fn cost_summary_windowed(
         &self,
@@ -293,17 +352,21 @@ impl Store for SqliteStore {
         since: Option<DateTime<Utc>>,
         until: Option<DateTime<Utc>>,
     ) -> Result<Vec<CostRow>> {
-        self.read(|c| events::cost_summary_windowed(c, project, since, until))
+        self.read_op(DbOp::UsageRead, |c| {
+            events::cost_summary_windowed(c, project, since, until)
+        })
     }
     fn usecase_costs(
         &self,
         project: Option<&str>,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<UseCaseCostRow>> {
-        self.read(|c| events::usecase_costs(c, project, since))
+        self.read_op(DbOp::UsageRead, |c| {
+            events::usecase_costs(c, project, since)
+        })
     }
     fn usage_since(&self, project: &str, since: DateTime<Utc>) -> Result<Usage> {
-        self.read(|c| events::usage_since(c, project, since))
+        self.read_op(DbOp::UsageRead, |c| events::usage_since(c, project, since))
     }
     fn usage_since_scoped(
         &self,
@@ -311,7 +374,9 @@ impl Store for SqliteStore {
         since: DateTime<Utc>,
         scope: &LimitScope,
     ) -> Result<Usage> {
-        self.read(|c| events::usage_since_scoped(c, project, since, scope))
+        self.read_op(DbOp::UsageRead, |c| {
+            events::usage_since_scoped(c, project, since, scope)
+        })
     }
     fn usage_by_scope(
         &self,
@@ -319,7 +384,9 @@ impl Store for SqliteStore {
         since: DateTime<Utc>,
         kind: &str,
     ) -> Result<Vec<ScopeUsage>> {
-        self.read(|c| events::usage_by_scope(c, project, since, kind))
+        self.read_op(DbOp::UsageRead, |c| {
+            events::usage_by_scope(c, project, since, kind)
+        })
     }
     fn daily_usage(
         &self,
@@ -327,7 +394,9 @@ impl Store for SqliteStore {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<DailyUsage>> {
-        self.read(|c| forecast::daily_usage(c, project, since, until))
+        self.read_op(DbOp::UsageRead, |c| {
+            forecast::daily_usage(c, project, since, until)
+        })
     }
     fn daily_cost_by_dimension(
         &self,
@@ -336,10 +405,12 @@ impl Store for SqliteStore {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<DailyDimCost>> {
-        self.read(|c| forecast::daily_cost_by_dimension(c, project, dim, since, until))
+        self.read_op(DbOp::UsageRead, |c| {
+            forecast::daily_cost_by_dimension(c, project, dim, since, until)
+        })
     }
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
-        self.read(|c| events::get(c, id))
+        self.read_op(DbOp::EventsRead, |c| events::get(c, id))
     }
 
     // --- traces ---
@@ -347,7 +418,9 @@ impl Store for SqliteStore {
         true
     }
     fn list_traces(&self, project: Option<&str>, limit: usize) -> Result<Vec<TraceSummary>> {
-        self.read(|c| events::list_trace_summaries(c, project, limit))
+        self.read_op(DbOp::TracesRead, |c| {
+            events::list_trace_summaries(c, project, limit)
+        })
     }
     fn list_traces_filtered(
         &self,
@@ -355,7 +428,9 @@ impl Store for SqliteStore {
         filter: &TraceFilter,
         limit: usize,
     ) -> Result<TracePage> {
-        self.read(|c| events::list_trace_summaries_filtered(c, project, filter, limit))
+        self.read_op(DbOp::TracesRead, |c| {
+            events::list_trace_summaries_filtered(c, project, filter, limit)
+        })
     }
     fn list_trace_events(
         &self,
@@ -363,18 +438,22 @@ impl Store for SqliteStore {
         trace_id: &str,
         max_spans: usize,
     ) -> Result<TraceEvents> {
-        self.read(|c| events::list_by_trace(c, project, trace_id, max_spans))
+        self.read_op(DbOp::TracesRead, |c| {
+            events::list_by_trace(c, project, trace_id, max_spans)
+        })
     }
     fn list_trace_scores(&self, project: Option<&str>, trace_id: &str) -> Result<Vec<Score>> {
-        self.read(|c| scores::list_by_trace(c, project, trace_id))
+        self.read_op(DbOp::TracesRead, |c| {
+            scores::list_by_trace(c, project, trace_id)
+        })
     }
 
     // --- scores ---
     fn insert_score(&self, s: &Score) -> Result<()> {
-        self.with(|c| scores::insert(c, s))
+        self.with_op(DbOp::ScoresWrite, |c| scores::insert(c, s))
     }
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
-        self.read(|c| scores::list(c, project, limit))
+        self.read_op(DbOp::ScoresRead, |c| scores::list(c, project, limit))
     }
     fn list_run_scores(
         &self,
@@ -382,10 +461,12 @@ impl Store for SqliteStore {
         project: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Score>> {
-        self.read(|c| scores::list_by_run(c, run_id, project, limit))
+        self.read_op(DbOp::ScoresRead, |c| {
+            scores::list_by_run(c, run_id, project, limit)
+        })
     }
     fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
-        self.read(|c| scores::scored_event_ids(c, event_ids))
+        self.read_op(DbOp::ScoresRead, |c| scores::scored_event_ids(c, event_ids))
     }
 
     // --- projects / api keys / limits ---
@@ -490,19 +571,19 @@ impl Store for SqliteStore {
 
     // --- jobs ---
     fn create_job(&self, j: &Job) -> Result<()> {
-        self.with(|c| jobs::create(c, j))
+        self.with_op(DbOp::JobsWrite, |c| jobs::create(c, j))
     }
     fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
-        self.with(|c| jobs::claim(c, stale_before))
+        self.with_op(DbOp::JobsWrite, |c| jobs::claim(c, stale_before))
     }
     fn cancel_job(&self, id: &str) -> Result<Option<JobCancel>> {
-        self.with(|c| jobs::cancel(c, id))
+        self.with_op(DbOp::JobsWrite, |c| jobs::cancel(c, id))
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
-        self.with(|c| jobs::update_progress(c, id, progress))
+        self.with_op(DbOp::JobsWrite, |c| jobs::update_progress(c, id, progress))
     }
     fn renew_job_lease(&self, id: &str, fence: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
-        self.with(|c| jobs::renew_lease(c, id, fence))
+        self.with_op(DbOp::JobsWrite, |c| jobs::renew_lease(c, id, fence))
     }
     fn finish_job(
         &self,
@@ -512,13 +593,15 @@ impl Store for SqliteStore {
         error: Option<&str>,
         fence: Option<DateTime<Utc>>,
     ) -> Result<JobFinish> {
-        self.with(|c| jobs::finish(c, id, status, result, error, fence))
+        self.with_op(DbOp::JobsWrite, |c| {
+            jobs::finish(c, id, status, result, error, fence)
+        })
     }
     fn get_job(&self, id: &str) -> Result<Option<Job>> {
-        self.read(|c| jobs::get(c, id))
+        self.read_op(DbOp::JobsRead, |c| jobs::get(c, id))
     }
     fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
-        self.read(|c| jobs::list(c, status, limit))
+        self.read_op(DbOp::JobsRead, |c| jobs::list(c, status, limit))
     }
 
     // --- prompt registry ---
@@ -569,7 +652,9 @@ impl Store for SqliteStore {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
-        self.read(|c| revenue::cost_by_dimension(c, project, dim, since, until))
+        self.read_op(DbOp::UsageRead, |c| {
+            revenue::cost_by_dimension(c, project, dim, since, until)
+        })
     }
     fn tokens_by_dimension(
         &self,
@@ -578,7 +663,9 @@ impl Store for SqliteStore {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<TokensByDimension>> {
-        self.read(|c| revenue::tokens_by_dimension(c, project, dim, since, until))
+        self.read_op(DbOp::UsageRead, |c| {
+            revenue::tokens_by_dimension(c, project, dim, since, until)
+        })
     }
     fn customer_cost_by_model(
         &self,
@@ -587,7 +674,9 @@ impl Store for SqliteStore {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
-        self.read(|c| revenue::customer_cost_by_model(c, project, customer, since, until))
+        self.read_op(DbOp::UsageRead, |c| {
+            revenue::customer_cost_by_model(c, project, customer, since, until)
+        })
     }
     fn customer_cost_by_name(
         &self,
@@ -596,7 +685,9 @@ impl Store for SqliteStore {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
-        self.read(|c| revenue::customer_cost_by_name(c, project, customer, since, until))
+        self.read_op(DbOp::UsageRead, |c| {
+            revenue::customer_cost_by_name(c, project, customer, since, until)
+        })
     }
 
     // --- cloud→device relay queue ---
@@ -651,12 +742,18 @@ impl Store for SqliteStore {
         // A pooled reader: the accounting walk is read-only and must not queue behind ingest — an
         // operator asking "why is my disk full" during a busy period is exactly when it matters.
         let path = self.path.clone();
-        self.read(|c| maintenance::report(c, path.as_deref()))
+        self.read_op(DbOp::Maintenance, |c| {
+            maintenance::report(c, path.as_deref())
+        })
+    }
+
+    fn db_metrics(&self) -> Result<DbMetricsReport> {
+        Ok(self.meter.report())
     }
 
     fn maintenance_pass(&self, req: MaintenanceRequest) -> Result<MaintenancePass> {
         // The write connection, because a checkpoint and a vacuum are writers. One chunk per call:
         // the lock is released before the caller re-reads its activity gauge, never held across it.
-        self.with(|c| maintenance::pass(c, req))
+        self.with_op(DbOp::Maintenance, |c| maintenance::pass(c, req))
     }
 }

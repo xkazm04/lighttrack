@@ -628,6 +628,45 @@ pub struct MaintenancePass {
     pub detail: String,
 }
 
+/// One measured operation family's numbers.
+///
+/// Every figure here travels with what it means; see [`DbMetricsReport::recomputation`], which is
+/// served in the same payload rather than living in a doc the reader of a number will not have open.
+#[derive(Debug, Clone, Serialize)]
+pub struct DbOpStats {
+    /// The family key — a table or a named operation family, never statement text.
+    pub key: &'static str,
+    /// Operations recorded since process start.
+    pub count: u64,
+    pub mean_ms: f64,
+    pub p50_ms: f64,
+    pub p95_ms: f64,
+    pub max_ms: f64,
+    /// How many recent durations the percentiles above were computed from.
+    pub sampled: usize,
+    /// Operations at or over `slow_over_ms`. The count is meaningless without the threshold, so the
+    /// threshold ships beside it in every row.
+    pub slow_count: u64,
+    pub slow_over_ms: f64,
+    /// `None` for read families: a read changes no rows, which is a different statement from
+    /// changing zero rows.
+    pub rows_written: Option<u64>,
+}
+
+/// The store's view of its own behaviour.
+#[derive(Debug, Clone, Serialize)]
+pub struct DbMetricsReport {
+    pub since_secs: u64,
+    /// Per-key ring size — the bound on how much history the percentiles can see.
+    pub ring_capacity: usize,
+    /// Only families that have actually run. A family nobody called is omitted rather than rendered
+    /// as a row of zeros, which is a number someone would quote.
+    pub ops: Vec<DbOpStats>,
+    /// How each figure above was derived, in the payload.
+    pub recomputation: &'static str,
+    pub note: &'static str,
+}
+
 /// Backend-agnostic persistence interface.
 pub trait Store: Send + Sync {
     /// Create tables if they don't exist.
@@ -1252,5 +1291,13 @@ pub trait Store: Send + Sync {
     /// The caller owns the activity gate and the chunk loop; this is one chunk.
     fn maintenance_pass(&self, _req: MaintenanceRequest) -> Result<MaintenancePass> {
         Err(StoreError::Unsupported("store maintenance"))
+    }
+
+    /// What this store has observed about its own operation latency, keyed by operation family.
+    ///
+    /// `Unsupported` by default for the same reason as the two above: a backend that measures
+    /// nothing must say so, because an empty report reads as "everything is fast".
+    fn db_metrics(&self) -> Result<DbMetricsReport> {
+        Err(StoreError::Unsupported("store self-instrumentation"))
     }
 }
