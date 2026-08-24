@@ -1948,8 +1948,14 @@ fn job_queue_claim_finish() {
         .unwrap()
         .is_none());
 
-    s.finish_job("j1", "done", &serde_json::json!({ "run_id": "r1" }), None)
-        .unwrap();
+    s.finish_job(
+        "j1",
+        "done",
+        &serde_json::json!({ "run_id": "r1" }),
+        None,
+        claimed.claimed_at,
+    )
+    .unwrap();
     let got = s.get_job("j1").unwrap().unwrap();
     assert_eq!(got.status, "done");
     assert_eq!(got.result["run_id"], "r1");
@@ -2378,8 +2384,14 @@ fn a_database_predating_job_failure_accounting_migrates_on_open() {
         (claimed.attempts, claimed.failures, claimed.stale_reclaims),
         (1, 0, 0)
     );
-    s.finish_job("old-1", "failed", &Value::Null, Some("boom"))
-        .unwrap();
+    s.finish_job(
+        "old-1",
+        "failed",
+        &Value::Null,
+        Some("boom"),
+        claimed.claimed_at,
+    )
+    .unwrap();
     assert_eq!(s.get_job("old-1").unwrap().unwrap().failures, 1);
     assert_eq!(
         s.cancel_job("old-1").unwrap().unwrap(),
@@ -2451,6 +2463,7 @@ fn cancel_is_race_safe_against_stale_reclaim() {
         "cancelled",
         &serde_json::json!({ "partial": true }),
         None,
+        after.claimed_at,
     )
     .unwrap();
     let done = s.get_job("b").unwrap().unwrap();

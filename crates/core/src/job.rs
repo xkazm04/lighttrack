@@ -42,7 +42,20 @@ pub struct Job {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub result: Value,
-    /// When a worker last claimed it (for stale-claim recovery / heartbeat).
+    /// When the holding worker last proved it is alive — set by the claim and moved forward by
+    /// every lease renewal.
+    ///
+    /// It is also this job's **fencing token**. A claim (or a reclaim) stamps a new value here, so
+    /// a worker that holds `claimed_at = T` and finds the row no longer at `T` has learned that
+    /// someone else owns the job now. Every write a worker makes about a job it believes it holds
+    /// carries this value and is refused if it does not match — see [`crate::JobFinish`]. That is
+    /// what stops a slow worker, reclaimed while it was busy, from overwriting the verdict its
+    /// replacement already wrote.
+    ///
+    /// Because it now moves on renewal rather than only on claim, the staleness window is a
+    /// **detection latency** (how long a dead worker may go unnoticed — minutes) and no longer has
+    /// to be sized to the longest legitimate job (hours). Those are the two quantities a single
+    /// claim timestamp used to conflate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_at: Option<DateTime<Utc>>,
     #[serde(default = "Utc::now")]
@@ -67,6 +80,31 @@ pub enum JobCancel {
     Cancelling,
     /// It had already reached a terminal state (`done` / `failed` / `cancelled`); nothing changed.
     AlreadyFinished { status: String },
+}
+
+/// What a finish attempt did, so a worker learns whether its verdict landed instead of assuming it.
+///
+/// The unconditioned finish this replaces was the queue's last unfenced write: a worker reclaimed
+/// as stale would keep running (nothing had told it otherwise), eventually finish, and overwrite
+/// whatever verdict its replacement had already recorded — silently, with a plausible-looking
+/// result. A completion is a transition like any other and goes through the same conditioned door:
+/// *set the verdict where the job is still non-terminal and still mine*.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum JobFinish {
+    /// The verdict landed.
+    Finished,
+    /// Refused. The caller does not hold this job any more — its lease expired and someone
+    /// reclaimed it, an operator requeued it, or it already reached a terminal state. `status` and
+    /// `claimed_at` are what the record says NOW, so the loser can log what beat it rather than
+    /// guessing.
+    NotHeld {
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        claimed_at: Option<DateTime<Utc>>,
+    },
+    /// There is no such job (→ 404). Distinct from `NotHeld`, which is a live job someone else owns.
+    NoSuchJob,
 }
 
 /// Prefix on a stored job error that means **the worker died**, not that the benchmark failed. The

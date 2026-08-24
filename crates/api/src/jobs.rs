@@ -8,7 +8,7 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 
-use lighttrack_core::{new_id, Job, JobCancel};
+use lighttrack_core::{new_id, Job, JobCancel, JobFinish};
 
 use crate::benchmarks::load_benchmark_authorized;
 use crate::error::ApiError;
@@ -120,8 +120,17 @@ pub(crate) struct ClaimReq {
     stale_secs: i64,
 }
 
+/// How long a dead worker may go unnoticed — **not** how long a job may legitimately run.
+///
+/// Those are two different quantities, and a single claim timestamp used to conflate them: this was
+/// 600 s, chosen to be longer than a slow benchmark, which meant a killed worker's job sat
+/// untouchable for ten minutes. Now that the holder renews its lease on a timer
+/// (`/v1/jobs/:id/renew`), job duration is unbounded and irrelevant here, and this can be sized to
+/// detection latency instead. 120 s is four missed 30 s heartbeats: a GC pause, a slow round trip,
+/// or a brief network blip cannot cost a live worker its job, while a dead one is reclaimed in
+/// about two minutes rather than ten.
 fn default_stale_secs() -> i64 {
-    600
+    120
 }
 
 pub(crate) async fn claim_job(
@@ -177,14 +186,57 @@ pub(crate) async fn job_progress(
 }
 
 #[derive(Deserialize)]
+pub(crate) struct RenewReq {
+    /// The `claimed_at` the worker was handed at claim — its proof that the job is still its own.
+    claimed_at: chrono::DateTime<Utc>,
+}
+
+/// Heartbeat: "I am still alive, extend my lease." A conditioned write, and its result is the
+/// worker's own gate on its legitimacy — a **409** means the lease is no longer theirs (a reaper
+/// expired it, an operator requeued the job, someone reclaimed it) and the run must stop rather
+/// than keep spending as a zombie beside its successor.
+///
+/// The endpoint carries nothing but liveness on purpose. Progress rides `/progress`, so a stall in
+/// computing progress can never stall the heartbeat and make a live-but-stuck worker read as a
+/// dead one — the two states the lease exists to tell apart.
+pub(crate) async fn job_renew(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<RenewReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let store = st.store.clone();
+    let id2 = id.clone();
+    let renewed = spawn_db(move || store.renew_job_lease(&id2, req.claimed_at)).await?;
+    match renewed {
+        Some(claimed_at) => Ok(Json(serde_json::json!({ "claimed_at": claimed_at }))),
+        None => Err(ApiError::conflict(format!(
+            "job '{id}' is no longer held by that lease; stop working on it"
+        ))),
+    }
+}
+
+#[derive(Deserialize)]
 pub(crate) struct FinishReq {
     status: String,
     #[serde(default)]
     result: serde_json::Value,
     #[serde(default)]
     error: Option<String>,
+    /// The lease the caller holds. A worker always sends it; omitting it is the operator-shaped
+    /// finish, which waives the ownership condition but never the finality one.
+    #[serde(default)]
+    claimed_at: Option<chrono::DateTime<Utc>>,
 }
 
+/// Record a job's verdict. A **conditioned** write: the job must still be non-terminal, and — when
+/// `claimed_at` is supplied — still held by this caller.
+///
+/// A refusal is a **409**, not a silent no-op. This closes the queue's last unfenced write: a worker
+/// reclaimed as stale while it was busy would finish later and overwrite the verdict its
+/// replacement had already recorded, plausibly and with nothing anywhere saying so. Now the slow
+/// worker is told what beat it, and the verdict stands.
 pub(crate) async fn job_finish(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -193,6 +245,23 @@ pub(crate) async fn job_finish(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
     let store = st.store.clone();
-    spawn_db(move || store.finish_job(&id, &req.status, &req.result, req.error.as_deref())).await?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+    let id2 = id.clone();
+    let outcome = spawn_db(move || {
+        store.finish_job(
+            &id2,
+            &req.status,
+            &req.result,
+            req.error.as_deref(),
+            req.claimed_at,
+        )
+    })
+    .await?;
+    match outcome {
+        JobFinish::Finished => Ok(Json(serde_json::json!({ "ok": true }))),
+        JobFinish::NoSuchJob => Err(ApiError::not_found(format!("job '{id}' not found"))),
+        JobFinish::NotHeld { status, claimed_at } => Err(ApiError::conflict(format!(
+            "job '{id}' is {status} and not held by that lease (its lease is {claimed_at:?}); \
+             the verdict you sent was NOT recorded"
+        ))),
+    }
 }

@@ -11,10 +11,10 @@ use serde_json::{json, Value};
 
 use lighttrack_core::{
     compute_margin, new_id, ApiKey, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem,
-    DimensionCheck, DimensionKind, Job, JobCancel, LimitAction, LimitMetric, LimitRule, LimitScope,
-    LimitWindow, LlmEvent, MarginDimension, ModelPriceRow, Operation, Project, Provider, Redaction,
-    RelayOutcome, RelayTask, RevenueEvent, RevenueKind, Rubric, RubricDimension, Score,
-    ScoreDetail, ScoreDim, Status, TokenUsage,
+    DimensionCheck, DimensionKind, Job, JobCancel, JobFinish, LimitAction, LimitMetric, LimitRule,
+    LimitScope, LimitWindow, LlmEvent, MarginDimension, ModelPriceRow, Operation, Project,
+    Provider, Redaction, RelayOutcome, RelayTask, RevenueEvent, RevenueKind, Rubric,
+    RubricDimension, Score, ScoreDetail, ScoreDim, Status, TokenUsage,
 };
 
 use crate::{Admission, EventFilter, Result, Store, StoreError, TraceFilter};
@@ -1476,7 +1476,7 @@ fn jobs(store: &dyn Store) -> Result<()> {
 
     // Our specific job's lifecycle by id (independent of which job claim() returned).
     store.update_job_progress(&j.id, "50%")?;
-    store.finish_job(&j.id, "done", &json!({ "ok": true }), None)?;
+    store.finish_job(&j.id, "done", &json!({ "ok": true }), None, None)?;
     let done = store.get_job(&j.id)?.expect("get_job after finish");
     assert_eq!(done.status, "done");
     assert_eq!(done.result, json!({ "ok": true }), "job result round-trip");
@@ -1486,6 +1486,7 @@ fn jobs(store: &dyn Store) -> Result<()> {
         .any(|x| x.id == j.id));
     job_cancellation(store)?;
     job_failure_accounting(store)?;
+    job_leases(store)?;
     Ok(())
 }
 
@@ -1604,6 +1605,7 @@ fn job_failure_accounting(store: &dyn Store) -> Result<()> {
         "queued",
         &Value::Null,
         Some("benchmark failure: judge failed"),
+        second.claimed_at,
     )?;
     let after = store.get_job(&j.id)?.expect("get");
     assert_eq!(
@@ -1620,9 +1622,137 @@ fn job_failure_accounting(store: &dyn Store) -> Result<()> {
         .unwrap_or_default()
         .contains("judge failed"));
 
-    // A clean finish never consumes the budget.
-    store.finish_job(&j.id, "done", &json!({ "ok": true }), None)?;
+    // A clean finish never consumes the budget. (Unfenced: the job went back to `queued` above, so
+    // nobody holds it — this is the operator-shaped finish.)
+    store.finish_job(&j.id, "done", &json!({ "ok": true }), None, None)?;
     assert_eq!(store.get_job(&j.id)?.expect("get").failures, 1);
+    Ok(())
+}
+
+/// **The lease invariant**, held identically by every backend: a job's holder can prove it is alive,
+/// a holder that has been replaced cannot write, and a verdict is final.
+///
+/// This is the property whose absence let a long benchmark be stolen and then have its result
+/// clobbered. Before it, `finish_job` was unconditioned in all three backends: the original worker —
+/// still running, because nothing had told it otherwise — would eventually finish and overwrite the
+/// verdict its replacement had already recorded, with a plausible-looking result and no error
+/// anywhere. Each backend implements the conditioned write in its own dialect (SQLite `UPDATE …
+/// WHERE`, Postgres the same, Firestore an `updateTime` precondition over a read-compare loop), and
+/// a divergence in any of them is a silent correctness hole, so the contract is pinned here rather
+/// than in one backend's unit tests.
+fn job_leases(store: &dyn Store) -> Result<()> {
+    drain_jobs(store)?;
+    let j = new_job();
+    store.create_job(&j)?;
+    let held = store.claim_job(Utc::now())?.expect("claim");
+    assert_eq!(held.id, j.id, "the drained queue's only job is ours");
+    let fence = held
+        .claimed_at
+        .expect("a claim stamps the lease it hands out");
+
+    // ---- renewal is the liveness proof ----
+    let renewed = match store.renew_job_lease(&j.id, fence) {
+        Err(StoreError::Unsupported(_)) => {
+            eprintln!("conformance: backend does not support renew_job_lease (501) — skipping");
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+        Ok(v) => v.expect("the holder's renewal must succeed"),
+    };
+    assert!(
+        renewed >= fence,
+        "renewal moves the lease forward, never back: {renewed} < {fence}"
+    );
+    let after = store.get_job(&j.id)?.expect("get");
+    assert_eq!(
+        after.claimed_at,
+        Some(renewed),
+        "the renewed lease is what a reaper will read"
+    );
+    assert_eq!(after.status, "running", "renewal is not a state change");
+
+    // A renewal bearing the OLD fence is a lost lease, not a retry. This is the executor's own gate
+    // on its legitimacy: an executor that keeps working after this returns None is a zombie whose
+    // effects interleave with its successor's.
+    assert_eq!(
+        store.renew_job_lease(&j.id, fence)?,
+        None,
+        "a stale fence must not renew — that is how a zombie keeps its lease alive"
+    );
+    assert_eq!(
+        store.renew_job_lease(&new_id(), renewed)?,
+        None,
+        "renewing a job that does not exist reports the loss, never a fabricated success"
+    );
+
+    // ---- the finish is fenced like every other write ----
+    assert_eq!(
+        store.finish_job(&j.id, "done", &json!({ "stale": true }), None, Some(fence))?,
+        JobFinish::NotHeld {
+            status: "running".into(),
+            claimed_at: Some(renewed),
+        },
+        "a worker that no longer holds the job must be REFUSED, and told what holds it now"
+    );
+    let untouched = store.get_job(&j.id)?.expect("get");
+    assert_eq!(
+        untouched.status, "running",
+        "the refused write changed nothing"
+    );
+    assert_eq!(untouched.result, Value::Null);
+
+    // The rightful holder finishes.
+    assert_eq!(
+        store.finish_job(&j.id, "done", &json!({ "ok": true }), None, Some(renewed))?,
+        JobFinish::Finished
+    );
+    assert_eq!(store.get_job(&j.id)?.expect("get").status, "done");
+
+    // ---- a verdict is final ----
+    // This is the clobber the whole mechanism exists to stop, in its purest form: the replaced
+    // worker turns up late and tries to write its own answer over a terminal one.
+    assert!(
+        matches!(
+            store.finish_job(
+                &j.id,
+                "failed",
+                &json!({ "late": true }),
+                Some("too late"),
+                Some(renewed)
+            )?,
+            JobFinish::NotHeld { .. }
+        ),
+        "a terminal verdict must never be rewritten, not even by the worker that wrote it"
+    );
+    let final_job = store.get_job(&j.id)?.expect("get");
+    assert_eq!(final_job.status, "done", "the verdict stands");
+    assert_eq!(final_job.result, json!({ "ok": true }));
+    assert_eq!(
+        final_job.error, None,
+        "and no late error was grafted onto it"
+    );
+
+    // An unfenced (operator) finish is still refused on a terminal job — `fence: None` waives the
+    // ownership condition, never the finality one.
+    assert!(matches!(
+        store.finish_job(&j.id, "cancelled", &Value::Null, None, None)?,
+        JobFinish::NotHeld { .. }
+    ));
+    assert_eq!(store.get_job(&j.id)?.expect("get").status, "done");
+
+    // A dead lease cannot be renewed back to life.
+    assert_eq!(
+        store.renew_job_lease(&j.id, renewed)?,
+        None,
+        "a terminal job has no lease to extend"
+    );
+
+    // Finishing a job that does not exist is distinguishable from losing one that does — the caller
+    // needs to tell "someone beat me" from "that id is wrong".
+    assert_eq!(
+        store.finish_job(&new_id(), "done", &Value::Null, None, None)?,
+        JobFinish::NoSuchJob
+    );
     Ok(())
 }
 

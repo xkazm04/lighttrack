@@ -185,6 +185,7 @@ fn main() -> Result<()> {
             once,
             interval,
             stale_secs,
+            lease_renew_secs,
             recur_interval,
         } => serve::serve(
             &cli,
@@ -193,6 +194,7 @@ fn main() -> Result<()> {
             *once,
             *interval,
             *stale_secs,
+            *lease_renew_secs,
             *recur_interval,
         ),
         Cmd::Calibrate {

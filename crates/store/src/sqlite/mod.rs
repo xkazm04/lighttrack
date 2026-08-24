@@ -42,8 +42,9 @@ use serde_json::Value;
 
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
-    JobCancel, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
-    RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension, TraceSummary,
+    JobCancel, JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
+    PromptVersion, RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension,
+    TraceSummary,
 };
 
 use crate::{
@@ -490,14 +491,18 @@ impl Store for SqliteStore {
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
         self.with(|c| jobs::update_progress(c, id, progress))
     }
+    fn renew_job_lease(&self, id: &str, fence: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
+        self.with(|c| jobs::renew_lease(c, id, fence))
+    }
     fn finish_job(
         &self,
         id: &str,
         status: &str,
         result: &Value,
         error: Option<&str>,
-    ) -> Result<()> {
-        self.with(|c| jobs::finish(c, id, status, result, error))
+        fence: Option<DateTime<Utc>>,
+    ) -> Result<JobFinish> {
+        self.with(|c| jobs::finish(c, id, status, result, error, fence))
     }
     fn get_job(&self, id: &str) -> Result<Option<Job>> {
         self.read(|c| jobs::get(c, id))

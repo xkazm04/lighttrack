@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use lighttrack_core::{Job, JOB_ERROR_PREFIX_FAILURE};
@@ -17,6 +18,17 @@ use crate::recurrence;
 use crate::runctl::{RunControl, CANCEL_POLL_INTERVAL};
 use crate::util::short;
 
+/// How often the holder proves it is alive, given the lease TTL. A third is the conventional
+/// fraction and the reason is arithmetic: at TTL/3 a worker can miss two consecutive renewals — a
+/// GC pause, a transient API error, a slow round trip — and still hold its job. A heartbeat at the
+/// TTL itself converts every hiccup into a spurious takeover.
+fn renew_every(stale_secs: i64, override_secs: u64) -> Duration {
+    if override_secs > 0 {
+        return Duration::from_secs(override_secs);
+    }
+    Duration::from_secs((stale_secs.max(3) as u64 / 3).max(1))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn serve(
     cli: &Cli,
@@ -25,11 +37,15 @@ pub(crate) fn serve(
     once: bool,
     interval: u64,
     stale_secs: i64,
+    lease_renew_secs: u64,
     recur_interval: u64,
 ) -> Result<()> {
+    let renew = renew_every(stale_secs, lease_renew_secs);
     println!(
-        "lt-runner serve: polling {} (interval={interval}s, once={once}, recur_interval={recur_interval}s)",
-        cli.base
+        "lt-runner serve: polling {} (interval={interval}s, once={once}, \
+         recur_interval={recur_interval}s, lease={stale_secs}s renewed every {}s)",
+        cli.base,
+        renew.as_secs()
     );
     let mut last_sweep: Option<Instant> = None;
     loop {
@@ -53,7 +69,7 @@ pub(crate) fn serve(
                     job.failures,
                     job.stale_reclaims,
                 );
-                run_claimed_job(cli, http, engine, &job)?;
+                run_claimed_job(cli, http, engine, &job, renew)?;
             }
             None => {
                 if !once {
@@ -78,10 +94,14 @@ fn run_claimed_job(
     http: &reqwest::blocking::Client,
     engine: &EngineConfig,
     job: &Job,
+    renew: Duration,
 ) -> Result<()> {
     let ctl = RunControl::for_job(cli, http, &job.id);
     ctl.note("starting");
     let finished = AtomicBool::new(false);
+    // The lease this worker holds. The claim handed it over; the heartbeat moves it forward; and
+    // every write this worker makes about the job carries the current value as its fencing token.
+    let lease = Lease::new(job.claimed_at);
 
     let outcome = std::thread::scope(|scope| {
         // Watcher: ask the API whether an operator cancelled this job. The run itself notices at its
@@ -99,6 +119,37 @@ fn run_claimed_job(
                 }
             }
         });
+        // Heartbeat: prove this worker is alive, on a TIMER — never per case. A renewal loop driven
+        // by units of work silently stops renewing inside the one step that takes an hour, which is
+        // exactly the step during which the lease matters. It also carries no progress: liveness
+        // must never wait on anything the work computes, or a live-but-stuck worker reads as dead.
+        scope.spawn(|| {
+            while !finished.load(Ordering::Relaxed) {
+                std::thread::sleep(renew);
+                if finished.load(Ordering::Relaxed) {
+                    break;
+                }
+                match renew_lease(cli, http, &job.id, lease.get()) {
+                    Ok(Some(next)) => lease.set(next),
+                    Ok(None) => {
+                        // The lease is gone: a reaper expired it, an operator requeued the job, or
+                        // someone reclaimed it. A gate whose result nobody reads gates nothing —
+                        // this one stops the run. Carrying on would make this a zombie whose spend
+                        // and effects interleave with its successor's.
+                        eprintln!(
+                            "  LEASE LOST - this job is no longer ours; stopping at the next case \
+                             boundary. Nothing this run writes from here will be accepted."
+                        );
+                        ctl.cancel();
+                        break;
+                    }
+                    // A transient failure is not evidence of a lost lease, and treating it as one
+                    // would abandon a healthy run on a blip. That is what the TTL/3 cadence buys:
+                    // room to miss one or two and try again.
+                    Err(e) => eprintln!("  lease renewal failed (will retry): {e}"),
+                }
+            }
+        });
         let outcome = process_job(cli, http, engine, job, &ctl);
         finished.store(true, Ordering::Relaxed);
         outcome
@@ -110,17 +161,63 @@ fn run_claimed_job(
             // benchmark itself; the job says so too, and carries no error — cancelling is not a
             // failure, so it must not consume a retry.
             let status = if ctl.cancelled() { "cancelled" } else { "done" };
-            finish(cli, http, &job.id, status, &result, None)?;
-            println!("  -> {status}");
+            report(
+                finish(cli, http, &job.id, status, &result, None, lease.get()),
+                status,
+            );
         }
         Err(e) => {
             let (status, note) = retry_decision(job.failures, job.max_attempts);
             let error = format!("{JOB_ERROR_PREFIX_FAILURE}{e}");
-            finish(cli, http, &job.id, status, &Value::Null, Some(&error))?;
-            eprintln!("  -> {status} ({note}): {e}");
+            report(
+                finish(
+                    cli,
+                    http,
+                    &job.id,
+                    status,
+                    &Value::Null,
+                    Some(&error),
+                    lease.get(),
+                ),
+                &format!("{status} ({note}): {e}"),
+            );
         }
     }
     Ok(())
+}
+
+/// Say what the finish did. A refusal (HTTP 409 - the lease moved, or the job is already terminal)
+/// is LOUD but not fatal: this worker lost a race it was always going to lose, the verdict that
+/// stands belongs to whoever holds the job now, and the loop must go back to claiming rather than
+/// dying. Swallowing it silently would be worse than the clobber this replaced, because nobody
+/// would ever learn that a run's result went nowhere.
+fn report(outcome: Result<()>, what: &str) {
+    match outcome {
+        Ok(()) => println!("  -> {what}"),
+        Err(e) => eprintln!(
+            "  -> VERDICT NOT RECORDED ({what}): {e}\n     This worker no longer held the job; \
+             whoever holds it now owns the outcome."
+        ),
+    }
+}
+
+/// The lease a worker holds, shared between the heartbeat thread and the finish.
+///
+/// A fence is an identity, not a moment: what matters is that the stamp still matches exactly.
+struct Lease(std::sync::Mutex<Option<DateTime<Utc>>>);
+
+impl Lease {
+    fn new(initial: Option<DateTime<Utc>>) -> Self {
+        Lease(std::sync::Mutex::new(initial))
+    }
+    fn get(&self) -> Option<DateTime<Utc>> {
+        self.0.lock().ok().and_then(|g| *g)
+    }
+    fn set(&self, v: DateTime<Utc>) {
+        if let Ok(mut g) = self.0.lock() {
+            *g = Some(v);
+        }
+    }
 }
 
 /// Whether a *reported* failure retries, given how many real failures the job has already had.
@@ -164,6 +261,42 @@ fn claim(cli: &Cli, http: &reqwest::blocking::Client, stale_secs: i64) -> Result
     }
 }
 
+/// Extend this worker's lease, returning the new one. `Ok(None)` means the lease is no longer ours
+/// (the API answered 409) - affirmative evidence of a takeover, which is why it is a distinct value
+/// from `Err`, i.e. "I could not tell".
+fn renew_lease(
+    cli: &Cli,
+    http: &reqwest::blocking::Client,
+    id: &str,
+    fence: Option<DateTime<Utc>>,
+) -> Result<Option<DateTime<Utc>>> {
+    // No lease was stamped at claim, so there is nothing to prove and nothing to lose.
+    let Some(fence) = fence else {
+        return Ok(None);
+    };
+    match post(
+        cli,
+        http,
+        &format!("/v1/jobs/{id}/renew"),
+        &json!({ "claimed_at": fence }),
+    ) {
+        Ok(v) => Ok(v
+            .get("claimed_at")
+            .and_then(|c| serde_json::from_value::<DateTime<Utc>>(c.clone()).ok())),
+        Err(e) if is_conflict(&e) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Whether an API error is the 409 that means "you do not hold this any more".
+fn is_conflict(e: &anyhow::Error) -> bool {
+    e.to_string().contains("409")
+}
+
+/// Write the verdict, FENCED on the lease this worker holds. The API refuses with 409 if the job
+/// moved on - which is precisely the write that used to be unconditioned, letting a worker that had
+/// already been reclaimed overwrite its replacement's verdict.
+#[allow(clippy::too_many_arguments)]
 fn finish(
     cli: &Cli,
     http: &reqwest::blocking::Client,
@@ -171,12 +304,13 @@ fn finish(
     status: &str,
     result: &Value,
     error: Option<&str>,
+    fence: Option<DateTime<Utc>>,
 ) -> Result<()> {
     post(
         cli,
         http,
         &format!("/v1/jobs/{id}/finish"),
-        &json!({ "status": status, "result": result, "error": error }),
+        &json!({ "status": status, "result": result, "error": error, "claimed_at": fence }),
     )?;
     Ok(())
 }
@@ -265,7 +399,21 @@ fn process_job(
 
 #[cfg(test)]
 mod tests {
-    use super::retry_decision;
+    use super::{renew_every, retry_decision};
+    use std::time::Duration;
+
+    #[test]
+    fn the_heartbeat_leaves_room_to_miss_a_couple() {
+        // A third of the TTL, so two consecutive misses still hold the lease. A cadence at (or near)
+        // the TTL turns every GC pause into a spurious takeover - the mistake this encodes against.
+        assert_eq!(renew_every(120, 0), Duration::from_secs(40));
+        assert_eq!(renew_every(600, 0), Duration::from_secs(200));
+        // An explicit override wins, for operators who know their own latency profile.
+        assert_eq!(renew_every(120, 5), Duration::from_secs(5));
+        // A nonsensically small TTL still yields a positive cadence rather than a busy loop.
+        assert!(renew_every(1, 0) >= Duration::from_secs(1));
+        assert!(renew_every(0, 0) >= Duration::from_secs(1));
+    }
 
     #[test]
     fn only_reported_failures_consume_the_retry_budget() {

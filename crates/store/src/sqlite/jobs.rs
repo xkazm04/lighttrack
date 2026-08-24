@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::Value;
 
-use lighttrack_core::{Job, JobCancel, JOB_ERROR_WORKER_LOST};
+use lighttrack_core::{Job, JobCancel, JobFinish, JOB_ERROR_WORKER_LOST};
 
 use crate::codec::{fmt_ts, json_or_null, parse_ts, val_or_null};
 use crate::Result;
@@ -103,8 +103,37 @@ pub(super) fn update_progress(conn: &Connection, id: &str, progress: &str) -> Re
     Ok(())
 }
 
-/// Finish a job. An error means the job RAN and the work failed, so it increments `failures` — the
-/// retry budget. A clean finish (including a cancellation, which carries no error) never does, so a
+/// Extend the holder's lease. One conditioned statement: move `claimed_at` forward only where it is
+/// still `fence` and the job is still live. Zero rows means this caller no longer holds the job —
+/// the affirmative evidence its work loop needs to stop, rather than a guess.
+///
+/// `cancelling` is inside the renewable set on purpose: a run being asked to stop is still running,
+/// still spending, and still has to reach its next case boundary and finish honestly. Dropping its
+/// lease would let the reclaim path start a second copy of a run that is already winding down.
+pub(super) fn renew_lease(
+    conn: &Connection,
+    id: &str,
+    fence: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>> {
+    let now = Utc::now();
+    let n = conn.execute(
+        "UPDATE jobs SET claimed_at = ?3, updated_at = ?3 \
+         WHERE id = ?1 AND claimed_at = ?2 AND status IN ('running','cancelling')",
+        params![id, fmt_ts(fence), fmt_ts(now)],
+    )?;
+    Ok((n > 0).then_some(now))
+}
+
+/// Finish a job — the last write in the lifecycle, and now a conditioned one like every other.
+///
+/// Two conditions, both load-bearing:
+/// * **still non-terminal** — a verdict is final, so nothing rewrites `done`/`failed`/`cancelled`.
+/// * **still mine** (when a `fence` is supplied) — `claimed_at` must be exactly what the caller was
+///   handed at claim. A worker reclaimed as stale while it was busy would otherwise finish later
+///   and overwrite whatever verdict its replacement had already written, silently and plausibly.
+///
+/// An error means the job RAN and the work failed, so it increments `failures` — the retry budget.
+/// A clean finish (including a cancellation, which carries no error) never does, so a
 /// crash-and-reclaim cycle can't consume a job's chances without the benchmark ever failing.
 pub(super) fn finish(
     conn: &Connection,
@@ -112,15 +141,30 @@ pub(super) fn finish(
     status: &str,
     result: &Value,
     error: Option<&str>,
-) -> Result<()> {
+    fence: Option<DateTime<Utc>>,
+) -> Result<JobFinish> {
     let result_s = json_or_null(result)?;
-    conn.execute(
+    let fence_s = fence.map(fmt_ts);
+    let n = conn.execute(
         "UPDATE jobs SET status = ?2, result = ?3, error = ?4, updated_at = ?5, \
                 failures = failures + (?4 IS NOT NULL) \
-         WHERE id = ?1",
-        params![id, status, result_s, error, fmt_ts(Utc::now())],
+         WHERE id = ?1 \
+           AND status NOT IN ('done','failed','cancelled') \
+           AND (?6 IS NULL OR claimed_at = ?6)",
+        params![id, status, result_s, error, fmt_ts(Utc::now()), fence_s],
     )?;
-    Ok(())
+    if n > 0 {
+        return Ok(JobFinish::Finished);
+    }
+    // Refused. Say what the record actually holds now, so the loser can name what beat it instead
+    // of reporting a bare failure.
+    Ok(match get(conn, id)? {
+        Some(j) => JobFinish::NotHeld {
+            status: j.status,
+            claimed_at: j.claimed_at,
+        },
+        None => JobFinish::NoSuchJob,
+    })
 }
 
 pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Job>> {

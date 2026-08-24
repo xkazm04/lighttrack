@@ -14,6 +14,35 @@ use lighttrack_store::Store;
 use crate::redact::Redactor;
 use crate::tests_ingest::{make_key, setup};
 
+/// A fixture span's `startTimeUnixNano`, as an OTel SDK would emit it **now**.
+///
+/// It used to be the calendar constant `1785578400000000000` (2026-08-01 10:00 UTC). Ingest refuses
+/// a `ts` more than `LIGHTTRACK_MAX_TS_SKEW_PAST_SECS` (7 days) behind the server, so on 2026-08-08
+/// every OTLP test in this file began failing on a tree nobody had touched, and `cargo test
+/// --workspace` — a BLOCKING check — went red and stayed red. A fixture pinned to a wall-clock
+/// instant is a test whose verdict is a function of the calendar rather than of the commit.
+///
+/// So the fixture is anchored to the run: one minute ago, comfortably inside the skew window in
+/// both directions, and unaffected by the passage of time.
+///
+/// Resolved once per process, so every fixture and every assertion in this file share one instant —
+/// a per-call `Utc::now()` would make "the start time became the event timestamp" unassertable.
+fn base_nanos() -> i64 {
+    static BASE: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *BASE.get_or_init(|| {
+        (chrono::Utc::now() - chrono::Duration::seconds(60))
+            .timestamp_nanos_opt()
+            .expect("a timestamp near now is representable in nanoseconds")
+    })
+}
+
+/// `base_nanos()` plus a fixed offset in milliseconds, as a JSON string — the form an OTel exporter
+/// uses for int64 fields. Offsets, not absolutes, so the spans keep their exact relative durations
+/// (which is what the latency assertions actually pin).
+fn at_ms(offset_ms: i64) -> String {
+    (base_nanos() + offset_ms * 1_000_000).to_string()
+}
+
 /// A realistic OTLP/HTTP JSON export as an OTel SDK emits it: one resource, one instrumentation
 /// scope, and a canonical `gen_ai.*` chat span (current semconv attribute names, int64 fields as
 /// JSON strings, hex ids) plus a child span using the **legacy** `prompt_tokens`/`completion_tokens`
@@ -32,8 +61,8 @@ fn fixture() -> Value {
               "spanId": "eee19b7ec3c1b174",
               "name": "chat claude-haiku-4-5",
               "kind": 3,
-              "startTimeUnixNano": "1785578400000000000",
-              "endTimeUnixNano": "1785578401500000000",
+              "startTimeUnixNano": at_ms(0),
+              "endTimeUnixNano": at_ms(1500),
               "attributes": [
                 { "key": "gen_ai.system", "value": { "stringValue": "anthropic" } },
                 { "key": "gen_ai.operation.name", "value": { "stringValue": "chat" } },
@@ -51,8 +80,8 @@ fn fixture() -> Value {
               "spanId": "eee19b7ec3c1b175",
               "parentSpanId": "eee19b7ec3c1b174",
               "name": "chat claude-haiku-4-5",
-              "startTimeUnixNano": 1785578402000000000i64,
-              "endTimeUnixNano": 1785578402250000000i64,
+              "startTimeUnixNano": at_ms(2000),
+              "endTimeUnixNano": at_ms(2250),
               "attributes": [
                 { "key": "gen_ai.system", "value": { "stringValue": "anthropic" } },
                 { "key": "gen_ai.request.model", "value": { "stringValue": "claude-haiku-4-5" } },
@@ -138,8 +167,8 @@ async fn canonical_export_round_trips_to_events() {
     assert_eq!(root.latency_ms, Some(1500));
     assert_eq!(root.status, Status::Success);
     assert_eq!(
-        root.ts.timestamp(),
-        1_785_578_400,
+        root.ts.timestamp_nanos_opt(),
+        at_ms(0).parse::<i64>().ok(),
         "startTimeUnixNano became the event timestamp"
     );
     assert_eq!(root.source.as_deref(), Some("otlp"));
@@ -373,8 +402,8 @@ fn nested_fixture() -> Value {
             "traceId": "9f2c4d6e8a0b1c3d5e7f9a1b2c3d4e5f",
             "spanId": id,
             "name": name,
-            "startTimeUnixNano": "1785578400000000000",
-            "endTimeUnixNano": "1785578401000000000",
+            "startTimeUnixNano": at_ms(0),
+            "endTimeUnixNano": at_ms(1000),
             "attributes": if genai {
                 json!([
                     { "key": "gen_ai.system", "value": { "stringValue": "anthropic" } },

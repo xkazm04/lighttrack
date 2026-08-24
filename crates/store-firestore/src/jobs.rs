@@ -4,7 +4,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
-use lighttrack_core::{Job, JobCancel, JOB_ERROR_WORKER_LOST};
+use lighttrack_core::{job_is_terminal, Job, JobCancel, JobFinish, JOB_ERROR_WORKER_LOST};
 use lighttrack_store::{Result, StoreError};
 
 use crate::codec::*;
@@ -37,33 +37,125 @@ pub(crate) fn update_job_progress(rest: &Rest, id: &str, progress: &str) -> Resu
     rest.patch_fields("jobs", id, &m, &["progress", "updated_at"])
 }
 
-/// Finish a job. An error means the job RAN and the work failed, so it consumes the retry budget
-/// (`failures`); a clean finish — including a cancellation — never does. Firestore has no atomic
-/// `failures = failures + 1`, so the counter is read then written; a lost update would only
-/// undercount a retry, never restart a finished job.
+/// Extend the holder's lease. Firestore has no conditional `UPDATE … WHERE`, so the condition is an
+/// `updateTime` precondition over a read-compare-commit loop — the same mechanism `claim_job` and
+/// `cancel_job` already use here, and it gives the same guarantee: the write lands only if nobody
+/// changed the document in between.
+///
+/// `None` means this caller no longer holds the job (its `claimed_at` moved, or the job left the
+/// live set). That is affirmative evidence its work loop must read and stop on, not a guess.
+///
+/// `cancelling` is renewable on purpose: a run being asked to stop is still running, still
+/// spending, and still has to reach its next case boundary and finish honestly.
+pub(crate) fn renew_job_lease(
+    rest: &Rest,
+    id: &str,
+    fence: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>> {
+    let want = fmt_ts(fence);
+    for _ in 0..5 {
+        let Some(doc) = doc_by_id(rest, id)? else {
+            return Ok(None); // no such job — nothing to renew, and nothing to pretend about
+        };
+        let (name, update_time) = doc_handle(&doc);
+        let fields = decode_doc(&doc);
+        if fstr(&fields, "claimed_at").as_deref() != Some(want.as_str()) {
+            return Ok(None); // someone else's lease now
+        }
+        if !matches!(
+            fields.get("status").and_then(Value::as_str),
+            Some("running") | Some("cancelling")
+        ) {
+            return Ok(None); // not live: nothing to keep alive
+        }
+        let now = Utc::now();
+        let mut m = Fields::new();
+        m.insert("claimed_at".into(), json!(fmt_ts(now)));
+        m.insert("updated_at".into(), json!(fmt_ts(now)));
+        if rest.commit_update(&name, &m, &["claimed_at", "updated_at"], Some(&update_time))? {
+            return Ok(Some(now));
+        }
+        // Precondition failed: the doc changed under us. Re-read and decide against the new state
+        // rather than retrying blind — the change may BE the takeover we are checking for.
+    }
+    Err(StoreError::Conflict(format!(
+        "job '{id}' changed under every lease-renewal attempt; retry"
+    )))
+}
+
+/// Finish a job — the last write in the lifecycle, and a conditioned one like every other.
+///
+/// Two conditions, enforced here by read-compare-commit under an `updateTime` precondition because
+/// Firestore has no conditional update: **still non-terminal** (a verdict is final) and, when a
+/// `fence` is supplied, **still mine** (`claimed_at` is exactly what the caller was handed at
+/// claim). Without the second, a worker reclaimed as stale while it was busy finishes later and
+/// overwrites the verdict its replacement already wrote — silently, with a plausible result.
+///
+/// An error means the job RAN and the work failed, so it consumes the retry budget (`failures`); a
+/// clean finish — including a cancellation — never does. Firestore has no atomic
+/// `failures = failures + 1`, but the counter is now read inside the same precondition-guarded
+/// round as the write, so a concurrent change invalidates the commit instead of racing it.
 pub(crate) fn finish_job(
     rest: &Rest,
     id: &str,
     status: &str,
     result: &Value,
     error: Option<&str>,
-) -> Result<()> {
-    let mut m = Fields::new();
-    m.insert("status".into(), json!(status));
-    m.insert("result".into(), json!(json_or_null_str(result)?));
-    m.insert("error".into(), json!(error));
-    m.insert("updated_at".into(), json!(fmt_ts(Utc::now())));
-    let mut mask: Vec<&str> = vec!["status", "result", "error", "updated_at"];
-    if error.is_some() {
-        let prev = rest
-            .get_doc("jobs", id)?
-            .as_ref()
-            .and_then(|f| fi64(f, "failures"))
-            .unwrap_or(0);
-        m.insert("failures".into(), json!(prev + 1));
-        mask.push("failures");
+    fence: Option<DateTime<Utc>>,
+) -> Result<JobFinish> {
+    let want = fence.map(fmt_ts);
+    for _ in 0..5 {
+        let Some(doc) = doc_by_id(rest, id)? else {
+            return Ok(JobFinish::NoSuchJob);
+        };
+        let (name, update_time) = doc_handle(&doc);
+        let fields = decode_doc(&doc);
+        let current = freq(&fields, "status")?;
+        let claimed_at = fstr(&fields, "claimed_at");
+        let refused = job_is_terminal(&current)
+            || want
+                .as_ref()
+                .is_some_and(|w| claimed_at.as_deref() != Some(w.as_str()));
+        if refused {
+            return Ok(JobFinish::NotHeld {
+                status: current,
+                claimed_at: claimed_at.as_deref().map(parse_ts).transpose()?,
+            });
+        }
+
+        let mut m = Fields::new();
+        m.insert("status".into(), json!(status));
+        m.insert("result".into(), json!(json_or_null_str(result)?));
+        m.insert("error".into(), json!(error));
+        m.insert("updated_at".into(), json!(fmt_ts(Utc::now())));
+        let mut mask: Vec<&str> = vec!["status", "result", "error", "updated_at"];
+        if error.is_some() {
+            m.insert(
+                "failures".into(),
+                json!(fi64(&fields, "failures").unwrap_or(0) + 1),
+            );
+            mask.push("failures");
+        }
+        if rest.commit_update(&name, &m, &mask, Some(&update_time))? {
+            return Ok(JobFinish::Finished);
+        }
+        // The doc changed between the read and the write — which may be exactly the takeover this
+        // is guarding against. Re-read and re-decide.
     }
-    rest.patch_fields("jobs", id, &m, &mask)
+    Err(StoreError::Conflict(format!(
+        "job '{id}' changed under every finish attempt; retry"
+    )))
+}
+
+/// A document's `(name, updateTime)` — the handle a precondition-guarded commit needs.
+fn doc_handle(doc: &Value) -> (String, String) {
+    let get = |k: &str| {
+        doc.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    (get("name"), get("updateTime"))
 }
 
 /// Ask a job to stop: `queued` → `cancelled`, `running` → `cancelling` (which neither the queued nor

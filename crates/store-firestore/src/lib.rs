@@ -26,8 +26,8 @@ use serde_json::Value;
 
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, JobCancel,
-    LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent,
-    Rubric, Score, TraceSummary,
+    JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
+    RevenueEvent, Rubric, Score, TraceSummary,
 };
 use lighttrack_store::{
     insert_event_checked_nonatomic, insert_events_checked_nonatomic, Admission, CostRow,
@@ -304,14 +304,18 @@ impl Store for FirestoreStore {
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
         jobs::update_job_progress(&self.rest, id, progress)
     }
+    fn renew_job_lease(&self, id: &str, fence: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
+        jobs::renew_job_lease(&self.rest, id, fence)
+    }
     fn finish_job(
         &self,
         id: &str,
         status: &str,
         result: &Value,
         error: Option<&str>,
-    ) -> Result<()> {
-        jobs::finish_job(&self.rest, id, status, result, error)
+        fence: Option<DateTime<Utc>>,
+    ) -> Result<JobFinish> {
+        jobs::finish_job(&self.rest, id, status, result, error, fence)
     }
     fn get_job(&self, id: &str) -> Result<Option<Job>> {
         jobs::get_job(&self.rest, id)

@@ -353,8 +353,9 @@ Benchmark runs must never block ingestion. A **jobs** table + a worker loop in `
   immediately. Ingestion (`POST /v1/events`) is unaffected.
 - `lt-runner serve` polls `GET /v1/jobs?status=queued&claim=1` (atomic claim → `running`), executes
   (generate?/judge/aggregate), posts results, marks `done`/`failed` with progress + error.
-- States: `queued → running → done|failed`; heartbeat + `attempts` for retry; concurrency cap so judge
-  calls don't stampede. **Cloud:** swap the jobs table for Pub/Sub; same worker.
+- States: `queued → running → done|failed`; a renewed **lease** (§4c) proves the holder is alive and
+  fences every write it makes; `attempts` for retry; concurrency cap so judge calls don't stampede.
+  **Cloud:** swap the jobs table for Pub/Sub; same worker.
 
 ### 4b. Run control: cancel, live progress, honest failure accounting
 A queued benchmark is paid, long-running work, so it is stoppable and observable:
@@ -376,6 +377,40 @@ A queued benchmark is paid, long-running work, so it is stoppable and observable
   `worker lost: …` error) · `failures` (runs that actually reported an error). **`failures` is the
   retry budget**, so three crashes no longer permanently fail a job with the crash recorded as its
   error; and `benchmark failure: …` vs `worker lost: …` tells an operator which one happened.
+
+### 4c. Leases: is the holder still alive, and may it still write?
+
+A claim answers "who won this job?". A **lease** answers the question that matters an hour later:
+"is the winner still alive?" Until 2026-08-24 those were the same timestamp, and the consequences
+were two:
+
+- **`--stale-secs` was 600, sized to outlast the slowest benchmark.** That conflates job duration
+  (unbounded, irrelevant) with detection latency (how long a dead worker may go unnoticed — which
+  should be small). A killed worker's job therefore sat untouchable for ten minutes.
+- **`finish_job` was unconditioned in all three backends.** A worker reclaimed as stale kept running,
+  because nothing had told it otherwise, and eventually wrote its verdict over the one its
+  replacement had already recorded — silently, plausibly, with no error anywhere.
+
+Both are closed:
+
+- **`POST /v1/jobs/:id/renew`** — the holder sends the `claimed_at` it was handed and gets a fresh
+  one back. A **409** means the lease is no longer its own; the run stops at the next case boundary
+  rather than continuing as a zombie. The worker renews **on a timer** (`--lease-renew-secs`,
+  default `--stale-secs`/3), never per case: a per-item loop stops renewing inside the one step that
+  takes an hour, which is the step during which the lease matters. The endpoint carries liveness and
+  nothing else — progress rides `/progress` — so a stall in the work can never stall the heartbeat
+  and make a live-but-stuck worker look dead.
+- **`--stale-secs` now defaults to 120** — four missed 30 s heartbeats. A run may take hours; a
+  corpse is noticed in about two minutes.
+- **`POST /v1/jobs/:id/finish` is a conditioned write.** It carries `claimed_at` as a fencing token
+  and lands only if the job is still non-terminal *and* still held by that lease. Otherwise: 409,
+  naming the status and lease that actually hold, and the worker logs `VERDICT NOT RECORDED` instead
+  of believing it finished. Omitting `claimed_at` is the operator-shaped finish — it waives the
+  ownership condition, never the finality one.
+- The invariant is pinned in the **shared conformance suite** (`crates/store/src/conformance.rs`,
+  `job_leases`), so SQLite, Postgres and Firestore each prove it in CI. Each expresses the
+  conditioned write in its own dialect (SQL `UPDATE … WHERE`; Firestore an `updateTime` precondition
+  over a read-compare-commit loop), and a divergence in any one of them is a silent correctness hole.
 
 ### 4a. Self-running benchmarks (opt-in recurrence)
 By default a benchmark runs **only** on a manual enqueue (`POST /v1/benchmarks/:id/enqueue`) or a

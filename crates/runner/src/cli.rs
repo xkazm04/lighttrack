@@ -239,9 +239,20 @@ pub(crate) enum Cmd {
         /// Seconds to wait between polls when the queue is empty.
         #[arg(long, default_value_t = 5)]
         interval: u64,
-        /// Reclaim jobs stuck in `running` longer than this many seconds.
-        #[arg(long, default_value_t = 600)]
+        /// Lease TTL: reclaim a job whose holder has not proved it is alive for this many seconds.
+        ///
+        /// This is **detection latency**, not job duration. It used to be 600 — sized to outlast the
+        /// slowest benchmark, which meant a killed worker's job was untouchable for ten minutes.
+        /// Now the holder renews on a timer (`--lease-renew-secs`), so a run may take hours while
+        /// this stays small.
+        #[arg(long, default_value_t = 120)]
         stale_secs: i64,
+        /// Heartbeat cadence: renew the lease this often while a job runs. Default `0` = a third of
+        /// `--stale-secs`, the conventional fraction: missing one or two renewals (a GC pause, a
+        /// transient API error) must not forfeit a live worker's job, or every hiccup becomes a
+        /// spurious takeover.
+        #[arg(long, default_value_t = 0)]
+        lease_renew_secs: u64,
         /// Seconds between benchmark-recurrence sweeps. Each sweep enqueues a `bench_run` for any
         /// benchmark whose opt-in `schedule_interval_secs` is due (continuous quality monitoring).
         /// `0` disables recurrence. With `--once`, one sweep always runs (so OS cron can drive it).

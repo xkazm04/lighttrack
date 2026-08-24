@@ -5,7 +5,7 @@ use serde_json::Value;
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
-use lighttrack_core::{Job, JobCancel, JOB_ERROR_WORKER_LOST};
+use lighttrack_core::{Job, JobCancel, JobFinish, JOB_ERROR_WORKER_LOST};
 use lighttrack_store::Result;
 
 use crate::util::{fmt_ts, json_or_null, parse_ts, pgerr, val_or_null};
@@ -106,30 +106,79 @@ pub(crate) async fn update_progress(pool: &PgPool, id: &str, progress: &str) -> 
     Ok(())
 }
 
+/// Extend the holder's lease: one conditioned statement moving `claimed_at` forward only where it
+/// is still `fence` and the job is still live. Zero rows means this caller no longer holds the job —
+/// affirmative evidence its work loop must read and stop on, not a guess.
+///
+/// `cancelling` is renewable on purpose: a run being asked to stop is still running, still spending,
+/// and still has to reach its next case boundary. Dropping its lease would let the reclaim path
+/// start a second copy of a run that is already winding down.
+pub(crate) async fn renew_lease(
+    pool: &PgPool,
+    id: &str,
+    fence: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>> {
+    let now = Utc::now();
+    let updated: Option<String> = sqlx::query_scalar(
+        "UPDATE jobs SET claimed_at = $3, updated_at = $3 \
+         WHERE id = $1 AND claimed_at = $2 AND status IN ('running','cancelling') \
+         RETURNING claimed_at",
+    )
+    .bind(id.to_string())
+    .bind(fmt_ts(fence))
+    .bind(fmt_ts(now))
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
+    updated.map(|s| parse_ts(&s)).transpose()
+}
+
+/// Finish a job — the last write in the lifecycle, and a conditioned one like every other.
+///
+/// Two conditions: **still non-terminal** (a verdict is final) and, when a `fence` is supplied,
+/// **still mine** (`claimed_at` is exactly what the caller was handed at claim). Without the second,
+/// a worker reclaimed as stale while it was busy finishes later and overwrites the verdict its
+/// replacement already wrote — silently, with a plausible-looking result.
 pub(crate) async fn finish(
     pool: &PgPool,
     id: &str,
     status: &str,
     result: &Value,
     error: Option<&str>,
-) -> Result<()> {
+    fence: Option<DateTime<Utc>>,
+) -> Result<JobFinish> {
     let result_s = json_or_null(result)?;
     // An error means the job RAN and the work failed → it consumes the retry budget (`failures`).
     // A clean finish, including a cancellation, never does.
-    sqlx::query(
+    let landed: Option<String> = sqlx::query_scalar(
         "UPDATE jobs SET status = $2, result = $3, error = $4, updated_at = $5, \
                 failures = failures + (CASE WHEN $4::text IS NULL THEN 0 ELSE 1 END) \
-         WHERE id = $1",
+         WHERE id = $1 \
+           AND status NOT IN ('done','failed','cancelled') \
+           AND ($6::text IS NULL OR claimed_at = $6) \
+         RETURNING id",
     )
     .bind(id.to_string())
     .bind(status.to_string())
     .bind(result_s)
     .bind(error.map(str::to_string))
     .bind(fmt_ts(Utc::now()))
-    .execute(pool)
+    .bind(fence.map(fmt_ts))
+    .fetch_optional(pool)
     .await
     .map_err(pgerr)?;
-    Ok(())
+    if landed.is_some() {
+        return Ok(JobFinish::Finished);
+    }
+    // Refused: report what the record actually holds now, so the loser can name what beat it
+    // instead of reporting a bare failure.
+    Ok(match get(pool, id).await? {
+        Some(j) => JobFinish::NotHeld {
+            status: j.status,
+            claimed_at: j.claimed_at,
+        },
+        None => JobFinish::NoSuchJob,
+    })
 }
 
 pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Job>> {

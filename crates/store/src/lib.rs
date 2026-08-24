@@ -20,9 +20,9 @@ use thiserror::Error;
 
 use lighttrack_core::{
     scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, CostEvidence,
-    Dataset, DatasetItem, Job, JobCancel, LimitMetric, LimitRule, LimitScope, LimitStatus,
-    LimitWindow, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayOutcome, RelayTask,
-    RevenueEvent, Rubric, Score, TokensByDimension, Trace, TraceSummary,
+    Dataset, DatasetItem, Job, JobCancel, JobFinish, LimitMetric, LimitRule, LimitScope,
+    LimitStatus, LimitWindow, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
+    RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension, Trace, TraceSummary,
 };
 
 pub use sqlite::SqliteStore;
@@ -886,8 +886,40 @@ pub trait Store: Send + Sync {
         Err(StoreError::Unsupported("cancelling a job"))
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()>;
-    fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>)
-        -> Result<()>;
+    /// Extend the holder's lease: move `claimed_at` forward, **conditioned on it still being
+    /// `fence`** and the job still live. Returns the new `claimed_at` on success, `None` when the
+    /// lease is no longer this caller's (expired and reclaimed, requeued, cancelled, finished).
+    ///
+    /// A renewal that nobody reads gates nothing. `None` is the executor's own gate on its
+    /// legitimacy and must reach its work loop and stop it: an executor that keeps working after
+    /// losing its lease interleaves its effects with its successor's.
+    ///
+    /// Renewal is on a **timer**, not per unit of work — a loop that renews "after each item"
+    /// silently stops renewing inside the one step that takes an hour, which is exactly the step
+    /// during which the lease matters. And it never waits on progress: the moment liveness is
+    /// conditioned on having something to report, a live-but-stuck worker reads as a dead one, and
+    /// those are the two states the whole mechanism exists to tell apart.
+    fn renew_job_lease(&self, _id: &str, _fence: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
+        Err(StoreError::Unsupported("renewing a job lease"))
+    }
+    /// Write a job's verdict — **conditioned on the job still being non-terminal, and (when `fence`
+    /// is given) still held by this caller**.
+    ///
+    /// `fence` is the `claimed_at` the caller believes it holds. Pass it from every worker; `None`
+    /// is for an operator/administrative finish that is not claiming to be the holder, and even
+    /// then a terminal verdict is never overwritten.
+    ///
+    /// Returns [`JobFinish::NotHeld`] rather than an error when the write is refused, carrying the
+    /// status and lease the record actually has, so a slow worker that lost the finish-line race
+    /// loses it politely and can say what beat it.
+    fn finish_job(
+        &self,
+        id: &str,
+        status: &str,
+        result: &Value,
+        error: Option<&str>,
+        fence: Option<DateTime<Utc>>,
+    ) -> Result<JobFinish>;
     fn get_job(&self, id: &str) -> Result<Option<Job>>;
     fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>>;
 
