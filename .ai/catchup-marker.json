@@ -1,0 +1,82 @@
+{
+  "marker_version": 1,
+  "family": "agent-contract",
+  "family_description": "The surfaces an agent or a new contributor reads before touching anything: the machine-readable manifest and its spec, the working agreement, the contribution rules, the front-page README, the security posture, and the context map. These drift on a different clock from docs/ — they change when the WORKFLOW changes (a new gate, a new capability, a new boundary), not when a feature ships — and two of them are already machine-checked, which changes what a catch-up pass owes them.",
+
+  "anchor": {
+    "commit": "b7c28c9133eb7748b0d4f6ea31e51436528d2872",
+    "date": "2026-08-24",
+    "why": "The commit this pass was measured against; the next pass scans anchor..now rather than all of history."
+  },
+
+  "surfaces": {
+    "roots": [{ "path": ".ai", "extensions": [".md", ".yaml", ".json"], "recursive": false }],
+    "files": [
+      "CLAUDE.md",
+      "CONTRIBUTING.md",
+      "README.md",
+      "SECURITY.md",
+      "context-map.json"
+    ]
+  },
+
+  "covered": [
+    {
+      "path": ".ai/manifest.yaml",
+      "note": "verified against the shipped spec and against scripts/gates.sh by crates/core/tests/manifest_guard.rs on every `cargo test --workspace`, and re-read this pass. Machine-checked coverage is the strongest kind: it cannot silently lapse between passes."
+    },
+    {
+      "path": ".ai/ai-manifest.spec.md",
+      "note": "the manifest's authority; enforced clause-by-clause (C1/C2/C3) by the same guard."
+    },
+    {
+      "path": ".ai/registry-conformance.md",
+      "note": "rewritten this pass — it is this wave's own output."
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "note": "edited this pass (the soak lane's non-gate note). Its gate table is derived from .github/workflows/ci.yml by crates/core/tests/gate_table_guard.rs, so the load-bearing half cannot drift unnoticed."
+    },
+    { "path": ".ai/catchup-marker.json", "note": "this file" }
+  ],
+
+  "skipped": [
+    {
+      "path": "CLAUDE.md",
+      "kind": "not-in-this-pass",
+      "reason": "the working agreement was followed but not re-read against the tree"
+    },
+    {
+      "path": "README.md",
+      "kind": "not-in-this-pass",
+      "reason": "the front page was not read against the code in this pass; it is the surface most likely to carry an outdated feature list, and the next pass owes it"
+    },
+    {
+      "path": "SECURITY.md",
+      "kind": "not-in-this-pass",
+      "reason": "last verified in the wave-2 PII work (its emit-site inventory is cited by crates/api/src/redact.rs); not re-read this pass"
+    },
+    {
+      "path": "context-map.json",
+      "kind": "not-in-this-pass",
+      "reason": "generated artifact describing the crate/file map; this pass added crates/store/src/sqlite/{maintenance,metrics}.rs, crates/api/src/storage.rs and crates/store/tests/soak.rs without regenerating it — a standing debt named here rather than left implicit"
+    }
+  ],
+
+  "flagged": [
+    {
+      "path": "context-map.json",
+      "flagged_on": "2026-08-24",
+      "what": "Four new source files landed in this wave (store maintenance, store metrics, the api storage surface, the soak lane) and the map was not regenerated. Nothing in the repo regenerates or checks it, so its coverage claim silently decays with every new module.",
+      "drained_when": "the map is regenerated, or a guard is added that fails when a crate module is absent from it"
+    },
+    {
+      "path": ".ai/manifest.yaml",
+      "flagged_on": "2026-08-24",
+      "what": "`generatedAt`/`generatedFrom` describe a file no generator produces — the provenance fields name a process that does not exist. The manifest is machine-CHECKED but hand-MAINTAINED, and the fields imply otherwise.",
+      "drained_when": "a generator exists, or the fields are replaced with something true of a hand-maintained file"
+    }
+  ],
+
+  "baseline_note": "First marker for this family — 2026-08-24, written by the wave-2b registry-conformance drain. Four surfaces were genuinely covered: the manifest and its spec (both machine-checked by manifest_guard on every test run, and re-read here), CONTRIBUTING.md (edited here; its gate table is derived from ci.yml by gate_table_guard), and the conformance file this wave produced. Four were not: CLAUDE.md, README.md, SECURITY.md and context-map.json are listed as `not-in-this-pass`, unread and unjudged. What this pass incorporated into the covered surfaces: the wave-2b work — disk accounting and lossless maintenance, store self-instrumentation, the soak lane on its own clock — plus the operator decisions of 2026-08-24 that retention stays unbounded and that authentication/authorization is deferred until productionization. 2026-08-24, dated note on the mechanisms around this marker: two guards now check surfaces in this family against their sources (manifest_guard, gate_table_guard) and a third (catchup_marker_guard) fails the build when a file in this family appears in neither list. That they exist is a fact recorded here; whether they hold is measured by their own runs, and this marker makes no claim about it."
+}

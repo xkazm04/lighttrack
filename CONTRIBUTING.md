@@ -188,6 +188,45 @@ is configured from these strings.
 | `gitleaks (secrets)` — full-history secret scan, pinned engine | yes |
 | `gitleaks (latest rules, advisory)` — Monday cron, newest upstream rules | **no** — see below |
 
+### The documentation recovery lane
+
+Per-change enforcement always leaks — dismissals accumulate, a surface gets imported from before the
+discipline existed, a pass runs out of budget — so the repair for accumulated drift is a **batch
+pass**: read the current source truth, rewrite what drifted. What keeps that from being an
+open-ended rewrite-everything campaign is a **catch-up marker** per surface family, recording what
+the last pass did and against what:
+
+| family | marker | what it covers |
+| --- | --- | --- |
+| reference docs | `docs/catchup-marker.json` | `docs/**` — design and operations reference |
+| agent contract | `.ai/catchup-marker.json` | `.ai/`, `CLAUDE.md`, `CONTRIBUTING.md`, `README.md`, `SECURITY.md`, `context-map.json` |
+| client SDK docs | `clients/catchup-marker.json` | the READMEs that ship inside the published packages |
+
+Three markers, not one: those families drift at different rates and are repaired by different
+passes, and a shared marker would force the narrowest pass to lie about the widest surface.
+
+`sh scripts/docs-catchup.sh [family]` turns "should someone do a docs pass?" into a computable
+question — how many commits since the anchor, how many of this family's files changed in them, and
+how long is the list the last pass did not reach. It **refuses loudly** on a missing or unparseable
+marker rather than defaulting to a full rewrite or a silent no-op.
+
+Two rules, both enforced by `crates/core/tests/catchup_marker_guard.rs` on every
+`cargo test --workspace`:
+
+- **Every file under a family's surfaces is in exactly one of `covered` / `skipped`.** So a doc added
+  tomorrow cannot join no list; the build says so in the same change that added it. That is what
+  makes "full pass" a predicate rather than a claim — a later reader can tell "this was current as of
+  the anchor" from "this was never in scope".
+- **A marker records what was done, never what is hoped.** Predictions ("this cannot drift again")
+  are rejected mechanically. The technique this follows exists because of a marker that ended *"the
+  per-session hook now prevents this kind of drift; bulk rewrites should not be needed again"* —
+  written on the day the never-fired hook landed. The next operator trusted it and scoped narrow; the
+  truth was zero enforcement and fifteen months of drift. When the mechanisms around a marker change,
+  it gains a dated note *that* they changed, never an assertion that they work.
+
+A pass's final act is updating its marker, **in the same commit as the repairs** — a repair committed
+without its marker update recreates exactly the ambiguity the marker exists to remove.
+
 One lane is deliberately **not** in that table and not in `ci.yml`: the store soak lane
 (`.github/workflows/soak.yml`, nightly). A long lane is a certification, not a gate — it judges
 behaviour over time, which is not a property of any single change — so it runs on its own clock and

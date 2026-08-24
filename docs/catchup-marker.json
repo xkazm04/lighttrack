@@ -1,0 +1,75 @@
+{
+  "marker_version": 1,
+  "family": "reference-docs",
+  "family_description": "docs/ — the design and operations reference: what the system is, why it is that way, and how to run it. Drifts when the code changes underneath it, which is a different rate and a different repair from the agent-contract surfaces or the shipped SDK READMEs. Hence its own marker: a shared one would force the narrowest pass to lie about the widest surface.",
+
+  "anchor": {
+    "commit": "b7c28c9133eb7748b0d4f6ea31e51436528d2872",
+    "date": "2026-08-24",
+    "why": "The commit this pass was measured against. It is the marker's reason to exist: the next pass scans anchor..now instead of re-reading all history (expensive, so it gets skipped) or under-doing the tail (silent, so it gets trusted)."
+  },
+
+  "surfaces": {
+    "roots": [{ "path": "docs", "extensions": [".md", ".json"], "recursive": true }],
+    "files": []
+  },
+
+  "covered": [
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "note": "§12 written this pass (disk accounting, the dated unbounded-retention decision, the quiet-window maintenance ladder); §5 and §11 re-read against the code while writing it."
+    },
+    {
+      "path": "docs/harness/soak-lane.md",
+      "note": "written this pass — the long lane's contract."
+    },
+    {
+      "path": "docs/harness/soak-criteria.json",
+      "note": "written this pass — the lane's declared criteria, read by the harness via include_str!."
+    }
+  ],
+
+  "skipped": [
+    {
+      "path": "docs/harness/perf-feature-2026-07-16",
+      "kind": "frozen-archive",
+      "reason": "A dated campaign record — what a 2026-07-16 dual-lens audit found, wave by wave. Rewriting it against today's code would falsify a record rather than repair drift. Frozen by design; it is never in a catch-up pass's scope."
+    },
+    {
+      "path": "docs/harness/followups-2026-07-16.md",
+      "kind": "frozen-archive",
+      "reason": "The same campaign's follow-up ledger, with per-item commits. A record of what was decided then."
+    },
+    {
+      "path": "docs/harness/harness-learnings.md",
+      "kind": "frozen-archive",
+      "reason": "Dated structural observations from the same campaign. Its facts are stamped 2026-07-16 and read as history, not as a current description."
+    },
+    { "path": "docs/ALERTS.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/BENCHMARK_FRAMEWORK.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/CALIBRATION.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/CI_GATE.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/CURRENCY.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/DATA_MODEL.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/DECISIONS.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/FIRESTORE.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/MARGIN.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/OTLP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/PACKAGING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/PRICING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/RELAY.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/ROADMAP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/SCHEDULING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" }
+  ],
+
+  "flagged": [
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "flagged_on": "2026-08-24",
+      "what": "§5 still describes the cloud tier as 'BigQuery for events/scores + Firestore for hot config', which predates the shipped backends: the code has `lighttrack-store-pg` (Postgres, the cross-cloud default) and `lighttrack-store-firestore`, and no BigQuery Store implementation exists. Noticed while writing §12; NOT repaired here, because a drive-by rewrite of the cloud-tier story is a bigger claim than this pass verified.",
+      "drained_when": "a pass reads §5 against crates/store-pg and crates/store-firestore and rewrites it, or the BigQuery backend lands"
+    }
+  ],
+
+  "baseline_note": "First marker for this family — 2026-08-24, written by the wave-2b registry-conformance drain. This was NOT a full pass. It rewrote one document (ARCHITECTURE §12, for the disk/retention/maintenance work landed the same day) and created two (the soak lane's contract and criteria), and it read §5/§11 of ARCHITECTURE while doing so. Everything else in docs/ is listed above as `not-in-this-pass`: unread against the code, not judged, not claimed. The three frozen archives are a separate category and stay out of scope permanently. The next pass's scope is therefore anchor..now PLUS the whole `not-in-this-pass` list — which is large, and saying so is the point: unbounded repair debt is not the drift itself, it is not knowing how much drift there is. What the pass incorporated: retention is now a stated, dated operator decision (unbounded, 2026-08-24) rather than an unexamined default, and the store has disk accounting, self-instrumentation and a lossless maintenance pass that ARCHITECTURE §12 describes. 2026-08-24, dated note on the mechanisms around this marker: crates/core/tests/catchup_marker_guard.rs now fails the build when a file under docs/ appears in neither list, and scripts/docs-catchup.sh computes this family's range and refuses loudly on a missing or unparseable marker. That those mechanisms exist is a fact; whether they hold is their own liveness evidence to produce, and no claim about it belongs here."
+}

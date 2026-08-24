@@ -1,0 +1,69 @@
+{
+  "marker_version": 1,
+  "family": "client-sdk-docs",
+  "family_description": "The READMEs that ship inside the published packages (pip, npm, crates-by-path). They are the family with a real cross-boundary problem: they describe behaviour a USER installs, they are versioned with a release rather than with a merge, and the same-change check cannot reach the published artifact — a README that is wrong here was already downloaded. Their own marker for exactly that reason: their repair cadence is the release, not the commit.",
+
+  "anchor": {
+    "commit": "b7c28c9133eb7748b0d4f6ea31e51436528d2872",
+    "date": "2026-08-24",
+    "why": "The commit this pass was measured against; the next pass scans anchor..now plus the standing debts below."
+  },
+
+  "surfaces": {
+    "roots": [],
+    "files": [
+      "clients/README.md",
+      "clients/python/README.md",
+      "clients/rust/README.md",
+      "clients/typescript/README.md"
+    ]
+  },
+
+  "covered": [],
+
+  "skipped": [
+    {
+      "path": "clients/README.md",
+      "kind": "not-in-this-pass",
+      "reason": "not read against the client code in this pass"
+    },
+    {
+      "path": "clients/python/README.md",
+      "kind": "not-in-this-pass",
+      "reason": "rewritten in wave 2 for the crash-surviving span journal; not re-read here"
+    },
+    {
+      "path": "clients/typescript/README.md",
+      "kind": "not-in-this-pass",
+      "reason": "rewritten in wave 2 for the crash-surviving span journal; not re-read here"
+    },
+    {
+      "path": "clients/rust/README.md",
+      "kind": "not-in-this-pass",
+      "reason": "not read against clients/rust in this pass"
+    }
+  ],
+
+  "flagged": [
+    {
+      "path": "clients/rust/README.md",
+      "flagged_on": "2026-08-24",
+      "what": "clients/rust has no span type at all — its builder still emits only on `send()` — so it cannot offer the crash-surviving breadcrumb the Python and TypeScript clients gained in wave 2. The README documents a narrower story than its siblings, and a user comparing the three has no way to see that the difference is a gap rather than a design.",
+      "drained_when": "the Rust client gains a span type, or its README states the asymmetry in the user's own terms"
+    },
+    {
+      "path": "clients/python/README.md",
+      "flagged_on": "2026-08-24",
+      "what": "Journal recovery needs a LATER client process to see the same journal directory. A container rescheduled onto fresh storage is uncovered, and the README says so — but this is the kind of caveat that gets edited out as noise by the next person rewriting the page for clarity. Flagged so a future pass re-checks that it survived.",
+      "drained_when": "a pass confirms the caveat is still present and still accurate, or server-side write-at-open lands and makes it obsolete"
+    },
+    {
+      "path": "clients/typescript/README.md",
+      "flagged_on": "2026-08-24",
+      "what": "Same caveat, same erosion risk, same check.",
+      "drained_when": "as above"
+    }
+  ],
+
+  "baseline_note": "First marker for this family — 2026-08-24, written by the wave-2b registry-conformance drain. This pass covered NOTHING in this family: `covered` is deliberately empty, and an empty covered list with a populated skip list is a legitimate marker state — it says 'a pass ran, it did not reach here, and here is precisely what it owes'. That is the state this family is actually in, and recording it is worth more than an inflated claim. Three obligations that per-change enforcement cannot gate are queued in `flagged`: the Rust client's missing span type (a capability gap its README quietly inherits) and the two journal-recovery caveats, which are accurate today and are exactly the sort of sentence a future clarity edit removes. The marker is the honest interface between 'we cannot enforce this per-change' and 'we did not forget it'."
+}
