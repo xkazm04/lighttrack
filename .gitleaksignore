@@ -8,9 +8,19 @@
 # This file was created from the triage that armed the scanner (gitleaks 8.30.1 over all 241 commits
 # of history, 2026-08-24). Exactly one finding, and it is a false positive; the repository has never
 # committed a credential, which is why there is no baseline file and why CI gates on zero.
+#
+# NOTE FOR FUTURE ENTRIES: do not quote the flagged text here. This file is scanned like every other
+# file in the tree (deliberately — an allowlist is a fine place to hide a secret), so a rationale
+# that reproduces the finding verbatim re-trips the rule on itself, forever, one commit later.
+# Describe the finding; the fingerprint already identifies it exactly.
 
-# `generic-api-key` firing on `assert!(...key, "min_cost=0.25")` — the entropy heuristic saw a
-# high-entropy-looking string on a line whose variable is named `key`. It is a test assertion
-# message about a cost floor, it holds no secret, and the line has since moved. Kept as a
-# fingerprint (not a file exemption) so tests_ingest.rs stays scanned.
+# `generic-api-key`, an entropy hit on a test assertion message about a minimum-cost floor. The line
+# declares a numeric threshold and happens to sit next to a variable whose name is three letters
+# long and begins with k; there is no credential in it, and the line has since moved. Kept as a
+# fingerprint (not a file exemption) so tests_ingest.rs stays fully scanned.
 78b4869d5390a42246e491fa659ef066563a41e6:crates/api/src/tests_ingest.rs:generic-api-key:903
+
+# The same false positive, quoted verbatim inside this file's own rationale by the commit that
+# introduced the scanner — which is exactly the self-trip the note above now warns against. The
+# offending text lives only in that historical blob; the current rationale no longer reproduces it.
+dbd912d81b3ae6b48476c00474daaeba448ce65e:.gitleaksignore:generic-api-key:12
