@@ -1,0 +1,70 @@
+# .ai/manifest.yaml — the agent-facing contract for this repo.
+# Capabilities are tool-NEUTRAL (a name -> the command that fulfils it), heavy subsystems are
+# referenced by path, and unknown fields MUST be ignored — so this survives tool churn and schema
+# growth. Shape reference: the ai-manifest spec carried by the registry consumer lane.
+schema: ai-manifest
+schemaVersion: 0.1.0
+generatedAt: "2026-08-24"
+generatedFrom: [Cargo.toml, .github/workflows/ci.yml, CONTRIBUTING.md]
+
+repo:
+  name: tracklight
+  purpose: "Self-hosted LLM observability + LLM-as-judge scoring/benchmark service (Rust workspace)"
+  languages: [rust, typescript, python]
+  archetype: service
+
+# Capabilities, not tools. Add keys freely; older readers ignore unknown ones.
+# `verified` is a claim a doctor flips to true once it has actually run the command.
+# Every command below is one CI runs (.github/workflows/ci.yml) or one CONTRIBUTING.md documents.
+capabilities:
+  build: { command: "cargo build --workspace", verified: false }
+  test: { command: "cargo test --workspace", verified: false }
+  lint: { command: "cargo clippy --workspace --all-targets -- -D warnings", verified: false }
+  typecheck: { command: "cargo check --workspace --all-targets", verified: false }
+  format-check: { command: "cargo fmt --all -- --check", verified: false }
+  conformance: { command: "cargo test -p lighttrack-store --test sqlite_conformance", verified: false }
+  audit: { command: "cargo deny check all --locked", verified: false }
+  smoke: { command: "sh scripts/smoke.sh http://127.0.0.1:8787", verified: false }
+
+# Pointers — these subsystems can change format underneath without breaking this contract.
+paths:
+  contextMap: context-map.json
+  docs: docs/
+  workingAgreement: CLAUDE.md
+  contributing: CONTRIBUTING.md
+  dependencyPolicy: deny.toml
+
+boundaries:
+  neverTouch: [target/, Cargo.lock]
+  secretsFrom: ".env via dotenvy (git-ignored); the GitHub remote is PUBLIC — never commit an API key"
+
+# The control model: where each capability is PRIMARILY enforced. All four store/test jobs plus
+# clippy and fmt are required checks on main; cargo-deny is deliberately advisory.
+controls:
+  ciHardPass: [test, conformance, lint, format-check]
+  ciAdvisory: [audit]
+
+# The organization's AI registry — knowledge bundles this repo consumes and the skill
+# marketplace it installs from. Unknown fields MUST be ignored by a reader.
+# registered from the secondary machine (mkdol) 2026-08-24
+registry:
+  remote: github:xkazm04/ai-registry
+  local: ../ai-registry
+  machine: secondary
+  contributor: mkdol-dev-box
+knowledge:
+  domains: [software-engineering, llm-observability]
+
+# Shared skills this project uses, from the registry's skills/ lane. The LINK is machine
+# state (gitignored); THIS list is the reviewable declaration. A skill not listed here is
+# project-owned and lives in .claude/skills/ as a real directory.
+skills:
+  - architect
+  - ci-triage
+  - conform
+  - consult
+  - explorer
+  - research
+  - ship-loop
+  - test-before-commit
+  - tiger
