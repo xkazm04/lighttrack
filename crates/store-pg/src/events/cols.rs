@@ -71,10 +71,10 @@ pub(crate) fn from_row(row: &PgRow) -> Result<LlmEvent> {
         parent_span_id: row.try_get(4).map_err(pgerr)?,
         ts: parse_ts(&ts)?,
         received_at: parse_ts(&received_at)?,
-        provider: parse_enum::<Provider>(&provider),
+        provider: parse_enum::<Provider>("provider", &provider)?,
         model: row.try_get(7).map_err(pgerr)?,
         name: row.try_get(22).map_err(pgerr)?,
-        operation: parse_enum::<Operation>(&operation),
+        operation: parse_enum::<Operation>("operation", &operation)?,
         usage: TokenUsage {
             input: row.try_get::<i64, _>(9).map_err(pgerr)? as u64,
             output: row.try_get::<i64, _>(10).map_err(pgerr)? as u64,
@@ -92,7 +92,7 @@ pub(crate) fn from_row(row: &PgRow) -> Result<LlmEvent> {
             .try_get::<Option<i64>, _>(14)
             .map_err(pgerr)?
             .map(|v| v as u64),
-        status: parse_enum::<Status>(&status),
+        status: parse_enum::<Status>("status", &status)?,
         error: row.try_get(16).map_err(pgerr)?,
         input: match input {
             Some(s) => Some(serde_json::from_str(&s)?),

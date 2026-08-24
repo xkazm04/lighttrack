@@ -38,9 +38,33 @@ pub fn enum_to_str<T: Serialize>(v: &T) -> Result<String> {
         .ok_or_else(|| StoreError::Other("enum did not serialize to a string".into()))
 }
 
-/// Parse a stored enum string, falling back to the type's default on any mismatch.
-pub fn parse_enum<T: DeserializeOwned + Default>(s: &str) -> T {
-    serde_json::from_value(Value::String(s.to_string())).unwrap_or_default()
+/// Parse a stored closed-vocabulary string into its domain enum, at the seam, **strictly**.
+///
+/// This used to be `unwrap_or_default()`: a value the vocabulary did not know was silently coerced
+/// into the type's default and handed downstream as if it were a member. That is the one option a
+/// mapper never gets — it defers the explosion to whichever caller switches on the value furthest
+/// from the evidence, and here the defaults are exactly the ones that read as "fine":
+/// `Status::Success` (a corrupt status column becomes a successful call), `Redaction::None`
+/// (a corrupt privacy policy becomes "store raw payloads"), and `LimitAction`'s default (a corrupt
+/// cap silently changes what it does). None of those look wrong in a dashboard.
+///
+/// Enums with an explicit quarantine variant — [`Provider::Unknown`] and [`Operation::Other`], via
+/// `#[serde(other)]` — parse successfully into it and never reach the error path. That is the
+/// technique's *other* sanctioned option, chosen per column: unknown is a value those two
+/// vocabularies deliberately have.
+///
+/// `column` names where the bad value came from, because "invalid enum" without a column is a
+/// message nobody can act on. Symmetric with [`parse_ts`], which has always been strict — a
+/// timestamp that fails to parse already fails its read, and a status that fails to parse now does
+/// too.
+pub fn parse_enum<T: DeserializeOwned>(column: &str, s: &str) -> Result<T> {
+    serde_json::from_value(Value::String(s.to_string())).map_err(|_| {
+        StoreError::Other(format!(
+            "stored value {s:?} in column `{column}` is outside its vocabulary — this row was \
+             written by something that does not share this schema's enum definition, and coercing \
+             it to a default would turn a drift bug into a plausible-looking verdict"
+        ))
+    })
 }
 
 /// Encode a `(ts, id)` keyset position as an opaque, URL/header-safe cursor (hex of `ts|id`). Both
@@ -135,11 +159,36 @@ mod tests {
     }
 
     #[test]
-    fn enum_round_trips_and_defaults_on_mismatch() {
+    fn a_stored_value_outside_the_vocabulary_is_surfaced_not_coerced() {
         assert_eq!(enum_to_str(&Sample::BetaTwo).unwrap(), "beta_two");
-        assert_eq!(parse_enum::<Sample>("beta_two"), Sample::BetaTwo);
-        // Unknown / corrupt values fall back to the type default rather than erroring.
-        assert_eq!(parse_enum::<Sample>("nonsense"), Sample::Alpha);
+        assert_eq!(
+            parse_enum::<Sample>("kind", "beta_two").unwrap(),
+            Sample::BetaTwo
+        );
+
+        // The behaviour this replaces: `unwrap_or_default()` turned an unknown stored value into
+        // `Sample::Alpha` and handed it downstream as if it were a member. On the columns that
+        // actually use this, the defaults are the ones that read as "fine" — a corrupt `status`
+        // became a SUCCESSFUL call, and a corrupt `redaction` became "store raw payloads".
+        let err = parse_enum::<Sample>("kind", "nonsense").expect_err("must not coerce");
+        let msg = err.to_string();
+        assert!(msg.contains("nonsense"), "the bad value is named: {msg}");
+        assert!(msg.contains("kind"), "and the column it came from: {msg}");
+    }
+
+    /// The technique's other sanctioned option, chosen per column: a vocabulary that deliberately
+    /// HAS an unknown member parses into it and never reaches the error path.
+    #[test]
+    fn an_explicit_quarantine_variant_still_absorbs_the_unknown() {
+        use lighttrack_core::{Operation, Provider};
+        assert_eq!(
+            parse_enum::<Provider>("provider", "azure-openai").unwrap(),
+            Provider::Unknown
+        );
+        assert_eq!(
+            parse_enum::<Operation>("operation", "rerank").unwrap(),
+            Operation::Other
+        );
     }
 
     #[test]

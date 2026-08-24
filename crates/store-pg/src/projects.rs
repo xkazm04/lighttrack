@@ -224,7 +224,7 @@ fn project_from_row(row: &PgRow) -> Result<Project> {
         id: row.try_get(0).map_err(pgerr)?,
         name: row.try_get(1).map_err(pgerr)?,
         enabled: row.try_get::<i64, _>(2).map_err(pgerr)? != 0,
-        redaction: parse_enum::<Redaction>(&redaction),
+        redaction: parse_enum::<Redaction>("redaction", &redaction)?,
         collective_opt_in: row.try_get::<i64, _>(4).map_err(pgerr)? != 0,
         created_at: parse_ts(&created_at)?,
     })
@@ -255,10 +255,10 @@ pub(crate) fn limit_rule_from_row(row: &PgRow) -> Result<LimitRule> {
     Ok(LimitRule {
         id: row.try_get(0).map_err(pgerr)?,
         project_id: row.try_get(1).map_err(pgerr)?,
-        metric: parse_enum(&metric),
-        window: parse_enum(&window),
+        metric: parse_enum("metric", &metric)?,
+        window: parse_enum("window", &window)?,
         threshold: row.try_get(4).map_err(pgerr)?,
-        action: parse_enum(&action),
+        action: parse_enum("action", &action)?,
         enabled: row.try_get::<i64, _>(6).map_err(pgerr)? != 0,
         warn_at: row.try_get(7).map_err(pgerr)?,
         scope: match (

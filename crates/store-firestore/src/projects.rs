@@ -83,7 +83,7 @@ fn project_from(m: &Fields) -> Result<Project> {
         id: freq(m, "id")?,
         name: freq(m, "name")?,
         enabled: fbool(m, "enabled"),
-        redaction: parse_enum::<Redaction>(&fstr(m, "redaction").unwrap_or_default()),
+        redaction: parse_enum::<Redaction>("redaction", &fstr(m, "redaction").unwrap_or_default())?,
         // Docs written before the consent field existed read as opted OUT — the safe default.
         collective_opt_in: fbool(m, "collective_opt_in"),
         created_at: parse_ts(&freq(m, "created_at")?)?,

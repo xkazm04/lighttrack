@@ -52,18 +52,19 @@ pub(super) fn list(conn: &Connection, project: &str, only_enabled: bool) -> Resu
         format!("SELECT {COLS} FROM limit_rules WHERE project_id = ?1")
     };
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt
+    let raws = stmt
         .query_map(params![project], map_limit)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
+    raws.into_iter().map(limit_from_raw).collect()
 }
 
 pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LimitRule>> {
     let sql = format!("SELECT {COLS} FROM limit_rules WHERE id = ?1");
     let mut stmt = conn.prepare(&sql)?;
     stmt.query_row(params![id], map_limit)
-        .optional()
-        .map_err(Into::into)
+        .optional()?
+        .map(limit_from_raw)
+        .transpose()
 }
 
 /// Update a rule's mutable columns in place (matched by id); `project_id` is left untouched. Returns
@@ -95,20 +96,52 @@ pub(super) fn delete(conn: &Connection, id: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
-fn map_limit(row: &Row) -> rusqlite::Result<LimitRule> {
+/// The columns as SQLite hands them over, before any domain decoding.
+///
+/// Split from [`limit_from_raw`] because decoding a closed vocabulary can now FAIL, and a
+/// `rusqlite::Result` cannot carry that failure — the same raw-then-decode shape the jobs mapper
+/// already uses. A rule whose `metric`/`window`/`action` is outside the vocabulary is a defect to
+/// surface, not a value to coerce: the tempting `unwrap_or_default()` would turn a drift bug into a
+/// silently different cap.
+type LimitRaw = (
+    String,
+    String,
+    String,
+    String,
+    f64,
+    String,
+    i64,
+    Option<f64>,
+    Option<String>,
+    Option<String>,
+);
+
+fn map_limit(row: &Row) -> rusqlite::Result<LimitRaw> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+    ))
+}
+
+fn limit_from_raw(r: LimitRaw) -> Result<LimitRule> {
     Ok(LimitRule {
-        id: row.get(0)?,
-        project_id: row.get(1)?,
-        metric: parse_enum::<LimitMetric>(&row.get::<_, String>(2)?),
-        window: parse_enum::<LimitWindow>(&row.get::<_, String>(3)?),
-        threshold: row.get(4)?,
-        action: parse_enum::<LimitAction>(&row.get::<_, String>(5)?),
-        enabled: row.get::<_, i64>(6)? != 0,
-        warn_at: row.get(7)?,
-        scope: match (
-            row.get::<_, Option<String>>(8)?,
-            row.get::<_, Option<String>>(9)?,
-        ) {
+        id: r.0,
+        project_id: r.1,
+        metric: parse_enum::<LimitMetric>("metric", &r.2)?,
+        window: parse_enum::<LimitWindow>("window", &r.3)?,
+        threshold: r.4,
+        action: parse_enum::<LimitAction>("action", &r.5)?,
+        enabled: r.6 != 0,
+        warn_at: r.7,
+        scope: match (r.8, r.9) {
             (Some(kind), Some(value)) => LimitScope::from_parts(&kind, value),
             _ => None,
         },

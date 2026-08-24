@@ -81,7 +81,7 @@ fn project_from_raw(r: ProjectRaw) -> Result<Project> {
         id: r.0,
         name: r.1,
         enabled: r.2 != 0,
-        redaction: parse_enum::<Redaction>(&r.3),
+        redaction: parse_enum::<Redaction>("redaction", &r.3)?,
         collective_opt_in: r.4 != 0,
         created_at: parse_ts(&r.5)?,
     })

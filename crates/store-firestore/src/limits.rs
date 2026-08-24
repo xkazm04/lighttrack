@@ -70,10 +70,10 @@ fn limit_from(m: &Fields) -> Result<LimitRule> {
     Ok(LimitRule {
         id: freq(m, "id")?,
         project_id: freq(m, "project_id")?,
-        metric: parse_enum(&fstr(m, "metric").unwrap_or_default()),
-        window: parse_enum(&fstr(m, "window").unwrap_or_default()),
+        metric: parse_enum("metric", &fstr(m, "metric").unwrap_or_default())?,
+        window: parse_enum("window", &fstr(m, "window").unwrap_or_default())?,
         threshold: ff64(m, "threshold").unwrap_or(0.0),
-        action: parse_enum(&fstr(m, "action").unwrap_or_default()),
+        action: parse_enum("action", &fstr(m, "action").unwrap_or_default())?,
         enabled: fbool(m, "enabled"),
         warn_at: ff64(m, "warn_at"),
         scope: match (fstr(m, "scope_kind"), fstr(m, "scope_value")) {

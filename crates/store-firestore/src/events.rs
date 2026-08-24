@@ -364,10 +364,10 @@ fn from_fields(m: &Fields) -> Result<LlmEvent> {
         // No `received_at` field on this backend yet: mirror the SQLite migration's backfill
         // (arrival time == event time). Mechanical only — the Firestore owner ports the real field.
         received_at: parse_ts(&fstr(m, "received_at").unwrap_or(freq(m, "ts")?))?,
-        provider: parse_enum(&freq(m, "provider")?),
+        provider: parse_enum("provider", &freq(m, "provider")?)?,
         model: freq(m, "model")?,
         name: fstr(m, "name"),
-        operation: parse_enum(&freq(m, "operation")?),
+        operation: parse_enum("operation", &freq(m, "operation")?)?,
         usage: TokenUsage {
             input: fi64(m, "input_tokens").unwrap_or(0) as u64,
             output: fi64(m, "output_tokens").unwrap_or(0) as u64,
@@ -376,7 +376,7 @@ fn from_fields(m: &Fields) -> Result<LlmEvent> {
         },
         cost_usd: ff64(m, "cost_usd"),
         latency_ms: fi64(m, "latency_ms").map(|v| v as u64),
-        status: parse_enum(&freq(m, "status")?),
+        status: parse_enum("status", &freq(m, "status")?)?,
         error: fstr(m, "error"),
         input: fopt_json(m, "input")?,
         output: fopt_json(m, "output")?,
