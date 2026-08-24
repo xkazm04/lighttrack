@@ -403,6 +403,17 @@ Long passes run as chunks with the gauge re-read between them, and the store's w
 before each re-read — the reverse order would leave a user waiting on the very check meant to protect
 them. A pass abandoned at a chunk boundary is merely incomplete, never inconsistent.
 
+**What the escalated rung is actually for, measured.** The store soak lane
+(`docs/harness/soak-lane.md`) ran two CI certifications on 2026-08-24 and found that under
+*continuous* read load the journal plateaus at ~57–59 MiB rather than growing without bound — 90 s and
+300 s runs agreed within 3% despite the second doing 2.8× the work. The cause is that a checkpoint
+cannot advance past a live reader's snapshot, so with readers looping without a gap the checkpointer
+starves. On such an instance the activity gauge never reads zero, the sweep defers every time, and
+the journal's own byte bound is the only thing that ever runs a pass. That is the rung working as
+designed — and it is why the bound is stated in bytes: 64 MiB sits just above the measured plateau,
+so an instance in this state checkpoints occasionally rather than never, without a wall clock
+deciding it.
+
 `LIGHTTRACK_MAINTENANCE_SECS=0` switches the sweep off entirely. It is **on by default**, unlike the
 forecast sweep (§10a): that one turns a self-hosted process into an outbound notifier, which is a
 decision; this one keeps the process's own disk in order, which is upkeep.
