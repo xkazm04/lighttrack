@@ -217,6 +217,47 @@ fn every_control_names_a_declared_capability() {
     assert!(checked >= 5, "only {checked} control entries parsed");
 }
 
+/// The ladder's rungs run the SAME commands, from one authority.
+///
+/// Before `scripts/gates.sh` there was no local rung at all — no hooks, no script — so every check's
+/// first run was a CI round trip, which is the expensive way to learn that the formatter wants a
+/// blank line. A local script is only worth trusting while it runs what the remote actually blocks
+/// on, and "we'll remember to update both" is not a mechanism: this is.
+#[test]
+fn the_local_gate_script_runs_every_blocking_gate() {
+    let script = std::fs::read_to_string(repo_root().join("scripts/gates.sh"))
+        .expect("scripts/gates.sh is the local rung");
+    let caps = block(MANIFEST, "capabilities");
+    let controls = block(MANIFEST, "controls");
+    let blocking = flow_list(controls.get("ciHardPass").expect("ciHardPass"));
+    assert!(
+        blocking.len() >= 5,
+        "only {} blocking gates",
+        blocking.len()
+    );
+
+    for name in blocking {
+        let body = &caps[&name];
+        // The capability's command, verbatim, as it appears between `command: "` and the closing
+        // quote. Comparing the command rather than the capability NAME is what makes this a real
+        // bind: a local script that ran `cargo test -p one-crate` under the label `test` would pass
+        // a name check and prove nothing.
+        let cmd = body
+            .split("command: \"")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+            .unwrap_or_else(|| panic!("capability '{name}' has no quoted command: {body}"));
+        // The advisory-only trailing comment in one capability is not part of what runs.
+        let cmd = cmd.split("  #").next().unwrap_or(cmd).trim();
+        assert!(
+            script.contains(cmd),
+            "controls.ciHardPass lists '{name}', but scripts/gates.sh does not run its command:\n  \
+             {cmd}\nAdd it there in the same change, or the local rung silently stops covering a \
+             gate that blocks."
+        );
+    }
+}
+
 #[test]
 fn the_parsers_can_go_red() {
     // The guard's own seeded-failure proof: a checker whose parser silently returns nothing is a

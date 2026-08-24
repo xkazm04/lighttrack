@@ -1,0 +1,34 @@
+#!/bin/sh
+# The last cheap moment: run the blocking gates before the commits leave this machine.
+#
+# Install once per clone (git never runs hooks a clone brings with it):
+#
+#     git config core.hooksPath .githooks
+#
+# Push, not commit. Commit is too often — a work-in-progress commit that does not compile is a
+# legitimate thing to make, and a rung that forbids it gets bypassed within a day, taking the
+# secret scan on the commit rung down with it. Push is the moment the work becomes everyone's.
+#
+# It runs `scripts/gates.sh`, which is the SAME set of commands CI blocks on (the manifest is the
+# one authority, and a test fails the build if the two drift). So a green run here means the remote
+# run is a confirmation rather than a discovery — which is the entire value of a local rung.
+#
+# `LIGHTTRACK_SKIP_GATES=1 git push` bypasses it deliberately, and says so. The bypass exists on
+# purpose: a rung with no escape hatch is a rung people disable permanently, and `--no-verify` would
+# also silence the pre-commit secret scan, which is the one control that must not be trained away.
+# CI blocks regardless — nothing here is the guarantee.
+set -eu
+
+if [ "${LIGHTTRACK_SKIP_GATES:-0}" != "0" ]; then
+    echo "pre-push: gates SKIPPED (LIGHTTRACK_SKIP_GATES is set). CI still blocks." >&2
+    exit 0
+fi
+
+root=$(git rev-parse --show-toplevel)
+if [ ! -f "$root/scripts/gates.sh" ]; then
+    echo "pre-push: scripts/gates.sh is missing — skipping (CI still blocks)." >&2
+    exit 0
+fi
+
+echo "pre-push: running the blocking gates locally. LIGHTTRACK_SKIP_GATES=1 to skip." >&2
+sh "$root/scripts/gates.sh"

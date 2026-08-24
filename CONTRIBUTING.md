@@ -145,6 +145,26 @@ These are enforced in review:
 
 ## Pull requests
 
+### Run the gates before you push
+
+```bash
+git config core.hooksPath .githooks   # once per clone
+sh scripts/gates.sh                   # or --fast for fmt + clippy + the workspace suite
+```
+
+`scripts/gates.sh` runs **the same commands CI blocks on** — not a hand-copied approximation:
+`crates/core/tests/manifest_guard.rs` fails the build if any capability in the manifest's
+`controls.ciHardPass` is missing from the script or spelled differently there. Add a blocking gate
+and the local rung is red until it runs it too.
+
+`.githooks/pre-push` runs it for you. Push, not commit: a work-in-progress commit that does not
+compile is a legitimate thing to make, and a rung that forbids it gets bypassed within a day —
+taking the pre-commit secret scan down with it. `LIGHTTRACK_SKIP_GATES=1 git push` bypasses it
+deliberately (prefer that to `--no-verify`, which also silences the secret scan). A gate whose engine
+is not installed locally announces the skip and does not fail your run; CI installs every engine and
+blocks unconditionally, which is where the guarantee lives. The point of the local rung is that the
+remote run becomes a **confirmation** rather than a discovery.
+
 CI runs on every PR to `main`. **`.github/workflows/ci.yml` is the authority on what blocks** — this
 table is a projection of it. It is no longer maintained on trust: `crates/core/tests/gate_table_guard.rs`
 reads both files and fails `cargo test --workspace` if a job is missing from the table, a row names a
