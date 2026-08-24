@@ -58,9 +58,20 @@ over an instance:
 - **Redaction and PII** — this one is explicitly in scope and easy to get wrong. `crates/api/src/redact.rs`
   applies two layers on ingest: the per-project persistence policy (`none` / `hash` / `drop`) and the
   server-global PII scrub gated by `LIGHTTRACK_REDACT_INGEST` (`all` | a CSV of project ids | `off`),
-  which scrubs `input`, `output`, `error`, and `tags` via the `lighttrack_anon` regex pass. **The
-  scrub is ON by default** — an unset variable means `all` (see D14 in `docs/DECISIONS.md`); `off`
-  is an explicit opt-out. A case
+  which scrubs **every field a caller can write** via the `lighttrack_anon` regex pass: `input`,
+  `output`, `error`, `tags`, `name`, `source`, and `metadata`. The only exceptions are the accounting
+  keys inside `metadata` (`api_key_id`, `customer_id`, `product_id`, `cost_source`, `pricing_mode`),
+  which pass through **un-rewritten and on purpose** — they are join keys, and scrubbing one would
+  merge the buckets cost and margin are grouped by rather than protect anyone. If you use a real
+  email address as a `customer_id`, it is stored as you sent it; send a pseudonym.
+
+  The walk is **bounded** (depth, breadth, string length, total nodes) and, at every cap, **drops**
+  what it could not inspect and marks it `<UNSCANNED: <cap>>` — distinct from the `<EMAIL>`-style
+  markers, so "nothing sensitive here" and "I could not look" never read alike. A scrub that panics
+  discards the payloads rather than falling back to the unscrubbed original.
+
+  **The scrub is ON by default** — an unset variable means `all` (see D14 in `docs/DECISIONS.md`);
+  `off` is an explicit opt-out. A case
   where a project's `drop`/`hash` policy is not honored, or where enabled redaction still persists PII
   it claims to remove — including on paths other than plain ingest (batch, OTLP, relay, dataset build,
   judge prompts, exports) — is a security bug, not a feature request. Report it here.

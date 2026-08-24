@@ -7,8 +7,11 @@
 //! `AppState` (see `state::redaction_policy_for`) and enforced here on the ingest path.
 //!
 //! **2. PII scrub** ([`Redactor::redact_event`]): scrubs structured PII (emails, cards, SSNs,
-//! secrets, IPs, phones — the `lighttrack_anon` regex pass) from captured `input`/`output` **and**
-//! the `error` string and `tags` (all client-supplied free text) before storage. Config is
+//! secrets, IPs, phones — the `lighttrack_anon` regex pass) from **every client-supplied surface**
+//! before storage — captured `input`/`output`, the `error` string, `tags`, `name`, `source`, and
+//! `metadata` (except the accounting keys enumerated in `METADATA_PASSTHROUGH`, each with its
+//! reason). Nothing a caller can write is left un-dispositioned: an emit-site inventory with a field
+//! missing from it is an inventory that has not been taken. Config is
 //! server-global via env and acts as a floor under the per-project policy:
 //!   LIGHTTRACK_REDACT_INGEST  unset           → **redact every project** (the default; see D14)
 //!                             `off`/`0`       → disabled: client text is stored verbatim
@@ -169,23 +172,113 @@ impl Redactor {
         if !self.enabled_for(&ev.project_id) {
             return 0;
         }
-        let mut n = 0;
-        if matches!(persistence, Redaction::None) {
-            if let Some(input) = ev.input.as_mut() {
-                n += scrub_value(input);
+        // The scrubber's own failure is not consent to send. If anything in the walk panics — a
+        // shape that defeats an assumption, a stack overflow the depth cap somehow missed — the
+        // event must NOT fall back to the un-scrubbed original, which is the tempting default and
+        // the one that turns a boundary failure into a disclosure. It falls back to a payload-free
+        // record, and the failure is logged at `error` because a scrubber that has started panicking
+        // is a boundary that has silently stopped existing.
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scrub_all(ev, persistence)));
+        match outcome {
+            Ok(n) => n,
+            Err(_) => {
+                ev.input = Some(json!("<REDACTION FAILED: payload discarded>"));
+                ev.output = Some(json!("<REDACTION FAILED: payload discarded>"));
+                ev.error = Some("<REDACTION FAILED>".to_string());
+                ev.tags.clear();
+                ev.metadata = Value::Null;
+                tracing::error!(
+                    project_id = %ev.project_id,
+                    event_id = %ev.id,
+                    "PII scrub PANICKED; payloads were discarded rather than stored unscrubbed"
+                );
+                0
             }
-            if let Some(output) = ev.output.as_mut() {
-                n += scrub_value(output);
-            }
         }
-        if let Some(error) = ev.error.as_mut() {
-            n += scrub_string(error);
-        }
-        for tag in ev.tags.iter_mut() {
-            n += scrub_string(tag);
-        }
-        n
     }
+}
+
+/// Server-owned or accounting keys inside `metadata` that pass the scrub **un-rewritten**, each with
+/// its "passed, because…". These are join keys, not payloads: rewriting one does not protect anyone,
+/// it silently merges or splits the buckets every cost, margin and budget number is grouped by.
+///
+/// * `api_key_id` — server-stamped from the authenticated principal (never read from the body); an
+///   opaque `api_keys.id`, not key material.
+/// * `customer_id` — the billing linkage `margin`/`cost_by_dimension` group on. If it were scrubbed,
+///   every customer whose id happens to look like an email would collapse into one `<EMAIL>` bucket
+///   and their spend would merge. An operator who uses a real address as a customer id should send a
+///   pseudonym; that is a caller-side decision, and this is where it is written down.
+/// * `product_id` — same, for per-product attribution.
+/// * `cost_source` — a closed vocabulary (`client` | `book`) the server stamps.
+/// * `pricing_mode` — a closed vocabulary the price book resolves against.
+const METADATA_PASSTHROUGH: [&str; 5] = [
+    "api_key_id",
+    "customer_id",
+    "product_id",
+    "cost_source",
+    "pricing_mode",
+];
+
+/// Every client-supplied surface, scrubbed. Split out of [`Redactor::redact_event`] so the whole
+/// walk sits inside one panic guard.
+fn scrub_all(ev: &mut LlmEvent, persistence: Redaction) -> usize {
+    let mut n = 0;
+    let mut capped = 0;
+    if matches!(persistence, Redaction::None) {
+        for payload in [&mut ev.input, &mut ev.output] {
+            if let Some(v) = payload.as_mut() {
+                let (r, c) = scrub_value_capped(v);
+                n += r;
+                capped += c;
+            }
+        }
+    }
+    if let Some(error) = ev.error.as_mut() {
+        n += scrub_string(error);
+    }
+    for tag in ev.tags.iter_mut() {
+        n += scrub_string(tag);
+    }
+    // `name` and `source` are client-set free text. Their disposition used to be "not mentioned",
+    // which is not a disposition. Scrubbed: a legitimate call-site label ("summarize-email") matches
+    // no PII rule and is untouched, and if one ever does contain an address, a fragmented rollup is
+    // the lesser harm.
+    if let Some(name) = ev.name.as_mut() {
+        n += scrub_string(name);
+    }
+    if let Some(source) = ev.source.as_mut() {
+        n += scrub_string(source);
+    }
+    // `metadata` is ARBITRARY client JSON and was never scrubbed at all — the largest hole in this
+    // module's "raw PII never lands in the DB" promise, because it is the field applications
+    // actually use for per-call context. It is scrubbed now, except the accounting keys above.
+    if let Value::Object(map) = &mut ev.metadata {
+        for (key, value) in map.iter_mut() {
+            if METADATA_PASSTHROUGH.contains(&key.as_str()) {
+                continue;
+            }
+            let (r, c) = scrub_value_capped(value);
+            n += r;
+            capped += c;
+        }
+    } else if !ev.metadata.is_null() {
+        // A non-object `metadata` (a bare string or array) is still client text.
+        let (r, c) = scrub_value_capped(&mut ev.metadata);
+        n += r;
+        capped += c;
+    }
+    if capped > 0 {
+        tracing::warn!(
+            project_id = %ev.project_id,
+            event_id = %ev.id,
+            dropped = capped,
+            "payload hit a redaction traversal cap; the un-inspected parts were DROPPED (see the \
+             `<UNSCANNED: …>` markers). A cap firing routinely means that field wants an explicit \
+             shape, not a bigger limit."
+        );
+    }
+    n
 }
 
 /// Enforce a project's persistence policy on the event's captured payloads, in place. Returns `true`
@@ -248,20 +341,131 @@ fn scrub_string(s: &mut String) -> usize {
     r.redactions
 }
 
-/// Recursively scrub every string leaf of a JSON value, preserving structure. Returns the total
-/// redaction count.
-fn scrub_value(v: &mut Value) -> usize {
+// ---- traversal caps -------------------------------------------------------------------------
+//
+// The walker below runs on an ingest path SECURITY.md names as attacker-reachable, over JSON the
+// caller chose. It used to have no caps at all: any depth, any breadth, any string length, any total
+// size. Two failure modes, and the second is the one that matters:
+//
+//   * cost — a deeply nested or enormous payload turns every ingest into an unbounded walk;
+//   * disclosure — WHICH WAY a capped walker fails is the whole difference between a privacy
+//     boundary and a formatter. A pretty-printer that hits its depth limit prints an ellipsis and
+//     lets the rest through; its worst outcome is an ugly page. A REDACTOR that does the same has
+//     emitted the one region it never inspected, and the selection is not random: object graphs
+//     nest deepest exactly where they are richest.
+//
+// So: at every cap, DROP, and say which cap fired. An inspected-and-passed value is a decision; an
+// uninspected-and-passed value is a disclosure. The numbers are the least interesting part and are
+// set generously — a legitimate LLM payload should never meet one, and a cap that starts firing
+// routinely is a signal that the field wants an explicit shape, not a bigger number.
+//
+// Two branches this technique normally demands are genuinely absent here, and are recorded rather
+// than skipped: `serde_json::Value` is an acyclic tree (no cycle guard is possible or needed) and
+// its variants are enumerated (there is no "exotic value" default branch that could pass an
+// un-inspected foreign type through).
+
+/// Nesting depth beyond which a subtree is dropped rather than walked.
+const MAX_DEPTH: usize = 12;
+/// Children walked per array/object. The rest are shed as one marker carrying the count.
+const MAX_BREADTH: usize = 512;
+/// Bytes of a single string leaf that are scrubbed. The prefix is inspected and kept; the tail is
+/// dropped with a marker, because forwarding an un-scanned tail is the disclosure this guards.
+const MAX_STRING_BYTES: usize = 32 * 1024;
+/// Total nodes any one payload may consume. A wide-and-shallow payload evades depth and breadth
+/// caps individually; this is the ceiling on the walk as a whole.
+const MAX_NODES: usize = 20_000;
+
+/// Marker for a value the boundary **did not inspect**, naming the cap that fired.
+///
+/// Deliberately not the same word as the scrubber's own `<EMAIL>` / `<SECRET>` markers: "nothing
+/// sensitive here" and "I could not look" must not read alike. An investigator seeing
+/// `<UNSCANNED: depth>` at a path knows there is a blind spot exactly there.
+fn unscanned(cap: &str) -> Value {
+    Value::String(format!("<UNSCANNED: {cap}>"))
+}
+
+/// One payload's traversal budget and tally.
+struct Walk {
+    nodes_left: usize,
+    redactions: usize,
+    /// How many values were dropped un-inspected. Non-zero means this event has blind spots.
+    capped: usize,
+}
+
+/// Recursively scrub every string leaf of a JSON value, preserving structure, **within bounded
+/// depth, breadth, string length and total node count** — dropping (never forwarding) whatever it
+/// could not inspect. Returns the redaction count and the number of un-inspected drops.
+fn scrub_value_capped(v: &mut Value) -> (usize, usize) {
+    let mut w = Walk {
+        nodes_left: MAX_NODES,
+        redactions: 0,
+        capped: 0,
+    };
+    walk(v, 0, &mut w);
+    (w.redactions, w.capped)
+}
+
+fn walk(v: &mut Value, depth: usize, w: &mut Walk) {
+    if depth >= MAX_DEPTH {
+        *v = unscanned("depth");
+        w.capped += 1;
+        return;
+    }
+    if w.nodes_left == 0 {
+        *v = unscanned("node-budget");
+        w.capped += 1;
+        return;
+    }
+    w.nodes_left -= 1;
+
     match v {
         Value::String(s) => {
-            let r = lighttrack_anon::scrub(s);
-            if r.redactions > 0 {
-                *s = r.text;
+            if s.len() > MAX_STRING_BYTES {
+                // Inspect what fits and drop the rest. Splitting on a char boundary keeps the
+                // prefix valid UTF-8; the marker names how much was shed so the size is not a
+                // silent truncation.
+                let mut cut = MAX_STRING_BYTES;
+                while cut > 0 && !s.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                let shed = s.len() - cut;
+                let mut head = s[..cut].to_string();
+                w.redactions += scrub_string(&mut head);
+                *s = format!("{head}<UNSCANNED: string, {shed} bytes dropped>");
+                w.capped += 1;
+            } else {
+                w.redactions += scrub_string(s);
             }
-            r.redactions
         }
-        Value::Array(arr) => arr.iter_mut().map(scrub_value).sum(),
-        Value::Object(map) => map.values_mut().map(scrub_value).sum(),
-        _ => 0,
+        Value::Array(arr) => {
+            if arr.len() > MAX_BREADTH {
+                let shed = arr.len() - MAX_BREADTH;
+                arr.truncate(MAX_BREADTH);
+                arr.push(unscanned(&format!("breadth, {shed} entries dropped")));
+                w.capped += 1;
+            }
+            for item in arr.iter_mut() {
+                walk(item, depth + 1, w);
+            }
+        }
+        Value::Object(map) => {
+            if map.len() > MAX_BREADTH {
+                let shed = map.len() - MAX_BREADTH;
+                let keep: Vec<String> = map.keys().take(MAX_BREADTH).cloned().collect();
+                map.retain(|k, _| keep.iter().any(|kk| kk == k));
+                map.insert(
+                    "<UNSCANNED>".to_string(),
+                    unscanned(&format!("breadth, {shed} keys dropped")),
+                );
+                w.capped += 1;
+            }
+            for value in map.values_mut() {
+                walk(value, depth + 1, w);
+            }
+        }
+        // Null / Bool / Number carry no free text and are enumerated, not defaulted: `Value` has no
+        // other variants, so nothing reaches this arm by being unfamiliar.
+        _ => {}
     }
 }
 
@@ -472,5 +676,177 @@ mod tests {
         let mut b = event("p2", json!("jane@example.com"), json!("x"));
         assert!(scoped.redact_event(&mut a, Redaction::None) > 0);
         assert_eq!(scoped.redact_event(&mut b, Redaction::None), 0);
+    }
+
+    // ---- traversal caps: what the boundary does when it cannot look ----------------------------
+
+    /// Build `depth` nested objects with the PII at the bottom.
+    fn nest(depth: usize, leaf: Value) -> Value {
+        (0..depth).fold(leaf, |acc, _| json!({ "n": acc }))
+    }
+
+    #[test]
+    fn a_payload_deeper_than_the_cap_is_dropped_not_forwarded() {
+        // The direction rule, and the whole reason this is not a formatter: a walker that hits its
+        // depth limit and lets the subtree through has emitted the ONE region it never inspected —
+        // and object graphs nest deepest exactly where they are richest.
+        let r = Redactor::all();
+        let mut ev = event(
+            "p1",
+            nest(MAX_DEPTH + 5, json!("mail jane@example.com")),
+            json!("ok"),
+        );
+        r.redact_event(&mut ev, Redaction::None);
+        let stored = serde_json::to_string(&ev).unwrap();
+        assert!(
+            !stored.contains("jane@example.com"),
+            "an un-inspected deep subtree must never reach storage: {stored}"
+        );
+        assert!(
+            stored.contains("<UNSCANNED: depth>"),
+            "and the reader must be told there is a blind spot at that path: {stored}"
+        );
+    }
+
+    #[test]
+    fn a_cap_marker_is_not_spelled_like_a_redaction() {
+        // "nothing sensitive here" and "I could not look" must not read alike, or an investigator
+        // reading the record can conclude nothing from a marker.
+        let r = Redactor::all();
+        let mut ev = event(
+            "p1",
+            json!("mail jane@example.com"),
+            nest(MAX_DEPTH + 2, json!("x")),
+        );
+        r.redact_event(&mut ev, Redaction::None);
+        let input = serde_json::to_string(&ev.input).unwrap();
+        let output = serde_json::to_string(&ev.output).unwrap();
+        assert!(input.contains("<EMAIL>"), "{input}");
+        assert!(!input.contains("UNSCANNED"), "{input}");
+        assert!(output.contains("<UNSCANNED"), "{output}");
+    }
+
+    #[test]
+    fn breadth_and_the_node_budget_shed_the_tail_and_say_how_much() {
+        let r = Redactor::all();
+        let wide: Vec<Value> = (0..MAX_BREADTH + 40)
+            .map(|_| json!("mail jane@example.com"))
+            .collect();
+        let mut ev = event("p1", json!(wide), json!("ok"));
+        r.redact_event(&mut ev, Redaction::None);
+        let stored = serde_json::to_string(&ev.input).unwrap();
+        assert!(!stored.contains("jane@example.com"), "{stored}");
+        assert!(
+            stored.contains("40 entries dropped"),
+            "the count is the point: {stored}"
+        );
+
+        // Wide-and-shallow evades the depth cap; the node budget is the ceiling on the walk itself.
+        let huge: Vec<Value> = (0..MAX_BREADTH)
+            .map(|_| json!((0..MAX_BREADTH).map(|_| json!("x")).collect::<Vec<_>>()))
+            .collect();
+        let mut ev = event("p1", json!(huge), json!("ok"));
+        r.redact_event(&mut ev, Redaction::None);
+        assert!(
+            serde_json::to_string(&ev.input)
+                .unwrap()
+                .contains("<UNSCANNED: node-budget>"),
+            "a payload wide enough to exhaust the budget must be capped, not walked forever"
+        );
+    }
+
+    #[test]
+    fn an_oversized_string_keeps_its_inspected_prefix_and_drops_the_rest() {
+        let r = Redactor::all();
+        let mut long = "mail jane@example.com ".to_string();
+        long.push_str(&"a".repeat(MAX_STRING_BYTES));
+        long.push_str(" bob@example.com"); // past the cap: never inspected, must not survive
+        let mut ev = event("p1", json!(long), json!("ok"));
+        r.redact_event(&mut ev, Redaction::None);
+        let stored = serde_json::to_string(&ev.input).unwrap();
+        assert!(
+            stored.contains("<EMAIL>"),
+            "the inspected prefix is still scrubbed: {}",
+            &stored[..80]
+        );
+        assert!(
+            !stored.contains("bob@example.com"),
+            "the un-inspected tail is dropped"
+        );
+        assert!(
+            stored.contains("bytes dropped"),
+            "and the cut is marked with its size"
+        );
+    }
+
+    // ---- emit-site inventory: every field a caller can write ------------------------------------
+
+    #[test]
+    fn metadata_is_scrubbed_except_the_accounting_keys() {
+        // `metadata` is arbitrary client JSON and was never scrubbed at all — the largest hole in
+        // this module's promise, on the field applications actually use for per-call context.
+        let r = Redactor::all();
+        let mut ev = event("p1", json!("clean"), json!("clean"));
+        ev.metadata = json!({
+            "note": "escalated by jane@example.com",
+            "nested": { "ticket": "card 4111 1111 1111 1111" },
+            "customer_id": "jane@example.com",
+            "api_key_id": "key-123",
+            "product_id": "pro@example.com",
+            "cost_source": "client",
+        });
+        assert!(r.redact_event(&mut ev, Redaction::None) > 0);
+        let m = &ev.metadata;
+        assert_eq!(m["note"], "escalated by <EMAIL>");
+        assert!(
+            !m["nested"]["ticket"].as_str().unwrap().contains("4111"),
+            "the walk reaches nested metadata too: {m}"
+        );
+        // The passthrough list, and why it is a list rather than "scrub everything": these are join
+        // keys. Rewriting one protects nobody and merges the buckets every cost and margin number is
+        // grouped by — every customer whose id looks like an email would collapse into one.
+        assert_eq!(m["customer_id"], "jane@example.com");
+        assert_eq!(m["product_id"], "pro@example.com");
+        assert_eq!(m["api_key_id"], "key-123");
+        assert_eq!(m["cost_source"], "client");
+    }
+
+    #[test]
+    fn name_and_source_are_dispositioned_rather_than_unmentioned() {
+        let r = Redactor::all();
+        let mut ev = event("p1", json!("clean"), json!("clean"));
+        ev.name = Some("reply-to jane@example.com".into());
+        ev.source = Some("agent-4111111111111111".into());
+        assert!(r.redact_event(&mut ev, Redaction::None) > 0);
+        assert_eq!(ev.name.as_deref(), Some("reply-to <EMAIL>"));
+        assert!(!ev.source.as_deref().unwrap().contains("4111111111111111"));
+
+        // A legitimate call-site label matches no rule and is left exactly alone — the property that
+        // makes scrubbing these two cheap rather than a rollup hazard.
+        let mut ok = event("p1", json!("clean"), json!("clean"));
+        ok.name = Some("summarize-email".into());
+        ok.source = Some("checkout-api".into());
+        r.redact_event(&mut ok, Redaction::None);
+        assert_eq!(ok.name.as_deref(), Some("summarize-email"));
+        assert_eq!(ok.source.as_deref(), Some("checkout-api"));
+    }
+
+    #[test]
+    fn the_caps_leave_an_ordinary_payload_completely_alone() {
+        // False-positive economics: a boundary that mangles normal traffic gets turned off. Nothing
+        // an ordinary LLM payload contains should ever meet one of these limits.
+        let r = Redactor::all();
+        let ordinary = json!({
+            "messages": (0..40).map(|i| json!({ "role": "user", "content": format!("turn {i}") })).collect::<Vec<_>>(),
+            "temperature": 0.0,
+            "tools": [{ "name": "search", "parameters": { "type": "object", "properties": { "q": { "type": "string" } } } }],
+        });
+        let mut ev = event("p1", ordinary.clone(), json!("a normal answer"));
+        r.redact_event(&mut ev, Redaction::None);
+        assert_eq!(
+            ev.input,
+            Some(ordinary),
+            "no cap fires on realistic traffic"
+        );
     }
 }
