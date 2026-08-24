@@ -15,6 +15,7 @@ mod events;
 mod forecast;
 mod jobs;
 mod limits;
+mod maintenance;
 mod pool;
 mod prices;
 mod projects;
@@ -32,8 +33,10 @@ mod bench;
 mod tests;
 #[cfg(test)]
 mod tests_concurrency;
+#[cfg(test)]
+mod tests_maintenance;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
@@ -48,8 +51,9 @@ use lighttrack_core::{
 };
 
 use crate::{
-    Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, EventFilter, EventPage, Result,
-    ScopeUsage, Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, EventFilter, EventPage,
+    MaintenancePass, MaintenanceRequest, Result, ScopeUsage, StorageReport, Store, StoreError,
+    TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 /// A **sargable** project predicate for `?1`-bound project queries. When a project is given this is an
@@ -99,6 +103,10 @@ pub struct SqliteStore {
     /// instead of re-aggregating the whole window. Locked *before* `conn` in the two admission
     /// methods, so the count-then-insert stays one atomic critical section. See [`usage_cache`].
     usage_cache: Mutex<usage_cache::UsageCache>,
+    /// The database file, kept so the storage report can stat the WAL sidecar and name the file it
+    /// is accounting for. `None` for an in-memory store — which has no file, and must not be given
+    /// a plausible-looking path in a report an operator reads about disk.
+    path: Option<PathBuf>,
 }
 
 impl SqliteStore {
@@ -141,6 +149,7 @@ impl SqliteStore {
             conn: Mutex::new(conn),
             readers,
             usage_cache: Mutex::new(usage_cache::UsageCache::default()),
+            path: Some(path.to_path_buf()),
         })
     }
 
@@ -153,6 +162,7 @@ impl SqliteStore {
             conn: Mutex::new(conn),
             readers: pool::ReadPool::disabled(),
             usage_cache: Mutex::new(usage_cache::UsageCache::default()),
+            path: None,
         })
     }
 
@@ -634,5 +644,19 @@ impl Store for SqliteStore {
     }
     fn purge_collective_entries_before(&self, cutoff: DateTime<Utc>) -> Result<u64> {
         self.with(|c| collective::purge_before(c, cutoff))
+    }
+
+    // --- storage accounting + lossless maintenance (see [`maintenance`]) ---
+    fn storage_report(&self) -> Result<StorageReport> {
+        // A pooled reader: the accounting walk is read-only and must not queue behind ingest — an
+        // operator asking "why is my disk full" during a busy period is exactly when it matters.
+        let path = self.path.clone();
+        self.read(|c| maintenance::report(c, path.as_deref()))
+    }
+
+    fn maintenance_pass(&self, req: MaintenanceRequest) -> Result<MaintenancePass> {
+        // The write connection, because a checkpoint and a vacuum are writers. One chunk per call:
+        // the lock is released before the caller re-reads its activity gauge, never held across it.
+        self.with(|c| maintenance::pass(c, req))
     }
 }

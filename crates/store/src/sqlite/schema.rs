@@ -56,6 +56,20 @@ const ADDED_COLUMNS: &[&str] = &[
 const ADD_RECEIVED_AT: &str = "ALTER TABLE events ADD COLUMN received_at TEXT";
 
 pub(super) fn apply(c: &Connection) -> Result<()> {
+    // BEFORE anything creates a table: `auto_vacuum` is a property of the FILE, writable only while
+    // the database is still empty. Setting it here makes every database created from 2026-08-24 on
+    // able to hand freed pages back to the filesystem in yieldable chunks
+    // (`PRAGMA incremental_vacuum(N)`, see [`super::maintenance`]) instead of only ever growing.
+    //
+    // On an existing database this statement is a documented no-op — SQLite ignores it rather than
+    // failing — which is why the mode is READ BACK by the storage report rather than assumed, and
+    // why an older file's report says outright that incremental reclamation is unavailable on it and
+    // names the offline remedy. Same discipline as `journal_mode`: a pragma that can silently not
+    // take effect is not a setting until someone reads the answer.
+    //
+    // `incremental` and not `full`: `full` vacuums on every commit, which puts reclamation work on
+    // the ingest hot path — the opposite of the quiet-window design.
+    c.execute_batch("PRAGMA auto_vacuum=INCREMENTAL")?;
     // Columns FIRST, batch second. [`SCHEMA`] indexes some of these columns
     // (`idx_events_project_received`), and an index over a column an old table doesn't have yet is a
     // hard error — so on a database predating the column the batch would fail before the `ALTER`

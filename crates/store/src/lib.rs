@@ -492,6 +492,142 @@ pub fn insert_events_checked_nonatomic<S: Store + ?Sized>(
         .collect()
 }
 
+/// How a byte figure in a [`StorageReport`] was obtained.
+///
+/// The two answers are *different claims*, and conflating them makes the report unable to answer its
+/// own follow-up question ("will anything shrink the file?"): pages allocated to an object include
+/// the free space inside those pages; live bytes do not. They diverge by exactly the reclaimable
+/// space, which is the number the maintenance pass acts on.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ByteMeasure {
+    /// Summed `dbstat.pgsize` — **bytes of pages allocated** to the object, free space within those
+    /// pages included. This is what the engine's own page accounting reports.
+    PagesAllocated,
+    /// The engine could not be asked (the `dbstat` virtual table is not compiled into this SQLite),
+    /// so per-object bytes are `None`. Deliberately not a zero: "I could not look" and "there is
+    /// nothing there" are different findings, and a zero would read as the second.
+    Unavailable,
+}
+
+impl ByteMeasure {
+    /// The predicate every byte figure in the report travels with.
+    pub fn predicate(self) -> &'static str {
+        match self {
+            ByteMeasure::PagesAllocated => {
+                "bytes of pages allocated to the object (dbstat.pgsize), free space inside those \
+                 pages included — not bytes of live rows"
+            }
+            ByteMeasure::Unavailable => {
+                "not measured: this SQLite build has no dbstat virtual table, so per-object bytes \
+                 are unknown (not zero)"
+            }
+        }
+    }
+}
+
+/// One accounted object in the store — a table or one of its indexes.
+///
+/// Indexes are listed as their own rows rather than folded into their table: an index that has
+/// outgrown its table is a different finding, with a different remedy, from a table that has grown.
+#[derive(Debug, Clone, Serialize)]
+pub struct StorageObject {
+    pub name: String,
+    /// `table` or `index`.
+    pub kind: String,
+    /// `None` for indexes (an index has no independent row count) and whenever counting failed.
+    pub rows: Option<i64>,
+    /// `None` when [`StorageReport::measured`] is [`ByteMeasure::Unavailable`].
+    pub bytes: Option<u64>,
+    /// This object's share of `db_bytes`, `None` when bytes are unmeasured.
+    pub share: Option<f64>,
+}
+
+/// Per-object disk accounting for an embedded store, plus what a maintenance pass could reclaim.
+///
+/// The unit of actionability is the object, not the file: "the database is 2 GB" triggers panic,
+/// "one table is 1.7 GB of it" triggers a fix. Every byte figure carries how it was measured
+/// ([`ByteMeasure`]), and the file-level figures name their own source in their doc comments.
+#[derive(Debug, Clone, Serialize)]
+pub struct StorageReport {
+    /// Which backend answered — a report that does not say what it measured is a rumour.
+    pub backend: &'static str,
+    /// The database file, when the backend has one.
+    pub path: Option<String>,
+    /// `PRAGMA page_size`.
+    pub page_size: u64,
+    /// `PRAGMA page_count × page_size` — the main database file's size as the engine accounts it.
+    pub db_bytes: u64,
+    /// The write-ahead journal sidecar, from the filesystem. `None` when there is no file to stat
+    /// (in-memory) or the stat failed — never a zero, which would read as "the WAL is empty".
+    pub wal_bytes: Option<u64>,
+    /// `PRAGMA freelist_count × page_size` — pages the engine already owns and will reuse, which a
+    /// reclamation pass can return to the filesystem **without deleting a single row**.
+    pub reclaimable_bytes: u64,
+    /// `reclaimable_bytes / db_bytes`, the ratio the reclamation trigger reads.
+    pub reclaimable_share: f64,
+    /// `none` | `full` | `incremental` — decides whether reclamation can happen in yieldable chunks
+    /// (`incremental`) or only as a full offline rewrite (`none`).
+    pub auto_vacuum: &'static str,
+    /// Whether `maintenance_pass` can reclaim on this file at all, and what to do when it cannot.
+    pub reclaim_note: String,
+    pub measured: ByteMeasure,
+    /// The predicate for every `bytes` figure below, carried in the payload so a number quoted out
+    /// of this report keeps its meaning.
+    pub bytes_predicate: &'static str,
+    /// Largest first.
+    pub objects: Vec<StorageObject>,
+    /// What this store deletes on its own, stated where the disk is measured. Retention is a product
+    /// decision, and the current one is written here rather than left to be inferred from an empty
+    /// list of pruners.
+    pub retention: &'static str,
+}
+
+/// What one maintenance pass was asked to do. Both actions are **lossless**: a checkpoint moves
+/// already-committed pages from the journal into the database, and incremental vacuum returns pages
+/// the engine had already freed. Neither deletes a row, and there is no pruning door here on purpose.
+#[derive(Debug, Clone, Copy)]
+pub struct MaintenanceRequest {
+    /// Truncate the WAL back to zero bytes rather than the routine passive checkpoint. The heavier
+    /// form: it needs the writer briefly and is reserved for the escalation rung where the sidecar
+    /// itself is the stated harm.
+    pub truncate_wal: bool,
+    /// Pages of already-freed space to return to the filesystem this pass. `0` skips reclamation.
+    /// This is the chunk size — the caller re-reads its activity gauge between chunks.
+    pub reclaim_pages: u32,
+}
+
+/// How a maintenance pass ended. Three outcomes, never two: a log that cannot distinguish "ran and
+/// found nothing to do" from "attempted and failed" cannot tell a healthy store from a broken
+/// scheduler, and the difference arrives later as a disk-full report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceOutcome {
+    /// Work was done — pages checkpointed and/or reclaimed.
+    Ran,
+    /// The pass executed and there was nothing to do (empty journal, no free pages).
+    NothingToDo,
+    /// The engine refused or errored; `detail` carries what it said.
+    Failed,
+}
+
+/// One record in the store's maintenance flight recorder.
+#[derive(Debug, Clone, Serialize)]
+pub struct MaintenancePass {
+    pub outcome: MaintenanceOutcome,
+    pub duration_ms: u64,
+    /// Pages moved from the journal into the database file.
+    pub pages_checkpointed: u64,
+    /// Pages returned to the filesystem by incremental vacuum.
+    pub pages_reclaimed: u64,
+    /// `PRAGMA freelist_count` before and after, so "we reclaimed nothing" is distinguishable from
+    /// "there was nothing to reclaim".
+    pub freelist_before: u64,
+    pub freelist_after: u64,
+    /// What the engine said, or what was skipped and why.
+    pub detail: String,
+}
+
 /// Backend-agnostic persistence interface.
 pub trait Store: Send + Sync {
     /// Create tables if they don't exist.
@@ -1097,5 +1233,24 @@ pub trait Store: Send + Sync {
     /// dead rows on disk. The API therefore treats `Unsupported` here as non-fatal.
     fn purge_collective_entries_before(&self, _cutoff: DateTime<Utc>) -> Result<u64> {
         Err(StoreError::Unsupported("the collective leaderboard"))
+    }
+
+    // --- storage accounting + lossless maintenance ---
+    //
+    // Both are `Unsupported` by default rather than returning an empty report: a managed backend
+    // (Postgres, Firestore) has a disk somebody else monitors, and answering "0 bytes, no tables"
+    // for it would be a confident lie in exactly the surface an operator consults about disk.
+
+    /// Per-object disk accounting for this store. Cheap enough to serve on demand; it walks the
+    /// engine's page accounting, so it is a read, not an estimate — see [`ByteMeasure`].
+    fn storage_report(&self) -> Result<StorageReport> {
+        Err(StoreError::Unsupported("storage accounting"))
+    }
+
+    /// Run one **lossless** maintenance chunk: checkpoint the journal, return already-freed pages.
+    /// Never deletes a row (there is no pruning parameter on purpose — see `MaintenanceRequest`).
+    /// The caller owns the activity gate and the chunk loop; this is one chunk.
+    fn maintenance_pass(&self, _req: MaintenanceRequest) -> Result<MaintenancePass> {
+        Err(StoreError::Unsupported("store maintenance"))
     }
 }
