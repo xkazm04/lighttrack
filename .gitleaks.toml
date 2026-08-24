@@ -1,0 +1,53 @@
+# Secret-scanning rule set for this repository.
+#
+# Why it exists: the remote is PUBLIC and the product stores other people's prompts and completions
+# (SECURITY.md). A credential's remediation cost is a step function with its step at push — before a
+# secret enters shared history the fix is deleting a line; after, the only honest fix is rotation,
+# because copied history cannot be recalled and a rewrite un-leaks nothing. Until 2026-08-24 nothing
+# in this repo read a diff or the history for credentials at all.
+#
+# WHERE A LEAKED TOKEN CANNOT PASS: the `gitleaks (secrets)` job in .github/workflows/ci.yml. It runs
+# on every PR and every push to main, on a runner that installs the engine itself, and it BLOCKS.
+# `scripts/pre-commit` runs the same engine and this same config over the *staged diff* for a fast
+# local answer, but it ANNOUNCES A SKIP when gitleaks is not installed rather than failing the
+# commit: a local rung that punishes a fresh clone teaches bypass, and the bypass habit persists
+# into the one commit that mattered. The local rung is convenience; the CI job is the gate.
+
+[extend]
+# Start from gitleaks' bundled rule set (provider token prefixes and shapes) rather than
+# re-deriving it. Everything below is an addition, not a replacement.
+useDefault = true
+
+# ── Repository-specific rules ─────────────────────────────────────────────────────────────────────
+# LightTrack mints its own API keys, and no bundled rule knows their shape. This is the credential
+# most likely to be pasted into a README, an issue reproduction, or a test fixture.
+[[rules]]
+id = "lighttrack-api-key"
+description = "LightTrack API key (lt_<prefix>_<secret>, minted by crates/api/src/auth.rs::generate_key)"
+# `generate_key` builds `lt_` + 8 hex (the non-secret lookup prefix) + `_` + 64 hex (two UUIDv4s,
+# ~244 bits). Matching the FULL shape rather than the `lt_` prefix alone is what keeps this rule at
+# effectively zero false positives — `lt_` is too common a fragment to gate on, and a scanner that
+# fires on ordinary source is one that gets turned off within a week.
+regex = '''\blt_[0-9a-f]{8}_[0-9a-f]{64}\b'''
+keywords = ["lt_"]
+
+# ── Allowlist ─────────────────────────────────────────────────────────────────────────────────────
+# Discipline: an entry names a FINDING, never a directory. A path-level exemption is a standing blind
+# spot exactly where fixtures and configs concentrate — it exempts every file the directory will ever
+# contain, including ones nobody has written yet. Every entry carries its rationale.
+#
+# The rule set was driven over the whole tree (`gitleaks dir .`) and the whole history
+# (`gitleaks git .`) with gitleaks 8.30.1 BEFORE this file was armed. Both came back clean: this
+# repository has never committed a credential. That is why there is no baseline file — this gates on
+# ZERO from day one, which is only defensible because zero is where it actually starts. If a future
+# adoption of a wider rule set surfaces legacy findings, the answer is the standard ratchet
+# (fingerprint them into a committed baseline, gate on new findings, burn the baseline down), not a
+# directory exemption here.
+[[allowlists]]
+description = "Documented placeholder credentials — the strings the docs and env templates TELL a reader to replace. A REAL example value is banned even in a test: the fix for 'the scanner flagged my test credential' is a clearly-fake credential, not an entry here."
+regexTarget = "match"
+regexes = [
+  '''(?i)lt_your[_-]?key[_-]?here''',
+  '''(?i)(sk-|lt_)?(your|xxx+|test|dummy|example|placeholder|replace)[_-]?(me|this|api)?[_-]?(key|token|secret)?[_-]?here?''',
+  '''<[A-Za-z0-9 _-]*(key|token|secret|password)[A-Za-z0-9 _-]*>''',
+]

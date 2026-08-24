@@ -165,6 +165,8 @@ is configured from these strings.
 | `cargo fmt --check` | yes |
 | `cargo deny (policy)` — bans, licenses, crate sources | yes |
 | `cargo deny (advisories, advisory)` — RUSTSEC feed | **no** — see below |
+| `gitleaks (secrets)` — full-history secret scan, pinned engine | yes |
+| `gitleaks (latest rules, advisory)` — Monday cron, newest upstream rules | **no** — see below |
 
 Clippy and fmt **block**. They were advisory while the tree carried pre-existing debt; that debt was
 retired, the tree is stock-rustfmt clean and passes `clippy -D warnings` workspace-wide, and the
@@ -196,6 +198,19 @@ serious its findings sound:
   push-only trigger would never see an advisory published during a quiet week) and its output is
   meant to be read, not ignored; an advisory job nobody reads is not a supply-chain check at all.
 
+`gitleaks` is split on the same axis, for the same reason:
+
+- **`gitleaks (secrets)` blocks**, on a **pinned** engine (the version is in the job's `env:`). It
+  scans the whole history, not just your diff — 241 commits in about seven seconds, so there is no
+  latency argument for scanning less. Pinned because a scanner's verdict is a function of *this
+  repository × its rule set*, and an unpinned engine would make a blocking gate non-deterministic
+  across time, exactly the property that disqualified the floating toolchain above.
+- **`gitleaks (latest rules, advisory)` does not block.** It runs the *newest* upstream rules over
+  the whole history on the Monday cron, because rules improve after commits land and a pattern added
+  today should find a token pushed last spring — an input that moves without us, so it reports
+  rather than walls. Triage its findings into `.gitleaksignore` as **fingerprints with a reason**
+  (never a directory exemption), or by rotating; a run of clean Mondays is the cue to bump the pin.
+
 The three client SDKs each get their own job because each is a **detached project**: `clients/rust`
 is its own cargo workspace, and the Python and TypeScript clients are not cargo at all, so
 `cargo test --workspace` reaches none of them. They are shipped artifacts, and `clients/rust` has
@@ -210,9 +225,27 @@ and an unacceptable one for a store change.
 ### Secrets
 
 The repository is public. `.env`, `*.local.toml`, and `service-account*.json` are git-ignored —
-**never commit an API key.** Before committing, check `git check-ignore .env` and review
-`git status`. Stage explicit paths rather than `git add -A`. Secret-scanning push protection is on,
-but do not rely on it to catch you.
+**never commit an API key.** Stage explicit paths rather than `git add -A`.
+
+Two rungs now scan for credentials, and only one of them is a gate:
+
+```bash
+git config core.hooksPath .githooks   # once per clone — git never runs a cloned repo's hooks by default
+```
+
+- **`.githooks/pre-commit`** runs `gitleaks` over the **staged diff** — the exact bytes about to
+  become history, not the working tree (under partial staging those differ). If gitleaks is not
+  installed it **announces the skip and lets the commit through**: failing a fresh clone on a missing
+  tool teaches `--no-verify`, and that habit persists into the commit that mattered.
+- **`gitleaks (secrets)` in CI** scans the full history on every PR and push and **blocks**. That is
+  the rung a leaked token cannot pass. The local hook is the fast answer, not the guarantee.
+
+If the scanner flags something of yours: if it *is* a secret, unstage it — it has not entered shared
+history yet, so the fix is still deleting a line rather than rotating a key. If it is not, make the
+value obviously fake. Only if it genuinely must stay does it get a **fingerprint** in
+`.gitleaksignore`, with the reason written next to it — never a path or directory exemption, which
+is a permanent blind spot exactly where fixtures and configs collect. A real example value is banned
+even in a test.
 
 ## Reporting a bug
 

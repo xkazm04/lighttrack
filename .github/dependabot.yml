@@ -1,0 +1,91 @@
+# Automated dependency-update proposals.
+#
+# Why: `cargo deny (advisories, advisory)` reads the RUSTSEC feed and reports honestly, but until
+# 2026-08-24 there was nothing on the other end of that report — every bump had to be authored by
+# hand, so the advisory lane had a reader and no remediation path. (It sat red on `h2`
+# RUSTSEC-2026-0258 for exactly that reason; the fix was a one-line `cargo update -p h2` nobody had
+# been prompted to run.) Dependabot turns each advisory into a PR that the existing gates then
+# judge — an update proposal is worth nothing without a suite that can reject it, and this repo has
+# one.
+#
+# EVERY ECOSYSTEM THIS REPOSITORY SHIPS IS LISTED. The three client SDKs are detached projects that
+# `cargo test --workspace` never reaches, which is exactly how `clients/rust` once stopped compiling
+# against a green board — an updater that only watched the workspace would recreate that blind spot
+# on the dependency side. The ship inventory in .github/workflows/ci.yml is the list this must
+# mirror; adding a shipped artifact means adding a job there AND an entry here.
+version: 2
+updates:
+  # ── Rust ────────────────────────────────────────────────────────────────────────────────────────
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    # An hour after the Monday cargo-deny/gitleaks cron, so an advisory surfaced at 06:00 has a PR
+    # waiting beside it rather than in a different week.
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine patch/minor churn: a one-maintainer project reviewing fifteen
+      # single-crate PRs a week reviews none of them. Majors stay separate — they are decisions.
+      rust-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: cargo
+    directory: "/clients/rust"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    groups:
+      rust-client-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps(clients/rust)"
+
+  # ── TypeScript SDK ──────────────────────────────────────────────────────────────────────────────
+  # Dev-only graph (tsx, esbuild, typescript): the published package declares zero runtime deps.
+  - package-ecosystem: npm
+    directory: "/clients/typescript"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    groups:
+      ts-client-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps(clients/typescript)"
+
+  # ── The workflows themselves ────────────────────────────────────────────────────────────────────
+  # Actions are supply chain too: `actions/checkout`, `Swatinem/rust-cache`, `setup-java`,
+  # `setup-gcloud`, `cargo-deny-action`, `action-gh-release` all execute with repository context.
+  # A major tag can be re-pointed under us, so a bump PR is the only moment anyone reads what moved.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci(actions)"
+# NOT covered here, deliberately, so the gap is a written decision rather than an oversight:
+#   * clients/python declares ZERO runtime and zero dev dependencies (stdlib only, hatchling build
+#     backend resolved at build time) — there is no manifest for pip/uv to watch.
+#   * The gitleaks engine version pinned in ci.yml's `secrets` job is a bare env var, not a manifest,
+#     so no ecosystem sees it. The `gitleaks (latest rules, advisory)` cron job is its update
+#     signal: clean Mondays on the newest rules are the cue to bump the pin.
+#   * rust-toolchain.toml is likewise not a dependabot ecosystem. Bumping Rust is a deliberate act
+#     whose fmt/clippy churn must land in the same PR (see CONTRIBUTING.md).

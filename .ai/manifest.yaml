@@ -27,6 +27,13 @@ capabilities:
   # is rejected by cargo-deny 0.20 ("unexpected argument '--locked' found").
   audit-policy: { command: "cargo deny --locked check bans licenses sources", verified: true }
   audit-advisories: { command: "cargo deny --locked check advisories", verified: true }
+  # Full-history secret scan. The engine is external and NOT assumed present: a machine without it
+  # gets an announced skip locally (.githooks/pre-commit), while CI installs a pinned build and
+  # blocks. Verified against gitleaks 8.30.1 over all 241 commits — clean.
+  audit-secrets: { command: "gitleaks git . --config .gitleaks.toml --redact --no-banner", verified: true }
+  # Same scan on the NEWEST upstream rules rather than the pinned engine — a detection pattern
+  # published today should find a token pushed last spring. Advisory: its input moves without us.
+  audit-secrets-latest-rules: { command: "gitleaks git . --config .gitleaks.toml --redact --no-banner  # with the latest gitleaks release installed", verified: false }
   smoke: { command: "sh scripts/smoke.sh http://127.0.0.1:8787", verified: false }
   # cargo test --workspace ranges over the root Cargo.toml members list, which excludes all three
   # detached client SDKs. Each ships to users and needs its own command.
@@ -43,8 +50,17 @@ paths:
   dependencyPolicy: deny.toml
 
 boundaries:
-  neverTouch: [target/, Cargo.lock]
+  # Build output only. `Cargo.lock` used to be listed here, which read as "never change it" and so
+  # forbade the one remediation path the advisory lane has — the `cargo update -p <crate>` that
+  # answers a RUSTSEC finding. Corrected 2026-08-24: it is generated, never hand-edited, and changed
+  # only by cargo (that is `generatedNotHandEdited` below).
+  neverTouch: [target/]
+  generatedNotHandEdited: [Cargo.lock, clients/typescript/package-lock.json]
   secretsFrom: ".env via dotenvy (git-ignored); the GitHub remote is PUBLIC — never commit an API key"
+  # Where a leaked credential cannot pass: the blocking `gitleaks (secrets)` CI job (full history,
+  # pinned engine). `.githooks/pre-commit` is the local rung and announces a skip when the engine is
+  # absent, so it is a convenience, not the gate.
+  secretScanning: { config: .gitleaks.toml, allowlist: .gitleaksignore, bindingRung: "gitleaks (secrets)" }
 
 # The control model: where each capability is PRIMARILY enforced. `.github/workflows/ci.yml` is the
 # authority; this is a projection of it and must be updated in the same change as the workflow.
@@ -61,8 +77,12 @@ controls:
       test-client-rust,
       test-client-python,
       test-client-typescript,
+      audit-secrets,
     ]
-  ciAdvisory: [audit-advisories]
+  # Both read an input that moves WITHOUT this repository — the RUSTSEC feed and gitleaks' upstream
+  # rule set — so neither can be made green by work here and neither may wall a PR. Both run on the
+  # Monday cron and are meant to be read.
+  ciAdvisory: [audit-advisories, audit-secrets-latest-rules]
 
 # The organization's AI registry — knowledge bundles this repo consumes and the skill
 # marketplace it installs from. Unknown fields MUST be ignored by a reader.

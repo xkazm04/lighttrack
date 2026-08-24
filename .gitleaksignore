@@ -1,0 +1,16 @@
+# Accepted gitleaks findings, one line per FINDING (commit:file:rule:line), never a path pattern.
+#
+# A path-level exemption is a standing blind spot exactly where fixtures and configs concentrate —
+# it exempts every file the directory will ever contain, including ones nobody has written yet. Each
+# entry below therefore names one exact finding and carries the reason it is accepted. An entry that
+# stops matching anything is unaccounted-for permission: delete it in the change that made it stale.
+#
+# This file was created from the triage that armed the scanner (gitleaks 8.30.1 over all 241 commits
+# of history, 2026-08-24). Exactly one finding, and it is a false positive; the repository has never
+# committed a credential, which is why there is no baseline file and why CI gates on zero.
+
+# `generic-api-key` firing on `assert!(...key, "min_cost=0.25")` — the entropy heuristic saw a
+# high-entropy-looking string on a line whose variable is named `key`. It is a test assertion
+# message about a cost floor, it holds no secret, and the line has since moved. Kept as a
+# fingerprint (not a file exemption) so tests_ingest.rs stays scanned.
+78b4869d5390a42246e491fa659ef066563a41e6:crates/api/src/tests_ingest.rs:generic-api-key:903

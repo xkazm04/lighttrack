@@ -386,6 +386,72 @@ jobs:
           # auditing a resolved-on-the-fly graph that nobody ships.
           arguments: --locked
 
+  # ── Required check ────────────────────────────────────────────────────────────────────────────
+  # BLOCKING, and this is the rung where a leaked credential cannot pass. The remote is PUBLIC and
+  # this product stores other people's prompts and completions (SECURITY.md); until 2026-08-24
+  # nothing here read a diff or the history for credentials at all.
+  #
+  # It scans the FULL HISTORY, not the diff: 241 commits in ~7 seconds, so the "scan the diff at
+  # commit, sweep the history on a schedule" split that exists to protect a latency budget buys
+  # nothing at this size. `.githooks/pre-commit` still scans the staged diff locally for the fast
+  # answer, but it announces a skip when gitleaks is absent — punishing a fresh clone teaches bypass.
+  # This job is the rung the author cannot skip, on a runner that installs the engine itself.
+  #
+  # The gitleaks VERSION IS PINNED, for the same reason rust-toolchain.toml pins rustc: a scanner's
+  # verdict is a function of (this repo) × (its rule set), and an unpinned engine makes a blocking
+  # gate non-deterministic across time — the property that disqualifies a gate from blocking. New
+  # upstream rules reach old history through the advisory cron job below, and through a reviewable
+  # one-line bump here.
+  #
+  # Armed clean: the rule set was driven over the whole tree and all of history before this job
+  # existed. One finding, a false positive (an entropy hit on `min_cost=0.25` beside a variable
+  # named `key`), fingerprinted in `.gitleaksignore`. There is no baseline file because the
+  # repository has never committed a credential — this gates on zero because zero is where it starts.
+  secrets:
+    name: gitleaks (secrets)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      # The pin. Bumping it is the moment new upstream rules get applied to old history.
+      GITLEAKS_VERSION: "8.30.1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A shallow clone would scan a truncated history and pass on a token pushed last spring.
+          fetch-depth: 0
+      - name: Install gitleaks (pinned)
+        run: |
+          curl -sSfL -o /tmp/gitleaks.tar.gz             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          sudo tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+          gitleaks version
+      # `--redact` so a finding names its file and rule in a PUBLIC log without republishing the
+      # secret it just found.
+      - run: gitleaks git . --config .gitleaks.toml --redact --no-banner
+
+  # NON-BLOCKING, on the Monday cron only — the secret-scanning twin of `deny-advisories`, graded on
+  # the same axis. Its input is gitleaks' UPSTREAM rule set, which moves without this repository: a
+  # detection pattern published next month should find a token pushed last spring, and the blocking
+  # job above deliberately cannot see it because its engine is pinned. So the newest rules get run
+  # over the whole history here, where a new upstream heuristic firing on old fixture data reports
+  # to a human instead of walling unrelated work. Findings are triaged into `.gitleaksignore` (as
+  # fingerprints) or fixed by rotation; a clean run for a while is the signal to bump the pin above.
+  secrets-latest:
+    name: gitleaks (latest rules, advisory)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks (latest)
+        run: |
+          url=$(curl -sSfL https://api.github.com/repos/gitleaks/gitleaks/releases/latest             | grep -o 'https://[^"]*linux_x64.tar.gz')
+          curl -sSfL -o /tmp/gitleaks.tar.gz "$url"
+          sudo tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+          gitleaks version
+      - run: gitleaks git . --config .gitleaks.toml --redact --no-banner
+
   # NON-BLOCKING, and permanently so — this is not a debt schedule waiting on a cleanup. Its input
   # is the RUSTSEC database, which moves without us: an entry published overnight against a
   # transitive dependency would wall every unrelated PR until someone lands a bump. No amount of

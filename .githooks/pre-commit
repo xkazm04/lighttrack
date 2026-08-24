@@ -1,0 +1,44 @@
+#!/bin/sh
+# Local rung: scan the STAGED DIFF for credentials before it becomes history.
+#
+# Install once per clone (it is not automatic — git never runs hooks a clone brings with it):
+#
+#     git config core.hooksPath .githooks
+#
+# What it reads, and why: the staged content, i.e. the exact bytes about to become a commit. Not the
+# working tree — under partial staging those diverge, and a working-tree scan passes or fails on
+# content that is not being committed. Not the full history — that is the CI job's business
+# (`gitleaks (secrets)` in .github/workflows/ci.yml), which scans all of it on every push.
+#
+# THE THREE OUTCOMES ARE KEPT DISTINGUISHABLE — found something / found nothing / could not run:
+# a missing engine ANNOUNCES ITSELF with an install hint and lets the commit through. Failing the
+# commit on a missing tool punishes every fresh clone and teaches people to pass --no-verify, and
+# that habit persists into the one commit that mattered. Silence would be worse still: the machine
+# without the tool is the machine that leaks. This rung is convenience; the binding rung is CI, on a
+# runner that installs the engine itself and that no author can skip.
+set -eu
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    printf '%s\n' \
+        "pre-commit: SKIPPED the secret scan — gitleaks is not installed on this machine." \
+        "            Install it (https://github.com/gitleaks/gitleaks/releases, or" \
+        "            \`brew install gitleaks\` / \`winget install gitleaks\`) to get the fast local" \
+        "            answer. CI scans the full history and BLOCKS regardless — this is the cheap" \
+        "            rung, not the gate." >&2
+    exit 0
+fi
+
+if ! gitleaks git --staged --no-banner --redact --config .gitleaks.toml .; then
+    printf '%s\n' \
+        "" \
+        "pre-commit: a staged change looks like a credential (see the finding above; the value is" \
+        "            redacted on purpose)." \
+        "" \
+        "  If it IS a secret: unstage it. It has not entered history yet, so the fix is still" \
+        "  deleting a line rather than rotating a key." \
+        "" \
+        "  If it is NOT: make the value obviously fake rather than exempting it. If it genuinely" \
+        "  must stay, add its FINGERPRINT (not its path) with a reason to .gitleaksignore — a" \
+        "  directory exemption is a permanent blind spot where fixtures concentrate." >&2
+    exit 1
+fi
