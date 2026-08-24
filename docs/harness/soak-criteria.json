@@ -1,0 +1,44 @@
+{
+  "lane": "store-soak",
+  "declared_on": "2026-08-24",
+  "declared_by": "xkazm04",
+  "what_it_certifies": "That sustained ingest against the embedded store holds its latency SHAPE over time, that the file grows in proportion to the data rather than faster, and that the journal sidecar stays bounded while the quiet-window maintenance pass runs alongside. These are properties of duration, not of any single change, which is why this lane runs on its own clock and never gates a merge.",
+  "workload": {
+    "writers": 1,
+    "readers": 2,
+    "payload_bytes": 900,
+    "read_mix": "cost_summary + list_events(200) in a loop, the dashboard shape",
+    "maintenance": "one quiet-window pass every 500ms, truncating once the journal passes 4 MiB",
+    "shape_is_approximate": true,
+    "shape_note": "The real production mix is unknown — this instance has no fleet telemetry to shape the load from. One writer is not an approximation but a fact: the SQLite backend serialises writes behind one connection by design, so a second writer would measure queueing, not the store. An honest lane certifying a declared-approximate workload beats a confident lane certifying an unexamined one; when a real traffic profile exists, it replaces this block and the bounds are re-declared against it."
+  },
+  "criteria": {
+    "max_errors": {
+      "bound": 0,
+      "predicate": "store errors returned by insert_event_checked over the whole run. Committed work is never lost and never refused."
+    },
+    "write_p95_ms": {
+      "bound": 60.0,
+      "predicate": "95th percentile single-event write latency, at the declared concurrency, for the declared duration. A percentile and not an average: an average hides exactly the tail this lane exists to see."
+    },
+    "write_p95_drift_ratio": {
+      "bound": 3.0,
+      "predicate": "p95 of the run's FINAL bucket divided by p95 of the first bucket of its second half - the slope measured WITHIN the second half, at the declared concurrency. The trend criterion: a p95 that sits under its ceiling at the finish is still compatible with linear degradation that clears the ceiling an hour later, so the slope is judged separately from the endpoint. Measured inside the second half rather than half-against-half because the opening bucket is cache warm-up, and folding warm-up into the numerator produces a ratio nobody can act on. Bounded at 3x rather than 1x because a growing file legitimately writes a little slower than an empty one."
+    },
+    "db_bytes_per_event": {
+      "bound": 8192,
+      "predicate": "database file bytes (page_count x page_size) divided by events written, measured at the end. Catches growth that is super-linear in the data — an index that fans out, a page-fragmentation spiral — as opposed to the file simply holding what was put in it."
+    },
+    "wal_bytes_max": {
+      "bound": 67108864,
+      "predicate": "the largest journal sidecar observed at any sample during the run, in bytes (64 MiB). This is the criterion the quiet-window maintenance pass exists to hold: without a checkpoint the sidecar is what grows unattended, and retention being deliberately unbounded (operator 2026-08-24) makes it the one growth axis engineering still controls."
+    }
+  },
+  "bounds_are_declared_before_the_run": "These numbers were fixed before the runs that judge them. Criteria adjusted while looking at results are not criteria; they are commentary. They are chosen loose enough to be stable on a shared CI runner and tight enough that the planted-defect run fails them — which is checked on every single run, not assumed.",
+  "how_the_bounds_were_calibrated": "Arming a threshold without measuring what it will see is how a lane earns a reputation for crying wolf, so each bound was set against an observed baseline BEFORE this file was committed and before any run judged it: a 30-second enforced run on the author's machine (2026-08-24) produced 10621 events, 0 errors, write p95 8.1 ms, drift 1.25x, 2494 bytes/event and a peak journal of 18.7 MiB. Every bound above sits roughly 2.5-7x above its observed value, because the lane is judged on a shared runner whose disk and write rate differ from that machine's. That is headroom for a different machine, not headroom for a regression: a 3x latency drift or a 3x growth per event is a finding at any of these scales. When a bound is changed, this paragraph changes with it and says what was measured.",
+  "lane_health": {
+    "green_on_known_good": "asserted every run: the good-configuration run must satisfy every criterion above",
+    "red_on_known_bad": "asserted every run: a second run with a deliberate latency injection in its second half must FAIL, and must fail on write_p95_drift_ratio specifically. A lane that has never been observed to fail for cause is indistinguishable from a lane that cannot fail; one that fails for the wrong reason certifies nothing.",
+    "first_green": "2026-08-24"
+  }
+}

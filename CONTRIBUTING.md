@@ -188,6 +188,14 @@ is configured from these strings.
 | `gitleaks (secrets)` — full-history secret scan, pinned engine | yes |
 | `gitleaks (latest rules, advisory)` — Monday cron, newest upstream rules | **no** — see below |
 
+One lane is deliberately **not** in that table and not in `ci.yml`: the store soak lane
+(`.github/workflows/soak.yml`, nightly). A long lane is a certification, not a gate — it judges
+behaviour over time, which is not a property of any single change — so it runs on its own clock and
+never walls a merge. Its criteria are committed at `docs/harness/soak-criteria.json` and its
+contract is `docs/harness/soak-lane.md`. The same harness runs briefly inside
+`cargo test --workspace`, where it asserts only that the lane is alive and still fires on its planted
+defect; the timing bounds are the nightly's verdict.
+
 Clippy and fmt **block**. They were advisory while the tree carried pre-existing debt; that debt was
 retired, the tree is stock-rustfmt clean and passes `clippy -D warnings` workspace-wide, and the
 gates were promoted so it cannot come back. There is deliberately no `rustfmt.toml`, so plain

@@ -1,6 +1,12 @@
 //! In-process ingest-under-read-load harness. `#[ignore]`d: it asserts nothing, it *measures*, and
 //! the numbers depend on the machine's disk. Run it by hand when changing the concurrency model:
 //!
+//! **This is not the long lane.** Since 2026-08-24 that is `crates/store/tests/soak.rs` — declared
+//! criteria, a per-run artifact, a nightly clock, and a planted defect asserted on every run
+//! (`docs/harness/soak-lane.md`). This file is a different instrument and is kept deliberately: a
+//! one-off A/B of store *shapes*, which the lane cannot answer because the lane certifies one shape
+//! over time rather than comparing two.
+//!
 //! ```text
 //! cargo test -p lighttrack-store --lib -- --ignored --nocapture ingest_under_read_load
 //! ```

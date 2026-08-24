@@ -1,0 +1,129 @@
+name: soak
+
+# The store's LONG LANE. Deliberately a workflow of its own, not a job in ci.yml.
+#
+# Two reasons, and they are different:
+#
+# 1. A long lane is a CERTIFICATION, not a gate. It answers questions only time and pressure can ask
+#    — does write latency hold its shape over a sustained run, does the file grow in proportion to
+#    the data, does the journal sidecar stay bounded while the quiet-window maintenance pass runs
+#    alongside — and none of those is a property of any single change. Blocking a merge on a run like
+#    this destroys the merge cadence without improving the certification. So it runs on its own clock
+#    (nightly) and on demand, and never as a required check.
+# 2. `crates/core/tests/gate_table_guard.rs` derives CONTRIBUTING.md's published gate table from
+#    ci.yml's jobs, and branch protection is configured from those exact `name:` strings. A lane that
+#    is not a gate has no business appearing in the gate table, and a new job in ci.yml would have to
+#    — so it lives here instead, where it changes neither the table nor the required-check set.
+#
+# THE CRITERIA ARE NOT IN THIS FILE. They are `docs/harness/soak-criteria.json`, committed, declared
+# before the runs that judge them, and read by the harness via `include_str!` so a missing or renamed
+# file is a build error rather than a lane that quietly certifies nothing. Changing a bound is a
+# reviewable diff to that file, which is the point.
+#
+# LANE HEALTH IS ASSERTED ON EVERY RUN, both directions. The good configuration must satisfy every
+# criterion (earned green) AND a second run with a deliberate latency injection through its second
+# half must fail on `write_p95_drift_ratio` specifically (planted red). A lane that has never been
+# observed to fail for cause is indistinguishable from a lane that cannot fail; one that fails for
+# the wrong reason certifies nothing. First green: 2026-08-24 (see the criteria file).
+#
+# The short per-change form of this same harness runs inside `cargo test --workspace` in ci.yml,
+# where it asserts only that the lane is ALIVE — it measures, it writes an artifact, it fires on the
+# plant — and does not enforce the timing bounds, because a shared runner's noise must not turn a
+# blocking gate into a coin flip. That is deliberately not a skip: a lane wired in and never
+# exercised is the failure mode that hides in plain sight.
+
+on:
+  schedule:
+    # 03:20 UTC nightly. Off-peak for the shared runners, and far from the Monday 06:00 supply-chain
+    # cron so the two never contend.
+    - cron: "20 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Seconds per phase (the lane runs two: known-good, then planted-defect)"
+        required: false
+        default: "300"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soak-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  store-soak:
+    name: store soak (certification)
+    runs-on: ubuntu-latest
+    # Two phases plus build. 300s each by default; the ceiling is generous so a dispatched longer run
+    # is not cut off mid-certification, which would look like a failure and be a timeout.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      # The ruler is pinned by rust-toolchain.toml (one address, repo root) exactly as in ci.yml —
+      # a certification judged by a floating toolchain would attribute a compiler's change to the
+      # product. Do not add a toolchain step here.
+      - run: cargo --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+      - name: Run the lane
+        env:
+          # ENFORCE is what makes this the certification rather than the liveness check: every
+          # criterion in docs/harness/soak-criteria.json is a verdict here.
+          LIGHTTRACK_SOAK_ENFORCE: "1"
+          LIGHTTRACK_SOAK_SECS: ${{ github.event.inputs.seconds || '300' }}
+          LIGHTTRACK_SOAK_ARTIFACT: ${{ github.workspace }}/soak-artifact.json
+        # `--release` on purpose: a debug-build latency profile certifies a binary nobody ships.
+        run: cargo test --release -p lighttrack-store --test soak -- --nocapture
+      - name: Summarise the verdict
+        # `always()` so a FAILED run still publishes its numbers. A red lane whose artifact was
+        # skipped is a lane that reports "something broke" and nothing else.
+        if: always()
+        run: |
+          {
+            echo '## store soak — verdict'
+            echo
+            if [ -f soak-artifact.json ]; then
+              python3 - <<'PY'
+          import json
+          d = json.load(open("soak-artifact.json"))
+          m, h = d["measured"], d["lane_health"]
+          print(f"**{d['verdict'].upper()}** — {d['duration_secs']:.0f}s per phase, {m['events']} events, {m['errors']} errors\n")
+          print("| figure | value | bound |")
+          print("| --- | --- | --- |")
+          c = d["criteria"]
+          rows = [
+              ("write p95 (ms)", f"{m['write_p95_ms']:.2f}", c["write_p95_ms"]["bound"]),
+              ("p95 drift (2nd-half slope)", f"{m['write_p95_drift_ratio']:.2f}x", f"{c['write_p95_drift_ratio']['bound']}x"),
+              ("bytes / event", f"{m['db_bytes_per_event']:.0f}", c["db_bytes_per_event"]["bound"]),
+              ("peak journal (bytes)", m["wal_bytes_max"], c["wal_bytes_max"]["bound"]),
+              ("errors", m["errors"], c["max_errors"]["bound"]),
+          ]
+          for name, got, bound in rows:
+              print(f"| {name} | {got} | {bound} |")
+          print()
+          print(f"- earned green on a known-good build: **{h['green_on_known_good']}**")
+          print(f"- planted red fired on a known-bad build: **{h['red_on_known_bad']}**")
+          if d["failures"]:
+              print("\n**Failures**\n")
+              for f in d["failures"]:
+                  print(f"- {f}")
+          print("\nPer-bucket write p95 (ms), first bucket to last — the series the trend criterion reads:\n")
+          print("`" + "  ".join(f"{x:.2f}" for x in m["bucket_p95_ms"]) + "`")
+          PY
+            else
+              echo 'No artifact was produced — the lane did not get far enough to measure anything.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the run artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-artifact-${{ github.run_number }}
+          path: soak-artifact.json
+          # The unit of value is the TREND across runs, not one verdict: a regression that stays
+          # inside its bound is still a regression, and only the sequence catches it. 90 days of
+          # artifacts is that sequence.
+          retention-days: 90
+          if-no-files-found: warn
