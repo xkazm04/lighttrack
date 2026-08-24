@@ -4,7 +4,25 @@
 //! validates. That's the safety boundary: a misbehaving tool call can at worst get a 4xx; it cannot
 //! corrupt state or crash the API process.
 
+use std::time::Duration;
+
 use serde_json::Value;
+
+/// How long a single API call may take before it becomes an in-band error.
+///
+/// This transport is **stdio**: one process, one session, one request at a time. A call with no
+/// timeout does not degrade — it hangs the only session the design has, and the agent on the other
+/// end has no channel to ask what happened. `reqwest`'s default is no timeout at all, so an API that
+/// accepted the connection and then stopped answering (a paused container, a dropped route, a
+/// deadlocked handler) parked `lt-mcp` forever.
+///
+/// 30 s is chosen against the slowest read this server makes (a large filtered event page over a
+/// cold Postgres), with room to spare: long enough that a legitimate call is never cut off, short
+/// enough that a wedged upstream costs half a minute instead of the session.
+/// `LIGHTTRACK_MCP_TIMEOUT_SECS` overrides it; `0` disables it, for someone deliberately debugging a
+/// slow upstream who would rather wait than retry.
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
+pub(crate) const ENV_TIMEOUT: &str = "LIGHTTRACK_MCP_TIMEOUT_SECS";
 
 pub(crate) struct Client {
     base: String,
@@ -14,13 +32,26 @@ pub(crate) struct Client {
 
 impl Client {
     pub(crate) fn from_env() -> Self {
+        let timeout = std::env::var(ENV_TIMEOUT)
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let mut builder = reqwest::blocking::Client::builder();
+        if timeout > 0 {
+            builder = builder.timeout(Duration::from_secs(timeout));
+        }
         Self {
             base: std::env::var("LIGHTTRACK_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8787".into()),
             key: std::env::var("LIGHTTRACK_KEY")
                 .ok()
                 .filter(|s| !s.is_empty()),
-            http: reqwest::blocking::Client::new(),
+            // A builder failure here is a TLS/backend initialization problem, not a per-call one;
+            // falling back to an untimed client would silently restore the hang this exists to
+            // prevent, so the process refuses to start instead.
+            http: builder
+                .build()
+                .expect("HTTP client init (TLS backend unavailable)"),
         }
     }
 
