@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde_json::Value;
 use sha2::Sha256;
 
