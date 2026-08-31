@@ -289,6 +289,28 @@ Keep PRs scoped to one thing. Fill in the PR template — which crates, which te
 and whether backend parity is affected. "Tests: none" is an acceptable answer for a docs-only change
 and an unacceptable one for a store change.
 
+### Which landed work has needed the most repair
+
+This project has never reverted anything — 0 reverts in 267 commits. That is a policy, not a
+quality result: we fix forward. The consequence is that the one risk signal readable from git
+alone reads nothing here, and "no reverts" quietly gets taken for "nothing went wrong."
+
+`sh scripts/repair-density.sh [tag|commit]` reads the other half of the same history: the repairs
+a scope needed *after* a declared instant, ranked by count and by repairs-per-file-touched. It
+prints the revert count first, so the reason it exists is visible in its own output, and it refuses
+loudly (exit 2) on an unresolvable instant or an empty range rather than printing a clean board.
+
+**It deliberately does not rank by severity.** That version was built and measured: hardening and
+repair share a vocabulary, so a keyword classifier cannot tell "fixed a panic" from "added a panic
+guard", and on this repository three of its four top-ranked units were hardening commits wearing a
+repair's words — it scored `security(supply-chain): secret scanning, dependabot` as two security
+repairs. So the script prints the repair *subjects* for the top units instead of classifying them.
+The counts rank the reading order; a person ranks the risk.
+
+Two limits it states in its own output rather than hiding: the unit is the conventional-commit
+scope, which is a proxy for a feature and not the thing itself, and commits with no scope are
+counted as an explicit blind spot rather than dropped.
+
 ### Secrets
 
 The repository is public. `.env`, `*.local.toml`, and `service-account*.json` are git-ignored —
