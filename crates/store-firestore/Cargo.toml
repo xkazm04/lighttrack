@@ -12,4 +12,8 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 # REST over the proven blocking reqwest (native-tls => SChannel on Windows). No gRPC/ring.
+# `native-tls` is named explicitly, not inherited: reqwest 0.13 redefined `default-tls` from
+# native-tls to rustls, and one crate letting that default through re-arms rustls + aws-lc-sys
+# for the whole workspace via feature unification. Every reqwest dependency here spells its TLS
+# backend out for that reason.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "native-tls"] }
