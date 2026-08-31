@@ -80,7 +80,7 @@ jobs:
             -Path "$r/lt.exe","$r/lt-runner.exe","$r/lt-mcp.exe","$r/lighttrack-api.exe"
 
       - name: Attach to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
 
