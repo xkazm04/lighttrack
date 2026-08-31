@@ -11,6 +11,15 @@ lighttrack-store = { path = "../store" }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
-# native-tls => SChannel on Windows / system TLS elsewhere (cloud Postgres like Neon needs TLS).
+# rustls on aws-lc-rs — the same provider reqwest uses, so the binary ships one TLS stack rather
+# than two (cloud Postgres like Neon needs TLS).
+#
+# One behaviour note this feature name hides: sqlx's aws-lc-rs variant verifies against the bundled
+# Mozilla root set (webpki-roots), NOT the OS trust store the old native-tls build used. Managed
+# Postgres on a public CA (Neon, Supabase) is unaffected. A server whose CA is private — a corporate
+# root, or the separately-distributed Amazon RDS bundle — must now name it explicitly with
+# `sslrootcert=` in the connection string instead of relying on it being installed system-wide.
+# `tls-rustls-ring-native-roots` would keep OS roots, at the cost of a second crypto provider
+# (ring alongside aws-lc-rs) in the same binary.
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-native-tls", "postgres"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres"] }

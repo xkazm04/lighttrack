@@ -763,7 +763,7 @@ missing" is a recorded fact rather than something an operator has to infer.
 2. **Anonymization** = hybrid: regex always + optional `--llm-scrub` pass. ✅ shipped in 3.6b.
 
 **All sub-phases 3.6a–3.6e are implemented, tested, and verified live** (see ROADMAP). The **Gemini and
-OpenAI generation adapters are now live too** (reqwest/native-tls, keys from `.env`, gen cost priced from
+OpenAI generation adapters are now live too** (reqwest/rustls, keys from `.env`, gen cost priced from
 the DB book) — verified in a 3-way Claude/Gemini/OpenAI comparison. The **judge↔human calibration set is
 now shipped too** (`lt-runner calibrate`; Cohen's κ + correlation + trust verdict — see §3).
 **Prompt-length-tiered & batch/flex pricing** is shipped via price-row variants (`docs/PRICING.md`).

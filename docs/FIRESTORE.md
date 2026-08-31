@@ -8,8 +8,12 @@ records the design/rationale.
 
 ## Approach: REST over `reqwest` (not gRPC)
 Use the **Firestore REST API** (`https://firestore.googleapis.com/v1`) through the existing `reqwest`
-client rather than the gRPC `firestore`/`gcloud-sdk` crates. Rationale: gRPC pulls `tonic`+`ring`/`aws-lc`
-(NASM/CMake build pain on Windows); REST reuses our proven `reqwest` + `native-tls` (SChannel on Windows).
+client rather than the gRPC `firestore`/`gcloud-sdk` crates. Rationale: REST reuses the `reqwest` client
+every other outbound call already goes through, and avoids `tonic` and a second HTTP/2 stack.
+
+*Updated when the workspace moved to rustls:* the original rationale also cited avoiding the NASM/CMake
+build that `ring`/`aws-lc` need. That half no longer distinguishes the two — reqwest's `rustls` feature
+brings `aws-lc-rs` in regardless. Reusing one HTTP client is what still argues for REST.
 New crate `crates/store-firestore` implements the same `Store` trait; selected by
 `LIGHTTRACK_DATABASE_URL=firestore://<project-id>`.
 
@@ -55,7 +59,7 @@ parallel `lt-runner serve` workers.
 ## Crate structure (per CLAUDE.md: ≤300 LOC/file, per-domain modules)
 ```
 crates/store-firestore/
-  Cargo.toml                # reqwest (native-tls), serde, serde_json, lighttrack-core + -store
+  Cargo.toml                # reqwest (rustls), serde, serde_json, lighttrack-core + -store
   src/lib.rs                # FirestoreStore + connect() + `impl Store` delegating to modules
   src/rest.rs               # REST client (GET/PATCH/runQuery/commit) + typed-value encode/decode
   src/events.rs src/projects.rs src/scores.rs src/prices.rs src/limits.rs

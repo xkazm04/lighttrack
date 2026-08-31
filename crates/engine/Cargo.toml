@@ -12,5 +12,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 # Deterministic rubric dimensions of kind `regex` (and numeric extraction).
 regex = "1"
-# HTTPS client for provider APIs (Gemini/OpenAI generation). native-tls => SChannel on Windows.
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "native-tls"] }
+# HTTPS client for provider APIs (Gemini/OpenAI generation). rustls, validating against the OS
+# trust store (SChannel on Windows) via rustls-platform-verifier.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
