@@ -60,6 +60,11 @@
       "path": "context-map.json",
       "kind": "not-in-this-pass",
       "reason": "generated artifact describing the crate/file map; this pass added crates/store/src/sqlite/{maintenance,metrics}.rs, crates/api/src/storage.rs and crates/store/tests/soak.rs without regenerating it — a standing debt named here rather than left implicit"
+    },
+    {
+      "path": ".ai/registry-map.json",
+      "kind": "not-in-this-pass",
+      "reason": "generated artifact — the join between this repo's contexts and the knowledge registry's subjects, produced by ai-registry/scripts/build-registry-map.mjs. It did not exist at this marker's anchor: it landed in 4070e17 and was listed here on 2026-08-31 by the change that noticed the omission, not by a pass that read it. All 119 pairs it records carry state `unknown`, so nothing in it has been judged against this tree."
     }
   ],
 
@@ -75,8 +80,14 @@
       "flagged_on": "2026-08-24",
       "what": "`generatedAt`/`generatedFrom` describe a file no generator produces — the provenance fields name a process that does not exist. The manifest is machine-CHECKED but hand-MAINTAINED, and the fields imply otherwise.",
       "drained_when": "a generator exists, or the fields are replaced with something true of a hand-maintained file"
+    },
+    {
+      "path": ".ai/registry-map.json",
+      "flagged_on": "2026-08-31",
+      "what": "The map is pinned to projectSha 1b34763 and generatedAt 2026-08-29, and HEAD has moved past both. Its own checker — `node scripts/build-registry-map.mjs --check --project tracklight`, run from an ai-registry checkout — reported STALE on 2026-08-31: 125 pairs recomputed against the 119 recorded, one stale path, three lexical-only matches. Nothing in THIS repository regenerates or checks it, so unlike the two guards in this family its staleness is invisible to `cargo test --workspace` and to CI.",
+      "drained_when": "the map is regenerated from an ai-registry checkout and `--check` reports it current, or this repo gains a job of its own that goes red when it drifts"
     }
   ],
 
-  "baseline_note": "First marker for this family — 2026-08-24, written by the wave-2b registry-conformance drain. Four surfaces were genuinely covered: the manifest and its spec (both machine-checked by manifest_guard on every test run, and re-read here), CONTRIBUTING.md (edited here; its gate table is derived from ci.yml by gate_table_guard), and the conformance file this wave produced. Four were not: CLAUDE.md, README.md, SECURITY.md and context-map.json are listed as `not-in-this-pass`, unread and unjudged. What this pass incorporated into the covered surfaces: the wave-2b work — disk accounting and lossless maintenance, store self-instrumentation, the soak lane on its own clock — plus the operator decisions of 2026-08-24 that retention stays unbounded and that authentication/authorization is deferred until productionization. 2026-08-24, dated note on the mechanisms around this marker: two guards now check surfaces in this family against their sources (manifest_guard, gate_table_guard) and a third (catchup_marker_guard) fails the build when a file in this family appears in neither list. That they exist is a fact recorded here; whether they hold is measured by their own runs, and this marker makes no claim about it."
+  "baseline_note": "First marker for this family — 2026-08-24, written by the wave-2b registry-conformance drain. Four surfaces were genuinely covered: the manifest and its spec (both machine-checked by manifest_guard on every test run, and re-read here), CONTRIBUTING.md (edited here; its gate table is derived from ci.yml by gate_table_guard), and the conformance file this wave produced. Four were not: CLAUDE.md, README.md, SECURITY.md and context-map.json are listed as `not-in-this-pass`, unread and unjudged. What this pass incorporated into the covered surfaces: the wave-2b work — disk accounting and lossless maintenance, store self-instrumentation, the soak lane on its own clock — plus the operator decisions of 2026-08-24 that retention stays unbounded and that authentication/authorization is deferred until productionization. 2026-08-24, dated note on the mechanisms around this marker: two guards now check surfaces in this family against their sources (manifest_guard, gate_table_guard) and a third (catchup_marker_guard) fails the build when a file in this family appears in neither list. That they exist is a fact recorded here; whether they hold is measured by their own runs, and this marker makes no claim about it. 2026-08-31, dated note: `.ai/registry-map.json` joined this family's surfaces after the anchor (4070e17) without being listed, and catchup_marker_guard caught the gap in the denominator. It is listed as skipped and flagged by this change — an amendment to the lists made after the 2026-08-24 pass rather than a judgement made by it, and the distinction matters when reading what that pass covered. Its regenerator and checker live in the ai-registry rather than here; that they exist is recorded, and whether the map is current is measured by running them."
 }
