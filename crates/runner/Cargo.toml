@@ -20,6 +20,6 @@ serde_json.workspace = true
 chrono.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
 # `default-tls` so `billing sync` can reach the Stripe HTTPS API (the local API is plain http).
-reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "default-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "blocking", "native-tls", "query"] }
 anyhow = "1"
 dotenvy = "0.15"
