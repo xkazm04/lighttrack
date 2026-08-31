@@ -1,4 +1,6 @@
-//! Datasets (Phase 3.6b) — curated case collections, freezable for reproducible runs.
+//! Datasets (Phase 3.6b) — curated case collections, freezable so a run's *input* is fixed.
+//! Freezing alone is not comparability across time: see the note on `Dataset` in core, which
+//! records why an imported dataset and a traffic-sampled one age differently.
 
 use axum::{
     extract::{Path, State},

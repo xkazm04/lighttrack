@@ -2,7 +2,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// A versioned, reusable evaluation dataset. Frozen datasets are immutable so runs stay comparable.
+/// A versioned, reusable evaluation dataset. Freezing makes the dataset immutable, which fixes
+/// one half of run comparability — the input. It does not fix the other half. Where the cases came
+/// from outside this project (`source: import`), the models under test accumulate exposure to that
+/// material as it circulates, so two runs of the same frozen dataset months apart are not
+/// interchangeable: a rise can be the target or judge having *seen* the cases rather than having
+/// improved. Cases sampled from this project's own traffic (`source: events:recent`) cannot be
+/// exposed that way, which is the strongest reason to prefer them over an import.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dataset {
     #[serde(default = "crate::new_id")]

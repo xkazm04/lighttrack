@@ -66,7 +66,7 @@ pub(crate) fn tools() -> Vec<Value> {
             },"required":["dataset","input"]}),
             false),
         wtool("freeze_dataset",
-            "Freeze a dataset so it becomes immutable and runs stay comparable. Idempotent.",
+            "Freeze a dataset so it becomes immutable, fixing the input half of run comparability. \n             Runs months apart are only comparable if the models under test have gained no exposure \n             to the cases meanwhile, which imported datasets cannot guarantee. Idempotent.",
             json!({"type":"object","properties":{"dataset":{"type":"string"}},"required":["dataset"]}),
             true),
         wtool("create_rubric",
