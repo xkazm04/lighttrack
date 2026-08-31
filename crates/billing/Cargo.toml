@@ -13,4 +13,4 @@ chrono.workspace = true
 thiserror.workspace = true
 hmac = "0.12"
 sha2 = "0.10"
-base64 = "0.22"
+base64 = "0.23"
