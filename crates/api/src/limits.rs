@@ -57,15 +57,20 @@ pub(crate) async fn evaluate_project_limits(
     Ok(statuses)
 }
 
+/// The mutable fields of a limit rule — the body of both `POST /v1/projects/:id/limits` (create)
+/// and `PUT /v1/limits/:id` (replace wholesale). One struct so the two doors cannot drift: a field
+/// accepted on create is accepted on update, with the same default. `id` and `project_id` are never
+/// in the body — the server mints the first and a rule cannot hop projects.
 #[derive(Deserialize)]
-pub(crate) struct CreateLimitReq {
+pub(crate) struct LimitReq {
     metric: LimitMetric,
     window: LimitWindow,
     threshold: f64,
     #[serde(default)]
     action: LimitAction,
-    /// Whether the rule enforces/alerts on creation. Defaults `true`; the old code hardcoded it,
-    /// silently ignoring a client that asked for a rule created disabled.
+    /// Whether the rule enforces/alerts. Defaults `true`; the old create path hardcoded it, silently
+    /// ignoring a client that asked for a rule created disabled. Honored on update so a rule can be
+    /// toggled off/on.
     #[serde(default = "default_true")]
     enabled: bool,
     /// Optional soft-warning fraction in (0,1) — see [`LimitRule::warn_at`].
@@ -76,6 +81,23 @@ pub(crate) struct CreateLimitReq {
     scope: Option<LimitScope>,
 }
 
+impl LimitReq {
+    /// Materialize the rule under a given identity (minted on create, preserved on update).
+    fn into_rule(self, id: String, project_id: String) -> LimitRule {
+        LimitRule {
+            id,
+            project_id,
+            metric: self.metric,
+            window: self.window,
+            threshold: self.threshold,
+            action: self.action,
+            enabled: self.enabled,
+            warn_at: self.warn_at,
+            scope: self.scope,
+        }
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -84,7 +106,7 @@ pub(crate) async fn create_limit(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(pid): Path<String>,
-    Json(req): Json<CreateLimitReq>,
+    Json(req): Json<LimitReq>,
 ) -> Result<Json<LimitRule>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
 
@@ -97,17 +119,7 @@ pub(crate) async fn create_limit(
         return Err(ApiError::not_found(format!("project '{pid}' not found")));
     }
 
-    let rule = LimitRule {
-        id: new_id(),
-        project_id: pid,
-        metric: req.metric,
-        window: req.window,
-        threshold: req.threshold,
-        action: req.action,
-        enabled: req.enabled,
-        warn_at: req.warn_at,
-        scope: req.scope,
-    };
+    let rule = req.into_rule(new_id(), pid);
     rule.validate().map_err(ApiError::bad_request)?;
     let store = st.store.clone();
     let r2 = rule.clone();
@@ -115,28 +127,11 @@ pub(crate) async fn create_limit(
     Ok(Json(rule))
 }
 
-/// Fields a `PUT /v1/limits/:id` may change. `project_id` is immutable (a rule can't hop projects);
-/// everything else is replaced wholesale. `enabled` is honored so a rule can be toggled off/on.
-#[derive(Deserialize)]
-pub(crate) struct UpdateLimitReq {
-    metric: LimitMetric,
-    window: LimitWindow,
-    threshold: f64,
-    #[serde(default)]
-    action: LimitAction,
-    #[serde(default = "default_true")]
-    enabled: bool,
-    #[serde(default)]
-    warn_at: Option<f64>,
-    #[serde(default)]
-    scope: Option<LimitScope>,
-}
-
 pub(crate) async fn update_limit(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(req): Json<UpdateLimitReq>,
+    Json(req): Json<LimitReq>,
 ) -> Result<Json<LimitRule>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
 
@@ -147,17 +142,7 @@ pub(crate) async fn update_limit(
         .await?
         .ok_or_else(|| ApiError::not_found(format!("limit rule '{id}' not found")))?;
 
-    let rule = LimitRule {
-        id: existing.id,
-        project_id: existing.project_id,
-        metric: req.metric,
-        window: req.window,
-        threshold: req.threshold,
-        action: req.action,
-        enabled: req.enabled,
-        warn_at: req.warn_at,
-        scope: req.scope,
-    };
+    let rule = req.into_rule(existing.id, existing.project_id);
     rule.validate().map_err(ApiError::bad_request)?;
     let store = st.store.clone();
     let r2 = rule.clone();
@@ -207,7 +192,7 @@ pub(crate) struct LimitStatusResp {
     project_id: String,
     throttled: bool,
     statuses: Vec<LimitStatus>,
-    /// Rejected-traffic ledger: per (metric, window), the ingest attempts this project's caps have
+    /// Rejected-traffic ledger: per (metric, window, scope), the ingest attempts this project's caps have
     /// turned away (429) with their estimated missed cost. **Best-effort and process-local** — held in
     /// memory, reset on restart, rolled off after 24h (rejected events are never stored, since that
     /// would corrupt the usage/cost math the caps are evaluated against). Empty when nothing's been
