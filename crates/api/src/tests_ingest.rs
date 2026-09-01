@@ -961,10 +961,12 @@ async fn alert_limit_flags_but_admits_and_stores() {
     .await;
 
     // Alert is observe-only: the event is admitted (200), the breach is surfaced, never throttled.
+    // An accepted write carries no `throttled` flag at all — admission already means nothing
+    // enforcing applied, so the flag could never have been true.
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        body["throttled"], false,
-        "an Alert breach must not throttle: {body}"
+    assert!(
+        body.get("throttled").is_none(),
+        "an admitted event has no throttled flag: {body}"
     );
     let breached = body["breached"].as_array().expect("breached array present");
     assert_eq!(breached.len(), 1, "{body}");

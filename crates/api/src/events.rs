@@ -302,7 +302,6 @@ pub(crate) struct IngestResponse {
     ts: DateTime<Utc>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     breached: Vec<LimitStatus>,
-    throttled: bool,
     /// `true` when this request was a replay of an already-recorded event (same id, same logical
     /// payload): the original outcome is returned and nothing is double-counted, so a client may
     /// retry a timed-out POST safely. Omitted (false) on first-time writes.
@@ -389,7 +388,6 @@ pub(crate) async fn post_event(
                     cost_usd: s.cost_usd,
                     ts: s.ts,
                     breached: Vec::new(),
-                    throttled: false,
                     duplicate: true,
                     usage_ratio: None,
                     shed_fraction: None,
@@ -411,8 +409,9 @@ pub(crate) async fn post_event(
             .retry_after(admission.retry_after_secs));
     }
 
-    // Admitted: any remaining breaches are Alert-only (enforcing ones would have 429'd above).
-    let throttled = breached.iter().any(|s| s.rejects_ingest());
+    // Admitted: any remaining breaches are Alert-only (enforcing ones would have 429'd above), so
+    // the response carries them as observe-only detail — there is no separate "throttled" flag to
+    // report, because an admitted event is by definition one nothing enforcing turned away.
     let (usage_ratio, shed_fraction) = proximity(&admission.statuses);
     Ok(Json(IngestResponse {
         id: ev.id,
@@ -420,7 +419,6 @@ pub(crate) async fn post_event(
         cost_usd: ev.cost_usd,
         ts: ev.ts,
         breached,
-        throttled,
         duplicate: false,
         usage_ratio,
         shed_fraction,
