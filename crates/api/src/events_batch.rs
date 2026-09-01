@@ -14,10 +14,13 @@ use serde::Serialize;
 use lighttrack_core::{LimitStatus, LlmEvent};
 use lighttrack_store::{Admission, StoreError};
 
+use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::events::{breach_reason, on_admission, prepare_event, same_logical_event};
 use crate::events_validate;
-use crate::guards::{authenticate, resolve_ingest_project_ensuring, NO_PROJECT_MSG};
+use crate::guards::{
+    authenticate, ensure_dev_default_project, resolve_ingest_project, NO_PROJECT_MSG,
+};
 use crate::state::{spawn_db, AppState};
 
 /// One item's outcome, tagged so a client can branch on `status`:
@@ -107,12 +110,24 @@ pub(crate) async fn post_batch(
     let mut results: Vec<Option<BatchItem>> = Vec::with_capacity(evs.len());
     let mut valid: Vec<LlmEvent> = Vec::new();
     let mut valid_idx: Vec<usize> = Vec::new();
+    // The dev default project is created-if-missing once per batch, not once per item: the ensure is
+    // a store read, and a keyless 500-event dev batch was paying for 500 of them.
+    let mut dev_default_ensured = false;
     for (i, mut ev) in evs.into_iter().enumerate() {
         let item_id = (!ev.id.is_empty()).then(|| ev.id.clone());
         // Same resolution as the single-event door, dev default included: a batching SDK must not be
         // the one client that still fails silently on a zero-config first run.
-        let pid = match resolve_ingest_project_ensuring(&st, &principal, &ev.project_id).await {
-            Ok(p) => p,
+        let pid = match resolve_ingest_project(&principal, &ev.project_id) {
+            Ok(p) => {
+                if !dev_default_ensured
+                    && matches!(principal, Principal::Dev)
+                    && ev.project_id.trim().is_empty()
+                {
+                    ensure_dev_default_project(&st).await;
+                    dev_default_ensured = true;
+                }
+                p
+            }
             // The only failure mode: an admin (or an enforced-mode caller) left project_id blank.
             Err(_) => {
                 results.push(Some(BatchItem::Invalid {

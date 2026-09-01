@@ -159,7 +159,7 @@ pub(crate) async fn resolve_ingest_project_ensuring(
 /// `project_id` and there is no foreign key), so a failure here — including losing the create race
 /// to a concurrent first event — must never turn a good event into an error. The row exists so the
 /// project shows up in `GET /v1/projects`, can be given limits, and can be opened in the UI.
-async fn ensure_dev_default_project(st: &AppState) {
+pub(crate) async fn ensure_dev_default_project(st: &AppState) {
     let store = st.store.clone();
     match spawn_db(move || store.get_project(DEV_DEFAULT_PROJECT)).await {
         Ok(Some(_)) => return,
