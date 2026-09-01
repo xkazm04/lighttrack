@@ -250,6 +250,24 @@ fn set_journal_mode(conn: &Connection, wal: bool) -> Result<bool> {
     Ok(mode.eq_ignore_ascii_case("wal"))
 }
 
+impl SqliteStore {
+    /// The admission usage cache. A poisoned lock (an admission panicked mid-fold) is recovered by
+    /// RESETTING the cache, not by trusting it: a bucket may be half-updated, and a rebuilt cache
+    /// costs one full reload on the next admission — where an `unwrap()` here would have turned
+    /// one panic into a permanent ingest outage, and a trusted half-fold into a wrong cap.
+    fn usage_cache(&self) -> std::sync::MutexGuard<'_, usage_cache::UsageCache> {
+        match self.usage_cache.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                let mut g = poisoned.into_inner();
+                g.reset();
+                self.usage_cache.clear_poison();
+                g
+            }
+        }
+    }
+}
+
 impl Store for SqliteStore {
     fn init_schema(&self) -> Result<()> {
         self.with(schema::apply)
@@ -267,7 +285,7 @@ impl Store for SqliteStore {
     fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
         // Lock the usage cache *before* the connection (consistent order in both admission methods,
         // so no deadlock) and hold both across the check-count-insert — one atomic critical section.
-        let mut cache = self.usage_cache.lock().unwrap();
+        let mut cache = self.usage_cache();
         self.with_op(DbOp::EventsWrite, |c| {
             events::insert_checked(c, &mut cache, ev)
         })
@@ -287,7 +305,7 @@ impl Store for SqliteStore {
         //
         // Limit rules are also hoisted: fetched once per distinct project (a batch is single-project
         // by construction today) instead of re-queried per item.
-        let mut cache = self.usage_cache.lock().unwrap();
+        let mut cache = self.usage_cache();
         self.with_op(DbOp::EventsWrite, |c| {
             let tx = match c.unchecked_transaction() {
                 Ok(tx) => tx,

@@ -56,6 +56,13 @@ pub(super) struct UsageCache {
 }
 
 impl UsageCache {
+    /// Forget everything: the next read of every key reloads from `rowid 0` — one full scan of the
+    /// table, then delta-bounded again. The recovery for any state the incremental fold cannot
+    /// undo (a rolled-back batch, a poisoned lock); never a hot-path operation.
+    pub(super) fn reset(&mut self) {
+        self.buckets.clear();
+    }
+
     /// Current rolling [`Usage`] for `(project, window, scope)` as of `now`, folding in any events
     /// committed since the last call and evicting those that have aged out of the window.
     pub(super) fn usage(
