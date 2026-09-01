@@ -702,13 +702,17 @@
       "description": "Per-project usage caps that can throttle or block ingest traffic when cost, call-count, or token thresholds are exceeded within configurable rolling windows (hour/day/month). Rules support fine-grained scoping by provider, model, operation name, API key, or billing customer — so ten keys of one project can carry ten different budgets. An in-memory usage cache makes admission O(1) and TOCTOU-safe. GET /v1/limits/usage breaks rolling usage down by one scope dimension (who is spending) both before and after a cap trips. Rejected ingest attempts are tracked in-memory for attribution reporting.",
       "entry_points": [
         "crates/api/src/limits.rs",
-        "crates/core/src/limits.rs"
+        "crates/core/src/limits/mod.rs"
       ],
       "file_paths": [
         "crates/api/src/limits.rs",
         "crates/api/src/limits_usage.rs",
         "crates/api/src/rejections.rs",
-        "crates/core/src/limits.rs"
+        "crates/core/src/limits/mod.rs",
+        "crates/core/src/limits/rule.rs",
+        "crates/core/src/limits/scope.rs",
+        "crates/core/src/limits/status.rs",
+        "crates/core/src/limits/tests.rs"
       ],
       "group": "Usage Governance",
       "group_id": "ed6eab63-a4bf-4e3e-9b23-3baba606597a",
