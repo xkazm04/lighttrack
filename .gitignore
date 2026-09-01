@@ -69,3 +69,6 @@ Thumbs.db
 /.claude/rules/ai-registry-software-engineering.md
 /.claude/rules/ai-registry-llm-observability.md
 # END ai-registry linked skills
+
+# Registry consult log (append-only, local; the registry's signals lane folds it into counts)
+.ai/consults.jsonl
