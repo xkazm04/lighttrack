@@ -47,7 +47,7 @@ jobs:
       # a multi-arch manifest could not be loaded into the daemon, and emulating arm64 would be
       # unusably slow.
       - name: Build image locally (for smoke)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/docker/Dockerfile
@@ -73,7 +73,7 @@ jobs:
           sh scripts/smoke.sh http://127.0.0.1:8787
 
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/docker/Dockerfile
@@ -116,7 +116,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           tags: |

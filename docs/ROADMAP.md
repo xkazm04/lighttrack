@@ -110,7 +110,7 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
 
 ## Provider generation adapters (post-3.6) ✅
 - [x] **Gemini** (`generativelanguage … :generateContent`) + **OpenAI** (`/v1/chat/completions`) generation
-      live in `engine::generate` via reqwest (native-tls / SChannel on Windows). Keys loaded from `.env`
+      live in `engine::generate` via reqwest (rustls; OS trust roots via rustls-platform-verifier). Keys loaded from `.env`
       (dotenvy): `GEMINI_API_KEY` / `OPENAI_API_KEY`; generation cost priced from the DB price book by tokens.
       *Verified live:* 3-way compare (claude-haiku / gemini-2.5-flash / gpt-4o-mini) — all correct on a
       capital-of-France case; gemini fastest (744ms), gpt-4o-mini cheapest gen ($0.00001).

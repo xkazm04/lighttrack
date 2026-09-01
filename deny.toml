@@ -45,6 +45,11 @@ allow = [
     "ISC",                          # rustls-webpki, untrusted; ring is `Apache-2.0 AND ISC`
     "Unicode-3.0",                  # the icu_* / zerovec stack pulled in via idna → reqwest/url
     "Zlib",                         # foldhash (Zlib only), tinyvec
+    # Not a code license: the Mozilla CA root bundle that rustls-platform-verifier carries as a
+    # fallback for platforms with no usable OS trust store. CDLA-Permissive-2.0 is a *data* licence
+    # with no copyleft and no attribution obligation on redistribution, so it clears the same bar
+    # the list above is drawn at. Added when the workspace moved from native-tls to rustls.
+    "CDLA-Permissive-2.0",          # webpki-root-certs
 ]
 # Anything permissive we did not need is still worth listing above: an unused entry is cheap, while a
 # missing one turns a routine dependency bump into a red check. Licenses reachable only through an

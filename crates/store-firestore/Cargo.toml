@@ -11,5 +11,10 @@ lighttrack-store = { path = "../store" }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
-# REST over the proven blocking reqwest (native-tls => SChannel on Windows). No gRPC/ring.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "native-tls"] }
+# REST over the proven blocking reqwest. No gRPC.
+# `rustls` is named explicitly rather than inherited from `default-tls`, which reqwest 0.13
+# redefined from native-tls to rustls: spelling it out means a future default flip cannot change
+# this crate's TLS stack silently, and feature unification cannot hand it a backend it never asked
+# for. reqwest's `rustls` pulls rustls-platform-verifier, so certificates are still validated
+# against the OS trust store (SChannel on Windows) — what the old native-tls note cared about.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
