@@ -61,4 +61,8 @@ and the Personas app; the explorer does not verify those - say so.
   honour) rather than group adjacency - project-management found the `enabled` gap; cost-pricing
   would not have. A parallel session installs skills (`.claude/skills/*`, `.gitignore`,
   `.ai/manifest.yaml` edits) - leave those hunks alone.
+- 2026-09-01: read the governing registry technique BEFORE the code for a governed context - the
+  limit-enforcement high item (rollback vs usage-cache cursor) came from the technique's own
+  question, not from any grep. Store-side changes: gate with `cargo test -p lighttrack-store`
+  (lib + conformance + guards) and `cargo build -p lighttrack-api` afterwards.
 
