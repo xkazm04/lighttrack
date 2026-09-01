@@ -77,16 +77,18 @@ pub(crate) struct ScopeEntry {
     rules: Vec<LimitStatus>,
 }
 
-/// Parse the `window` query param, defaulting to `day`.
+/// Parse the `window` query param, defaulting to `day`. The accepted set and the error's expected
+/// list both come from the enum, so a new window cannot be silently rejected here.
 fn parse_window(s: Option<&str>) -> Result<LimitWindow, ApiError> {
-    match s.unwrap_or("day") {
-        "hour" => Ok(LimitWindow::Hour),
-        "day" => Ok(LimitWindow::Day),
-        "month" => Ok(LimitWindow::Month),
-        other => Err(ApiError::bad_request(format!(
-            "unknown window '{other}' (expected hour|day|month)"
-        ))),
-    }
+    let raw = s.unwrap_or(LimitWindow::default().as_str());
+    LimitWindow::from_wire(raw).ok_or_else(|| {
+        let expected = LimitWindow::ALL
+            .iter()
+            .map(|w| w.as_str())
+            .collect::<Vec<_>>()
+            .join("|");
+        ApiError::bad_request(format!("unknown window '{raw}' (expected {expected})"))
+    })
 }
 
 pub(crate) async fn usage_by_scope(

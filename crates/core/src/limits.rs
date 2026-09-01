@@ -143,6 +143,25 @@ pub enum LimitWindow {
 }
 
 impl LimitWindow {
+    /// Every window, so a wire parser can derive its accepted set from the enum rather than
+    /// hand-maintaining a parallel string list that drifts when a variant is added (the same
+    /// authority shape as `Status::ALL`).
+    pub const ALL: [LimitWindow; 3] = [LimitWindow::Hour, LimitWindow::Day, LimitWindow::Month];
+
+    /// The wire/storage literal (`hour` | `day` | `month`) — what serde writes.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LimitWindow::Hour => "hour",
+            LimitWindow::Day => "day",
+            LimitWindow::Month => "month",
+        }
+    }
+
+    /// Parse a wire literal back to a [`LimitWindow`], or `None` outside the vocabulary.
+    pub fn from_wire(s: &str) -> Option<LimitWindow> {
+        LimitWindow::ALL.into_iter().find(|w| w.as_str() == s)
+    }
+
     /// How long a client should wait before retrying an ingest a **hard** cap turned away. Nothing
     /// frees capacity until usage ages out of the rolling window, so polling faster than this is
     /// pure waste; it is deliberately far shorter than the window itself, because usage leaves the
