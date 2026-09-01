@@ -101,22 +101,26 @@ fn normalize_ids(ev: &mut LlmEvent) {
 /// hash of it — nothing that could be replayed or reversed if an event row leaks. Rows written before
 /// this existed simply carry no `api_key_id` and fall into the unattributed bucket.
 fn stamp_api_key(ev: &mut LlmEvent, key_id: Option<&str>) {
-    match (&mut ev.metadata, key_id) {
-        (Value::Object(m), Some(id)) => {
-            m.insert("api_key_id".to_string(), Value::String(id.to_string()));
+    match key_id {
+        Some(id) => metadata_set(ev, "api_key_id", Value::String(id.to_string())),
+        // Non-object metadata (a client-owned scalar/array) can hold no `api_key_id` to forge, so
+        // only an object needs the strip.
+        None => {
+            if let Value::Object(m) = &mut ev.metadata {
+                m.remove("api_key_id");
+            }
         }
-        (Value::Object(m), None) => {
-            m.remove("api_key_id");
+    }
+}
+
+/// Set one server-owned key in `metadata`, creating the object when metadata is null. Non-object,
+/// non-null metadata is a client-owned scalar/array: it is left untouched rather than clobbered.
+fn metadata_set(ev: &mut LlmEvent, key: &str, value: Value) {
+    match &mut ev.metadata {
+        Value::Object(m) => {
+            m.insert(key.to_string(), value);
         }
-        (v, Some(id)) if v.is_null() => {
-            *v = Value::Object(
-                [("api_key_id".to_string(), Value::String(id.to_string()))]
-                    .into_iter()
-                    .collect(),
-            );
-        }
-        // Null metadata with no key, or non-object metadata (client-owned scalar/array — it can hold
-        // no `api_key_id` to forge): nothing to do.
+        v @ Value::Null => *v = Value::Object([(key.to_string(), value)].into_iter().collect()),
         _ => {}
     }
 }
@@ -129,15 +133,7 @@ fn mark_cost_source(ev: &mut LlmEvent, client_supplied: bool) {
         return; // no cost resolved (unpriced) → nothing to attribute
     }
     let src = Value::String(if client_supplied { "client" } else { "book" }.to_string());
-    match &mut ev.metadata {
-        Value::Object(m) => {
-            m.insert("cost_source".to_string(), src);
-        }
-        v @ Value::Null => {
-            *v = Value::Object([("cost_source".to_string(), src)].into_iter().collect())
-        }
-        _ => {} // non-object, non-null metadata is client-owned: don't clobber it
-    }
+    metadata_set(ev, "cost_source", src);
 }
 
 /// Post-admission side effects shared by the single- and batch-ingest paths: log and best-effort
