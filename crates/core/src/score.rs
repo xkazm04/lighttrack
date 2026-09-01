@@ -55,9 +55,22 @@ pub struct ScoreDim {
     /// The rubric's gating floor for this dimension, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub floor: Option<f64>,
-    /// True when `value` fell below `floor` — the reason a high overall can still fail.
+    /// True when `value` fell below `floor` — the reason a high overall can still fail. On a
+    /// merged cell this is the OR across the cells merged, so it can be true while the merged
+    /// (mean) `value` clears the floor; read `floor_hits`/`floor_of` for the shape.
     #[serde(default)]
     pub floor_hit: bool,
+    /// How many contributing observations fell below `floor`, and how many there were. One
+    /// judged verdict reports its own; a merged cell reports the tally across what it merged.
+    ///
+    /// `floor_hit` alone cannot separate a dimension that crossed on **every** observation from
+    /// one that crossed on **one of five**, because an OR reduces both to `true` — and that is
+    /// exactly the difference between a boundary the candidate always hits and one it sometimes
+    /// does. The count carries its own denominator so the two are never confused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor_hits: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor_of: Option<u32>,
     /// The judge's reasoning, one entry per sample that parsed (sample order). Every sample is kept:
     /// its reasoning tokens were paid for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

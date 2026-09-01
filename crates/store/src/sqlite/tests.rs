@@ -2226,6 +2226,7 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
                     "sample two".into(),
                     "sample three".into(),
                 ],
+                ..Default::default()
             },
             ScoreDim {
                 key: "safety".into(),
@@ -2234,6 +2235,7 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
                 floor: Some(0.5),
                 floor_hit: true,
                 reasoning: vec!["unsafe advice".into(), "still unsafe".into()],
+                ..Default::default()
             },
         ],
         agreement: Some(0.8),

@@ -22,6 +22,11 @@ pub(crate) fn rubric_detail(o: &RubricOutcome) -> ScoreDetail {
                 weight: d.weight,
                 floor: d.floor,
                 floor_hit: d.floor_hit,
+                // One judged verdict is one observation of this dimension's floor. Merging
+                // several of them sums these, which is what keeps all-of-N distinguishable
+                // from one-of-N after the OR on `floor_hit` has flattened both to `true`.
+                floor_hits: d.floor.map(|_| u32::from(d.floor_hit)),
+                floor_of: d.floor.map(|_| 1),
                 reasoning: d.reasonings.clone(),
             })
             .collect(),
@@ -110,6 +115,8 @@ pub(crate) fn merge_details(details: &[ScoreDetail]) -> ScoreDetail {
                 Some(i) => {
                     acc[i].value += dim.value;
                     acc[i].floor_hit |= dim.floor_hit;
+                    acc[i].floor_hits = add(acc[i].floor_hits, dim.floor_hits);
+                    acc[i].floor_of = add(acc[i].floor_of, dim.floor_of);
                     acc[i].reasoning.extend(dim.reasoning.iter().cloned());
                     counts[i] += 1;
                 }
@@ -181,6 +188,7 @@ mod tests {
             floor: None,
             floor_hit: false,
             reasoning: reasoning.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
         }
     }
 
@@ -194,6 +202,52 @@ mod tests {
             injection_suspected: Some(false),
             ..Default::default()
         }
+    }
+
+    /// A dimension that crosses its floor on **every** candidate and one that crosses on
+    /// **one of three** are different findings: the first is a boundary the candidate always
+    /// hits, the second is variance near one. `floor_hit` is an OR, so it reduces both to
+    /// `true` and the merged cell cannot tell them apart. The counts are what survive.
+    #[test]
+    fn a_merged_floor_keeps_how_many_candidates_hit_it() {
+        let floored = |value: f64, hit: bool| ScoreDim {
+            key: "safety".into(),
+            value,
+            weight: 1.0,
+            floor: Some(0.5),
+            floor_hit: hit,
+            floor_hits: Some(u32::from(hit)),
+            floor_of: Some(1),
+            reasoning: vec![],
+        };
+
+        // Always below the floor.
+        let always = merge_details(&[
+            detail(vec![floored(0.1, true)], 1.0),
+            detail(vec![floored(0.2, true)], 1.0),
+            detail(vec![floored(0.1, true)], 1.0),
+        ]);
+        // Below it once; the other two clear it comfortably.
+        let sometimes = merge_details(&[
+            detail(vec![floored(0.1, true)], 1.0),
+            detail(vec![floored(0.9, false)], 1.0),
+            detail(vec![floored(0.9, false)], 1.0),
+        ]);
+
+        // The property that made this worth changing: the boolean is identical for both.
+        assert!(always.dimensions[0].floor_hit);
+        assert!(sometimes.dimensions[0].floor_hit);
+
+        // The counts separate them, and each carries its own denominator.
+        assert_eq!(always.dimensions[0].floor_hits, Some(3));
+        assert_eq!(always.dimensions[0].floor_of, Some(3));
+        assert_eq!(sometimes.dimensions[0].floor_hits, Some(1));
+        assert_eq!(sometimes.dimensions[0].floor_of, Some(3));
+
+        // And the merged mean can clear a floor the OR still reports as hit — the reason
+        // `floor_hit` is documented as an OR on a merged cell rather than as `value < floor`.
+        let mean = sometimes.dimensions[0].value;
+        assert!(mean > 0.5, "merged mean {mean} should clear the 0.5 floor");
     }
 
     #[test]
@@ -272,6 +326,7 @@ mod tests {
                 floor: None,
                 floor_hit: false,
                 reasoning: many,
+                ..Default::default()
             }],
             ..Default::default()
         };

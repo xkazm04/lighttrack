@@ -94,8 +94,9 @@ CREATE TABLE IF NOT EXISTS scores (
   pass        INTEGER,
   reasoning   TEXT,
   -- Structured verdict provenance (core::ScoreDetail) as JSON: per-dimension {value, weight,
-  -- floor_hit, reasoning[]}, agreement, sample accounting, bias/injection flags. NULL for scores
-  -- posted without it. Bounded by ScoreDetail::capped() at the API boundary.
+  -- floor_hit, floor_hits/floor_of, reasoning[]}, agreement, sample accounting, bias/injection
+  -- flags. NULL for scores posted without it. Bounded by ScoreDetail::capped() at the API
+  -- boundary.
   detail      TEXT,
   -- The benchmark run that produced this verdict (NULL for online/ad-hoc scores), and the 1-based
   -- case position within that run. Together they make "every case result for run X" a query instead

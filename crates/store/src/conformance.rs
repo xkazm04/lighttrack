@@ -411,6 +411,7 @@ fn run_scoped_cases(store: &dyn Store, pid: &str) -> Result<()> {
             floor: Some(0.5),
             floor_hit: true,
             reasoning: vec!["unsafe advice".into()],
+            ..Default::default()
         }],
         agreement: Some(0.75),
         samples_requested: Some(3),
