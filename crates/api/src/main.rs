@@ -131,7 +131,9 @@ mod collective;
 mod datasets;
 mod error;
 mod events;
+mod events_admission;
 mod events_batch;
+mod events_query;
 mod events_validate;
 mod forecast;
 mod forecast_alerts;
@@ -375,7 +377,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/events",
             post(events::post_event)
                 .layer(shed_ingest.clone())
-                .get(events::get_events)
+                .get(events_query::get_events)
                 .layer(DefaultBodyLimit::max(body_limit)),
         )
         .route(
@@ -386,7 +388,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/ingest/status", get(shed::get_ingest_status))
         .route("/v1/storage/status", get(storage::get_storage_status))
-        .route("/v1/events/:id", get(events::get_event_by_id))
+        .route("/v1/events/:id", get(events_query::get_event_by_id))
         .route(
             "/v1/traces",
             // The OTLP door is an ingest door: one export fans a whole batch into the same write
@@ -400,9 +402,9 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/traces/:id", get(traces::get_trace))
         .route("/v1/traces/:id/score", post(traces::score_trace))
-        .route("/v1/costs", get(events::get_costs))
-        .route("/v1/costs/prompts", get(events::get_prompt_costs))
-        .route("/v1/usecases", get(events::get_usecases))
+        .route("/v1/costs", get(events_query::get_costs))
+        .route("/v1/costs/prompts", get(events_query::get_prompt_costs))
+        .route("/v1/usecases", get(events_query::get_usecases))
         .route(
             "/v1/scores",
             post(scores::post_score).get(scores::get_scores),

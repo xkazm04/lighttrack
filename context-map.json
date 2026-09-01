@@ -554,7 +554,9 @@
       ],
       "file_paths": [
         "crates/api/src/events.rs",
+        "crates/api/src/events_admission.rs",
         "crates/api/src/events_batch.rs",
+        "crates/api/src/events_query.rs",
         "crates/api/src/events_validate.rs",
         "crates/core/src/event.rs"
       ],

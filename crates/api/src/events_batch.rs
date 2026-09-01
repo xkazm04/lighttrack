@@ -5,7 +5,7 @@
 //! while its siblings succeed, so no single status code fits the whole request). Each item runs the
 //! exact same pipeline as the single-event path — auth, project scoping, validation, PII redaction,
 //! cost-fill, and limit admission with alert fan-out — by sharing `events::prepare_event` /
-//! `on_admission`. The store call is one critical section (see [`Store::insert_events_checked`]) so a
+//! `events_admission::on_admission`. The store call is one critical section (see [`Store::insert_events_checked`]) so a
 //! batch cannot bypass a cap: admission for each item counts the previously-accepted items ahead of it.
 
 use axum::{extract::State, http::HeaderMap, Json};
@@ -16,7 +16,8 @@ use lighttrack_store::{Admission, StoreError};
 
 use crate::auth::Principal;
 use crate::error::ApiError;
-use crate::events::{breach_reason, on_admission, prepare_event, same_logical_event};
+use crate::events::{prepare_event, same_logical_event};
+use crate::events_admission::{breach_reason, on_admission};
 use crate::events_validate;
 use crate::guards::{
     authenticate, ensure_dev_default_project, resolve_ingest_project, NO_PROJECT_MSG,
