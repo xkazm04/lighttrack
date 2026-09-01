@@ -337,8 +337,12 @@ impl Store for SqliteStore {
             }
             if let Err(e) = tx.commit() {
                 // The whole batch is lost (all-or-nothing beats a torn batch a client can't detect).
-                // The in-memory usage cache may now over-count the uncommitted events — the safe
-                // direction (over-enforcement), and it re-syncs from the table on its next rebuild.
+                // The usage cache folded the rolled-back rows in — and, worse, advanced its
+                // `seen_rowid` past rowids SQLite will now hand to the NEXT events (`events.id` is a
+                // TEXT key, so the implicit rowid is max+1 and a rollback frees it). Left alone, those
+                // events would never be counted: an under-count, the unsafe direction, for as long as
+                // the process lived. There is no periodic rebuild, so the reset is done here.
+                cache.reset();
                 let msg = format!("batch commit failed: {e}");
                 return evs
                     .iter()

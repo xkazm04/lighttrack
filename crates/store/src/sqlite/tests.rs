@@ -1083,6 +1083,64 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
 }
 
 #[test]
+fn usage_cache_reset_recovers_rowids_reused_after_a_rollback() {
+    // A batch folds its rows into the cache inside the transaction. If that transaction rolls back,
+    // SQLite hands the freed rowids to the next inserts (`events.id` is TEXT; the implicit rowid is
+    // max+1) — and the cache's `seen_rowid` is already past them, so they would never be folded in.
+    // The batch path resets the cache on commit failure; this pins that a reset is what makes the
+    // cache equal the reference again, and that without one it silently under-counts.
+    let s = SqliteStore::open_in_memory().unwrap();
+    let mut cache = super::usage_cache::UsageCache::default();
+    let conn = s.conn.lock().unwrap();
+    let win = LimitWindow::Day;
+    let now = Utc::now();
+
+    let tx = conn.unchecked_transaction().unwrap();
+    let mut lost = ev("p", "m", 10, 10, 1.0);
+    lost.id = "lost".into();
+    super::events::insert(&tx, &lost).unwrap();
+    let u = cache.usage(&tx, "p", win, None, now).unwrap();
+    assert_eq!(u.calls, 1, "folded inside the transaction");
+    let lost_rowid: i64 = tx
+        .query_row("SELECT MAX(rowid) FROM events", [], |r| r.get(0))
+        .unwrap();
+    tx.rollback().unwrap();
+
+    // Two fresh events: the first takes the rowid the rollback freed, the second the one after.
+    for (id, cost) in [("kept-a", 4.0), ("kept-b", 8.0)] {
+        let mut e = ev("p", "m", 10, 10, cost);
+        e.id = id.into();
+        super::events::insert(&conn, &e).unwrap();
+    }
+    let first_kept_rowid: i64 = conn
+        .query_row("SELECT rowid FROM events WHERE id = 'kept-a'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        first_kept_rowid, lost_rowid,
+        "SQLite reused the rolled-back rowid"
+    );
+
+    let want = super::events::usage_since(&conn, "p", win.since(now)).unwrap();
+    assert_eq!(want.calls, 2);
+    assert_eq!(want.cost_usd, 12.0);
+
+    // Without a reset: `lost` is still counted, `kept-a` never is — 2 calls that look right, at
+    // the wrong cost. This is the under-count a cap could be walked past.
+    let stale = cache.usage(&conn, "p", win, None, now).unwrap();
+    assert_eq!(
+        stale.cost_usd, 9.0,
+        "stale cache: lost(1.0) + kept-b(8.0), kept-a unseen"
+    );
+
+    cache.reset();
+    let fresh = cache.usage(&conn, "p", win, None, now).unwrap();
+    assert_eq!(fresh.calls, want.calls);
+    assert_eq!(fresh.cost_usd, want.cost_usd);
+}
+
+#[test]
 fn usage_cache_evicts_events_leaving_the_window() {
     use chrono::{Duration, TimeZone, Utc as CU};
     // The hard part of any incremental design: an event that ages out of the rolling window must be
