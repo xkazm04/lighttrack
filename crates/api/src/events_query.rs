@@ -233,17 +233,17 @@ pub(crate) async fn get_event_by_id(
     let p = authenticate(&st, &headers).await?;
     let store = st.store.clone();
     let id2 = id.clone();
+    let not_found = || ApiError::not_found(format!("event '{id}' not found"));
     let ev = spawn_db(move || store.get_event(&id2))
         .await?
-        .ok_or_else(|| ApiError::not_found(format!("event '{id}' not found")))?;
-    if let Principal::Project {
-        project_id: pid, ..
-    } = &p
-    {
-        if &ev.project_id != pid {
-            return Err(ApiError::forbidden(
-                "key not authorized for that event's project",
-            ));
+        .ok_or_else(not_found)?;
+    // Another project's event answers exactly like a missing one. A distinct 403 would let any
+    // project key probe which ids exist on the instance — a cross-tenant existence oracle over
+    // client-chosen ids — and from a project key's point of view "not yours" and "not there" are
+    // the same fact.
+    if let Principal::Project { project_id, .. } = &p {
+        if &ev.project_id != project_id {
+            return Err(not_found());
         }
     }
     Ok(Json(ev))
