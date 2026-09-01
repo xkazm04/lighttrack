@@ -199,16 +199,19 @@ pub(crate) async fn post_batch(
             Err(StoreError::Conflict(_)) => {
                 let store = st.store.clone();
                 let id = ev.id.clone();
-                let stored = spawn_db(move || store.get_event(&id)).await.ok().flatten();
-                match stored {
-                    Some(s) if same_logical_event(&s, ev) => BatchItem::Accepted {
+                // The read-back can itself fail. That is not a conflict — telling a client its
+                // payload differs when we never managed to look at the stored one would send it
+                // minting new ids for an event that is already recorded. Report the failure as
+                // what it is, so the item is retried rather than rewritten.
+                match spawn_db(move || store.get_event(&id)).await {
+                    Ok(Some(s)) if same_logical_event(&s, ev) => BatchItem::Accepted {
                         index,
                         id: ev.id.clone(),
                         cost_usd: s.cost_usd,
                         duplicate: true,
                         breached: Vec::new(),
                     },
-                    _ => BatchItem::Invalid {
+                    Ok(_) => BatchItem::Invalid {
                         index,
                         id: Some(ev.id.clone()),
                         code: "conflict",
@@ -217,6 +220,16 @@ pub(crate) async fn post_batch(
                             ev.id
                         ),
                     },
+                    Err(e) => {
+                        tracing::error!(index, event_id = %ev.id, error = %e, "batch replay check: could not read the stored event");
+                        BatchItem::Invalid {
+                            index,
+                            id: Some(ev.id.clone()),
+                            code: "internal",
+                            reason: "store error while checking for a replay (see server logs)"
+                                .to_string(),
+                        }
+                    }
                 }
             }
             // Any other per-item store failure is reported as invalid rather than aborting the
