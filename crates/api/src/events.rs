@@ -65,7 +65,10 @@ pub(crate) fn prepare_event(
     }
     let client_supplied = ev.cost_usd.is_some();
     {
-        let book = st.prices.read().unwrap();
+        // A poisoned lock (a writer panicked mid-swap) must not take every subsequent ingest down
+        // with it: the book is replaced wholesale, never mutated in place, so whatever is under the
+        // lock is a complete, usable snapshot.
+        let book = st.prices.read().unwrap_or_else(|p| p.into_inner());
         ev.ensure_cost(&book);
     }
     mark_cost_source(ev, client_supplied);

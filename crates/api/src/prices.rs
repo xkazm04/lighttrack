@@ -113,9 +113,12 @@ pub(crate) async fn put_price(
     // Hot-swap the in-memory price book so new prices take effect without a restart.
     let store2 = st.store.clone();
     let rows = spawn_db(move || store2.list_prices()).await?;
+    // Build outside the lock, swap under it: the critical section is one pointer-sized assignment,
+    // and a poisoned lock is recovered rather than propagated (see `events::prepare_event`).
+    let fresh = PriceBook::from_rows(&rows);
     {
-        let mut book = st.prices.write().unwrap();
-        *book = PriceBook::from_rows(&rows);
+        let mut book = st.prices.write().unwrap_or_else(|p| p.into_inner());
+        *book = fresh;
     }
     Ok(Json(row))
 }
