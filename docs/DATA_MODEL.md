@@ -85,7 +85,7 @@ by `trace_id` and refuses with **501 `unsupported`** (see `docs/FIRESTORE.md`) �
 |---|---|---|
 | `id` | string | caller-choosable at create; else a server-minted UUID (see below) |
 | `name` | string | |
-| `enabled` | bool | |
+| `enabled` | bool | `false` refuses the project's events on both ingest doors (single POST → 403 `forbidden`; batch item → `invalid`/`forbidden`), nothing stored; reads and the project's keys keep working. Takes effect on the next event via the ingest policy cache |
 | `redaction` | string | `none` \| `hash` \| `drop` — how to store prompts/outputs |
 | `created_at` | timestamp | immutable |
 

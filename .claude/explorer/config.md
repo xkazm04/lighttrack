@@ -57,3 +57,8 @@ and the Personas app; the explorer does not verify those - say so.
 - 2026-09-01: with an empty coverage ledger the tie-break "smallest file count" selects `cli-tool`
   (1 file). Pick the golden path (event-ingest) or any >=3-file context instead, and say why.
 - 2026-09-01: `.ai/consults.jsonl` was untracked, not ignored - added to `.gitignore` this run.
+- 2026-09-01: for a `sec` pass, widen along the trust boundary (who owns the flag/policy the area must
+  honour) rather than group adjacency - project-management found the `enabled` gap; cost-pricing
+  would not have. A parallel session installs skills (`.claude/skills/*`, `.gitignore`,
+  `.ai/manifest.yaml` edits) - leave those hunks alone.
+
