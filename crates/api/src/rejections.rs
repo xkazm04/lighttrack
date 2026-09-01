@@ -14,10 +14,11 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 
 use lighttrack_core::{LimitMetric, LimitScope, LimitWindow};
+use lighttrack_store::codec::fmt_ts;
 
 /// How long a rejection key stays live after its last hit before it is pruned (rolling reset).
 const TTL_HOURS: i64 = 24;
@@ -35,7 +36,8 @@ struct Entry {
 type RejectionKey = (String, LimitMetric, LimitWindow, Option<LimitScope>);
 
 /// A read-only snapshot of one rejection bucket, shaped for the `/v1/limits/status` `rejected` block.
-/// Timestamps are fixed-width `RFC3339(Nanos, Z)` for consistency with stored event times.
+/// Timestamps go through the store's one codec (`fmt_ts`: fixed-width `RFC3339(Nanos, Z)`), the
+/// same bytes stored event times carry.
 #[derive(Serialize, Clone, Debug)]
 pub(crate) struct RejectionStat {
     pub(crate) metric: LimitMetric,
@@ -131,8 +133,8 @@ impl RejectionLedger {
                 scope: scope.clone(),
                 count: e.count,
                 est_missed_cost_usd: e.est_cost_usd,
-                first_ts: e.first_ts.to_rfc3339_opts(SecondsFormat::Nanos, true),
-                last_ts: e.last_ts.to_rfc3339_opts(SecondsFormat::Nanos, true),
+                first_ts: fmt_ts(e.first_ts),
+                last_ts: fmt_ts(e.last_ts),
             })
             .collect()
     }

@@ -1,6 +1,6 @@
 //! Structural guard for the fixed-width timestamp invariant (see `codec::fmt_ts`): every RFC3339
 //! formatting call in the workspace must use `(SecondsFormat::Nanos, true)`. A few crates that
-//! don't link the store re-implement the format inline (runner, api rejections); this guard is what
+//! don't link the store re-implement the format inline (runner); this guard is what
 //! keeps those copies from drifting to a variable-width form that would break string range filters,
 //! ORDER BY, and keyset cursors. Pointer: Obsidian vault → Architect/strong-patterns.md.
 
