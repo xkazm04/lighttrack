@@ -626,14 +626,7 @@ pub(crate) async fn get_usecases(
 ) -> Result<Json<Vec<UseCaseCostRow>>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
-    let since = match q.since.as_deref() {
-        Some(s) => Some(
-            DateTime::parse_from_rfc3339(s)
-                .map_err(|e| ApiError::bad_request(format!("invalid 'since' timestamp: {e}")))?
-                .with_timezone(&Utc),
-        ),
-        None => None,
-    };
+    let since = parse_opt_ts("since", q.since.as_deref())?;
     let store = st.store.clone();
     let rows = spawn_db(move || store.usecase_costs(project.as_deref(), since)).await?;
     Ok(Json(rows))
