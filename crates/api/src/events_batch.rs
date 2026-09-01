@@ -143,12 +143,14 @@ pub(crate) async fn post_batch(
         // Per-item policy lookup is a cache hit after the first event of each project in the batch.
         let persistence = match crate::state::redaction_policy_for(&st, &pid).await {
             Ok(p) => p,
+            // Same rule as the store-error arm below: the raw error goes to the log, not the wire.
             Err(e) => {
+                tracing::error!(index = i, project_id = %pid, error = %e, "batch item: could not resolve project policy");
                 results.push(Some(BatchItem::Invalid {
                     index: i,
                     id: item_id,
                     code: "internal",
-                    reason: format!("could not resolve project policy: {e}"),
+                    reason: "could not resolve project policy (see server logs)".to_string(),
                 }));
                 continue;
             }
