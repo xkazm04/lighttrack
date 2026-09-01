@@ -38,6 +38,12 @@ pub(crate) fn prepare_event(
     let now = Utc::now();
     ev.project_id = pid.to_string();
     ev.received_at = now;
+    // An absent `id` is minted by the deserializer; an explicit `""` sailed past it and became the
+    // primary key `""` — so the second such event in a project was a 409 against the first. Blank
+    // means "you choose", same as absent.
+    if ev.id.trim().is_empty() {
+        ev.id = lighttrack_core::new_id();
+    }
     normalize_ids(ev);
     stamp_api_key(ev, key_id);
     policy().validate(ev, now)?;

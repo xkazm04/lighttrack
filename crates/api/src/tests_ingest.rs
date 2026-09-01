@@ -1359,6 +1359,32 @@ async fn duplicate_event_id_returns_409() {
 }
 
 #[tokio::test]
+async fn blank_event_id_is_minted_not_stored_as_empty_pk() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    let body = json!({
+        "id": "",
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "usage": { "input": 1, "output": 1 }
+    });
+
+    // Two events with an explicit blank id must not collide on the primary key `""`.
+    let (s1, b1) = ingest(&app, &key, body.clone()).await;
+    assert_eq!(s1, StatusCode::OK, "{b1}");
+    let (s2, b2) = ingest(&app, &key, body).await;
+    assert_eq!(s2, StatusCode::OK, "{b2}");
+    let (id1, id2) = (b1["id"].as_str().unwrap(), b2["id"].as_str().unwrap());
+    assert!(
+        !id1.is_empty() && !id2.is_empty(),
+        "ids were minted: {b1} {b2}"
+    );
+    assert_ne!(id1, id2, "each blank id got its own");
+    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn key_lifecycle_list_shows_use_and_revoke_kills_auth() {
     let (state, store) = setup(Redactor::off());
     let key = make_key(&store, "proj-a");
