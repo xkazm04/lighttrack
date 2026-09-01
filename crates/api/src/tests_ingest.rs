@@ -67,7 +67,7 @@ pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
         auth_throttle: Arc::new(crate::auth_throttle::AuthThrottle::from_env()),
         // Empty cache: policies are back-filled lazily from the store on first sight, which is also
         // the path these tests exercise.
-        redaction_policies: Arc::new(crate::state::RedactionCache::new(HashMap::new())),
+        project_policies: Arc::new(crate::state::ProjectPolicyCache::new(HashMap::new())),
         activity: Arc::new(crate::storage::ActivityGauge::default()),
         maintenance: Arc::new(crate::storage::Maintenance::default()),
         maintenance_desc: "test fixture (no sweep task is spawned)".to_string(),
@@ -1383,6 +1383,60 @@ async fn blank_event_id_is_minted_not_stored_as_empty_pk() {
         "ids were minted: {b1} {b2}"
     );
     assert_ne!(id1, id2, "each blank id got its own");
+    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn disabled_project_refuses_ingest_on_both_doors_until_re_enabled() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state.clone());
+    let body = json!({
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "usage": { "input": 1, "output": 1 }
+    });
+
+    let (s, b) = ingest(&app, &key, body.clone()).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+
+    // Flip the switch the way PUT /v1/projects/:id does: update the row, invalidate the cache.
+    let flip = |enabled: bool| {
+        let mut p = store.get_project("proj-a").unwrap().unwrap();
+        p.enabled = enabled;
+        assert!(store.update_project(&p).unwrap());
+        state.project_policies.invalidate("proj-a");
+    };
+    flip(false);
+
+    // Door 1: the single-event POST is a 403 with the stable code, and nothing is stored.
+    let (s, b) = ingest(&app, &key, body.clone()).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{b}");
+    assert_eq!(b["error"]["code"], "forbidden", "{b}");
+    // Door 2: the batch item is `invalid` with the same code; the request itself is still 200.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/events/batch")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {key}"))
+        .body(Body::from(json!([body.clone()]).to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(v["invalid"], 1, "{v}");
+    assert_eq!(v["results"][0]["status"], "invalid", "{v}");
+    assert_eq!(v["results"][0]["code"], "forbidden", "{v}");
+    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
+
+    // The key still authenticates for reads — disabled means "no new events", not "locked out".
+    let (s, _) = get_json(&app, &key, "/v1/events?project=proj-a").await;
+    assert_eq!(s, StatusCode::OK);
+
+    flip(true);
+    let (s, b) = ingest(&app, &key, body).await;
+    assert_eq!(s, StatusCode::OK, "re-enabled: {b}");
     assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
 }
 

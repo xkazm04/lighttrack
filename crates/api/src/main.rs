@@ -186,7 +186,7 @@ use axum::{
     Router,
 };
 
-use lighttrack_core::{PriceBook, Redaction};
+use lighttrack_core::PriceBook;
 use lighttrack_store::{SqliteStore, Store};
 
 use auth::AuthMode;
@@ -228,9 +228,9 @@ async fn main() -> anyhow::Result<()> {
     type StartupState = (
         Arc<dyn Store + Send + Sync>,
         PriceBook,
-        std::collections::HashMap<String, Redaction>,
+        std::collections::HashMap<String, state::ProjectPolicy>,
     );
-    let (store, book, redaction_policies) = tokio::task::spawn_blocking(
+    let (store, book, project_policies) = tokio::task::spawn_blocking(
         move || -> anyhow::Result<StartupState> {
             let store: Arc<dyn Store + Send + Sync> = match &database_url {
                 Some(url) if url.starts_with("postgres") => {
@@ -259,13 +259,13 @@ async fn main() -> anyhow::Result<()> {
             // startup context allowed to call the store synchronously (Postgres `block_on`s
             // internally and panics on the async main thread — created-after-startup projects
             // are added on create / first sight).
-            let redaction_policies: std::collections::HashMap<_, _> = store
+            let project_policies: std::collections::HashMap<_, _> = store
                 .list_projects()
                 .unwrap_or_default()
                 .into_iter()
-                .map(|p| (p.id, p.redaction))
+                .map(|p| (p.id.clone(), state::ProjectPolicy::from(&p)))
                 .collect();
-            Ok((store, book, redaction_policies))
+            Ok((store, book, project_policies))
         },
     )
     .await??;
@@ -305,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
         rejections,
         ingest_guard,
         auth_throttle,
-        redaction_policies: Arc::new(state::RedactionCache::new(redaction_policies)),
+        project_policies: Arc::new(state::ProjectPolicyCache::new(project_policies)),
         activity: Arc::new(storage::ActivityGauge::default()),
         maintenance: Arc::new(storage::Maintenance::default()),
         maintenance_desc: maintenance_desc.clone(),

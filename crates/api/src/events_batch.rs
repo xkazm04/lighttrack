@@ -15,8 +15,8 @@ use lighttrack_core::{LimitStatus, LlmEvent};
 use lighttrack_store::{Admission, StoreError};
 
 use crate::auth::Principal;
-use crate::error::ApiError;
-use crate::events::{prepare_event, same_logical_event};
+use crate::error::{ApiError, ErrorCode};
+use crate::events::{disabled_project_msg, prepare_event, same_logical_event};
 use crate::events_admission::{breach_reason, on_admission};
 use crate::events_validate;
 use crate::guards::{
@@ -35,7 +35,8 @@ use crate::state::{spawn_db, AppState};
 /// Every variant carries `index` (the item's position in the request array), so positional
 /// correlation is explicit rather than load-bearing-but-unstated, and non-accepted variants carry a
 /// stable machine-readable `code` (the same taxonomy the single-event path returns:
-/// `bad_request` | `ts_too_old` | `ts_too_new` | `conflict` | `rate_limited` | `internal`) so a
+/// `bad_request` | `ts_too_old` | `ts_too_new` | `forbidden` | `conflict` | `rate_limited` |
+/// `internal`) so a
 /// client can branch without substring-matching English prose.
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
@@ -141,7 +142,7 @@ pub(crate) async fn post_batch(
             }
         };
         // Per-item policy lookup is a cache hit after the first event of each project in the batch.
-        let persistence = match crate::state::redaction_policy_for(&st, &pid).await {
+        let policy = match crate::state::project_policy_for(&st, &pid).await {
             Ok(p) => p,
             // Same rule as the store-error arm below: the raw error goes to the log, not the wire.
             Err(e) => {
@@ -155,7 +156,16 @@ pub(crate) async fn post_batch(
                 continue;
             }
         };
-        match prepare_event(&st, &mut ev, &pid, principal.key_id(), persistence) {
+        if !policy.enabled {
+            results.push(Some(BatchItem::Invalid {
+                index: i,
+                id: item_id,
+                code: ErrorCode::Forbidden.as_str(),
+                reason: disabled_project_msg(&pid),
+            }));
+            continue;
+        }
+        match prepare_event(&st, &mut ev, &pid, principal.key_id(), policy.redaction) {
             Ok(()) => {
                 valid_idx.push(i);
                 valid.push(ev);

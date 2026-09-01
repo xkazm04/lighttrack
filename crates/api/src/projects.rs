@@ -116,7 +116,8 @@ pub(crate) async fn insert_project(st: &AppState, proj: &Project) -> Result<(), 
     let store = st.store.clone();
     let pc = proj.clone();
     spawn_db(move || store.create_project(&pc)).await?;
-    st.redaction_policies.put(&proj.id, proj.redaction);
+    st.project_policies
+        .put(&proj.id, crate::state::ProjectPolicy::from(proj));
     Ok(())
 }
 
@@ -170,7 +171,7 @@ pub(crate) async fn update_project(
     }
     // Invalidate rather than overwrite: the next ingest re-reads the committed row, so the cache can
     // never disagree with what the store actually persisted.
-    st.redaction_policies.invalidate(&proj.id);
+    st.project_policies.invalidate(&proj.id);
     Ok(Json(proj))
 }
 

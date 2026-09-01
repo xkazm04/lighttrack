@@ -190,6 +190,15 @@ pub(crate) fn same_logical_event(stored: &LlmEvent, incoming: &LlmEvent) -> bool
         && stored.usage.output == incoming.usage.output
 }
 
+/// The refusal both ingest doors return for a project whose `enabled` flag is off. Names the fix:
+/// the flag is set through the same endpoint that cleared it.
+pub(crate) fn disabled_project_msg(pid: &str) -> String {
+    format!(
+        "project '{pid}' is disabled: ingest refused. Re-enable it with \
+         PUT /v1/projects/{pid} {{\"enabled\": true}}"
+    )
+}
+
 pub(crate) async fn post_event(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -197,8 +206,11 @@ pub(crate) async fn post_event(
 ) -> Result<Json<IngestResponse>, ApiError> {
     let principal = authenticate(&st, &headers).await?;
     let pid = resolve_ingest_project_ensuring(&st, &principal, &ev.project_id).await?;
-    let persistence = crate::state::redaction_policy_for(&st, &pid).await?;
-    prepare_event(&st, &mut ev, &pid, principal.key_id(), persistence)?;
+    let policy = crate::state::project_policy_for(&st, &pid).await?;
+    if !policy.enabled {
+        return Err(ApiError::forbidden(disabled_project_msg(&pid)));
+    }
+    prepare_event(&st, &mut ev, &pid, principal.key_id(), policy.redaction)?;
 
     // Admission control: evaluate the project's limits and insert in one atomic store step. An
     // enforcing (Throttle/Block) breach rejects the event — it is NOT recorded and we return 429 so
