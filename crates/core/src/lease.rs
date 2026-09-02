@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 /// did this lease start" and "when does it expire" — are the same Rust type and are trivially
 /// swappable at a call site, and swapping them turns a fence check into a liveness check that
 /// accepts any holder. Naming the fence makes that mistake a compile error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct LeaseFence(DateTime<Utc>);
 
@@ -52,7 +52,7 @@ impl From<DateTime<Utc>> for LeaseFence {
 /// distributed queue and the holder has to act on it (stop working, do not deliver, do not retry),
 /// which it cannot do if the answer is indistinguishable from a transient failure. The payload says
 /// what the record holds **now**, so the loser can name what beat it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum LeaseHeld {
     /// The write landed. `deadline` is the lease's new expiry when the call extended it.

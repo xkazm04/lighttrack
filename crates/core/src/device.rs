@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 /// `key_hash` follows the API-key scheme verbatim (`"<salt>:<sha256hex>"`), and the raw key —
 /// `ltd_<prefix>_<secret>` — is returned once at creation and never stored. `key_prefix` is the
 /// non-secret lookup handle.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Device {
     #[serde(default = "crate::new_id")]
     pub id: String,

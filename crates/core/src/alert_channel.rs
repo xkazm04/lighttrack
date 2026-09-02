@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::alert::{AlertKind, Severity};
 
 /// Where an alert goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelKind {
     /// A JSON POST, signed (see `X-LightTrack-Signature` in `docs/ALERTS.md`).
@@ -44,7 +44,7 @@ impl ChannelKind {
 
 /// One routing destination. `project_id: None` means **global** — it receives every project's
 /// alerts, which is exactly what the env-configured channels have always been.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AlertChannel {
     #[serde(default = "crate::new_id")]
     pub id: String,

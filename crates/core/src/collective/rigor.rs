@@ -59,7 +59,9 @@ pub fn weakest_determinism(a: Option<&str>, b: Option<&str>) -> Option<String> {
 /// `All` / `None` are **complete** claims: every contributor recorded the fact and they agree. Anything
 /// short of that is `Mixed` — including "they agree but somebody didn't say", because a claim resting
 /// on silence is not a claim. `Unknown` is nobody said anything at all.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Coverage {
     /// Every contributing run/source recorded the fact as true.

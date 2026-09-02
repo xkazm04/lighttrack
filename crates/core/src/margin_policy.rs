@@ -32,7 +32,7 @@ use crate::new_id;
 pub const POLICY_ORIGIN_PREFIX: &str = "margin_policy:";
 
 /// What makes a policy fire for one customer.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyTrigger {
     /// Gross margin percentage under this value (e.g. `20` → margin% < 20%). A cost-only row (no
@@ -46,7 +46,7 @@ pub enum PolicyTrigger {
 }
 
 /// What a fired policy does about it.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyAction {
     /// Raise an observe-only rule. The default stance: a guardrail an operator has not yet trusted
@@ -74,7 +74,7 @@ impl PolicyAction {
 }
 
 /// A standing margin guardrail for one project.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MarginPolicy {
     pub id: String,
     pub project_id: String,

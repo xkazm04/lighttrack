@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 /// The structured verdict an LLM judge returns. Used as the `--json-schema` for `claude -p`
 /// (lands in the `structured_output` field of the JSON envelope).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct JudgeVerdict {
     pub score: f64,
     #[serde(default = "one")]
@@ -46,7 +46,7 @@ pub const MAX_DIMENSIONS: usize = 32;
 pub const MAX_NOTES: usize = 8;
 
 /// One dimension's contribution to a judged verdict, kept so a stored score can answer *why*.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ScoreDim {
     pub key: String,
     /// The aggregated (mean-over-samples) dimension score.
@@ -80,7 +80,7 @@ pub struct ScoreDim {
 /// Structured provenance for a judged verdict: the per-dimension breakdown plus the reliability
 /// signals (agreement, sample accounting, bias/injection flags) that produced the scalar `value` on
 /// [`Score`]. Additive and nullable — a score posted without it is still a valid score.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ScoreDetail {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dimensions: Vec<ScoreDim>,
@@ -171,7 +171,9 @@ impl ScoreDetail {
 ///
 /// Typed here, defaulted to [`ScoreKind::Freeform`], and the legacy `rubric` string is kept verbatim
 /// beside it — this classifies existing verdicts rather than replacing their identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ScoreKind {
     /// An ad-hoc verdict with no rubric behind it (the online scorer's default judge).
@@ -244,7 +246,7 @@ impl ScoreKind {
 }
 
 /// A stored judge result, optionally tied to the event it scored.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Score {
     #[serde(default = "crate::new_id")]
     pub id: String,
@@ -334,7 +336,7 @@ impl Score {
 
 /// One case in a benchmark dataset. `output` is the candidate to judge; `expected` is an optional
 /// reference answer the judge can compare against.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BenchmarkCase {
     pub input: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -361,7 +363,7 @@ pub const RECURRENCE_KEY: &str = "schedule_interval_secs";
 pub const REGRESSION_DATASET_KEY: &str = "regression_dataset";
 
 /// A benchmark definition: a dataset + rubric + judge run repeatedly to track quality over time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Benchmark {
     #[serde(default = "crate::new_id")]
     pub id: String,
@@ -408,7 +410,7 @@ fn default_judge_model() -> String {
 }
 
 /// One execution of a [`Benchmark`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BenchmarkRun {
     #[serde(default = "crate::new_id")]
     pub id: String,

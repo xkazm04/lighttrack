@@ -22,7 +22,7 @@ use crate::score::ScoreDim;
 /// question and the store indexes them together: an event is production traffic a human graded, a
 /// dataset item is a curated golden case, and a score is a human *reviewing the judge* — the
 /// disagreement signal `GET /v1/scores?needs_review=1` reads.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", content = "id", rename_all = "snake_case")]
 pub enum LabelSubject {
     Event(String),
@@ -79,7 +79,7 @@ impl LabelSubject {
 /// `value` is normalized to 0..1 exactly as [`crate::Score::value`] is over `max`, so a label and a
 /// judge verdict on the same subject are directly comparable — which is the entire point, and the
 /// reason there is no `max` here to get out of step with the judge's.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Label {
     #[serde(default = "crate::new_id")]
     pub id: String,

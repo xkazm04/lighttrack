@@ -48,7 +48,7 @@ pub struct RunStat {
 
 /// A published digest entry: one `(provider, model, task_type)` bucket aggregated across an instance's
 /// runs. Purely aggregate — safe to share.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelDigestEntry {
     pub provider: String,
     pub model: String,
@@ -91,7 +91,7 @@ pub struct ModelDigestEntry {
 /// A full digest an instance contributes to a hub. The `contributor_id` is **opaque** (a hash) but a
 /// hub ignores it and derives identity from the presented bearer key; it stays on the wire only for
 /// backward compatibility.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CollectiveDigest {
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,

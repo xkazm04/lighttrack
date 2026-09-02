@@ -20,7 +20,19 @@ use serde_json::Value;
 /// What kind of condition fired. One variant per alert this system has ever produced — the wire
 /// literals match the `event` field webhook receivers have always been switching on, so a receiver
 /// written before the ledger existed keeps working.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AlertKind {
     /// A limit rule breached (`LimitStatus.breached`).
@@ -96,7 +108,18 @@ impl AlertKind {
 
 /// How loud an alert is. Ordered, so a channel's `min_severity` is a `>=` comparison.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
@@ -127,7 +150,7 @@ impl Severity {
 }
 
 /// One delivery attempt's outcome, appended to the alert as it fans out.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Delivery {
     /// The [`AlertChannel::id`] this went to, or a synthetic id for an env-configured global
     /// channel (`env:webhook`, `env:ntfy`, `env:email`).
@@ -140,7 +163,7 @@ pub struct Delivery {
 }
 
 /// One fired alert, with everything that happened to it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Alert {
     #[serde(default = "crate::new_id")]
     pub id: String,

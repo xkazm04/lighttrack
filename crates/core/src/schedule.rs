@@ -22,7 +22,7 @@ use serde_json::Value;
 pub const MIN_INTERVAL_SECS: u32 = 60;
 
 /// One recurring workload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Schedule {
     #[serde(default = "crate::new_id")]
     pub id: String,

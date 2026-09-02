@@ -40,7 +40,7 @@ impl MarginDimension {
 }
 
 /// LLM cost aggregated for one dimension value over the window (produced by the store from events).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct CostByDimension {
     /// The customer/product id (or prompt tag), or `None` for untagged (unattributed) cost.
     pub key: Option<String>,

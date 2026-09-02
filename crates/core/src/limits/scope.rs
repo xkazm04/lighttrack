@@ -42,7 +42,7 @@ impl<'a> ScopeDims<'a> {
 ///
 /// Serializes externally-tagged, e.g. `{"model":"gpt-4o"}` / `{"provider":"openai"}` /
 /// `{"name":"summarize"}` / `{"api_key":"<key-id>"}` / `{"customer":"cus_123"}`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LimitScope {
     Provider(String),

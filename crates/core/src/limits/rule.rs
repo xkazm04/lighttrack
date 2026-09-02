@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use super::{CostEvidence, Escalation, LimitScope, LimitStatus, Threshold, ThresholdBasis};
 
 /// What a limit measures over its window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum LimitMetric {
     #[default]
@@ -17,7 +19,9 @@ pub enum LimitMetric {
 }
 
 /// Rolling window a limit is evaluated over.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum LimitWindow {
     Hour,
@@ -86,7 +90,9 @@ impl LimitWindow {
 ///
 /// Both enforcing tiers reject at ingest admission (the event is not recorded). Inline *pre-call*
 /// blocking still requires the future gateway/proxy mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum LimitAction {
     #[default]
@@ -116,7 +122,7 @@ impl LimitAction {
 pub const DEFAULT_THROTTLE_START: f64 = 0.8;
 
 /// A per-project limit. Tripped by **monitored traffic only** — the scoring engine is exempt.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LimitRule {
     pub id: String,
     pub project_id: String,

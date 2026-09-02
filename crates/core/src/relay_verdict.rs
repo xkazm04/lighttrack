@@ -40,7 +40,7 @@ pub enum RelaySettle {
 
 /// What a cancel request did to a relay task. Mirrors [`crate::JobCancel`] — the same three honest
 /// answers, so the API never reports "cancelled" for a run that is still spending.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum RelayCancel {
     /// It was queued — nothing ever ran, and nothing ever will.

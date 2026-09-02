@@ -10,7 +10,7 @@ use crate::prompt_canary::{CanaryPolicy, LabelChange, MAX_LABEL_HISTORY};
 /// `{"production": 2, "staging": 5}`) fetched at runtime, plus an optional linked benchmark whose
 /// regression check gates promotion. The actual prompt text lives in [`PromptVersion`] rows, one per
 /// immutable version — so a registry edit is a new version, never an in-place overwrite.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Prompt {
     #[serde(default = "crate::new_id")]
     pub id: String,
@@ -77,7 +77,7 @@ impl Prompt {
 }
 
 /// One immutable version of a [`Prompt`]. `version` is monotonic per prompt (1, 2, 3, …).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PromptVersion {
     #[serde(default = "crate::new_id")]
     pub id: String,

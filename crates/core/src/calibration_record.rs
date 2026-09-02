@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::calibration::Agreement;
 
 /// One completed judge↔human calibration, stored.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CalibrationRecord {
     #[serde(default = "crate::new_id")]
     pub id: String,

@@ -4,7 +4,7 @@ use serde_json::Value;
 
 /// A unit of background work (Phase 3.6d). Enqueued by the API, executed by `lt-runner serve`,
 /// so long operations (benchmark runs) never block ingestion. Cloud path swaps the table for Pub/Sub.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Job {
     #[serde(default = "crate::new_id")]
     pub id: String,

@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 /// mechanical check the engine runs locally at zero tokens and zero cost, scored into the same
 /// weighting / floor / aggregation pipeline. Additive and defaulted: a rubric written before kinds
 /// existed deserializes as all-`Llm` and re-serializes byte-identically.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DimensionKind {
     /// Scored by the judge model against the dimension's description and anchors.
@@ -43,7 +45,7 @@ impl DimensionKind {
 
 /// Per-kind configuration for a deterministic dimension. Every field is optional, so one struct
 /// serves all kinds and an `llm` dimension serializes without it at all.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DimensionCheck {
     /// The literal target for `exact` / `contains` / `numeric` (and, optionally, `json_valid`).
     /// Defaults to the case's `expected` reference answer when unset.
@@ -92,7 +94,7 @@ fn default_true() -> bool {
 }
 
 /// One scored dimension of a rubric (e.g. correctness, completeness, faithfulness, concision).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RubricDimension {
     /// Stable key used in the judge's JSON output (must be a valid identifier-ish string).
     pub key: String,
@@ -121,7 +123,7 @@ fn default_weight() -> f64 {
 }
 
 /// A weighted, anchored rubric — the judge's scoring contract (see docs/BENCHMARK_FRAMEWORK.md §3).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Rubric {
     #[serde(default = "crate::new_id")]
     pub id: String,
