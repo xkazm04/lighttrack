@@ -98,7 +98,7 @@ pub(crate) fn calibrate(
     }
 
     let (jp, jm) = parse_judge_spec(&engine.model);
-    let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    let prices: Vec<ModelPriceRow> = crate::bench::fetch_prices(cli, http);
 
     let c = judge_set(
         engine,

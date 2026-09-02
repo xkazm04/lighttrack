@@ -23,7 +23,6 @@ use lighttrack_engine::{parse_judge_spec, EngineConfig};
 use crate::calibrate::{judge_set, resolve_rubric};
 use crate::calibration_post;
 use crate::cli::Cli;
-use crate::http::get;
 use crate::util::now_ts;
 
 /// Exit code the runner returns when a `--once` cycle ends untrusted, so an external scheduler / CI
@@ -119,7 +118,7 @@ pub(crate) fn watch(
     }
     let (jp, jm) = parse_judge_spec(&engine.model);
     let reserved = reserved_rubric(&jp, &jm);
-    let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    let prices: Vec<ModelPriceRow> = crate::bench::fetch_prices(cli, http);
 
     println!(
         "calibrate --watch: {} item(s), judge={jp}/{jm}, rubric={reserved}, every {}s (once={}), \
