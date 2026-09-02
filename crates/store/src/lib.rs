@@ -13,6 +13,7 @@ pub mod collective;
 pub mod conformance;
 pub mod pricing;
 mod rollup_compat;
+pub mod scope;
 pub mod sqlite;
 pub mod threshold;
 
@@ -35,6 +36,7 @@ use lighttrack_core::{
 
 pub use capabilities::{Capabilities, Surface};
 pub use collective::{replace_collective_contribution_nonatomic, CollectiveFilter, ReplaceAck};
+pub use scope::Scope;
 pub use sqlite::SqliteStore;
 pub use threshold::{
     needs_revenue, resolve_all as resolve_thresholds, resolve_from_windows, resolver,
