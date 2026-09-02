@@ -23,6 +23,7 @@ acknowledged it, and what came of it.
 | `bench_run` | a benchmark run finished (the CI gate contract's completion hook) | `info` |
 | `ingest_rejected` | periodic flush: how many ingest attempts the caps turned away | `info` |
 | `prompt_canary_regressed` | a prompt's canary label is measurably worse than its production label | `warning` |
+| `relay_task_unroutable` | queued relay tasks name an action no enrolled device advertises any more | `warning` |
 
 `prompt_canary_regressed` is the one alert that fires **after** a promotion, which is where the
 prompt registry used to stop looking. It requires both an evidence floor (`min_n` verdicts on each

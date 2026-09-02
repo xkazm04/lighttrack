@@ -57,6 +57,9 @@ pub enum AlertKind {
     /// against (M23). The one alert that fires *after* a promotion, which is where a registry
     /// previously stopped looking.
     PromptCanaryRegressed,
+    /// Queued relay tasks name an action no enrolled device advertises any more (M18): the fleet
+    /// changed under work that was routable when it was accepted.
+    RelayTaskUnroutable,
 }
 
 impl AlertKind {
@@ -70,6 +73,7 @@ impl AlertKind {
         AlertKind::BenchRun,
         AlertKind::IngestRejected,
         AlertKind::PromptCanaryRegressed,
+        AlertKind::RelayTaskUnroutable,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -83,6 +87,7 @@ impl AlertKind {
             AlertKind::BenchRun => "bench_run",
             AlertKind::IngestRejected => "ingest_rejected",
             AlertKind::PromptCanaryRegressed => "prompt_canary_regressed",
+            AlertKind::RelayTaskUnroutable => "relay_task_unroutable",
         }
     }
 
@@ -100,7 +105,8 @@ impl AlertKind {
             | AlertKind::ForecastAlert
             | AlertKind::ErrorSpike
             | AlertKind::ScoreDrop
-            | AlertKind::PromptCanaryRegressed => Severity::Warning,
+            | AlertKind::PromptCanaryRegressed
+            | AlertKind::RelayTaskUnroutable => Severity::Warning,
             AlertKind::BenchRun | AlertKind::IngestRejected => Severity::Info,
         }
     }
