@@ -1,0 +1,176 @@
+{
+  "$schema": "../schema.json",
+  "note": "Parse only. What a client DOES with a limit view - pre-spend admission, backoff, shedding its own traffic - is M5; this file fixes what the view IS, so the three SDKs cannot each invent a different reading of the same response. Bodies are the real IngestResponse / ApiError shapes from crates/api.",
+  "limits": [
+    {
+      "name": "accepted-with-proximity",
+      "why": "An accepted write carries the worst usage ratio among the rules that applied, so a client can see the wall coming without polling /v1/limits/status.",
+      "status": 200,
+      "headers": {},
+      "body": {
+        "id": "01J8W0",
+        "project_id": "demo",
+        "cost_usd": 0.0042,
+        "ts": "2026-09-01T10:00:00.000000000Z",
+        "usage_ratio": 0.82
+      },
+      "expect": {
+        "accepted": true,
+        "rate_limited": false,
+        "usage_ratio": 0.82,
+        "shed_fraction": null,
+        "retry_after_secs": null,
+        "error_code": null
+      }
+    },
+    {
+      "name": "accepted-under-graduated-shedding",
+      "why": "shed_fraction rising is the signal to slow down BEFORE the hard 429s start. It is omitted entirely when nothing is throttling, so absent and 0.0 must not be conflated.",
+      "status": 200,
+      "headers": {},
+      "body": {
+        "id": "01J8W1",
+        "project_id": "demo",
+        "cost_usd": 0.0011,
+        "ts": "2026-09-01T10:00:01.000000000Z",
+        "usage_ratio": 0.95,
+        "shed_fraction": 0.25
+      },
+      "expect": {
+        "accepted": true,
+        "rate_limited": false,
+        "usage_ratio": 0.95,
+        "shed_fraction": 0.25,
+        "retry_after_secs": null,
+        "error_code": null
+      }
+    },
+    {
+      "name": "accepted-no-limits-configured",
+      "why": "A project with no limits reports no ratio at all. null means unknown, not zero - a client that read it as 0.0 would think it had infinite headroom.",
+      "status": 201,
+      "headers": {},
+      "body": { "id": "01J8W2", "project_id": "demo", "cost_usd": null, "ts": "2026-09-01T10:00:02.000000000Z" },
+      "expect": {
+        "accepted": true,
+        "rate_limited": false,
+        "usage_ratio": null,
+        "shed_fraction": null,
+        "retry_after_secs": null,
+        "error_code": null
+      }
+    },
+    {
+      "name": "accepted-duplicate-replay",
+      "why": "A retried POST of an already-recorded event returns the original outcome. Still accepted; nothing is double-counted.",
+      "status": 200,
+      "headers": {},
+      "body": {
+        "id": "01J8W0",
+        "project_id": "demo",
+        "cost_usd": 0.0042,
+        "ts": "2026-09-01T10:00:00.000000000Z",
+        "duplicate": true,
+        "usage_ratio": 0.82
+      },
+      "expect": {
+        "accepted": true,
+        "rate_limited": false,
+        "usage_ratio": 0.82,
+        "shed_fraction": null,
+        "retry_after_secs": null,
+        "error_code": null
+      }
+    },
+    {
+      "name": "hard-cap-429",
+      "why": "A hard cap advertises the wait until its window ages out. Header name casing is not guaranteed by HTTP, so the lookup has to be case-insensitive - this case spells it Retry-After.",
+      "status": 429,
+      "headers": { "Retry-After": "3600" },
+      "body": { "error": { "code": "rate_limited", "message": "project 'demo' is over its monthly cost cap" } },
+      "expect": {
+        "accepted": false,
+        "rate_limited": true,
+        "usage_ratio": null,
+        "shed_fraction": null,
+        "retry_after_secs": 3600,
+        "error_code": "rate_limited"
+      }
+    },
+    {
+      "name": "graduated-shed-429",
+      "why": "A shed asks for a short pause, not the window. Same status, different schedule - and this case spells the header lower-case.",
+      "status": 429,
+      "headers": { "retry-after": "5" },
+      "body": { "error": { "code": "rate_limited", "message": "shedding: 40% of ingest is being refused" } },
+      "expect": {
+        "accepted": false,
+        "rate_limited": true,
+        "usage_ratio": null,
+        "shed_fraction": null,
+        "retry_after_secs": 5,
+        "error_code": "rate_limited"
+      }
+    },
+    {
+      "name": "rejected-bad-request",
+      "why": "Not every rejection is a limit. A 400 must not be read as back-pressure, or a client would sleep an hour over a typo.",
+      "status": 400,
+      "headers": {},
+      "body": { "error": { "code": "bad_request", "message": "project_id is required" } },
+      "expect": {
+        "accepted": false,
+        "rate_limited": false,
+        "usage_ratio": null,
+        "shed_fraction": null,
+        "retry_after_secs": null,
+        "error_code": "bad_request"
+      }
+    },
+    {
+      "name": "overloaded-503",
+      "why": "Back-pressure from the server rather than from a project's budget. It carries a Retry-After too, and a client should honour it, but it is not rate_limited.",
+      "status": 503,
+      "headers": { "Retry-After": "30" },
+      "body": { "error": { "code": "overloaded", "message": "ingest queue is full" } },
+      "expect": {
+        "accepted": false,
+        "rate_limited": false,
+        "usage_ratio": null,
+        "shed_fraction": null,
+        "retry_after_secs": 30,
+        "error_code": "overloaded"
+      }
+    },
+    {
+      "name": "unparseable-retry-after",
+      "why": "Retry-After may legally be an HTTP-date. The SDKs do not parse dates; the contract is that an unreadable value is null, never 0 (which would mean retry immediately).",
+      "status": 429,
+      "headers": { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" },
+      "body": { "error": { "code": "rate_limited", "message": "over cap" } },
+      "expect": {
+        "accepted": false,
+        "rate_limited": true,
+        "usage_ratio": null,
+        "shed_fraction": null,
+        "retry_after_secs": null,
+        "error_code": "rate_limited"
+      }
+    },
+    {
+      "name": "error-without-a-body",
+      "why": "A proxy can return a bare status. Everything unknown stays null.",
+      "status": 502,
+      "headers": {},
+      "body": null,
+      "expect": {
+        "accepted": false,
+        "rate_limited": false,
+        "usage_ratio": null,
+        "shed_fraction": null,
+        "retry_after_secs": null,
+        "error_code": null
+      }
+    }
+  ]
+}
