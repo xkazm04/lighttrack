@@ -31,13 +31,19 @@ use lighttrack_store::Scope as TenantScope;
 pub(crate) const ENV_WEBHOOK: &str = "env:webhook";
 pub(crate) const ENV_NTFY: &str = "env:ntfy";
 pub(crate) const ENV_EMAIL: &str = "env:email";
+/// The dedicated `LIGHTTRACK_BENCH_WEBHOOK` receiver: a global channel that wants `bench_run` only.
+pub(crate) const ENV_BENCH_WEBHOOK: &str = "env:bench-webhook";
 
 /// The env destinations as global channel rows. No severity floor and no kind filter: this is the
 /// pre-routing behaviour restated, and quietly narrowing it would silence alerts an operator is
 /// receiving today.
 pub(crate) fn env_channels(cfg: &AlertConfig) -> Vec<AlertChannel> {
     let mut out = Vec::new();
-    let mut push = |id: &str, kind: ChannelKind, target: String, key: Option<String>| {
+    let mut push = |id: &str,
+                    kind: ChannelKind,
+                    target: String,
+                    key: Option<String>,
+                    kinds: Vec<AlertKind>| {
         out.push(AlertChannel {
             id: id.to_string(),
             project_id: None,
@@ -46,7 +52,7 @@ pub(crate) fn env_channels(cfg: &AlertConfig) -> Vec<AlertChannel> {
             secret_hash: key,
             prev_secret_hash: None,
             min_severity: Severity::Info,
-            kinds: Vec::new(),
+            kinds,
             enabled: true,
             created_at: Utc::now(),
         });
@@ -57,14 +63,39 @@ pub(crate) fn env_channels(cfg: &AlertConfig) -> Vec<AlertChannel> {
             ChannelKind::Webhook,
             u.clone(),
             cfg.webhook_key.clone(),
+            Vec::new(),
+        );
+    }
+    // The dedicated benchmark receiver (`LIGHTTRACK_BENCH_WEBHOOK`) is a channel for one kind. It was
+    // read from env and named in the startup banner, but nothing ever delivered to it: the CI
+    // receiver subscribed to run completions got nothing once delivery went through routing. Only
+    // synthesised when it differs from the general webhook — the config falls back to that URL, and
+    // the same receiver must not get every run twice.
+    if let Some(u) = cfg
+        .bench_webhook
+        .as_ref()
+        .filter(|b| Some(*b) != cfg.webhook.as_ref())
+    {
+        push(
+            ENV_BENCH_WEBHOOK,
+            ChannelKind::Webhook,
+            u.clone(),
+            None,
+            vec![AlertKind::BenchRun],
         );
     }
     if let Some(u) = &cfg.ntfy {
-        push(ENV_NTFY, ChannelKind::Ntfy, u.clone(), None);
+        push(ENV_NTFY, ChannelKind::Ntfy, u.clone(), None, Vec::new());
     }
     if let Some(r) = &cfg.resend {
         // One row for the whole recipient list: Resend takes an array, so this is one delivery.
-        push(ENV_EMAIL, ChannelKind::Email, r.to.join(","), None);
+        push(
+            ENV_EMAIL,
+            ChannelKind::Email,
+            r.to.join(","),
+            None,
+            Vec::new(),
+        );
     }
     out
 }
@@ -282,5 +313,29 @@ mod tests {
     #[test]
     fn no_env_destination_synthesises_no_channel() {
         assert!(env_channels(&cfg(None, None)).is_empty());
+    }
+
+    /// `LIGHTTRACK_BENCH_WEBHOOK` on its own must reach a receiver — and when it merely falls back
+    /// to the general webhook it must not make that receiver hear every run twice.
+    #[test]
+    fn the_dedicated_bench_webhook_is_a_bench_run_only_channel_and_never_a_duplicate() {
+        let mut only_bench = cfg(None, None);
+        only_bench.bench_webhook = Some("https://ci.test/runs".into());
+        let ch = env_channels(&only_bench);
+        assert_eq!(ch.len(), 1);
+        assert_eq!(ch[0].id, ENV_BENCH_WEBHOOK);
+        assert!(ch[0].accepts(AlertKind::BenchRun, Severity::Info));
+        assert!(
+            !ch[0].accepts(AlertKind::LimitBreach, Severity::Critical),
+            "a CI receiver subscribed to run completions gets nothing else"
+        );
+
+        let mut fallback = cfg(Some("https://hook.test/x"), None);
+        fallback.bench_webhook = Some("https://hook.test/x".into());
+        assert_eq!(
+            env_channels(&fallback).len(),
+            1,
+            "the fallback is the same receiver, not a second channel"
+        );
     }
 }

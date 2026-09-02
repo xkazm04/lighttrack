@@ -30,6 +30,7 @@
 //! Config is env-global; env destinations are synthesised as **global channels** (see [`routing`]),
 //! and per-project routing is added on top with `PUT /v1/projects/:id/alert-channels`:
 //!   LIGHTTRACK_ALERT_WEBHOOK              POST a JSON body (Slack/Discord/custom)
+//!   LIGHTTRACK_BENCH_WEBHOOK              a `bench_run`-only webhook (falls back to the one above)
 //!   LIGHTTRACK_ALERT_NTFY                 POST a text body to an ntfy topic URL
 //!   LIGHTTRACK_ALERT_RESEND_KEY           Resend API key — enables email delivery
 //!   LIGHTTRACK_ALERT_EMAIL_TO             comma-separated recipient(s) (required for email)
