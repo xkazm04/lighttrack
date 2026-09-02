@@ -96,6 +96,12 @@ mod table {
         // let the thing being measured edit the measurement.
         r("/v1/datasets/:id/items/from-label", NoMethod, Admin),
         r("/v1/datasets/:id/labels", READ, NoMethod),
+        // M24 — lineage. Forking and importing mint the corpus a benchmark run is pinned to, which
+        // is configuration, not observability traffic: admin only, like every other corpus write.
+        // The version walk is an ordinary project read.
+        r("/v1/datasets/:id/fork", NoMethod, Admin),
+        r("/v1/datasets/:id/items/import", NoMethod, Admin),
+        r("/v1/projects/:id/datasets/versions", READ, NoMethod),
         r("/v1/labels", READ, MANAGE),
         r("/v1/calibrations", READ, MANAGE),
         r("/v1/judges/trust", READ, NoMethod),

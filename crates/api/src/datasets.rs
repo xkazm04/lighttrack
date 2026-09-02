@@ -39,6 +39,8 @@ pub(crate) async fn create_dataset(
         frozen: false,
         source: req.source,
         created_at: Utc::now(),
+        // A dataset created directly is the root of its own lineage; only a fork has a parent.
+        parent_id: None,
     };
     let store = st.store.clone();
     let d2 = d.clone();
