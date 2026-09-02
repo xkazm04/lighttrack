@@ -21,6 +21,8 @@ const NAMES: &[&str] = &[
     "create_dataset",
     "add_dataset_item",
     "freeze_dataset",
+    "fork_dataset",
+    "import_dataset_items",
     "create_rubric",
     "record_label",
     "create_benchmark",
@@ -94,6 +96,25 @@ pub(crate) fn tools() -> Vec<Value> {
             "Freeze a dataset so it becomes immutable, fixing the input half of run comparability. \n             Runs months apart are only comparable if the models under test have gained no exposure \n             to the cases meanwhile, which imported datasets cannot guarantee. Idempotent.",
             json!({"type":"object","properties":{"dataset":{"type":"string"}},"required":["dataset"]}),
             true),
+        wtool("fork_dataset",
+            "Fork a FROZEN dataset into the next version of its name (M24): items and their human labels copied, unfrozen, parent linked. This is how a golden set is extended — freezing is a checkpoint, not a dead end, and writing to the frozen one would rewrite what a finished run was scored against. The new version's `version` is what a run's dataset_pin records, so two runs over different corpora stop comparing as if they were the same.",
+            json!({"type":"object","properties":{"dataset":{"type":"string","description":"id of the dataset to fork"}},"required":["dataset"]}),
+            false),
+        wtool("import_dataset_items",
+            "Mine stored rows into an UNFROZEN dataset (M24). Strategies: recent (newest), random (uniform over what matched), stratified (a per model+status quota, so a low-volume model is represented rather than drowned), errors (failures only). `from: scores` joins verdicts, which is what makes a failure-mined regression set possible. Mined production text is scrubbed on the way in. Returns how many cases were WRITTEN — with dedupe, a near-duplicate of a case already in the set is not, and 0 is a successful answer. 409 if the target is frozen: fork it first.",
+            json!({"type":"object","properties":{
+                "dataset":{"type":"string","description":"id of the dataset to import into"},
+                "from":{"type":"string","enum":["events","scores"],"description":"which table the cases come from (default events)"},
+                "strategy":{"type":"string","enum":["recent","random","stratified","errors"],"description":"how to choose them (default recent)"},
+                "n":{"type":"integer","description":"how many to mine (default 50, cap 5000)"},
+                "dedupe":{"type":"boolean","description":"skip cases whose normalised input is already in the set (default false)"},
+                "below":{"type":"number","description":"with from=scores: only verdicts whose normalised value (value/max) is below this"},
+                "model":{"type":"string","description":"only events from this model"},
+                "status":{"type":"string","enum":["success","error","timeout"],"description":"only events with this outcome"},
+                "since":{"type":"string","description":"RFC3339: only events at or after this instant"},
+                "event_ids":{"type":"array","items":{"type":"string"},"description":"import exactly these events, bypassing the filter and strategy"}
+            },"required":["dataset"]}),
+            false),
         wtool("record_label",
             "Record one human verdict (M11) — the ground truth a judge is calibrated against. `labeler` is required: a verdict with no attribution cannot be audited, which is how a calibration result becomes a number nobody can defend.",
             json!({"type":"object","properties":{
@@ -252,6 +273,17 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
             Ok(d) => c.post(&format!("/v1/datasets/{d}/freeze"), &json!({})),
             Err(e) => Err(e),
         },
+        "fork_dataset" => match need(args, "dataset") {
+            Ok(d) => c.post(&format!("/v1/datasets/{d}/fork"), &json!({})),
+            Err(e) => Err(e),
+        },
+        "import_dataset_items" => match need(args, "dataset") {
+            Ok(d) => c.post(
+                &format!("/v1/datasets/{d}/items/import"),
+                &import_spec(args),
+            ),
+            Err(e) => Err(e),
+        },
         "record_label" => post_with(
             c,
             args,
@@ -387,6 +419,30 @@ fn post_put(
 }
 
 /// Require a string arg.
+/// Build the `ImportSpec` body from `import_dataset_items`' flat arguments.
+///
+/// Flat on the wire and nested on the way out, deliberately: the API's spec nests the row predicates
+/// under `filter`, and asking an agent to construct a two-level object correctly — for a tool it
+/// will call once — is how a tool call becomes three attempts. The nesting is mechanical, so it
+/// happens here.
+fn import_spec(args: &Value) -> Value {
+    let mut filter = serde_json::Map::new();
+    for k in ["model", "status", "since", "below", "pass"] {
+        if let Some(v) = args.get(k) {
+            if !v.is_null() {
+                filter.insert(k.to_string(), v.clone());
+            }
+        }
+    }
+    let mut spec = pick(args, &["from", "strategy", "n", "dedupe", "event_ids"]);
+    if let Some(m) = spec.as_object_mut() {
+        if !filter.is_empty() {
+            m.insert("filter".to_string(), Value::Object(filter));
+        }
+    }
+    spec
+}
+
 fn need(args: &Value, key: &str) -> Result<String, String> {
     args.get(key)
         .and_then(Value::as_str)
