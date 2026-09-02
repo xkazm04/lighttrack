@@ -43,6 +43,11 @@ pub(crate) enum Cmd {
         #[arg(long)]
         project: Option<String>,
     },
+    /// The model price book: what is priced, what is not, and what a rate used to be.
+    Prices {
+        #[command(subcommand)]
+        action: PricesCmd,
+    },
     /// Recent events.
     Events {
         #[arg(long)]
@@ -104,6 +109,26 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         action: CollectiveCmd,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum PricesCmd {
+    /// The rates in force today, one row per model.
+    List,
+    /// Models carrying traffic the price book could not cost, loudest first.
+    ///
+    /// While this list is non-empty, every cost, margin, forecast and limit number over the window
+    /// is a FLOOR — those calls are stored with no cost at all, never a zero. Close a row with
+    /// `PUT /v1/prices/<provider>/<model>?fill_unpriced=1`.
+    Unpriced {
+        #[arg(long)]
+        project: Option<String>,
+        /// RFC3339 window start (default: 30 days ago).
+        #[arg(long)]
+        since: Option<String>,
+    },
+    /// Every stored rate for one model, newest first — what a call in a past window really cost.
+    History { provider: String, model: String },
 }
 
 #[derive(Subcommand)]

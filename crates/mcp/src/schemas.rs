@@ -22,6 +22,8 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "list_limits" => list_of(limit_rule()),
         "list_margin_policies" => list_of(margin_policy()),
         "list_prices" => list_of(price_row()),
+        "list_price_history" => list_of(price_row()),
+        "list_unpriced_models" => unpriced_resp(),
         "list_benchmarks" => list_of(benchmark()),
         "get_benchmark" => benchmark(),
         "get_benchmark_runs" => list_of(benchmark_run()),
@@ -303,8 +305,28 @@ fn price_row() -> Value {
     obj(json!({
         "provider": {"type":"string"}, "model": {"type":"string"},
         "input_per_mtok": {"type":"number"}, "output_per_mtok": {"type":"number"},
-        "cached_input_per_mtok": {"type":["number","null"]}, "effective_date": {"type":"string"},
-        "source_url": {"type":["string","null"]}
+        "cached_input_per_mtok": {"type":["number","null"]}, "effective_from": {"type":"string"},
+        "source_url": {"type":["string","null"]},
+        "verified_at": {"type":["string","null"]}, "note": {"type":["string","null"]}
+    }))
+}
+
+/// `list_unpriced_models` — the ledger, plus how fresh the rates that *did* apply are.
+fn unpriced_resp() -> Value {
+    obj(json!({
+        "since": {"type":"string"},
+        "unpriced_calls": {"type":"integer"},
+        "notes": {"type":"string"},
+        "models": {"type":"array","items": obj(json!({
+            "provider": {"type":"string"}, "model": {"type":"string"},
+            "calls": {"type":"integer"},
+            "input_tokens": {"type":"integer"}, "output_tokens": {"type":"integer"},
+            "first_seen": {"type":"string"}, "last_seen": {"type":"string"}
+        }))},
+        "price_book": obj(json!({
+            "verified_at": {"type":["string","null"]}, "stale": {"type":"boolean"},
+            "stale_after_days": {"type":"integer"}, "rows": {"type":"integer"}
+        }))
     }))
 }
 

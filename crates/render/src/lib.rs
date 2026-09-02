@@ -27,6 +27,7 @@ mod rubrics;
 mod schedules;
 mod scores;
 mod traces;
+mod unpriced;
 
 /// Render an API response to Markdown for the given logical `kind` (an MCP tool name, or the matching
 /// CLI verb). Returns `None` when there is no renderer for `kind`, or the value shape is unexpected —
@@ -46,6 +47,8 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "get_limit_status" => limits::status(v),
         "list_limits" => limits::list(v),
         "list_prices" => prices::list(v),
+        "list_price_history" => prices::history(v),
+        "list_unpriced_models" => unpriced::ledger(v),
         "list_benchmarks" => benchmarks::list(v),
         "get_benchmark" => benchmarks::detail(v),
         "get_benchmark_runs" => benchmarks::runs(v),
