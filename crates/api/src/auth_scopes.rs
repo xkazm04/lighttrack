@@ -71,12 +71,17 @@ mod table {
         r("/v1/traces/:id/score", NoMethod, INGEST),
         r("/v1/costs", READ, NoMethod),
         r("/v1/costs/prompts", READ, NoMethod),
+        // The unpriced-traffic ledger. Project-scoped like the cost rollups it qualifies — a
+        // project key must be able to see that its OWN cost numbers are a floor.
+        r("/v1/costs/unpriced", READ, NoMethod),
         r("/v1/usecases", READ, NoMethod),
         // The grouped primitive behind every cost surface. Project-scoped like the fixed
         // rollups above; the `api_key` dimension is gated to admins inside the handler.
         r("/v1/rollup", READ, NoMethod),
         r("/v1/scores", READ, INGEST),
         r("/v1/prices", READ, NoMethod),
+        // The price timeline is a read of the same book `/v1/prices` exposes, so the same scope.
+        r("/v1/prices/history/:provider/:model", READ, NoMethod),
         r("/v1/prices/:provider/:model", NoMethod, Admin),
         r("/v1/projects/:id/datasets", READ, Admin),
         r("/v1/datasets/:id", READ, NoMethod),
