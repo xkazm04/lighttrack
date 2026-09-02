@@ -1,10 +1,72 @@
-# Pricing — where a cost number comes from, and how much to trust it
+# Pricing: tiers, batch & flex
 
-Every cost, margin, forecast and limit number in LightTrack is a sum over `events.cost_usd`. This
-document is about the one question that sum cannot answer on its own: **where did each of those
-numbers come from?**
+LightTrack computes per-event cost from a **DB-backed price book** (`model_prices`, seeded once from
+`config/pricing.json`, then hot-swappable). Each row is `(provider, model, input_per_mtok,
+output_per_mtok, cached_input_per_mtok?)`. Cost = `input·in_rate + output·out_rate + cached·cached_rate`
+(cached tokens fall back to the input rate when no cached rate is set).
 
-The short version: a stored cost is one of four things, and they are not interchangeable.
+Beyond plain per-model rates, the book supports **prompt-length tiers** and **batch / flex** rates —
+encoded as ordinary price rows with a modifier in the `model` name, so there is **no schema change**
+and you manage them through the same `PUT /v1/prices/:provider/:model` endpoint.
+
+## Variant rows
+
+| Row `model`            | Meaning |
+|------------------------|---------|
+| `gemini-2.5-pro`       | base / standard rate |
+| `gemini-2.5-pro@in>200000` | **prompt-length tier**: applies when input tokens exceed 200000 |
+| `gpt-4o@batch`         | **batch** rate |
+| `gpt-4o@flex`          | **flex** (priority) rate |
+
+Resolution per call:
+1. If the call's mode is `batch`/`flex` and a `@batch`/`@flex` row exists → use it; otherwise fall back
+   to standard rates.
+2. Standard lane: among `@in>N` rows, the **highest threshold the input exceeds** wins; if none, the
+   base row.
+3. Then the usual date-suffix fallback applies (e.g. `claude-haiku-4-5-20251001` → `claude-haiku-4-5`).
+
+Tiers and mode variants compose only one level deep (a `@batch` row is a flat rate; it does not also
+apply `@in>N` tiers). Define the variants you actually need.
+
+## Setting rates
+
+```bash
+# base
+curl -X PUT "$API/v1/prices/google/gemini-2.5-pro" -H 'authorization: Bearer <admin>' \
+  -d '{"input_per_mtok":1.25,"output_per_mtok":10.0}'
+# long-context tier (URL-encode @ and > → %40 %3E)
+curl -X PUT "$API/v1/prices/google/gemini-2.5-pro%40in%3E200000" -H 'authorization: Bearer <admin>' \
+  -d '{"input_per_mtok":2.5,"output_per_mtok":15.0}'
+# batch rate
+curl -X PUT "$API/v1/prices/openai/gpt-4o%40batch" -H 'authorization: Bearer <admin>' \
+  -d '{"input_per_mtok":1.25,"output_per_mtok":5.0}'
+```
+
+(You can also seed any of these in `config/pricing.json` under `models`, keyed `"<provider>/<model>"`.)
+
+## Telling LightTrack a call is batch / flex
+
+The event carries the lane via either field (no new event column):
+
+- `metadata.pricing_mode = "batch" | "flex" | "standard"` (explicit), **or**
+- a tag: `"batch"`, or `"flex"` / `"priority"`.
+
+Default is standard. Example ingest body:
+
+```json
+{ "provider": "openai", "model": "gpt-4o", "usage": { "input": 1000000, "output": 1000000 },
+  "metadata": { "pricing_mode": "batch" } }
+```
+
+The client SDKs (`clients/`) pass these through their `metadata` / `tags` options.
+
+---
+
+# Where a cost number comes from, and how much to trust it
+
+Everything above is about *rates*. This half is about the question a rate cannot answer on its own:
+for any given stored `cost_usd`, **where did that number come from?** A stored cost is one of four
+things, and they are not interchangeable.
 
 ## Stamped vs filled vs imputed vs absent
 
@@ -40,7 +102,7 @@ GET /v1/costs/unpriced?project=<id>&since=<rfc3339>      # READ scope; window de
       "first_seen": "2026-08-02T00:00:00Z", "last_seen": "2026-08-30T00:00:00Z" }
   ],
   "unpriced_calls": 4000,
-  "notes": "…every cost, margin and limit number over this window is a FLOOR until these are priced…",
+  "notes": "...every cost, margin and limit number over this window is a FLOOR until these are priced...",
   "price_book": { "verified_at": "2026-05-31T00:00:00Z", "stale": true,
                   "stale_after_days": 60, "rows": 41 }
 }
@@ -58,14 +120,14 @@ Also available as `lt prices unpriced` and as the MCP read tool `list_unpriced_m
 PUT /v1/prices/acme/zoo-1?fill_unpriced=1        # admin
 { "input_per_mtok": 2.0, "output_per_mtok": 6.0,
   "verified_at": "2026-09-01", "note": "vendor pricing page" }
-→ { …the stored row…, "filled": 4000, "remaining_unpriced": 0 }
+-> { ...the stored row..., "filled": 4000, "remaining_unpriced": 0 }
 ```
 
 What the fill does and does not do:
 
 * Only rows with `cost_usd IS NULL` **for that exact `(provider, model)`** are eligible.
-* Each row is priced through the *same* `PriceBook::cost_usd_mode` ingest uses, so prompt-length
-  tiers (`@in>N`) and batch/flex lanes resolve exactly as they would have at the time.
+* Each row is priced through the *same* resolution ingest uses, so the prompt-length tiers and
+  batch/flex lanes documented above apply exactly as they would have at the time.
 * Every written row gets `metadata.cost_source = "book_fill"` and `metadata.priced_at`. The caller's
   own metadata (customer, product, prompt tag) is untouched.
 * It is **idempotent**: a second run finds nothing left and reports `filled: 0`.
@@ -83,7 +145,8 @@ adds a row; it does not overwrite the row that priced last quarter's traffic.
 * `GET /v1/prices/history/:provider/:model` — the whole timeline, newest first. This is what a cost
   number from a past window is defended with.
 * `PUT` accepts `effective_from` (default now), `verified_at`, and a free-text `note`. Writing the
-  same `(provider, model, effective_from)` again corrects that one point on the timeline.
+  same `(provider, model, effective_from)` again corrects that one point on the timeline. The
+  pre-M26 body spelling `effective_date` is still accepted.
 
 Existing deployments migrate automatically on the next start: SQLite rebuilds the table (the primary
 key changes, which `ALTER` cannot express) carrying each row's `effective_date` across as its
