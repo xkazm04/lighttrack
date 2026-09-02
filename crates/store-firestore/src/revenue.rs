@@ -209,6 +209,45 @@ mod tests {
         assert_eq!(got.kind, RevenueKind::OneTime);
         assert_eq!(got.period_start, None);
         assert_eq!(got.ts, ev.ts);
+        // FX provenance survives the typed-value codec. `amount_usd` is derived; without the
+        // provider's own figure and the rate behind it, a wrong conversion is permanently
+        // un-correctable on this backend — the row could only be re-ingested, never repriced.
+        assert_eq!(got.amount_minor, Some(2_000));
+        assert_eq!(got.fx_rate, Some(1.0));
+        assert_eq!(got.fx_book_version.as_deref(), Some("test-book"));
+        assert_eq!(got.converted, Some(true));
+    }
+
+    /// The three-way distinction has to survive storage: absent is "written before FX provenance
+    /// existed" and reads differently from a stored `false`. Firestore's `fbool` folds absence into
+    /// `false`, which is why this codec deliberately does not use it.
+    #[test]
+    fn an_unstamped_revenue_row_round_trips_as_unknown_not_as_unconverted() {
+        let legacy = RevenueEvent {
+            id: "r-legacy".into(),
+            project_id: "p1".into(),
+            source: "manual".into(),
+            external_id: None,
+            customer_id: None,
+            product_id: None,
+            amount_usd: 70.0,
+            currency: "USD".into(),
+            amount_minor: None,
+            fx_rate: None,
+            fx_book_version: None,
+            converted: None,
+            kind: RevenueKind::OneTime,
+            period_start: None,
+            period_end: None,
+            ts: t("2026-06-10T00:00:00Z"),
+        };
+        let got = roundtrip(&legacy);
+        assert_eq!(got.converted, None, "absence is not `false`");
+        assert_eq!(got.amount_minor, None);
+        assert!(
+            got.is_converted(),
+            "…and a USD row infers as converted rather than being flagged approximate"
+        );
     }
 
     #[test]
