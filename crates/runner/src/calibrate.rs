@@ -343,19 +343,36 @@ pub(crate) fn load_items(file: &str) -> Result<Vec<CalibrationItem>> {
 /// (one object per line; blank lines and `//`-comment lines are skipped). `file` is used only for
 /// error context. I/O-free so it can be unit-tested without a temp file or a live provider.
 fn parse_items(text: &str, file: &str) -> Result<Vec<CalibrationItem>> {
-    if text.trim_start().starts_with('[') {
-        return serde_json::from_str(text)
-            .with_context(|| format!("{file}: invalid JSON array of items"));
-    }
-    let mut items = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        let l = line.trim();
-        if l.is_empty() || l.starts_with("//") {
-            continue;
+    let items: Vec<CalibrationItem> = if text.trim_start().starts_with('[') {
+        serde_json::from_str(text)
+            .with_context(|| format!("{file}: invalid JSON array of items"))?
+    } else {
+        let mut items = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            let l = line.trim();
+            if l.is_empty() || l.starts_with("//") {
+                continue;
+            }
+            items.push(
+                serde_json::from_str(l)
+                    .with_context(|| format!("{file}:{} \u{2014} invalid item", n + 1))?,
+            );
         }
-        items.push(
-            serde_json::from_str(l)
-                .with_context(|| format!("{file}:{} \u{2014} invalid item", n + 1))?,
+        items
+    };
+    // `human_score` is the ground truth κ is measured against, on the 0..1 scale the judge's
+    // normalized score is on. A value outside it (`85`, a percentage typo; `-1`) is not a harsh
+    // grader - it makes every pass/fail comparison and every MAE term nonsense, and the verdict
+    // that came out of it read as a real measurement.
+    if let Some((i, it)) = items
+        .iter()
+        .enumerate()
+        .find(|(_, it)| !(0.0..=1.0).contains(&it.human_score) || it.human_score.is_nan())
+    {
+        bail!(
+            "{file}: item #{} has human_score {} - scores are 0..1 (a fraction, not a percentage)",
+            i + 1,
+            it.human_score
         );
     }
     Ok(items)
@@ -414,6 +431,27 @@ mod tests {
         let text = "{\"input\":\"a\",\"output\":\"x\",\"human_score\":0.9}\nnot json";
         let err = parse_items(text, "bad.jsonl").unwrap_err();
         assert!(err.to_string().contains("bad.jsonl:2"), "got: {err}");
+    }
+
+    /// A percentage where a fraction belongs is the one typo that turns κ into fiction.
+    #[test]
+    fn a_human_score_outside_0_to_1_is_refused_naming_the_item() {
+        let text = "{\"input\":\"a\",\"output\":\"x\",\"human_score\":0.9}\n\
+                    {\"input\":\"b\",\"output\":\"y\",\"human_score\":85}";
+        let err = parse_items(text, "g.jsonl").unwrap_err().to_string();
+        assert!(err.contains("item #2") && err.contains("85"), "{err}");
+        assert!(parse_items(
+            "[{\"input\":\"a\",\"output\":\"x\",\"human_score\":-0.1}]",
+            "g"
+        )
+        .is_err());
+        // The boundaries themselves are legal grades.
+        assert!(parse_items(
+            "{\"input\":\"a\",\"output\":\"x\",\"human_score\":1.0}",
+            "g"
+        )
+        .is_ok());
+        assert!(parse_items("{\"input\":\"a\",\"output\":\"x\",\"human_score\":0}", "g").is_ok());
     }
 
     #[test]
