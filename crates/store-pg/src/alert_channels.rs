@@ -34,12 +34,24 @@ pub(crate) async fn create(pool: &PgPool, c: &AlertChannel) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<AlertChannel>> {
-    let row = sqlx::query(&format!("SELECT {COLS} FROM alert_channels WHERE id = $1"))
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+/// One channel by id, in `project`'s scope. An operator scope (`None`) reads the project-less
+/// channels it owns, mirroring [`list`] — the two reads must agree on what a scope can see.
+pub(crate) async fn get(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<AlertChannel>> {
+    let predicate = match project {
+        Some(_) => "project_id = $2",
+        None => "project_id IS NULL",
+    };
+    let sql = format!("SELECT {COLS} FROM alert_channels WHERE id = $1 AND {predicate}");
+    let q = sqlx::query(&sql).bind(id.to_string());
+    let q = match project {
+        Some(p) => q.bind(p.to_string()),
+        None => q,
+    };
+    let row = q.fetch_optional(pool).await.map_err(pgerr)?;
     row.as_ref().map(from_row).transpose()
 }
 
@@ -67,13 +79,17 @@ pub(crate) async fn list(pool: &PgPool, project: Option<&str>) -> Result<Vec<Ale
     rows.iter().map(from_row).collect()
 }
 
-pub(crate) async fn delete(pool: &PgPool, id: &str) -> Result<bool> {
-    let n = sqlx::query("DELETE FROM alert_channels WHERE id = $1")
-        .bind(id.to_string())
-        .execute(pool)
-        .await
-        .map_err(pgerr)?
-        .rows_affected();
+pub(crate) async fn delete(pool: &PgPool, project: Option<&str>, id: &str) -> Result<bool> {
+    let sql = match project {
+        Some(_) => "DELETE FROM alert_channels WHERE id = $1 AND project_id = $2",
+        None => "DELETE FROM alert_channels WHERE id = $1 AND project_id IS NULL",
+    };
+    let q = sqlx::query(sql).bind(id.to_string());
+    let q = match project {
+        Some(p) => q.bind(p.to_string()),
+        None => q,
+    };
+    let n = q.execute(pool).await.map_err(pgerr)?.rows_affected();
     Ok(n > 0)
 }
 

@@ -126,6 +126,11 @@ const ADDED_COLUMNS_LATE: &[&str] = &[
     // retroactively would block every existing deployment's gates on the day it upgraded, because
     // nothing has been calibrated yet.
     "ALTER TABLE projects ADD COLUMN require_trusted_judge INTEGER NOT NULL DEFAULT 0",
+    // M17 — the job queue's missing tenant. Without it a project key reading `GET /v1/jobs` saw
+    // every project's payloads. Nullable: NULL is an operator/legacy job (a sweep, or anything
+    // enqueued before this column existed), which `Scope::Operator` sees and no project scope does.
+    "ALTER TABLE jobs ADD COLUMN project_id TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_project_created ON jobs(project_id, created_at DESC)",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.

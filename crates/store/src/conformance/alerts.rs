@@ -14,6 +14,7 @@ use serde_json::json;
 use lighttrack_core::{new_id, AlertKind, ChannelKind, Delivery, Severity};
 
 use super::fixtures::{sample_alert, sample_alert_channel};
+use crate::Scope;
 use crate::{AlertAdmission, AlertFilter, Result, Store};
 
 pub(super) fn alerts(store: &dyn Store, pid: &str) -> Result<()> {
@@ -39,7 +40,7 @@ pub(super) fn alerts(store: &dyn Store, pid: &str) -> Result<()> {
         ),
     }
     assert!(
-        store.get_alert(&second.id)?.is_none(),
+        store.get_alert(Scope::Operator, &second.id)?.is_none(),
         "a suppressed alert must not leave a row: the ledger counts incidents, not attempts"
     );
 
@@ -57,7 +58,9 @@ pub(super) fn alerts(store: &dyn Store, pid: &str) -> Result<()> {
     );
 
     // Round-trip: the row carries what fired, at what severity, with its payload intact.
-    let got = store.get_alert(&first.id)?.expect("get_alert Some");
+    let got = store
+        .get_alert(Scope::Operator, &first.id)?
+        .expect("get_alert Some");
     assert_eq!(got.kind, AlertKind::LimitBreach);
     assert_eq!(got.severity, Severity::Critical, "breaches are critical");
     assert_eq!(got.dedup_key, key);
@@ -83,7 +86,9 @@ pub(super) fn alerts(store: &dyn Store, pid: &str) -> Result<()> {
             at: Utc::now(),
         },
     )?);
-    let got = store.get_alert(&first.id)?.expect("get after deliveries");
+    let got = store
+        .get_alert(Scope::Operator, &first.id)?
+        .expect("get after deliveries");
     assert_eq!(
         got.delivered.len(),
         2,
@@ -99,17 +104,23 @@ pub(super) fn alerts(store: &dyn Store, pid: &str) -> Result<()> {
     );
 
     // Ack and resolution are separate facts: someone saw it, and something came of it.
-    assert!(store.ack_alert(&first.id, "ops@example.test", Utc::now())?);
-    assert!(store.attach_alert_resolution(&first.id, &json!({ "ok": true, "cost_usd": 0.02 }))?);
-    let got = store.get_alert(&first.id)?.expect("get after ack");
+    assert!(store.ack_alert(Scope::Operator, &first.id, "ops@example.test", Utc::now())?);
+    assert!(store.attach_alert_resolution(
+        Scope::Operator,
+        &first.id,
+        &json!({ "ok": true, "cost_usd": 0.02 })
+    )?);
+    let got = store
+        .get_alert(Scope::Operator, &first.id)?
+        .expect("get after ack");
     assert_eq!(got.acked_by.as_deref(), Some("ops@example.test"));
     assert!(got.acked_at.is_some());
     assert_eq!(
         got.resolution,
         Some(json!({ "ok": true, "cost_usd": 0.02 }))
     );
-    assert!(!store.ack_alert(&new_id(), "nobody", Utc::now())?);
-    assert!(!store.attach_alert_resolution(&new_id(), &json!({}))?);
+    assert!(!store.ack_alert(Scope::Operator, &new_id(), "nobody", Utc::now())?);
+    assert!(!store.attach_alert_resolution(Scope::Operator, &new_id(), &json!({}))?);
 
     // Listing is project-scoped and narrows on kind / acked, newest first.
     let mine = AlertFilter {
@@ -196,7 +207,7 @@ pub(super) fn alert_routing(store: &dyn Store, pid: &str) -> Result<()> {
     store.create_alert_channel(&mine)?;
 
     let got = store
-        .get_alert_channel(&mine.id)?
+        .get_alert_channel(Scope::Project(pid), &mine.id)?
         .expect("get_alert_channel Some");
     assert_eq!(got.kind, ChannelKind::Webhook);
     assert_eq!(got.target, "https://receiver.invalid/hook");
@@ -210,22 +221,22 @@ pub(super) fn alert_routing(store: &dyn Store, pid: &str) -> Result<()> {
     assert!(got.enabled);
 
     // The two listings are disjoint by design: `Some(p)` is the project's own, `None` the globals.
-    let project_only = store.list_alert_channels(Some(pid))?;
+    let project_only = store.list_alert_channels(Scope::Project(pid))?;
     assert!(project_only.iter().any(|c| c.id == mine.id));
     assert!(
         !project_only.iter().any(|c| c.id == global.id),
         "a project listing must not silently include the global channels"
     );
     assert!(store
-        .list_alert_channels(None)?
+        .list_alert_channels(Scope::Operator)?
         .iter()
         .any(|c| c.id == global.id));
 
     // `channels_for` is the union — which is what makes an existing env-only deployment unchanged.
-    let routed = store.channels_for(Some(pid))?;
+    let routed = store.channels_for(Scope::Project(pid))?;
     assert!(routed.iter().any(|c| c.id == mine.id));
     assert!(routed.iter().any(|c| c.id == global.id));
-    let unrelated = store.channels_for(Some(&new_id()))?;
+    let unrelated = store.channels_for(Scope::Project(&new_id()))?;
     assert!(unrelated.iter().any(|c| c.id == global.id));
     assert!(
         !unrelated.iter().any(|c| c.id == mine.id),
@@ -237,12 +248,14 @@ pub(super) fn alert_routing(store: &dyn Store, pid: &str) -> Result<()> {
     assert!(got.accepts(AlertKind::LimitBreach, Severity::Critical));
     assert!(!got.accepts(AlertKind::ScoreDrop, Severity::Critical));
 
-    assert!(store.delete_alert_channel(&mine.id)?);
-    assert!(store.get_alert_channel(&mine.id)?.is_none());
+    assert!(store.delete_alert_channel(Scope::Project(pid), &mine.id)?);
+    assert!(store
+        .get_alert_channel(Scope::Project(pid), &mine.id)?
+        .is_none());
     assert!(
-        !store.delete_alert_channel(&mine.id)?,
+        !store.delete_alert_channel(Scope::Project(pid), &mine.id)?,
         "a second delete finds nothing"
     );
-    assert!(store.delete_alert_channel(&global.id)?);
+    assert!(store.delete_alert_channel(Scope::Operator, &global.id)?);
     Ok(())
 }

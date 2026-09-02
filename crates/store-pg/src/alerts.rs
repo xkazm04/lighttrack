@@ -113,20 +113,30 @@ pub(crate) async fn mark_delivery(pool: &PgPool, alert_id: &str, d: &Delivery) -
     Ok(true)
 }
 
-pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Alert>> {
-    let row = sqlx::query(&format!("SELECT {COLS} FROM alerts WHERE id = $1"))
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+pub(crate) async fn get(pool: &PgPool, project: Option<&str>, id: &str) -> Result<Option<Alert>> {
+    let row = sqlx::query(&format!(
+        "SELECT {COLS} FROM alerts WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)"
+    ))
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     row.as_ref().map(from_row).transpose()
 }
 
-pub(crate) async fn ack(pool: &PgPool, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
-    let n = sqlx::query("UPDATE alerts SET acked_at = $2, acked_by = $3 WHERE id = $1")
+pub(crate) async fn ack(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+    by: &str,
+    at: DateTime<Utc>,
+) -> Result<bool> {
+    let n = sqlx::query("UPDATE alerts SET acked_at = $2, acked_by = $3 WHERE id = $1 AND ($4::text IS NULL OR project_id = $4)")
         .bind(id.to_string())
         .bind(fmt_ts(at))
         .bind(by.to_string())
+        .bind(project.map(str::to_string))
         .execute(pool)
         .await
         .map_err(pgerr)?
@@ -134,14 +144,22 @@ pub(crate) async fn ack(pool: &PgPool, id: &str, by: &str, at: DateTime<Utc>) ->
     Ok(n > 0)
 }
 
-pub(crate) async fn attach_resolution(pool: &PgPool, id: &str, resolution: &Value) -> Result<bool> {
-    let n = sqlx::query("UPDATE alerts SET resolution = $2 WHERE id = $1")
-        .bind(id.to_string())
-        .bind(serde_json::to_string(resolution)?)
-        .execute(pool)
-        .await
-        .map_err(pgerr)?
-        .rows_affected();
+pub(crate) async fn attach_resolution(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+    resolution: &Value,
+) -> Result<bool> {
+    let n = sqlx::query(
+        "UPDATE alerts SET resolution = $2 WHERE id = $1 AND ($3::text IS NULL OR project_id = $3)",
+    )
+    .bind(id.to_string())
+    .bind(serde_json::to_string(resolution)?)
+    .bind(project.map(str::to_string))
+    .execute(pool)
+    .await
+    .map_err(pgerr)?
+    .rows_affected();
     Ok(n > 0)
 }
 

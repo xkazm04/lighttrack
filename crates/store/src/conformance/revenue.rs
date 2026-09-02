@@ -5,6 +5,7 @@ use chrono::Utc;
 use lighttrack_core::{compute_margin, new_id, MarginDimension, RevenueEvent, RevenueKind};
 
 use super::fixtures::tagged_event;
+use crate::Scope;
 use crate::{Result, Store};
 
 /// Revenue + margin (Phase 1 profit tracking). This is the check that catches a backend silently
@@ -59,7 +60,7 @@ pub(super) fn revenue(store: &dyn Store) -> Result<()> {
     let since = now - chrono::Duration::hours(1);
     let until = now + chrono::Duration::hours(1);
 
-    let listed = store.list_revenue_events(Some(&pid), since, until)?;
+    let listed = store.list_revenue_events(Scope::Project(&pid), since, until)?;
     assert_eq!(
         listed.len(),
         2,
@@ -89,7 +90,7 @@ pub(super) fn revenue(store: &dyn Store) -> Result<()> {
     // onto the existing row — a second physical row here would silently double every downstream margin
     // number, the exact corruption profit tracking exists to prevent.
     store.insert_revenue_event(&mk_rev("acme", 20.0))?;
-    let after = store.list_revenue_events(Some(&pid), since, until)?;
+    let after = store.list_revenue_events(Scope::Project(&pid), since, until)?;
     assert_eq!(
         after.len(),
         2,
@@ -129,7 +130,7 @@ pub(super) fn revenue(store: &dyn Store) -> Result<()> {
     restated.fx_rate = Some(49.95);
     restated.fx_book_version = Some("a-later-book".into());
     store.insert_revenue_event(&restated)?;
-    let after_replay = store.list_revenue_events(Some(&pid), since, until)?;
+    let after_replay = store.list_revenue_events(Scope::Project(&pid), since, until)?;
     let acme_now = after_replay
         .iter()
         .find(|r| r.customer_id.as_deref() == Some("acme"))
@@ -146,7 +147,7 @@ pub(super) fn revenue(store: &dyn Store) -> Result<()> {
     );
 
     // Cost grouped by the billing dimension, read from event metadata.
-    let costs = store.cost_by_dimension(Some(&pid), "customer", since, until)?;
+    let costs = store.cost_by_dimension(Scope::Project(&pid), "customer", since, until)?;
     let acme_cost = costs
         .iter()
         .find(|c| c.key.as_deref() == Some("acme"))
@@ -222,7 +223,7 @@ pub(super) fn reprice(store: &dyn Store) -> Result<()> {
         mk("gbp-legacy", "GBP", None, 70.0, Some(false)),
     ])?;
 
-    let dry = store.reprice_revenue(Some(&pid), "GBP", 1.27, "2026-09-02", true)?;
+    let dry = store.reprice_revenue(Scope::Project(&pid), "GBP", 1.27, "2026-09-02", true)?;
     assert!(dry.dry_run);
     assert_eq!(dry.matched, 3, "every unconverted GBP row matches");
     assert_eq!(
@@ -232,7 +233,7 @@ pub(super) fn reprice(store: &dyn Store) -> Result<()> {
 
     let since = now - chrono::Duration::hours(1);
     let until = now + chrono::Duration::hours(1);
-    let before = store.list_revenue_events(Some(&pid), since, until)?;
+    let before = store.list_revenue_events(Scope::Project(&pid), since, until)?;
     assert!(
         before
             .iter()
@@ -240,7 +241,7 @@ pub(super) fn reprice(store: &dyn Store) -> Result<()> {
         "a dry run writes nothing"
     );
 
-    let run = store.reprice_revenue(Some(&pid), "gbp", 1.27, "2026-09-02", false)?;
+    let run = store.reprice_revenue(Scope::Project(&pid), "gbp", 1.27, "2026-09-02", false)?;
     assert!(!run.dry_run);
     assert_eq!(
         (run.matched, run.changed),
@@ -248,7 +249,7 @@ pub(super) fn reprice(store: &dyn Store) -> Result<()> {
         "the dry run predicted the real one exactly"
     );
 
-    let rows = store.list_revenue_events(Some(&pid), since, until)?;
+    let rows = store.list_revenue_events(Scope::Project(&pid), since, until)?;
     let by = |suffix: &str| {
         rows.iter()
             .find(|r| r.id.ends_with(suffix))
@@ -283,7 +284,7 @@ pub(super) fn reprice(store: &dyn Store) -> Result<()> {
     );
 
     // A currency nobody stored is not an error and not a silent success: zero matched, zero changed.
-    let none = store.reprice_revenue(Some(&pid), "JPY", 0.0068, "2026-09-02", false)?;
+    let none = store.reprice_revenue(Scope::Project(&pid), "JPY", 0.0068, "2026-09-02", false)?;
     assert_eq!((none.matched, none.changed), (0, 0));
     Ok(())
 }

@@ -59,10 +59,19 @@ pub(super) fn get(conn: &Connection, project: &str, name: &str) -> Result<Option
     raw.map(prompt_from_raw).transpose()
 }
 
-pub(super) fn get_by_id(conn: &Connection, id: &str) -> Result<Option<Prompt>> {
-    let sql = format!("SELECT {PROMPT_COLS} FROM prompts WHERE id = ?1");
+pub(super) fn get_by_id(
+    conn: &Connection,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<Prompt>> {
+    let sql = format!(
+        "SELECT {PROMPT_COLS} FROM prompts WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![id], map_prompt).optional()?;
+    let raw = stmt
+        .query_row(params![id, project], map_prompt)
+        .optional()?;
     raw.map(prompt_from_raw).transpose()
 }
 
@@ -94,27 +103,40 @@ pub(super) fn create_version(conn: &Connection, v: &PromptVersion) -> Result<()>
     Ok(())
 }
 
+/// `prompt_versions` carries no `project_id` of its own, so the tenant filter rides the parent
+/// prompt: a foreign prompt id is simply not found.
 pub(super) fn get_version(
     conn: &Connection,
+    project: Option<&str>,
     prompt_id: &str,
     version: u32,
 ) -> Result<Option<PromptVersion>> {
-    let sql =
-        format!("SELECT {VERSION_COLS} FROM prompt_versions WHERE prompt_id = ?1 AND version = ?2");
+    let sql = format!(
+        "SELECT {VERSION_COLS} FROM prompt_versions WHERE prompt_id = ?1 AND version = ?2 \
+           AND (?3 IS NULL OR EXISTS \
+                (SELECT 1 FROM prompts p WHERE p.id = prompt_id AND p.project_id = ?3))"
+    );
     let mut stmt = conn.prepare(&sql)?;
     let raw = stmt
-        .query_row(params![prompt_id, version as i64], map_version)
+        .query_row(params![prompt_id, version as i64, project], map_version)
         .optional()?;
     raw.map(version_from_raw).transpose()
 }
 
-pub(super) fn list_versions(conn: &Connection, prompt_id: &str) -> Result<Vec<PromptVersion>> {
+pub(super) fn list_versions(
+    conn: &Connection,
+    project: Option<&str>,
+    prompt_id: &str,
+) -> Result<Vec<PromptVersion>> {
     let sql = format!(
-        "SELECT {VERSION_COLS} FROM prompt_versions WHERE prompt_id = ?1 ORDER BY version DESC"
+        "SELECT {VERSION_COLS} FROM prompt_versions WHERE prompt_id = ?1 \
+           AND (?2 IS NULL OR EXISTS \
+                (SELECT 1 FROM prompts p WHERE p.id = prompt_id AND p.project_id = ?2)) \
+         ORDER BY version DESC"
     );
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
-        .query_map(params![prompt_id], map_version)?
+        .query_map(params![prompt_id, project], map_version)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(version_from_raw).collect()
 }

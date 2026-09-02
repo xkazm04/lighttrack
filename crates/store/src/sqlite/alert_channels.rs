@@ -33,10 +33,23 @@ pub(super) fn create(conn: &Connection, c: &AlertChannel) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<AlertChannel>> {
-    let sql = format!("SELECT {COLS} FROM alert_channels WHERE id = ?1");
+/// One channel by id, in `project`'s scope. An operator scope (`None`) reads the project-less
+/// channels it owns, mirroring [`list`] — the two reads must agree on what a scope can see.
+pub(super) fn get(
+    conn: &Connection,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<AlertChannel>> {
+    let predicate = match project {
+        Some(_) => "project_id = ?2",
+        None => "project_id IS NULL",
+    };
+    let sql = format!("SELECT {COLS} FROM alert_channels WHERE id = ?1 AND {predicate}");
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![id], map_raw).optional()?;
+    let raw = match project {
+        Some(p) => stmt.query_row(params![id, p], map_raw).optional()?,
+        None => stmt.query_row(params![id], map_raw).optional()?,
+    };
     raw.map(from_raw).transpose()
 }
 
@@ -60,8 +73,17 @@ pub(super) fn list(conn: &Connection, project: Option<&str>) -> Result<Vec<Alert
         .collect()
 }
 
-pub(super) fn delete(conn: &Connection, id: &str) -> Result<bool> {
-    let n = conn.execute("DELETE FROM alert_channels WHERE id = ?1", params![id])?;
+pub(super) fn delete(conn: &Connection, project: Option<&str>, id: &str) -> Result<bool> {
+    let n = match project {
+        Some(p) => conn.execute(
+            "DELETE FROM alert_channels WHERE id = ?1 AND project_id = ?2",
+            params![id, p],
+        )?,
+        None => conn.execute(
+            "DELETE FROM alert_channels WHERE id = ?1 AND project_id IS NULL",
+            params![id],
+        )?,
+    };
     Ok(n > 0)
 }
 

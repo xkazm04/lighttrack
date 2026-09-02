@@ -78,21 +78,35 @@ pub(crate) fn list_limit_rules(
     docs.iter().map(limit_from).collect()
 }
 
-pub(crate) fn get_limit_rule(rest: &Rest, id: &str) -> Result<Option<LimitRule>> {
-    rest.get_doc(COLL, id)?.as_ref().map(limit_from).transpose()
+pub(crate) fn get_limit_rule(
+    rest: &Rest,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<LimitRule>> {
+    let r = rest
+        .get_doc(COLL, id)?
+        .as_ref()
+        .map(limit_from)
+        .transpose()?;
+    Ok(crate::scope::keep(project, r, |r| {
+        Some(r.project_id.as_str())
+    }))
 }
 
 /// Full-document replace, but only when the rule exists (the Store contract returns `false` for an
 /// unknown id → API 404 — a plain put would silently create instead).
-pub(crate) fn update_limit_rule(rest: &Rest, r: &LimitRule) -> Result<bool> {
-    if rest.get_doc(COLL, &r.id)?.is_none() {
+pub(crate) fn update_limit_rule(rest: &Rest, project: Option<&str>, r: &LimitRule) -> Result<bool> {
+    if get_limit_rule(rest, project, &r.id)?.is_none() {
         return Ok(false);
     }
     rest.put_doc(COLL, &r.id, &limit_fields(r)?)?;
     Ok(true)
 }
 
-pub(crate) fn delete_limit_rule(rest: &Rest, id: &str) -> Result<bool> {
+pub(crate) fn delete_limit_rule(rest: &Rest, project: Option<&str>, id: &str) -> Result<bool> {
+    if get_limit_rule(rest, project, id)?.is_none() {
+        return Ok(false);
+    }
     rest.delete_doc(COLL, id)
 }
 

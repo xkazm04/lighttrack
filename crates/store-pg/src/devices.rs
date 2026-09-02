@@ -38,13 +38,19 @@ pub(crate) async fn create(pool: &PgPool, d: &Device) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Device>> {
-    one(
-        pool,
-        &format!("SELECT {COLS} FROM devices WHERE id = $1"),
-        id,
-    )
+/// One device by id, in `project`'s view of the fleet — the same view [`list`] shows, so the
+/// operator-wide devices (`project_id IS NULL`) that serve every project's tasks stay readable.
+pub(crate) async fn get(pool: &PgPool, project: Option<&str>, id: &str) -> Result<Option<Device>> {
+    let row = sqlx::query(&format!(
+        "SELECT {COLS} FROM devices \
+         WHERE id = $1 AND ($2::text IS NULL OR project_id = $2 OR project_id IS NULL)"
+    ))
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .fetch_optional(pool)
     .await
+    .map_err(pgerr)?;
+    row.as_ref().map(from_row).transpose()
 }
 
 /// Lookup by the presented key's non-secret prefix. A revoked device is returned rather than
@@ -113,13 +119,16 @@ pub(crate) async fn touch(
     Ok(())
 }
 
-pub(crate) async fn revoke(pool: &PgPool, id: &str) -> Result<bool> {
-    let n = sqlx::query("UPDATE devices SET revoked = TRUE WHERE id = $1")
-        .bind(id.to_string())
-        .execute(pool)
-        .await
-        .map_err(pgerr)?
-        .rows_affected();
+pub(crate) async fn revoke(pool: &PgPool, project: Option<&str>, id: &str) -> Result<bool> {
+    let n = sqlx::query(
+        "UPDATE devices SET revoked = TRUE WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)",
+    )
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .execute(pool)
+    .await
+    .map_err(pgerr)?
+    .rows_affected();
     Ok(n > 0)
 }
 

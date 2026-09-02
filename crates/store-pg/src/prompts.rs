@@ -68,12 +68,19 @@ pub(crate) async fn get(pool: &PgPool, project: &str, name: &str) -> Result<Opti
     row.as_ref().map(prompt_from_row).transpose()
 }
 
-pub(crate) async fn get_by_id(pool: &PgPool, id: &str) -> Result<Option<Prompt>> {
-    let row = sqlx::query(&format!("SELECT {PROMPT_COLS} FROM prompts WHERE id = $1"))
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+pub(crate) async fn get_by_id(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<Prompt>> {
+    let row = sqlx::query(&format!(
+        "SELECT {PROMPT_COLS} FROM prompts WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)"
+    ))
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     row.as_ref().map(prompt_from_row).transpose()
 }
 
@@ -114,14 +121,18 @@ pub(crate) async fn create_version(pool: &PgPool, v: &PromptVersion) -> Result<(
 
 pub(crate) async fn get_version(
     pool: &PgPool,
+    project: Option<&str>,
     prompt_id: &str,
     version: u32,
 ) -> Result<Option<PromptVersion>> {
     let row = sqlx::query(&format!(
-        "SELECT {VERSION_COLS} FROM prompt_versions WHERE prompt_id = $1 AND version = $2"
+        "SELECT {VERSION_COLS} FROM prompt_versions WHERE prompt_id = $1 AND version = $2 \
+           AND ($3::text IS NULL OR EXISTS \
+                (SELECT 1 FROM prompts p WHERE p.id = prompt_id AND p.project_id = $3))"
     ))
     .bind(prompt_id.to_string())
     .bind(version as i32)
+    .bind(project.map(str::to_string))
     .fetch_optional(pool)
     .await
     .map_err(pgerr)?;
@@ -130,11 +141,19 @@ pub(crate) async fn get_version(
 
 /// Newest version first — a reversed order would serve a stale prompt to every runtime fetch that
 /// asks for "the latest", which is why the conformance suite pins it.
-pub(crate) async fn list_versions(pool: &PgPool, prompt_id: &str) -> Result<Vec<PromptVersion>> {
+pub(crate) async fn list_versions(
+    pool: &PgPool,
+    project: Option<&str>,
+    prompt_id: &str,
+) -> Result<Vec<PromptVersion>> {
     let rows = sqlx::query(&format!(
-        "SELECT {VERSION_COLS} FROM prompt_versions WHERE prompt_id = $1 ORDER BY version DESC"
+        "SELECT {VERSION_COLS} FROM prompt_versions WHERE prompt_id = $1 \
+           AND ($2::text IS NULL OR EXISTS \
+                (SELECT 1 FROM prompts p WHERE p.id = prompt_id AND p.project_id = $2)) \
+         ORDER BY version DESC"
     ))
     .bind(prompt_id.to_string())
+    .bind(project.map(str::to_string))
     .fetch_all(pool)
     .await
     .map_err(pgerr)?;

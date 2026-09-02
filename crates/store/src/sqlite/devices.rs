@@ -37,8 +37,16 @@ pub(super) fn create(conn: &Connection, d: &Device) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Device>> {
-    one(conn, "id = ?1", id)
+/// One device by id, in `project`'s view of the fleet — the same view [`list`] shows, so the
+/// operator-wide devices (`project_id IS NULL`) that serve every project's tasks stay readable.
+pub(super) fn get(conn: &Connection, project: Option<&str>, id: &str) -> Result<Option<Device>> {
+    let sql = format!(
+        "SELECT {COLS} FROM devices \
+         WHERE id = ?1 AND (?2 IS NULL OR project_id = ?2 OR project_id IS NULL)"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let raw = stmt.query_row(params![id, project], map_raw).optional()?;
+    raw.map(from_raw).transpose()
 }
 
 /// Lookup by the presented key's non-secret prefix. Revoked devices are returned rather than
@@ -97,8 +105,14 @@ pub(super) fn touch(
     Ok(())
 }
 
-pub(super) fn revoke(conn: &Connection, id: &str) -> Result<bool> {
-    let n = conn.execute("UPDATE devices SET revoked = 1 WHERE id = ?1", params![id])?;
+/// Strictly the scope's OWN device, unlike [`get`]: an operator-wide device serves every project,
+/// so no single tenant may retire it.
+pub(super) fn revoke(conn: &Connection, project: Option<&str>, id: &str) -> Result<bool> {
+    let sql = format!(
+        "UPDATE devices SET revoked = 1 WHERE id = ?1{}",
+        super::scope_and(2)
+    );
+    let n = conn.execute(&sql, params![id, project])?;
     Ok(n > 0)
 }
 

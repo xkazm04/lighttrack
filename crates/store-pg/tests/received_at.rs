@@ -10,6 +10,7 @@ use lighttrack_core::{
     new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation, Status,
     Threshold, TokenUsage,
 };
+use lighttrack_store::Scope;
 use lighttrack_store::Store;
 use lighttrack_store_pg::PgStore;
 
@@ -77,7 +78,7 @@ fn windowed_accounting_ignores_a_backdated_client_clock() {
     assert!((u.cost_usd - 1.0).abs() < 1e-9);
     assert_eq!(
         store
-            .get_event(&backdated.id)
+            .get_event(Scope::Operator, &backdated.id)
             .expect("get")
             .expect("present")
             .ts

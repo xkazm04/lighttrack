@@ -619,3 +619,13 @@ CREATE TABLE IF NOT EXISTS calibrations (
 );
 CREATE INDEX IF NOT EXISTS idx_calibrations_key
   ON calibrations(project_id, judge, rubric_id, created_at);
+
+-- --------------------------------------------------------------------------------------------
+-- M17 - tenant scope on every read. Self-contained tail block: append-only, idempotent, and safe
+-- to re-run against a database created by any earlier revision of this file.
+--
+-- The job queue carried no tenant at all, so a project key reading GET /v1/jobs saw every
+-- project's payloads. Nullable on purpose: NULL is an operator/legacy job (a sweep, or anything
+-- enqueued before this column existed) - the operator scope reads those and no project scope does.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS project_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_jobs_project_created ON jobs(project_id, created_at DESC);

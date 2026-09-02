@@ -125,7 +125,7 @@ fn equals_the_legacy_methods(
 ) -> Result<()> {
     let p = Some(pid);
 
-    let mut native = store.cost_summary_windowed(p, Some(since), Some(until))?;
+    let mut native = store.cost_summary_windowed(p.into(), Some(since), Some(until))?;
     let mut derived = rollup_compat::cost_summary_windowed(store, p, Some(since), Some(until))?;
     let key = |r: &crate::CostRow| (r.project_id.clone(), r.provider.clone(), r.model.clone());
     native.sort_by_key(key);
@@ -145,7 +145,7 @@ fn equals_the_legacy_methods(
         assert_eq!(n.unpriced_calls, d.unpriced_calls, "{n:?} vs {d:?}");
     }
 
-    let mut native = store.usecase_costs(p, Some(since))?;
+    let mut native = store.usecase_costs(p.into(), Some(since))?;
     let mut derived = rollup_compat::usecase_costs(store, p, Some(since))?;
     let key = |r: &crate::UseCaseCostRow| (r.name.clone(), r.provider.clone(), r.model.clone());
     native.sort_by_key(key);
@@ -159,7 +159,7 @@ fn equals_the_legacy_methods(
     }
 
     for dim in ["customer", "product", "prompt"] {
-        let mut native = store.cost_by_dimension(p, dim, since, until)?;
+        let mut native = store.cost_by_dimension(p.into(), dim, since, until)?;
         let mut derived = rollup_compat::cost_by_dimension(store, p, dim, since, until)?;
         native.sort_by(|a, b| a.key.cmp(&b.key));
         derived.sort_by(|a, b| a.key.cmp(&b.key));
@@ -173,7 +173,7 @@ fn equals_the_legacy_methods(
             assert_eq!(n.unpriced_calls, d.unpriced_calls, "{dim}");
         }
 
-        let mut native = store.tokens_by_dimension(p, dim, since, until)?;
+        let mut native = store.tokens_by_dimension(p.into(), dim, since, until)?;
         let mut derived = rollup_compat::tokens_by_dimension(store, p, dim, since, until)?;
         native.sort_by(|a, b| a.key.cmp(&b.key));
         derived.sort_by(|a, b| a.key.cmp(&b.key));
@@ -226,7 +226,7 @@ fn equals_the_legacy_methods(
         "daily_usage"
     );
 
-    let mut native = store.daily_cost_by_dimension(p, "customer", since, until)?;
+    let mut native = store.daily_cost_by_dimension(p.into(), "customer", since, until)?;
     let mut derived = rollup_compat::daily_cost_by_dimension(store, p, "customer", since, until)?;
     let key = |r: &crate::DailyDimCost| (r.day.clone(), r.key.clone());
     native.sort_by_key(key);
@@ -238,7 +238,7 @@ fn equals_the_legacy_methods(
     );
 
     for customer in ["cus-r-a", "cus-r-b", "cus-nobody"] {
-        let native = store.customer_cost_by_model(p, customer, since, until)?;
+        let native = store.customer_cost_by_model(p.into(), customer, since, until)?;
         let derived = rollup_compat::customer_cost_by_model(store, p, customer, since, until)?;
         assert_eq!(
             native
@@ -252,7 +252,7 @@ fn equals_the_legacy_methods(
             "customer_cost_by_model({customer})"
         );
 
-        let native = store.customer_cost_by_name(p, customer, since, until)?;
+        let native = store.customer_cost_by_name(p.into(), customer, since, until)?;
         let derived = rollup_compat::customer_cost_by_name(store, p, customer, since, until)?;
         assert_eq!(
             native

@@ -10,6 +10,7 @@ use lighttrack_core::{new_id, ModelPrice, ModelPriceRow, PriceBook};
 
 use super::fixtures::sample_event;
 use crate::pricing::{PriceFill, FILL_SOURCE};
+use crate::Scope;
 use crate::{Result, Store};
 
 pub(super) fn pricing(store: &dyn Store) -> Result<()> {
@@ -49,7 +50,7 @@ fn unpriced_ledger_and_fill(store: &dyn Store) -> Result<()> {
         store.insert_event(&ev)?;
     }
 
-    let ledger = store.list_unpriced(Some(&pid), since)?;
+    let ledger = store.list_unpriced(Scope::Project(&pid), since)?;
     let row = ledger
         .iter()
         .find(|r| r.model == model)
@@ -81,7 +82,7 @@ fn unpriced_ledger_and_fill(store: &dyn Store) -> Result<()> {
     // …and the ledger agrees, which is the whole loop.
     assert!(
         !store
-            .list_unpriced(Some(&pid), since)?
+            .list_unpriced(Scope::Project(&pid), since)?
             .iter()
             .any(|r| r.model == model),
         "the key is gone from the ledger once it is priced"
@@ -89,7 +90,7 @@ fn unpriced_ledger_and_fill(store: &dyn Store) -> Result<()> {
 
     // Provenance: a filled row says it was filled, and a client-costed row is untouched.
     let mut filled_rows = 0;
-    for ev in store.list_events(Some(&pid), 100)? {
+    for ev in store.list_events(Scope::Project(&pid), 100)? {
         if ev.model != model {
             continue;
         }

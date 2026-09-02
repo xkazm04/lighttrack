@@ -99,25 +99,44 @@ pub(super) fn mark_delivery(conn: &Connection, alert_id: &str, d: &Delivery) -> 
     Ok(true)
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Alert>> {
-    let sql = format!("SELECT {COLS} FROM alerts WHERE id = ?1");
+pub(super) fn get(conn: &Connection, project: Option<&str>, id: &str) -> Result<Option<Alert>> {
+    let sql = format!(
+        "SELECT {COLS} FROM alerts WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![id], map_raw).optional()?;
+    let raw = stmt.query_row(params![id, project], map_raw).optional()?;
     raw.map(from_raw).transpose()
 }
 
-pub(super) fn ack(conn: &Connection, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
-    let n = conn.execute(
-        "UPDATE alerts SET acked_at = ?2, acked_by = ?3 WHERE id = ?1",
-        params![id, fmt_ts(at), by],
-    )?;
+pub(super) fn ack(
+    conn: &Connection,
+    project: Option<&str>,
+    id: &str,
+    by: &str,
+    at: DateTime<Utc>,
+) -> Result<bool> {
+    let sql = format!(
+        "UPDATE alerts SET acked_at = ?2, acked_by = ?3 WHERE id = ?1{}",
+        super::scope_and(4)
+    );
+    let n = conn.execute(&sql, params![id, fmt_ts(at), by, project])?;
     Ok(n > 0)
 }
 
-pub(super) fn attach_resolution(conn: &Connection, id: &str, resolution: &Value) -> Result<bool> {
+pub(super) fn attach_resolution(
+    conn: &Connection,
+    project: Option<&str>,
+    id: &str,
+    resolution: &Value,
+) -> Result<bool> {
+    let sql = format!(
+        "UPDATE alerts SET resolution = ?2 WHERE id = ?1{}",
+        super::scope_and(3)
+    );
     let n = conn.execute(
-        "UPDATE alerts SET resolution = ?2 WHERE id = ?1",
-        params![id, serde_json::to_string(resolution)?],
+        &sql,
+        params![id, serde_json::to_string(resolution)?, project],
     )?;
     Ok(n > 0)
 }

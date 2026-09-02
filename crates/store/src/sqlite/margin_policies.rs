@@ -51,17 +51,28 @@ pub(super) fn list(
     raws.into_iter().map(from_raw).collect()
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<MarginPolicy>> {
-    let sql = format!("SELECT {COLS} FROM margin_policies WHERE id = ?1");
+pub(super) fn get(
+    conn: &Connection,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<MarginPolicy>> {
+    let sql = format!(
+        "SELECT {COLS} FROM margin_policies WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    stmt.query_row(params![id], map_raw)
+    stmt.query_row(params![id, project], map_raw)
         .optional()?
         .map(from_raw)
         .transpose()
 }
 
-pub(super) fn delete(conn: &Connection, id: &str) -> Result<bool> {
-    let n = conn.execute("DELETE FROM margin_policies WHERE id = ?1", params![id])?;
+pub(super) fn delete(conn: &Connection, project: Option<&str>, id: &str) -> Result<bool> {
+    let sql = format!(
+        "DELETE FROM margin_policies WHERE id = ?1{}",
+        super::scope_and(2)
+    );
+    let n = conn.execute(&sql, params![id, project])?;
     Ok(n > 0)
 }
 

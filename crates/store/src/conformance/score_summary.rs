@@ -18,6 +18,7 @@ use serde_json::json;
 use lighttrack_core::{new_id, Dimension, Score, ScoreKind};
 
 use super::fixtures::sample_event;
+use crate::Scope;
 use crate::{Result, ScoreSummaryRow, Store};
 
 /// One verdict on `event`, scored `value` out of `max`, against `rubric_id`.
@@ -86,7 +87,7 @@ pub(super) fn score_summaries(store: &dyn Store) -> Result<()> {
 
     let since = Utc::now() - Duration::hours(1);
     let rows = store.score_summary_by_dimension(
-        Some(&project),
+        Scope::Project(&project),
         Dimension::Prompt,
         since,
         None,
@@ -138,8 +139,13 @@ pub(super) fn score_summaries(store: &dyn Store) -> Result<()> {
     );
 
     // Unfiltered by rubric, the canary's other-rubric verdict joins its bucket.
-    let all =
-        store.score_summary_by_dimension(Some(&project), Dimension::Prompt, since, None, None)?;
+    let all = store.score_summary_by_dimension(
+        Scope::Project(&project),
+        Dimension::Prompt,
+        since,
+        None,
+        None,
+    )?;
     assert_eq!(
         row(&all, &v2).n,
         2,
@@ -148,7 +154,7 @@ pub(super) fn score_summaries(store: &dyn Store) -> Result<()> {
 
     // A window that ends before anything was judged is empty — and so is another project's read.
     let past = store.score_summary_by_dimension(
-        Some(&project),
+        Scope::Project(&project),
         Dimension::Prompt,
         since - Duration::days(2),
         Some(since - Duration::days(1)),
@@ -157,7 +163,13 @@ pub(super) fn score_summaries(store: &dyn Store) -> Result<()> {
     assert!(past.is_empty(), "the window bounds the verdict's own time");
     assert!(
         store
-            .score_summary_by_dimension(Some(&new_id()), Dimension::Prompt, since, None, None)?
+            .score_summary_by_dimension(
+                Scope::Project(&new_id()),
+                Dimension::Prompt,
+                since,
+                None,
+                None
+            )?
             .is_empty(),
         "summaries are scoped to their project"
     );
@@ -165,7 +177,7 @@ pub(super) fn score_summaries(store: &dyn Store) -> Result<()> {
     // The vocabulary is `Dimension`, not one hard-coded key: grouping by the event's model must work
     // too, or the surface is a prompt feature wearing a dimension's clothes.
     let by_model = store.score_summary_by_dimension(
-        Some(&project),
+        Scope::Project(&project),
         Dimension::Model,
         since,
         None,

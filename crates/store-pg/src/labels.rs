@@ -97,14 +97,19 @@ pub(crate) async fn list(pool: &PgPool, f: &LabelFilter) -> Result<Vec<Label>> {
 
 /// Every label on any item of `dataset_id`, oldest-first so the calibration set is built in the
 /// dataset's own order and κ does not depend on paging.
-pub(crate) async fn for_dataset(pool: &PgPool, dataset_id: &str) -> Result<Vec<Label>> {
+pub(crate) async fn for_dataset(
+    pool: &PgPool,
+    project: Option<&str>,
+    dataset_id: &str,
+) -> Result<Vec<Label>> {
     let rows = sqlx::query(&format!(
         "SELECT {COLS} FROM labels \
          WHERE subject_kind = 'dataset_item' \
-           AND subject_id IN (SELECT id FROM dataset_items WHERE dataset_id = $1) \
+           AND subject_id IN (SELECT id FROM dataset_items WHERE dataset_id = $1) AND ($2::text IS NULL OR project_id = $2) \
          ORDER BY created_at ASC, id ASC"
     ))
     .bind(dataset_id.to_string())
+    .bind(project.map(str::to_string))
     .fetch_all(pool)
     .await
     .map_err(pgerr)?;

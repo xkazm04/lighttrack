@@ -10,7 +10,7 @@ use crate::codec::{fmt_ts, json_or_null, parse_ts, val_or_null};
 use crate::Result;
 
 const COLS: &str = "id, type, payload, status, attempts, max_attempts, progress, error, \
-    result, claimed_at, created_at, updated_at, failures, stale_reclaims";
+    result, claimed_at, created_at, updated_at, failures, stale_reclaims, project_id";
 
 pub(super) fn create(conn: &Connection, j: &Job) -> Result<()> {
     let payload = json_or_null(&j.payload)?;
@@ -18,8 +18,8 @@ pub(super) fn create(conn: &Connection, j: &Job) -> Result<()> {
     conn.execute(
         "INSERT INTO jobs \
          (id, type, payload, status, attempts, max_attempts, progress, error, result, claimed_at, \
-          created_at, updated_at, failures, stale_reclaims) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+          created_at, updated_at, failures, stale_reclaims, project_id) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
         params![
             j.id,
             j.job_type,
@@ -35,6 +35,7 @@ pub(super) fn create(conn: &Connection, j: &Job) -> Result<()> {
             fmt_ts(j.updated_at),
             j.failures as i64,
             j.stale_reclaims as i64,
+            j.project_id,
         ],
     )?;
     Ok(())
@@ -46,25 +47,35 @@ pub(super) fn create(conn: &Connection, j: &Job) -> Result<()> {
 /// - `running` → `cancelling`, which is **not** in the claimable set — so the stale-claim reclaim
 ///   path can never restart a cancelled run, no matter which of the two statements lands first.
 /// - anything terminal → untouched, and reported as already finished.
-pub(super) fn cancel(conn: &Connection, id: &str) -> Result<Option<JobCancel>> {
+pub(super) fn cancel(
+    conn: &Connection,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<JobCancel>> {
     let now = fmt_ts(Utc::now());
-    let mut stmt = conn.prepare(
+    let scope = super::scope_and(3);
+    let sql = format!(
         "UPDATE jobs SET status = CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END, \
          updated_at = ?2 \
-         WHERE id = ?1 AND status IN ('queued','running') \
-         RETURNING status",
-    )?;
-    let new_status: Option<String> = stmt.query_row(params![id, now], |r| r.get(0)).optional()?;
+         WHERE id = ?1 AND status IN ('queued','running'){scope} \
+         RETURNING status"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let new_status: Option<String> = stmt
+        .query_row(params![id, now, project], |r| r.get(0))
+        .optional()?;
     match new_status.as_deref() {
         Some("cancelled") => return Ok(Some(JobCancel::Cancelled)),
         Some(_) => return Ok(Some(JobCancel::Cancelling)),
         None => {}
     }
-    // Nothing to cancel: either it's already terminal, or there is no such job.
+    // Nothing to cancel: either it's already terminal, or there is no such job *in this scope*.
+    let existing_sql = format!(
+        "SELECT status FROM jobs WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let existing: Option<String> = conn
-        .query_row("SELECT status FROM jobs WHERE id = ?1", params![id], |r| {
-            r.get(0)
-        })
+        .query_row(&existing_sql, params![id, project], |r| r.get(0))
         .optional()?;
     Ok(existing.map(|status| JobCancel::AlreadyFinished { status }))
 }
@@ -180,7 +191,7 @@ pub(super) fn finish(
     }
     // Refused. Say what the record actually holds now, so the loser can name what beat it instead
     // of reporting a bare failure.
-    Ok(match get(conn, id)? {
+    Ok(match get(conn, None, id)? {
         Some(j) => JobFinish::NotHeld {
             status: j.status,
             claimed_at: j.claimed_at,
@@ -189,27 +200,42 @@ pub(super) fn finish(
     })
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Job>> {
-    let sql = format!("SELECT {COLS} FROM jobs WHERE id = ?1");
+pub(super) fn get(conn: &Connection, project: Option<&str>, id: &str) -> Result<Option<Job>> {
+    let sql = format!(
+        "SELECT {COLS} FROM jobs WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![id], map_raw).optional()?;
+    let raw = stmt.query_row(params![id, project], map_raw).optional()?;
     raw.map(from_raw).transpose()
 }
 
-pub(super) fn list(conn: &Connection, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
+/// The queue as one scope sees it. A project reads only the work stamped with its own id; the
+/// operator additionally reads the project-less rows (sweeps, and anything enqueued before the
+/// column existed). Backed by `idx_jobs_project_created`.
+pub(super) fn list(
+    conn: &Connection,
+    project: Option<&str>,
+    status: Option<&str>,
+    limit: usize,
+) -> Result<Vec<Job>> {
     let raws = if let Some(s) = status {
-        let sql =
-            format!("SELECT {COLS} FROM jobs WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2");
+        let scope = super::scope_and(3);
+        let sql = format!(
+            "SELECT {COLS} FROM jobs WHERE status = ?1{scope} ORDER BY created_at DESC LIMIT ?2"
+        );
         let mut stmt = conn.prepare(&sql)?;
         let v = stmt
-            .query_map(params![s, limit as i64], map_raw)?
+            .query_map(params![s, limit as i64, project], map_raw)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         v
     } else {
-        let sql = format!("SELECT {COLS} FROM jobs ORDER BY created_at DESC LIMIT ?1");
+        let scope = super::scope_and(2);
+        let sql =
+            format!("SELECT {COLS} FROM jobs WHERE 1 = 1{scope} ORDER BY created_at DESC LIMIT ?1");
         let mut stmt = conn.prepare(&sql)?;
         let v = stmt
-            .query_map(params![limit as i64], map_raw)?
+            .query_map(params![limit as i64, project], map_raw)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         v
     };
@@ -231,6 +257,7 @@ type JobRaw = (
     String,
     i64,
     i64,
+    Option<String>,
 );
 
 fn map_raw(row: &Row) -> rusqlite::Result<JobRaw> {
@@ -249,6 +276,7 @@ fn map_raw(row: &Row) -> rusqlite::Result<JobRaw> {
         row.get(11)?,
         row.get(12)?,
         row.get(13)?,
+        row.get(14)?,
     ))
 }
 
@@ -271,5 +299,6 @@ fn from_raw(r: JobRaw) -> Result<Job> {
         updated_at: parse_ts(&r.11)?,
         failures: r.12 as u32,
         stale_reclaims: r.13 as u32,
+        project_id: r.14,
     })
 }

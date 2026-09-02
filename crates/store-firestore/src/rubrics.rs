@@ -26,11 +26,15 @@ pub(crate) fn create_rubric(rest: &Rest, r: &Rubric) -> Result<()> {
     rest.put_doc("rubrics", &r.id, &m)
 }
 
-pub(crate) fn get_rubric(rest: &Rest, id: &str) -> Result<Option<Rubric>> {
-    rest.get_doc("rubrics", id)?
+pub(crate) fn get_rubric(rest: &Rest, project: Option<&str>, id: &str) -> Result<Option<Rubric>> {
+    let r = rest
+        .get_doc("rubrics", id)?
         .as_ref()
         .map(rubric_from)
-        .transpose()
+        .transpose()?;
+    Ok(crate::scope::keep(project, r, |r| {
+        Some(r.project_id.as_str())
+    }))
 }
 
 pub(crate) fn list_rubrics(rest: &Rest, project: &str) -> Result<Vec<Rubric>> {

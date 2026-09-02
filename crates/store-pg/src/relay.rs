@@ -55,12 +55,19 @@ pub(crate) async fn create(pool: &PgPool, t: &RelayTask) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<RelayTask>> {
-    let row = sqlx::query(&format!("SELECT {COLS} FROM relay_tasks WHERE id = $1"))
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+pub(crate) async fn get(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<RelayTask>> {
+    let row = sqlx::query(&format!(
+        "SELECT {COLS} FROM relay_tasks WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)"
+    ))
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     row.as_ref().map(from_row).transpose()
 }
 

@@ -89,10 +89,13 @@ pub(super) fn list(conn: &Connection, project: &str, only_enabled: bool) -> Resu
     raws.into_iter().map(limit_from_raw).collect()
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LimitRule>> {
-    let sql = format!("SELECT {COLS} FROM limit_rules WHERE id = ?1");
+pub(super) fn get(conn: &Connection, project: Option<&str>, id: &str) -> Result<Option<LimitRule>> {
+    let sql = format!(
+        "SELECT {COLS} FROM limit_rules WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    stmt.query_row(params![id], map_limit)
+    stmt.query_row(params![id, project], map_limit)
         .optional()?
         .map(limit_from_raw)
         .transpose()
@@ -100,15 +103,19 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LimitRule>> {
 
 /// Update a rule's mutable columns in place (matched by id); `project_id` is left untouched. Returns
 /// whether a row matched.
-pub(super) fn update(conn: &Connection, r: &LimitRule) -> Result<bool> {
+pub(super) fn update(conn: &Connection, project: Option<&str>, r: &LimitRule) -> Result<bool> {
     let (scope_kind, scope_value) = scope_parts(&r.scope);
     let (threshold, threshold_json) = threshold_parts(&r.threshold)?;
-    let n = conn.execute(
+    let sql = format!(
         "UPDATE limit_rules \
          SET metric = ?2, window = ?3, threshold = ?4, action = ?5, enabled = ?6, warn_at = ?7, \
              scope_kind = ?8, scope_value = ?9, threshold_json = ?10, escalation_json = ?11, \
              escalated_until = ?12, origin = ?13, expires_at = ?14 \
-         WHERE id = ?1",
+         WHERE id = ?1{}",
+        super::scope_and(15)
+    );
+    let n = conn.execute(
+        &sql,
         params![
             r.id,
             enum_to_str(&r.metric)?,
@@ -124,13 +131,18 @@ pub(super) fn update(conn: &Connection, r: &LimitRule) -> Result<bool> {
             r.escalated_until.map(fmt_ts),
             r.origin,
             r.expires_at.map(fmt_ts),
+            project,
         ],
     )?;
     Ok(n > 0)
 }
 
-pub(super) fn delete(conn: &Connection, id: &str) -> Result<bool> {
-    let n = conn.execute("DELETE FROM limit_rules WHERE id = ?1", params![id])?;
+pub(super) fn delete(conn: &Connection, project: Option<&str>, id: &str) -> Result<bool> {
+    let sql = format!(
+        "DELETE FROM limit_rules WHERE id = ?1{}",
+        super::scope_and(2)
+    );
+    let n = conn.execute(&sql, params![id, project])?;
     Ok(n > 0)
 }
 

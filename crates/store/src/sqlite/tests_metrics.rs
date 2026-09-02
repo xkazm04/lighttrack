@@ -10,6 +10,7 @@ use crate::{DbOpStats, MaintenanceRequest, Store};
 
 use super::tests_concurrency::ev;
 use super::SqliteStore;
+use crate::Scope;
 
 fn store() -> (tempfile::TempDir, SqliteStore) {
     let dir = tempfile::tempdir().unwrap();
@@ -27,10 +28,10 @@ fn every_method_lands_on_the_family_an_operator_would_look_under() {
     for _ in 0..5 {
         s.insert_event(&ev("m")).unwrap();
     }
-    s.list_events(Some("m"), 10).unwrap();
-    s.list_events(Some("m"), 10).unwrap();
-    s.cost_summary(Some("m")).unwrap();
-    s.list_jobs(None, 10).unwrap();
+    s.list_events(Scope::Project("m"), 10).unwrap();
+    s.list_events(Scope::Project("m"), 10).unwrap();
+    s.cost_summary(Scope::Project("m")).unwrap();
+    s.list_jobs(Scope::Operator, None, 10).unwrap();
     s.list_prices().unwrap();
 
     let r = s.db_metrics().unwrap();
@@ -62,7 +63,7 @@ fn every_method_lands_on_the_family_an_operator_would_look_under() {
 fn waiting_for_a_connection_is_its_own_key_and_never_inside_query_time() {
     let (_d, s) = store();
     s.insert_event(&ev("m")).unwrap();
-    s.list_events(Some("m"), 10).unwrap();
+    s.list_events(Scope::Project("m"), 10).unwrap();
     let r = s.db_metrics().unwrap();
 
     let acquire = stat(&r.ops, "pool.acquire").expect("pooled reads record their acquisition");
@@ -100,7 +101,7 @@ fn rows_written_is_null_for_reads_because_a_read_changes_no_rows() {
     for _ in 0..3 {
         s.insert_event(&ev("m")).unwrap();
     }
-    s.list_events(Some("m"), 10).unwrap();
+    s.list_events(Scope::Project("m"), 10).unwrap();
     let r = s.db_metrics().unwrap();
     assert_eq!(
         stat(&r.ops, "events.write").unwrap().rows_written,
@@ -174,7 +175,7 @@ fn the_instrument_does_not_use_the_database() {
     let before = tables(&s);
     for _ in 0..200 {
         s.insert_event(&ev("m")).unwrap();
-        s.list_events(Some("m"), 5).unwrap();
+        s.list_events(Scope::Project("m"), 5).unwrap();
     }
     let after = tables(&s);
     assert_eq!(

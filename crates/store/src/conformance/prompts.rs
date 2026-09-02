@@ -11,6 +11,7 @@ use lighttrack_core::{
     new_id, CanaryPolicy, Prompt, PromptVersion, REASON_CANARY_REGRESSED, REASON_PROMOTE,
 };
 
+use crate::Scope;
 use crate::{Result, Store};
 
 pub(super) fn sample_prompt(project: &str) -> Prompt {
@@ -50,7 +51,7 @@ pub(super) fn prompts(store: &dyn Store) -> Result<()> {
     assert_eq!(by_name.id, p.id);
     assert_eq!(
         store
-            .get_prompt_by_id(&p.id)?
+            .get_prompt_by_id(Scope::Operator, &p.id)?
             .expect("get_prompt_by_id")
             .name,
         p.name
@@ -72,19 +73,21 @@ pub(super) fn prompts(store: &dyn Store) -> Result<()> {
     let v2 = sample_version(&p.id, 2);
     store.create_prompt_version(&v2)?;
 
-    let versions = store.list_prompt_versions(&p.id)?;
+    let versions = store.list_prompt_versions(Scope::Operator, &p.id)?;
     assert_eq!(versions.len(), 2, "both versions are listed");
     assert_eq!(
         versions[0].version, 2,
         "newest version first (a reversed order serves a stale prompt to every caller)"
     );
     let got = store
-        .get_prompt_version(&p.id, 2)?
+        .get_prompt_version(Scope::Operator, &p.id, 2)?
         .expect("get_prompt_version by number");
     assert_eq!(got.content, v2.content, "version content round-trips");
     assert_eq!(got.config, v2.config, "version config round-trips");
     assert!(
-        store.get_prompt_version(&p.id, 99)?.is_none(),
+        store
+            .get_prompt_version(Scope::Operator, &p.id, 99)?
+            .is_none(),
         "an unknown version number is None"
     );
 

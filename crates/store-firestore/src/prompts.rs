@@ -47,11 +47,19 @@ pub(crate) fn get_prompt(rest: &Rest, project: &str, name: &str) -> Result<Optio
     docs.first().map(prompt_from).transpose()
 }
 
-pub(crate) fn get_prompt_by_id(rest: &Rest, id: &str) -> Result<Option<Prompt>> {
-    rest.get_doc("prompts", id)?
+pub(crate) fn get_prompt_by_id(
+    rest: &Rest,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<Prompt>> {
+    let p = rest
+        .get_doc("prompts", id)?
         .as_ref()
         .map(prompt_from)
-        .transpose()
+        .transpose()?;
+    Ok(crate::scope::keep(project, p, |p| {
+        Some(p.project_id.as_str())
+    }))
 }
 
 pub(crate) fn list_prompts(rest: &Rest, project: &str) -> Result<Vec<Prompt>> {
@@ -72,11 +80,16 @@ pub(crate) fn create_prompt_version(rest: &Rest, v: &PromptVersion) -> Result<()
     rest.put_doc("prompt_versions", &v.id, &m)
 }
 
+/// `prompt_versions` documents carry no `project_id`, so the tenant filter rides the parent prompt.
 pub(crate) fn get_prompt_version(
     rest: &Rest,
+    project: Option<&str>,
     prompt_id: &str,
     version: u32,
 ) -> Result<Option<PromptVersion>> {
+    if get_prompt_by_id(rest, project, prompt_id)?.is_none() {
+        return Ok(None);
+    }
     let filters: Vec<(&str, &str, Value)> = vec![
         ("prompt_id", "EQUAL", json!(prompt_id)),
         ("version", "EQUAL", json!(version as i64)),
@@ -85,7 +98,14 @@ pub(crate) fn get_prompt_version(
     docs.first().map(version_from).transpose()
 }
 
-pub(crate) fn list_prompt_versions(rest: &Rest, prompt_id: &str) -> Result<Vec<PromptVersion>> {
+pub(crate) fn list_prompt_versions(
+    rest: &Rest,
+    project: Option<&str>,
+    prompt_id: &str,
+) -> Result<Vec<PromptVersion>> {
+    if get_prompt_by_id(rest, project, prompt_id)?.is_none() {
+        return Ok(Vec::new());
+    }
     let filters: Vec<(&str, &str, Value)> = vec![("prompt_id", "EQUAL", json!(prompt_id))];
     let docs = rest.query("prompt_versions", &filters, Some(("version", true)), None)?;
     docs.iter().map(version_from).collect()

@@ -77,12 +77,26 @@ use crate::{
     capabilities::{Capabilities, Surface},
     Admission, AlertAdmission, AlertFilter, CollectiveFilter, CostRow, CustomerCostRow,
     DailyDimCost, DailyUsage, DbMetricsReport, EventFilter, EventPage, MaintenancePass,
-    MaintenanceRequest, RedactionPostureRow, ReplaceAck, RepriceReport, Result, ScopeUsage,
+    MaintenanceRequest, RedactionPostureRow, ReplaceAck, RepriceReport, Result, Scope, ScopeUsage,
     ScoreFilter, ScoreSummaryRow, StorageReport, Store, StoreError, TraceEvents, TraceFilter,
     TracePage, Usage, UseCaseCostRow,
 };
 
 use metrics::DbOp;
+
+/// The tenant filter for a read that already seeks by its own key: `AND (?n IS NULL OR
+/// project_id = ?n)`, appended to the `WHERE` clause.
+///
+/// The `OR` form [`project_pred`] avoids is right here and wrong there. These statements seek on a
+/// primary key (or a parent key), so there is no index for the planner to lose, and keeping ONE
+/// statement shape across both scopes keeps the prepared-statement cache warm — the alternative
+/// (two texts, chosen per call) doubles every point read's cache entry.
+///
+/// `NULL` — an operator scope — matches every row including the project-less ones; a project scope
+/// matches only its own, and never a `NULL`-project row.
+pub(super) fn scope_and(slot: usize) -> String {
+    format!(" AND (?{slot} IS NULL OR project_id = ?{slot})")
+}
 
 /// A **sargable** project predicate for `?1`-bound project queries. When a project is given this is an
 /// index-seekable equality (`project_id = ?1`), so a `WHERE project_pred(..) AND ts >= ?2 AND ts < ?3`
@@ -389,20 +403,23 @@ impl Store for SqliteStore {
             out
         })
     }
-    fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
+    fn list_events(&self, project: Scope<'_>, limit: usize) -> Result<Vec<LlmEvent>> {
+        let project = project.project();
         self.read_op(DbOp::EventsRead, |c| events::list(c, project, limit))
     }
     fn list_events_filtered(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         filter: &EventFilter,
         limit: usize,
     ) -> Result<EventPage> {
+        let project = project.project();
         self.read_op(DbOp::EventsRead, |c| {
             events::list_filtered(c, project, filter, limit)
         })
     }
-    fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
+    fn cost_summary(&self, project: Scope<'_>) -> Result<Vec<CostRow>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| events::cost_summary(c, project))
     }
     fn rollup(&self, q: &RollupQuery<'_>) -> Result<Vec<RollupRow>> {
@@ -410,19 +427,21 @@ impl Store for SqliteStore {
     }
     fn cost_summary_windowed(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: Option<DateTime<Utc>>,
         until: Option<DateTime<Utc>>,
     ) -> Result<Vec<CostRow>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             events::cost_summary_windowed(c, project, since, until)
         })
     }
     fn usecase_costs(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<UseCaseCostRow>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             events::usecase_costs(c, project, since)
         })
@@ -452,9 +471,10 @@ impl Store for SqliteStore {
     }
     fn redaction_posture(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: DateTime<Utc>,
     ) -> Result<Vec<RedactionPostureRow>> {
+        let project = project.project();
         self.read_op(DbOp::EventsRead, |c| redaction::posture(c, project, since))
     }
     fn daily_usage(
@@ -469,46 +489,51 @@ impl Store for SqliteStore {
     }
     fn daily_cost_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<DailyDimCost>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             forecast::daily_cost_by_dimension(c, project, dim, since, until)
         })
     }
-    fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
-        self.read_op(DbOp::EventsRead, |c| events::get(c, id))
+    fn get_event(&self, scope: Scope<'_>, id: &str) -> Result<Option<LlmEvent>> {
+        self.read_op(DbOp::EventsRead, |c| events::get(c, scope.project(), id))
     }
 
     // --- traces ---
-    fn list_traces(&self, project: Option<&str>, limit: usize) -> Result<Vec<TraceSummary>> {
+    fn list_traces(&self, project: Scope<'_>, limit: usize) -> Result<Vec<TraceSummary>> {
+        let project = project.project();
         self.read_op(DbOp::TracesRead, |c| {
             events::list_trace_summaries(c, project, limit)
         })
     }
     fn list_traces_filtered(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         filter: &TraceFilter,
         limit: usize,
     ) -> Result<TracePage> {
+        let project = project.project();
         self.read_op(DbOp::TracesRead, |c| {
             events::list_trace_summaries_filtered(c, project, filter, limit)
         })
     }
     fn list_trace_events(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         trace_id: &str,
         max_spans: usize,
     ) -> Result<TraceEvents> {
+        let project = project.project();
         self.read_op(DbOp::TracesRead, |c| {
             events::list_by_trace(c, project, trace_id, max_spans)
         })
     }
-    fn list_trace_scores(&self, project: Option<&str>, trace_id: &str) -> Result<Vec<Score>> {
+    fn list_trace_scores(&self, project: Scope<'_>, trace_id: &str) -> Result<Vec<Score>> {
+        let project = project.project();
         self.read_op(DbOp::TracesRead, |c| {
             scores::list_by_trace(c, project, trace_id)
         })
@@ -518,15 +543,17 @@ impl Store for SqliteStore {
     fn insert_score(&self, s: &Score) -> Result<()> {
         self.with_op(DbOp::ScoresWrite, |c| scores::insert(c, s))
     }
-    fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
+    fn list_scores(&self, project: Scope<'_>, limit: usize) -> Result<Vec<Score>> {
+        let project = project.project();
         self.read_op(DbOp::ScoresRead, |c| scores::list(c, project, limit))
     }
     fn list_scores_filtered(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         filter: &ScoreFilter,
         limit: usize,
     ) -> Result<Vec<Score>> {
+        let project = project.project();
         self.read_op(DbOp::ScoresRead, |c| {
             scores::list_filtered(c, project, filter, limit)
         })
@@ -534,26 +561,30 @@ impl Store for SqliteStore {
     fn list_run_scores(
         &self,
         run_id: &str,
-        project: Option<&str>,
+        project: Scope<'_>,
         limit: usize,
     ) -> Result<Vec<Score>> {
+        let project = project.project();
         self.read_op(DbOp::ScoresRead, |c| {
             scores::list_by_run(c, run_id, project, limit)
         })
     }
-    fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
-        self.read_op(DbOp::ScoresRead, |c| scores::scored_event_ids(c, event_ids))
+    fn scored_event_ids(&self, scope: Scope<'_>, event_ids: &[String]) -> Result<Vec<String>> {
+        self.read_op(DbOp::ScoresRead, |c| {
+            scores::scored_event_ids(c, scope.project(), event_ids)
+        })
     }
     /// Verdicts grouped by a value on the joined event row (M23) — the served-version quality
     /// ledger. See the trait for the semantics every backend matches.
     fn score_summary_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: Dimension,
         since: DateTime<Utc>,
         until: Option<DateTime<Utc>>,
         rubric_id: Option<&str>,
     ) -> Result<Vec<ScoreSummaryRow>> {
+        let project = project.project();
         self.read_op(DbOp::ScoresRead, |c| {
             score_summary::score_summary(c, project, dim, since, until, rubric_id)
         })
@@ -596,11 +627,11 @@ impl Store for SqliteStore {
     fn list_limit_rules(&self, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
         self.read(|c| limits::list(c, project, only_enabled))
     }
-    fn get_limit_rule(&self, id: &str) -> Result<Option<LimitRule>> {
-        self.read(|c| limits::get(c, id))
+    fn get_limit_rule(&self, scope: Scope<'_>, id: &str) -> Result<Option<LimitRule>> {
+        self.read(|c| limits::get(c, scope.project(), id))
     }
-    fn update_limit_rule(&self, r: &LimitRule) -> Result<bool> {
-        self.with(|c| limits::update(c, r))
+    fn update_limit_rule(&self, scope: Scope<'_>, r: &LimitRule) -> Result<bool> {
+        self.with(|c| limits::update(c, scope.project(), r))
     }
     fn create_margin_policy(&self, p: &lighttrack_core::MarginPolicy) -> Result<()> {
         self.with(|c| margin_policies::create(c, p))
@@ -612,23 +643,27 @@ impl Store for SqliteStore {
     ) -> Result<Vec<lighttrack_core::MarginPolicy>> {
         self.read(|c| margin_policies::list(c, project, only_enabled))
     }
-    fn get_margin_policy(&self, id: &str) -> Result<Option<lighttrack_core::MarginPolicy>> {
-        self.read(|c| margin_policies::get(c, id))
+    fn get_margin_policy(
+        &self,
+        scope: Scope<'_>,
+        id: &str,
+    ) -> Result<Option<lighttrack_core::MarginPolicy>> {
+        self.read(|c| margin_policies::get(c, scope.project(), id))
     }
-    fn delete_margin_policy(&self, id: &str) -> Result<bool> {
-        self.with(|c| margin_policies::delete(c, id))
+    fn delete_margin_policy(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.with(|c| margin_policies::delete(c, scope.project(), id))
     }
 
-    fn delete_limit_rule(&self, id: &str) -> Result<bool> {
-        self.with(|c| limits::delete(c, id))
+    fn delete_limit_rule(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.with(|c| limits::delete(c, scope.project(), id))
     }
 
     // --- benchmarks ---
     fn create_benchmark(&self, b: &Benchmark) -> Result<()> {
         self.with(|c| benchmarks::create(c, b))
     }
-    fn get_benchmark(&self, id: &str) -> Result<Option<Benchmark>> {
-        self.read(|c| benchmarks::get(c, id))
+    fn get_benchmark(&self, scope: Scope<'_>, id: &str) -> Result<Option<Benchmark>> {
+        self.read(|c| benchmarks::get(c, scope.project(), id))
     }
     fn list_benchmarks(&self, project: &str) -> Result<Vec<Benchmark>> {
         self.read(|c| benchmarks::list(c, project))
@@ -636,8 +671,12 @@ impl Store for SqliteStore {
     fn create_benchmark_run(&self, r: &BenchmarkRun) -> Result<()> {
         self.with(|c| benchmarks::create_run(c, r))
     }
-    fn list_benchmark_runs(&self, benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
-        self.read(|c| benchmarks::list_runs(c, benchmark_id))
+    fn list_benchmark_runs(
+        &self,
+        scope: Scope<'_>,
+        benchmark_id: &str,
+    ) -> Result<Vec<BenchmarkRun>> {
+        self.read(|c| benchmarks::list_runs(c, scope.project(), benchmark_id))
     }
 
     // --- prices ---
@@ -658,28 +697,28 @@ impl Store for SqliteStore {
     fn create_dataset(&self, d: &Dataset) -> Result<()> {
         self.with(|c| datasets::create(c, d))
     }
-    fn get_dataset(&self, id: &str) -> Result<Option<Dataset>> {
-        self.read(|c| datasets::get(c, id))
+    fn get_dataset(&self, scope: Scope<'_>, id: &str) -> Result<Option<Dataset>> {
+        self.read(|c| datasets::get(c, scope.project(), id))
     }
-    fn list_datasets(&self, project: &str) -> Result<Vec<Dataset>> {
-        self.read(|c| datasets::list(c, project))
+    fn list_datasets(&self, project: Scope<'_>) -> Result<Vec<Dataset>> {
+        self.read(|c| datasets::list(c, project.project()))
     }
-    fn set_dataset_frozen(&self, id: &str, frozen: bool) -> Result<()> {
-        self.with(|c| datasets::set_frozen(c, id, frozen))
+    fn set_dataset_frozen(&self, scope: Scope<'_>, id: &str, frozen: bool) -> Result<()> {
+        self.with(|c| datasets::set_frozen(c, scope.project(), id, frozen))
     }
     fn create_dataset_item(&self, item: &DatasetItem) -> Result<()> {
         self.with(|c| datasets::create_item(c, item))
     }
-    fn list_dataset_items(&self, dataset_id: &str) -> Result<Vec<DatasetItem>> {
-        self.read(|c| datasets::list_items(c, dataset_id))
+    fn list_dataset_items(&self, scope: Scope<'_>, dataset_id: &str) -> Result<Vec<DatasetItem>> {
+        self.read(|c| datasets::list_items(c, scope.project(), dataset_id))
     }
 
     // --- rubrics ---
     fn create_rubric(&self, r: &Rubric) -> Result<()> {
         self.with(|c| rubrics::create(c, r))
     }
-    fn get_rubric(&self, id: &str) -> Result<Option<Rubric>> {
-        self.read(|c| rubrics::get(c, id))
+    fn get_rubric(&self, scope: Scope<'_>, id: &str) -> Result<Option<Rubric>> {
+        self.read(|c| rubrics::get(c, scope.project(), id))
     }
     fn list_rubrics(&self, project: &str) -> Result<Vec<Rubric>> {
         self.read(|c| rubrics::list(c, project))
@@ -692,8 +731,8 @@ impl Store for SqliteStore {
     fn claim_job(&self, stale_before: DateTime<Utc>, kinds: &[&str]) -> Result<Option<Job>> {
         self.with_op(DbOp::JobsWrite, |c| jobs::claim(c, stale_before, kinds))
     }
-    fn cancel_job(&self, id: &str) -> Result<Option<JobCancel>> {
-        self.with_op(DbOp::JobsWrite, |c| jobs::cancel(c, id))
+    fn cancel_job(&self, scope: Scope<'_>, id: &str) -> Result<Option<JobCancel>> {
+        self.with_op(DbOp::JobsWrite, |c| jobs::cancel(c, scope.project(), id))
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
         self.with_op(DbOp::JobsWrite, |c| jobs::update_progress(c, id, progress))
@@ -713,28 +752,30 @@ impl Store for SqliteStore {
             jobs::finish(c, id, status, result, error, fence)
         })
     }
-    fn get_job(&self, id: &str) -> Result<Option<Job>> {
-        self.read_op(DbOp::JobsRead, |c| jobs::get(c, id))
+    fn get_job(&self, scope: Scope<'_>, id: &str) -> Result<Option<Job>> {
+        self.read_op(DbOp::JobsRead, |c| jobs::get(c, scope.project(), id))
     }
-    fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
-        self.read_op(DbOp::JobsRead, |c| jobs::list(c, status, limit))
+    fn list_jobs(&self, scope: Scope<'_>, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
+        self.read_op(DbOp::JobsRead, |c| {
+            jobs::list(c, scope.project(), status, limit)
+        })
     }
 
     // --- stored schedules ---
     fn create_schedule(&self, s: &Schedule) -> Result<()> {
         self.with(|c| schedules::create(c, s))
     }
-    fn get_schedule(&self, id: &str) -> Result<Option<Schedule>> {
-        self.read(|c| schedules::get(c, id))
+    fn get_schedule(&self, scope: Scope<'_>, id: &str) -> Result<Option<Schedule>> {
+        self.read(|c| schedules::get(c, scope.project(), id))
     }
     fn list_schedules(&self, project: &str) -> Result<Vec<Schedule>> {
         self.read(|c| schedules::list(c, project))
     }
-    fn update_schedule(&self, s: &Schedule) -> Result<bool> {
-        self.with(|c| schedules::update(c, s))
+    fn update_schedule(&self, scope: Scope<'_>, s: &Schedule) -> Result<bool> {
+        self.with(|c| schedules::update(c, scope.project(), s))
     }
-    fn delete_schedule(&self, id: &str) -> Result<bool> {
-        self.with(|c| schedules::delete(c, id))
+    fn delete_schedule(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.with(|c| schedules::delete(c, scope.project(), id))
     }
     fn due_schedules(&self, now: DateTime<Utc>) -> Result<Vec<Schedule>> {
         self.read(|c| schedules::due(c, now))
@@ -750,8 +791,8 @@ impl Store for SqliteStore {
     fn get_prompt(&self, project: &str, name: &str) -> Result<Option<Prompt>> {
         self.read(|c| prompts::get(c, project, name))
     }
-    fn get_prompt_by_id(&self, id: &str) -> Result<Option<Prompt>> {
-        self.read(|c| prompts::get_by_id(c, id))
+    fn get_prompt_by_id(&self, scope: Scope<'_>, id: &str) -> Result<Option<Prompt>> {
+        self.read(|c| prompts::get_by_id(c, scope.project(), id))
     }
     fn list_prompts(&self, project: &str) -> Result<Vec<Prompt>> {
         self.read(|c| prompts::list(c, project))
@@ -759,11 +800,20 @@ impl Store for SqliteStore {
     fn create_prompt_version(&self, v: &PromptVersion) -> Result<()> {
         self.with(|c| prompts::create_version(c, v))
     }
-    fn get_prompt_version(&self, prompt_id: &str, version: u32) -> Result<Option<PromptVersion>> {
-        self.read(|c| prompts::get_version(c, prompt_id, version))
+    fn get_prompt_version(
+        &self,
+        scope: Scope<'_>,
+        prompt_id: &str,
+        version: u32,
+    ) -> Result<Option<PromptVersion>> {
+        self.read(|c| prompts::get_version(c, scope.project(), prompt_id, version))
     }
-    fn list_prompt_versions(&self, prompt_id: &str) -> Result<Vec<PromptVersion>> {
-        self.read(|c| prompts::list_versions(c, prompt_id))
+    fn list_prompt_versions(
+        &self,
+        scope: Scope<'_>,
+        prompt_id: &str,
+    ) -> Result<Vec<PromptVersion>> {
+        self.read(|c| prompts::list_versions(c, scope.project(), prompt_id))
     }
 
     // --- revenue + margin (Phase 1 profit tracking) ---
@@ -775,20 +825,22 @@ impl Store for SqliteStore {
     }
     fn list_revenue_events(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<RevenueEvent>> {
+        let project = project.project();
         self.read(|c| revenue::list(c, project, since, until))
     }
     fn reprice_revenue(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         currency: &str,
         rate: f64,
         version: &str,
         dry_run: bool,
     ) -> Result<RepriceReport> {
+        let project = project.project();
         // Through the write connection even for a dry run: the two counts it reports must come from
         // one consistent view, and a dry run whose numbers a concurrent sync moved under it is a
         // preview of something that never happens.
@@ -796,44 +848,48 @@ impl Store for SqliteStore {
     }
     fn cost_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             revenue::cost_by_dimension(c, project, dim, since, until)
         })
     }
     fn tokens_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<TokensByDimension>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             revenue::tokens_by_dimension(c, project, dim, since, until)
         })
     }
     fn customer_cost_by_model(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         customer: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             revenue::customer_cost_by_model(c, project, customer, since, until)
         })
     }
     fn customer_cost_by_name(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         customer: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             revenue::customer_cost_by_name(c, project, customer, since, until)
         })
@@ -843,27 +899,29 @@ impl Store for SqliteStore {
     fn create_relay_task(&self, t: &RelayTask) -> Result<()> {
         self.with(|c| relay::create(c, t))
     }
-    fn get_relay_task(&self, id: &str) -> Result<Option<RelayTask>> {
-        self.read(|c| relay::get(c, id))
+    fn get_relay_task(&self, scope: Scope<'_>, id: &str) -> Result<Option<RelayTask>> {
+        self.read(|c| relay::get(c, scope.project(), id))
     }
     fn find_relay_task_by_key(&self, project: &str, key: &str) -> Result<Option<RelayTask>> {
         self.read(|c| relay::find_by_key(c, project, key))
     }
     fn list_relay_tasks(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         status: Option<&str>,
         limit: usize,
     ) -> Result<Vec<RelayTask>> {
+        let project = project.project();
         self.read(|c| relay::list(c, project, status, limit))
     }
     fn list_relay_tasks_by_action(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         action_type: &str,
         status: Option<&str>,
         limit: usize,
     ) -> Result<Vec<RelayTask>> {
+        let project = project.project();
         self.read(|c| relay::list_by_action(c, project, action_type, status, limit))
     }
     fn lease_relay_tasks(
@@ -902,8 +960,8 @@ impl Store for SqliteStore {
     ) -> Result<LeaseHeld> {
         self.with(|c| relay_lease::update_progress(c, id, fence, progress))
     }
-    fn cancel_relay_task(&self, id: &str) -> Result<Option<RelayCancel>> {
-        self.with(|c| relay_lease::cancel(c, id))
+    fn cancel_relay_task(&self, scope: Scope<'_>, id: &str) -> Result<Option<RelayCancel>> {
+        self.with(|c| relay_lease::cancel(c, scope.project(), id))
     }
 
     // --- collective model intelligence ---
@@ -976,10 +1034,11 @@ impl Store for SqliteStore {
     fn create_device(&self, d: &Device) -> Result<()> {
         self.with(|c| devices::create(c, d))
     }
-    fn get_device(&self, id: &str) -> Result<Option<Device>> {
-        self.read(|c| devices::get(c, id))
+    fn get_device(&self, scope: Scope<'_>, id: &str) -> Result<Option<Device>> {
+        self.read(|c| devices::get(c, scope.project(), id))
     }
-    fn list_devices(&self, project: Option<&str>) -> Result<Vec<Device>> {
+    fn list_devices(&self, project: Scope<'_>) -> Result<Vec<Device>> {
+        let project = project.project();
         self.read(|c| devices::list(c, project))
     }
     fn find_device_by_key_prefix(&self, prefix: &str) -> Result<Option<Device>> {
@@ -993,8 +1052,8 @@ impl Store for SqliteStore {
     ) -> Result<()> {
         self.with(|c| devices::touch(c, id, capabilities, agent_version))
     }
-    fn revoke_device(&self, id: &str) -> Result<bool> {
-        self.with(|c| devices::revoke(c, id))
+    fn revoke_device(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.with(|c| devices::revoke(c, scope.project(), id))
     }
     fn count_eligible_devices(&self, action_type: &str) -> Result<DeviceEligibility> {
         self.read(|c| devices::count_eligible(c, action_type))
@@ -1016,27 +1075,33 @@ impl Store for SqliteStore {
     fn list_alerts(&self, f: &AlertFilter) -> Result<Vec<Alert>> {
         self.read(|c| alerts::list(c, f))
     }
-    fn get_alert(&self, id: &str) -> Result<Option<Alert>> {
-        self.read(|c| alerts::get(c, id))
+    fn get_alert(&self, scope: Scope<'_>, id: &str) -> Result<Option<Alert>> {
+        self.read(|c| alerts::get(c, scope.project(), id))
     }
-    fn ack_alert(&self, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
-        self.with(|c| alerts::ack(c, id, by, at))
+    fn ack_alert(&self, scope: Scope<'_>, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
+        self.with(|c| alerts::ack(c, scope.project(), id, by, at))
     }
-    fn attach_alert_resolution(&self, id: &str, resolution: &Value) -> Result<bool> {
-        self.with(|c| alerts::attach_resolution(c, id, resolution))
+    fn attach_alert_resolution(
+        &self,
+        scope: Scope<'_>,
+        id: &str,
+        resolution: &Value,
+    ) -> Result<bool> {
+        self.with(|c| alerts::attach_resolution(c, scope.project(), id, resolution))
     }
 
     fn create_alert_channel(&self, c: &AlertChannel) -> Result<()> {
         self.with(|conn| alert_channels::create(conn, c))
     }
-    fn get_alert_channel(&self, id: &str) -> Result<Option<AlertChannel>> {
-        self.read(|c| alert_channels::get(c, id))
+    fn get_alert_channel(&self, scope: Scope<'_>, id: &str) -> Result<Option<AlertChannel>> {
+        self.read(|c| alert_channels::get(c, scope.project(), id))
     }
-    fn list_alert_channels(&self, project: Option<&str>) -> Result<Vec<AlertChannel>> {
+    fn list_alert_channels(&self, project: Scope<'_>) -> Result<Vec<AlertChannel>> {
+        let project = project.project();
         self.read(|c| alert_channels::list(c, project))
     }
-    fn delete_alert_channel(&self, id: &str) -> Result<bool> {
-        self.with(|c| alert_channels::delete(c, id))
+    fn delete_alert_channel(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.with(|c| alert_channels::delete(c, scope.project(), id))
     }
 
     // --- the human verdict ledger + calibration history (M11) ---
@@ -1046,8 +1111,10 @@ impl Store for SqliteStore {
     fn list_labels(&self, f: &LabelFilter) -> Result<Vec<Label>> {
         self.read_op(DbOp::ScoresRead, |c| labels::list(c, f))
     }
-    fn labels_for_dataset(&self, dataset_id: &str) -> Result<Vec<Label>> {
-        self.read_op(DbOp::ScoresRead, |c| labels::for_dataset(c, dataset_id))
+    fn labels_for_dataset(&self, scope: Scope<'_>, dataset_id: &str) -> Result<Vec<Label>> {
+        self.read_op(DbOp::ScoresRead, |c| {
+            labels::for_dataset(c, scope.project(), dataset_id)
+        })
     }
     fn insert_calibration(&self, c: &CalibrationRecord) -> Result<()> {
         self.with_op(DbOp::ScoresWrite, |conn| calibrations::insert(conn, c))
@@ -1064,10 +1131,11 @@ impl Store for SqliteStore {
     }
     fn list_calibrations(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<Vec<CalibrationRecord>> {
+        let project = project.project();
         self.read_op(DbOp::ScoresRead, |c| {
             calibrations::list(c, project, limit, cursor)
         })

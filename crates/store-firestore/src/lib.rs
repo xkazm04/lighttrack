@@ -27,6 +27,7 @@ mod rest;
 mod revenue;
 mod rollup;
 mod rubrics;
+mod scope;
 mod scores;
 
 use chrono::{DateTime, Utc};
@@ -45,6 +46,7 @@ use lighttrack_store::{
     Store, StoreError, TraceEvents, Usage, UseCaseCostRow,
 };
 
+use lighttrack_store::Scope;
 use rest::Rest;
 
 /// Firestore-backed [`Store`].
@@ -158,35 +160,38 @@ impl Store for FirestoreStore {
     fn insert_events_checked(&self, evs: &[LlmEvent]) -> Vec<Result<Admission>> {
         insert_events_checked_nonatomic(self, evs)
     }
-    fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
+    fn list_events(&self, project: Scope<'_>, limit: usize) -> Result<Vec<LlmEvent>> {
+        let project = project.project();
         events::list_events(&self.rest, project, limit)
     }
     /// Spelled out rather than inherited, so the refusal is a visible choice in this backend rather
     /// than a trait default nobody remembered was there. `Surface::Traces` is absent from
     /// [`FirestoreStore::SURFACES`], which is what makes the refusal a *tested* property.
-    fn list_traces(&self, _project: Option<&str>, _limit: usize) -> Result<Vec<TraceSummary>> {
+    fn list_traces(&self, _project: Scope<'_>, _limit: usize) -> Result<Vec<TraceSummary>> {
         Err(StoreError::Unsupported("traces"))
     }
     fn list_trace_events(
         &self,
-        _project: Option<&str>,
+        _project: Scope<'_>,
         _trace_id: &str,
         _max_spans: usize,
     ) -> Result<TraceEvents> {
         Err(StoreError::Unsupported("traces"))
     }
-    fn list_trace_scores(&self, _project: Option<&str>, _trace_id: &str) -> Result<Vec<Score>> {
+    fn list_trace_scores(&self, _project: Scope<'_>, _trace_id: &str) -> Result<Vec<Score>> {
         Err(StoreError::Unsupported("traces"))
     }
     fn list_events_filtered(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         filter: &EventFilter,
         limit: usize,
     ) -> Result<EventPage> {
+        let project = project.project();
         events::list_events_filtered(&self.rest, project, filter, limit)
     }
-    fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
+    fn cost_summary(&self, project: Scope<'_>) -> Result<Vec<CostRow>> {
+        let project = project.project();
         events::cost_summary(&self.rest, project)
     }
     /// The grouped-rollup primitive — a client-side fold; the forecast and margin-breakdown surfaces
@@ -196,17 +201,19 @@ impl Store for FirestoreStore {
     }
     fn cost_summary_windowed(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: Option<DateTime<Utc>>,
         until: Option<DateTime<Utc>>,
     ) -> Result<Vec<CostRow>> {
+        let project = project.project();
         events::cost_summary_windowed(&self.rest, project, since, until)
     }
     fn usecase_costs(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<UseCaseCostRow>> {
+        let project = project.project();
         events::usecase_costs(&self.rest, project, since)
     }
     fn usage_since(&self, project: &str, since: DateTime<Utc>) -> Result<Usage> {
@@ -228,8 +235,8 @@ impl Store for FirestoreStore {
     ) -> Result<Vec<ScopeUsage>> {
         events::usage_by_scope(&self.rest, project, since, kind)
     }
-    fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
-        events::get_event(&self.rest, id)
+    fn get_event(&self, scope: Scope<'_>, id: &str) -> Result<Option<LlmEvent>> {
+        events::get_event(&self.rest, scope.project(), id)
     }
 
     fn create_project(&self, p: &Project) -> Result<()> {
@@ -266,14 +273,14 @@ impl Store for FirestoreStore {
     fn list_limit_rules(&self, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
         limits::list_limit_rules(&self.rest, project, only_enabled)
     }
-    fn get_limit_rule(&self, id: &str) -> Result<Option<LimitRule>> {
-        limits::get_limit_rule(&self.rest, id)
+    fn get_limit_rule(&self, scope: Scope<'_>, id: &str) -> Result<Option<LimitRule>> {
+        limits::get_limit_rule(&self.rest, scope.project(), id)
     }
-    fn update_limit_rule(&self, r: &LimitRule) -> Result<bool> {
-        limits::update_limit_rule(&self.rest, r)
+    fn update_limit_rule(&self, scope: Scope<'_>, r: &LimitRule) -> Result<bool> {
+        limits::update_limit_rule(&self.rest, scope.project(), r)
     }
-    fn delete_limit_rule(&self, id: &str) -> Result<bool> {
-        limits::delete_limit_rule(&self.rest, id)
+    fn delete_limit_rule(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        limits::delete_limit_rule(&self.rest, scope.project(), id)
     }
 
     // --- margin policies ---
@@ -287,29 +294,35 @@ impl Store for FirestoreStore {
     ) -> Result<Vec<lighttrack_core::MarginPolicy>> {
         margin_policies::list_margin_policies(&self.rest, project, only_enabled)
     }
-    fn get_margin_policy(&self, id: &str) -> Result<Option<lighttrack_core::MarginPolicy>> {
-        margin_policies::get_margin_policy(&self.rest, id)
+    fn get_margin_policy(
+        &self,
+        scope: Scope<'_>,
+        id: &str,
+    ) -> Result<Option<lighttrack_core::MarginPolicy>> {
+        margin_policies::get_margin_policy(&self.rest, scope.project(), id)
     }
-    fn delete_margin_policy(&self, id: &str) -> Result<bool> {
-        margin_policies::delete_margin_policy(&self.rest, id)
+    fn delete_margin_policy(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        margin_policies::delete_margin_policy(&self.rest, scope.project(), id)
     }
 
     fn insert_score(&self, s: &Score) -> Result<()> {
         scores::insert_score(&self.rest, s)
     }
-    fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
+    fn list_scores(&self, project: Scope<'_>, limit: usize) -> Result<Vec<Score>> {
+        let project = project.project();
         scores::list_scores(&self.rest, project, limit)
     }
     fn list_run_scores(
         &self,
         run_id: &str,
-        project: Option<&str>,
+        project: Scope<'_>,
         limit: usize,
     ) -> Result<Vec<Score>> {
+        let project = project.project();
         scores::list_run_scores(&self.rest, run_id, project, limit)
     }
-    fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
-        scores::scored_event_ids(&self.rest, event_ids)
+    fn scored_event_ids(&self, scope: Scope<'_>, event_ids: &[String]) -> Result<Vec<String>> {
+        scores::scored_event_ids(&self.rest, scope.project(), event_ids)
     }
 
     fn upsert_price(&self, p: &ModelPriceRow) -> Result<()> {
@@ -329,8 +342,8 @@ impl Store for FirestoreStore {
     fn create_benchmark(&self, b: &Benchmark) -> Result<()> {
         benchmarks::create_benchmark(&self.rest, b)
     }
-    fn get_benchmark(&self, id: &str) -> Result<Option<Benchmark>> {
-        benchmarks::get_benchmark(&self.rest, id)
+    fn get_benchmark(&self, scope: Scope<'_>, id: &str) -> Result<Option<Benchmark>> {
+        benchmarks::get_benchmark(&self.rest, scope.project(), id)
     }
     fn list_benchmarks(&self, project: &str) -> Result<Vec<Benchmark>> {
         benchmarks::list_benchmarks(&self.rest, project)
@@ -338,32 +351,36 @@ impl Store for FirestoreStore {
     fn create_benchmark_run(&self, r: &BenchmarkRun) -> Result<()> {
         benchmarks::create_benchmark_run(&self.rest, r)
     }
-    fn list_benchmark_runs(&self, benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
-        benchmarks::list_benchmark_runs(&self.rest, benchmark_id)
+    fn list_benchmark_runs(
+        &self,
+        scope: Scope<'_>,
+        benchmark_id: &str,
+    ) -> Result<Vec<BenchmarkRun>> {
+        benchmarks::list_benchmark_runs(&self.rest, scope.project(), benchmark_id)
     }
     fn create_dataset(&self, d: &Dataset) -> Result<()> {
         datasets::create_dataset(&self.rest, d)
     }
-    fn get_dataset(&self, id: &str) -> Result<Option<Dataset>> {
-        datasets::get_dataset(&self.rest, id)
+    fn get_dataset(&self, scope: Scope<'_>, id: &str) -> Result<Option<Dataset>> {
+        datasets::get_dataset(&self.rest, scope.project(), id)
     }
-    fn list_datasets(&self, project: &str) -> Result<Vec<Dataset>> {
-        datasets::list_datasets(&self.rest, project)
+    fn list_datasets(&self, project: Scope<'_>) -> Result<Vec<Dataset>> {
+        datasets::list_datasets(&self.rest, project.project())
     }
-    fn set_dataset_frozen(&self, id: &str, frozen: bool) -> Result<()> {
-        datasets::set_dataset_frozen(&self.rest, id, frozen)
+    fn set_dataset_frozen(&self, scope: Scope<'_>, id: &str, frozen: bool) -> Result<()> {
+        datasets::set_dataset_frozen(&self.rest, scope.project(), id, frozen)
     }
     fn create_dataset_item(&self, item: &DatasetItem) -> Result<()> {
         datasets::create_dataset_item(&self.rest, item)
     }
-    fn list_dataset_items(&self, dataset_id: &str) -> Result<Vec<DatasetItem>> {
-        datasets::list_dataset_items(&self.rest, dataset_id)
+    fn list_dataset_items(&self, scope: Scope<'_>, dataset_id: &str) -> Result<Vec<DatasetItem>> {
+        datasets::list_dataset_items(&self.rest, scope.project(), dataset_id)
     }
     fn create_rubric(&self, r: &Rubric) -> Result<()> {
         rubrics::create_rubric(&self.rest, r)
     }
-    fn get_rubric(&self, id: &str) -> Result<Option<Rubric>> {
-        rubrics::get_rubric(&self.rest, id)
+    fn get_rubric(&self, scope: Scope<'_>, id: &str) -> Result<Option<Rubric>> {
+        rubrics::get_rubric(&self.rest, scope.project(), id)
     }
     fn list_rubrics(&self, project: &str) -> Result<Vec<Rubric>> {
         rubrics::list_rubrics(&self.rest, project)
@@ -374,8 +391,8 @@ impl Store for FirestoreStore {
     fn claim_job(&self, stale_before: DateTime<Utc>, kinds: &[&str]) -> Result<Option<Job>> {
         jobs::claim_job(&self.rest, stale_before, kinds)
     }
-    fn cancel_job(&self, id: &str) -> Result<Option<JobCancel>> {
-        jobs::cancel_job(&self.rest, id)
+    fn cancel_job(&self, scope: Scope<'_>, id: &str) -> Result<Option<JobCancel>> {
+        jobs::cancel_job(&self.rest, scope.project(), id)
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
         jobs::update_job_progress(&self.rest, id, progress)
@@ -393,11 +410,11 @@ impl Store for FirestoreStore {
     ) -> Result<JobFinish> {
         jobs::finish_job(&self.rest, id, status, result, error, fence)
     }
-    fn get_job(&self, id: &str) -> Result<Option<Job>> {
-        jobs::get_job(&self.rest, id)
+    fn get_job(&self, scope: Scope<'_>, id: &str) -> Result<Option<Job>> {
+        jobs::get_job(&self.rest, scope.project(), id)
     }
-    fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
-        jobs::list_jobs(&self.rest, status, limit)
+    fn list_jobs(&self, scope: Scope<'_>, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
+        jobs::list_jobs(&self.rest, scope.project(), status, limit)
     }
 
     // ---- prompt registry ---------------------------------------------------
@@ -410,8 +427,8 @@ impl Store for FirestoreStore {
     fn get_prompt(&self, project: &str, name: &str) -> Result<Option<Prompt>> {
         prompts::get_prompt(&self.rest, project, name)
     }
-    fn get_prompt_by_id(&self, id: &str) -> Result<Option<Prompt>> {
-        prompts::get_prompt_by_id(&self.rest, id)
+    fn get_prompt_by_id(&self, scope: Scope<'_>, id: &str) -> Result<Option<Prompt>> {
+        prompts::get_prompt_by_id(&self.rest, scope.project(), id)
     }
     fn list_prompts(&self, project: &str) -> Result<Vec<Prompt>> {
         prompts::list_prompts(&self.rest, project)
@@ -419,11 +436,20 @@ impl Store for FirestoreStore {
     fn create_prompt_version(&self, v: &PromptVersion) -> Result<()> {
         prompts::create_prompt_version(&self.rest, v)
     }
-    fn get_prompt_version(&self, prompt_id: &str, version: u32) -> Result<Option<PromptVersion>> {
-        prompts::get_prompt_version(&self.rest, prompt_id, version)
+    fn get_prompt_version(
+        &self,
+        scope: Scope<'_>,
+        prompt_id: &str,
+        version: u32,
+    ) -> Result<Option<PromptVersion>> {
+        prompts::get_prompt_version(&self.rest, scope.project(), prompt_id, version)
     }
-    fn list_prompt_versions(&self, prompt_id: &str) -> Result<Vec<PromptVersion>> {
-        prompts::list_prompt_versions(&self.rest, prompt_id)
+    fn list_prompt_versions(
+        &self,
+        scope: Scope<'_>,
+        prompt_id: &str,
+    ) -> Result<Vec<PromptVersion>> {
+        prompts::list_prompt_versions(&self.rest, scope.project(), prompt_id)
     }
 
     // ---- revenue + margin (Phase 1 profit tracking) ------------------------
@@ -434,19 +460,21 @@ impl Store for FirestoreStore {
     }
     fn list_revenue_events(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<RevenueEvent>> {
+        let project = project.project();
         revenue::list(&self.rest, project, since, until)
     }
     fn cost_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
+        let project = project.project();
         revenue::cost_by_dimension(&self.rest, project, dim, since, until)
     }
 
@@ -510,27 +538,33 @@ impl Store for FirestoreStore {
     fn list_alerts(&self, f: &AlertFilter) -> Result<Vec<Alert>> {
         alerts::list_alerts(&self.rest, f)
     }
-    fn get_alert(&self, id: &str) -> Result<Option<Alert>> {
-        alerts::get_alert(&self.rest, id)
+    fn get_alert(&self, scope: Scope<'_>, id: &str) -> Result<Option<Alert>> {
+        alerts::get_alert(&self.rest, scope.project(), id)
     }
-    fn ack_alert(&self, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
-        alerts::ack_alert(&self.rest, id, by, at)
+    fn ack_alert(&self, scope: Scope<'_>, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
+        alerts::ack_alert(&self.rest, scope.project(), id, by, at)
     }
-    fn attach_alert_resolution(&self, id: &str, resolution: &Value) -> Result<bool> {
-        alerts::attach_alert_resolution(&self.rest, id, resolution)
+    fn attach_alert_resolution(
+        &self,
+        scope: Scope<'_>,
+        id: &str,
+        resolution: &Value,
+    ) -> Result<bool> {
+        alerts::attach_alert_resolution(&self.rest, scope.project(), id, resolution)
     }
 
     fn create_alert_channel(&self, c: &AlertChannel) -> Result<()> {
         alert_channels::create_alert_channel(&self.rest, c)
     }
-    fn get_alert_channel(&self, id: &str) -> Result<Option<AlertChannel>> {
-        alert_channels::get_alert_channel(&self.rest, id)
+    fn get_alert_channel(&self, scope: Scope<'_>, id: &str) -> Result<Option<AlertChannel>> {
+        alert_channels::get_alert_channel(&self.rest, scope.project(), id)
     }
-    fn list_alert_channels(&self, project: Option<&str>) -> Result<Vec<AlertChannel>> {
+    fn list_alert_channels(&self, project: Scope<'_>) -> Result<Vec<AlertChannel>> {
+        let project = project.project();
         alert_channels::list_alert_channels(&self.rest, project)
     }
-    fn delete_alert_channel(&self, id: &str) -> Result<bool> {
-        alert_channels::delete_alert_channel(&self.rest, id)
+    fn delete_alert_channel(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        alert_channels::delete_alert_channel(&self.rest, scope.project(), id)
     }
 
     // --- the human verdict ledger + calibration history (M11) ---
@@ -540,8 +574,8 @@ impl Store for FirestoreStore {
     fn list_labels(&self, f: &LabelFilter) -> Result<Vec<Label>> {
         labels::list_labels(&self.rest, f)
     }
-    fn labels_for_dataset(&self, dataset_id: &str) -> Result<Vec<Label>> {
-        labels::labels_for_dataset(&self.rest, dataset_id)
+    fn labels_for_dataset(&self, scope: Scope<'_>, dataset_id: &str) -> Result<Vec<Label>> {
+        labels::labels_for_dataset(&self.rest, scope.project(), dataset_id)
     }
     fn insert_calibration(&self, c: &CalibrationRecord) -> Result<()> {
         labels::insert_calibration(&self.rest, c)
@@ -556,10 +590,11 @@ impl Store for FirestoreStore {
     }
     fn list_calibrations(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<Vec<CalibrationRecord>> {
+        let project = project.project();
         labels::list_calibrations(&self.rest, project, limit, cursor)
     }
 }
@@ -576,23 +611,27 @@ mod tests {
         let store = FirestoreStore::connect("firestore://demo").expect("connect");
         assert!(!store.serves_traces());
         assert!(matches!(
-            store.list_traces(Some("p"), 10),
+            store.list_traces(Scope::Project("p"), 10),
             Err(StoreError::Unsupported(_))
         ));
         assert!(matches!(
-            store.list_traces_filtered(Some("p"), &lighttrack_store::TraceFilter::default(), 10),
+            store.list_traces_filtered(
+                Scope::Project("p"),
+                &lighttrack_store::TraceFilter::default(),
+                10
+            ),
             Err(StoreError::Unsupported(_))
         ));
         assert!(matches!(
-            store.list_trace_events(Some("p"), "t", 10),
+            store.list_trace_events(Scope::Project("p"), "t", 10),
             Err(StoreError::Unsupported(_))
         ));
         assert!(matches!(
-            store.list_trace_scores(Some("p"), "t"),
+            store.list_trace_scores(Scope::Project("p"), "t"),
             Err(StoreError::Unsupported(_))
         ));
         assert!(matches!(
-            store.get_trace(Some("p"), "t", 10),
+            store.get_trace(Scope::Project("p"), "t", 10),
             Err(StoreError::Unsupported(_))
         ));
     }
