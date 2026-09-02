@@ -24,8 +24,10 @@ pub(crate) struct AgentConfig {
     /// delays the round-robin for the others.
     #[serde(default)]
     pub wait_secs: u64,
-    /// How long a leased task is held before the cloud may reclaim it. Cover the longest
-    /// expected Claude run.
+    /// How long a leased task may go without a heartbeat before the cloud may reclaim it. Since M7
+    /// the agent renews the lease on a timer the server hands back (about a third of this), so this
+    /// is **detection latency for a dead agent**, not a bound on how long a Claude run may take —
+    /// a run takes as long as it takes. The server clamps what it will grant.
     #[serde(default = "default_lease_secs")]
     pub lease_secs: i64,
     /// Tasks leased per call. Runs are serial, so a small batch just saves round trips.
