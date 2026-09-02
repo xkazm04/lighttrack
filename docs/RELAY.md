@@ -27,7 +27,7 @@ LightTrack ────┘                 relay_tasks: queued → leased → su
                                         │ outbound lease / result (LIGHTTRACK_RELAY_DEVICE_KEY)
                               lt-agent (local device)
                                  │ actions/<type>/  ← gitignored: prompt.md + action.toml + connector
-                                 │ claude.exe -p … --output-format json   (engine::run_raw)
+                                 │ claude.exe -p … --output-format json  (engine::invocation::run)
                                  │ connector (http | command) → pushes result into the app
                                  └─ POST /v1/relay/tasks/:id/result (+ usage → cloud logs $1 event)
 ```
