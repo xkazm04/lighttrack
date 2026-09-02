@@ -128,11 +128,14 @@ impl RejectionLedger {
     }
 
     /// Snapshot every live rejection bucket for `project` (pruning stale ones first), for the
-    /// `/v1/limits/status` response. Order is unspecified.
+    /// `/v1/limits/status` response. Ordered worst-first by count, then by label, so two reads of a
+    /// quiet ledger produce the same document — the map's own order changed between identical
+    /// requests, which made the status body diff-noisy for an operator watching it.
     pub(crate) fn snapshot(&self, project: &str, now: DateTime<Utc>) -> Vec<RejectionStat> {
         let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         Self::prune(&mut map, now, self.ttl);
-        map.iter()
+        let mut out: Vec<RejectionStat> = map
+            .iter()
             .filter(|((p, _, _, _), _)| p == project)
             .map(|((_, metric, window, scope), e)| RejectionStat {
                 metric: *metric,
@@ -143,7 +146,14 @@ impl RejectionLedger {
                 first_ts: fmt_ts(e.first_ts),
                 last_ts: fmt_ts(e.last_ts),
             })
-            .collect()
+            .collect();
+        out.sort_by(|a, b| {
+            b.count.cmp(&a.count).then_with(|| {
+                format!("{:?}/{:?}/{:?}", a.metric, a.window, a.scope)
+                    .cmp(&format!("{:?}/{:?}/{:?}", b.metric, b.window, b.scope))
+            })
+        });
+        out
     }
 
     /// Evict buckets whose last hit is older than the TTL (rolling reset).
