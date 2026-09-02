@@ -96,14 +96,8 @@ async fn resolve_principal(st: &AppState, headers: &HeaderMap) -> Result<Princip
                     scopes = ?k.scopes,
                     "authenticated a project key"
                 );
-                // Best-effort, detached: record last use without delaying the request.
-                let store2 = st.store.clone();
-                let id = k.id.clone();
-                tokio::spawn(async move {
-                    let _ =
-                        tokio::task::spawn_blocking(move || store2.touch_api_key(&id, Utc::now()))
-                            .await;
-                });
+                // Best-effort, detached and debounced: record last use without delaying the request.
+                crate::idempotency::touch_key_later(st, &k.id);
                 return Ok(Principal::Project {
                     project_id: k.project_id,
                     key_id: k.id,
