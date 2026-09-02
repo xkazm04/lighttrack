@@ -53,18 +53,20 @@ pub(crate) struct Collective {
     pub(crate) alias_source: String,
 }
 
-/// The alias table shipped with the source tree, compiled in. Same reasoning as the price book in
-/// `crate::prices`, with a sharper failure mode: release archives carry only the binaries, so an
-/// installed instance has no `config/model_aliases.json` next to it. Without normalization
-/// `gpt-4o-2024-08-06` and `gpt-4o` never merge, each stays a **single-source** row, and every one of
-/// them is then withheld by the `min_contributors` k-anonymity floor — a missing file does not skip a
-/// cosmetic tidy-up, it publishes an empty leaderboard. A file on disk still wins when there is one.
-const EMBEDDED_ALIASES: &str = include_str!("../../../../config/model_aliases.json");
+/// The alias table shipped with the source tree, compiled in — **the price seed** since M8, whose
+/// per-model `aliases` lists are the declared identity collapses (an alias can no longer name a model
+/// nothing prices). Same reasoning as the price book in `crate::prices`, with a sharper failure mode:
+/// release archives carry only the binaries, so an installed instance has no `config/pricing.json`
+/// next to it. Without normalization `gemini-2.5-pro-002` and `gemini-2.5-pro` never merge, each stays
+/// a **single-source** row, and every one of them is then withheld by the `min_contributors`
+/// k-anonymity floor — a missing file does not skip a cosmetic tidy-up, it publishes an empty
+/// leaderboard. A file on disk still wins when there is one, in either the seed or the pre-M8 shape.
+const EMBEDDED_ALIASES: &str = include_str!("../../../../config/pricing.json");
 
-const DEFAULT_ALIASES_PATH: &str = "config/model_aliases.json";
+const DEFAULT_ALIASES_PATH: &str = "config/pricing.json";
 
 /// Where a startup alias table came from — reported at boot so an operator can tell whether their
-/// edits to `model_aliases.json` were actually picked up.
+/// edits to the alias table were actually picked up.
 #[derive(Debug, PartialEq)]
 pub(crate) enum AliasSeed {
     File,
@@ -236,7 +238,7 @@ mod tests {
     #[test]
     fn the_compiled_in_alias_table_parses_and_actually_normalizes() {
         let a = ModelAliases::from_json_str(EMBEDDED_ALIASES)
-            .expect("embedded model_aliases.json must parse");
+            .expect("the embedded alias seed must parse");
         // Non-empty, asserted the way the leaderboard cares about: the dated variant collapses onto
         // the family, which is what lets two contributors' rows merge past `min_contributors`.
         assert_eq!(
@@ -248,7 +250,7 @@ mod tests {
 
     #[test]
     fn a_missing_alias_file_falls_back_to_the_embedded_table_not_a_pass_through_one() {
-        let (aliases, seed) = seed_aliases("no/such/model_aliases.json");
+        let (aliases, seed) = seed_aliases("no/such/pricing.json");
         assert_eq!(seed, AliasSeed::Embedded);
         // The regression this guards: with a pass-through table these two stay distinct, so each is
         // a single-source row and `min_contributors=2` withholds both — an empty leaderboard.

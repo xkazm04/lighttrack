@@ -42,6 +42,7 @@ pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
             input_per_mtok: 1.0,
             output_per_mtok: 5.0,
             cached_input_per_mtok: None,
+            aliases: Vec::new(),
         },
     );
     let book = PriceBook::new(entries);

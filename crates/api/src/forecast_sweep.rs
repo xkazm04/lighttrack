@@ -170,8 +170,8 @@ mod tests {
     use super::*;
     use chrono::{Duration as ChronoDuration, Utc};
     use lighttrack_core::{
-        new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation, Provider,
-        Status, TokenUsage,
+        new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation, Status,
+        TokenUsage,
     };
     use lighttrack_store::Store;
 
@@ -188,7 +188,7 @@ mod tests {
             parent_span_id: None,
             ts,
             received_at: ts,
-            provider: Provider::Anthropic,
+            provider: "anthropic".into(),
             model: "claude-haiku-4-5".into(),
             name: None,
             operation: Operation::Chat,

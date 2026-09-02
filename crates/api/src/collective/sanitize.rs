@@ -103,17 +103,14 @@ pub(super) fn sanitize_entry(
     })
 }
 
-/// Clamp a contributed judge tag to the known vocabulary (`anthropic|openai|google|mixed`), mapping
-/// anything unrecognized to `unknown` so a poster can't inject arbitrary judge labels.
+/// Clamp a contributed judge tag to the known vocabulary, so a poster can't inject arbitrary judge
+/// labels. The vocabulary is `ProviderFamily` plus `mixed` — the one value a *merge* produces and no
+/// single judge ever is (see `merge::collapse`), which is why it cannot come from `judge_family`.
 fn canon_judge(j: &str) -> String {
-    match j.to_lowercase().as_str() {
-        "anthropic" => "anthropic",
-        "openai" => "openai",
-        "google" => "google",
-        "mixed" => "mixed",
-        _ => "unknown",
+    if j.trim().eq_ignore_ascii_case("mixed") {
+        return "mixed".to_string();
     }
-    .to_string()
+    lighttrack_core::judge_family(j).as_str().to_string()
 }
 
 #[cfg(test)]

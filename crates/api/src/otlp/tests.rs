@@ -507,6 +507,51 @@ async fn an_otel_trace_keeps_its_shape_when_non_genai_spans_are_dropped() {
     );
 }
 
+/// A namespaced `gen_ai.system` is kept **as sent** (M8) instead of being coerced into one of three
+/// literals, and still prices — from its family's rows, since nothing declares an `az.ai.openai`
+/// price. The id is what limit scopes and rollups group on, so losing it lost the operator's own
+/// vocabulary; collapsing it into `anthropic` lost the fact that this was Azure.
+#[tokio::test]
+async fn a_namespaced_vendor_id_is_kept_and_still_prices() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-az");
+    let app = crate::build_router(state);
+
+    let body = json!({
+      "resourceSpans": [{
+        "scopeSpans": [{
+          "spans": [{
+            "traceId": "5b8efff798038103d269b633813fc60d",
+            "spanId": "eee19b7ec3c1b175",
+            "name": "chat gpt-4o-mini",
+            "startTimeUnixNano": at_ms(0),
+            "endTimeUnixNano": at_ms(10),
+            "attributes": [
+              { "key": "gen_ai.system", "value": { "stringValue": "az.ai.anthropic" } },
+              { "key": "gen_ai.request.model", "value": { "stringValue": "claude-haiku-4-5" } },
+              { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "1000000" } }
+            ]
+          }]
+        }]
+      }]
+    });
+    let (status, resp) = export(&app, &key, body).await;
+    assert_eq!(status, StatusCode::OK, "{resp}");
+
+    let rows = store.list_events(Some("proj-az"), 10).unwrap();
+    assert_eq!(rows.len(), 1, "{resp}");
+    assert_eq!(
+        rows[0].provider.as_str(),
+        "az.ai.anthropic",
+        "the vendor id the exporter sent is what we store"
+    );
+    assert_eq!(
+        rows[0].cost_usd,
+        Some(1.0),
+        "an Anthropic-family id prices from the Anthropic rows"
+    );
+}
+
 /// One logical trace that spans an OTel-instrumented service and an SDK-instrumented service. The
 /// SDK sends the W3C trace id in upper case (nothing normalized it before); OTLP lower-cases. Both
 /// doors now canonicalize identically, so this renders as one trace instead of two.

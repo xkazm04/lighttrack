@@ -120,7 +120,8 @@
 //!      LIGHTTRACK_COLLECTIVE_MIN_CASES (hub-enforced k-anonymity floor; default 5, clamp ≥1),
 //!      LIGHTTRACK_COLLECTIVE_DISPLAY_FLOOR (merged rows below this many cases are flagged
 //!        low_confidence; default 30),
-//!      LIGHTTRACK_MODEL_ALIASES (model-identity normalization table; default config/model_aliases.json).
+//!      LIGHTTRACK_MODEL_ALIASES (model-identity normalization table; default config/pricing.json,
+//!      whose per-model `aliases` lists are the declared collapses since M8).
 
 mod alerts;
 mod auth;
@@ -254,7 +255,8 @@ async fn main() -> anyhow::Result<()> {
                 };
                 tracing::info!(count = seed.len(), source = %source, "seeded model prices into the DB");
             }
-            let book = PriceBook::from_rows(&store.list_prices()?);
+            let book = PriceBook::from_rows(&store.list_prices()?)
+                .with_aliases(crate::prices::declared_aliases());
             // Warm the per-project persistence-policy cache here too: this closure is the one
             // startup context allowed to call the store synchronously (Postgres `block_on`s
             // internally and panics on the async main thread — created-after-startup projects

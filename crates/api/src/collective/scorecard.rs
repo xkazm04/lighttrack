@@ -62,37 +62,20 @@ fn significance_tested_of(report: &Value) -> Option<bool> {
 }
 
 /// Classify a benchmark's `judge_model` (`[provider/]model`) into a coarse judge family — provider
-/// only (`anthropic|openai|google|unknown`), never the full model, to limit fingerprinting. An
-/// explicit `provider/` prefix wins; otherwise the family is inferred from the model name.
+/// only (`anthropic|openai|google|…|unknown`), never the full model, to limit fingerprinting.
+///
+/// The rules are `lighttrack_core::judge_family` (M8): this used to be a fourth private copy of the
+/// provider/model vocabulary, which is how the leaderboard's judge tag and the engine's
+/// self-preference check could disagree about the same judge.
 fn judge_provider_of(judge_model: &str) -> Option<String> {
-    let m = judge_model.trim().to_lowercase();
-    if m.is_empty() {
+    if judge_model.trim().is_empty() {
         return None;
     }
-    let (prefix, name) = m.split_once('/').unwrap_or(("", m.as_str()));
-    let canon_prefix = match prefix {
-        "anthropic" | "claude" => Some("anthropic"),
-        "openai" | "azure-openai" | "azure" => Some("openai"),
-        "google" | "gemini" | "vertex" | "google-vertex" => Some("google"),
-        _ => None,
-    };
-    if let Some(c) = canon_prefix {
-        return Some(c.to_string());
-    }
-    let name = if name.is_empty() { m.as_str() } else { name };
-    let family = if ["claude", "haiku", "sonnet", "opus"]
-        .iter()
-        .any(|k| name.contains(k))
-    {
-        "anthropic"
-    } else if name.contains("gpt") || name.starts_with("o1") || name.starts_with("o3") {
-        "openai"
-    } else if name.contains("gemini") || name.contains("gemma") || name.contains("bison") {
-        "google"
-    } else {
-        "unknown"
-    };
-    Some(family.to_string())
+    Some(
+        lighttrack_core::judge_family(judge_model)
+            .as_str()
+            .to_string(),
+    )
 }
 
 /// A short, one-way fingerprint of a benchmark's rubric shape — 8 hex of SHA-256 over the
