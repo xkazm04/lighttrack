@@ -5,6 +5,7 @@
 //! calculation, per-project [`limits`] evaluation, and the [`score`] /benchmark types.
 
 pub mod alert;
+pub mod alert_channel;
 pub mod alert_sign;
 pub mod alias_table;
 pub mod calibration;
@@ -36,7 +37,8 @@ pub mod schedule;
 pub mod score;
 pub mod trace;
 
-pub use alert::{Alert, AlertChannel, AlertKind, ChannelKind, Delivery, Severity};
+pub use alert::{Alert, AlertKind, Delivery, Severity};
+pub use alert_channel::{AlertChannel, ChannelKind};
 pub use alert_sign::{
     derive_key as derive_signing_key, signature_header, verify as verify_signature,
     SIGNATURE_HEADER,

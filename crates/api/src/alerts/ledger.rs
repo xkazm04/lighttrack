@@ -15,7 +15,7 @@ use std::sync::Arc;
 use lighttrack_core::{Alert, LimitStatus, LlmEvent, RelayTask, Score};
 use lighttrack_store::AlertAdmission;
 
-use super::{channels, compose, detectors, Alerter};
+use super::{attribution, channels, compose, detectors, Alerter};
 use crate::error::ApiError;
 use crate::forecast_alerts::ForecastAlert;
 use crate::state::spawn_db;
@@ -172,6 +172,47 @@ impl Alerter {
             scored_by: s.scored_by.clone(),
         };
         self.spawn_fire(vec![compose::score_drop(&drop, dedup)]);
+    }
+
+    /// Best-effort top-spender attribution for the breaches being delivered, keyed by
+    /// [`LimitStatus::alert_key`].
+    ///
+    /// The store comes from `AppState` now. It used to be a *second* SQLite handle opened from a
+    /// file path resolved by re-deriving the API's backend selection from env — which meant
+    /// attribution was `None` on Postgres and Firestore, and that a breach alert on the backend
+    /// carrying production traffic never said what had burned the money. Any backend that serves
+    /// the windowed cost rollups now attributes; one that does not degrades to no attribution, and
+    /// the alert delivers unchanged.
+    ///
+    /// Runs inside the spawned delivery task (zero cost on the ingest path), with the blocking
+    /// store reads on the blocking pool.
+    async fn attribute(
+        &self,
+        breaches: &[LimitStatus],
+    ) -> HashMap<String, attribution::Attribution> {
+        let Some(store) = self.store() else {
+            return HashMap::new();
+        };
+        let breaches = breaches.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let now = chrono::Utc::now();
+            let mut map = HashMap::new();
+            for b in &breaches {
+                let attr = attribution::fetch(
+                    store.as_ref(),
+                    &b.project_id,
+                    b.window,
+                    now,
+                    b.scope.as_ref(),
+                );
+                if !attr.is_empty() {
+                    map.insert(b.alert_key(), attr);
+                }
+            }
+            map
+        })
+        .await
+        .unwrap_or_default()
     }
 
     fn spawn_fire(self: &Arc<Self>, alerts: Vec<Alert>) {

@@ -64,49 +64,6 @@ impl Attribution {
     }
 }
 
-impl super::Alerter {
-    /// Best-effort top-spender attribution for the breaches being delivered, keyed by
-    /// [`LimitStatus::alert_key`].
-    ///
-    /// The store comes from `AppState` now. It used to be a *second* SQLite handle opened from a
-    /// file path resolved by re-deriving the API's backend selection from env — which meant
-    /// attribution was `None` on Postgres and Firestore, and that a breach alert on the backend
-    /// carrying production traffic never said what had burned the money. Any backend that serves
-    /// the windowed cost rollups now attributes; one that does not degrades to no attribution, and
-    /// the alert delivers unchanged.
-    ///
-    /// Runs inside the spawned delivery task (zero cost on the ingest path), with the blocking
-    /// store reads on the blocking pool.
-    pub(super) async fn attribute(
-        &self,
-        breaches: &[lighttrack_core::LimitStatus],
-    ) -> std::collections::HashMap<String, Attribution> {
-        let Some(store) = self.store() else {
-            return std::collections::HashMap::new();
-        };
-        let breaches = breaches.to_vec();
-        tokio::task::spawn_blocking(move || {
-            let now = chrono::Utc::now();
-            let mut map = std::collections::HashMap::new();
-            for b in &breaches {
-                let attr = fetch(
-                    store.as_ref(),
-                    &b.project_id,
-                    b.window,
-                    now,
-                    b.scope.as_ref(),
-                );
-                if !attr.is_empty() {
-                    map.insert(b.alert_key(), attr);
-                }
-            }
-            map
-        })
-        .await
-        .unwrap_or_default()
-    }
-}
-
 /// Fetch the breached window's rollups from `store` and compose attribution. Best-effort: a store
 /// error degrades to empty (no attribution), never propagates.
 pub(crate) fn fetch(

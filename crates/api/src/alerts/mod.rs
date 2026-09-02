@@ -128,13 +128,7 @@ impl Alerter {
                 score_drop: env_f64("LIGHTTRACK_ALERT_SCORE_DROP", 0.15),
                 dev_destinations: vet::dev_destinations(),
             },
-            // `Policy::none()`: a 302 from an operator-supplied webhook to `169.254.169.254` would
-            // otherwise walk straight past everything `vet` checked. See [`vet`].
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap_or_default(),
+            http: http_client(),
             last_sent: Mutex::new(HashMap::new()),
             error_windows: Mutex::new(HashMap::new()),
             score_windows: Mutex::new(HashMap::new()),
@@ -244,6 +238,23 @@ impl ResendConfig {
             .unwrap_or_else(|| "onboarding@resend.dev".to_string());
         Some(ResendConfig { key, from, to })
     }
+}
+
+/// The one client every alert delivery goes through.
+///
+/// A named constructor rather than an inline builder because the test fixture must be able to build
+/// the *same* client: with `reqwest::Client::new()` in the tests, the redirect assertion below
+/// passed against a client production never uses, which is a test that proves nothing.
+///
+/// `Policy::none()` is the load-bearing part. `vet` checks the URL we were configured with; a 302
+/// from an operator-supplied webhook to `http://169.254.169.254/...` is a *different* URL, fetched
+/// after every check has already run. See [`vet`].
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_default()
 }
 
 fn env_opt(key: &str) -> Option<String> {
