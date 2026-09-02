@@ -362,3 +362,47 @@ CREATE INDEX IF NOT EXISTS idx_schedules_project ON schedules(project_id);
 -- longer burns one of the task's chances. `lease_fence` is the holding device's identity, compared
 -- exactly on settle/renew/progress. See schema/sqlite ADDED_COLUMNS for pre-existing databases.
 CREATE INDEX IF NOT EXISTS idx_relay_lease ON relay_tasks(status, lease_deadline);
+
+-- ===========================================================================================
+-- M3: the persisted alert ledger + per-project routing. Self-contained block, appended.
+-- ===========================================================================================
+
+-- Every alert this deployment has fired. Before this table, an alert was a `tracing::warn!` and a
+-- `HashMap<String, Instant>` entry: dedup reset on restart, each replica alerted independently, and
+-- nothing recorded whether delivery actually landed. `dedup_key` + `fired_at` is the cooldown gate,
+-- decided in one transaction so two replicas produce one alert.
+CREATE TABLE IF NOT EXISTS alerts (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT,                             -- NULL = a deployment-wide condition
+  kind        TEXT NOT NULL,                    -- AlertKind wire literal (limit_breach | score_drop | ...)
+  dedup_key   TEXT NOT NULL,                    -- the logical identity the cooldown dedups on
+  severity    TEXT NOT NULL,                    -- info | warning | critical
+  payload     TEXT,                             -- JSON: the same body the channel delivered
+  fired_at    TEXT NOT NULL,                    -- fixed-width RFC3339: string range filters are correct
+  delivered   TEXT,                             -- JSON array of {channel_id, ok, status, at}
+  acked_at    TEXT,
+  acked_by    TEXT,
+  resolution  TEXT                              -- JSON: what came of it (responder diagnosis / note)
+);
+-- The dedup gate's index: `(dedup_key, fired_at)` makes the look-back one range seek, not a scan.
+CREATE INDEX IF NOT EXISTS idx_alerts_dedup ON alerts(dedup_key, fired_at);
+-- The listing's keyset order, and its project-narrowed variant.
+CREATE INDEX IF NOT EXISTS idx_alerts_fired ON alerts(fired_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_project ON alerts(project_id, fired_at);
+
+-- Where an alert goes. `project_id IS NULL` is a global channel — the shape the env-configured
+-- destinations have always had, which is why those are synthesised at startup and never stored:
+-- an existing deployment's routing is unchanged by this table existing.
+CREATE TABLE IF NOT EXISTS alert_channels (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT,                        -- NULL = global (receives every project's alerts)
+  kind             TEXT NOT NULL,               -- webhook | ntfy | email
+  target           TEXT NOT NULL,               -- URL (webhook/ntfy) or address (email)
+  secret_hash      TEXT,                        -- sha256(secret): the derived HMAC signing key
+  prev_secret_hash TEXT,                        -- kept live through a rotation
+  min_severity     TEXT NOT NULL,               -- info | warning | critical
+  kinds            TEXT,                        -- JSON array of AlertKind; NULL = every kind
+  enabled          INTEGER NOT NULL DEFAULT 1,
+  created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alert_channels_project ON alert_channels(project_id);

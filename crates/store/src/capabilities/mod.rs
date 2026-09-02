@@ -77,6 +77,18 @@ pub enum Surface {
     /// Scheduler) hitting `POST /v1/jobs`, and a backend that cannot host the table must be able to
     /// say so instead of answering an empty due-list that reads as "nothing is scheduled here".
     Schedules,
+    /// The persisted alert ledger: what fired, where it went, who acknowledged it, what came of it.
+    ///
+    /// Its own surface because it is the product's own audit trail rather than a feature of ingest:
+    /// a backend that cannot host it must say so, because an empty `GET /v1/alerts` reads as
+    /// "nothing has fired here" — the most reassuring possible lie about a monitoring system.
+    Alerts,
+    /// Per-project alert routing: the channel table `channels_for` unions with the global ones.
+    ///
+    /// Separate from [`Surface::Alerts`] because the split is real: a deployment can keep the
+    /// env-configured global channels (which are synthesised, never stored) and still record every
+    /// alert, so a backend may serve the ledger and refuse the routing table.
+    AlertRouting,
     /// Disk accounting and the quiet-window maintenance pass.
     Maintenance,
     /// The store's own per-family latency profile.
@@ -104,6 +116,8 @@ impl Surface {
         Surface::MarginPolicies,
         Surface::JobLeases,
         Surface::Schedules,
+        Surface::Alerts,
+        Surface::AlertRouting,
         Surface::Maintenance,
         Surface::Metrics,
     ];
@@ -129,6 +143,8 @@ impl Surface {
             Surface::MarginPolicies => "margin_policies",
             Surface::JobLeases => "job_leases",
             Surface::Schedules => "schedules",
+            Surface::Alerts => "alerts",
+            Surface::AlertRouting => "alert_routing",
             Surface::Maintenance => "maintenance",
             Surface::Metrics => "metrics",
         }
@@ -341,6 +357,27 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
             "update_schedule",
             "delete_schedule",
             "due_schedules",
+        ],
+    ),
+    (
+        Surface::Alerts,
+        &[
+            "insert_alert_dedup",
+            "mark_delivery",
+            "list_alerts",
+            "get_alert",
+            "ack_alert",
+            "attach_alert_resolution",
+        ],
+    ),
+    (
+        Surface::AlertRouting,
+        &[
+            "create_alert_channel",
+            "get_alert_channel",
+            "list_alert_channels",
+            "delete_alert_channel",
+            "channels_for",
         ],
     ),
     (

@@ -384,3 +384,39 @@ CREATE INDEX IF NOT EXISTS idx_scores_kind ON scores(kind, created_at);
 -- version is a new row linked to the old one, never a mutation of it.
 ALTER TABLE rubrics ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE rubrics ADD COLUMN IF NOT EXISTS supersedes TEXT;
+
+-- ===========================================================================================
+-- M3: the persisted alert ledger + per-project routing. Self-contained block, appended.
+-- Mirrors schema/sqlite/001_init.sql; timestamps stay fixed-width RFC3339 TEXT.
+-- ===========================================================================================
+
+CREATE TABLE IF NOT EXISTS alerts (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT,
+  kind        TEXT NOT NULL,
+  dedup_key   TEXT NOT NULL,
+  severity    TEXT NOT NULL,
+  payload     TEXT,
+  fired_at    TEXT NOT NULL,
+  delivered   TEXT,
+  acked_at    TEXT,
+  acked_by    TEXT,
+  resolution  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_dedup ON alerts(dedup_key, fired_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_fired ON alerts(fired_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_project ON alerts(project_id, fired_at);
+
+CREATE TABLE IF NOT EXISTS alert_channels (
+  id               TEXT PRIMARY KEY,
+  project_id       TEXT,
+  kind             TEXT NOT NULL,
+  target           TEXT NOT NULL,
+  secret_hash      TEXT,
+  prev_secret_hash TEXT,
+  min_severity     TEXT NOT NULL,
+  kinds            TEXT,
+  enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alert_channels_project ON alert_channels(project_id);

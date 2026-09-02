@@ -13,11 +13,14 @@
 use chrono::Utc;
 use serde_json::json;
 
-use lighttrack_core::{new_id, RelayOutcome};
+use lighttrack_core::{new_id, AlertKind, Delivery, RelayOutcome};
 
-use super::fixtures::{sample_entry, sample_policy, sample_project, sample_rule};
+use super::fixtures::{
+    sample_alert, sample_alert_channel, sample_entry, sample_policy, sample_project, sample_rule,
+};
 use crate::{
-    CollectiveFilter, MaintenanceRequest, Result, Store, StoreError, Surface, TraceFilter,
+    AlertFilter, CollectiveFilter, MaintenanceRequest, Result, Store, StoreError, Surface,
+    TraceFilter,
 };
 
 /// Methods that cannot refuse because they do not return a `Result`. They are pure readers of the
@@ -58,6 +61,8 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
         Surface::MarginPolicies => margin_policies(store),
         Surface::JobLeases => job_leases(store),
         Surface::Schedules => schedules(store),
+        Surface::Alerts => alerts(store),
+        Surface::AlertRouting => alert_routing(store),
         Surface::Maintenance => maintenance(store),
         Surface::Metrics => metrics(store),
     };
@@ -374,4 +379,61 @@ fn maintenance(store: &dyn Store) -> Vec<&'static str> {
 fn metrics(store: &dyn Store) -> Vec<&'static str> {
     refused("db_metrics", store.db_metrics());
     vec!["db_metrics"]
+}
+
+/// A backend that cannot store an alert must refuse, not accept and drop it. An `Ok(Admitted)` that
+/// wrote nothing would tell the caller to go ahead and deliver, and then leave no record that
+/// anyone was ever told — the ledger's whole purpose, silently absent. `list_alerts` answering `[]`
+/// would be worse still: an empty alert page reads as "nothing has fired here".
+fn alerts(store: &dyn Store) -> Vec<&'static str> {
+    let a = sample_alert(&new_id(), AlertKind::LimitBreach, "conf:refusal");
+    refused(
+        "insert_alert_dedup",
+        store.insert_alert_dedup(&a, std::time::Duration::from_secs(60)),
+    );
+    refused(
+        "mark_delivery",
+        store.mark_delivery(
+            &a.id,
+            &Delivery {
+                channel_id: "env:webhook".into(),
+                ok: true,
+                status: Some("200".into()),
+                at: Utc::now(),
+            },
+        ),
+    );
+    refused("list_alerts", store.list_alerts(&AlertFilter::default()));
+    refused("get_alert", store.get_alert(&a.id));
+    refused("ack_alert", store.ack_alert(&a.id, "ops", Utc::now()));
+    refused(
+        "attach_alert_resolution",
+        store.attach_alert_resolution(&a.id, &json!({ "ok": true })),
+    );
+    vec![
+        "insert_alert_dedup",
+        "mark_delivery",
+        "list_alerts",
+        "get_alert",
+        "ack_alert",
+        "attach_alert_resolution",
+    ]
+}
+
+/// Routing refuses as a set, `channels_for` included — it composes the listings, so a backend that
+/// overrode only the composed half would answer "no channels configured" where it means "no table".
+fn alert_routing(store: &dyn Store) -> Vec<&'static str> {
+    let c = sample_alert_channel(None);
+    refused("create_alert_channel", store.create_alert_channel(&c));
+    refused("get_alert_channel", store.get_alert_channel(&c.id));
+    refused("list_alert_channels", store.list_alert_channels(None));
+    refused("delete_alert_channel", store.delete_alert_channel(&c.id));
+    refused("channels_for", store.channels_for(Some(&new_id())));
+    vec![
+        "create_alert_channel",
+        "get_alert_channel",
+        "list_alert_channels",
+        "delete_alert_channel",
+        "channels_for",
+    ]
 }

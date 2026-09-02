@@ -4,6 +4,7 @@
 //! the normalized [`event::LlmEvent`] model, the [`pricing::PriceBook`] and cost
 //! calculation, per-project [`limits`] evaluation, and the [`score`] /benchmark types.
 
+pub mod alert;
 pub mod alias_table;
 pub mod calibration;
 pub mod collective;
@@ -34,6 +35,7 @@ pub mod schedule;
 pub mod score;
 pub mod trace;
 
+pub use alert::{Alert, AlertChannel, AlertKind, ChannelKind, Delivery, Severity};
 pub use alias_table::AliasTable;
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use collective::{
