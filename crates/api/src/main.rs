@@ -158,6 +158,7 @@ mod redact;
 mod rejections;
 mod relay;
 mod revenue;
+mod rollup;
 mod rubrics;
 mod scores;
 mod shed;
@@ -181,6 +182,8 @@ mod tests_ingest;
 mod tests_limit_scope;
 #[cfg(test)]
 mod tests_relay;
+#[cfg(test)]
+mod tests_rollup;
 #[cfg(test)]
 mod tests_storage;
 #[cfg(test)]
@@ -420,6 +423,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/costs", get(events_query::get_costs))
         .route("/v1/costs/prompts", get(events_query::get_prompt_costs))
         .route("/v1/usecases", get(events_query::get_usecases))
+        .route("/v1/rollup", get(rollup::get_rollup))
         .route(
             "/v1/scores",
             post(scores::post_score).get(scores::get_scores),

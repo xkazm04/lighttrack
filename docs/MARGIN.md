@@ -54,19 +54,25 @@ The pure recompute lives in `crates/core/src/margin_sim.rs` (`compute_margin_sim
 
 | Method                     | SQLite | Postgres | Firestore |
 |----------------------------|:------:|:--------:|:---------:|
-| `list_revenue_events`      |  full  |   full   |   empty   |
-| `cost_by_dimension`        |  full  |   full   |   empty   |
-| `tokens_by_dimension`      |  full  | **empty**|   empty   |
-| `daily_cost_by_dimension`  |  full  | **empty**|   empty   |
-| customer model/name cost   |  full  |   empty  |   empty   |
+| `list_revenue_events`      |  full  |   full   |   full    |
+| `cost_by_dimension`        |  full  |   full   |   full    |
+| `tokens_by_dimension`      |  full  |   full   |   full    |
+| `daily_cost_by_dimension`  |  full  |   full   |   full    |
+| customer model/name cost   |  full  |   full   |   full    |
 
-- **SQLite** is the reference backend; every margin surface is fully served.
-- **Postgres** serves `/v1/margin` fully. It does **not** yet implement `daily_cost_by_dimension` or
-  `tokens_by_dimension` (both inherit the trait's empty default), so `/v1/margin/trend` returns the
-  **revenue** side per day with a **zero cost** series, and `/v1/margin/simulate` returns **zero
-  simulated token-revenue** (flat-fee terms still apply) until those queries are ported — a documented
-  handoff, not a bug. The per-customer model/name breakdown likewise returns empty on Postgres.
-- **Firestore** returns empty for the whole margin surface by default (no aggregate queries ported).
+The whole margin surface is served on all three backends. It used to be SQLite-only past the first
+two rows: `/v1/margin/trend` returned a revenue series against a **zero cost** series on Postgres, and
+`/v1/margin/simulate` returned zero simulated token-revenue — numbers that read as answers.
 
-These stances follow the store trait's "additive default methods" convention: an unported backend
-compiles unchanged and degrades to empty rather than erroring.
+What closed it is one method. Every row above is now a fixed grouping of `Store::rollup`
+(`docs/DATA_MODEL.md`), reached through trait default impls, so a backend that implements the
+primitive serves all of them with identical semantics rather than five hand-written queries that
+could each be forgotten. `docs/PARITY.md` is generated from the backends' own manifests and is the
+authority if this table ever falls behind it.
+
+Two caveats that survive:
+
+- **Firestore** stores no `received_at`, so its windows and day buckets read the client-declared
+  `ts`. A caller with a skewed clock can shift its own spend between margin-trend buckets there.
+- Every cost row carries `unpriced_calls`. When it is non-zero the cost — and therefore the margin
+  computed from it — is a **floor**: those calls had no price in the book and contributed `$0.00`.

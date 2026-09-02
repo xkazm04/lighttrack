@@ -73,11 +73,16 @@ pub(crate) fn cost_summary_windowed(
                 input_tokens: 0,
                 output_tokens: 0,
                 cost_usd: 0.0,
+                unpriced_calls: 0,
             });
         row.calls += 1;
         row.input_tokens += fi64(m, "input_tokens").unwrap_or(0);
         row.output_tokens += fi64(m, "output_tokens").unwrap_or(0);
-        row.cost_usd += ff64(m, "cost_usd").unwrap_or(0.0);
+        // A doc with no `cost_usd` is unpriced: counted, never summed as $0.00.
+        match ff64(m, "cost_usd") {
+            Some(c) => row.cost_usd += c,
+            None => row.unpriced_calls += 1,
+        }
     }
     let mut rows: Vec<CostRow> = agg.into_values().collect();
     rows.sort_by(|a, b| {
@@ -297,11 +302,15 @@ pub(crate) fn usecase_costs(
                 input_tokens: 0,
                 output_tokens: 0,
                 cost_usd: 0.0,
+                unpriced_calls: 0,
             });
         row.calls += 1;
         row.input_tokens += fi64(m, "input_tokens").unwrap_or(0);
         row.output_tokens += fi64(m, "output_tokens").unwrap_or(0);
-        row.cost_usd += ff64(m, "cost_usd").unwrap_or(0.0);
+        match ff64(m, "cost_usd") {
+            Some(c) => row.cost_usd += c,
+            None => row.unpriced_calls += 1,
+        }
     }
     let mut rows: Vec<UseCaseCostRow> = agg.into_values().collect();
     rows.sort_by(|a, b| {

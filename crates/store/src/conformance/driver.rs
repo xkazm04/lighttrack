@@ -9,7 +9,7 @@ use lighttrack_core::new_id;
 
 use super::{
     admission, catalog, collective, events, forecast, job_leases, jobs, maintenance, margin,
-    projects, prompts, refusals, relay, revenue, scores, traces,
+    projects, prompts, refusals, relay, revenue, rollup, scores, traces,
 };
 use crate::{Result, Store, Surface};
 
@@ -52,6 +52,7 @@ fn section(store: &dyn Store, pid: &str, surface: Surface) -> Result<()> {
             events::scoped_usage(store)?;
             events::parity_gap_methods(store)?;
         }
+        Surface::Rollup => rollup::rollup(store)?,
         Surface::Traces => traces::traces(store)?,
         Surface::Forecast => forecast::forecast(store)?,
         Surface::MarginBreakdowns => margin::margin(store)?,

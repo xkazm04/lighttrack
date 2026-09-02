@@ -22,6 +22,7 @@ mod md;
 mod prices;
 mod projects;
 mod prompts;
+mod rollup;
 mod rubrics;
 mod scores;
 mod traces;
@@ -34,6 +35,7 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "list_projects" => projects::list(v),
         "get_cost_summary" => costs::summary(v),
         "get_usecases" => costs::usecases(v),
+        "query_rollup" => rollup::table(v),
         "get_forecast" => forecast::report(v),
         "query_events" => events::list(v),
         "get_event" => events::detail(v),

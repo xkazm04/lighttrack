@@ -19,6 +19,7 @@ mod projects;
 mod prompts;
 mod rest;
 mod revenue;
+mod rollup;
 mod rubrics;
 mod scores;
 
@@ -28,7 +29,7 @@ use serde_json::Value;
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
     JobCancel, JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
-    PromptVersion, RevenueEvent, Rubric, Score, TraceSummary,
+    PromptVersion, RevenueEvent, RollupQuery, RollupRow, Rubric, Score, TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
@@ -84,12 +85,20 @@ impl FirestoreStore {
     /// `MarginBreakdowns` and `ProjectAdmin` are simply not ported. All of them refuse with
     /// `Unsupported` (HTTP 501) and the conformance suite asserts that refusal.
     ///
+    /// `Rollup` — and, through the trait defaults over it, `Forecast` and `MarginBreakdowns` — is a
+    /// client-side fold over the same windowed document scan every other aggregate here runs. One
+    /// caveat rides with it and is documented in `rollup.rs`: Firestore stores no `received_at`, so
+    /// an accounting window asked for on server-arrival time is answered on the client's `ts`.
+    ///
     /// `Collective` is served, with one bounded caveat this backend states rather than hides: a
     /// contributor replacement larger than one `:commit` batch is chunked and reports
     /// `ReplaceAck::atomic == false` (see [`collective`]).
     pub const SURFACES: &'static [Surface] = &[
         Surface::EventsCore,
         Surface::EventFilters,
+        Surface::Rollup,
+        Surface::Forecast,
+        Surface::MarginBreakdowns,
         Surface::Prompts,
         Surface::KeyAdmin,
         Surface::LimitLifecycle,
@@ -155,6 +164,11 @@ impl Store for FirestoreStore {
     }
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
         events::cost_summary(&self.rest, project)
+    }
+    /// The grouped-rollup primitive — a client-side fold; the forecast and margin-breakdown surfaces
+    /// reach this backend through the trait defaults over it.
+    fn rollup(&self, q: &RollupQuery<'_>) -> Result<Vec<RollupRow>> {
+        rollup::rollup(&self.rest, q)
     }
     fn cost_summary_windowed(
         &self,

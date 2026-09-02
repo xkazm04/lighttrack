@@ -176,6 +176,7 @@ mod tests {
             key: customer.map(str::to_string),
             calls,
             cost_usd,
+            unpriced_calls: 0,
         }
     }
 

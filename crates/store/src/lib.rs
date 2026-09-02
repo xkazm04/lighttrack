@@ -11,6 +11,7 @@ pub mod capabilities;
 pub mod codec;
 pub mod collective;
 pub mod conformance;
+mod rollup_compat;
 pub mod sqlite;
 
 use std::collections::HashMap;
@@ -24,7 +25,8 @@ use lighttrack_core::{
     scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, CostEvidence,
     Dataset, DatasetItem, Job, JobCancel, JobFinish, LimitMetric, LimitRule, LimitScope,
     LimitStatus, LimitWindow, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
-    RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension, Trace, TraceSummary,
+    RelayOutcome, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Score,
+    TokensByDimension, Trace, TraceSummary,
 };
 
 pub use capabilities::{Capabilities, Surface};
@@ -68,6 +70,10 @@ pub struct CostRow {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cost_usd: f64,
+    /// How many of `calls` had no price on the row and so contributed `$0.00` to `cost_usd` — the
+    /// disclosure that keeps a floor from reading as a total. Additive: absent on older payloads.
+    #[serde(default)]
+    pub unpriced_calls: i64,
 }
 
 /// Optional filters + keyset cursor for [`Store::list_events_filtered`]. All fields are additive and
@@ -200,6 +206,9 @@ pub struct UseCaseCostRow {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cost_usd: f64,
+    /// See [`CostRow::unpriced_calls`].
+    #[serde(default)]
+    pub unpriced_calls: i64,
 }
 
 /// One UTC calendar day's aggregated usage for a project — a point in the dense daily series that
@@ -765,28 +774,51 @@ pub trait Store: Send + Sync {
     /// Cost/usage rollup grouped by project + provider + model, optionally filtered by project.
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>>;
 
-    /// Cost/usage rollup over an optional `[since, until)` time window (both bounds optional). The
-    /// default ignores the window and delegates to [`Store::cost_summary`] (full history) so backends
-    /// that haven't ported the windowed query compile unchanged; SQLite implements the window.
+    // --- the grouped-rollup primitive ---
+    /// **The** grouped rollup: usage and cost over a window, grouped by one to three
+    /// [`Dimension`](lighttrack_core::Dimension)s, optionally filtered.
+    ///
+    /// Every other method in this area — `cost_summary_windowed`, `usecase_costs`, `usage_by_scope`,
+    /// the two daily series, the two `*_by_dimension` splits and the two customer breakdowns — is a
+    /// **default impl over this one** ([`rollup_compat`]). That is the point: those nine used to be
+    /// nine hand-written `GROUP BY`s, four of them on SQLite only, so a production Postgres
+    /// deployment answered 501 for `/v1/forecast` and three margin surfaces because nobody had
+    /// written the ninth near-identical query. A backend that implements `rollup` serves all of them
+    /// with identical semantics by construction.
+    ///
+    /// A backend may still override any of the nine (SQLite keeps its hand-written versions); the
+    /// conformance suite asserts the override and the `rollup`-derived answer agree row for row.
+    ///
+    /// The default is an honest refusal, not an empty `Vec`: a rollup that reads as "nobody spent
+    /// anything" is the failure mode this whole area exists to remove.
+    fn rollup(&self, _q: &RollupQuery<'_>) -> Result<Vec<RollupRow>> {
+        Err(StoreError::Unsupported("the grouped rollup"))
+    }
+
+    /// Cost/usage rollup over an optional `[since, until)` time window (both bounds optional).
+    /// Defaults over [`Store::rollup`]; a backend with neither falls back to full history.
     fn cost_summary_windowed(
         &self,
         project: Option<&str>,
-        _since: Option<DateTime<Utc>>,
-        _until: Option<DateTime<Utc>>,
+        since: Option<DateTime<Utc>>,
+        until: Option<DateTime<Utc>>,
     ) -> Result<Vec<CostRow>> {
-        self.cost_summary(project)
+        match rollup_compat::cost_summary_windowed(self, project, since, until) {
+            // No rollup *and* no windowed query: the pre-existing lenient fallback, which returns
+            // more than asked rather than nothing. Kept so this can only widen, never blank, a page.
+            Err(StoreError::Unsupported(_)) => self.cost_summary(project),
+            other => other,
+        }
     }
 
     /// Use-case rollup: cost/usage grouped by (name, provider, model), optionally restricted to
-    /// events at/after `since`. Default returns an empty rollup so backends that don't implement it
-    /// (Postgres/Firestore) compile unchanged — the SQLite dev backend is the one that powers the
-    /// LLM-Overview surface.
+    /// events at/after `since`. Defaults over [`Store::rollup`].
     fn usecase_costs(
         &self,
-        _project: Option<&str>,
-        _since: Option<DateTime<Utc>>,
+        project: Option<&str>,
+        since: Option<DateTime<Utc>>,
     ) -> Result<Vec<UseCaseCostRow>> {
-        Err(StoreError::Unsupported("the use-case cost rollup"))
+        rollup_compat::usecase_costs(self, project, since)
     }
 
     /// Aggregate usage for one project since `since` (inclusive). Used by limit evaluation.
@@ -816,41 +848,41 @@ pub trait Store: Send + Sync {
     /// *this* key spent", this one answers "how much has *each* key spent" — the question an operator
     /// needs answered **before** writing a per-key budget, and the one a breach makes urgent.
     ///
-    /// No conservative fallback is possible here (there is no safe way to guess a grouping), so the
-    /// default is an honest [`StoreError::Unsupported`] → HTTP 501 rather than an empty list that
-    /// would read as "nobody spent anything".
+    /// No conservative fallback is possible here (there is no safe way to guess a grouping), so a
+    /// backend with no [`Store::rollup`] answers an honest [`StoreError::Unsupported`] → HTTP 501
+    /// rather than an empty list that would read as "nobody spent anything".
     fn usage_by_scope(
         &self,
-        _project: &str,
-        _since: DateTime<Utc>,
-        _kind: &str,
+        project: &str,
+        since: DateTime<Utc>,
+        kind: &str,
     ) -> Result<Vec<ScopeUsage>> {
-        Err(StoreError::Unsupported("per-dimension usage breakdown"))
+        rollup_compat::usage_by_scope(self, project, since, kind)
     }
 
     // --- daily time-series for predictive cost/margin forecasting ---
-    // Default impls so backends that don't (yet) bucket by day compile unchanged: forecasting simply
-    // reads an empty series there (no trend → no forecast) until the backend adds the queries.
+    // Both default over `rollup` (grouping by `Dimension::Day` on the `received_at` key), so a
+    // backend that implements the primitive serves the forecast surface without porting anything.
     /// Daily (UTC) usage totals for one project over `[since, until)`, oldest day first — the series
     /// trend forecasting fits. Days with no traffic are absent (the caller densifies to zero).
     fn daily_usage(
         &self,
-        _project: &str,
-        _since: DateTime<Utc>,
-        _until: DateTime<Utc>,
+        project: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
     ) -> Result<Vec<DailyUsage>> {
-        Err(StoreError::Unsupported("the daily usage series"))
+        rollup_compat::daily_usage(self, project, since, until)
     }
     /// Daily (UTC) LLM cost per billing-dimension value (`customer` | `product`, from event
     /// metadata) over `[since, until)`, for per-customer/product margin-trend forecasting.
     fn daily_cost_by_dimension(
         &self,
-        _project: Option<&str>,
-        _dim: &str,
-        _since: DateTime<Utc>,
-        _until: DateTime<Utc>,
+        project: Option<&str>,
+        dim: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
     ) -> Result<Vec<DailyDimCost>> {
-        Err(StoreError::Unsupported("the daily cost series"))
+        rollup_compat::daily_cost_by_dimension(self, project, dim, since, until)
     }
 
     // --- projects ---
@@ -1189,50 +1221,50 @@ pub trait Store: Send + Sync {
         Err(StoreError::Unsupported("revenue tracking"))
     }
     /// LLM cost grouped by a billing dimension (`customer` | `product`, from event metadata) over
-    /// `[since, until)`.
+    /// `[since, until)`. Defaults over [`Store::rollup`].
     fn cost_by_dimension(
         &self,
-        _project: Option<&str>,
-        _dim: &str,
-        _since: DateTime<Utc>,
-        _until: DateTime<Utc>,
+        project: Option<&str>,
+        dim: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
-        Err(StoreError::Unsupported("cost by dimension"))
+        rollup_compat::cost_by_dimension(self, project, dim, since, until)
     }
     /// Prompt+completion tokens grouped by a billing dimension (`customer` | `product`, from event
-    /// metadata) over `[since, until)` — the usage side of the pricing what-if simulator. Default empty
-    /// so unported backends (Postgres/Firestore) compile unchanged; SQLite implements it.
+    /// metadata) over `[since, until)` — the usage side of the pricing what-if simulator. Defaults
+    /// over [`Store::rollup`].
     fn tokens_by_dimension(
         &self,
-        _project: Option<&str>,
-        _dim: &str,
-        _since: DateTime<Utc>,
-        _until: DateTime<Utc>,
+        project: Option<&str>,
+        dim: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
     ) -> Result<Vec<TokensByDimension>> {
-        Err(StoreError::Unsupported("token usage by dimension"))
+        rollup_compat::tokens_by_dimension(self, project, dim, since, until)
     }
     /// One customer's LLM cost broken down **by model** (`provider/model`) over `[since, until)`,
-    /// scoped by `json_extract(metadata,'$.customer_id') = customer`. Default empty so unported
-    /// backends (Postgres/Firestore) compile unchanged; SQLite implements it.
+    /// scoped by `metadata.customer_id = customer`. Defaults over [`Store::rollup`], where the
+    /// customer is a *filter* rather than a grouping — a row for anyone else here is a tenant leak.
     fn customer_cost_by_model(
         &self,
-        _project: Option<&str>,
-        _customer: &str,
-        _since: DateTime<Utc>,
-        _until: DateTime<Utc>,
+        project: Option<&str>,
+        customer: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
-        Err(StoreError::Unsupported("customer cost breakdown"))
+        rollup_compat::customer_cost_by_model(self, project, customer, since, until)
     }
     /// One customer's LLM cost broken down **by use-case `name`** over `[since, until)`, scoped by the
-    /// same `metadata.customer_id`. Default empty (see [`Store::customer_cost_by_model`]).
+    /// same `metadata.customer_id` (see [`Store::customer_cost_by_model`]).
     fn customer_cost_by_name(
         &self,
-        _project: Option<&str>,
-        _customer: &str,
-        _since: DateTime<Utc>,
-        _until: DateTime<Utc>,
+        project: Option<&str>,
+        customer: &str,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
-        Err(StoreError::Unsupported("customer cost breakdown"))
+        rollup_compat::customer_cost_by_name(self, project, customer, since, until)
     }
 
     // --- cloud→device relay queue (docs/RELAY.md) ---

@@ -233,6 +233,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             cost_usd: c,
+            unpriced_calls: 0,
         }
     }
 
@@ -245,6 +246,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             cost_usd: c,
+            unpriced_calls: 0,
         }
     }
 

@@ -21,6 +21,7 @@ mod prices;
 mod projects;
 mod relay;
 mod revenue;
+mod rollup;
 mod rubrics;
 mod scores;
 mod traces;
@@ -34,7 +35,7 @@ use tokio::runtime::Runtime;
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
     JobCancel, JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, RelayOutcome,
-    RelayTask, RevenueEvent, Rubric, Score, TraceSummary,
+    RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Score, TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
@@ -77,13 +78,19 @@ impl PgStore {
 impl PgStore {
     /// What this backend implements today, read off the `impl Store` block below.
     ///
-    /// The absent surfaces are honest gaps, not oversights: `Forecast` and `MarginBreakdowns` need
-    /// the daily/dimension rollups, `Prompts` the registry tables, and `Maintenance`/`Metrics` are
-    /// SQLite-file concerns a managed Postgres owns itself. Each refuses with `Unsupported`
-    /// (HTTP 501) and the conformance suite asserts that refusal.
+    /// `Rollup` is the primitive the forecast and margin surfaces read through: implementing it
+    /// once is what makes `Forecast` and `MarginBreakdowns` answer here (their methods default over
+    /// it), instead of the 501s `/v1/forecast` and three `/v1/margin/*` routes used to return.
+    ///
+    /// The absent surfaces are honest gaps, not oversights: `Prompts` needs the registry tables,
+    /// and `Maintenance`/`Metrics` are SQLite-file concerns a managed Postgres owns itself. Each
+    /// refuses with `Unsupported` (HTTP 501) and the conformance suite asserts that refusal.
     pub const SURFACES: &'static [Surface] = &[
         Surface::EventsCore,
         Surface::EventFilters,
+        Surface::Rollup,
+        Surface::Forecast,
+        Surface::MarginBreakdowns,
         Surface::Traces,
         Surface::ProjectAdmin,
         Surface::KeyAdmin,
@@ -142,6 +149,11 @@ impl Store for PgStore {
     }
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
         self.rt.block_on(events::cost_summary(&self.pool, project))
+    }
+    /// The grouped-rollup primitive. Everything in the forecast and margin-breakdown surfaces
+    /// reaches Postgres through the trait defaults over this one method.
+    fn rollup(&self, q: &RollupQuery<'_>) -> Result<Vec<RollupRow>> {
+        self.rt.block_on(rollup::rollup(&self.pool, q))
     }
     fn cost_summary_windowed(
         &self,

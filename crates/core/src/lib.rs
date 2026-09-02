@@ -24,6 +24,7 @@ pub mod prompt;
 pub mod provider;
 pub mod relay;
 pub mod revenue;
+pub mod rollup;
 pub mod rubric;
 pub mod score;
 pub mod trace;
@@ -65,6 +66,7 @@ pub use relay::{
     RELAY_DEFAULT_RETRY_INTERVAL_SECS,
 };
 pub use revenue::{RevenueEvent, RevenueKind};
+pub use rollup::{Dimension, RollupQuery, RollupRow, Storage, TimeKey, MAX_GROUP_BY};
 pub use rubric::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
 pub use score::{
     judge_verdict_schema, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, JudgeVerdict, Score,

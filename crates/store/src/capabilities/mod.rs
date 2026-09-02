@@ -34,6 +34,10 @@ pub enum Surface {
     EventsCore,
     /// The extended event predicates + keyset paging + scoped/grouped usage rollups.
     EventFilters,
+    /// The one grouped-rollup primitive (`Store::rollup`) every cost/usage/margin/forecast surface
+    /// reads through. A backend that serves it serves the nine legacy grouped methods too, via
+    /// their default impls — which is why it is its own surface rather than a member of another.
+    Rollup,
     /// Events rolled up by `trace_id`: listing, detail, whole-trace scores.
     Traces,
     /// Daily (UTC) usage/cost series — the input `GET /v1/forecast` fits a trend to.
@@ -65,6 +69,7 @@ impl Surface {
     pub const ALL: &'static [Surface] = &[
         Surface::EventsCore,
         Surface::EventFilters,
+        Surface::Rollup,
         Surface::Traces,
         Surface::Forecast,
         Surface::MarginBreakdowns,
@@ -84,6 +89,7 @@ impl Surface {
         match self {
             Surface::EventsCore => "events_core",
             Surface::EventFilters => "event_filters",
+            Surface::Rollup => "rollup",
             Surface::Traces => "traces",
             Surface::Forecast => "forecast",
             Surface::MarginBreakdowns => "margin_breakdowns",
@@ -211,6 +217,7 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
             "usage_by_scope",
         ],
     ),
+    (Surface::Rollup, &["rollup"]),
     (
         Surface::Traces,
         &[

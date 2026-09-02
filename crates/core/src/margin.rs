@@ -46,6 +46,11 @@ pub struct CostByDimension {
     pub key: Option<String>,
     pub calls: i64,
     pub cost_usd: f64,
+    /// How many of `calls` had no price on the row, so they contributed `$0.00` to `cost_usd`. The
+    /// disclosure that keeps this row from reading as a complete number when it is a floor: a
+    /// margin computed from a bucket with unpriced traffic understates cost by an unknown amount.
+    #[serde(default)]
+    pub unpriced_calls: i64,
 }
 
 /// One profit/margin rollup row.
@@ -187,6 +192,7 @@ mod tests {
             key: customer.map(str::to_string),
             calls,
             cost_usd,
+            unpriced_calls: 0,
         }
     }
 

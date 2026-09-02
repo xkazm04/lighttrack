@@ -89,7 +89,8 @@ const META: &str = "NULLIF(metadata,'')::jsonb";
 fn cost_sql(key: &str) -> String {
     format!(
         "SELECT ({META})->>'{key}' AS k, COUNT(*)::bigint AS calls, \
-         COALESCE(SUM(cost_usd),0.0) AS cost FROM events \
+         COALESCE(SUM(cost_usd),0.0) AS cost, \
+         COUNT(*) FILTER (WHERE cost_usd IS NULL)::bigint AS unpriced FROM events \
          WHERE ($1::text IS NULL OR project_id = $1) AND ts >= $2 AND ts < $3 \
          GROUP BY ({META})->>'{key}'"
     )
@@ -116,6 +117,7 @@ pub(crate) async fn cost_by_dimension(
                 key: row.try_get(0).map_err(pgerr)?,
                 calls: row.try_get(1).map_err(pgerr)?,
                 cost_usd: row.try_get(2).map_err(pgerr)?,
+                unpriced_calls: row.try_get(3).map_err(pgerr)?,
             })
         })
         .collect()

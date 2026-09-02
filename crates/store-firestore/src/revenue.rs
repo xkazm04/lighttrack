@@ -68,7 +68,9 @@ pub(crate) fn cost_by_dimension(
     filters.push(("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))));
     filters.push(("ts", "LESS_THAN", json!(fmt_ts(until))));
     let docs = rest.query("events", &filters, None, None)?;
-    let mut agg: BTreeMap<Option<String>, (i64, f64)> = BTreeMap::new();
+    // (calls, cost, unpriced): a doc with no `cost_usd` field is unpriced — counted, never summed as
+    // $0.00, so the row discloses how much of it is a floor rather than a total.
+    let mut agg: BTreeMap<Option<String>, (i64, f64, i64)> = BTreeMap::new();
     for m in &docs {
         // Belt-and-suspenders re-check of the window client-side (also skips ts-less docs).
         let ts = match fstr(m, "ts") {
@@ -79,16 +81,20 @@ pub(crate) fn cost_by_dimension(
             continue;
         }
         let key = metadata_key(m, field)?;
-        let e = agg.entry(key).or_insert((0, 0.0));
+        let e = agg.entry(key).or_insert((0, 0.0, 0));
         e.0 += 1;
-        e.1 += ff64(m, "cost_usd").unwrap_or(0.0);
+        match ff64(m, "cost_usd") {
+            Some(c) => e.1 += c,
+            None => e.2 += 1,
+        }
     }
     Ok(agg
         .into_iter()
-        .map(|(key, (calls, cost_usd))| CostByDimension {
+        .map(|(key, (calls, cost_usd, unpriced_calls))| CostByDimension {
             key,
             calls,
             cost_usd,
+            unpriced_calls,
         })
         .collect())
 }
