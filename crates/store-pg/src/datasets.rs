@@ -8,15 +8,17 @@ use lighttrack_store::Result;
 
 use crate::util::{fmt_ts, json_or_null, parse_ts, pgerr, val_or_null};
 
-const DATASET_COLS: &str = "id, project_id, name, version, frozen, source, created_at";
+pub(crate) const DATASET_COLS: &str =
+    "id, project_id, name, version, frozen, source, created_at, parent_id";
 
 const ITEM_COLS: &str = "id, dataset_id, input, output, expected, context, tags, \
-    source_event_id, anonymization";
+    source_event_id, anonymization, input_hash";
 
 pub(crate) async fn create(pool: &PgPool, d: &Dataset) -> Result<()> {
     sqlx::query(
-        "INSERT INTO datasets (id, project_id, name, version, frozen, source, created_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        "INSERT INTO datasets \
+         (id, project_id, name, version, frozen, source, created_at, parent_id) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
     )
     .bind(d.id.clone())
     .bind(d.project_id.clone())
@@ -25,6 +27,7 @@ pub(crate) async fn create(pool: &PgPool, d: &Dataset) -> Result<()> {
     .bind(d.frozen as i64)
     .bind(d.source.clone())
     .bind(fmt_ts(d.created_at))
+    .bind(d.parent_id.clone())
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -68,7 +71,8 @@ pub(crate) async fn create_item(pool: &PgPool, item: &DatasetItem) -> Result<()>
     let anon = json_or_null(&item.anonymization)?;
     sqlx::query(
         "INSERT INTO dataset_items (id, dataset_id, input, output, expected, context, \
-         tags, source_event_id, anonymization) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+         tags, source_event_id, anonymization, input_hash) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
     )
     .bind(item.id.clone())
     .bind(item.dataset_id.clone())
@@ -79,6 +83,7 @@ pub(crate) async fn create_item(pool: &PgPool, item: &DatasetItem) -> Result<()>
     .bind(tags)
     .bind(item.source_event_id.clone())
     .bind(anon)
+    .bind(item.input_hash.clone())
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -96,7 +101,7 @@ pub(crate) async fn list_items(pool: &PgPool, dataset_id: &str) -> Result<Vec<Da
     rows.iter().map(item_from_row).collect()
 }
 
-fn dataset_from_row(row: &PgRow) -> Result<Dataset> {
+pub(crate) fn dataset_from_row(row: &PgRow) -> Result<Dataset> {
     let created_at: String = row.try_get(6).map_err(pgerr)?;
     Ok(Dataset {
         id: row.try_get(0).map_err(pgerr)?,
@@ -106,6 +111,7 @@ fn dataset_from_row(row: &PgRow) -> Result<Dataset> {
         frozen: row.try_get::<i64, _>(4).map_err(pgerr)? != 0,
         source: row.try_get(5).map_err(pgerr)?,
         created_at: parse_ts(&created_at)?,
+        parent_id: row.try_get(7).map_err(pgerr)?,
     })
 }
 
@@ -125,5 +131,6 @@ fn item_from_row(row: &PgRow) -> Result<DatasetItem> {
         },
         source_event_id: row.try_get(7).map_err(pgerr)?,
         anonymization: val_or_null(anon)?,
+        input_hash: row.try_get(9).map_err(pgerr)?,
     })
 }

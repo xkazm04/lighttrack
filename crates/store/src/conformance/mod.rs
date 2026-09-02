@@ -21,6 +21,7 @@ mod alerts;
 mod catalog;
 mod collective;
 mod contributions;
+mod dataset_lineage;
 mod devices;
 mod driver;
 mod events;

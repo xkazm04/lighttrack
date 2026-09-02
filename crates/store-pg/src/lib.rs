@@ -18,6 +18,7 @@ mod benchmarks;
 mod calibrations;
 mod collective;
 mod contributions;
+mod dataset_lineage;
 mod datasets;
 mod devices;
 mod events;
@@ -146,6 +147,11 @@ impl PgStore {
         // would leave `require_trusted_judge` unenforceable exactly where it matters.
         Surface::Labels,
         Surface::Calibrations,
+        // Versioned eval corpora (M24). Declared here because this is the backend a deployment with
+        // enough traffic to *need* a stratified or failure-mined corpus actually runs on: refusing
+        // it would leave the loop that turns production failures into permanent eval cases existing
+        // only on the laptop backend, and `Dataset::version` pinned at 1 wherever it matters.
+        Surface::DatasetLineage,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -832,5 +838,25 @@ impl Store for PgStore {
     ) -> Result<Vec<CalibrationRecord>> {
         self.rt
             .block_on(calibrations::list(&self.pool, project, limit, cursor))
+    }
+
+    // --- eval corpus lineage (M24) ---
+    fn fork_dataset(&self, project: Option<&str>, id: &str) -> Result<Dataset> {
+        self.rt
+            .block_on(dataset_lineage::fork(&self.pool, project, id))
+    }
+    fn import_dataset_items(
+        &self,
+        project: Option<&str>,
+        dataset_id: &str,
+        spec: &lighttrack_core::ImportSpec,
+    ) -> Result<u32> {
+        self.rt.block_on(dataset_lineage::import(
+            &self.pool, project, dataset_id, spec,
+        ))
+    }
+    fn list_dataset_versions(&self, project: Option<&str>, name: &str) -> Result<Vec<Dataset>> {
+        self.rt
+            .block_on(dataset_lineage::versions(&self.pool, project, name))
     }
 }

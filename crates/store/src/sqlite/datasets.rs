@@ -8,14 +8,17 @@ use lighttrack_core::{Dataset, DatasetItem};
 use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
 
-const DATASET_COLS: &str = "id, project_id, name, version, frozen, source, created_at";
-const ITEM_COLS: &str =
-    "id, dataset_id, input, output, expected, context, tags, source_event_id, anonymization";
+pub(super) const DATASET_COLS: &str =
+    "id, project_id, name, version, frozen, source, created_at, parent_id";
+pub(super) const ITEM_COLS: &str =
+    "id, dataset_id, input, output, expected, context, tags, source_event_id, anonymization, \
+     input_hash";
 
 pub(super) fn create(conn: &Connection, d: &Dataset) -> Result<()> {
     conn.execute(
-        "INSERT INTO datasets (id, project_id, name, version, frozen, source, created_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO datasets \
+         (id, project_id, name, version, frozen, source, created_at, parent_id) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
             d.id,
             d.project_id,
@@ -23,7 +26,8 @@ pub(super) fn create(conn: &Connection, d: &Dataset) -> Result<()> {
             d.version as i64,
             d.frozen as i64,
             d.source,
-            fmt_ts(d.created_at)
+            fmt_ts(d.created_at),
+            d.parent_id,
         ],
     )?;
     Ok(())
@@ -64,8 +68,9 @@ pub(super) fn create_item(conn: &Connection, item: &DatasetItem) -> Result<()> {
     };
     conn.execute(
         "INSERT INTO dataset_items \
-         (id, dataset_id, input, output, expected, context, tags, source_event_id, anonymization) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+         (id, dataset_id, input, output, expected, context, tags, source_event_id, \
+          anonymization, input_hash) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             item.id,
             item.dataset_id,
@@ -76,6 +81,7 @@ pub(super) fn create_item(conn: &Connection, item: &DatasetItem) -> Result<()> {
             tags,
             item.source_event_id,
             anon,
+            item.input_hash,
         ],
     )?;
     Ok(())
@@ -90,9 +96,18 @@ pub(super) fn list_items(conn: &Connection, dataset_id: &str) -> Result<Vec<Data
     raws.into_iter().map(item_from_raw).collect()
 }
 
-type DatasetRaw = (String, String, String, i64, i64, Option<String>, String);
+type DatasetRaw = (
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    Option<String>,
+    String,
+    Option<String>,
+);
 
-fn map_dataset(row: &Row) -> rusqlite::Result<DatasetRaw> {
+pub(super) fn map_dataset(row: &Row) -> rusqlite::Result<DatasetRaw> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -101,10 +116,11 @@ fn map_dataset(row: &Row) -> rusqlite::Result<DatasetRaw> {
         row.get(4)?,
         row.get(5)?,
         row.get(6)?,
+        row.get(7)?,
     ))
 }
 
-fn dataset_from_raw(r: DatasetRaw) -> Result<Dataset> {
+pub(super) fn dataset_from_raw(r: DatasetRaw) -> Result<Dataset> {
     Ok(Dataset {
         id: r.0,
         project_id: r.1,
@@ -113,6 +129,7 @@ fn dataset_from_raw(r: DatasetRaw) -> Result<Dataset> {
         frozen: r.4 != 0,
         source: r.5,
         created_at: parse_ts(&r.6)?,
+        parent_id: r.7,
     })
 }
 
@@ -120,6 +137,7 @@ type ItemRaw = (
     String,
     String,
     String,
+    Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -139,6 +157,7 @@ fn map_item(row: &Row) -> rusqlite::Result<ItemRaw> {
         row.get(6)?,
         row.get(7)?,
         row.get(8)?,
+        row.get(9)?,
     ))
 }
 
@@ -161,5 +180,6 @@ fn item_from_raw(r: ItemRaw) -> Result<DatasetItem> {
         tags,
         source_event_id: r.7,
         anonymization,
+        input_hash: r.9,
     })
 }

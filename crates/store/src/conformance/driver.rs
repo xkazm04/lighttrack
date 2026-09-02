@@ -8,9 +8,9 @@
 use lighttrack_core::new_id;
 
 use super::{
-    admission, alerts, catalog, collective, contributions, devices, events, forecast, job_leases,
-    jobs, labels, maintenance, margin, margin_policy, pricing, projects, prompts, refusals, relay,
-    revenue, rollup, schedules, score_summary, scores, traces,
+    admission, alerts, catalog, collective, contributions, dataset_lineage, devices, events,
+    forecast, job_leases, jobs, labels, maintenance, margin, margin_policy, pricing, projects,
+    prompts, refusals, relay, revenue, rollup, schedules, score_summary, scores, traces,
 };
 use crate::{Result, Store, Surface};
 
@@ -82,6 +82,7 @@ fn section(store: &dyn Store, pid: &str, surface: Surface) -> Result<()> {
         Surface::ScoreSummaries => score_summary::score_summaries(store)?,
         Surface::Labels => labels::labels(store, pid)?,
         Surface::Calibrations => labels::calibrations(store, pid)?,
+        Surface::DatasetLineage => dataset_lineage::dataset_lineage(store, pid)?,
     }
     Ok(())
 }

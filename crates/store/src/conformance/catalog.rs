@@ -111,6 +111,7 @@ pub(super) fn datasets(store: &dyn Store, pid: &str) -> Result<()> {
         frozen: false,
         source: Some("conf".into()),
         created_at: Utc::now(),
+        parent_id: None,
     };
     store.create_dataset(&d)?;
     assert!(store.get_dataset(&d.id)?.is_some());
@@ -126,6 +127,7 @@ pub(super) fn datasets(store: &dyn Store, pid: &str) -> Result<()> {
         tags: vec!["t".into()],
         source_event_id: None,
         anonymization: json!({ "method": "regex", "redactions": 0 }),
+        input_hash: None,
     };
     store.create_dataset_item(&item)?;
     let items = store.list_dataset_items(&d.id)?;

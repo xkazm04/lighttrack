@@ -13,7 +13,9 @@
 use chrono::Utc;
 use serde_json::json;
 
-use lighttrack_core::{new_id, AlertKind, Delivery, LabelFilter, LabelSubject, RelayOutcome};
+use lighttrack_core::{
+    new_id, AlertKind, Delivery, ImportSpec, LabelFilter, LabelSubject, RelayOutcome,
+};
 
 use super::fixtures::{
     sample_alert, sample_alert_channel, sample_entry, sample_policy, sample_project, sample_rule,
@@ -71,6 +73,7 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
         Surface::ScoreSummaries => score_summaries(store),
         Surface::Labels => labels(store),
         Surface::Calibrations => calibrations(store),
+        Surface::DatasetLineage => dataset_lineage(store),
     };
 
     let uncovered: Vec<&str> = surface
@@ -123,6 +126,28 @@ fn calibrations(store: &dyn Store) -> Vec<&'static str> {
         "insert_calibration",
         "latest_calibration",
         "list_calibrations",
+    ]
+}
+
+/// A backend that cannot version an eval corpus must say so. The quiet failure here is not an empty
+/// page but a **frozen `version`**: a fork that silently did nothing (or answered v1 again) leaves
+/// the runner's paired-test guard comparing 1 with 1, which reports two different corpora as
+/// comparable — the precise bug this surface exists to end.
+fn dataset_lineage(store: &dyn Store) -> Vec<&'static str> {
+    let id = new_id();
+    refused("fork_dataset", store.fork_dataset(None, &id));
+    refused(
+        "import_dataset_items",
+        store.import_dataset_items(None, &id, &ImportSpec::default()),
+    );
+    refused(
+        "list_dataset_versions",
+        store.list_dataset_versions(None, "any"),
+    );
+    vec![
+        "fork_dataset",
+        "import_dataset_items",
+        "list_dataset_versions",
     ]
 }
 

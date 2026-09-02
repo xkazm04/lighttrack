@@ -147,6 +147,16 @@ pub enum Surface {
     /// a missing calibration is a *load-bearing* answer (it is what makes trust `unknown` rather
     /// than `untrusted`), so it must never be something a missing table says by accident.
     Calibrations,
+    /// Versioned eval corpora (M24): forking a frozen dataset into its next version, mining stored
+    /// rows into one by a declared sampling strategy, and reading a name's version history.
+    ///
+    /// Its own surface rather than part of [`Surface::EventsCore`], whose dataset methods are the
+    /// flat CRUD — create, freeze, list items. This is the *lineage*, and a backend can serve every
+    /// one of those and have no way to express a stratified quota or a fork. The answer that must
+    /// never be accidental is the version: a backend that quietly declined to fork would leave
+    /// `version` pinned at 1 forever, which is precisely the state M24 exists to end — and a
+    /// paired-test guard comparing 1 with 1 reports "comparable" about two different corpora.
+    DatasetLineage,
 }
 
 impl Surface {
@@ -180,6 +190,7 @@ impl Surface {
         Surface::ScoreSummaries,
         Surface::Labels,
         Surface::Calibrations,
+        Surface::DatasetLineage,
     ];
 
     /// Stable wire/doc name (`snake_case`, matching the `Serialize` impl).
@@ -213,6 +224,7 @@ impl Surface {
             Surface::ScoreSummaries => "score_summaries",
             Surface::Labels => "labels",
             Surface::Calibrations => "calibrations",
+            Surface::DatasetLineage => "dataset_lineage",
         }
     }
 
@@ -487,6 +499,14 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
             "insert_calibration",
             "latest_calibration",
             "list_calibrations",
+        ],
+    ),
+    (
+        Surface::DatasetLineage,
+        &[
+            "fork_dataset",
+            "import_dataset_items",
+            "list_dataset_versions",
         ],
     ),
 ];

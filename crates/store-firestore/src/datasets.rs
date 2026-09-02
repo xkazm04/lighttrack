@@ -17,6 +17,10 @@ pub(crate) fn create_dataset(rest: &Rest, d: &Dataset) -> Result<()> {
     m.insert("frozen".into(), json!(d.frozen as i64));
     m.insert("source".into(), json!(d.source));
     m.insert("created_at".into(), json!(fmt_ts(d.created_at)));
+    // M24 columns round-trip even though this backend does not declare `Surface::DatasetLineage`:
+    // refusing to *fork* is a capability gap, silently dropping a fork's parent link on a plain
+    // read-back would be data loss.
+    m.insert("parent_id".into(), json!(d.parent_id));
     rest.put_doc("datasets", &d.id, &m)
 }
 
@@ -49,6 +53,7 @@ pub(crate) fn create_dataset_item(rest: &Rest, item: &DatasetItem) -> Result<()>
     m.insert("context".into(), json!(item.context));
     m.insert("tags".into(), json!(serde_json::to_string(&item.tags)?));
     m.insert("source_event_id".into(), json!(item.source_event_id));
+    m.insert("input_hash".into(), json!(item.input_hash));
     m.insert(
         "anonymization".into(),
         json!(json_or_null_str(&item.anonymization)?),
@@ -71,6 +76,7 @@ fn dataset_from(m: &Fields) -> Result<Dataset> {
         frozen: fbool(m, "frozen"),
         source: fstr(m, "source"),
         created_at: parse_ts(&freq(m, "created_at")?)?,
+        parent_id: fstr(m, "parent_id"),
     })
 }
 
@@ -88,5 +94,6 @@ fn item_from(m: &Fields) -> Result<DatasetItem> {
         },
         source_event_id: fstr(m, "source_event_id"),
         anonymization: fjson(m, "anonymization")?,
+        input_hash: fstr(m, "input_hash"),
     })
 }

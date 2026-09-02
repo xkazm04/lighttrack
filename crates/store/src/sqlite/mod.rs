@@ -14,6 +14,8 @@ mod benchmarks;
 mod calibrations;
 mod collective;
 mod contributions;
+mod dataset_fork;
+mod dataset_import;
 mod datasets;
 mod devices;
 mod events;
@@ -1071,5 +1073,21 @@ impl Store for SqliteStore {
         self.read_op(DbOp::ScoresRead, |c| {
             calibrations::list(c, project, limit, cursor)
         })
+    }
+
+    // --- eval corpus lineage (M24) ---
+    fn fork_dataset(&self, project: Option<&str>, id: &str) -> Result<Dataset> {
+        self.with(|c| dataset_fork::fork(c, project, id))
+    }
+    fn import_dataset_items(
+        &self,
+        project: Option<&str>,
+        dataset_id: &str,
+        spec: &lighttrack_core::ImportSpec,
+    ) -> Result<u32> {
+        self.with(|c| dataset_import::import(c, project, dataset_id, spec))
+    }
+    fn list_dataset_versions(&self, project: Option<&str>, name: &str) -> Result<Vec<Dataset>> {
+        self.read(|c| dataset_fork::versions(c, project, name))
     }
 }
