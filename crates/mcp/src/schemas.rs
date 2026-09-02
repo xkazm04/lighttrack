@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 /// The `outputSchema` for a tool's structured result, or `None` if the tool returns text only.
 pub(crate) fn output_schema(tool: &str) -> Option<Value> {
     let s = match tool {
+        "get_capabilities" => capabilities_resp(),
         "list_projects" => list_of(project()),
         "get_cost_summary" => list_of(cost_row()),
         "get_margin" => margin_resp(),
@@ -53,6 +54,22 @@ fn list_of(item: Value) -> Value {
 
 fn obj(props: Value) -> Value {
     json!({ "type": "object", "additionalProperties": true, "properties": props })
+}
+
+/// The store capability manifest. `unsupported` is the half that changes an agent's behaviour: a
+/// surface listed there means a 501 from its routes is a permanent gap, not absent data.
+fn capabilities_resp() -> Value {
+    json!({
+        "type": "object",
+        "required": ["backend", "surfaces", "unsupported"],
+        "additionalProperties": true,
+        "properties": {
+            "backend": {"type":"string"},
+            "surfaces": {"type":"array","items":{"type":"string"}},
+            "unsupported": {"type":"array","items":{"type":"string"}},
+            "atomic_admission": {"type":"boolean"}
+        }
+    })
 }
 
 fn project() -> Value {

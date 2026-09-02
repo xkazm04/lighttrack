@@ -9,6 +9,8 @@ use crate::client::Client;
 /// Tool definitions surfaced in `tools/list`.
 pub(crate) fn tools() -> Vec<Value> {
     vec![
+        tool("get_capabilities", "What this LightTrack deployment's store backend actually serves: the backend name, the surfaces it implements, the surfaces it REFUSES (whose routes answer HTTP 501 `unsupported` rather than an empty result), and whether usage caps are enforced atomically or are merely advisory. Read this before concluding a surface returned no data — a 501 here means 'not ported on this backend', never 'you have none'.",
+            json!({"type":"object","properties":{}})),
         tool("list_projects", "List all projects (admin key required in enforced mode).",
             json!({"type":"object","properties":{}})),
         tool("get_cost_summary", "Cost/usage rollup grouped by project + provider + model. Optionally filter by project.",
@@ -122,6 +124,7 @@ fn tool(name: &str, desc: &str, schema: Value) -> Value {
 /// Route a read tool. Returns `None` if `name` is not a read tool (so the caller can try writes).
 pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Value, String>> {
     let r = match name {
+        "get_capabilities" => c.get("/v1/capabilities"),
         "list_projects" => c.get("/v1/projects"),
         "get_cost_summary" => c.get(&with_project("/v1/costs", args)),
         "get_margin" => c.get(&margin_path(args)),
@@ -338,6 +341,21 @@ fn usecases_path(args: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The manifest tool is a read: it must be listed, annotated `readOnlyHint`, and declare the
+    /// output shape an agent branches on (`unsupported`).
+    #[test]
+    fn get_capabilities_is_a_listed_read_only_tool() {
+        let t = tools()
+            .into_iter()
+            .find(|t| t["name"] == "get_capabilities")
+            .expect("get_capabilities is listed");
+        assert_eq!(t["annotations"]["readOnlyHint"], true);
+        assert_eq!(
+            t["outputSchema"]["properties"]["unsupported"]["type"], "array",
+            "the refused surfaces are part of the declared contract"
+        );
+    }
 
     #[test]
     fn events_path_defaults_to_limit_only() {
