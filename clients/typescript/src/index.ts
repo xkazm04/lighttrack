@@ -13,8 +13,9 @@
  *   await lt.flush();                             // await in-flight sends before exit
  */
 
-import { Diagnostics, noProjectMessage, sendFailureMessage, truncate } from "./diagnostics.ts";
+import { Diagnostics, diagnosticKind, noProjectMessage, sendFailureMessage, truncate } from "./diagnostics.ts";
 import { RECOVERED_TAG, SpanJournal, unsettledError } from "./journal.ts";
+import { PII_RULES } from "./pii.ts";
 
 export type ProviderName = "openai" | "anthropic" | "google" | (string & {});
 
@@ -92,7 +93,10 @@ export function extractOpenAI(resp: any): [string | undefined, number, number, n
   const u = resp?.usage ?? {};
   const input = num(u.prompt_tokens) ?? num(u.input_tokens) ?? 0;
   const output = num(u.completion_tokens) ?? num(u.output_tokens) ?? 0;
-  const cached = num(u.prompt_tokens_details?.cached_tokens);
+  // The Responses API renamed the pair AND moved the cache counter: `input_tokens_details`, not
+  // `prompt_tokens_details`. Reading only the older place reported every cached Responses call as
+  // uncached, which the price book then charged at full input rate.
+  const cached = num(u.prompt_tokens_details?.cached_tokens) ?? num(u.input_tokens_details?.cached_tokens);
   return [resp?.model, input, output, cached];
 }
 
@@ -127,7 +131,11 @@ export interface GuardRules {
   mustMatch?: RegExp | string;
   /** Output must NOT match any of these (banned content / patterns). */
   mustNotMatch?: Array<RegExp | string>;
-  /** Reject common PII (email, phone, credit-card-like, SSN). */
+  /**
+   * Reject PII. The rules are the *server's* — generated from `lighttrack_anon`'s scrubber into
+   * `clients/contract/fixtures/pii.json` (see pii.ts), so this guard cannot contradict what the
+   * ingest path would redact. Kinds: `email`, `iban`, `ssn`, `secret`, `phone`, `credit_card`, `ip`.
+   */
   noPII?: boolean;
 }
 
@@ -137,12 +145,22 @@ export interface GuardResult {
   checks: Record<string, boolean>;
 }
 
-const PII_PATTERNS: Array<[string, RegExp]> = [
-  ["email", /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/],
-  ["phone", /(?:\+?\d[\s().-]?){10,}/],
-  ["credit_card", /\b(?:\d[ -]?){13,16}\b/],
-  ["ssn", /\b\d{3}-\d{2}-\d{4}\b/],
-];
+/** Compiled once. `PII_RULES` is generated from the server's own scrubber (see pii.ts). */
+const PII_COMPILED: Array<[string, RegExp]> = PII_RULES.map((r) => [r.kind, new RegExp(r.pattern)]);
+
+/**
+ * The PII families present in `text`, in rule order, each reported once.
+ *
+ * A kind is a family, not a regex: a phone number has three shapes and a secret three prefixes, and
+ * a caller wants to know *a phone number leaked*, not which of three patterns noticed.
+ */
+export function piiKinds(text: string): string[] {
+  const found: string[] = [];
+  for (const [kind, re] of PII_COMPILED) {
+    if (!found.includes(kind) && re.test(text)) found.push(kind);
+  }
+  return found;
+}
 
 /**
  * Deterministic, network-free output validation — runs inline in the request path. Pure: it returns
@@ -178,34 +196,33 @@ export function guard(output: string, rules: GuardRules): GuardResult {
 
   const words = output.trim() ? output.trim().split(/\s+/).length : 0;
   if (rules.maxWords != null) {
-    words <= rules.maxWords ? ok("maxWords") : fail("maxWords", `too long: ${words} words > ${rules.maxWords}`);
+    words <= rules.maxWords ? ok("max_words") : fail("max_words", `too long: ${words} words > ${rules.maxWords}`);
   }
   if (rules.minWords != null) {
-    words >= rules.minWords ? ok("minWords") : fail("minWords", `too short: ${words} words < ${rules.minWords}`);
+    words >= rules.minWords ? ok("min_words") : fail("min_words", `too short: ${words} words < ${rules.minWords}`);
   }
   if (rules.maxChars != null) {
-    output.length <= rules.maxChars ? ok("maxChars") : fail("maxChars", `too long: ${output.length} chars > ${rules.maxChars}`);
+    output.length <= rules.maxChars ? ok("max_chars") : fail("max_chars", `too long: ${output.length} chars > ${rules.maxChars}`);
   }
   for (const s of rules.mustInclude ?? []) {
     output.includes(s) ? ok(`include:${s}`) : fail(`include:${s}`, `must include "${s}"`);
   }
   if (rules.mustMatch != null) {
+    const src = typeof rules.mustMatch === "string" ? rules.mustMatch : rules.mustMatch.source;
     const re = typeof rules.mustMatch === "string" ? new RegExp(rules.mustMatch) : rules.mustMatch;
-    re.test(output) ? ok("mustMatch") : fail("mustMatch", `must match ${re}`);
+    re.test(output) ? ok("must_match") : fail("must_match", `must match ${src}`);
   }
   for (const pat of rules.mustNotMatch ?? []) {
+    // Keyed on the PATTERN, not the stringified RegExp: `/nope/` is a JavaScript spelling no other
+    // SDK can produce, and a check key that differs by language is not a shared contract.
+    const src = typeof pat === "string" ? pat : pat.source;
     const re = typeof pat === "string" ? new RegExp(pat) : pat;
-    re.test(output) ? fail(`notMatch:${re}`, `must not match ${re}`) : ok(`notMatch:${re}`);
+    re.test(output) ? fail(`not_match:${src}`, `must not match ${src}`) : ok(`not_match:${src}`);
   }
   if (rules.noPII) {
-    let clean = true;
-    for (const [name, re] of PII_PATTERNS) {
-      if (re.test(output)) {
-        clean = false;
-        fail(`pii:${name}`, `contains ${name}-like PII`);
-      }
-    }
-    if (clean) ok("noPII");
+    const kinds = piiKinds(output);
+    for (const kind of kinds) fail(`pii:${kind}`, `contains ${kind}-like PII`);
+    if (kinds.length === 0) ok("no_pii");
   }
 
   return { ok: violations.length === 0, violations, checks };
@@ -506,7 +523,7 @@ export class LightTrack {
           /* body unreadable (aborted / already consumed) — the status alone is still actionable */
         }
         this.diag.warn(
-          `http-${resp.status}`,
+          diagnosticKind(resp.status),
           sendFailureMessage(this.baseUrl, path, `HTTP ${resp.status} ${detail}`, {
             status: resp.status,
             hasProject,
@@ -519,7 +536,7 @@ export class LightTrack {
         // crowd out) genuine connection failures.
         const aborted = (e as { name?: string })?.name === "AbortError";
         const detail = aborted ? `timed out after ${this.timeoutMs}ms` : String(e);
-        this.diag.warn(aborted ? "timeout" : "network", sendFailureMessage(this.baseUrl, path, detail, { hasProject, hasKey }));
+        this.diag.warn(diagnosticKind(undefined, { timedOut: aborted }), sendFailureMessage(this.baseUrl, path, detail, { hasProject, hasKey }));
       })
       .finally(() => {
         if (timer) clearTimeout(timer);
@@ -612,7 +629,15 @@ export class Span {
 }
 
 // Rate-limited failure reporting (see diagnostics.ts) — exported so a host app can inspect or reuse it.
-export { Diagnostics, noProjectMessage, sendFailureMessage } from "./diagnostics.ts";
+export { Diagnostics, diagnosticKind, noProjectMessage, sendFailureMessage } from "./diagnostics.ts";
+
+// The server's PII rule set, generated from crates/anon (see pii.ts).
+export { PII_RULES } from "./pii.ts";
+export type { PiiRule } from "./pii.ts";
+
+// Reading an ingest response's limit signals (see limits.ts).
+export { parseLimitView } from "./limits.ts";
+export type { LimitView } from "./limits.ts";
 
 // Crash-surviving breadcrumbs for in-flight calls (see journal.ts).
 export { SpanJournal, unsettled, unsettledError, RECOVERED_TAG, DEFAULT_ORPHAN_MS } from "./journal.ts";
