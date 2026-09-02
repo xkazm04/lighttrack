@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": { "type": "string" },
+    "areas": { "type": "array", "items": { "type": "string" } },
+    "risk": { "type": "string", "enum": ["low", "medium", "high"] },
+    "risk_reason": { "type": "string" }
+  },
+  "required": ["summary", "areas", "risk", "risk_reason"],
+  "additionalProperties": false
+}
