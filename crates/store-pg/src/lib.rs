@@ -511,6 +511,21 @@ impl Store for PgStore {
         self.rt
             .block_on(relay::list(&self.pool, project, status, limit))
     }
+    fn list_relay_tasks_by_action(
+        &self,
+        project: Option<&str>,
+        action_type: &str,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RelayTask>> {
+        self.rt.block_on(relay::list_by_action(
+            &self.pool,
+            project,
+            action_type,
+            status,
+            limit,
+        ))
+    }
     fn lease_relay_tasks(
         &self,
         device: &str,

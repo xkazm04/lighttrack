@@ -330,6 +330,7 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
             "get_relay_task",
             "find_relay_task_by_key",
             "list_relay_tasks",
+            "list_relay_tasks_by_action",
             "lease_relay_tasks",
             "sweep_relay_dead",
             "settle_relay_task",

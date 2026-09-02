@@ -51,6 +51,22 @@ pub(crate) struct ActionSpec {
     /// Wall-clock ceiling for this action's run; defaults to the engine's.
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+    /// A label the author bumps when they change `prompt.md`. Free text (`"3"`, `"2026-09-02"`,
+    /// `"v2-tighter-rubric"`) — the cloud never parses it, it only groups by it beside the
+    /// rendered prompt's fingerprint. Optional because the fingerprint is what actually detects a
+    /// change; the version is what makes the change *legible* in a report.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Send the rendered prompt and the result text to the cloud on settle, so the run can be
+    /// judged like any other LLM call.
+    ///
+    /// **Off by default, and that default is the privacy contract.** An action's prompt and its
+    /// result are the two things `docs/RELAY.md` promises never leave the device unasked; turning
+    /// this on is the operator deciding, per action, that this particular workload's content is
+    /// safe to store in their cloud instance. With it off the cloud still gets `prompt_sha256`, so
+    /// a silent prompt regression is detectable without the text.
+    #[serde(default)]
+    pub report_io: bool,
     #[serde(default)]
     pub connector: Option<ConnectorSpec>,
 }
@@ -288,7 +304,28 @@ mod tests {
         assert!(a.spec.workspace.is_none());
         assert!(a.spec.allowed_tools.is_empty());
         assert_eq!(a.spec.timeout(), invocation::DEFAULT_TIMEOUT);
+        // An action that says nothing about reporting keeps its prompt and result on the device.
+        assert!(!a.spec.report_io);
+        assert!(a.spec.version.is_none());
         assert!(load(dir.path().to_str().unwrap(), "ns/missing").is_err());
+    }
+
+    /// Opting in is explicit, per action, and independent of the version label.
+    #[test]
+    fn an_action_can_version_itself_and_opt_into_reporting_its_io() {
+        let dir = tempfile::tempdir().unwrap();
+        let act = dir.path().join("ns").join("judged");
+        std::fs::create_dir_all(&act).unwrap();
+        std::fs::write(act.join("prompt.md"), "rate this").unwrap();
+        std::fs::write(
+            act.join("action.toml"),
+            "version = \"3\"\nreport_io = true\n",
+        )
+        .unwrap();
+
+        let a = load(dir.path().to_str().unwrap(), "ns/judged").unwrap();
+        assert_eq!(a.spec.version.as_deref(), Some("3"));
+        assert!(a.spec.report_io);
     }
 
     #[test]

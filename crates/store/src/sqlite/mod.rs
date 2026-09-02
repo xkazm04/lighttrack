@@ -838,6 +838,15 @@ impl Store for SqliteStore {
     ) -> Result<Vec<RelayTask>> {
         self.read(|c| relay::list(c, project, status, limit))
     }
+    fn list_relay_tasks_by_action(
+        &self,
+        project: Option<&str>,
+        action_type: &str,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RelayTask>> {
+        self.read(|c| relay::list_by_action(c, project, action_type, status, limit))
+    }
     fn lease_relay_tasks(
         &self,
         device: &str,

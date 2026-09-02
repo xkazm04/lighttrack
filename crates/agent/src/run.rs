@@ -25,7 +25,8 @@ use lighttrack_engine::{resolve_claude_bin, EngineConfig};
 
 use crate::cloud::Client;
 use crate::config::AgentConfig;
-use crate::exec::{self, RunReport};
+use crate::exec;
+use crate::report::RunReport;
 
 pub(crate) fn run(cfg: &AgentConfig, once: bool) -> Result<()> {
     let engine = EngineConfig {

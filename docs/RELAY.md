@@ -104,7 +104,7 @@ terminal is a `409`, not a comfortable lie.
 | `POST /v1/relay/tasks/:id/renew` | device key | Heartbeat, carrying `fence`. `409` = the lease is no longer yours: stop, and do not deliver. |
 | `POST /v1/relay/tasks/:id/progress` | device key | Liveness detail (`fence` + `progress`), visible on the task. Deliberately not on the heartbeat. |
 | `POST /v1/relay/tasks/:id/cancel` | project key (own) / admin | Stop a queued or leased task. `409` if it already finished. |
-| `POST /v1/relay/tasks/:id/result` | device key | Settle: `succeeded` (+`result`) \| `failed` (+`error`) \| `deferred` (+`retry_after_secs`), carrying `fence`. Optional usage/accounting: `model`, `input_tokens`, `output_tokens`, `latency_ms`, `cost_usd`, `mode`. `409` = not held; the result was NOT recorded. |
+| `POST /v1/relay/tasks/:id/result` | device key | Settle: `succeeded` (+`result`) \| `failed` (+`error`) \| `deferred` (+`retry_after_secs`), carrying `fence`. Optional usage/accounting: `model`, `input_tokens`, `output_tokens`, `latency_ms`, `cost_usd`, `mode`. Optional provenance (see **Quality model**): `prompt_sha256`, `action_version`, and — only when the action set `report_io` — `input` / `output`. `409` = not held; the result was NOT recorded. |
 | `POST /v1/relay/devices` | admin | Enrol a device: `name`, optional `project_id`, `capabilities`. Returns the row **plus its key, once**. Never exposed over MCP. |
 | `GET /v1/relay/devices?project=` | admin | The fleet: advertised capabilities, `last_seen_at` / `seen_secs_ago` / `online`, agent version, revocation. Never returns a key or a digest. |
 | `DELETE /v1/relay/devices/:id` | admin | Revoke a device. A flag, not a delete — tasks it already ran keep naming a device that still resolves. |
@@ -186,7 +186,8 @@ The **cloud logs the event itself on settle** (no project key needed on the devi
 a terminal `succeeded`/`failed` report on a live lease inserts an `LlmEvent` with
 `cost_usd = LIGHTTRACK_RELAY_FLAT_COST_USD` (default 1.0), `provider: "anthropic"`, the
 `source`/tokens/latency the device reported, `trace_id = task_id` (retries of one task group
-into one trace), and `metadata: { task_id, action_type, attempt, device_cost_usd, mode }`.
+into one trace), and
+`metadata: { task_id, action_type, attempt, device_cost_usd, mode, prompt_sha256, action_version }`.
 `deferred` logs nothing — no run happened.
 
 The device now reports what the CLI envelope said the run cost (`cost_usd`) and the posture it
@@ -200,6 +201,45 @@ recorded, only the stamped `cost_usd` changes.
 Relay events are always recorded (plain insert, not admission-checked): enforcing limits exist
 to cap metered spend, and the run has already happened on the flat-rate subscription. They still
 show up in costs, usage and forecasts like any other traffic.
+
+## Quality model: a relay run is a judgeable event (M19)
+
+LightTrack is an LLM-as-judge product, and the relay is the one LLM workload it *originates*. It
+used to be the only one it could not score: the settle event was written with `input: None,
+output: None`, both judges skip an event without content, and the result JSON sat in
+`relay_tasks.result` read by nobody. Meanwhile the action's `prompt.md` was edited in place on
+disk with no version and no fingerprint, while the prompt registry versions app prompts and gates
+their promotion on a benchmark. An action prompt could regress for months and the only evidence
+was a vaguely worse result.
+
+**Every run names its prompt.** The device reports `prompt_sha256` — sha256 of the *rendered*
+prompt, params substituted, so it is the text the model actually read — plus the action's declared
+`version` if it has one. Both land in the settle event's metadata beside `action_type`. The
+fingerprint is computed before anything is spawned, so a posture refusal that costs nothing names
+its prompt too; the one unstamped outcome is an action that could not be loaded at all, which had
+no prompt to fingerprint.
+
+**Content is opt-in, per action.** `report_io = true` in `action.toml` (off by default) also sends
+the rendered prompt and the result text, which the cloud stores as the event's `input`/`output`.
+That is the whole gate: `lt-runner score` and `score-traces` judge a relay run exactly when its
+action opted in, with **no new scorer and no new table**. With it off the cloud holds the
+fingerprint only — enough to see that a prompt changed on the 14th and the failures start on the
+14th, without the text. This is the same promise the rest of this document makes: prompts and
+results stay on the device unless the operator says otherwise.
+
+The payload goes through the **same redaction door** every other ingest path uses
+(`crates/api/src/redact.rs`), so an opted-in action's stored prompt is PII-scrubbed like any
+captured payload. One exemption: `prompt_sha256` bypasses the scrub, because it is 64 hex
+characters and the scrubber's "32+ hex is a secret" rule would collapse every fingerprint to the
+same `<SECRET>` — the same reasoning that already exempts the `hash` persistence policy's digests.
+
+| Route | Auth | Purpose |
+|---|---|---|
+| `GET /v1/relay/actions?project=&limit=` | project key (own) / admin | The fingerprint ledger, **derived from the settle events** — distinct `action_type × prompt_sha256` with `versions`, `runs`, `errors`, `judgeable` (how many carry content), and `first_seen`/`last_seen`. `limit` bounds how many events are walked (default 1000, cap 20000); the answer carries `scanned` and `truncated`, because a ledger that stopped early without saying so reads as "this action has one prompt" when it has three. |
+| `POST /v1/relay/actions/:action_type/dataset` | admin | Snapshot the action's succeeded tasks (`payload → input`, `result → output`) into a dataset, so a benchmark can be linked and the next prompt edit is gated like a registry prompt's. Body: `{ project_id, name?, limit? }` (default 200, cap 1000). Answers the dataset plus `items` and `skipped`. The source is the **task**, not the settle event, so an action can be benchmark-gated without its prompt text ever reaching the cloud. The dataset is left unfrozen — freezing is the curator's call once they have looked at the cases. |
+
+A namespaced `action_type` percent-encodes its `/` in the path:
+`POST /v1/relay/actions/xprice%2Freprice-summary/dataset`.
 
 ## The device side (`crates/agent`, binary `lt-agent`)
 

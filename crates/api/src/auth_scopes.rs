@@ -153,6 +153,12 @@ mod table {
         // enrolled device would be reading across tenants.
         r("/v1/relay/devices", Admin, Admin),
         r("/v1/relay/devices/:id", NoMethod, Admin),
+        // The action fingerprint ledger (M19) is derived from the project's OWN settle events and
+        // names no payload text — so a project read key sees its own actions, exactly like the
+        // `/v1/relay/tasks` listing it is a rollup of. Snapshotting one into a dataset is a
+        // dataset write, and every other dataset write on this table is admin.
+        r("/v1/relay/actions", READ, NoMethod),
+        r("/v1/relay/actions/:action_type/dataset", NoMethod, Admin),
         r("/v1/revenue", NoMethod, Admin),
         // Admin-only, and never over MCP: this restates stored money in bulk.
         r("/v1/revenue/reprice", NoMethod, Admin),

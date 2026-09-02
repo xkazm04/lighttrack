@@ -81,9 +81,9 @@ fn score_once(
     let mut eligible: Vec<(&LlmEvent, String, String)> = Vec::new();
     let mut skipped = 0usize;
     for ev in &events {
-        match (ev.input.as_ref(), ev.output.as_ref()) {
-            (Some(i), Some(o)) => eligible.push((ev, value_to_text(i), value_to_text(o))),
-            _ => skipped += 1,
+        match judgeable(ev) {
+            Some((i, o)) => eligible.push((ev, i, o)),
+            None => skipped += 1,
         }
     }
 
@@ -122,6 +122,19 @@ fn score_once(
     Ok(scored)
 }
 
+/// The one predicate that decides whether an event gets judged: it has both an input and an
+/// output, rendered as the text the judge reads. Everything else is skipped.
+///
+/// Named rather than inlined because it is a *contract* other parts of the system have to satisfy
+/// — M19's relay settle event exists to satisfy it. "No content ⇒ never scored" silently excluded
+/// the one LLM workload LightTrack originates for as long as nobody wrote it down.
+fn judgeable(ev: &LlmEvent) -> Option<(String, String)> {
+    match (ev.input.as_ref(), ev.output.as_ref()) {
+        (Some(i), Some(o)) => Some((value_to_text(i), value_to_text(o))),
+        _ => None,
+    }
+}
+
 /// Score a single ad-hoc input/output pair.
 pub(crate) fn score_text(
     cli: &Cli,
@@ -157,4 +170,50 @@ fn build_score(project_id: &str, event_id: Option<&str>, judge: &Judge, v: &Verd
         "scored_by": v.scored_by,
         "cost_usd": v.cost_usd,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A relay settle event as the cloud writes it, with and without the action's `report_io`.
+    fn relay_event(with_content: bool) -> LlmEvent {
+        let mut ev: LlmEvent = serde_json::from_value(json!({
+            "project_id": "p", "provider": "anthropic", "model": "claude-code",
+            "name": "relay-run", "tags": ["relay"],
+            "metadata": { "action_type": "xprice/summary", "prompt_sha256": "ab" },
+        }))
+        .expect("event fixture");
+        if with_content {
+            ev.input = Some(json!("Price SKU A-1"));
+            ev.output = Some(json!({ "text": "A-1 is $12" }));
+        }
+        ev
+    }
+
+    /// M19's whole claim, at the gate that used to refuse it: a relay run needs NO new scorer — it
+    /// needed content. Without it the online scorer counts it as "no content" and skips it, which
+    /// is how 100% of relay traffic went unjudged; with it the run is judged like any other call.
+    #[test]
+    fn a_relay_run_is_judged_once_its_action_reports_its_io() {
+        assert!(
+            judgeable(&relay_event(false)).is_none(),
+            "an action that has not opted in stays unjudgeable, by design"
+        );
+        let (input, output) = judgeable(&relay_event(true)).expect("opted in ⇒ judged");
+        assert_eq!(input, "Price SKU A-1");
+        assert!(output.contains("A-1 is $12"), "{output}");
+    }
+
+    /// Half the pair is not a pair: judging an output against a missing prompt would produce a
+    /// verdict about nothing.
+    #[test]
+    fn one_side_alone_is_never_enough() {
+        let mut only_in = relay_event(true);
+        only_in.output = None;
+        assert!(judgeable(&only_in).is_none());
+        let mut only_out = relay_event(true);
+        only_out.input = None;
+        assert!(judgeable(&only_out).is_none());
+    }
 }

@@ -86,14 +86,37 @@ pub(crate) async fn list(
     status: Option<&str>,
     limit: usize,
 ) -> Result<Vec<RelayTask>> {
+    list_where(pool, project, None, status, limit).await
+}
+
+/// [`list`] narrowed to one `action_type` (M19).
+pub(crate) async fn list_by_action(
+    pool: &PgPool,
+    project: Option<&str>,
+    action_type: &str,
+    status: Option<&str>,
+    limit: usize,
+) -> Result<Vec<RelayTask>> {
+    list_where(pool, project, Some(action_type), status, limit).await
+}
+
+async fn list_where(
+    pool: &PgPool,
+    project: Option<&str>,
+    action_type: Option<&str>,
+    status: Option<&str>,
+    limit: usize,
+) -> Result<Vec<RelayTask>> {
     let rows = sqlx::query(&format!(
         "SELECT {COLS} FROM relay_tasks \
          WHERE ($1::text IS NULL OR project_id = $1) AND ($2::text IS NULL OR status = $2) \
+           AND ($4::text IS NULL OR action_type = $4) \
          ORDER BY created_at DESC LIMIT $3"
     ))
     .bind(project.map(str::to_string))
     .bind(status.map(str::to_string))
     .bind(limit as i64)
+    .bind(action_type.map(str::to_string))
     .fetch_all(pool)
     .await
     .map_err(pgerr)?;
