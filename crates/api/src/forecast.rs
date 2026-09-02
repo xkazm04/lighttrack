@@ -17,10 +17,11 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use lighttrack_core::forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast};
+use lighttrack_core::forecast_gate::{MIN_OBSERVED_DAYS, MIN_SPAN_DAYS};
 use lighttrack_core::margin::UNATTRIBUTED;
 use lighttrack_core::{
     compute_margin, CostByDimension, LimitMetric, LimitRule, LimitWindow, MarginDimension,
-    MarginRow, RevenueEvent, Trend,
+    MarginRow, Project, RevenueEvent, Trend,
 };
 use lighttrack_store::{DailyDimCost, DailyUsage, StoreError, Usage};
 
@@ -33,6 +34,11 @@ use crate::state::{spawn_db, AppState};
 /// response and the per-key trend work.
 const MAX_DIM_FORECASTS: usize = 50;
 
+/// Shortest lookback a caller may ask for. Below the evidence floor a trend cannot be presented at
+/// all ([`lighttrack_core::forecast_gate`]), so accepting `lookback=2` would only mean answering
+/// every projection with a refusal — clamping says the same thing without pretending to try.
+const MIN_LOOKBACK_DAYS: u32 = MIN_OBSERVED_DAYS as u32;
+
 #[derive(Deserialize)]
 pub(crate) struct ForecastParams {
     project: Option<String>,
@@ -40,7 +46,7 @@ pub(crate) struct ForecastParams {
     by: Option<String>,
     /// How far ahead to project, in days (default 14, clamped to 1..=90).
     horizon: Option<u32>,
-    /// How many trailing days of history to fit the trend over (default 14, clamped to 2..=90).
+    /// How many trailing days of history to fit the trend over (default 14, clamped to 4..=90).
     lookback: Option<u32>,
 }
 
@@ -50,6 +56,19 @@ pub(crate) struct SpendProjection {
     projected_daily_cost_usd: f64,
     projected_cost_next_7d_usd: f64,
     projected_cost_next_30d_usd: f64,
+    /// r² of the spend fit, or `null` when the trend is under the evidence floor — in which case
+    /// the matching entry in `refused[]` says what is missing.
+    confidence: Option<f64>,
+}
+
+/// One projection this response declines to make, and why. A forecast surface that answers a
+/// too-young project with silence is indistinguishable from one answering "all is well"; naming the
+/// refusal is what keeps the difference visible.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct Refused {
+    /// `spend`, a limit rule id, or a customer/product key.
+    pub(crate) subject: String,
+    pub(crate) reason: String,
 }
 
 #[derive(Serialize)]
@@ -65,6 +84,10 @@ pub(crate) struct ForecastResponse {
     /// Pre-emptive warnings derived from the forecasts (also delivered best-effort to alert sinks,
     /// by the handler and by the scheduled sweep alike).
     pub(crate) alerts: Vec<ForecastAlert>,
+    /// Projections withheld because the history behind them is too thin to mean anything. Always
+    /// present (possibly empty), so an operator — and the escalation pass — can tell "no risk" from
+    /// "no evidence".
+    pub(crate) refused: Vec<Refused>,
     /// The windowed margin rows the `margins` forecasts were built from. Not serialized — the
     /// `/v1/margin` surface is where an operator reads these — but carried so the guardrail pass
     /// acts on exactly the numbers this forecast was computed from, rather than re-reading the
@@ -75,6 +98,8 @@ pub(crate) struct ForecastResponse {
 
 /// Raw store reads gathered in one blocking hop, before any pure shaping.
 struct RawForecast {
+    /// The tenant row, for its `created_at` — half of the definition seam under `densify`.
+    project: Option<Project>,
     daily: Vec<DailyUsage>,
     rules: Vec<LimitRule>,
     window_usage: HashMap<LimitWindow, Usage>,
@@ -93,7 +118,7 @@ pub(crate) async fn get_forecast(
         .ok_or_else(|| ApiError::bad_request("project is required"))?;
     let dim = MarginDimension::parse(q.by.as_deref().unwrap_or("customer"));
     let horizon = q.horizon.unwrap_or(14).clamp(1, 90);
-    let lookback = q.lookback.unwrap_or(14).clamp(2, 90);
+    let lookback = q.lookback.unwrap_or(14).clamp(MIN_LOOKBACK_DAYS, 90);
 
     let resp = compute_forecast(&st, &project, dim, horizon, lookback).await?;
     if !resp.alerts.is_empty() {
@@ -115,31 +140,55 @@ pub(crate) async fn compute_forecast(
     lookback: u32,
 ) -> Result<ForecastResponse, ApiError> {
     let project = project.to_string();
+    // Both callers are clamped here rather than only at the handler, so the scheduled sweep cannot
+    // be configured into a lookback the evidence floor would refuse anyway.
+    let lookback = lookback.clamp(MIN_LOOKBACK_DAYS, 90);
     let until = Utc::now();
     // The series is `lookback` daily buckets ending today; `start_day` is the oldest bucket's date.
     let start_day = (until - Duration::days((lookback - 1) as i64)).date_naive();
     let since = start_day.and_hms_opt(0, 0, 0).unwrap().and_utc();
 
     let raw = gather(st, &project, dim, since, until).await?;
+    let first = first_observed(raw.project.as_ref(), &raw.daily, start_day);
 
-    // Dense daily series (gaps → 0) for each metric the budgets might track.
-    let cost_series = densify(&by_day(&raw.daily, |d| d.cost_usd), start_day, lookback);
-    let calls_series = densify(&by_day(&raw.daily, |d| d.calls as f64), start_day, lookback);
+    // Dense daily series for each metric the budgets might track. Gaps become 0 — but only from the
+    // project's first observed day onward (see `first_observed`).
+    let cost_series = densify(
+        &by_day(&raw.daily, |d| d.cost_usd),
+        start_day,
+        lookback,
+        first,
+    );
+    let calls_series = densify(
+        &by_day(&raw.daily, |d| d.calls as f64),
+        start_day,
+        lookback,
+        first,
+    );
     let tokens_series = densify(
         &by_day(&raw.daily, |d| d.tokens as f64),
         start_day,
         lookback,
+        first,
     );
 
+    let mut refused: Vec<Refused> = Vec::new();
     let cost_trend = Trend::fit(&cost_series);
+    if let Err(r) = cost_trend.presentability(MIN_OBSERVED_DAYS, MIN_SPAN_DAYS) {
+        refused.push(Refused {
+            subject: "spend".into(),
+            reason: r.reason,
+        });
+    }
     let spend = SpendProjection {
         projected_daily_cost_usd: round(cost_trend.project(1.0)),
         projected_cost_next_7d_usd: round(cost_trend.project_cumulative(7)),
         projected_cost_next_30d_usd: round(cost_trend.project_cumulative(30)),
+        confidence: cost_trend.r2,
         cost_trend,
     };
 
-    let budgets: Vec<BudgetForecast> = raw
+    let mut budgets: Vec<BudgetForecast> = raw
         .rules
         .iter()
         .map(|r| {
@@ -167,14 +216,14 @@ pub(crate) async fn compute_forecast(
             .insert(d.day.clone(), d.cost_usd);
     }
     let rows = compute_margin(&raw.revenue, &raw.costs, dim, since, until);
-    let margins: Vec<MarginForecast> = rows
+    let mut margins: Vec<MarginForecast> = rows
         .iter()
         .filter(|row| row.key != UNATTRIBUTED) // unattributed isn't a billable customer/product
         .take(MAX_DIM_FORECASTS)
         .map(|row| {
             let series = dim_by_key
                 .get(&row.key)
-                .map(|m| densify(m, start_day, lookback))
+                .map(|m| densify(m, start_day, lookback, first))
                 .unwrap_or_else(|| vec![0.0; lookback as usize]);
             forecast_margin(
                 &row.key,
@@ -186,6 +235,31 @@ pub(crate) async fn compute_forecast(
             )
         })
         .collect();
+
+    // Withhold every ETA the evidence floor refuses, and say so. Nulling the field rather than
+    // leaving a number nobody may act on is the point: the JSON must not carry a projection the
+    // alert path has already decided is unsayable.
+    for b in &mut budgets {
+        if let Err(r) = b.trend.presentability(MIN_OBSERVED_DAYS, MIN_SPAN_DAYS) {
+            b.eta_days = None;
+            refused.push(Refused {
+                subject: b.rule_id.clone(),
+                reason: r.reason,
+            });
+        }
+    }
+    for m in &mut margins {
+        if let Err(r) = m
+            .cost_trend
+            .presentability(MIN_OBSERVED_DAYS, MIN_SPAN_DAYS)
+        {
+            m.eta_unprofitable_days = None;
+            refused.push(Refused {
+                subject: m.key.clone(),
+                reason: r.reason,
+            });
+        }
+    }
 
     let alerts = build_alerts(&project, &budgets, &margins);
 
@@ -199,6 +273,7 @@ pub(crate) async fn compute_forecast(
         budgets,
         margins,
         alerts,
+        refused,
         margin_rows: rows,
     })
 }
@@ -215,6 +290,7 @@ async fn gather(
     let proj = project.to_string();
     let dim_s = dim.as_str().to_string();
     spawn_db(move || {
+        let project = store.get_project(&proj)?;
         let daily = store.daily_usage(&proj, since, until)?;
         let rules = store.list_limit_rules(&proj, true)?;
         let mut window_usage: HashMap<LimitWindow, Usage> = HashMap::new();
@@ -229,6 +305,7 @@ async fn gather(
         let costs = store.cost_by_dimension(Some(&proj), &dim_s, since, until)?;
         let daily_dim = store.daily_cost_by_dimension(Some(&proj), &dim_s, since, until)?;
         Ok::<_, StoreError>(RawForecast {
+            project,
             daily,
             rules,
             window_usage,
@@ -245,14 +322,49 @@ fn by_day(rows: &[DailyUsage], pick: impl Fn(&DailyUsage) -> f64) -> HashMap<Str
     rows.iter().map(|d| (d.day.clone(), pick(d))).collect()
 }
 
-/// Expand a sparse `day → value` map into a dense oldest→newest vector of `days` points starting at
-/// `start`, filling absent days with 0 (no traffic that day = no spend).
-fn densify(by_day: &HashMap<String, f64>, start: chrono::NaiveDate, days: u32) -> Vec<f64> {
+/// The **definition seam**: the first day in this window on which "no traffic" is a real
+/// observation rather than an absence of history. Days before it are dropped from the fitted series
+/// instead of being zero-filled.
+///
+/// A project that predates the window (`created_at <= start`) could have spent on any day in it, so
+/// every quiet day inside is a genuine zero and nothing is trimmed (`None`). A project created
+/// *inside* the window has its whole life in view, so the first day it actually spent is the first
+/// day there was anything to observe — the eleven zeros in front of it are the calendar, not the
+/// project, and fitting a slope through them is how "started spending on Tuesday" became "on track
+/// to breach".
+fn first_observed(
+    project: Option<&Project>,
+    daily: &[DailyUsage],
+    start: chrono::NaiveDate,
+) -> Option<chrono::NaiveDate> {
+    let created = project?.created_at.date_naive();
+    if created <= start {
+        return None;
+    }
+    let first_traffic = daily
+        .iter()
+        .filter_map(|d| chrono::NaiveDate::parse_from_str(&d.day, "%Y-%m-%d").ok())
+        .min();
+    // The *earliest* of the two, not the later: traffic is itself proof the project existed, so a
+    // row whose `created_at` was backfilled after the fact must not erase history that plainly
+    // happened. The seam is "first evidence of existence", and evidence beats bookkeeping.
+    Some(first_traffic.map_or(created, |t| t.min(created)))
+}
+
+/// Expand a sparse `day → value` map into a dense oldest→newest vector starting at `start`, filling
+/// absent days with 0 (no traffic that day = no spend). Days before `first_observed` are **omitted**
+/// rather than zero-filled: see [`first_observed`] for why the difference is the whole point.
+fn densify(
+    by_day: &HashMap<String, f64>,
+    start: chrono::NaiveDate,
+    days: u32,
+    first_observed: Option<chrono::NaiveDate>,
+) -> Vec<f64> {
     (0..days)
-        .map(|i| {
-            let day = (start + Duration::days(i as i64))
-                .format("%Y-%m-%d")
-                .to_string();
+        .map(|i| start + Duration::days(i as i64))
+        .filter(|d| first_observed.is_none_or(|f| *d >= f))
+        .map(|d| {
+            let day = d.format("%Y-%m-%d").to_string();
             *by_day.get(&day).unwrap_or(&0.0)
         })
         .collect()

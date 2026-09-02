@@ -344,11 +344,7 @@ mod tests {
     /// A flat, uninteresting cost trend — the erosion tests care about `eta_unprofitable_days`,
     /// which the forecaster has already computed by the time a policy sees it.
     fn trend() -> Trend {
-        Trend {
-            level: 0.0,
-            slope: 0.0,
-            n: 0,
-        }
+        Trend::fit(&[])
     }
 
     fn row(key: &str, revenue: f64, cost: f64) -> MarginRow {

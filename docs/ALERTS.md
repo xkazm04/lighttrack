@@ -91,8 +91,10 @@ When a scoped window has no attributable spend, `contributors` is empty and `sco
 `rejected_count` is present for an enforcing (`throttle`/`block`) breach: how many ingest attempts
 that cap has turned away (429'd) in the current rolling window.
 
-The same channels also deliver **forecast alerts** (`"event": "forecast_alert"`, see
-`docs/PREDICTIVE.md` / the forecast module) and **relay dead-letter alerts**
+The same channels also deliver **forecast alerts** (`"event": "forecast_alert"`) — pre-emptive
+budget-breach and margin-erosion warnings, gated by the evidence floor described in
+[`docs/PREDICTIVE.md`](PREDICTIVE.md) and de-duplicated on
+`forecast:<project>:<kind>:<subject>:<severity>` — and **relay dead-letter alerts**
 (`"event": "relay_task_dead"`, see `docs/RELAY.md`) — fired when a relay task exhausts its
 attempts or its device vanishes past the retry envelope:
 

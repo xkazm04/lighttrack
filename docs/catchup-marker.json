@@ -26,6 +26,10 @@
     {
       "path": "docs/harness/soak-criteria.json",
       "note": "written this pass — the lane's declared criteria, read by the harness via include_str!."
+    },
+    {
+      "path": "docs/PREDICTIVE.md",
+      "note": "written by M27 (forecast honesty gates): the evidence floor, the flat band, the burn-rate corroboration, the zero-fill definition seam, and what refused[] means. docs/ALERTS.md ~94 referenced this file before it existed; that reference now resolves."
     }
   ],
 
