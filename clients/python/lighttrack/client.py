@@ -21,16 +21,24 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from .admission import (Admit, AdmissionCache, BudgetExceeded, DEFAULT_ADMISSION_TTL_MS,
+                        view_from_statuses)
 from .diagnostics import (Diagnostics, diagnostic_kind, no_project_message, send_failure_message,
                           truncate)
 from .journal import RECOVERED_TAG, SpanJournal, unsettled_error
+from .limits import parse_limit_view
 from .pii import PII_RULES
 
 _DEFAULT_URL = "http://127.0.0.1:8787"
+
+#: Tag on the zero-usage event a locally-blocked call leaves behind.
+BLOCKED_TAG = "lt_blocked_locally"
 
 # Map common provider names/aliases onto the API's enum (openai|anthropic|google; else "unknown").
 _PROVIDER_ALIASES = {
@@ -215,13 +223,25 @@ class LightTrack:
                  project: Optional[str] = None, source: Optional[str] = None,
                  tags: Optional[list] = None, enabled: bool = True, async_: bool = True,
                  timeout: float = 2.0, max_queue: int = 1000, quiet: Optional[bool] = None,
-                 journal: Optional[bool] = None, journal_dir: Optional[str] = None):
+                 journal: Optional[bool] = None, journal_dir: Optional[str] = None,
+                 enforce: Optional[str] = None, admission_ttl_ms: int = DEFAULT_ADMISSION_TTL_MS,
+                 record_blocked: bool = False):
         """`quiet=True` (or `LIGHTTRACK_QUIET=1`) suppresses the stderr diagnostics that a dropped or
         rejected event otherwise reports; `None` defers to the env var.
 
         `journal=False` (or `LIGHTTRACK_JOURNAL=0`) turns off the crash-surviving breadcrumb that
         makes a call which began but never reported an outcome recoverable — see `journal.py` for
-        what that costs and what it buys."""
+        what that costs and what it buys.
+
+        `enforce` turns on pre-spend admission (see `admission.py`): `"block"` raises
+        `BudgetExceeded` instead of making a call the project's caps would turn away, `"warn"` logs
+        and proceeds, `"off"` (the default, also read from `LIGHTTRACK_ENFORCE`) only observes. Off
+        by default deliberately: adding an observability SDK must not change what an app does.
+
+        `record_blocked=True` records a locally-blocked call as a zero-usage event tagged
+        `lt_blocked_locally` — it is not spend and is never recorded as spend, but it is traffic the
+        app attempted, and a rollup that cannot see it reads as a quiet week rather than a throttled
+        one."""
         self.base_url = (base_url or os.environ.get("LIGHTTRACK_URL", _DEFAULT_URL)).rstrip("/")
         self.api_key = api_key or os.environ.get("LIGHTTRACK_KEY") or None
         # A project key derives the project server-side; set `project` only for dev mode (no key) or
@@ -237,6 +257,12 @@ class LightTrack:
         self._closed = False
         self._worker: Optional[threading.Thread] = None
         self.journal = SpanJournal(enabled=journal, directory=journal_dir)
+        self.enforce = enforce or os.environ.get("LIGHTTRACK_ENFORCE") or "off"
+        self.record_blocked = record_blocked
+        #: What the server last said about this project's caps, and the pre-spend verdict taken from
+        #: it. Public so a host app can ask `lt.limits.admit(...)` directly, or seed it in a test.
+        self.limits = AdmissionCache(ttl_ms=admission_ttl_ms)
+        self._refresh_lock = threading.Lock()
         if enabled and async_:
             self._worker = threading.Thread(target=self._run, name="lighttrack", daemon=True)
             self._worker.start()
@@ -431,6 +457,71 @@ class LightTrack:
         from .instrument import instrument as _instrument
         return _instrument(self, providers=providers)
 
+    def admit(self, name: Optional[str] = None, event_id: Optional[str] = None) -> Admit:
+        """Would a call be admitted right now? Pure and instant — decided from the last ingest
+        response this client saw, with no round trip (see `admission.py`)."""
+        return self.limits.admit(name=name, event_id=event_id)
+
+    def gate(self, name: Optional[str] = None) -> None:
+        """The enforcement gate the instrumentation wrappers call before a provider call.
+
+        Raises `BudgetExceeded` under `enforce="block"`, warns under `"warn"`, and is a no-op under
+        `"off"`. A stale view kicks off one background refresh and still admits — the decision never
+        waits on the network.
+        """
+        if self.enforce == "off" or not self.enabled:
+            return
+        # The server mints the event id, so the client cannot know it in advance: this is a fresh
+        # ticket per call. The shed *rate* therefore matches the server's; the shed *set* does not.
+        verdict = self.limits.admit(name=name, event_id=uuid.uuid4().hex)
+        if verdict.stale:
+            self._refresh_limits_async()
+        if verdict.ok:
+            return
+        if self.record_blocked:
+            self._record_blocked(name, verdict)
+        msg = f"LightTrack: {name or 'this call'} refused before it was made ({verdict.reason})"
+        if self.enforce == "warn":
+            self.diag.warn("budget", f'{msg}. enforce="warn", so the call is proceeding anyway.')
+            return
+        raise BudgetExceeded(verdict, 'Use enforce="warn" to log instead of raising.')
+
+    def _record_blocked(self, name: Optional[str], verdict: Admit) -> None:
+        """Record a call this client refused: real traffic, zero usage, and explicitly not spend."""
+        self.track(
+            "lighttrack", "blocked", name=name, status="error",
+            error=f"blocked locally by pre-spend admission ({verdict.reason})",
+            tags=[BLOCKED_TAG],
+            metadata={"lt_admit_reason": verdict.reason,
+                      "lt_retry_after_secs": verdict.retry_after_secs},
+        )
+
+    def refresh_limits(self) -> None:
+        """Refresh the limit view from `GET /v1/limits/status`. Best-effort: a failure leaves the
+        old view in place (fail open)."""
+        try:
+            q = f"?project={urllib.parse.quote(self.project)}" if self.project else ""
+            body = self._request("GET", f"/v1/limits/status{q}")
+            view = view_from_statuses(body.get("statuses"))
+            if view is not None:
+                self.limits.observe(view)
+        except Exception:
+            # An unreachable status endpoint must not change what the app does.
+            pass
+
+    def _refresh_limits_async(self) -> None:
+        """One poll per stale burst, off the caller's thread."""
+        if not self._refresh_lock.acquire(blocking=False):
+            return
+
+        def run() -> None:
+            try:
+                self.refresh_limits()
+            finally:
+                self._refresh_lock.release()
+
+        threading.Thread(target=run, name="lighttrack-limits", daemon=True).start()
+
     def flush(self, timeout: float = 5.0) -> None:
         if not (self.enabled and self._async):
             return
@@ -522,11 +613,16 @@ class LightTrack:
                 headers["Authorization"] = f"Bearer {self.api_key}"
             req = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers,
                                          method="POST")
-            with urllib.request.urlopen(req, timeout=self.timeout):
-                pass
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                # Every ingest response, accepted or refused, is evidence about the project's
+                # position. Reading it here is what makes `admit()` answer from the wall the app is
+                # actually near, rather than from a poll it never makes.
+                self._observe_limits(resp.status, resp.headers, resp.read())
         except urllib.error.HTTPError as e:
+            body = _error_body(e)
+            self._observe_limits(e.code, e.headers, body)
             self.diag.warn(diagnostic_kind(e.code), send_failure_message(
-                self.base_url, path, f"HTTP {e.code} {_error_body(e)}", status=e.code, **ctx))
+                self.base_url, path, f"HTTP {e.code} {body}", status=e.code, **ctx))
         except Exception as e:
             # urlopen surfaces a timeout either directly or wrapped in URLError.reason, so both are
             # checked: a timeout bucketed as "network" hides behind (and crowds out) real connection
@@ -534,6 +630,21 @@ class LightTrack:
             timed_out = isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
             self.diag.warn(diagnostic_kind(timed_out=timed_out), send_failure_message(
                 self.base_url, path, f"{type(e).__name__}: {e}", **ctx))
+
+    def _observe_limits(self, status: int, headers: Any, raw: Any) -> None:
+        """Fold one ingest response into the admission cache. Never raises into the send path."""
+        try:
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", "replace")
+            try:
+                body = json.loads(raw) if raw else None
+            except Exception:
+                # A proxy's HTML, a truncated stream — the status and headers still carry the signal.
+                body = None
+            self.limits.observe(parse_limit_view(status, dict(headers.items()) if headers else None,
+                                                 body))
+        except Exception:
+            pass
 
 
 class Span:

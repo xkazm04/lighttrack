@@ -22,7 +22,7 @@ import re
 import unittest
 from pathlib import Path
 
-from lighttrack import guard, parse_limit_view, unsettled
+from lighttrack import AdmissionCache, guard, parse_limit_view, shed_ticket, unsettled
 from lighttrack.client import _extract_anthropic, _extract_gemini, _extract_openai
 from lighttrack.diagnostics import diagnostic_kind, send_failure_message
 from lighttrack.pii import PII_RULES
@@ -162,6 +162,36 @@ class Limits(unittest.TestCase):
                         ),
                         "binding_rule": v.binding_rule,
                     },
+                    case["expect"],
+                    case.get("why", ""),
+                )
+
+
+class Admission(unittest.TestCase):
+    def test_shed_lottery_is_the_servers_own_function(self):
+        for case in fixture("limits")["shed_lottery"]:
+            with self.subTest(f'{case["rule_id"]}/{case["event_id"]}'):
+                got = shed_ticket(case["rule_id"], case["event_id"])
+                self.assertAlmostEqual(got, case["ticket"], delta=1e-12)
+
+    @unittest.skipUnless(supports("admit"), "SDK declares no pre-spend admission")
+    def test_pre_spend_admission_verdicts(self):
+        for case in fixture("limits")["admission"]:
+            with self.subTest(case["name"]):
+                cache = AdmissionCache(ttl_ms=case["ttl_ms"])
+                for o in case["observe"]:
+                    cache.observe(
+                        parse_limit_view(o["status"], o.get("headers"), o.get("body")),
+                        now_ms=o["at_ms"],
+                    )
+                v = cache.admit(
+                    name=case["admit"].get("name"),
+                    event_id=case["admit"].get("event_id"),
+                    now_ms=case["admit"]["at_ms"],
+                )
+                self.assertEqual(
+                    {"ok": v.ok, "reason": v.reason,
+                     "retry_after_secs": v.retry_after_secs, "stale": v.stale},
                     case["expect"],
                     case.get("why", ""),
                 )

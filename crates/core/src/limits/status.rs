@@ -12,7 +12,14 @@ use super::{LimitAction, LimitMetric, LimitScope, LimitWindow, ThresholdBasis, T
 /// the same event never changes its answer, and raising the shed fraction only ever *adds* events to
 /// the shed set (it never un-sheds one, which is what makes the ramp monotone). FNV-1a rather than
 /// `DefaultHasher` so the mapping is pinned to this code, not to a std implementation detail.
-fn shed_ticket(rule_id: &str, event_id: &str) -> f64 {
+///
+/// **Public because the SDKs need the server's own function, not a re-implementation of it.**
+/// Pre-spend admission asks a client to decide, locally and before it spends, whether this event
+/// would be shed — and "would be" is only true if it is the same arithmetic. The Rust client calls
+/// straight through to here; the TypeScript and Python clients carry a port, held to the same values
+/// by `clients/contract/fixtures/limits.json`'s `shed_lottery` list, which this crate's own runner
+/// checks against this function.
+pub fn shed_ticket(rule_id: &str, event_id: &str) -> f64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in rule_id
         .as_bytes()

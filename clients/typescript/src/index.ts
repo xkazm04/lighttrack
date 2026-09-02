@@ -13,7 +13,10 @@
  *   await lt.flush();                             // await in-flight sends before exit
  */
 
+import { AdmissionCache, LightTrackBudgetExceeded, viewFromStatuses } from "./admission.ts";
+import type { Admit, AdmitQuery, Enforce } from "./admission.ts";
 import { Diagnostics, diagnosticKind, noProjectMessage, sendFailureMessage, truncate } from "./diagnostics.ts";
+import { parseLimitView } from "./limits.ts";
 import { RECOVERED_TAG, SpanJournal, unsettledError } from "./journal.ts";
 import { PII_RULES } from "./pii.ts";
 
@@ -65,6 +68,25 @@ export interface LightTrackConfig {
    * process that may be rescheduled onto fresh storage should point this at a mounted volume, or
    * accept that its in-flight calls are not recoverable. */
   journalDir?: string;
+  /**
+   * Pre-spend admission (see admission.ts). `"block"` refuses a call the project's caps would turn
+   * away, by throwing {@link LightTrackBudgetExceeded} instead of calling the provider; `"warn"`
+   * logs and proceeds; `"off"` (the default) only observes. Defaults to `LIGHTTRACK_ENFORCE`.
+   *
+   * Off by default deliberately: adding an observability SDK must not change what an app does. You
+   * opt into having it stop calls.
+   */
+  enforce?: Enforce;
+  /** How long a cached limit view stays evidence, ms. Default 30000. */
+  admissionTtlMs?: number;
+  /**
+   * Record a locally-blocked call as a zero-usage event tagged `lt_blocked_locally`.
+   *
+   * A blocked call is *not* spend and is never recorded as spend — but it is traffic the app
+   * attempted, and a rollup that cannot see it reads as a quiet week rather than a throttled one.
+   * Off by default: the event still costs an ingest write against the very cap that refused it.
+   */
+  recordBlocked?: boolean;
 }
 
 const DEFAULT_URL = "http://127.0.0.1:8787";
@@ -330,6 +352,15 @@ export class LightTrack {
    * to have landed — a test, or a supervisor draining a crashed worker's journal — can await it.
    */
   readonly recovered: Promise<number>;
+  /**
+   * What the server last said about this project's caps, and the pre-spend verdict taken from it.
+   * Exposed so a host app can ask `lt.limits.admit(...)` directly, or seed it in a test.
+   */
+  readonly limits: AdmissionCache;
+  private enforce: Enforce;
+  private recordBlocked: boolean;
+  /** In-flight `GET /v1/limits/status` refresh, so a stale view triggers one poll, not a stampede. */
+  private refreshing?: Promise<void>;
 
   constructor(cfg: LightTrackConfig = {}) {
     this.baseUrl = (cfg.baseUrl ?? env("LIGHTTRACK_URL") ?? DEFAULT_URL).replace(/\/+$/, "");
@@ -341,6 +372,9 @@ export class LightTrack {
     this.timeoutMs = cfg.timeoutMs ?? 2000;
     this.diag = new Diagnostics({ quiet: cfg.quiet });
     this.journal = new SpanJournal({ enabled: cfg.journal, dir: cfg.journalDir });
+    this.enforce = cfg.enforce ?? (env("LIGHTTRACK_ENFORCE") as Enforce | undefined) ?? "off";
+    this.recordBlocked = cfg.recordBlocked ?? false;
+    this.limits = new AdmissionCache({ ttlMs: cfg.admissionTtlMs });
     // Report the calls a PREVIOUS process began and never settled, before anything else this client
     // sends. That is the whole point of the journal: a later client on the same machine is what
     // turns a killed process's in-flight calls back into records.
@@ -514,6 +548,71 @@ export class LightTrack {
     }
   }
 
+  /**
+   * Would a call be admitted right now? Pure and instant — decided from the last ingest response
+   * this client saw, with no round trip (see admission.ts).
+   */
+  admit(q: AdmitQuery = {}): Admit {
+    return this.limits.admit(q);
+  }
+
+  /**
+   * The enforcement gate the instrumentation wrappers call before a provider call.
+   *
+   * Throws {@link LightTrackBudgetExceeded} under `enforce: "block"`, warns under `"warn"`, and is
+   * a no-op under `"off"`. A stale view kicks off one background refresh and still admits — the
+   * decision never waits on the network.
+   */
+  gate(name?: string): void {
+    if (this.enforce === "off" || !this.enabled) return;
+    // The server mints the event id, so the client cannot know it in advance: this is a fresh
+    // ticket per call. The shed *rate* therefore matches the server's; the shed *set* does not.
+    // Proportional local shedding is the honest thing this can deliver, and saying so is better
+    // than implying an agreement that only holds when the caller supplies the id itself.
+    const verdict = this.limits.admit({ name, eventId: ticketId() });
+    if (verdict.stale) void this.refreshLimits();
+    if (verdict.ok) return;
+    if (this.recordBlocked) this.recordBlockedCall(name, verdict);
+    const msg = `LightTrack: ${name ?? "this call"} refused before it was made (${verdict.reason})`;
+    if (this.enforce === "warn") {
+      this.diag.warn("budget", `${msg}. enforce="warn", so the call is proceeding anyway.`);
+      return;
+    }
+    throw new LightTrackBudgetExceeded(verdict, `Use enforce: "warn" to log instead of throwing.`);
+  }
+
+  /** Record a call this client refused: real traffic, zero usage, and explicitly not spend. */
+  private recordBlockedCall(name: string | undefined, verdict: Admit): void {
+    this.track("lighttrack", "blocked", {
+      name,
+      status: "error",
+      error: `blocked locally by pre-spend admission (${verdict.reason})`,
+      tags: [BLOCKED_TAG],
+      metadata: { lt_admit_reason: verdict.reason, lt_retry_after_secs: verdict.retryAfterSecs },
+    });
+  }
+
+  /**
+   * Refresh the limit view from `GET /v1/limits/status`. Best-effort and deduplicated: a burst of
+   * stale verdicts triggers one poll, and a failure leaves the old view in place (fail open).
+   */
+  async refreshLimits(): Promise<void> {
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = (async () => {
+      try {
+        const q = this.project ? `?project=${encodeURIComponent(this.project)}` : "";
+        const body = (await this.request("GET", `/v1/limits/status${q}`)) as any;
+        const view = viewFromStatuses(body?.statuses);
+        if (view) this.limits.observe(view);
+      } catch {
+        /* best-effort: an unreachable status endpoint must not change what the app does */
+      } finally {
+        this.refreshing = undefined;
+      }
+    })();
+    return this.refreshing;
+  }
+
   /** Await all in-flight sends (call before process exit). */
   async flush(): Promise<void> {
     await Promise.allSettled([...this.inflight]);
@@ -576,13 +675,17 @@ export class LightTrack {
       signal: ac?.signal,
     })
       .then(async (resp) => {
-        if (resp.ok) return;
-        let detail = "";
+        let text = "";
         try {
-          detail = truncate(await resp.text());
+          text = await resp.text();
         } catch {
           /* body unreadable (aborted / already consumed) — the status alone is still actionable */
         }
+        // Every ingest response, accepted or refused, is evidence about the project's position.
+        // Reading it here is what makes `admit()` answer from the wall the app is actually near.
+        this.observeLimits(resp.status, resp.headers, text);
+        if (resp.ok) return;
+        const detail = truncate(text);
         this.diag.warn(
           diagnosticKind(resp.status),
           sendFailureMessage(this.baseUrl, path, `HTTP ${resp.status} ${detail}`, {
@@ -605,6 +708,29 @@ export class LightTrack {
       });
     this.inflight.add(p);
   }
+
+  /** Fold one ingest response into the admission cache. Never throws into the send path. */
+  private observeLimits(status: number, headers: Headers, text: string): void {
+    try {
+      let body: unknown;
+      try {
+        body = text ? JSON.parse(text) : undefined;
+      } catch {
+        /* a proxy's HTML, a truncated stream — the status and headers still carry the signal */
+      }
+      this.limits.observe(parseLimitView(status, headers, body));
+    } catch {
+      /* observing must never break a send */
+    }
+  }
+}
+
+/** Tag on the zero-usage event a locally-blocked call leaves behind. */
+export const BLOCKED_TAG = "lt_blocked_locally";
+
+/** A throwaway id for one shed-lottery draw. Not the event id — the server mints that. */
+function ticketId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /**
@@ -695,6 +821,16 @@ export { Diagnostics, diagnosticKind, noProjectMessage, sendFailureMessage } fro
 // The server's PII rule set, generated from crates/anon (see pii.ts).
 export { PII_RULES } from "./pii.ts";
 export type { PiiRule } from "./pii.ts";
+
+// Pre-spend admission: acting on those signals before the call (see admission.ts).
+export {
+  AdmissionCache,
+  LightTrackBudgetExceeded,
+  shedTicket,
+  viewFromStatuses,
+  DEFAULT_ADMISSION_TTL_MS,
+} from "./admission.ts";
+export type { Admit, AdmitQuery, AdmitReason, Enforce } from "./admission.ts";
 
 // Reading an ingest response's limit signals (see limits.ts).
 export { parseLimitView } from "./limits.ts";

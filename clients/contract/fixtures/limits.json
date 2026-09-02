@@ -360,5 +360,400 @@
         "binding_rule": null
       }
     }
+  ],
+  "admission_note": "What a client DOES with a limit view. Every cap the server has is record-side: it refuses to RECORD a call that already cost money. admit() is the client's half - a pure, no-I/O decision taken BEFORE the provider call, from the last view the SDK saw. It fails OPEN: an SDK that has never spoken to the server, or whose view has gone stale, admits. A telemetry client that blocks an app's LLM calls because it is itself confused is worse than one that records nothing.",
+  "admission": [
+    {
+      "name": "never-observed-admits",
+      "why": "Fail open. An SDK that has not yet spoken to the server knows nothing, and 'unknown' must never read as 'over budget' - that would make adding LightTrack an outage.",
+      "ttl_ms": 30000,
+      "observe": [],
+      "admit": {
+        "at_ms": 1000,
+        "name": null,
+        "event_id": null
+      },
+      "expect": {
+        "ok": true,
+        "reason": null,
+        "retry_after_secs": null,
+        "stale": false
+      }
+    },
+    {
+      "name": "a-429-refuses-for-the-window-it-advertised",
+      "why": "The whole point: the server said come back in 30s, so the next 30 seconds of provider calls are not made at all. Refusing locally is the only refusal that saves money - a server-side one arrives after the spend.",
+      "ttl_ms": 30000,
+      "observe": [
+        {
+          "at_ms": 0,
+          "status": 429,
+          "headers": {
+            "Retry-After": "30"
+          },
+          "body": {
+            "error": {
+              "code": "rate_limited",
+              "message": "over cap"
+            }
+          }
+        }
+      ],
+      "admit": {
+        "at_ms": 5000,
+        "name": null,
+        "event_id": null
+      },
+      "expect": {
+        "ok": false,
+        "reason": "retry_after",
+        "retry_after_secs": 25,
+        "stale": false
+      }
+    },
+    {
+      "name": "the-advertised-wait-actually-expires",
+      "why": "A back-off that never lifts is a broken client. At the end of the window admission resumes with no further round trip.",
+      "ttl_ms": 60000,
+      "observe": [
+        {
+          "at_ms": 0,
+          "status": 429,
+          "headers": {
+            "Retry-After": "30"
+          },
+          "body": {
+            "error": {
+              "code": "rate_limited",
+              "message": "over cap"
+            }
+          }
+        }
+      ],
+      "admit": {
+        "at_ms": 31000,
+        "name": null,
+        "event_id": null
+      },
+      "expect": {
+        "ok": true,
+        "reason": null,
+        "retry_after_secs": null,
+        "stale": false
+      }
+    },
+    {
+      "name": "an-accepted-write-clears-an-earlier-wait",
+      "why": "The cap can be raised, or the window can age out early. A 2xx is the server saying the refusal is over, and it outranks a schedule the client is still holding.",
+      "ttl_ms": 30000,
+      "observe": [
+        {
+          "at_ms": 0,
+          "status": 429,
+          "headers": {
+            "Retry-After": "3600"
+          },
+          "body": {
+            "error": {
+              "code": "rate_limited",
+              "message": "over cap"
+            }
+          }
+        },
+        {
+          "at_ms": 1000,
+          "status": 200,
+          "headers": {},
+          "body": {
+            "id": "01J8W9",
+            "project_id": "demo",
+            "ts": "2026-09-01T10:00:00.000000000Z",
+            "usage_ratio": 0.4
+          }
+        }
+      ],
+      "admit": {
+        "at_ms": 2000,
+        "name": null,
+        "event_id": null
+      },
+      "expect": {
+        "ok": true,
+        "reason": null,
+        "retry_after_secs": null,
+        "stale": false
+      }
+    },
+    {
+      "name": "at-the-cap-refuses-with-no-schedule",
+      "why": "usage_ratio >= 1.0 means the cap is reached. There is no advertised wait on an accepted write, so the refusal carries none - a made-up number would be a client inventing a back-off the server never promised.",
+      "ttl_ms": 30000,
+      "observe": [
+        {
+          "at_ms": 0,
+          "status": 200,
+          "headers": {},
+          "body": {
+            "id": "01J8W9",
+            "project_id": "demo",
+            "ts": "2026-09-01T10:00:00.000000000Z",
+            "usage_ratio": 1.0
+          }
+        }
+      ],
+      "admit": {
+        "at_ms": 1000,
+        "name": null,
+        "event_id": null
+      },
+      "expect": {
+        "ok": false,
+        "reason": "at_cap",
+        "retry_after_secs": null,
+        "stale": false
+      }
+    },
+    {
+      "name": "approaching-a-cap-is-not-reaching-it",
+      "why": "0.95 is a warning, not a wall. Refusing here would turn every soft-warning threshold into a hard one and quietly halve the budget an operator configured.",
+      "ttl_ms": 30000,
+      "observe": [
+        {
+          "at_ms": 0,
+          "status": 200,
+          "headers": {},
+          "body": {
+            "id": "01J8W9",
+            "project_id": "demo",
+            "ts": "2026-09-01T10:00:00.000000000Z",
+            "usage_ratio": 0.95
+          }
+        }
+      ],
+      "admit": {
+        "at_ms": 1000,
+        "name": null,
+        "event_id": null
+      },
+      "expect": {
+        "ok": true,
+        "reason": null,
+        "retry_after_secs": null,
+        "stale": false
+      }
+    },
+    {
+      "name": "the-shed-lottery-refuses-the-same-events-the-server-would",
+      "why": "Graduated shedding is a hash of (rule_id, event_id), not a coin flip. The client runs the server's own function on the binding rule, so a call the server would have shed is not made - and one it would have kept is.",
+      "ttl_ms": 30000,
+      "observe": [
+        {
+          "at_ms": 0,
+          "status": 200,
+          "headers": {},
+          "body": {
+            "id": "01J8W9",
+            "project_id": "demo",
+            "ts": "2026-09-01T10:00:00.000000000Z",
+            "usage_ratio": 0.8,
+            "shed_fraction": 0.4,
+            "binding_rule": "rule-hot"
+          }
+        }
+      ],
+      "admit": {
+        "at_ms": 1000,
+        "name": null,
+        "event_id": "ev-1"
+      },
+      "expect": {
+        "ok": false,
+        "reason": "shed",
+        "retry_after_secs": null,
+        "stale": false
+      }
+    },
+    {
+      "name": "an-event-outside-the-shed-set-still-goes",
+      "why": "The other half of the same lottery: shedding is proportional, not a stop. ev-3's ticket is above 0.4, so it is admitted while ev-1 is not.",
+      "ttl_ms": 30000,
+      "observe": [
+        {
+          "at_ms": 0,
+          "status": 200,
+          "headers": {},
+          "body": {
+            "id": "01J8W9",
+            "project_id": "demo",
+            "ts": "2026-09-01T10:00:00.000000000Z",
+            "usage_ratio": 0.8,
+            "shed_fraction": 0.4,
+            "binding_rule": "rule-hot"
+          }
+        }
+      ],
+      "admit": {
+        "at_ms": 1000,
+        "name": null,
+        "event_id": "ev-3"
+      },
+      "expect": {
+        "ok": true,
+        "reason": null,
+        "retry_after_secs": null,
+        "stale": false
+      }
+    },
+    {
+      "name": "a-name-scoped-cap-stops-only-that-call-site",
+      "why": "This is what binding_scope buys. A cap on the 'summarize' use-case must not stop 'translate' - applying the worst rule in the project to every call is how a scoped budget turns into a project-wide outage.",
+      "ttl_ms": 30000,
+      "observe": [
+        {
+          "at_ms": 0,
+          "status": 200,
+          "headers": {},
+          "body": {
+            "id": "01J8W9",
+            "project_id": "demo",
+            "ts": "2026-09-01T10:00:00.000000000Z",
+            "usage_ratio": 1.0,
+            "binding_scope": {
+              "kind": "name",
+              "value": "summarize"
+            },
+            "binding_rule": "rule-sum"
+          }
+        }
+      ],
+      "admit": {
+        "at_ms": 1000,
+        "name": "summarize",
+        "event_id": null
+      },
+      "expect": {
+        "ok": false,
+        "reason": "at_cap",
+        "retry_after_secs": null,
+        "stale": false
+      }
+    },
+    {
+      "name": "another-call-site-is-untouched-by-it",
+      "why": "Same observation, different call site: nothing is known about 'translate', so it admits.",
+      "ttl_ms": 30000,
+      "observe": [
+        {
+          "at_ms": 0,
+          "status": 200,
+          "headers": {},
+          "body": {
+            "id": "01J8W9",
+            "project_id": "demo",
+            "ts": "2026-09-01T10:00:00.000000000Z",
+            "usage_ratio": 1.0,
+            "binding_scope": {
+              "kind": "name",
+              "value": "summarize"
+            },
+            "binding_rule": "rule-sum"
+          }
+        }
+      ],
+      "admit": {
+        "at_ms": 1000,
+        "name": "translate",
+        "event_id": null
+      },
+      "expect": {
+        "ok": true,
+        "reason": null,
+        "retry_after_secs": null,
+        "stale": false
+      }
+    },
+    {
+      "name": "a-stale-view-admits-and-says-it-is-stale",
+      "why": "Past the TTL the cached numbers are no longer evidence. The verdict is admit, and `stale` is how the caller knows to refresh from GET /v1/limits/status rather than keep deciding from a view that has aged out.",
+      "ttl_ms": 30000,
+      "observe": [
+        {
+          "at_ms": 0,
+          "status": 200,
+          "headers": {},
+          "body": {
+            "id": "01J8W9",
+            "project_id": "demo",
+            "ts": "2026-09-01T10:00:00.000000000Z",
+            "usage_ratio": 1.0
+          }
+        }
+      ],
+      "admit": {
+        "at_ms": 60000,
+        "name": null,
+        "event_id": null
+      },
+      "expect": {
+        "ok": true,
+        "reason": null,
+        "retry_after_secs": null,
+        "stale": true
+      }
+    },
+    {
+      "name": "server-saturation-is-not-the-projects-budget",
+      "why": "503 overloaded carries a Retry-After too, but it means the INGEST endpoint is saturated. Pausing the app's LLM calls over that would be the observability tool causing the outage it exists to observe. Only a 429 arms the admission wait.",
+      "ttl_ms": 30000,
+      "observe": [
+        {
+          "at_ms": 0,
+          "status": 503,
+          "headers": {
+            "Retry-After": "30"
+          },
+          "body": {
+            "error": {
+              "code": "overloaded",
+              "message": "ingest queue is full"
+            }
+          }
+        }
+      ],
+      "admit": {
+        "at_ms": 1000,
+        "name": null,
+        "event_id": null
+      },
+      "expect": {
+        "ok": true,
+        "reason": null,
+        "retry_after_secs": null,
+        "stale": false
+      }
+    }
+  ],
+  "shed_lottery_note": "The §7c shed ticket: FNV-1a-shaped, over rule_id + 0x1f + event_id, finished with the SplitMix64 avalanche, top 53 bits over 2^53. Note the multiplier is the server's own 0x1000000001b3, not the textbook FNV prime 0x100000001b3 - a port that reaches for the standard constant produces a perfectly good hash that disagrees with the server on every event, which is exactly the failure this list exists to catch. Pinned here because a client running a different hash still sheds proportionally and still looks correct in aggregate. The Rust runner checks these values against lighttrack_core::shed_ticket - the server's own function - so the fixture cannot drift from it.",
+  "shed_lottery": [
+    {
+      "rule_id": "rule-hot",
+      "event_id": "ev-1",
+      "ticket": 0.00460697918405395
+    },
+    {
+      "rule_id": "rule-hot",
+      "event_id": "ev-2",
+      "ticket": 0.2976045718179592
+    },
+    {
+      "rule_id": "rule-hot",
+      "event_id": "ev-3",
+      "ticket": 0.4882438294649619
+    },
+    {
+      "rule_id": "",
+      "event_id": "ev-1",
+      "ticket": 0.6265611591037836
+    }
   ]
 }
