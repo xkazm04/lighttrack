@@ -1,8 +1,11 @@
 //! LightTrack core: the pure, I/O-free heart of the system.
 //!
-//! Everything here is shared by the `api`, `runner`, `mcp`, and `cli` crates:
-//! the normalized [`event::LlmEvent`] model, the [`pricing::PriceBook`] and cost
-//! calculation, per-project [`limits`] evaluation, and the [`score`] /benchmark types.
+//! Everything here is shared by every other crate in the workspace — `api`, the three store
+//! backends, `runner`, `mcp`, `cli`, `billing`, `responder`, `agent`, `contract` — and by the Rust
+//! client SDK, which reuses [`event::LlmEvent`] as its wire type so the payload cannot drift from
+//! the API. Here live the normalized event model, the [`pricing::PriceBook`] and cost calculation,
+//! per-project [`limits`] evaluation, and the [`score`] / benchmark types. One file per data type;
+//! `lib.rs` is the module list and the re-exports, nothing heavier.
 
 pub mod alert;
 pub mod alert_channel;
