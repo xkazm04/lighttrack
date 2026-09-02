@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/contract",
     "crates/core",
     "crates/store",
     "crates/store-pg",
@@ -24,6 +25,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/xkazm04/lighttrack"
 
 [workspace.dependencies]
+lighttrack-contract = { path = "crates/contract" }
 lighttrack-core = { path = "crates/core" }
 lighttrack-render = { path = "crates/render" }
 lighttrack-billing = { path = "crates/billing" }
