@@ -16,6 +16,7 @@ mod errors;
 mod prompts;
 mod prompts_tools;
 mod read;
+mod relay_tools;
 mod resources;
 mod rpc;
 mod schemas;

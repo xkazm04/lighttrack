@@ -15,6 +15,7 @@ mod admission;
 mod benchmarks;
 mod collective;
 mod datasets;
+mod devices;
 mod events;
 mod jobs;
 mod margin_policies;
@@ -39,10 +40,11 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use tokio::runtime::Runtime;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
-    JobCancel, JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project,
-    Prompt, PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
-    RollupQuery, RollupRow, Rubric, Schedule, Score, TraceSummary,
+    ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem,
+    Device, DeviceEligibility, Job, JobCancel, JobFinish, LeaseHeld, LimitRule, LimitScope,
+    LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayCancel, RelayOutcome,
+    RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score,
+    TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
@@ -109,6 +111,7 @@ impl PgStore {
         Surface::MarginPolicies,
         Surface::JobLeases,
         Surface::Relay,
+        Surface::Devices,
         // The hub runs here: a managed Postgres is where a public leaderboard is actually deployed,
         // so a 501 on `/v1/collective/*` was the gap that mattered most.
         Surface::Collective,
@@ -504,11 +507,17 @@ impl Store for PgStore {
     fn lease_relay_tasks(
         &self,
         device: &str,
+        capabilities: &[String],
         lease_secs: i64,
         max: usize,
     ) -> Result<Vec<RelayTask>> {
-        self.rt
-            .block_on(relay::lease(&self.pool, device, lease_secs, max))
+        self.rt.block_on(relay::lease(
+            &self.pool,
+            device,
+            capabilities,
+            lease_secs,
+            max,
+        ))
     }
     fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {
         self.rt.block_on(relay::sweep_dead(&self.pool))
@@ -647,5 +656,36 @@ impl Store for PgStore {
     fn list_prompt_versions(&self, prompt_id: &str) -> Result<Vec<PromptVersion>> {
         self.rt
             .block_on(prompts::list_versions(&self.pool, prompt_id))
+    }
+
+    // --- the relay device fleet (M18, see [`devices`]) ---
+    fn create_device(&self, d: &Device) -> Result<()> {
+        self.rt.block_on(devices::create(&self.pool, d))
+    }
+    fn get_device(&self, id: &str) -> Result<Option<Device>> {
+        self.rt.block_on(devices::get(&self.pool, id))
+    }
+    fn list_devices(&self, project: Option<&str>) -> Result<Vec<Device>> {
+        self.rt.block_on(devices::list(&self.pool, project))
+    }
+    fn find_device_by_key_prefix(&self, prefix: &str) -> Result<Option<Device>> {
+        self.rt
+            .block_on(devices::find_by_key_prefix(&self.pool, prefix))
+    }
+    fn touch_device(
+        &self,
+        id: &str,
+        capabilities: &[String],
+        agent_version: Option<&str>,
+    ) -> Result<()> {
+        self.rt
+            .block_on(devices::touch(&self.pool, id, capabilities, agent_version))
+    }
+    fn revoke_device(&self, id: &str) -> Result<bool> {
+        self.rt.block_on(devices::revoke(&self.pool, id))
+    }
+    fn count_eligible_devices(&self, action_type: &str) -> Result<DeviceEligibility> {
+        self.rt
+            .block_on(devices::count_eligible(&self.pool, action_type))
     }
 }

@@ -54,11 +54,16 @@ impl Client {
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
-    /// Lease up to `max` due tasks for `device`, held for `lease_secs`; the server long-polls up
-    /// to `wait_secs` before answering empty.
+    /// Lease up to `max` due tasks this device can run, held for `lease_secs`; the server
+    /// long-polls up to `wait_secs` before answering empty.
+    ///
+    /// `capabilities` is the device's own action inventory (M18) — the cloud filters the lease
+    /// against it, so an action never reaches a device whose library lacks it and burns an attempt
+    /// discovering that. There is no `device` argument any more: identity comes from the key, and
+    /// the name this agent used to assert was something the cloud wrote down as fact.
     pub(crate) fn lease(
         &self,
-        device: &str,
+        capabilities: &[String],
         max: usize,
         lease_secs: i64,
         wait_secs: u64,
@@ -74,7 +79,13 @@ impl Client {
         }
         let v = self.post(
             "/v1/relay/lease",
-            &json!({ "device": device, "max": max, "lease_secs": lease_secs, "wait_secs": wait_secs }),
+            &json!({
+                "capabilities": capabilities,
+                "agent_version": env!("CARGO_PKG_VERSION"),
+                "max": max,
+                "lease_secs": lease_secs,
+                "wait_secs": wait_secs,
+            }),
         )?;
         let r: Resp = serde_json::from_value(v).context("decoding leased tasks")?;
         Ok(Lease {

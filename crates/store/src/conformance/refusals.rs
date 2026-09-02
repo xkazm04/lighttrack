@@ -61,6 +61,7 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
         Surface::Maintenance => maintenance(store),
         Surface::Metrics => metrics(store),
         Surface::Pricing => pricing(store),
+        Surface::Devices => devices(store),
     };
 
     let uncovered: Vec<&str> = surface
@@ -230,7 +231,10 @@ fn relay(store: &dyn Store) -> Vec<&'static str> {
         "list_relay_tasks",
         store.list_relay_tasks(Some(&pid), None, 10),
     );
-    refused("lease_relay_tasks", store.lease_relay_tasks("dev-1", 60, 5));
+    refused(
+        "lease_relay_tasks",
+        store.lease_relay_tasks("dev-1", &[], 60, 5),
+    );
     refused("sweep_relay_dead", store.sweep_relay_dead());
     refused(
         "settle_relay_task",
@@ -396,4 +400,36 @@ fn pricing(store: &dyn Store) -> Vec<&'static str> {
         store.list_price_history("conformance", "none"),
     );
     vec!["list_unpriced", "fill_unpriced_cost", "list_price_history"]
+}
+
+/// A backend with no device table must refuse, never answer an empty fleet. "Nobody is enrolled" is
+/// a load-bearing answer on this surface — it is what admits a legacy shared-key deployment's
+/// traffic — so a backend that simply cannot store devices must not be able to say it by accident.
+fn devices(store: &dyn Store) -> Vec<&'static str> {
+    let d = super::devices::sample_device("refusal-probe", &["probe/*"]);
+    refused("create_device", store.create_device(&d));
+    refused("get_device", store.get_device(&d.id));
+    refused("list_devices", store.list_devices(Some(&new_id())));
+    refused(
+        "find_device_by_key_prefix",
+        store.find_device_by_key_prefix(&d.key_prefix),
+    );
+    refused(
+        "touch_device",
+        store.touch_device(&d.id, &d.capabilities, Some("0.0.0")),
+    );
+    refused("revoke_device", store.revoke_device(&d.id));
+    refused(
+        "count_eligible_devices",
+        store.count_eligible_devices("probe/thing"),
+    );
+    vec![
+        "create_device",
+        "get_device",
+        "list_devices",
+        "find_device_by_key_prefix",
+        "touch_device",
+        "revoke_device",
+        "count_eligible_devices",
+    ]
 }

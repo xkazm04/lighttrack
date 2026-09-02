@@ -152,11 +152,31 @@ pub fn verify_key(stored: &str, full_key: &str) -> bool {
     }
 }
 
+/// Scheme marker on a project API key.
+const KEY_SCHEME: &str = "lt";
+
+/// Scheme marker on a **relay device** key (M18). Distinct from [`KEY_SCHEME`] so the two can never
+/// be confused for one another: a device key that parsed as a project key would be looked up in the
+/// wrong table, and the miss would read as "bad credential" rather than "wrong kind of credential".
+/// The scheme is also what lets the device guard tell "this is a device key that failed" from "this
+/// is not a device key at all, try the legacy shared secret".
+pub const DEVICE_KEY_SCHEME: &str = "ltd";
+
 /// Generate a new API key (high-entropy, ~244 bits from two UUIDv4 secrets).
 pub fn generate_key() -> GeneratedKey {
+    generate_scheme(KEY_SCHEME)
+}
+
+/// Generate a new **device** key, `ltd_<prefix>_<secret>` — same entropy, same salted-digest
+/// storage, different scheme (see [`DEVICE_KEY_SCHEME`]). Shown to the operator once, at enrolment.
+pub fn generate_device_key() -> GeneratedKey {
+    generate_scheme(DEVICE_KEY_SCHEME)
+}
+
+fn generate_scheme(scheme: &str) -> GeneratedKey {
     let prefix = new_id().replace('-', "")[..8].to_string();
     let secret = format!("{}{}", new_id().replace('-', ""), new_id().replace('-', ""));
-    let full_key = format!("lt_{prefix}_{secret}");
+    let full_key = format!("{scheme}_{prefix}_{secret}");
     let key_hash = stored_hash(&full_key);
     GeneratedKey {
         prefix,
@@ -167,9 +187,21 @@ pub fn generate_key() -> GeneratedKey {
 
 /// Extract the `prefix` from a full key string `lt_<prefix>_<secret>`.
 pub fn prefix_of(full_key: &str) -> Option<String> {
+    scheme_prefix_of(KEY_SCHEME, full_key)
+}
+
+/// Extract the `prefix` from a device key `ltd_<prefix>_<secret>`, or `None` when the presented
+/// token is not a device key at all.
+pub fn device_prefix_of(full_key: &str) -> Option<String> {
+    scheme_prefix_of(DEVICE_KEY_SCHEME, full_key)
+}
+
+fn scheme_prefix_of(scheme: &str, full_key: &str) -> Option<String> {
     let mut parts = full_key.splitn(3, '_');
     match (parts.next(), parts.next(), parts.next()) {
-        (Some("lt"), Some(prefix), Some(_secret)) if !prefix.is_empty() => Some(prefix.to_string()),
+        (Some(s), Some(prefix), Some(_secret)) if s == scheme && !prefix.is_empty() => {
+            Some(prefix.to_string())
+        }
         _ => None,
     }
 }
@@ -185,6 +217,31 @@ mod tests {
         assert_eq!(prefix_of(&k.full_key).as_deref(), Some(k.prefix.as_str()));
         assert!(verify_key(&k.key_hash, &k.full_key));
         assert!(!verify_key(&k.key_hash, "lt_wrong_key"));
+    }
+
+    #[test]
+    fn a_device_key_and_a_project_key_are_never_mistaken_for_one_another() {
+        // The two schemes share the hashing and the entropy but not the namespace. A device key
+        // that parsed as a project key would be looked up in `api_keys`, and the miss would read as
+        // "bad credential" instead of "wrong kind of credential".
+        let d = generate_device_key();
+        assert!(d.full_key.starts_with("ltd_"));
+        assert_eq!(
+            device_prefix_of(&d.full_key).as_deref(),
+            Some(d.prefix.as_str())
+        );
+        assert!(verify_key(&d.key_hash, &d.full_key));
+        assert!(
+            prefix_of(&d.full_key).is_none(),
+            "a device key is not a project key"
+        );
+
+        let k = generate_key();
+        assert!(
+            device_prefix_of(&k.full_key).is_none(),
+            "a project key is not a device key — and this `None` is what makes the device guard \
+             fall through to the legacy shared secret rather than 401 on a valid admin key"
+        );
     }
 
     #[test]

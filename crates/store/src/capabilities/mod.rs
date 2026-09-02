@@ -90,6 +90,14 @@ pub enum Surface {
     /// rows, and an operator told "0 filled" by a backend that never looked would draw exactly the
     /// wrong conclusion.
     Pricing,
+    /// The enrolled relay device fleet (M18): hashed per-device keys, advertised capabilities,
+    /// liveness, and the eligibility count the enqueue door admits against.
+    ///
+    /// Its own surface rather than part of [`Surface::Relay`], because a backend can host the task
+    /// queue and have no `devices` table — and "nobody is enrolled" is a *load-bearing* answer
+    /// there (it is what admits a legacy shared-key deployment's traffic), so it must never be
+    /// something a missing table says by accident.
+    Devices,
 }
 
 impl Surface {
@@ -116,6 +124,7 @@ impl Surface {
         Surface::Maintenance,
         Surface::Metrics,
         Surface::Pricing,
+        Surface::Devices,
     ];
 
     /// Stable wire/doc name (`snake_case`, matching the `Serialize` impl).
@@ -142,6 +151,7 @@ impl Surface {
             Surface::Maintenance => "maintenance",
             Surface::Metrics => "metrics",
             Surface::Pricing => "pricing",
+            Surface::Devices => "devices",
         }
     }
 
@@ -362,6 +372,18 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
     (
         Surface::Pricing,
         &["list_unpriced", "fill_unpriced_cost", "list_price_history"],
+    ),
+    (
+        Surface::Devices,
+        &[
+            "create_device",
+            "get_device",
+            "list_devices",
+            "find_device_by_key_prefix",
+            "touch_device",
+            "revoke_device",
+            "count_eligible_devices",
+        ],
     ),
 ];
 

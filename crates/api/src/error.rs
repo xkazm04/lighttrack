@@ -49,6 +49,14 @@ pub(crate) enum ErrorCode {
     KeyExpired,
     /// The referenced resource does not exist. HTTP 404.
     NotFound,
+    /// A relay enqueue names an `action_type` no enrolled device advertises. HTTP 422 (M18).
+    ///
+    /// Its own code rather than `bad_request`, because the request is *well-formed* and the fix is
+    /// not necessarily in it: either the action type is misspelled, or the fleet has not been told
+    /// it can run it. A 400 would send the caller looking at their JSON. The failure it replaces was
+    /// worse than either — the task was accepted, handed to devices that had no such action, burned
+    /// every attempt on "no action", and dead-lettered hours later.
+    RelayUnroutable,
     /// The request conflicts with current state (duplicate, frozen dataset, gated regression). HTTP 409.
     Conflict,
     /// A usage/ingest limit has been exceeded. HTTP 429.
@@ -98,6 +106,7 @@ impl ErrorCode {
             ErrorCode::Unauthorized | ErrorCode::KeyExpired => StatusCode::UNAUTHORIZED,
             ErrorCode::Forbidden | ErrorCode::ProjectDisabled => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
+            ErrorCode::RelayUnroutable => StatusCode::UNPROCESSABLE_ENTITY,
             ErrorCode::Conflict => StatusCode::CONFLICT,
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::Overloaded => StatusCode::SERVICE_UNAVAILABLE,
@@ -118,6 +127,7 @@ impl ErrorCode {
             ErrorCode::ProjectDisabled => "project_disabled",
             ErrorCode::KeyExpired => "key_expired",
             ErrorCode::NotFound => "not_found",
+            ErrorCode::RelayUnroutable => "relay_unroutable",
             ErrorCode::Conflict => "conflict",
             ErrorCode::RateLimited => "rate_limited",
             ErrorCode::Overloaded => "overloaded",
@@ -182,6 +192,10 @@ impl ApiError {
     }
     pub(crate) fn conflict(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Conflict, m)
+    }
+    /// A relay enqueue nothing in the fleet could ever run (M18). See [`ErrorCode::RelayUnroutable`].
+    pub(crate) fn relay_unroutable(m: impl Into<String>) -> Self {
+        Self::new(ErrorCode::RelayUnroutable, m)
     }
     /// Whether this is a backend declining a surface it does not implement (HTTP 501), as opposed to
     /// a genuine failure. Background sweeps use it to distinguish "this deployment can never do

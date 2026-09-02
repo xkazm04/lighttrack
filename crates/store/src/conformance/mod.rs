@@ -19,6 +19,7 @@
 mod admission;
 mod catalog;
 mod collective;
+mod devices;
 mod driver;
 mod events;
 mod fixtures;

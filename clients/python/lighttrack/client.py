@@ -177,7 +177,37 @@ def _error_body(e: "urllib.error.HTTPError") -> str:
 
 class RelayError(Exception):
     """A relay call failed (network error or non-2xx). Unlike telemetry, relay enqueue/status is a
-    functional call the app depends on, so failures raise instead of being swallowed."""
+    functional call the app depends on, so failures raise instead of being swallowed.
+
+    `code` carries the API's own error code when the response had one, so a caller can act on the
+    *kind* of failure instead of pattern-matching a message. The one worth branching on is
+    `relay_unroutable` (`is_unroutable`): no enrolled device advertises that action type, so unlike
+    a timeout or a 503 the call will not succeed on a retry -- the fix is the action type's
+    spelling, or a device's advertised capabilities."""
+
+    def __init__(self, message: str, *, code: Optional[str] = None,
+                 status: Optional[int] = None):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+    @property
+    def is_unroutable(self) -> bool:
+        """Whether nothing in the fleet can ever run that action type (HTTP 422)."""
+        return self.code == "relay_unroutable"
+
+
+def error_code(body: str) -> Optional[str]:
+    """The API's error code out of an error body, or None when the body is not one.
+
+    Deliberately total: an error response is exactly when a body is least likely to be well-formed
+    (a proxy's HTML, a truncated stream), and a parse failure here must degrade to "no code" rather
+    than replace the real failure with a JSON error nobody can act on."""
+    try:
+        code = json.loads(body).get("error", {}).get("code")
+    except Exception:
+        return None
+    return code if isinstance(code, str) else None
 
 
 class LightTrack:
@@ -305,7 +335,14 @@ class LightTrack:
                    project: Optional[str] = None) -> dict:
         """Enqueue a task for the enrolled local device (executed via Claude Code, offline-tolerant).
         Synchronous; returns the task dict (re-enqueueing an `idempotency_key` returns the existing
-        task). Raises `RelayError` on failure."""
+        task). Raises `RelayError` on failure.
+
+        The returned task carries an `admission` verdict (M18): `{"verdict": "queued",
+        "eligible_devices": N}` says how much of the fleet advertises this action type -- `0` means
+        no devices are enrolled at all (the legacy single-device deployment), never that an enrolled
+        fleet declined it. An action type nothing advertises does not come back as a task at all: it
+        raises `RelayError` with `is_unroutable`, because a queued task nothing can lease is a
+        slow-motion dead letter."""
         body: dict = {"action_type": action_type}
         if payload is not None:
             body["payload"] = payload
@@ -465,7 +502,12 @@ class LightTrack:
             with urllib.request.urlopen(req, timeout=max(self.timeout, 10.0)) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            raise RelayError(f"{method} {path} -> HTTP {e.code}: {e.read().decode('utf-8', 'replace')}") from e
+            body = e.read().decode("utf-8", "replace")
+            raise RelayError(
+                f"{method} {path} -> HTTP {e.code}: {body}",
+                code=error_code(body),
+                status=e.code,
+            ) from e
         except Exception as e:
             raise RelayError(f"{method} {path} failed: {e}") from e
 

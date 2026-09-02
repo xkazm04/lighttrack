@@ -51,7 +51,7 @@ pub(super) fn settled(v: RelaySettle, what: &str) -> RelayTask {
 /// shared DB the batch may carry other rows.
 pub(super) fn leased_ours(store: &dyn Store, id: &str, secs: i64) -> Result<Option<RelayTask>> {
     Ok(store
-        .lease_relay_tasks("conf-dev", secs, 20)?
+        .lease_relay_tasks("conf-dev", &[], secs, 20)?
         .into_iter()
         .find(|t| t.id == id))
 }

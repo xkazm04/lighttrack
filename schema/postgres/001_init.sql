@@ -470,3 +470,32 @@ BEGIN
   END IF;
 END
 $m26pk$;
+
+-- M18 - the enrolled relay device fleet. Self-contained block, appended.
+-- ---------------------------------------------------------------------------
+
+-- Who may lease relay tasks, and what each one can actually run. The relay used
+-- to have exactly one anonymous device: a shared LIGHTTRACK_RELAY_DEVICE_KEY
+-- authorized every lease and the `device` written onto a task was whatever the
+-- client asserted, so identity was un-revocable and routing was blind - a task
+-- went to whoever asked first, including a device whose action library lacked
+-- the action, which burned a real attempt and then a five-hour retry interval to
+-- do it again. `key_hash` is the api_keys scheme verbatim ("<salt>:<sha256hex>");
+-- the raw `ltd_<prefix>_<secret>` is shown once and never stored. `capabilities`
+-- is a JSON array of action types / "<ns>/*" prefixes - EMPTY means "everything",
+-- the back-compat answer a pre-M18 agent gives. `relay_tasks.device` keeps its
+-- column and now carries this table's `id`.
+CREATE TABLE IF NOT EXISTS devices (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT,
+  name          TEXT NOT NULL,
+  key_prefix    TEXT NOT NULL,
+  key_hash      TEXT NOT NULL,
+  capabilities  TEXT NOT NULL DEFAULT '[]',
+  last_seen_at  TEXT,
+  agent_version TEXT,
+  created_at    TEXT NOT NULL,
+  revoked       BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_prefix ON devices(key_prefix);
+CREATE INDEX IF NOT EXISTS idx_devices_project ON devices(project_id);

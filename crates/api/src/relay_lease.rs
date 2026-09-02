@@ -18,7 +18,7 @@ use lighttrack_core::{LeaseHeld, RelayCancel, RelayTask};
 use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin};
-use crate::relay::ensure_device;
+use crate::relay_devices::{ensure_device, DeviceIdentity};
 use crate::state::{spawn_db, AppState};
 
 /// Bounds on a requested lease. The ceiling is no longer "the longest a run may take" — a renewing
@@ -37,8 +37,18 @@ fn renew_secs(lease_secs: i64) -> u64 {
 
 #[derive(Deserialize)]
 pub(crate) struct LeaseReq {
-    #[serde(default = "default_device")]
-    device: String,
+    /// What this device can actually run: exact action types, or `"<ns>/*"` (M18). The lease is
+    /// narrowed to them, so an action never reaches a device whose library lacks it.
+    ///
+    /// **Empty means no filter**, which is what a pre-M18 agent and the legacy shared key send: a
+    /// device that suddenly leased nothing after an upgrade would be a worse failure than an
+    /// unfiltered one.
+    #[serde(default)]
+    capabilities: Vec<String>,
+    /// The `lt-agent` version, recorded on the device so an operator can tell an un-upgraded fleet
+    /// from an upgraded one.
+    #[serde(default)]
+    agent_version: Option<String>,
     #[serde(default = "default_max")]
     max: usize,
     #[serde(default = "default_lease_secs")]
@@ -47,10 +57,6 @@ pub(crate) struct LeaseReq {
     /// immediately). Cuts pickup latency without shrinking the device's poll interval.
     #[serde(default)]
     wait_secs: u64,
-}
-
-fn default_device() -> String {
-    "default".to_string()
 }
 
 fn default_max() -> usize {
@@ -78,7 +84,16 @@ pub(crate) async fn lease_tasks(
     headers: HeaderMap,
     Json(req): Json<LeaseReq>,
 ) -> Result<Json<LeaseResp>, ApiError> {
-    ensure_device(&st, &headers).await?;
+    let identity = ensure_device(&st, &headers).await?;
+    // Identity comes from the KEY, never from the body (M18). The `device` field callers used to
+    // send was a client assertion the cloud wrote down as fact, so the record of which machine ran
+    // what was decoration; it is ignored now rather than rejected, so an older agent still leases.
+    let device = identity.task_device();
+    let capabilities = req.capabilities.clone();
+    // The heartbeat happens once per lease request, before the long poll: liveness must not wait on
+    // there being work, or a healthy idle device would read as a dead one — the same rule that keeps
+    // progress off the renewal endpoint.
+    touch(&st, &identity, &capabilities, req.agent_version.as_deref()).await;
     let lease_secs = req.lease_secs.clamp(MIN_LEASE_SECS, MAX_LEASE_SECS);
     let max = req.max.clamp(1, 20);
     let deadline =
@@ -94,8 +109,10 @@ pub(crate) async fn lease_tasks(
             st.alerts.notify_relay_dead(&dead);
         }
         let store = st.store.clone();
-        let device = req.device.clone();
-        let tasks = spawn_db(move || store.lease_relay_tasks(&device, lease_secs, max)).await?;
+        let device = device.clone();
+        let caps = capabilities.clone();
+        let tasks =
+            spawn_db(move || store.lease_relay_tasks(&device, &caps, lease_secs, max)).await?;
         if !tasks.is_empty() || std::time::Instant::now() >= deadline {
             return Ok(Json(LeaseResp {
                 tasks,
@@ -104,6 +121,28 @@ pub(crate) async fn lease_tasks(
             }));
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// Record that an enrolled device is alive, and what it now advertises. Best-effort: a fleet the
+/// backend cannot store must not stop the relay working, and this is bookkeeping, not the lease.
+async fn touch(
+    st: &AppState,
+    identity: &DeviceIdentity,
+    capabilities: &[String],
+    agent_version: Option<&str>,
+) {
+    let DeviceIdentity::Enrolled(device) = identity else {
+        return; // the legacy shared key has no row to touch
+    };
+    let store = st.store.clone();
+    let (id, caps, ver) = (
+        device.id.clone(),
+        capabilities.to_vec(),
+        agent_version.map(str::to_string),
+    );
+    if let Err(e) = spawn_db(move || store.touch_device(&id, &caps, ver.as_deref())).await {
+        tracing::debug!(device = %device.id, error = %e, "relay lease: device heartbeat not recorded");
     }
 }
 

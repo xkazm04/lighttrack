@@ -14,29 +14,14 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use lighttrack_core::{
-    new_id, RelayStatus, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS, RELAY_DEFAULT_RETRY_INTERVAL_SECS,
+    new_id, RelayAdmission, RelayStatus, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS,
+    RELAY_DEFAULT_RETRY_INTERVAL_SECS,
 };
 
 use crate::auth::Principal;
 use crate::error::ApiError;
-use crate::guards::{
-    authenticate, bearer, ensure_can_admin, resolve_ingest_project, resolve_read_project,
-};
+use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
 use crate::state::{spawn_db, AppState};
-
-/// Device endpoints (lease / result) authenticate with the enrolled device key
-/// (`LIGHTTRACK_RELAY_DEVICE_KEY`); an admin principal (or dev mode) also passes, for local testing.
-pub(crate) async fn ensure_device(st: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
-    if let (Some(expected), Some(token)) = (st.relay_device_key.as_ref(), bearer(headers)) {
-        // Constant-time for the same reason the admin key is: this is an operator-chosen secret
-        // compared against raw presented bytes, so a short-circuiting `==` is a byte-at-a-time
-        // oracle. A *wrong* device key falls through to `authenticate`, which meters the failure.
-        if crate::auth::secret_eq(&token, expected) {
-            return Ok(());
-        }
-    }
-    ensure_can_admin(&authenticate(st, headers).await?)
-}
 
 #[derive(Deserialize)]
 pub(crate) struct EnqueueReq {
@@ -54,25 +39,73 @@ pub(crate) struct EnqueueReq {
     retry_interval_secs: Option<u32>,
 }
 
+/// An accepted enqueue: the task, plus **why it was accepted**.
+///
+/// The task is flattened so every existing caller (the SDKs read `id`/`status` straight off the
+/// body) keeps working unchanged, and `admission` is the new field beside it.
+#[derive(serde::Serialize)]
+pub(crate) struct EnqueueResp {
+    #[serde(flatten)]
+    task: RelayTask,
+    /// Always `queued { eligible_devices }` here — a refusal never reaches this shape, it is a 422.
+    /// Carried anyway because `eligible_devices: 1` and `eligible_devices: 6` are very different
+    /// things to have just enqueued against.
+    admission: RelayAdmission,
+}
+
+/// Ask the fleet whether anything could run this action type.
+///
+/// Two answers are deliberately identical here: a backend that does not serve the device fleet, and
+/// a deployment with nobody enrolled. Both are "there is nothing to route against", which admits —
+/// the legacy shared-key relay is exactly that shape, and refusing its traffic would be this
+/// feature breaking the thing it hardens.
+async fn admit(st: &AppState, action_type: &str) -> RelayAdmission {
+    let store = st.store.clone();
+    let at = action_type.to_string();
+    match spawn_db(move || store.count_eligible_devices(&at)).await {
+        Ok(e) => e.admit(action_type),
+        Err(e) => {
+            tracing::debug!(error = %e, "relay enqueue: device fleet unavailable; admitting");
+            RelayAdmission::Queued {
+                eligible_devices: 0,
+            }
+        }
+    }
+}
+
 pub(crate) async fn enqueue_task(
     State(st): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<EnqueueReq>,
-) -> Result<Json<RelayTask>, ApiError> {
+) -> Result<Json<EnqueueResp>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_ingest_project(&p, &req.project_id)?;
     if req.action_type.trim().is_empty() {
         return Err(ApiError::bad_request("action_type is required"));
     }
     // Idempotent enqueue: the same (project, key) returns the existing task instead of a duplicate.
+    // Checked BEFORE admission, so a re-submitted key keeps answering with the task that exists
+    // even if the fleet has since changed shape — idempotency is about the record, not the roster.
     if let Some(key) = req.idempotency_key.clone() {
         let store = st.store.clone();
         let project2 = project.clone();
         if let Some(existing) =
             spawn_db(move || store.find_relay_task_by_key(&project2, &key)).await?
         {
-            return Ok(Json(existing));
+            let admission = admit(&st, &existing.action_type).await;
+            return Ok(Json(EnqueueResp {
+                task: existing,
+                admission,
+            }));
         }
+    }
+    // Admission (M18). Validation used to be "action_type is non-empty", so a typo was
+    // indistinguishable from a healthy backlog: the task sat queued, was handed to devices that had
+    // no such action, burned every attempt on "no action", and dead-lettered hours later. A 422
+    // here costs the caller one round trip and names the fix.
+    let admission = admit(&st, req.action_type.trim()).await;
+    if let RelayAdmission::Refused { reason } = &admission {
+        return Err(ApiError::relay_unroutable(reason.clone()));
     }
     let now = Utc::now();
     let task = RelayTask {
@@ -106,7 +139,7 @@ pub(crate) async fn enqueue_task(
     let store = st.store.clone();
     let t2 = task.clone();
     spawn_db(move || store.create_relay_task(&t2)).await?;
-    Ok(Json(task))
+    Ok(Json(EnqueueResp { task, admission }))
 }
 
 pub(crate) async fn get_task(

@@ -6,12 +6,16 @@ use serde_json::{json, Value};
 use crate::client::Client;
 use crate::errors::map_error;
 use crate::rpc::{more_results_line, tool_rendered, tool_text};
-use crate::{prompts_tools, read, write};
+use crate::{prompts_tools, read, relay_tools, write};
 
 /// The `tools/list` payload. Write tools appear only when `allow_writes`.
 pub(crate) fn list(allow_writes: bool) -> Value {
     let mut tools = read::tools();
     tools.extend(prompts_tools::read_tools());
+    // Relay reads are unconditional: they are side-effect-free, and the relay's WRITE surface
+    // (enqueue, cancel, and above all device enrolment, which mints a key) is deliberately absent
+    // from MCP entirely rather than gated behind the write flag.
+    tools.extend(relay_tools::read_tools());
     if allow_writes {
         tools.extend(write::tools());
         tools.extend(prompts_tools::write_tools());
@@ -91,6 +95,8 @@ fn call_inner(c: &Client, allow_writes: bool, params: &Value) -> Value {
     let outcome = if let Some(r) = read::dispatch(c, name, &args) {
         r
     } else if let Some(r) = prompts_tools::read_dispatch(c, name, &args) {
+        r
+    } else if let Some(r) = relay_tools::read_dispatch(c, name, &args) {
         r
     } else if write::is_write_tool(name) || prompts_tools::is_write_tool(name) {
         if allow_writes {

@@ -1,4 +1,5 @@
-//! The scheduled-work sweep: enqueue due schedules, and reap dead relay leases.
+//! The scheduled-work sweep: enqueue due schedules, reap dead relay leases, and report relay work
+//! no enrolled device can run (M18, `relay_unroutable`).
 //!
 //! **Where it runs.** In the API process, for the same reason `forecast_sweep` does: the runner is
 //! an optional companion (a Cloud Run deployment ships the API alone), so recurrence hosted there
@@ -75,10 +76,15 @@ pub(crate) fn spawn(st: AppState, cfg: Option<SweepConfig>) {
     });
 }
 
-/// One pass: reap dead relay leases, then fire every due schedule. Never panics and never
+/// One pass: reap dead relay leases, report unroutable relay work, then fire every due schedule.
+/// Never panics and never
 /// propagates — a broken schedule must not stop the others, or the loop.
 pub(crate) async fn sweep_once(st: &AppState) {
     reap_relay(st).await;
+    // M18: work with nobody left to run it. The reap above catches a device that died mid-run; this
+    // catches the queue that has no eligible device at all — which looks identical to a healthy
+    // backlog from the outside, and stays that way until somebody notices nothing has moved.
+    crate::relay_unroutable::sweep_once(st).await;
     let store = st.store.clone();
     let due = match spawn_db(move || store.due_schedules(Utc::now())).await {
         Ok(v) => v,

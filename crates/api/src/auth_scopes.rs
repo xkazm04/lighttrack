@@ -146,6 +146,13 @@ mod table {
         // Cancel is the operator's, not the device's: the task's OWN project key reaches it (the
         // handler checks ownership), which is why it is not Admin-only like the device doors.
         r("/v1/relay/tasks/:id/cancel", NoMethod, MANAGE),
+        // Device enrolment (M18) is admin-only in both directions, and `POST` mints a secret — so
+        // it is also one of the routes that must never be reachable over MCP: a key in a tool
+        // result is a key in a transcript. `GET` is admin rather than `READ` because the fleet is
+        // operator infrastructure, not one project's data: a project key that could enumerate every
+        // enrolled device would be reading across tenants.
+        r("/v1/relay/devices", Admin, Admin),
+        r("/v1/relay/devices/:id", NoMethod, Admin),
         r("/v1/revenue", NoMethod, Admin),
         // Admin-only, and never over MCP: this restates stored money in bulk.
         r("/v1/revenue/reprice", NoMethod, Admin),

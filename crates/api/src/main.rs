@@ -68,6 +68,9 @@
 //!   GET  /v1/schedules/:id/runs          the jobs one schedule has produced
 //!   POST /v1/relay/tasks                 enqueue a device task (GET ?project=&status=&limit= lists)
 //!   GET  /v1/relay/tasks/:id             task status/result (the originating app polls this)
+//!   POST /v1/relay/devices               enrol a device (admin; the key is shown ONCE, never on MCP)
+//!   GET  /v1/relay/devices               the fleet + liveness (admin)
+//!   DELETE /v1/relay/devices/:id         revoke a device (admin)
 //!   POST /v1/relay/lease                 device: lease due tasks (device key; outbound-only).
 //!                                        Answers { tasks, lease_secs, renew_secs } — the TTL is
 //!                                        detection latency now, not "how long a run may take"
@@ -112,7 +115,10 @@
 //!      LIGHTTRACK_AUTH_THROTTLE_MAX_SOURCES (bound on tracked sources; default 4096),
 //!      LIGHTTRACK_AUTH_TRUSTED_PROXY_HOPS (trust X-Forwarded-For from this many proxies in front of
 //!        the instance; default 0 = never — an untrusted XFF both evades and poisons the throttle),
-//!      LIGHTTRACK_RELAY_DEVICE_KEY (bearer key of the enrolled local device — relay lease/result),
+//!      LIGHTTRACK_RELAY_DEVICE_KEY (DEPRECATED shared single-device relay key — enrol devices via
+//!        POST /v1/relay/devices instead; kept as an all-capability fallback for one release),
+//!      LIGHTTRACK_RELAY_UNROUTABLE_SECS (how long a queued task with no eligible device waits
+//!        before the sweep raises relay_task_unroutable; default 900, 0 = off),
 //!      LIGHTTRACK_RELAY_FLAT_COST_USD (fixed cost stamped per relay run event; default 1.0),
 //!      LIGHTTRACK_ALERT_WEBHOOK / LIGHTTRACK_ALERT_NTFY / LIGHTTRACK_ALERT_COOLDOWN_SECS (see alerts),
 //!      LIGHTTRACK_FORECAST_SWEEP_SECS (cadence of the scheduled budget-ETA / margin-erosion alert
@@ -143,6 +149,7 @@
 //!      whose per-model `aliases` lists are the declared collapses since M8).
 
 mod alerts;
+mod alerts_relay;
 mod auth;
 mod auth_scopes;
 mod auth_throttle;
@@ -182,8 +189,10 @@ mod redact;
 mod redaction;
 mod rejections;
 mod relay;
+mod relay_devices;
 mod relay_lease;
 mod relay_result;
+mod relay_unroutable;
 mod revenue;
 mod revenue_reprice;
 mod rollup;
@@ -410,6 +419,7 @@ async fn main() -> anyhow::Result<()> {
     // block you cannot skim past, so that one stays a raw multi-line stderr shout rather than
     // becoming a JSON string with `\n`s in it.
     auth::warn_if_unenforced(state.auth_mode);
+    relay_devices::warn_if_legacy_key(state.relay_device_key.is_some());
 
     // Pre-emptive forecast alerts on a timer (off unless configured). Detached: it never shares a
     // task with a request, and its store reads go to the blocking pool like any handler's.
@@ -621,6 +631,14 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/relay/tasks/:id/cancel", post(relay_lease::cancel_task))
         .route("/v1/relay/lease", post(relay_lease::lease_tasks))
+        .route(
+            "/v1/relay/devices",
+            post(relay_devices::create_device).get(relay_devices::list_devices),
+        )
+        .route(
+            "/v1/relay/devices/:id",
+            delete(relay_devices::revoke_device),
+        )
         .route("/v1/revenue", post(revenue::post_revenue))
         .route("/v1/revenue/reprice", post(revenue_reprice::post_reprice))
         .route("/v1/margin", get(revenue::get_margin))

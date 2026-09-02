@@ -10,6 +10,7 @@ pub mod calibration;
 pub mod collective;
 pub mod customer;
 pub mod dataset;
+pub mod device;
 pub mod error;
 pub mod event;
 pub mod forecast;
@@ -51,6 +52,7 @@ pub use collective::{
 };
 pub use customer::{BillingProduct, Customer};
 pub use dataset::{Dataset, DatasetItem};
+pub use device::{capability_matches, Device, DeviceEligibility, RelayAdmission};
 pub use error::LtError;
 pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};

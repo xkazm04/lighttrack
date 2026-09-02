@@ -9,6 +9,12 @@
 //! and does not deliver: its result would land on a task the cloud has already handed to somebody
 //! else, and — unlike a stale write to a database row — the delivery half of an action is a
 //! connector call the cloud cannot take back.
+//!
+//! Since M18 each lease also carries this device's **action inventory**, so the cloud hands it only
+//! work it can actually run. The alternative was what shipped before: a device leased anything due,
+//! discovered the action folder was missing, and burned a real attempt plus a five-hour retry
+//! interval on that discovery — repeatedly, since nothing about the failure told the cloud to route
+//! the task elsewhere.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -34,9 +40,13 @@ pub(crate) fn run(cfg: &AgentConfig, once: bool) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
 
     loop {
+        // Re-enumerated each round rather than once at startup: an operator who adds an action
+        // folder should not have to restart the agent for the cloud to start routing that work to
+        // it. One directory walk per poll round is nothing beside a Claude Code run.
+        let capabilities = crate::inventory::inventory(&cfg.actions_dir);
         let mut worked = false;
         for client in &clients {
-            match client.lease(&cfg.device, cfg.max_batch, cfg.lease_secs, cfg.wait_secs) {
+            match client.lease(&capabilities, cfg.max_batch, cfg.lease_secs, cfg.wait_secs) {
                 Ok(lease) => {
                     for task in lease.tasks {
                         worked = true;

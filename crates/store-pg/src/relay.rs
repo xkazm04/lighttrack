@@ -13,6 +13,7 @@ use sqlx::Row;
 use lighttrack_core::{RelayStatus, RelayTask, RELAY_ERROR_DEVICE_LOST, RELAY_MAX_STALE_RECLAIMS};
 use lighttrack_store::Result;
 
+use crate::devices::CapabilityFilter;
 use crate::util::{fmt_ts, json_or_null, parse_ts, pgerr, val_or_null};
 
 pub(crate) const COLS: &str =
@@ -124,33 +125,43 @@ pub(crate) async fn sweep_dead(pool: &PgPool) -> Result<Vec<RelayTask>> {
 pub(crate) async fn lease(
     pool: &PgPool,
     device: &str,
+    capabilities: &[String],
     lease_secs: i64,
     max: usize,
 ) -> Result<Vec<RelayTask>> {
     let now = Utc::now();
     let now_s = fmt_ts(now);
     let deadline = fmt_ts(now + Duration::seconds(lease_secs.max(0)));
-    let rows = sqlx::query(&format!(
+    // The capability narrowing goes INSIDE the sub-select, beside the due/expired predicates and
+    // the `FOR UPDATE SKIP LOCKED`: it is part of what makes a task leasable *by this device*, not
+    // a filter on rows already claimed. Applied outside, the `UPDATE` would still have stamped its
+    // fence on the tasks it then dropped.
+    let caps = CapabilityFilter::build(capabilities, 7);
+    let sql = format!(
         "UPDATE relay_tasks SET status='leased', device=$1, lease_deadline=$2, lease_fence=$3, \
              attempts=attempts+1, progress=NULL, updated_at=$3, \
              stale_reclaims = stale_reclaims + (CASE WHEN status='leased' THEN 1 ELSE 0 END), \
              error = CASE WHEN status='leased' THEN $5 ELSE error END \
          WHERE id IN (SELECT id FROM relay_tasks \
-                      WHERE (status='queued' AND next_attempt_at <= $3) \
+                      WHERE ((status='queued' AND next_attempt_at <= $3) \
                          OR (status='leased' AND lease_deadline < $3 \
-                             AND failures < max_attempts AND stale_reclaims < $6) \
+                             AND failures < max_attempts AND stale_reclaims < $6)) \
+                        AND {} \
                       ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT $4) \
-         RETURNING {COLS}"
-    ))
-    .bind(device.to_string())
-    .bind(deadline)
-    .bind(now_s)
-    .bind(max as i64)
-    .bind(RELAY_ERROR_DEVICE_LOST)
-    .bind(RELAY_MAX_STALE_RECLAIMS as i64)
-    .fetch_all(pool)
-    .await
-    .map_err(pgerr)?;
+         RETURNING {COLS}",
+        caps.clause
+    );
+    let mut q = sqlx::query(&sql)
+        .bind(device.to_string())
+        .bind(deadline)
+        .bind(now_s)
+        .bind(max as i64)
+        .bind(RELAY_ERROR_DEVICE_LOST)
+        .bind(RELAY_MAX_STALE_RECLAIMS as i64);
+    for v in &caps.values {
+        q = q.bind(v.clone());
+    }
+    let rows = q.fetch_all(pool).await.map_err(pgerr)?;
     rows.iter().map(from_row).collect()
 }
 

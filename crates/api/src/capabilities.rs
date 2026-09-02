@@ -139,6 +139,9 @@ fn consequence(s: Surface) -> &'static str {
         }
         Surface::Prompts => "The prompt registry (/v1/projects/:id/prompts) is unavailable.",
         Surface::Relay => "The device relay queue (/v1/relay/*) is unavailable.",
+        Surface::Devices => {
+            "Device enrolment (/v1/relay/devices) is unavailable — relay work here can only be              driven by the deprecated shared LIGHTTRACK_RELAY_DEVICE_KEY, which cannot be revoked              per machine, and leases are NOT filtered by what a device can actually run."
+        }
         Surface::Collective => "The collective leaderboard hub cannot store contributions here.",
         Surface::ProjectAdmin => {
             "PUT /v1/projects/:id is unavailable — a project's redaction policy cannot be changed."
