@@ -214,8 +214,10 @@ pub(crate) async fn post_benchmark_run(
 }
 
 /// Machine-readable CI-gate verdict for a benchmark, from its latest finished run. `status` is
-/// `pass | regressed | no_baseline | no_runs`. Consumers (a pipeline step, a dashboard badge) branch
-/// on `status`; `run_id`/`mean`/`baseline`/`n` give the supporting numbers.
+/// `pass | regressed | no_baseline | no_runs | partial` — `partial` is a run the cost ceiling or an
+/// operator cut short, whose mean covers only what was reached: unverified, never green. Consumers
+/// (a pipeline step, a dashboard badge) branch on `status`; `run_id`/`mean`/`baseline`/`n` give the
+/// supporting numbers.
 #[derive(Debug, Serialize, PartialEq)]
 pub(crate) struct GateResponse {
     status: String,
