@@ -279,15 +279,28 @@ fn env_opt(key: &str) -> Option<String> {
 }
 
 fn env_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(default)
+    env_parsed(key, default)
 }
 
 fn env_f64(key: &str, default: f64) -> f64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(default)
+    env_parsed(key, default)
+}
+
+/// Absent degrades to the default; **present-but-unparseable is said out loud** and then degrades.
+/// `LIGHTTRACK_ALERT_COOLDOWN_SECS=1h` used to become 3600 silently, which reads as "my setting
+/// works" right up to the incident where it does not.
+fn env_parsed<T: std::str::FromStr + std::fmt::Display + Copy>(key: &str, default: T) -> T {
+    match std::env::var(key) {
+        Ok(raw) if !raw.trim().is_empty() => match raw.trim().parse::<T>() {
+            Ok(v) => v,
+            Err(_) => {
+                tracing::warn!(
+                    var = key, value = %raw, default = %default,
+                    "alert setting is not a number; using the default"
+                );
+                default
+            }
+        },
+        _ => default,
+    }
 }

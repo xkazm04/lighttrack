@@ -107,6 +107,23 @@ fn zero_cooldown_always_sends() {
     assert!(a.should_send_key(&a.dedup_key(&b)));
 }
 
+/// A malformed setting must degrade to the default (the process still starts) — the warn line that
+/// accompanies it is what distinguishes "I typed 1h" from "I never set it".
+#[test]
+fn a_malformed_numeric_setting_degrades_to_the_default() {
+    let key = "LIGHTTRACK_ALERT_TEST_UNPARSEABLE";
+    std::env::set_var(key, "1h");
+    assert_eq!(super::env_u64(key, 3600), 3600);
+    std::env::set_var(key, " 42 ");
+    assert_eq!(
+        super::env_u64(key, 3600),
+        42,
+        "surrounding whitespace is not a typo"
+    );
+    std::env::remove_var(key);
+    assert_eq!(super::env_u64(key, 7), 7);
+}
+
 /// The cooldown map is a cache, not a ledger: an entry past its cooldown cannot suppress anything,
 /// so keeping it is a leak — and per-incident keys (one per dead relay task) made it a steady one.
 #[test]
