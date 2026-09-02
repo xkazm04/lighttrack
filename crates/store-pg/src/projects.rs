@@ -28,6 +28,27 @@ pub(crate) async fn create(pool: &PgPool, p: &Project) -> Result<()> {
     Ok(())
 }
 
+/// Replace a project's mutable fields in place, matched by `p.id`; `id` and `created_at` are
+/// immutable. Returns whether a row matched (the API maps `false` to 404).
+///
+/// Ported because the trait default refuses (`Unsupported` → 501) and Postgres is the backend most
+/// deployments actually run: `PUT /v1/projects/:id` is how a *redaction* policy is changed, so
+/// inheriting the default meant production could not tighten what it stores. See `Surface::ProjectAdmin`.
+pub(crate) async fn update(pool: &PgPool, p: &Project) -> Result<bool> {
+    let res = sqlx::query(
+        "UPDATE projects SET name = $2, enabled = $3, redaction = $4, collective_opt_in = $5          WHERE id = $1",
+    )
+    .bind(p.id.clone())
+    .bind(p.name.clone())
+    .bind(p.enabled as i64)
+    .bind(enum_to_str(&p.redaction)?)
+    .bind(p.collective_opt_in as i64)
+    .execute(pool)
+    .await
+    .map_err(pgerr)?;
+    Ok(res.rows_affected() > 0)
+}
+
 pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Project>> {
     let row = sqlx::query(
         "SELECT id, name, enabled, redaction, collective_opt_in, created_at \
