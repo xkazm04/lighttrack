@@ -154,6 +154,27 @@ pub struct RedactionPostureRow {
     pub events: u64,
 }
 
+/// Predicates over a verdict's **typed identity** (M9-C).
+///
+/// `kind` is carried as the wire string rather than a [`ScoreKind`] so a filter can name a kind this
+/// binary does not know — a verdict written by a newer producer must be findable by an older reader
+/// instead of being invisible to it. The API validates the spelling against `ScoreKind::ALL` before
+/// it gets here, so a typo is a 400 rather than an empty page.
+#[derive(Debug, Clone, Default)]
+pub struct ScoreFilter {
+    /// The rubric a verdict was judged against — the join the free-text label could never be.
+    pub rubric_id: Option<String>,
+    pub kind: Option<String>,
+}
+
+impl ScoreFilter {
+    /// Whether this filter asks for anything at all. A backend can answer an empty filter with its
+    /// plain listing, which is why the unfiltered path stays on `list_scores`.
+    pub fn is_empty(&self) -> bool {
+        self.rubric_id.is_none() && self.kind.is_none()
+    }
+}
+
 /// What one [`Store::reprice_revenue`] pass did, or would do.
 ///
 /// `matched` and `changed` are reported separately because they differ for a reason the caller must
@@ -998,6 +1019,23 @@ pub trait Store: Send + Sync {
     /// silently degraded record rather than an obviously missing one.
     fn insert_score(&self, s: &Score) -> Result<()>;
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>>;
+    /// Scores narrowed by the typed identity: which rubric, and what sort of verdict.
+    ///
+    /// A separate method rather than widening [`Store::list_scores`], for the same reason
+    /// `list_events_filtered` is separate: the unfiltered listing is on the hot path of every
+    /// dashboard, and it must not grow a filter argument every consumer has to pass `None` for.
+    ///
+    /// [`StoreError::Unsupported`] by default — never a silently unfiltered listing. Answering a
+    /// `kind=bench_case` query with every score in the project would look authoritative and be
+    /// wrong, which is the failure this whole trait's default policy exists to refuse.
+    fn list_scores_filtered(
+        &self,
+        _project: Option<&str>,
+        _filter: &ScoreFilter,
+        _limit: usize,
+    ) -> Result<Vec<Score>> {
+        Err(StoreError::Unsupported("the typed score filters"))
+    }
     /// Every case result recorded for one benchmark run, in case order (`case_index`, then
     /// `created_at`; cases without an index sort last). This is the answer to "why did run 47 fail?"
     /// — the per-case verdicts, with the provenance that produced each one.

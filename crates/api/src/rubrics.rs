@@ -40,6 +40,9 @@ pub(crate) async fn create_rubric(
         name: req.name,
         dimensions: req.dimensions,
         threshold: req.threshold,
+        // Every rubric starts at generation 1; POST /v1/rubrics/:id/versions mints the next.
+        version: 1,
+        supersedes: None,
         created_at: Utc::now(),
     };
     let store = st.store.clone();
@@ -80,4 +83,51 @@ pub(crate) async fn get_rubric(
         }
     }
     Ok(Json(r))
+}
+
+/// Body for `POST /v1/rubrics/:id/versions` — a copy-with-changes of an existing rubric.
+///
+/// Both fields are optional: a version that only re-weights the dimensions should not have to
+/// restate the threshold, and one that only moves the threshold should not have to restate the
+/// dimensions. Whatever is omitted is carried forward from the rubric being superseded.
+#[derive(Deserialize)]
+pub(crate) struct NewVersionReq {
+    dimensions: Option<Vec<RubricDimension>>,
+    threshold: Option<f64>,
+}
+
+/// `POST /v1/rubrics/:id/versions` — the next generation of a rubric.
+///
+/// A **new row with a new id**, linked back to the old one, never a mutation. Verdicts already
+/// stored cite the old rubric's id, and editing that row underneath them would silently change what
+/// those verdicts claim to have measured — a restatement of history exactly like the one the revenue
+/// upsert refuses. The old rubric stays readable and stays cited.
+///
+/// Deliberately **no** `active` flag here: promoting a version behind a calibration gate is M11's
+/// job, and a flag shipped now would be an ungated promotion switch wearing the same name.
+pub(crate) async fn create_rubric_version(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<NewVersionReq>,
+) -> Result<Json<Rubric>, ApiError> {
+    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let store = st.store.clone();
+    let id2 = id.clone();
+    let prev = spawn_db(move || store.get_rubric(&id2))
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("rubric '{id}' not found")))?;
+
+    let dimensions = req.dimensions.unwrap_or_else(|| prev.dimensions.clone());
+    if dimensions.is_empty() {
+        return Err(ApiError::bad_request(
+            "a rubric version needs at least one dimension",
+        ));
+    }
+    let next = prev.next_version(dimensions, req.threshold.unwrap_or(prev.threshold));
+
+    let store = st.store.clone();
+    let to_insert = next.clone();
+    spawn_db(move || store.create_rubric(&to_insert)).await?;
+    Ok(Json(next))
 }

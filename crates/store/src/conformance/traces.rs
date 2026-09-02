@@ -3,7 +3,7 @@
 
 use chrono::Utc;
 
-use lighttrack_core::{new_id, Score, Status};
+use lighttrack_core::{new_id, Score, ScoreKind, Status};
 
 use super::fixtures::sample_event;
 use crate::{Result, Store, TraceFilter};
@@ -244,6 +244,8 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
         project_id: project.into(),
         event_id: Some(event_id.into()),
         rubric: rubric.into(),
+        rubric_id: None,
+        kind: ScoreKind::Trace,
         value: 0.9,
         max: 1.0,
         pass: Some(true),

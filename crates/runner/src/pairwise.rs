@@ -6,7 +6,7 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 
-use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, ModelPriceRow, Rubric};
+use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, ModelPriceRow, Rubric, ScoreKind};
 use lighttrack_engine::{
     generate_deterministic, run_pairwise, same_family, Determinism, EngineConfig, PairwiseWinner,
 };
@@ -269,6 +269,8 @@ pub(crate) fn run_pairwise_matrix(
                 let score = json!({
                     "project_id": bench.project_id,
                     "rubric": format!("{}:{} vs {}", bench.name, labels[i], labels[j]),
+                    "kind": ScoreKind::PairwiseGame.as_str(),
+                    "rubric_id": bench.rubric_id,
                     "run_id": run_id, "case_index": ci as u32 + 1,
                     "value": value, "max": 1.0, "pass": a_won,
                     "reasoning": trunc_reasoning(&o.reasoning),

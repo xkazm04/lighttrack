@@ -81,6 +81,9 @@ mod table {
         r("/v1/datasets/:id/freeze", NoMethod, Admin),
         r("/v1/projects/:id/rubrics", READ, Admin),
         r("/v1/rubrics/:id", READ, NoMethod),
+        // Minting a rubric generation changes what every future verdict means; admin, like every
+        // other rubric write.
+        r("/v1/rubrics/:id/versions", NoMethod, Admin),
         r("/v1/projects/:id/benchmarks", READ, Admin),
         r("/v1/benchmarks/:id", READ, NoMethod),
         r("/v1/benchmarks/:id/runs", READ, NoMethod),

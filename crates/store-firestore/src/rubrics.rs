@@ -19,6 +19,10 @@ pub(crate) fn create_rubric(rest: &Rest, r: &Rubric) -> Result<()> {
     );
     m.insert("threshold".into(), json!(r.threshold));
     m.insert("created_at".into(), json!(fmt_ts(r.created_at)));
+    // A rubric edit changes what a score means, so which generation this is and what it
+    // replaces ride on the row (M9-C). A new version is a new document, never a mutation.
+    m.insert("version".into(), json!(r.version as i64));
+    m.insert("supersedes".into(), json!(r.supersedes));
     rest.put_doc("rubrics", &r.id, &m)
 }
 
@@ -44,5 +48,8 @@ fn rubric_from(m: &Fields) -> Result<Rubric> {
         dimensions: serde_json::from_str(&dims)?,
         threshold: ff64(m, "threshold").unwrap_or(0.7),
         created_at: parse_ts(&freq(m, "created_at")?)?,
+        // Absent means generation 1, the same reading `Rubric`'s serde default takes.
+        version: fi64(m, "version").unwrap_or(1).max(1) as u32,
+        supersedes: fstr(m, "supersedes"),
     })
 }

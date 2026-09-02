@@ -145,6 +145,8 @@ pub(super) fn rubrics(store: &dyn Store, pid: &str) -> Result<()> {
         id: new_id(),
         project_id: pid.into(),
         name: "rub".into(),
+        version: 1,
+        supersedes: None,
         dimensions: vec![
             RubricDimension {
                 key: "correct".into(),

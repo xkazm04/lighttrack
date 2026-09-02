@@ -100,7 +100,7 @@ fn score_once(
         // what the boundary did onto the verdict, so "why is this score odd" has an answer at the
         // verdict rather than only at the row.
         crate::provenance::stamp_evidence(&mut v.detail, ev);
-        let score = build_score(&ev.project_id, Some(&ev.id), judge.label(), &v);
+        let score = build_score(&ev.project_id, Some(&ev.id), judge, &v);
         post(cli, http, "/v1/scores", &score)?;
         scored += 1;
         println!(
@@ -133,17 +133,22 @@ pub(crate) fn score_text(
     project: &str,
 ) -> Result<()> {
     let v = judge.judge(engine, input, output)?;
-    let score = build_score(project, None, judge.label(), &v);
+    let score = build_score(project, None, judge, &v);
     let stored = post(cli, http, "/v1/scores", &score)?;
     println!("posted score: {}", serde_json::to_string_pretty(&stored)?);
     Ok(())
 }
 
-fn build_score(project_id: &str, event_id: Option<&str>, rubric: &str, v: &Verdict) -> Value {
+fn build_score(project_id: &str, event_id: Option<&str>, judge: &Judge, v: &Verdict) -> Value {
     json!({
         "project_id": project_id,
         "event_id": event_id,
-        "rubric": rubric,
+        "rubric": judge.label(),
+        // The typed identity beside the label. `freeform` is not a placeholder here — an ad-hoc
+        // criteria string genuinely is a freeform verdict, and saying so keeps it out of the rollups
+        // that should only average verdicts judged against a stored rubric.
+        "rubric_id": judge.rubric_id(),
+        "kind": judge.kind().as_str(),
         "value": v.value,
         "max": v.max,
         "pass": v.pass,

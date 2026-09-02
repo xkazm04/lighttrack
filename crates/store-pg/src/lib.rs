@@ -39,7 +39,8 @@ use lighttrack_core::{
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
     Admission, CostRow, EventFilter, EventPage, RedactionPostureRow, RepriceReport, Result,
-    ScopeUsage, Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    ScopeUsage, ScoreFilter, Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage,
+    UseCaseCostRow,
 };
 
 use util::pgerr;
@@ -86,6 +87,7 @@ impl PgStore {
         Surface::EventFilters,
         Surface::RedactionPosture,
         Surface::RevenueReprice,
+        Surface::ScoreFilters,
         Surface::Traces,
         Surface::ProjectAdmin,
         Surface::KeyAdmin,
@@ -285,6 +287,15 @@ impl Store for PgStore {
     }
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
         self.rt.block_on(scores::list(&self.pool, project, limit))
+    }
+    fn list_scores_filtered(
+        &self,
+        project: Option<&str>,
+        filter: &ScoreFilter,
+        limit: usize,
+    ) -> Result<Vec<Score>> {
+        self.rt
+            .block_on(scores::list_filtered(&self.pool, project, filter, limit))
     }
     fn list_run_scores(
         &self,

@@ -184,6 +184,21 @@ pub(crate) enum RubricsCmd {
     },
     /// Show one rubric by id: its dimensions, weights and gating floors.
     Show { id: String },
+    /// Mint the next generation of a rubric: a copy-with-changes under a NEW id, linked to the old.
+    ///
+    /// Not an edit. Verdicts already stored cite the old rubric's id, and rewriting that row would
+    /// silently change what those verdicts claim to have measured. Omit `--file` to carry the
+    /// dimensions forward unchanged (e.g. to move only the threshold).
+    Version {
+        /// The rubric to supersede.
+        id: String,
+        /// Path to the new dimensions JSON (whole body or a bare array). Omitted ⇒ unchanged.
+        #[arg(long)]
+        file: Option<String>,
+        /// New pass threshold 0–1. Omitted ⇒ carried forward from the superseded rubric.
+        #[arg(long)]
+        threshold: Option<f64>,
+    },
 }
 
 #[derive(Subcommand)]

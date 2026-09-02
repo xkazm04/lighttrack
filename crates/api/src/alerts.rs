@@ -383,7 +383,13 @@ impl Alerter {
             return;
         }
         let normalized = (s.value / s.max).clamp(0.0, 1.0);
-        let key = format!("{}\u{1}{}", s.project_id, s.rubric);
+        // `Score::alert_key`, not the free-text label. Two defects rode that label: a rubric renamed
+        // between runs split one window into two (and two rubrics sharing a name merged into one),
+        // and a per-case label (`bench:x#case7`) is unique per case — so the window never saw the
+        // same key twice and this alert could not fire on a benchmark's case stream at all. Run
+        // cases now accumulate under their benchmark; everything else keys on `rubric_id` when the
+        // row carries one, and on the label when it does not (so existing windows keep history).
+        let key = format!("{}\u{1}{}", s.project_id, s.alert_key());
         let Some((recent, baseline, samples)) = self.note_score(&key, normalized) else {
             return;
         };

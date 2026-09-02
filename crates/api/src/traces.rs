@@ -244,6 +244,14 @@ pub(crate) async fn score_trace(
         project_id: trace.project_id.clone(),
         event_id,
         rubric: body.rubric,
+        // A verdict on a whole trace is a trace verdict; one pinned to an inner call is a
+        // per-call score against whatever rubric the caller names, which is freeform here.
+        rubric_id: None,
+        kind: if whole_trace {
+            lighttrack_core::ScoreKind::Trace
+        } else {
+            lighttrack_core::ScoreKind::Freeform
+        },
         value: body.value,
         max: body.max,
         pass: body.pass,

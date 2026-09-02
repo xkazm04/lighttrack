@@ -15,10 +15,12 @@ use axum::{
 };
 use serde::Deserialize;
 
-use lighttrack_core::Score;
+use lighttrack_core::{Score, ScoreKind};
 
 use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
+use lighttrack_store::ScoreFilter;
+
 use crate::state::{spawn_db, AppState};
 
 pub(crate) async fn post_score(
@@ -53,6 +55,12 @@ pub(crate) struct ScoresParams {
     /// verdicts it posts, so this works for all of them, not just the ones that inline case JSON in
     /// the run report.
     run: Option<String>,
+    /// Only verdicts judged against this rubric. The join the free-text `rubric` label could
+    /// never be: it survives a rename and separates two rubrics that share a name.
+    rubric_id: Option<String>,
+    /// Only verdicts of this kind (`freeform` | `rubric` | `bench_case` | `compare_cell` |
+    /// `pairwise_game` | `calibration` | `trace`).
+    kind: Option<String>,
 }
 
 pub(crate) async fn get_scores(
@@ -74,7 +82,33 @@ pub(crate) async fn get_scores(
         }
         None => {
             let limit = q.limit.unwrap_or(50).min(1000);
-            spawn_db(move || store.list_scores(project.as_deref(), limit)).await?
+            let filter = ScoreFilter {
+                rubric_id: q.rubric_id.clone(),
+                kind: q.kind.clone(),
+            };
+            if let Some(k) = filter.kind.as_deref() {
+                // Reject an unknown kind rather than answering with an empty page: 'no bench
+                // cases' and 'you spelled the kind wrong' must not look identical. The accepted
+                // set is derived from the enum, so adding a variant cannot leave this stale.
+                if ScoreKind::parse(k).is_none() {
+                    let expected = ScoreKind::ALL
+                        .iter()
+                        .map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    return Err(ApiError::bad_request(format!(
+                        "invalid 'kind' {k:?}: expected {expected}"
+                    )));
+                }
+            }
+            // The unfiltered listing stays on `list_scores`: it is every dashboard's hot path,
+            // and a backend that has not ported the filters must still serve it.
+            if filter.is_empty() {
+                spawn_db(move || store.list_scores(project.as_deref(), limit)).await?
+            } else {
+                spawn_db(move || store.list_scores_filtered(project.as_deref(), &filter, limit))
+                    .await?
+            }
         }
     };
     Ok(Json(scores))

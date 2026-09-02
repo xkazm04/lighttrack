@@ -148,7 +148,9 @@ for changes made by another replica or directly in the DB.
 | `id` | string | |
 | `project_id` | string | FK |
 | `event_id` | string? | scored event (null for benchmark-only) |
-| `rubric` | string | rubric/metric name |
+| `rubric` | string | the verdict's human-readable **label** — six encodings live here (a rubric name, `bench:{name}`, `{name}:{label}#case{i}`, a pairwise pairing, `lt:calibration:…`), which is why it is no longer the identity |
+| `rubric_id` | string? | the `rubrics` row this was judged against — the join the label could never be: stable across a rename, unique across two rubrics that share a name |
+| `kind` | string? | `freeform` \| `rubric` \| `bench_case` \| `compare_cell` \| `pairwise_game` \| `calibration` \| `trace`. Absent reads as `freeform` (the pre-typing default); an unrecognized value reads as `other` rather than being misfiled |
 | `value` | float | |
 | `max` | float | scale upper bound |
 | `pass` | bool? | |
@@ -156,6 +158,26 @@ for changes made by another replica or directly in the DB.
 | `scored_by` | string | judge model, e.g. `claude-haiku-4-5` |
 | `cost_usd` | float? | judge call cost (watched, never throttled) |
 | `created_at` | timestamp | |
+
+`GET /v1/scores` narrows on `rubric_id` and `kind` — a benchmark case is not the same measurement as
+an ad-hoc verdict, and averaging them together is what those filters exist to prevent. The alerting
+window keys on the same identity (`Score::alert_key`): per-case verdicts roll up under their
+benchmark, because a label carrying `#case7` is unique per case and a window that never sees the same
+key twice can never accumulate.
+
+## `rubrics`
+Beyond `{id, project_id, name, dimensions, threshold, created_at}`:
+
+| Field | Type | Notes |
+|---|---|---|
+| `version` | int | generation, from 1. Omitted from the wire at 1 (absent means 1) |
+| `supersedes` | string? | the rubric id this one replaces |
+
+A new version is a **new row with a new id** (`POST /v1/rubrics/:id/versions`), never a mutation:
+verdicts already stored cite the old rubric's id, and rewriting that row would silently change what
+those verdicts claim to have measured. The superseded rubric stays readable and stays cited. The
+collective digest's `rubric_fingerprint` includes the version for the same reason — two runs judged
+under materially different criteria must not merge into one leaderboard bucket.
 
 ## `benchmarks` / `benchmark_runs`
 | `benchmarks` | Type | | `benchmark_runs` | Type |

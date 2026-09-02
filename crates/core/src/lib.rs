@@ -69,8 +69,8 @@ pub use revenue::{RevenueEvent, RevenueKind};
 pub use rubric::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
 pub use score::{
     judge_verdict_schema, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, JudgeVerdict, Score,
-    ScoreDetail, ScoreDim, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM, MAX_REASONING_CHARS,
-    RECURRENCE_KEY,
+    ScoreDetail, ScoreDim, ScoreKind, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM,
+    MAX_REASONING_CHARS, RECURRENCE_KEY,
 };
 pub use trace::{
     normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,

@@ -14,9 +14,14 @@ use crate::Result;
 
 pub(super) const SCHEMA: &str = include_str!("../../../../schema/sqlite/001_init.sql");
 
-/// Columns added after the original schema shipped. Each is `ALTER`ed into a *pre-existing* table;
-/// on a fresh database the table doesn't exist yet and the `CREATE TABLE` in [`SCHEMA`] defines the
-/// column directly, so "no such table" is as much a success here as "duplicate column name".
+/// Additive statements applied after the original schema shipped — `ADD COLUMN`, plus the
+/// `CREATE INDEX IF NOT EXISTS` that covers a column added here (an index cannot live in [`SCHEMA`]
+/// if its column does not, and it cannot precede its own `ALTER`).
+///
+/// Each runs against a table that may or may not exist yet, so "no such table" is as much a success
+/// here as "duplicate column name" — and [`apply`] runs the whole list on **both sides** of the
+/// `CREATE` batch, which is what lets a column live here alone instead of also being written into
+/// `001_init.sql`.
 const ADDED_COLUMNS: &[&str] = &[
     // DBs created before `events.name` existed.
     "ALTER TABLE events ADD COLUMN name TEXT",
@@ -66,6 +71,18 @@ const ADDED_COLUMNS: &[&str] = &[
     "ALTER TABLE revenue_events ADD COLUMN fx_rate REAL",
     "ALTER TABLE revenue_events ADD COLUMN fx_book_version TEXT",
     "ALTER TABLE revenue_events ADD COLUMN converted INTEGER",
+    // C. Typed verdict identity (M9-C). `scores.rubric` is one free-text column carrying six
+    // encodings, so nothing downstream could tell a benchmark case from a calibration probe without
+    // parsing a string — and the alerting window keyed on that string, which made every compare cell
+    // a unique key that never accumulated. The legacy label stays verbatim beside these.
+    "ALTER TABLE scores ADD COLUMN rubric_id TEXT",
+    "ALTER TABLE scores ADD COLUMN kind TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_scores_rubric_id ON scores(rubric_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_scores_kind ON scores(kind, created_at)",
+    // A rubric edit changes what a score *means*, and nothing recorded that one had happened.
+    // A new version is a new row linked to the old one, never a mutation of it.
+    "ALTER TABLE rubrics ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE rubrics ADD COLUMN supersedes TEXT",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.

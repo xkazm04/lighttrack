@@ -38,6 +38,8 @@ pub enum Surface {
     RedactionPosture,
     /// Re-converting stored revenue at a corrected FX rate (M9).
     RevenueReprice,
+    /// Narrowing verdicts by their typed identity: rubric id and score kind (M9).
+    ScoreFilters,
     /// Events rolled up by `trace_id`: listing, detail, whole-trace scores.
     Traces,
     /// Daily (UTC) usage/cost series — the input `GET /v1/forecast` fits a trend to.
@@ -71,6 +73,7 @@ impl Surface {
         Surface::EventFilters,
         Surface::RedactionPosture,
         Surface::RevenueReprice,
+        Surface::ScoreFilters,
         Surface::Traces,
         Surface::Forecast,
         Surface::MarginBreakdowns,
@@ -92,6 +95,7 @@ impl Surface {
             Surface::EventFilters => "event_filters",
             Surface::RedactionPosture => "redaction_posture",
             Surface::RevenueReprice => "revenue_reprice",
+            Surface::ScoreFilters => "score_filters",
             Surface::Traces => "traces",
             Surface::Forecast => "forecast",
             Surface::MarginBreakdowns => "margin_breakdowns",
@@ -221,6 +225,7 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
     ),
     (Surface::RedactionPosture, &["redaction_posture"]),
     (Surface::RevenueReprice, &["reprice_revenue"]),
+    (Surface::ScoreFilters, &["list_scores_filtered"]),
     (
         Surface::Traces,
         &[

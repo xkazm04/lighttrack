@@ -2,10 +2,10 @@
 
 use chrono::Utc;
 
-use lighttrack_core::{new_id, Score, ScoreDetail, ScoreDim};
+use lighttrack_core::{new_id, Score, ScoreDetail, ScoreDim, ScoreKind};
 
 use super::fixtures::sample_event;
-use crate::{Result, Store};
+use crate::{Result, ScoreFilter, Store};
 
 pub(super) fn scores(store: &dyn Store, pid: &str) -> Result<()> {
     let s = Score {
@@ -13,6 +13,8 @@ pub(super) fn scores(store: &dyn Store, pid: &str) -> Result<()> {
         project_id: pid.into(),
         event_id: None,
         rubric: "correctness".into(),
+        rubric_id: Some("rub-conformance".into()),
+        kind: ScoreKind::Rubric,
         value: 0.9,
         max: 1.0,
         pass: Some(true),
@@ -100,6 +102,8 @@ fn run_scoped_cases(store: &dyn Store, pid: &str) -> Result<()> {
         project_id: pid.into(),
         event_id: None,
         rubric: "bench:conformance".into(),
+        rubric_id: Some("rub-bench".into()),
+        kind: ScoreKind::BenchCase,
         value,
         max: 1.0,
         pass: Some(value >= 0.5),
@@ -138,6 +142,15 @@ fn run_scoped_cases(store: &dyn Store, pid: &str) -> Result<()> {
         Some(&detail),
         "the per-case provenance rides the case instead of being dropped"
     );
+    // The typed identity round-trips. A backend that dropped it would leave every verdict looking
+    // like the untyped `freeform` default, which is the state this replaces.
+    assert_eq!(cases[0].kind, ScoreKind::BenchCase, "kind round-trip");
+    assert_eq!(
+        cases[0].rubric_id.as_deref(),
+        Some("rub-bench"),
+        "rubric_id round-trip"
+    );
+
     // Authorization scope is applied in the query, not by the caller.
     assert!(
         store
@@ -154,5 +167,88 @@ fn run_scoped_cases(store: &dyn Store, pid: &str) -> Result<()> {
         2,
         "limit is honored"
     );
+    Ok(())
+}
+
+/// `Surface::ScoreFilters`: narrowing verdicts by rubric and kind.
+///
+/// The bar is that the filters actually filter. A backend that ignored them would answer
+/// `kind=bench_case` with every score in the project — a page that looks authoritative and is a
+/// different question's answer, which is the failure this trait's whole default policy refuses.
+pub(super) fn score_filters(store: &dyn Store) -> Result<()> {
+    let scope = new_id();
+    let mk = |rubric: &str, rubric_id: Option<&str>, kind: ScoreKind| Score {
+        id: new_id(),
+        project_id: scope.clone(),
+        event_id: None,
+        rubric: rubric.into(),
+        rubric_id: rubric_id.map(str::to_string),
+        kind,
+        value: 0.5,
+        max: 1.0,
+        pass: None,
+        reasoning: None,
+        detail: None,
+        run_id: None,
+        case_index: None,
+        scored_by: "judge".into(),
+        cost_usd: None,
+        created_at: Utc::now(),
+    };
+    store.insert_score(&mk("quality", Some("rub-a"), ScoreKind::Rubric))?;
+    store.insert_score(&mk("quality", Some("rub-a"), ScoreKind::Rubric))?;
+    store.insert_score(&mk("bench:q#case1", Some("rub-a"), ScoreKind::BenchCase))?;
+    store.insert_score(&mk("adhoc", None, ScoreKind::Freeform))?;
+    store.insert_score(&mk("other", Some("rub-b"), ScoreKind::Rubric))?;
+
+    let by = |f: ScoreFilter| store.list_scores_filtered(Some(&scope), &f, 100);
+
+    let rub_a = by(ScoreFilter {
+        rubric_id: Some("rub-a".into()),
+        kind: None,
+    })?;
+    assert_eq!(rub_a.len(), 3, "every verdict citing rub-a, and only those");
+    assert!(rub_a
+        .iter()
+        .all(|s| s.rubric_id.as_deref() == Some("rub-a")));
+
+    let bench = by(ScoreFilter {
+        rubric_id: None,
+        kind: Some(ScoreKind::BenchCase.as_str().into()),
+    })?;
+    assert_eq!(
+        bench.len(),
+        1,
+        "the kind predicate narrows (an unfiltered listing would return 5)"
+    );
+    assert_eq!(bench[0].kind, ScoreKind::BenchCase);
+
+    // AND, not OR.
+    let both = by(ScoreFilter {
+        rubric_id: Some("rub-a".into()),
+        kind: Some(ScoreKind::Rubric.as_str().into()),
+    })?;
+    assert_eq!(both.len(), 2, "rubric_id AND kind");
+
+    // Project scoping still applies to a filtered read - a filter must never widen a query.
+    let elsewhere = store.list_scores_filtered(
+        Some(&new_id()),
+        &ScoreFilter {
+            rubric_id: Some("rub-a".into()),
+            kind: None,
+        },
+        100,
+    )?;
+    assert!(
+        elsewhere.is_empty(),
+        "another project's key sees none of these verdicts"
+    );
+
+    // A kind nobody wrote is an empty page - not an error, and not everything.
+    let none = by(ScoreFilter {
+        rubric_id: None,
+        kind: Some(ScoreKind::Calibration.as_str().into()),
+    })?;
+    assert!(none.is_empty());
     Ok(())
 }

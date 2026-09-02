@@ -69,8 +69,15 @@ fn gather_run_stats(store: &dyn Store) -> Result<(Vec<RunStat>, u32, u32), Store
         }
         included += 1;
         for b in store.list_benchmarks(&p.id)? {
+            // Resolved once per benchmark, not per run: which *generation* of the rubric judged
+            // these runs is part of what makes two contributors' numbers comparable, and a
+            // superseded rubric is a different measurement (see `rubric_fingerprint_of`).
+            let rubric_version = match b.rubric_id.as_deref() {
+                Some(id) => store.get_rubric(id)?.map(|r| r.version),
+                None => None,
+            };
             for run in store.list_benchmark_runs(&b.id)? {
-                if let Some(s) = run_stat(&b, &run) {
+                if let Some(s) = run_stat(&b, &run, rubric_version) {
                     stats.push(s);
                 }
             }

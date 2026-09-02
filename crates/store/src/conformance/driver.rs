@@ -54,6 +54,7 @@ fn section(store: &dyn Store, pid: &str, surface: Surface) -> Result<()> {
         }
         Surface::RedactionPosture => events::redaction_posture(store)?,
         Surface::RevenueReprice => revenue::reprice(store)?,
+        Surface::ScoreFilters => scores::score_filters(store)?,
         Surface::Traces => traces::traces(store)?,
         Surface::Forecast => forecast::forecast(store)?,
         Surface::MarginBreakdowns => margin::margin(store)?,

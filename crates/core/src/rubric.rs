@@ -132,12 +132,59 @@ pub struct Rubric {
     /// Overall pass threshold (weighted score, 0–1).
     #[serde(default = "default_threshold")]
     pub threshold: f64,
+    /// Which generation of this rubric this is. Editing a rubric changes what a score *means*, so
+    /// comparing verdicts across an edit is comparing two different measurements — and nothing
+    /// recorded that an edit had happened. Starts at 1; `POST /v1/rubrics/:id/versions` mints the
+    /// next.
+    ///
+    /// A new version is a **new row with a new id**, not a mutation: the old rubric must stay
+    /// readable, because the verdicts that cite it are still stored and still cite it.
+    ///
+    /// Omitted from the wire at generation 1, which is the same statement as absence (absent
+    /// deserializes to 1) and keeps a pre-versioning rubric serializing byte-identically.
+    #[serde(default = "default_version", skip_serializing_if = "is_first_version")]
+    pub version: u32,
+    /// The rubric id this one replaces, so the chain is walkable in both directions. `None` on the
+    /// first version of a rubric.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
     #[serde(default = "Utc::now")]
     pub created_at: DateTime<Utc>,
 }
 
 fn default_threshold() -> f64 {
     0.7
+}
+
+/// A rubric written before versioning existed is generation 1 — the reading that keeps every stored
+/// verdict citing a coherent generation, rather than an unnumbered one.
+fn default_version() -> u32 {
+    1
+}
+
+fn is_first_version(v: &u32) -> bool {
+    *v == 1
+}
+
+impl Rubric {
+    /// The next generation of this rubric: a **new row with a new id**, linked back to this one.
+    ///
+    /// Not a mutation, on purpose. Verdicts already stored cite this rubric's id, and editing the
+    /// row underneath them would silently change what those verdicts claim to have measured — the
+    /// same class of restatement the revenue upsert refuses. `dimensions` and `threshold` come from
+    /// the caller; identity, lineage and the clock do not.
+    pub fn next_version(&self, dimensions: Vec<RubricDimension>, threshold: f64) -> Rubric {
+        Rubric {
+            id: crate::new_id(),
+            project_id: self.project_id.clone(),
+            name: self.name.clone(),
+            dimensions,
+            threshold,
+            version: self.version.saturating_add(1),
+            supersedes: Some(self.id.clone()),
+            created_at: Utc::now(),
+        }
+    }
 }
 
 #[cfg(test)]

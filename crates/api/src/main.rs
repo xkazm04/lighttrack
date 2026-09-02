@@ -193,6 +193,8 @@ mod tests_storage;
 mod tests_tenancy;
 #[cfg(test)]
 mod tests_traces;
+#[cfg(test)]
+mod tests_verdict_identity;
 
 use std::sync::{Arc, RwLock};
 
@@ -447,6 +449,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
             post(rubrics::create_rubric).get(rubrics::list_rubrics),
         )
         .route("/v1/rubrics/:id", get(rubrics::get_rubric))
+        .route(
+            "/v1/rubrics/:id/versions",
+            post(rubrics::create_rubric_version),
+        )
         .route(
             "/v1/projects/:id/benchmarks",
             post(benchmarks::create_benchmark).get(benchmarks::list_benchmarks),

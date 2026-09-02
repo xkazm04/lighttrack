@@ -293,3 +293,17 @@ ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS amount_minor BIGINT;
 ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS fx_rate DOUBLE PRECISION;
 ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS fx_book_version TEXT;
 ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS converted BOOLEAN;
+
+-- C. Typed verdict identity: `scores.rubric` is one free-text column carrying six encodings, so a
+-- reader had to parse a string to learn what it was reading, and the alert window keyed on that
+-- string — which made every per-case verdict a unique key that never accumulated. The legacy label
+-- stays verbatim beside these.
+ALTER TABLE scores ADD COLUMN IF NOT EXISTS rubric_id TEXT;
+ALTER TABLE scores ADD COLUMN IF NOT EXISTS kind TEXT;
+CREATE INDEX IF NOT EXISTS idx_scores_rubric_id ON scores(rubric_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_scores_kind ON scores(kind, created_at);
+
+-- A rubric edit changes what a score means, and nothing recorded that one had happened. A new
+-- version is a new row linked to the old one, never a mutation of it.
+ALTER TABLE rubrics ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE rubrics ADD COLUMN IF NOT EXISTS supersedes TEXT;

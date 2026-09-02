@@ -59,8 +59,8 @@ use crate::{
     capabilities::{Capabilities, Surface},
     Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, DbMetricsReport, EventFilter,
     EventPage, MaintenancePass, MaintenanceRequest, RedactionPostureRow, RepriceReport, Result,
-    ScopeUsage, StorageReport, Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage,
-    UseCaseCostRow,
+    ScopeUsage, ScoreFilter, StorageReport, Store, StoreError, TraceEvents, TraceFilter, TracePage,
+    Usage, UseCaseCostRow,
 };
 
 use metrics::DbOp;
@@ -498,6 +498,16 @@ impl Store for SqliteStore {
     }
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
         self.read_op(DbOp::ScoresRead, |c| scores::list(c, project, limit))
+    }
+    fn list_scores_filtered(
+        &self,
+        project: Option<&str>,
+        filter: &ScoreFilter,
+        limit: usize,
+    ) -> Result<Vec<Score>> {
+        self.read_op(DbOp::ScoresRead, |c| {
+            scores::list_filtered(c, project, filter, limit)
+        })
     }
     fn list_run_scores(
         &self,

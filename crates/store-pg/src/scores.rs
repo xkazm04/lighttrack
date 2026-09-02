@@ -3,14 +3,14 @@
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
-use lighttrack_core::{Score, ScoreDetail};
-use lighttrack_store::Result;
+use lighttrack_core::{Score, ScoreDetail, ScoreKind};
+use lighttrack_store::{Result, ScoreFilter};
 
 use crate::util::{fmt_ts, parse_ts, pgerr};
 
 pub(crate) const COLS: &str =
     "id, project_id, event_id, rubric, value, \"max\", pass, reasoning, detail, \
-    run_id, case_index, scored_by, cost_usd, created_at";
+    run_id, case_index, scored_by, cost_usd, created_at, rubric_id, kind";
 
 pub(crate) async fn insert(pool: &PgPool, s: &Score) -> Result<()> {
     // Verdict provenance rides as JSON in one column (as on SQLite): it is read back whole with the
@@ -23,8 +23,9 @@ pub(crate) async fn insert(pool: &PgPool, s: &Score) -> Result<()> {
     };
     sqlx::query(
         "INSERT INTO scores (id, project_id, event_id, rubric, value, \"max\", pass, \
-         reasoning, detail, run_id, case_index, scored_by, cost_usd, created_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+         reasoning, detail, run_id, case_index, scored_by, cost_usd, created_at, \
+         rubric_id, kind) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
     )
     .bind(s.id.clone())
     .bind(s.project_id.clone())
@@ -40,6 +41,8 @@ pub(crate) async fn insert(pool: &PgPool, s: &Score) -> Result<()> {
     .bind(s.scored_by.clone())
     .bind(s.cost_usd)
     .bind(fmt_ts(s.created_at))
+    .bind(s.rubric_id.clone())
+    .bind(s.kind.as_str())
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -142,7 +145,65 @@ pub(crate) fn from_row(row: &PgRow) -> Result<Score> {
         scored_by: row.try_get(11).map_err(pgerr)?,
         cost_usd: row.try_get(12).map_err(pgerr)?,
         created_at: parse_ts(&created_at)?,
+        rubric_id: row.try_get(14).map_err(pgerr)?,
+        // A stored kind this binary does not know reads as `Other`; a row written before the column
+        // existed reads as `Freeform`, the pre-typing default. Neither errors the listing — one
+        // verdict from a newer producer must not take a whole page down.
+        kind: match row
+            .try_get::<Option<String>, _>(15)
+            .map_err(pgerr)?
+            .as_deref()
+        {
+            None => ScoreKind::Freeform,
+            Some(k) => ScoreKind::parse(k).unwrap_or(ScoreKind::Other),
+        },
     })
+}
+
+/// Filtered listing — the Postgres port of `sqlite/scores.rs::list_filtered`, held to the same
+/// semantics by the shared conformance suite.
+pub(crate) async fn list_filtered(
+    pool: &PgPool,
+    project: Option<&str>,
+    filter: &ScoreFilter,
+    limit: usize,
+) -> Result<Vec<Score>> {
+    let mut conds: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    if let Some(p) = project {
+        binds.push(p.to_string());
+        conds.push(format!("project_id = ${}", binds.len()));
+    }
+    if let Some(r) = &filter.rubric_id {
+        binds.push(r.clone());
+        conds.push(format!("rubric_id = ${}", binds.len()));
+    }
+    if let Some(k) = &filter.kind {
+        binds.push(k.clone());
+        let n = binds.len();
+        // NULL reads back as `freeform`, so the `freeform` filter must match a pre-typing row too —
+        // otherwise "show me the ad-hoc verdicts" silently omits most of them.
+        if k == ScoreKind::Freeform.as_str() {
+            conds.push(format!("(kind IS NULL OR kind = ${n})"));
+        } else {
+            conds.push(format!("kind = ${n}"));
+        }
+    }
+    let where_clause = if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {} ", conds.join(" AND "))
+    };
+    let sql = format!(
+        "SELECT {COLS} FROM scores {where_clause}ORDER BY created_at DESC LIMIT ${}",
+        binds.len() + 1
+    );
+    let mut q = sqlx::query(&sql);
+    for b in &binds {
+        q = q.bind(b.clone());
+    }
+    let rows = q.bind(limit as i64).fetch_all(pool).await.map_err(pgerr)?;
+    rows.iter().map(from_row).collect()
 }
 
 #[cfg(test)]
@@ -171,7 +232,9 @@ mod tests {
                 "case_index",
                 "scored_by",
                 "cost_usd",
-                "created_at"
+                "created_at",
+                "rubric_id",
+                "kind"
             ]
         );
     }

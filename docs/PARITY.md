@@ -14,6 +14,7 @@ conformance suite asserts that refusal, so a gap can never quietly become an emp
 | `event_filters` | full | full | full |
 | `redaction_posture` | full | full | refused |
 | `revenue_reprice` | full | full | refused |
+| `score_filters` | full | full | refused |
 | `traces` | full | full | refused |
 | `forecast` | full | refused | refused |
 | `margin_breakdowns` | full | refused | refused |
@@ -45,6 +46,7 @@ cap that reads as enforced is the failure this row exists to name.
 - **`event_filters`** — `list_events_filtered`, `cost_summary_windowed`, `usecase_costs`, `usage_since_scoped`, `usage_by_scope`
 - **`redaction_posture`** — `redaction_posture`
 - **`revenue_reprice`** — `reprice_revenue`
+- **`score_filters`** — `list_scores_filtered`
 - **`traces`** — `serves_traces`, `list_traces`, `list_traces_filtered`, `list_trace_events`, `list_trace_scores`, `get_trace`
 - **`forecast`** — `daily_usage`, `daily_cost_by_dimension`
 - **`margin_breakdowns`** — `tokens_by_dimension`, `customer_cost_by_model`, `customer_cost_by_name`
