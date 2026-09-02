@@ -26,6 +26,7 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "get_benchmark_runs" => list_of(benchmark_run()),
         "check_benchmark_gate" => gate_resp(),
         "get_usecases" => list_of(usecase_row()),
+        "query_rollup" => rollup_resp(),
         "get_forecast" => forecast_resp(),
         "list_jobs" => list_of(job()),
         "get_job" => job(),
@@ -200,6 +201,28 @@ fn usecase_row() -> Value {
         "calls": {"type":"integer"}, "input_tokens": {"type":"integer"},
         "output_tokens": {"type":"integer"}, "cost_usd": {"type":"number"}
     }))
+}
+
+/// The grouped rollup. `keys` aligns positionally with the echoed `group_by`, and `unpriced_calls`
+/// is what stops `cost_usd` from reading as a complete number when it is a floor.
+fn rollup_resp() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["group_by", "rows"],
+        "properties": {
+            "group_by": {"type":"array","items":{"type":"string"}},
+            "time_key": {"type":"string"},
+            "rows": {"type":"array","items": obj(json!({
+                "keys": {"type":"array","items":{"type":["string","null"]}},
+                "calls": {"type":"integer"}, "input_tokens": {"type":"integer"},
+                "output_tokens": {"type":"integer"}, "cost_usd": {"type":"number"},
+                "unpriced_calls": {"type":"integer"},
+                "client_reported_cost_usd": {"type":"number"},
+                "errors": {"type":"integer"}
+            }))}
+        }
+    })
 }
 
 fn forecast_resp() -> Value {

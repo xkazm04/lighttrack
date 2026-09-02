@@ -71,6 +71,15 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({"type":"object","properties":{"benchmark":{"type":"string"}},"required":["benchmark"]})),
         tool("check_benchmark_gate", "CI-gate verdict for a benchmark from its latest finished run: pass | regressed | no_baseline | no_runs, with the supporting run id, mean, baseline, and case count. Use in a pipeline step to block a regression.",
             json!({"type":"object","properties":{"benchmark":{"type":"string","description":"benchmark id"}},"required":["benchmark"]})),
+        tool("query_rollup", "THE grouped cost/usage question: totals over a window, grouped by 1-3 of project/provider/model/name/api_key/customer/product/prompt/day, with optional equality filters. Every fixed cost surface (costs, usecases, margin, forecast) is one grouping of this — use it for anything they do not already answer, e.g. \"cost per customer per day\" or \"which model drives this product's spend\". Rows carry `unpriced_calls`: when it is non-zero the cost is a FLOOR, not a total, because those calls had no price in the book.",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "by":{"type":"string","description":"comma-separated dimensions, 1..=3 (default provider,model): project|provider|model|name|api_key|customer|product|prompt|day"},
+                "since":{"type":"string","description":"RFC3339 window start (default 30d ago)"},
+                "until":{"type":"string","description":"RFC3339 window end (exclusive)"},
+                "time":{"type":"string","enum":["ts","received_at"],"description":"which timestamp the window and `day` bucket read (default ts; accounting reads use received_at)"},
+                "filter":{"type":"string","description":"comma-separated `dimension:value` equality predicates, e.g. customer:acme,model:gpt-5.4"}
+            }})),
         tool("get_usecases", "Use-case cost rollup: usage + cost grouped by (name, provider, model) for a project, optionally windowed from `since`. A call's use-case is its `name`, or its model when unnamed.",
             json!({"type":"object","properties":{
                 "project":{"type":"string"},
@@ -150,6 +159,7 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
             c.get(&format!("/v1/benchmarks/{b}/gate"))
         }),
         "get_usecases" => c.get(&usecases_path(args)),
+        "query_rollup" => c.get(&rollup_path(args)),
         "list_datasets" => bind(args, "project", |p| {
             c.get(&format!("/v1/projects/{p}/datasets"))
         }),
@@ -253,6 +263,25 @@ fn traces_path(args: &Value) -> String {
     );
     if let Some(mc) = args.get("min_cost").and_then(Value::as_f64) {
         p.push_str(&format!("&min_cost={mc}"));
+    }
+    p
+}
+
+/// `/v1/rollup` with only the args the caller actually supplied — the API's own defaults
+/// (30-day window, `provider,model` grouping) are the ones an agent should get when it omits them,
+/// rather than a second set of defaults invented here.
+fn rollup_path(args: &Value) -> String {
+    let mut p = "/v1/rollup".to_string();
+    let mut sep = '?';
+    for k in ["project", "by", "since", "until", "time", "filter"] {
+        if let Some(v) = args
+            .get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            p.push_str(&format!("{sep}{k}={v}"));
+            sep = '&';
+        }
     }
     p
 }
@@ -411,6 +440,30 @@ mod tests {
         assert_eq!(
             usecases_path(&json!({ "project": "p1", "since": "2026-01-01T00:00:00Z" })),
             "/v1/usecases?project=p1&since=2026-01-01T00:00:00Z"
+        );
+    }
+
+    /// Only what the caller supplied reaches the query string, so the API's defaults apply to the
+    /// rest. A path that always pinned `by=` would silently answer a different question than the
+    /// one an agent asked with no grouping.
+    #[test]
+    fn rollup_path_passes_only_the_supplied_args() {
+        assert_eq!(rollup_path(&json!({})), "/v1/rollup");
+        assert_eq!(
+            rollup_path(&json!({ "project": "p1", "by": "customer,day" })),
+            "/v1/rollup?project=p1&by=customer,day"
+        );
+        let p = rollup_path(&json!({
+            "by": "model", "time": "received_at", "filter": "customer:acme", "since": ""
+        }));
+        assert!(p.starts_with("/v1/rollup?by=model"), "{p}");
+        assert!(
+            p.contains("&time=received_at") && p.contains("&filter=customer:acme"),
+            "{p}"
+        );
+        assert!(
+            !p.contains("since"),
+            "an empty arg is omitted, not sent blank: {p}"
         );
     }
 
