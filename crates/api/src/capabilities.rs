@@ -129,6 +129,9 @@ fn consequence(s: Surface) -> &'static str {
              unavailable — this deployment cannot say WHICH models it failed to price, and a rate \
              added later cannot close the historical gap."
         }
+        Surface::ScoreSummaries => {
+            "GET /v1/quality/prompts and the prompt canary are unavailable — this deployment can              group a served prompt version'''s COST but not its quality, so a version that              regressed after promotion is visible only by reading /v1/scores by hand."
+        }
         Surface::Traces => "/v1/traces, /v1/traces/:id and whole-trace scoring are unavailable.",
         Surface::Forecast => "/v1/forecast and the pre-emptive breach alerts are unavailable.",
         Surface::MarginBreakdowns => {

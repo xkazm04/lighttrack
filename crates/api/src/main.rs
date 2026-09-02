@@ -40,6 +40,8 @@
 //!   PUT  /v1/projects/:id/prompts/:name                                  link/unlink its gating benchmark
 //!   POST /v1/projects/:id/prompts/:name/versions                         new version (auto-benchmarks)
 //!   POST /v1/projects/:id/prompts/:name/promote                          label promote (regression-gated)
+//!   PUT  /v1/projects/:id/prompts/:name/canary                           set/clear the online canary policy
+//!   GET  /v1/quality/prompts?project=&since=&until=&rubric_id=           per-served-version quality
 //!   POST /v1/projects  GET /v1/projects   POST /v1/projects/:id/keys
 //!   PUT  /v1/projects/:id                update name/enabled/redaction/collective_opt_in (admin);
 //!                                        a redaction change is enforced on the NEXT ingested event
@@ -87,6 +89,8 @@
 //!   GET  /v1/forecast?project=&by=&horizon=&lookback=   projected spend/budget-breach + margin-erosion + pre-emptive alerts
 //!        The same alerts also fire on a schedule with no request involved when
 //!        LIGHTTRACK_FORECAST_SWEEP_SECS is set (off by default; see `forecast_sweep`).
+//!        LIGHTTRACK_PROMPT_CANARY_SWEEP_SECS likewise arms the served-version canary
+//!        (off by default; see `prompt_canary_sweep`).
 //!   POST /v1/billing/:provider/webhook?project=   signed Stripe/Polar webhook → revenue (unauth; HMAC)
 //!   GET  /v1/collective/digest?min_cases=     build this instance's privacy-safe model digest (admin)
 //!   POST /v1/collective/ingest                hub: accept a contributor's digest (gated; off default)
@@ -149,6 +153,7 @@
 //!      whose per-model `aliases` lists are the declared collapses since M8).
 
 mod alerts;
+mod alerts_canary;
 mod alerts_relay;
 mod auth;
 mod auth_scopes;
@@ -183,8 +188,11 @@ mod prices;
 mod prices_fill;
 mod projects;
 mod projects_keys;
+mod prompt_canary_sweep;
 mod prompts;
+mod prompts_canary;
 mod prompts_gate;
+mod quality;
 mod redact;
 mod redaction;
 mod rejections;
@@ -390,6 +398,8 @@ async fn main() -> anyhow::Result<()> {
     let sweep_desc = forecast_sweep::describe(sweep);
     let sched_sweep = schedule_sweep::SweepConfig::from_env();
     let sched_sweep_desc = schedule_sweep::describe(sched_sweep);
+    let canary_sweep = prompt_canary_sweep::SweepConfig::from_env();
+    let canary_sweep_desc = prompt_canary_sweep::describe(canary_sweep);
     // The whole runtime configuration as one indexed event: "why did prod behave differently" is a
     // field comparison across two boots, not a diff of two prose lines. The human-critical part (are
     // we up, and on what address) stays in the message so it reads at a glance in either format.
@@ -404,6 +414,7 @@ async fn main() -> anyhow::Result<()> {
         alert_rejection_flush = %rejection_flush_desc,
         forecast_sweep = %sweep_desc,
         schedule_sweep = %sched_sweep_desc,
+        prompt_canary_sweep = %canary_sweep_desc,
         ingest = %shed_desc,
         maintenance = %maintenance_desc,
         redact = %redact_desc,
@@ -436,6 +447,11 @@ async fn main() -> anyhow::Result<()> {
     // wrote down and that never fires is a broken feature, not a respected default. It is also the
     // only thing that reaps a vanished device's tasks when nothing is polling for a lease.
     schedule_sweep::spawn(state.clone(), sched_sweep);
+
+    // The served-version quality loop (M23): compare each prompt's canary label against production
+    // and, only where a prompt opted in, move the label back. Off unless configured — a background
+    // task that can change what a deployment serves is not something an upgrade turns on.
+    prompt_canary_sweep::spawn(state.clone(), canary_sweep);
 
     // Flush the in-process rejection ledger into `ingest_rejected` alert rows. The counter itself
     // stays in RAM (a store write per rejected call would be on the ingest path); its deltas become
@@ -503,6 +519,8 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/costs", get(events_query::get_costs))
         .route("/v1/costs/prompts", get(events_query::get_prompt_costs))
         .route("/v1/costs/unpriced", get(costs_unpriced::get_unpriced))
+        // The quality half of `/v1/costs/prompts`: how good each served version actually is.
+        .route("/v1/quality/prompts", get(quality::get_prompt_quality))
         .route("/v1/usecases", get(events_query::get_usecases))
         .route("/v1/rollup", get(rollup::get_rollup))
         .route(
@@ -560,6 +578,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route(
             "/v1/projects/:id/prompts/:name/versions",
             post(prompts::add_version).get(prompts::list_versions),
+        )
+        .route(
+            "/v1/projects/:id/prompts/:name/canary",
+            axum::routing::put(prompts_canary::set_canary),
         )
         .route(
             "/v1/projects/:id/prompts/:name/promote",

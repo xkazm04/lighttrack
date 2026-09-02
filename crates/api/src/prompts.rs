@@ -13,7 +13,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use lighttrack_core::{new_id, Prompt, PromptVersion};
+use lighttrack_core::{new_id, Prompt, PromptVersion, REASON_PROMOTE};
 
 use crate::benchmarks::load_benchmark_authorized;
 use crate::benchmarks_target::validate_target_matrix;
@@ -78,6 +78,8 @@ pub(crate) async fn create_prompt(
         name: req.name,
         benchmark_id: req.benchmark_id,
         labels: Default::default(),
+        canary: None,
+        label_history: Vec::new(),
         created_at: now,
         updated_at: now,
     };
@@ -367,7 +369,10 @@ pub(crate) async fn promote(
         warning = outcome.warning().map(str::to_string);
     }
 
-    prompt.labels.insert(req.label, req.version);
+    // The pointer and the ledger move together (`Prompt::set_label`), so a served version always
+    // records how it got there — which is what an auto-revert later reads to find what to fall back
+    // to, and what separates "someone decided this" from "the canary decided this".
+    prompt.set_label(&req.label, req.version, REASON_PROMOTE);
     prompt.updated_at = Utc::now();
     let store = st.store.clone();
     let p2 = prompt.clone();
@@ -388,7 +393,7 @@ fn benchmark_resolves(target: &Value, prompt_name: &str) -> bool {
 }
 
 /// Load a prompt by `(project, name)`, scoped to the path project, or 404.
-async fn load_prompt(st: &AppState, pid: &str, name: &str) -> Result<Prompt, ApiError> {
+pub(crate) async fn load_prompt(st: &AppState, pid: &str, name: &str) -> Result<Prompt, ApiError> {
     let store = st.store.clone();
     let (pid, name2) = (pid.to_string(), name.to_string());
     spawn_db(move || store.get_prompt(&pid, &name2))
