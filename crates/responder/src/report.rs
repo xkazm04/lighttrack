@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::act::ActOutcome;
-use crate::claude::ClaudeRun;
+use crate::invoke::ClaudeRun;
 
 /// Build the Markdown report body (also used verbatim as the email body).
 #[allow(clippy::too_many_arguments)]
@@ -183,7 +183,7 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::claude::ClaudeRun;
+    use crate::invoke::ClaudeRun;
 
     #[test]
     fn html_email_renders() {

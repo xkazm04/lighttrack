@@ -31,6 +31,15 @@ pub use probe::{probe, Probe};
 pub use resolve::resolve_claude_bin;
 pub use run::run;
 
+/// Check an invocation's posture without spawning anything.
+///
+/// The rules are worth asserting where the *policy* is written — a caller's tool allowlist, an
+/// action file's mode — and not only where a run happens, so a bad posture is a failing test rather
+/// than a wasted paid run.
+pub fn validate(inv: &Invocation<'_>) -> crate::Result<()> {
+    posture::plan(inv).map(|_| ())
+}
+
 pub(crate) use envelope::{completion_text, model_of, token_counts};
 
 /// Wall-clock ceiling for a single `claude -p` subprocess when the caller names none.

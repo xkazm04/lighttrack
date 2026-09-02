@@ -6,12 +6,13 @@
 use std::process::Stdio;
 use std::time::Duration;
 
+use lighttrack_engine::invocation::Mode;
 use tokio::process::Command;
 
 use crate::breaker::Breaker;
-use crate::claude;
 use crate::config::{Config, ProjectEntry};
 use crate::git;
+use crate::invoke;
 use crate::webhook::Spike;
 
 pub(crate) struct ActOutcome {
@@ -79,10 +80,12 @@ pub(crate) async fn run_act(
     }
 
     let prompt = build_fix_prompt(entry, spike, diagnosis);
-    // No tool allowlist: the fix run needs edit + test tools, gated by act_permission_mode (acceptEdits).
-    let run = claude::run(
+    // No tool allowlist: the fix run needs edit + test tools, gated by act_permission_mode
+    // (acceptEdits), which `Mode::Edit` requires the caller to state rather than assume.
+    let run = invoke::run(
         cfg,
         &entry.repo,
+        Mode::Edit,
         &cfg.defaults.act_permission_mode,
         &[],
         &prompt,

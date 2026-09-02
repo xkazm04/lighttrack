@@ -166,7 +166,7 @@ async fn deliver(
     project: &str,
     kind: &str,
     detail: &str,
-    diag: &crate::claude::ClaudeRun,
+    diag: &crate::invoke::ClaudeRun,
     act_outcome: Option<&act::ActOutcome>,
 ) {
     let md = report::render(project, ts, kind, detail, diag, act_outcome);
