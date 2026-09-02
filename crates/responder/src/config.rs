@@ -162,7 +162,7 @@ fn load_map(path: &str) -> (Defaults, HashMap<String, ProjectEntry>) {
 }
 
 impl Defaults {
-    fn fallback() -> Self {
+    pub(crate) fn fallback() -> Self {
         Defaults {
             model: "sonnet".to_string(),
             permission_mode: "default".to_string(),

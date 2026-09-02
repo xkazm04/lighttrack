@@ -138,3 +138,96 @@ fn bad(kind: &str, e: serde_json::Error) -> StatusCode {
     eprintln!("[responder] malformed {kind} payload: {e}");
     StatusCode::OK
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use axum::http::{HeaderMap, HeaderValue};
+    use lighttrack_core::alert_sign::{derive_key, signature_header, SIGNATURE_HEADER};
+
+    use super::*;
+    use crate::breaker::Breaker;
+    use crate::config::{Config, Defaults};
+
+    const SECRET: &str = "whsec_responder_test";
+
+    fn state(secret: Option<&str>) -> AppState {
+        let cfg = Config {
+            bind: "127.0.0.1:0".into(),
+            lighttrack_url: "http://127.0.0.1:1".into(),
+            claude_bin: "claude".into(),
+            report_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            defaults: Defaults::fallback(),
+            // No mapped projects: an admitted delivery is logged and skipped by the pipeline, so the
+            // handler's verdict is the only thing under test.
+            projects: HashMap::new(),
+            email: None,
+            api_key: None,
+            webhook_secret: secret.map(str::to_string),
+        };
+        AppState {
+            cfg: Arc::new(cfg),
+            breaker: Arc::new(Breaker::new(1)),
+        }
+    }
+
+    fn signed(body: &str, secret: &str, t: i64) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        let v = signature_header(Some(&derive_key(secret)), None, t, body).expect("signed");
+        h.insert(SIGNATURE_HEADER, HeaderValue::from_str(&v).unwrap());
+        h
+    }
+
+    const BODY: &str = r#"{"event":"error_spike","spike":{"project_id":"p","count":5}}"#;
+
+    /// The one property that makes this endpoint safe to expose: with a secret configured, an
+    /// unsigned, mis-signed or stale delivery is refused with 401 — never quietly accepted as a 200.
+    #[tokio::test]
+    async fn a_configured_secret_refuses_unsigned_missigned_and_stale_deliveries() {
+        let st = state(Some(SECRET));
+        let now = chrono::Utc::now().timestamp();
+        assert_eq!(
+            receive(State(st.clone()), HeaderMap::new(), BODY.into()).await,
+            StatusCode::UNAUTHORIZED,
+            "unsigned"
+        );
+        assert_eq!(
+            receive(
+                State(st.clone()),
+                signed(BODY, "whsec_other", now),
+                BODY.into()
+            )
+            .await,
+            StatusCode::UNAUTHORIZED,
+            "signed with a different secret"
+        );
+        assert_eq!(
+            receive(
+                State(st.clone()),
+                signed(BODY, SECRET, now - SIGNATURE_TOLERANCE_SECS - 60),
+                BODY.into()
+            )
+            .await,
+            StatusCode::UNAUTHORIZED,
+            "a captured delivery replayed outside the tolerance"
+        );
+        assert_eq!(
+            receive(State(st.clone()), signed(BODY, SECRET, now), BODY.into()).await,
+            StatusCode::OK,
+            "a genuine delivery is admitted"
+        );
+    }
+
+    /// Without a secret the endpoint is deliberately open (loopback deployments) — and stays so, so
+    /// that adding this check did not silently turn every unsecured local setup into a 401 wall.
+    #[tokio::test]
+    async fn no_secret_means_unsigned_deliveries_are_still_admitted() {
+        let st = state(None);
+        assert_eq!(
+            receive(State(st), HeaderMap::new(), BODY.into()).await,
+            StatusCode::OK
+        );
+    }
+}
