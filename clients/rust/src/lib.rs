@@ -24,13 +24,13 @@ mod limits;
 mod pii;
 
 pub use admission::{
-    view_from_statuses, Admit, AdmissionCache, AdmitReason, BudgetExceeded, Enforce,
+    view_from_statuses, AdmissionCache, Admit, AdmitReason, BudgetExceeded, Enforce,
     DEFAULT_ADMISSION_TTL_MS,
 };
 pub use diagnostics::{diagnostic_kind, no_project_message, send_failure_message, FailureContext};
 pub use extract::{extract_anthropic, extract_gemini, extract_openai, Extracted};
-pub use limits::{parse_limit_view, BindingScope, LimitView};
 pub use lighttrack_core::shed_ticket;
+pub use limits::{parse_limit_view, BindingScope, LimitView};
 pub use pii::{pii_kinds, PiiRule};
 
 use std::sync::mpsc::{self, Sender};
@@ -219,8 +219,10 @@ impl Client {
             name.unwrap_or("this call")
         );
         if self.enforce == Enforce::Warn {
-            self.diag
-                .warn("budget", &format!("{msg}. enforce=warn, so the call is proceeding anyway."));
+            self.diag.warn(
+                "budget",
+                &format!("{msg}. enforce=warn, so the call is proceeding anyway."),
+            );
             return Ok(());
         }
         Err(BudgetExceeded {
@@ -377,7 +379,10 @@ impl Client {
         e: extract::Extracted,
         model: Option<&str>,
     ) {
-        let m = model.map(str::to_string).or(e.model).unwrap_or_else(|| "unknown".into());
+        let m = model
+            .map(str::to_string)
+            .or(e.model)
+            .unwrap_or_else(|| "unknown".into());
         self.event(provider, &m)
             .usage(e.input_tokens, e.output_tokens, e.cached_input_tokens)
             .send();
@@ -422,7 +427,9 @@ impl SendOutcome {
                     .headers()
                     .iter()
                     .filter_map(|(k, v)| {
-                        v.to_str().ok().map(|s| (k.as_str().to_string(), s.to_string()))
+                        v.to_str()
+                            .ok()
+                            .map(|s| (k.as_str().to_string(), s.to_string()))
                     })
                     .collect();
                 let body = resp.text().unwrap_or_default();
@@ -724,7 +731,10 @@ pub fn guard(output: &str, rules: &GuardRules) -> GuardResult {
         );
     }
     if let Some(mc) = rules.max_chars {
-        let n = output.len();
+        // Characters, as the rule's name says and as the Python/TS guards count. `len()` is bytes,
+        // so a 40-character reply in Czech or Japanese failed a `max_chars: 60` rule here and passed
+        // it in the sibling SDKs — one contract, two verdicts.
+        let n = output.chars().count();
         record(
             "max_chars".into(),
             n <= mc,
@@ -769,7 +779,11 @@ pub fn guard(output: &str, rules: &GuardRules) -> GuardResult {
     if rules.no_pii {
         let kinds = pii::pii_kinds(output);
         for kind in &kinds {
-            record(format!("pii:{kind}"), false, format!("contains {kind}-like PII"));
+            record(
+                format!("pii:{kind}"),
+                false,
+                format!("contains {kind}-like PII"),
+            );
         }
         if kinds.is_empty() {
             record("no_pii".into(), true, String::new());
@@ -817,6 +831,22 @@ mod tests {
         );
         assert!(!r.ok);
         assert!(r.violations.iter().any(|v| v.contains("email")));
+    }
+
+    /// `max_chars` counts characters, not bytes — the same verdict the Python guard gives.
+    #[test]
+    fn max_chars_counts_characters_not_bytes() {
+        let czech = "Příliš žluťoučký kůň úpěl ďábelské ódy"; // 38 chars, ~50 bytes
+        assert_eq!(czech.chars().count(), 38);
+        assert!(czech.len() > 38);
+        let r = guard(
+            czech,
+            &GuardRules {
+                max_chars: Some(40),
+                ..Default::default()
+            },
+        );
+        assert!(r.ok, "38 characters fit in 40: {:?}", r.violations);
     }
 
     #[test]
