@@ -1328,6 +1328,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
+ "lighttrack-contract",
  "lighttrack-render",
  "reqwest",
  "serde_json",
