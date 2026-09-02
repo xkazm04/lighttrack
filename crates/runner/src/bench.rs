@@ -238,7 +238,7 @@ fn run_simple(
     ctl: &RunControl,
 ) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
-    let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    let prices: Vec<ModelPriceRow> = fetch_prices(cli, http);
     // Mint the run id BEFORE judging so every case posted below is already run-scoped. Deriving it
     // afterwards from the stored run would leave the cases orphaned whenever the run post fails.
     let run_id = lighttrack_core::new_id();
@@ -447,6 +447,19 @@ fn run_simple(
         stored.get("id").and_then(|v| v.as_str()).unwrap_or("?")
     );
     Ok(status.to_string())
+}
+
+/// The price book, or an empty one with the reason said out loud. `unwrap_or_default()` here made
+/// an unreachable API and a missing book entry indistinguishable: every model then surfaced as
+/// "no price book entry for …" and an operator went looking at the book instead of at the network.
+pub(crate) fn fetch_prices(cli: &Cli, http: &reqwest::blocking::Client) -> Vec<ModelPriceRow> {
+    get(cli, http, "/v1/prices").unwrap_or_else(|e| {
+        eprintln!(
+            "  warning: could not read the price book ({e}); every model will be reported as \
+             unpriced and this run's cost will be undercounted"
+        );
+        Vec::new()
+    })
 }
 
 /// One output's judge result, preserving the per-dimension breakdown + self-consistency agreement

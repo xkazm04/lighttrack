@@ -296,7 +296,7 @@ pub(crate) fn run_compare(
         None => None,
     };
     // For providers whose API doesn't return a $ cost (e.g. Gemini/OpenAI), price by tokens from the DB.
-    let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    let prices: Vec<ModelPriceRow> = crate::bench::fetch_prices(cli, http);
 
     // Cost pre-flight, matching pairwise's contract: print the call count and a dollar estimate
     // BEFORE the first paid call, and refuse to start a matrix that blows past `--max-cost`. A
