@@ -1943,40 +1943,6 @@ impl ScoreSummaryRow {
     /// z for a ~95% two-sided normal interval, matching the runner's `stats::Z_95` so a summary and
     /// a benchmark verdict do not disagree about what 95% means.
     pub const Z_95: f64 = 1.959_963_984_540_054;
-
-    /// Fold a bucket's normalized values into a row. The client-side path (Firestore-shaped
-    /// backends, and the unit tests) uses this so the interval arithmetic exists once.
-    pub fn of(key: Option<String>, values: &[f64], passes: u64, cost_usd: f64) -> Self {
-        let n = values.len();
-        if n == 0 {
-            return ScoreSummaryRow {
-                key,
-                n: 0,
-                mean: 0.0,
-                pass_rate: 0.0,
-                ci95_low: 0.0,
-                ci95_high: 0.0,
-                cost_usd,
-            };
-        }
-        let mean = values.iter().sum::<f64>() / n as f64;
-        let stderr = if n < 2 {
-            0.0
-        } else {
-            let var = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0);
-            var.sqrt() / (n as f64).sqrt()
-        };
-        let half = Self::Z_95 * stderr;
-        ScoreSummaryRow {
-            key,
-            n: n as u64,
-            mean,
-            pass_rate: passes as f64 / n as f64,
-            ci95_low: mean - half,
-            ci95_high: mean + half,
-            cost_usd,
-        }
-    }
 }
 
 /// What [`Store::insert_alert_dedup`] decided. There is no third answer on purpose: an alert was
