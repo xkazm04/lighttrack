@@ -254,3 +254,33 @@ Return ONLY the rewritten text, with no preamble.\n\nTEXT:\n{out}"
     }
     Ok((out, redactions))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The flag parser refuses an unknown spelling instead of falling back, and coerces `--below`
+    /// on `recent` into the failure strategy it implies. Both decide what corpus an operator gets.
+    #[test]
+    fn flags_refuse_unknown_spellings_and_coerce_below_onto_errors() {
+        assert!(spec_from_flags("startified", "events", None, false, 10).is_err());
+        assert!(spec_from_flags("recent", "logs", None, false, 10).is_err());
+
+        let plain = spec_from_flags("recent", "events", None, false, 10).expect("parses");
+        assert!(
+            is_plain_recent(&plain),
+            "the pre-M24 shape is recognised as such"
+        );
+
+        let below = spec_from_flags("recent", "events", Some(0.5), false, 10).expect("parses");
+        assert_eq!(below.strategy, SamplingStrategy::Errors);
+        assert_eq!(below.filter.below, Some(0.5));
+        assert!(!is_plain_recent(&below));
+
+        let random = spec_from_flags("random", "scores", None, true, 5).expect("parses");
+        assert_eq!(random.strategy, SamplingStrategy::Random);
+        assert_eq!(random.from, ImportSource::Scores);
+        assert!(random.dedupe && random.n == 5);
+        assert!(!is_plain_recent(&random));
+    }
+}
