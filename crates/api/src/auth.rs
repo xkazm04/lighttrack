@@ -38,8 +38,22 @@ impl AuthMode {
 /// acceptable is doing it silently: the banner line reads `auth=Dev` in the middle of a long
 /// diagnostics string, which is easy to run past on the way to production. So this is a block, on
 /// stderr, next to the other startup diagnostics.
-pub(crate) fn warn_if_unenforced(mode: AuthMode) {
+pub(crate) fn warn_if_unenforced(mode: AuthMode, has_admin_key: bool) {
     if mode == AuthMode::Enforced {
+        // The opposite failure, and the one that used to boot in silence: enforced with no admin
+        // key means every request needs a credential and nothing on the instance can mint one -
+        // creating a project or a key is an admin call. Unless keys already exist in the store,
+        // that is a locked door, and the banner's `admin_key=unset` field did not say so.
+        if !has_admin_key {
+            eprintln!(
+                "
+!!!!! WARNING: LIGHTTRACK_AUTH_MODE=enforced WITH NO LIGHTTRACK_ADMIN_KEY !!!!!
+      Every request needs a credential, and only the admin key can create a project or mint a
+      project key. Unless project keys already exist in the store, nothing can reach this
+      instance. Set LIGHTTRACK_ADMIN_KEY=<secret> and restart.
+"
+            );
+        }
         return;
     }
     eprintln!(

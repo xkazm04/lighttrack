@@ -469,7 +469,7 @@ async fn main() -> anyhow::Result<()> {
     // `auth=Dev` in the banner above is one field among many; an unauthenticated server deserves a
     // block you cannot skim past, so that one stays a raw multi-line stderr shout rather than
     // becoming a JSON string with `\n`s in it.
-    auth::warn_if_unenforced(state.auth_mode);
+    auth::warn_if_unenforced(state.auth_mode, state.admin_key.is_some());
     relay_devices::warn_if_legacy_key(state.relay_device_key.is_some());
 
     // Pre-emptive forecast alerts on a timer (off unless configured). Detached: it never shares a
