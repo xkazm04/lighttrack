@@ -25,6 +25,7 @@ pub mod project;
 pub mod prompt;
 pub mod provider;
 pub mod relay;
+pub mod relay_verdict;
 pub mod revenue;
 pub mod rubric;
 pub mod schedule;
@@ -70,9 +71,10 @@ pub use project::{
 pub use prompt::{Prompt, PromptVersion};
 pub use provider::{family_of, ProviderFamily, ProviderId, UNKNOWN_PROVIDER};
 pub use relay::{
-    RelayCancel, RelayOutcome, RelaySettle, RelayStatus, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS,
+    RelayOutcome, RelayStatus, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS,
     RELAY_DEFAULT_RETRY_INTERVAL_SECS, RELAY_ERROR_DEVICE_LOST, RELAY_MAX_STALE_RECLAIMS,
 };
+pub use relay_verdict::{RelayCancel, RelaySettle};
 pub use revenue::{RevenueEvent, RevenueKind};
 pub use rubric::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
 pub use schedule::{Schedule, MIN_INTERVAL_SECS as SCHEDULE_MIN_INTERVAL_SECS};

@@ -37,6 +37,8 @@ mod schedule;
 mod score;
 mod score_traces;
 mod serve;
+mod serve_api;
+mod serve_job;
 mod stats;
 mod util;
 
