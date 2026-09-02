@@ -155,10 +155,14 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
 ## Phase 5 — Packaging & multicloud (design: docs/PACKAGING.md)
 Reframed from "GCP cloud move" to portable, multi-DB/multicloud: one image + one
 `LIGHTTRACK_DATABASE_URL` DSN; `Store`-trait adapters; tiered deploy (compose → Terraform → Helm).
-- [x] 5a **Postgres backend** (`lighttrack-store-pg`, sqlx): full `Store` parity; `claim_job` via
+- [x] 5a **Postgres backend** (`lighttrack-store-pg`, sqlx): `claim_job` via
       `FOR UPDATE SKIP LOCKED`. Selected by `LIGHTTRACK_DATABASE_URL=postgres://…`. Verified vs PG 16.
-- [x] **Firestore backend** (`lighttrack-store-firestore`, REST-over-reqwest): full parity, modular
+- [x] **Firestore backend** (`lighttrack-store-firestore`, REST-over-reqwest): modular
       (rest/codec + per-domain). `LIGHTTRACK_DATABASE_URL=firestore://<project>`. See `docs/FIRESTORE.md`.
+- **Parity is a matrix, not a checkbox.** "Full `Store` parity" used to be claimed here for both
+      backends and was not true of either; what each one serves is now declared by the backend itself
+      and generated into **`docs/PARITY.md`**, with every undeclared surface refusing (501) and the
+      conformance suite asserting that refusal. Read that table rather than a prose claim here.
 - [x] 5b **Containerize → GHCR**: multi-stage `deploy/docker/Dockerfile` (all 4 bins), compose, buildx
       CI. Published **public** at `ghcr.io/xkazm04/lighttrack` — anonymously pullable, linux/amd64 +
       linux/arm64, one tag per release (currently through `v0.0.6`) plus a moving `:latest`. The image

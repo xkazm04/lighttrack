@@ -526,9 +526,21 @@ LightTrack, the better the data for everyone (the moat).
   network never requires asking the hub operator. An admin may pass `?contributor=c-xxxx` to withdraw a
   named source, which is the escape hatch for a contributor that lost its key. Entries also expire on a
   stated policy: `LIGHTTRACK_COLLECTIVE_MAX_AGE_DAYS` (default **90**, `0` disables) — an expired entry
-  is **filtered out of the leaderboard before merging on every backend**, and is physically swept from
-  storage on the next ingest by backends that implement `purge_collective_entries_before` (SQLite
-  today; others keep the dead row on disk but never publish it again).
+  is **filtered out of the leaderboard before merging on every backend** — the cutoff is now the one
+  predicate pushed *into* the store (`list_collective_entries_filtered`), because it drops rows that
+  must not be published at all; every user filter still runs after the merge and after the
+  source floor. It is also physically swept from storage on the same pass as the next ingest, on all
+  three backends.
+- **Running a hub on Postgres or Firestore.** The hub endpoints (`POST /v1/collective/ingest`,
+  `GET /v1/collective/leaderboard`, `DELETE /v1/collective/contribution`) once answered 501 on
+  anything but SQLite, which meant the deployment shape a public hub actually has — a managed
+  database — was the one that could not host one. All three backends now declare the `collective`
+  surface (`docs/PARITY.md`) and are held to the same conformance section. A contributor's set is
+  replaced in **one** call: SQLite and Postgres do it in a transaction, so an interrupted ingest
+  leaves the previous set intact rather than a mixture the merged board would publish as the
+  collective's opinion. Firestore is atomic up to one 500-write commit batch and reports
+  `atomic: false` when a larger replacement has to be chunked — a hub on Firestore that wants the
+  guarantee unconditionally should keep a contributor's set under that bound.
 - **Hub-side identity is derived from a credential the hub issued, not asserted.** A hub does **not**
   trust the `contributor_id` in the request body (kept only for wire compat, ignored), *and it does not
   hash the bearer string either*: `authenticate` is deliberately lenient in `dev` auth mode (any
