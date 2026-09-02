@@ -160,7 +160,7 @@ pub(crate) async fn post_batch(
             results.push(Some(BatchItem::Invalid {
                 index: i,
                 id: item_id,
-                code: ErrorCode::Forbidden.as_str(),
+                code: ErrorCode::ProjectDisabled.as_str(),
                 reason: disabled_project_msg(&pid),
             }));
             continue;

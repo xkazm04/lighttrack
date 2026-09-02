@@ -176,6 +176,36 @@ pub(crate) enum KeysCmd {
         project: String,
         #[arg(long, default_value = "default")]
         name: String,
+        /// What the key may do: `ingest`, `read`, `manage`. Repeatable. Omitted ⇒ the server's
+        /// back-compat default (`ingest` + `read`); a key shipped inside a client app should be
+        /// `--scope ingest` so it cannot read the project's stored prompts back.
+        #[arg(long = "scope")]
+        scopes: Vec<String>,
+        /// Hard expiry, RFC3339 (e.g. `2027-01-01T00:00:00Z`). Past it the key stops working.
+        #[arg(long)]
+        expires: Option<String>,
+    },
+    /// List a project's keys with their scopes, expiry, last use and revocation state.
+    List {
+        #[arg(long)]
+        project: String,
+    },
+    /// Mint a successor with the same name and scopes, and give this key a deadline instead of
+    /// killing it — so a fleet still holding the old secret has a window to redeploy.
+    Rotate {
+        #[arg(long)]
+        project: String,
+        /// The key id to rotate (from `lt keys list`).
+        id: String,
+        /// How long the old key keeps working. `0` retires it at once.
+        #[arg(long = "grace-secs")]
+        grace_secs: Option<i64>,
+    },
+    /// Revoke a key immediately (soft — the row is kept for audit).
+    Revoke {
+        #[arg(long)]
+        project: String,
+        id: String,
     },
 }
 

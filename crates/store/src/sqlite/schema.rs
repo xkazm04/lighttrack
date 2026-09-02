@@ -50,6 +50,12 @@ const ADDED_COLUMNS: &[&str] = &[
     // existed must be widened here, before the batch.
     "ALTER TABLE jobs ADD COLUMN failures INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE jobs ADD COLUMN stale_reclaims INTEGER NOT NULL DEFAULT 0",
+    // Tenancy lifecycle: what a key may do, when it stops working, and when a project was archived.
+    // All three are nullable — an existing row carries no opinion, and `core::decode_scopes` reads
+    // that as the permissive back-compat default rather than locking a live key out on upgrade.
+    "ALTER TABLE api_keys ADD COLUMN scopes TEXT",
+    "ALTER TABLE api_keys ADD COLUMN expires_at TEXT",
+    "ALTER TABLE projects ADD COLUMN archived_at TEXT",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.

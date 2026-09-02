@@ -871,6 +871,17 @@ pub trait Store: Send + Sync {
     fn set_api_key_revoked(&self, _id: &str, _revoked: bool) -> Result<bool> {
         Err(StoreError::Unsupported("revoking API keys"))
     }
+    /// Stamp (or clear, with `None`) a key's `expires_at`. Returns `true` when a row changed,
+    /// `false` when the id is unknown (→ 404).
+    ///
+    /// This is what makes key *rotation* durable: the successor is minted and the predecessor is
+    /// given a deadline, so the grace window closes itself. A background revoke task would be lost
+    /// on the next restart — exactly when nobody is watching — and would then leave the old key
+    /// live forever. Same stance as `set_api_key_revoked`: an unported backend must say so, never
+    /// report a rotation it did not persist.
+    fn set_api_key_expiry(&self, _id: &str, _when: Option<DateTime<Utc>>) -> Result<bool> {
+        Err(StoreError::Unsupported("API-key expiry"))
+    }
 
     // --- limit rules ---
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()>;

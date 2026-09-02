@@ -95,6 +95,7 @@ pub(crate) fn make_key_with_redaction(
             enabled: true,
             redaction,
             collective_opt_in: false,
+            archived_at: None,
             created_at: now,
         })
         .unwrap();
@@ -109,6 +110,8 @@ pub(crate) fn make_key_with_redaction(
             created_at: now,
             last_used_at: None,
             revoked: false,
+            scopes: lighttrack_core::default_scopes(),
+            expires_at: None,
         })
         .unwrap();
     g.full_key
@@ -129,6 +132,8 @@ pub(crate) fn add_key(store: &SqliteStore, project_id: &str, name: &str) -> (Str
             created_at: Utc::now(),
             last_used_at: None,
             revoked: false,
+            scopes: lighttrack_core::default_scopes(),
+            expires_at: None,
         })
         .unwrap();
     (id, g.full_key)
@@ -591,6 +596,7 @@ async fn project_key_cannot_ingest_into_another_project() {
             enabled: true,
             redaction: Redaction::None,
             collective_opt_in: false,
+            archived_at: None,
             created_at: Utc::now(),
         })
         .unwrap();
@@ -1409,30 +1415,53 @@ async fn disabled_project_refuses_ingest_on_both_doors_until_re_enabled() {
     };
     flip(false);
 
-    // Door 1: the single-event POST is a 403 with the stable code, and nothing is stored.
+    // Door 1: the single-event POST is a 403 carrying the stable, actionable code — not a generic
+    // `forbidden` a client would answer by rotating credentials forever.
     let (s, b) = ingest(&app, &key, body.clone()).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{b}");
-    assert_eq!(b["error"]["code"], "forbidden", "{b}");
-    // Door 2: the batch item is `invalid` with the same code; the request itself is still 200.
-    let req = Request::builder()
-        .method("POST")
-        .uri("/v1/events/batch")
-        .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {key}"))
-        .body(Body::from(json!([body.clone()]).to_string()))
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(b["error"]["code"], "project_disabled", "{b}");
+
+    // Door 2: the batch. Since M16 the switch is applied at the *credential* — a disabled project's
+    // keys open nothing — so the whole request is refused rather than each item being ledgered
+    // `invalid`. Cheaper, and it means a shipped client cannot keep spending on a killed tenant.
+    let batch = |token: String, project: Option<&'static str>| {
+        let app = app.clone();
+        let mut body = body.clone();
+        async move {
+            if let Some(p) = project {
+                body["project_id"] = json!(p);
+            }
+            let req = Request::builder()
+                .method("POST")
+                .uri("/v1/events/batch")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from(json!([body]).to_string()))
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            let status = resp.status();
+            let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+        }
+    };
+    let (s, v) = batch(key.clone(), None).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert_eq!(v["error"]["code"], "project_disabled", "{v}");
+
+    // An admin naming the disabled project in the body is not stopped at the credential (an admin
+    // key belongs to no tenant), so the per-item check still has to hold — and still names the
+    // project, not the key.
+    let (s, v) = batch("admin-secret".to_string(), Some("proj-a")).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["invalid"], 1, "{v}");
     assert_eq!(v["results"][0]["status"], "invalid", "{v}");
-    assert_eq!(v["results"][0]["code"], "forbidden", "{v}");
+    assert_eq!(v["results"][0]["code"], "project_disabled", "{v}");
     assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
 
-    // The key still authenticates for reads — disabled means "no new events", not "locked out".
+    // Reads by that project's own keys stop too: "disabled" is a tenant kill switch, not an ingest
+    // filter — an operator who disabled a project did not mean "keep serving its stored prompts".
     let (s, _) = get_json(&app, &key, "/v1/events?project=proj-a").await;
-    assert_eq!(s, StatusCode::OK);
+    assert_eq!(s, StatusCode::FORBIDDEN);
 
     flip(true);
     let (s, b) = ingest(&app, &key, body).await;

@@ -98,6 +98,7 @@ fn mint_key(store: &SqliteStore, name: &str, opt_in: bool) -> String {
             enabled: true,
             redaction: Redaction::None,
             collective_opt_in: opt_in,
+            archived_at: None,
             created_at: Utc::now(),
         })
         .unwrap();
@@ -112,6 +113,8 @@ fn mint_key(store: &SqliteStore, name: &str, opt_in: bool) -> String {
             created_at: Utc::now(),
             last_used_at: None,
             revoked: false,
+            scopes: lighttrack_core::default_scopes(),
+            expires_at: None,
         })
         .unwrap();
     g.full_key
@@ -383,6 +386,7 @@ async fn digest_includes_only_consenting_projects() {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: opt_in,
+        archived_at: None,
         created_at: Utc::now(),
     };
     let mk_bench_run = |project: &str, model: &str| {

@@ -74,6 +74,7 @@ fn batch_admission_counts_prior_items_no_cap_bypass() {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: false,
+        archived_at: None,
         created_at: Utc::now(),
     })
     .unwrap();
@@ -902,6 +903,7 @@ fn projects_keys_limits_usage() {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: false,
+        archived_at: None,
         created_at: now,
     };
     s.create_project(&proj).unwrap();
@@ -918,6 +920,8 @@ fn projects_keys_limits_usage() {
         created_at: now,
         last_used_at: None,
         revoked: false,
+        scopes: lighttrack_core::default_scopes(),
+        expires_at: None,
     };
     s.create_api_key(&key).unwrap();
     assert_eq!(
@@ -2545,6 +2549,7 @@ fn cost_capped_store(threshold: f64) -> SqliteStore {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: false,
+        archived_at: None,
     })
     .unwrap();
     s.create_limit_rule(&LimitRule {

@@ -199,6 +199,10 @@ pub(crate) async fn score_trace(
     Json(body): Json<TraceScoreBody>,
 ) -> Result<Json<Score>, ApiError> {
     let p = authenticate(&st, &headers).await?;
+    // Reads the trace, then writes a verdict about it — so both capabilities, and the same
+    // `Ingest` the sibling `POST /v1/scores` door requires (a verdict is a recorded observation,
+    // not a configuration change).
+    crate::auth_scopes::ensure_scope(&p, lighttrack_core::Scope::Ingest)?;
     let scope = resolve_read_project(&p, None)?;
     let trace = load_trace(&st, scope, &id).await?;
 

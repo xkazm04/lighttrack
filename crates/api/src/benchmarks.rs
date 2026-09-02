@@ -200,6 +200,9 @@ pub(crate) async fn post_benchmark_run(
     Json(run): Json<BenchmarkRun>,
 ) -> Result<Json<BenchmarkRun>, ApiError> {
     let p = authenticate(&st, &headers).await?;
+    // The one benchmark *write* a project key can reach, so it is the one that needs `manage`:
+    // recording a run is what moves a gate, and an ingest/read key must not be able to.
+    crate::auth_scopes::ensure_scope(&p, lighttrack_core::Scope::Manage)?;
     let bench = load_benchmark_authorized(&st, &p, &run.benchmark_id).await?; // authorize via the benchmark
     let store = st.store.clone();
     let run2 = run.clone();

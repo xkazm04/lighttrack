@@ -36,6 +36,17 @@ pub(crate) enum ErrorCode {
     Unauthorized,
     /// Authenticated, but not permitted to act on the resource. HTTP 403.
     Forbidden,
+    /// The key authenticated, but its project is disabled — no door of that tenant accepts work.
+    /// HTTP 403. Split out of `forbidden` because the fix is an operator action on the *project*
+    /// (`PUT /v1/projects/:id {"enabled": true}`), not a different credential: a client that saw a
+    /// generic 403 would keep rotating keys forever.
+    ProjectDisabled,
+    /// The key is past its `expires_at`. HTTP 401.
+    ///
+    /// Deliberately NOT `unauthorized`: an expired key is a *correct* credential that ran out of
+    /// time, so it must not be metered by the failed-credential throttle (see [`ApiError::code`]),
+    /// and a client can tell "rotate me" from "you guessed wrong".
+    KeyExpired,
     /// The referenced resource does not exist. HTTP 404.
     NotFound,
     /// The request conflicts with current state (duplicate, frozen dataset, gated regression). HTTP 409.
@@ -84,8 +95,8 @@ impl ErrorCode {
             ErrorCode::BadRequest | ErrorCode::TsTooOld | ErrorCode::TsTooNew => {
                 StatusCode::BAD_REQUEST
             }
-            ErrorCode::Unauthorized => StatusCode::UNAUTHORIZED,
-            ErrorCode::Forbidden => StatusCode::FORBIDDEN,
+            ErrorCode::Unauthorized | ErrorCode::KeyExpired => StatusCode::UNAUTHORIZED,
+            ErrorCode::Forbidden | ErrorCode::ProjectDisabled => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::Conflict => StatusCode::CONFLICT,
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
@@ -104,6 +115,8 @@ impl ErrorCode {
             ErrorCode::TsTooNew => "ts_too_new",
             ErrorCode::Unauthorized => "unauthorized",
             ErrorCode::Forbidden => "forbidden",
+            ErrorCode::ProjectDisabled => "project_disabled",
+            ErrorCode::KeyExpired => "key_expired",
             ErrorCode::NotFound => "not_found",
             ErrorCode::Conflict => "conflict",
             ErrorCode::RateLimited => "rate_limited",
@@ -156,6 +169,13 @@ impl ApiError {
     }
     pub(crate) fn forbidden(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Forbidden, m)
+    }
+    /// The tenant kill switch: this project accepts nothing until it is re-enabled.
+    pub(crate) fn project_disabled(m: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ProjectDisabled, m)
+    }
+    pub(crate) fn key_expired(m: impl Into<String>) -> Self {
+        Self::new(ErrorCode::KeyExpired, m)
     }
     pub(crate) fn not_found(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::NotFound, m)

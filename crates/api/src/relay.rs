@@ -295,6 +295,19 @@ pub(crate) async fn post_result(
     // flat relay price (docs/RELAY.md). Always recorded — enforcing limits exist to cap metered
     // spend, and this run already happened on the flat-rate subscription. Deferred ⇒ no run.
     if prior.status == RelayStatus::Leased.as_str() && req.status != "deferred" {
+        // The fourth ingest door, and the one that cannot answer 403: the device has already run
+        // the work, and refusing the report would leave the task leased until it expired and was
+        // retried forever. So a disabled project settles the task (it terminates) and records
+        // nothing — `enabled` is honoured where it matters, on what lands in the store.
+        let policy = crate::state::project_policy_for(&st, &task.project_id).await?;
+        if !policy.enabled {
+            tracing::info!(
+                project_id = %task.project_id,
+                task_id = %task.id,
+                "relay run settled but not recorded: the project is disabled"
+            );
+            return Ok(Json(task));
+        }
         let mut ev = relay_run_event(&st, &task, &req);
         // This is the one door that writes an event without going through `events::prepare_event`,
         // and that is deliberate: the event is server-generated, so it needs no validation, costing

@@ -13,7 +13,7 @@
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use lighttrack_core::new_id;
+use lighttrack_core::{new_id, Scope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthMode {
@@ -87,12 +87,21 @@ pub enum Principal {
     Dev,
     /// The admin key was presented.
     Admin,
-    /// A valid project key was presented; carries its project id **and the key's row id**.
+    /// A valid project key was presented; carries its project id, the key's row id **and the
+    /// capabilities that key was minted with**.
     ///
     /// `key_id` is the opaque `api_keys.id` — never the presented token, its prefix, or any hash of
     /// it. Ingest stamps it onto the event so a budget can be scoped to one key and a breach can name
     /// which key drove it; nothing derived from the secret ever leaves this function.
-    Project { project_id: String, key_id: String },
+    ///
+    /// `scopes` travels on the principal rather than being re-read per check: the key row was
+    /// already loaded to verify the secret, and a second read per authorization would put a store
+    /// round-trip on every door.
+    Project {
+        project_id: String,
+        key_id: String,
+        scopes: Vec<Scope>,
+    },
 }
 
 impl Principal {
