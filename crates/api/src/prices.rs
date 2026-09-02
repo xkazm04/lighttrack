@@ -8,7 +8,7 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 
-use lighttrack_core::{ModelPriceRow, PriceBook};
+use lighttrack_core::{AliasTable, ModelPriceRow, PriceBook};
 
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin};
@@ -39,6 +39,17 @@ pub(crate) fn seed_book(path: &str) -> (PriceBook, PriceSeed) {
         },
         Err(_) => (embedded(), PriceSeed::Embedded),
     }
+}
+
+/// The declared model aliases from the seed, re-attached to every book built from DB rows.
+///
+/// `model_prices` has no alias column (M8 changes no schema) and none is wanted: an alias is a
+/// statement about *identity*, which ships with the build, while the DB is the source of truth for
+/// *prices*. Taken from the compiled-in seed so the table is identical on every instance of a
+/// release, however the operator edited their local `pricing.json` rates.
+pub(crate) fn declared_aliases() -> AliasTable {
+    static TABLE: std::sync::OnceLock<AliasTable> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| embedded().aliases().clone()).clone()
 }
 
 fn embedded() -> PriceBook {
@@ -115,7 +126,7 @@ pub(crate) async fn put_price(
     let rows = spawn_db(move || store2.list_prices()).await?;
     // Build outside the lock, swap under it: the critical section is one pointer-sized assignment,
     // and a poisoned lock is recovered rather than propagated (see `events::prepare_event`).
-    let fresh = PriceBook::from_rows(&rows);
+    let fresh = PriceBook::from_rows(&rows).with_aliases(declared_aliases());
     {
         let mut book = st.prices.write().unwrap_or_else(|p| p.into_inner());
         *book = fresh;

@@ -491,7 +491,7 @@ fn take_subtree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{Provider, Status, TokenUsage};
+    use crate::event::{Status, TokenUsage};
     use chrono::Duration;
     use serde_json::Value;
 
@@ -511,7 +511,7 @@ mod tests {
             parent_span_id: parent.map(str::to_string),
             ts: base() + Duration::seconds(secs),
             received_at: base(),
-            provider: Provider::Anthropic,
+            provider: "anthropic".into(),
             model: format!("m-{span}"),
             name: None,
             operation: Default::default(),

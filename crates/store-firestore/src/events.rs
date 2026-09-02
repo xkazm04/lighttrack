@@ -364,7 +364,7 @@ fn from_fields(m: &Fields) -> Result<LlmEvent> {
         // No `received_at` field on this backend yet: mirror the SQLite migration's backfill
         // (arrival time == event time). Mechanical only — the Firestore owner ports the real field.
         received_at: parse_ts(&fstr(m, "received_at").unwrap_or(freq(m, "ts")?))?,
-        provider: parse_enum("provider", &freq(m, "provider")?)?,
+        provider: lighttrack_core::ProviderId::new(&freq(m, "provider")?),
         model: freq(m, "model")?,
         name: fstr(m, "name"),
         operation: parse_enum("operation", &freq(m, "operation")?)?,

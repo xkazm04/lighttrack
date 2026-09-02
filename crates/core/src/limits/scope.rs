@@ -110,7 +110,15 @@ impl LimitScope {
     pub fn matches(&self, d: &ScopeDims<'_>) -> bool {
         match self {
             LimitScope::Provider(v) => d.provider == v,
-            LimitScope::Model(v) => d.model == v,
+            // Model scopes compare on the **canonical** identity, so a cap on `gpt-4o` also catches
+            // `gpt-4o-2024-08-06` and `openai/gpt-4o`. A dated release is the same model for
+            // spending purposes, and a cap an operator has to re-state per point release is a cap
+            // that silently stops covering traffic the week the vendor ships one.
+            LimitScope::Model(v) => {
+                d.model == v
+                    || crate::model_id::canonicalize(d.provider, d.model).family
+                        == crate::model_id::canonicalize(d.provider, v).family
+            }
             LimitScope::Name(v) => d.name == Some(v.as_str()),
             LimitScope::ApiKey(v) => d.api_key_id == Some(v.as_str()),
             LimitScope::Customer(v) => d.customer_id == Some(v.as_str()),

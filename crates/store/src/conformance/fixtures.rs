@@ -5,7 +5,7 @@ use serde_json::json;
 
 use lighttrack_core::{
     new_id, CollectiveEntry, Coverage, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent,
-    Operation, Project, Provider, Redaction, Status, TokenUsage,
+    Operation, Project, Redaction, Status, TokenUsage,
 };
 
 pub(super) fn sample_event(pid: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEvent {
@@ -17,7 +17,7 @@ pub(super) fn sample_event(pid: &str, model: &str, inp: u64, out: u64, cost: f64
         parent_span_id: None,
         ts: Utc::now(),
         received_at: Utc::now(),
-        provider: Provider::Anthropic,
+        provider: "anthropic".into(),
         model: model.into(),
         name: None,
         operation: Operation::Chat,

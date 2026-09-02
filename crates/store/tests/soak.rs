@@ -51,7 +51,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use serde_json::{json, Value};
 
-use lighttrack_core::{new_id, LlmEvent, Operation, Provider, Status, TokenUsage};
+use lighttrack_core::{new_id, LlmEvent, Operation, Status, TokenUsage};
 use lighttrack_store::{MaintenanceRequest, SqliteStore, Store};
 
 /// The criteria are read from the committed file, not restated here. `include_str!` so a missing or
@@ -102,7 +102,7 @@ fn ev(project: &str, payload_bytes: usize) -> LlmEvent {
         parent_span_id: None,
         ts: Utc::now(),
         received_at: Utc::now(),
-        provider: Provider::Anthropic,
+        provider: "anthropic".into(),
         model: "claude-haiku-4-5".into(),
         name: Some("soak".into()),
         operation: Operation::Chat,

@@ -35,6 +35,7 @@ fn section(store: &dyn Store, pid: &str, surface: Surface) -> Result<()> {
     match surface {
         Surface::EventsCore => {
             events::events(store, pid)?;
+            events::open_provider_identity(store)?;
             projects::projects_keys_limits(store, pid)?;
             scores::scores(store, pid)?;
             catalog::prices(store)?;

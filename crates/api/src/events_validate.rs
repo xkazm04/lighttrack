@@ -190,7 +190,6 @@ pub(crate) fn policy() -> &'static IngestPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lighttrack_core::Provider;
     use serde_json::json;
 
     fn ev(overrides: serde_json::Value) -> LlmEvent {
@@ -232,11 +231,14 @@ mod tests {
     #[test]
     fn accepts_unmodeled_provider() {
         let now = Utc::now();
-        // An unmodeled provider string deserializes to `Provider::Unknown` and is accepted —
-        // observability must ingest traffic from providers we haven't modeled yet.
+        // An unmodeled provider is accepted *as itself* (M8) — observability must ingest traffic
+        // from providers we haven't modeled, and keeping the name is what makes its price row and
+        // its limit scope reachable.
         let e = ev(json!({ "provider": "mistral" }));
-        assert_eq!(e.provider, Provider::Unknown);
+        assert_eq!(e.provider.as_str(), "mistral");
         assert!(disabled_skew().validate(&e, now).is_ok());
+        // Only a genuinely absent/blank provider becomes the `unknown` sentinel.
+        assert_eq!(ev(json!({ "provider": "  " })).provider.as_str(), "unknown");
     }
 
     #[test]

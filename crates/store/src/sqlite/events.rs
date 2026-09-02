@@ -8,7 +8,7 @@ use rusqlite::{params, params_from_iter, Connection, ErrorCode, OptionalExtensio
 use serde_json::Value;
 
 use lighttrack_core::{
-    LimitScope, LlmEvent, Operation, Provider, Status, TokenUsage, TraceShape, TraceSummary,
+    LimitScope, LlmEvent, Operation, ProviderId, Status, TokenUsage, TraceShape, TraceSummary,
 };
 
 use super::usage_cache::UsageCache;
@@ -873,7 +873,9 @@ fn from_raw(r: RawEvent) -> Result<LlmEvent> {
         parent_span_id: r.parent_span_id,
         ts,
         received_at,
-        provider: parse_enum::<Provider>("provider", &r.provider)?,
+        // An open id, not a vocabulary: the raw column is kept as written (historical rows that say
+        // `unknown` are the pre-M8 backfill sentinel — see docs/DATA_MODEL.md).
+        provider: ProviderId::new(&r.provider),
         model: r.model,
         name: r.name,
         operation: parse_enum::<Operation>("operation", &r.operation)?,

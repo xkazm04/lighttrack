@@ -7,39 +7,42 @@
 //!
 //! Deliberately coarse. The signal we need is "did the same lab's model grade its own output?", not
 //! a version taxonomy, so `claude-haiku-4-5` and `claude-opus-5` are one family.
+//!
+//! The rules themselves live in `lighttrack_core` (M8) — this is the engine's view of the *one*
+//! identity algorithm, not a fourth copy of it.
 
-/// The lab family behind a `(provider, model)` pair. Falls back to the provider string when the
-/// model name carries no recognisable marker — an unknown provider is its own family, which keeps
-/// the comparison honest (never silently "different").
-pub fn model_family(provider: &str, model: &str) -> String {
-    let m = model.to_ascii_lowercase();
-    // Model name wins over provider: a gateway/proxy provider can serve another lab's model, and
-    // the family that matters for self-preference is whoever trained it.
-    if m.contains("claude")
-        || m.starts_with("haiku")
-        || m.starts_with("sonnet")
-        || m.starts_with("opus")
-    {
-        return "anthropic".to_string();
-    }
-    if m.contains("gemini") || m.contains("gemma") {
-        return "google".to_string();
-    }
-    if m.starts_with("gpt") || m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") {
-        return "openai".to_string();
-    }
-    provider.to_ascii_lowercase()
+use lighttrack_core::{canonicalize, ProviderFamily};
+
+/// The lab family behind a `(provider, model)` pair. The model name wins over the provider (a
+/// gateway serves another lab's models); an unclassifiable pair falls back to the provider id's own
+/// family, which keeps the comparison honest — [`ProviderFamily::Other`] never reads as "different"
+/// by accident, because two unknowns compare equal only when their ids agree (see [`same_family`]).
+pub fn model_family(provider: &str, model: &str) -> ProviderFamily {
+    canonicalize(provider, model).provider_family()
 }
 
 /// True when a judge and the target it is grading come from the same lab — the self-preference
 /// condition. Never hard-fails a run: callers warn and record.
+///
+/// Two *unclassified* models are the same family only when their provider ids match, so a local
+/// `mistral` judge grading a local `mistral` generation is still flagged, while `groq` judging
+/// `ollama` is not.
 pub fn same_family(
     judge_provider: &str,
     judge_model: &str,
     target_provider: &str,
     target_model: &str,
 ) -> bool {
-    model_family(judge_provider, judge_model) == model_family(target_provider, target_model)
+    let judge = model_family(judge_provider, judge_model);
+    let target = model_family(target_provider, target_model);
+    if judge != target {
+        return false;
+    }
+    if judge.is_known() {
+        return true;
+    }
+    canonicalize(judge_provider, judge_model).provider
+        == canonicalize(target_provider, target_model).provider
 }
 
 #[cfg(test)]
@@ -48,11 +51,20 @@ mod tests {
 
     #[test]
     fn families_are_recognised_from_the_model_name() {
-        assert_eq!(model_family("anthropic", "haiku"), "anthropic");
-        assert_eq!(model_family("anthropic", "claude-haiku-4-5"), "anthropic");
-        assert_eq!(model_family("google", "gemini-2.5-flash"), "google");
-        assert_eq!(model_family("openai", "gpt-5-mini"), "openai");
-        assert_eq!(model_family("openai", "o3"), "openai");
+        assert_eq!(
+            model_family("anthropic", "haiku"),
+            ProviderFamily::Anthropic
+        );
+        assert_eq!(
+            model_family("anthropic", "claude-haiku-4-5"),
+            ProviderFamily::Anthropic
+        );
+        assert_eq!(
+            model_family("google", "gemini-2.5-flash"),
+            ProviderFamily::Google
+        );
+        assert_eq!(model_family("openai", "gpt-5-mini"), ProviderFamily::OpenAi);
+        assert_eq!(model_family("openai", "o3"), ProviderFamily::OpenAi);
     }
 
     #[test]
@@ -60,14 +72,21 @@ mod tests {
         // A gateway serving Claude is still the Anthropic family for bias purposes.
         assert_eq!(
             model_family("openrouter", "anthropic/claude-sonnet-5"),
-            "anthropic"
+            ProviderFamily::Anthropic
         );
     }
 
     #[test]
     fn unknown_models_fall_back_to_the_provider() {
-        assert_eq!(model_family("mistral", "mixtral-8x7b"), "mistral");
-        // …and an unknown provider is its own family, so it never reads as "different" by accident.
+        // Mistral is a modeled family now; an id nothing classifies stays `Other`…
+        assert_eq!(
+            model_family("mistral", "mixtral-8x7b"),
+            ProviderFamily::Mistral
+        );
+        assert_eq!(model_family("acme-labs", "zoo-1"), ProviderFamily::Other);
+        // …and two unclassified models are "same family" only when the provider id agrees.
+        assert!(same_family("acme-labs", "zoo-1", "acme-labs", "zoo-2"));
+        assert!(!same_family("acme-labs", "zoo-1", "other-labs", "zoo-2"));
         assert!(same_family("mistral", "mixtral", "mistral", "ministral"));
     }
 

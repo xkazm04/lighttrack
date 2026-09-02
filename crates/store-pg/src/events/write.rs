@@ -61,7 +61,7 @@ pub(crate) fn insert_query(
     .bind(ev.span_id.clone())
     .bind(ev.parent_span_id.clone())
     .bind(fmt_ts(ev.ts))
-    .bind(ev.provider.as_str())
+    .bind(ev.provider.as_str().to_string()) // owned: the id is no longer a 'static enum label
     .bind(ev.model.clone())
     .bind(ev.operation.as_str())
     .bind(ev.usage.input as i64)

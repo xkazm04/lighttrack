@@ -121,6 +121,41 @@ pub(super) fn scoped_usage(store: &dyn Store) -> Result<()> {
 /// the suite passed a backend that silently answered these wrong. It pins the correct behavior against
 /// SQLite and will now fail any backend that hasn't ported these queries — the drift signal the
 /// systemic parity gap was missing. Scoped to a fresh project so the window/scope math is deterministic.
+/// An **unmodeled** provider survives a round-trip verbatim, and its price row is reachable.
+///
+/// Before M8 the column stored the literal `unknown` for anything outside a closed enum, so a
+/// `mistral/*` price row could never be matched by a `mistral` event — on any backend. Runs in its
+/// own project so it cannot disturb the counts [`events`] asserts.
+pub(super) fn open_provider_identity(store: &dyn Store) -> Result<()> {
+    let pid = new_id();
+    let mut ev = sample_event(&pid, "mistral-large", 1_000_000, 0, 0.0);
+    ev.provider = "mistral".into();
+    ev.cost_usd = None;
+    store.insert_event(&ev)?;
+
+    let mut back = store.get_event(&ev.id)?.expect("open-provider event");
+    assert_eq!(
+        back.provider.as_str(),
+        "mistral",
+        "an unmodeled provider is stored as itself, not as `unknown`"
+    );
+    let book = lighttrack_core::PriceBook::from_rows(&[lighttrack_core::ModelPriceRow {
+        provider: "mistral".into(),
+        model: "mistral-large".into(),
+        input_per_mtok: 2.0,
+        output_per_mtok: 6.0,
+        cached_input_per_mtok: None,
+        effective_date: Utc::now(),
+        source_url: None,
+    }]);
+    assert_eq!(
+        back.ensure_cost(&book),
+        Some(2.0),
+        "a mistral event prices from a mistral price row"
+    );
+    Ok(())
+}
+
 pub(super) fn parity_gap_methods(store: &dyn Store) -> Result<()> {
     let pid = new_id();
     let now = Utc::now();

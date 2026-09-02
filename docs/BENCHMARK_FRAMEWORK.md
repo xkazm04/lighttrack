@@ -637,11 +637,15 @@ LightTrack, the better the data for everyone (the moat).
     hub clamps the judge tag to the known vocabulary. A leaderboard row exposes the distinct
     `judge_providers` and, when they disagree, a `mixed_judges` count; `GET …/leaderboard?judge=<prov>`
     filters to rows a given judge family scored. A bucket whose own runs disagree collapses to `mixed`.
-  - *Model-identity normalization.* At ingest the hub canonicalizes `(provider, model)` through
-    `config/model_aliases.json` (`LIGHTTRACK_MODEL_ALIASES`): a redundant `provider/` prefix is stripped
-    and dated/synonym variants collapse to their family **only where the alias file says so**
-    (`gpt-4o`, `openai/gpt-4o`, `gpt-4o-2024-08-06` → one row). An identity absent from the table passes
-    through unchanged, so a new model is never silently mis-merged.
+  - *Model-identity normalization.* At ingest the hub canonicalizes `(provider, model)` through the
+    single canonicalizer, `lighttrack_core::model_id` (M8): a redundant `provider/` prefix is stripped,
+    a declared provider synonym folds (`azure-openai` → `openai`), a `-YYYYMMDD` / `-YYYY-MM-DD` date
+    suffix and an `@batch`/`@flex`/`@in>N` lane come off, and only then the **declared** alias table
+    applies — the per-model `aliases` lists in `config/pricing.json` (`LIGHTTRACK_MODEL_ALIASES` still
+    overrides the file, in either that shape or the pre-M8 `model_aliases.json` one). So `gpt-4o`,
+    `openai/gpt-4o` and `gpt-4o-2024-08-06` are one row, an identity absent from the table passes
+    through unchanged, and rows never merge on *family*: an unmodeled provider keeps its own id rather
+    than being folded into the lab it proxies.
 - **Benchmark rigor rides the digest (schema v3).** Rounds 4 and 5 built exactly the signals that
   answer "should I trust this number" — determinism stamps, frozen datasets, significance-tested
   verdicts — and none of them used to reach the collective, so a pinned exact-determinism run against a

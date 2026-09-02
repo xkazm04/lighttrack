@@ -187,11 +187,10 @@ mod tests {
 
     #[test]
     fn estimate_prices_from_the_book_and_flags_misses() {
-        // Real provider names, because the price book's provider vocabulary is the `Provider` enum:
-        // a row whose provider is outside it keys under `unknown/` and is unreachable from every
-        // lookup path, ingest included. This test used to use "a"/"o", which only resolved while the
-        // runner had its own string-matching price lookup — the second pricing authority that is now
-        // gone. Its disappearance IS the fix, so the fixture moves to the shared vocabulary.
+        // Real provider names. The vocabulary is open since M8 — "a"/"o" would key and look up
+        // consistently now — but the fixture stays realistic: the runner has no pricing authority of
+        // its own, it asks the same book ingest does, and a test that reads like production traffic
+        // is the one that keeps noticing when that stops being true.
         let prices = vec![
             price("openai", "m", 1_000.0, 1_000.0),
             price("anthropic", "j", 1_000.0, 1_000.0),

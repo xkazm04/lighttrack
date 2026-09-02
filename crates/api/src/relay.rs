@@ -14,8 +14,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use lighttrack_core::{
-    new_id, LlmEvent, Operation, Provider, RelayOutcome, RelayStatus, RelayTask, Status,
-    TokenUsage, RELAY_DEFAULT_MAX_ATTEMPTS, RELAY_DEFAULT_RETRY_INTERVAL_SECS,
+    new_id, LlmEvent, Operation, RelayOutcome, RelayStatus, RelayTask, Status, TokenUsage,
+    RELAY_DEFAULT_MAX_ATTEMPTS, RELAY_DEFAULT_RETRY_INTERVAL_SECS,
 };
 
 use crate::auth::Principal;
@@ -349,7 +349,7 @@ fn relay_run_event(st: &AppState, task: &RelayTask, req: &ResultReq) -> LlmEvent
         parent_span_id: None,
         ts: Utc::now(),
         received_at: Utc::now(),
-        provider: Provider::Anthropic,
+        provider: "anthropic".into(),
         model: req
             .model
             .clone()
