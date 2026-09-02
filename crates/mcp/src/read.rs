@@ -22,12 +22,12 @@ pub(crate) fn tools() -> Vec<Value> {
                 "since":{"type":"string","description":"RFC3339 window start (default 30d ago)"},
                 "until":{"type":"string","description":"RFC3339 window end (default now)"}
             }})),
-        tool("get_forecast", "Predictive cost/margin forecast for a project: projected spend, per-budget breach ETAs (\"will breach in ~N days\"), per-customer/product margin-erosion crossovers (\"turns unprofitable next week\"), and the pre-emptive alerts derived from them. Fits an EWMA/linear trend over the recent daily counters.",
+        tool("get_forecast", "Predictive cost/margin forecast for a project: projected spend, per-budget breach ETAs (\"will breach in ~N days\"), per-customer/product margin-erosion crossovers (\"turns unprofitable next week\"), and the pre-emptive alerts derived from them. Fits an EWMA/linear trend over the recent daily counters. The forecast REFUSES rather than guesses: a projection built on too little history is withheld (its ETA is null) and named in `refused[]` with the reason (\"4 observed days needed, 2 seen\"), so an empty `alerts` with a non-empty `refused` means 'not enough evidence', not 'all is well'. `confidence` is the fit's r², withheld under the same floor.",
             json!({"type":"object","properties":{
                 "project":{"type":"string"},
                 "by":{"type":"string","enum":["customer","product"],"description":"margin dimension (default customer)"},
                 "horizon":{"type":"integer","description":"days to project ahead (default 14, 1..=90)"},
-                "lookback":{"type":"integer","description":"trailing days of history to fit (default 14, 2..=90)"}
+                "lookback":{"type":"integer","description":"trailing days of history to fit (default 14, clamped to 4..=90 — below the evidence floor a trend cannot be presented)"}
             },"required":["project"]})),
         tool("query_events", "Recent LLM call events (newest first). Filter by project/time window/provider/model/trace/use-case name; page with `cursor` (from a prior call's next_cursor).",
             json!({"type":"object","properties":{
