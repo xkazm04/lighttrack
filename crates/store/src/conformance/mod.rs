@@ -27,6 +27,7 @@ mod fixtures;
 mod forecast;
 mod job_leases;
 mod jobs;
+mod labels;
 mod maintenance;
 mod margin;
 mod margin_policy;

@@ -8,7 +8,7 @@
 use lighttrack_core::new_id;
 
 use super::{
-    admission, alerts, catalog, collective, devices, events, forecast, job_leases, jobs,
+    admission, alerts, catalog, collective, devices, events, forecast, job_leases, jobs, labels,
     maintenance, margin, margin_policy, pricing, projects, prompts, refusals, relay, revenue,
     rollup, schedules, scores, traces,
 };
@@ -78,6 +78,8 @@ fn section(store: &dyn Store, pid: &str, surface: Surface) -> Result<()> {
         Surface::Metrics => maintenance::metrics(store)?,
         Surface::Pricing => pricing::pricing(store)?,
         Surface::Devices => devices::devices(store)?,
+        Surface::Labels => labels::labels(store, pid)?,
+        Surface::Calibrations => labels::calibrations(store, pid)?,
     }
     Ok(())
 }

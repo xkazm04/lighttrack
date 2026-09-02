@@ -55,6 +55,7 @@ pub(super) fn sample_project() -> Project {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: false,
+        require_trusted_judge: false,
         archived_at: None,
         created_at: Utc::now(),
     }

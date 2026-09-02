@@ -110,6 +110,22 @@ pub enum Surface {
     /// there (it is what admits a legacy shared-key deployment's traffic), so it must never be
     /// something a missing table says by accident.
     Devices,
+    /// The human verdict ledger (M11): what a person said about an event, a golden-set item, or a
+    /// judge's own verdict.
+    ///
+    /// Its own surface rather than part of [`Surface::EventsCore`] because it is the *input* to the
+    /// trust argument rather than a product record, and a backend can serve every score and dataset
+    /// method without having a `labels` table. An empty listing here would read as "nobody has
+    /// graded anything", which is what lets a calibration run on nothing at all.
+    Labels,
+    /// The stored calibration results, and the `(rubric, judge)` trust lookup every gate makes
+    /// (M11).
+    ///
+    /// Separate from [`Surface::Labels`] because the split is real: a deployment can import its
+    /// labels from files forever and still want the kappa history stored, and — more importantly —
+    /// a missing calibration is a *load-bearing* answer (it is what makes trust `unknown` rather
+    /// than `untrusted`), so it must never be something a missing table says by accident.
+    Calibrations,
 }
 
 impl Surface {
@@ -139,6 +155,8 @@ impl Surface {
         Surface::Metrics,
         Surface::Pricing,
         Surface::Devices,
+        Surface::Labels,
+        Surface::Calibrations,
     ];
 
     /// Stable wire/doc name (`snake_case`, matching the `Serialize` impl).
@@ -168,6 +186,8 @@ impl Surface {
             Surface::Metrics => "metrics",
             Surface::Pricing => "pricing",
             Surface::Devices => "devices",
+            Surface::Labels => "labels",
+            Surface::Calibrations => "calibrations",
         }
     }
 
@@ -420,6 +440,18 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
             "touch_device",
             "revoke_device",
             "count_eligible_devices",
+        ],
+    ),
+    (
+        Surface::Labels,
+        &["insert_label", "list_labels", "labels_for_dataset"],
+    ),
+    (
+        Surface::Calibrations,
+        &[
+            "insert_calibration",
+            "latest_calibration",
+            "list_calibrations",
         ],
     ),
 ];

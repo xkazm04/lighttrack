@@ -15,6 +15,9 @@ CREATE TABLE IF NOT EXISTS projects (
   archived_at TEXT
 );
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS archived_at TEXT;
+-- M11: the per-project judge-trust policy. OFF by default: turning it on retroactively would
+-- block every existing deployment's gates on the day it upgraded, nothing having been calibrated.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS require_trusted_judge BIGINT NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS api_keys (
   id           TEXT PRIMARY KEY,
@@ -535,3 +538,44 @@ CREATE TABLE IF NOT EXISTS alert_channels (
   created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_alert_channels_project ON alert_channels(project_id);
+
+-- ===========================================================================================
+-- M11: the human verdict ledger + the calibration history. Self-contained block, appended.
+-- Mirrors schema/sqlite/001_init.sql; timestamps stay fixed-width RFC3339 TEXT.
+-- ===========================================================================================
+
+CREATE TABLE IF NOT EXISTS labels (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL,
+  subject_kind TEXT NOT NULL,
+  subject_id   TEXT NOT NULL,
+  rubric_id    TEXT,
+  value        DOUBLE PRECISION NOT NULL,
+  pass         BOOLEAN,
+  dimensions   TEXT,
+  labeler      TEXT NOT NULL,
+  note         TEXT,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_labels_subject ON labels(subject_kind, subject_id);
+CREATE INDEX IF NOT EXISTS idx_labels_project ON labels(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_labels_rubric ON labels(rubric_id, created_at);
+
+CREATE TABLE IF NOT EXISTS calibrations (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL,
+  judge           TEXT NOT NULL,
+  rubric_id       TEXT,
+  dataset_id      TEXT,
+  dataset_version INTEGER,
+  kappa           DOUBLE PRECISION NOT NULL,
+  pearson         DOUBLE PRECISION NOT NULL,
+  mae             DOUBLE PRECISION NOT NULL,
+  rmse            DOUBLE PRECISION NOT NULL,
+  n               INTEGER NOT NULL,
+  kappa_bar       DOUBLE PRECISION NOT NULL,
+  trusted         BOOLEAN NOT NULL,
+  created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_calibrations_key
+  ON calibrations(project_id, judge, rubric_id, created_at);

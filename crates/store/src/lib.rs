@@ -25,12 +25,12 @@ use thiserror::Error;
 
 use lighttrack_core::{
     scope_matches, Alert, AlertChannel, AlertKind, ApiKey, Benchmark, BenchmarkRun,
-    CollectiveEntry, CostByDimension, CostEvidence, Dataset, DatasetItem, Delivery, Device,
-    DeviceEligibility, Job, JobCancel, JobFinish, LeaseHeld, LimitMetric, LimitRule, LimitScope,
-    LimitStatus, LimitWindow, LlmEvent, MarginPolicy, ModelPriceRow, Project, Prompt,
-    PromptVersion, RedactionStamp, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
-    RollupQuery, RollupRow, Rubric, Schedule, Score, ThresholdBasis, TokensByDimension, Trace,
-    TraceSummary, UnpricedRow,
+    CalibrationRecord, CollectiveEntry, CostByDimension, CostEvidence, Dataset, DatasetItem,
+    Delivery, Device, DeviceEligibility, Job, JobCancel, JobFinish, Label, LabelFilter, LeaseHeld,
+    LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow, LlmEvent, MarginPolicy,
+    ModelPriceRow, Project, Prompt, PromptVersion, RedactionStamp, RelayCancel, RelayOutcome,
+    RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score,
+    ThresholdBasis, TokensByDimension, Trace, TraceSummary, UnpricedRow,
 };
 
 pub use capabilities::{Capabilities, Surface};
@@ -1845,6 +1845,63 @@ pub trait Store: Send + Sync {
             out.extend(self.list_alert_channels(Some(p))?);
         }
         Ok(out)
+    }
+
+    // --- the human verdict ledger (M11): labels as data, calibration off files ---
+    //
+    // Every method refuses by default. An empty `list_labels` would read as "nobody has ever
+    // graded anything here", which is the answer that lets a calibration run on nothing and a gate
+    // promote on a judge no human ever checked — the exact failure this surface exists to close.
+
+    /// Record one human verdict. `id` is the caller's; a duplicate is a
+    /// [`StoreError::Conflict`], never a silent overwrite of somebody's opinion.
+    fn insert_label(&self, _l: &Label) -> Result<()> {
+        Err(StoreError::Unsupported("the label ledger"))
+    }
+    /// Labels newest-first, narrowed by [`LabelFilter`] and keyset-paged on `(created_at, id)`.
+    fn list_labels(&self, _f: &LabelFilter) -> Result<Vec<Label>> {
+        Err(StoreError::Unsupported("the label ledger"))
+    }
+    /// Every label attached to any item of `dataset_id` — the read a calibration run makes to turn
+    /// a stored golden set into judge/human pairs.
+    ///
+    /// Its own method rather than a `list_labels` filter because it is a *join*: the labels are
+    /// keyed by dataset-item id and the caller has a dataset id, so composing it from the filter
+    /// would mean one query per item — which is how a 500-case set becomes 500 round trips.
+    fn labels_for_dataset(&self, _dataset_id: &str) -> Result<Vec<Label>> {
+        Err(StoreError::Unsupported("the label ledger"))
+    }
+
+    /// Record one completed calibration. Append-only: a re-measurement is a new row, because the
+    /// point of the table is the history a drift check reads.
+    fn insert_calibration(&self, _c: &CalibrationRecord) -> Result<()> {
+        Err(StoreError::Unsupported("the calibration ledger"))
+    }
+    /// The newest calibration for exactly this `(rubric_id, judge)` pair — the read every gate
+    /// makes.
+    ///
+    /// `rubric_id: None` means the freeform (rubric-less) calibration, and matches **only** rows
+    /// that also have no rubric. A rubric's trust is never inherited from a freeform measurement,
+    /// nor from another rubric's: "good" means a different thing under a different set of criteria,
+    /// and a gate that borrowed one rubric's kappa for another would be exactly the uncalibrated
+    /// gate wearing a trusted badge. The same rule makes a *new rubric version* (M9 mints a new id)
+    /// start at [`lighttrack_core::JudgeTrust::Unknown`], which is the intended behaviour.
+    fn latest_calibration(
+        &self,
+        _project: &str,
+        _rubric_id: Option<&str>,
+        _judge: &str,
+    ) -> Result<Option<CalibrationRecord>> {
+        Err(StoreError::Unsupported("the calibration ledger"))
+    }
+    /// A project's calibration history, newest-first, keyset-paged on `(created_at, id)`.
+    fn list_calibrations(
+        &self,
+        _project: Option<&str>,
+        _limit: usize,
+        _cursor: Option<&str>,
+    ) -> Result<Vec<CalibrationRecord>> {
+        Err(StoreError::Unsupported("the calibration ledger"))
     }
 }
 

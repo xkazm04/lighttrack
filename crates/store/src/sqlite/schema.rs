@@ -113,6 +113,10 @@ const ADDED_COLUMNS_LATE: &[&str] = &[
     "ALTER TABLE relay_tasks ADD COLUMN stale_reclaims INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE relay_tasks ADD COLUMN lease_fence TEXT",
     "ALTER TABLE relay_tasks ADD COLUMN progress TEXT",
+    // M11 — the per-project judge-trust policy. Nullable-with-a-default and OFF: turning it on
+    // retroactively would block every existing deployment's gates on the day it upgraded, because
+    // nothing has been calibrated yet.
+    "ALTER TABLE projects ADD COLUMN require_trusted_judge INTEGER NOT NULL DEFAULT 0",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.

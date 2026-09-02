@@ -11,12 +11,14 @@
 mod alert_channels;
 mod alerts;
 mod benchmarks;
+mod calibrations;
 mod collective;
 mod datasets;
 mod devices;
 mod events;
 mod forecast;
 mod jobs;
+mod labels;
 mod limits;
 mod maintenance;
 mod margin_policies;
@@ -61,11 +63,11 @@ use rusqlite::Connection;
 use serde_json::Value;
 
 use lighttrack_core::{
-    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension,
-    Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Job, JobCancel, JobFinish,
-    LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
-    RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow,
-    Rubric, Schedule, Score, TokensByDimension, TraceSummary,
+    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CalibrationRecord, CollectiveEntry,
+    CostByDimension, Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Job, JobCancel,
+    JobFinish, Label, LabelFilter, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow,
+    Project, Prompt, PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask,
+    RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score, TokensByDimension, TraceSummary,
 };
 
 use crate::{
@@ -994,5 +996,39 @@ impl Store for SqliteStore {
     }
     fn delete_alert_channel(&self, id: &str) -> Result<bool> {
         self.with(|c| alert_channels::delete(c, id))
+    }
+
+    // --- the human verdict ledger + calibration history (M11) ---
+    fn insert_label(&self, l: &Label) -> Result<()> {
+        self.with_op(DbOp::ScoresWrite, |c| labels::insert(c, l))
+    }
+    fn list_labels(&self, f: &LabelFilter) -> Result<Vec<Label>> {
+        self.read_op(DbOp::ScoresRead, |c| labels::list(c, f))
+    }
+    fn labels_for_dataset(&self, dataset_id: &str) -> Result<Vec<Label>> {
+        self.read_op(DbOp::ScoresRead, |c| labels::for_dataset(c, dataset_id))
+    }
+    fn insert_calibration(&self, c: &CalibrationRecord) -> Result<()> {
+        self.with_op(DbOp::ScoresWrite, |conn| calibrations::insert(conn, c))
+    }
+    fn latest_calibration(
+        &self,
+        project: &str,
+        rubric_id: Option<&str>,
+        judge: &str,
+    ) -> Result<Option<CalibrationRecord>> {
+        self.read_op(DbOp::ScoresRead, |c| {
+            calibrations::latest(c, project, rubric_id, judge)
+        })
+    }
+    fn list_calibrations(
+        &self,
+        project: Option<&str>,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Vec<CalibrationRecord>> {
+        self.read_op(DbOp::ScoresRead, |c| {
+            calibrations::list(c, project, limit, cursor)
+        })
     }
 }
