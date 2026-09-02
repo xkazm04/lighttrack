@@ -15,8 +15,8 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
 use lighttrack_core::{
-    BenchRunPayload, CalibratePayload, DatasetSamplePayload, Job, JobKind, ScoreEventsPayload,
-    ScoreTracesPayload,
+    BenchRunPayload, CalibratePayload, ContributePayload, DatasetSamplePayload, Job, JobKind,
+    ScoreEventsPayload, ScoreTracesPayload,
 };
 use lighttrack_engine::EngineConfig;
 
@@ -51,6 +51,7 @@ pub(crate) fn process_job(
         JobKind::ScoreTraces => score_traces(cli, http, engine, parse(p)?, ctl),
         JobKind::DatasetSample => dataset_sample(cli, http, engine, parse(p)?, ctl),
         JobKind::Calibrate => calibrate(cli, http, engine, parse(p)?, ctl),
+        JobKind::Contribute => contribute(cli, http, parse(p)?, ctl),
     }
 }
 
@@ -223,4 +224,38 @@ fn calibrate(
         "trusted": code == 0,
         "exit_code": code,
     }))
+}
+
+/// One cycle of the collective auto-push: ask the API to contribute, and report what it decided.
+///
+/// The worker deliberately does **no** collective logic of its own — no digest build, no hash, no
+/// outbound call to the hub. `POST /v1/collective/contribute` owns all of it, which is what keeps
+/// the scheduled push and the hand-run `lt collective contribute` byte-identical; a second
+/// implementation here is exactly how the hash gate would come to compare two digests that were
+/// never the same object.
+///
+/// A `skipped` cycle is a **success**, not a failure: the gate deciding nothing changed is the
+/// mechanism working, and failing the job would burn the retry budget re-deciding it.
+fn contribute(
+    cli: &Cli,
+    http: &reqwest::blocking::Client,
+    p: ContributePayload,
+    ctl: &RunControl,
+) -> Result<Value> {
+    p.validate().map_err(|e| anyhow!("{e}"))?;
+    ctl.note("contributing this instance's digest");
+    let mut body = json!({ "hub": p.hub });
+    if let Some(r) = &p.hub_key_ref {
+        body["hub_key_ref"] = json!(r);
+    }
+    if let Some(m) = p.min_cases {
+        body["min_cases"] = json!(m);
+    }
+    let ack = crate::http::post(cli, http, "/v1/collective/contribute", &body)?;
+    let outcome = ack
+        .get("outcome")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    ctl.note(&format!("contribution {outcome}"));
+    Ok(json!({ "kind": "contribute", "outcome": outcome, "ack": ack }))
 }

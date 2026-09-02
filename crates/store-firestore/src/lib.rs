@@ -12,6 +12,7 @@ mod alerts;
 mod benchmarks;
 mod codec;
 mod collective;
+mod contributions;
 mod datasets;
 mod events;
 mod jobs;
@@ -31,10 +32,10 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use lighttrack_core::{
-    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension,
-    Dataset, DatasetItem, Delivery, Job, JobCancel, JobFinish, LimitRule, LimitScope, LlmEvent,
-    ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent, RollupQuery, RollupRow, Rubric,
-    Score, TraceSummary,
+    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, ContributionRecord,
+    CostByDimension, Dataset, DatasetItem, Delivery, Job, JobCancel, JobFinish, LimitRule,
+    LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent, RollupQuery,
+    RollupRow, Rubric, Score, TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
@@ -116,6 +117,10 @@ impl FirestoreStore {
         // `GET /v1/alerts` would tell an operator nothing has ever fired here.
         Surface::Alerts,
         Surface::AlertRouting,
+        // The contributor-side ledger, with its own stated caveat: the page and the per-hub probe
+        // are ordered client-side, so that a fresh project needs no hand-declared composite index
+        // (see [`contributions`]).
+        Surface::Contributions,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -467,6 +472,21 @@ impl Store for FirestoreStore {
         f: &CollectiveFilter,
     ) -> Result<Vec<CollectiveEntry>> {
         collective::list_filtered(&self.rest, f)
+    }
+
+    // --- the contributor-side contribution ledger (M22) ---
+    fn insert_contribution(&self, c: &ContributionRecord) -> Result<()> {
+        contributions::insert(&self.rest, c)
+    }
+    fn list_contributions(
+        &self,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Vec<ContributionRecord>> {
+        contributions::list(&self.rest, limit, cursor)
+    }
+    fn latest_contribution(&self, hub_url_hash: &str) -> Result<Option<ContributionRecord>> {
+        contributions::latest(&self.rest, hub_url_hash)
     }
 
     // --- alert ledger + routing (M3) ---

@@ -54,9 +54,10 @@ pub use bench_target::{
 };
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use collective::{
-    bucket_cost, build_digest, canon_determinism, merge_leaderboard, task_type_from,
-    CollectiveDigest, CollectiveEntry, Coverage, LeaderboardRow, ModelAliases, ModelDigestEntry,
-    RowRigor, RunStat, DEFAULT_LOW_CONFIDENCE_CASES, DEFAULT_MIN_CASES, DETERMINISM_LEVELS,
+    bucket_cost, build_digest, canon_determinism, digest_sha256, hub_url_hash, merge_leaderboard,
+    normalize_hub_url, task_type_from, CollectiveDigest, CollectiveEntry, ContributionRecord,
+    ContributionStatus, Coverage, LeaderboardRow, ModelAliases, ModelDigestEntry, RowRigor,
+    RunStat, DEFAULT_LOW_CONFIDENCE_CASES, DEFAULT_MIN_CASES, DETERMINISM_LEVELS,
     DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
 };
 pub use customer::{BillingProduct, Customer};
@@ -71,8 +72,8 @@ pub use job::{
     JOB_ERROR_WORKER_LOST,
 };
 pub use job_kinds::{
-    validate_payload, BenchRunPayload, CalibratePayload, DatasetSamplePayload, JudgeSpec,
-    ScoreEventsPayload, ScoreTracesPayload,
+    validate_payload, BenchRunPayload, CalibratePayload, ContributePayload, DatasetSamplePayload,
+    JudgeSpec, ScoreEventsPayload, ScoreTracesPayload,
 };
 pub use lease::{LeaseFence, LeaseHeld};
 pub use limits::{

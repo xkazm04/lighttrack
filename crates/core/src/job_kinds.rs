@@ -109,6 +109,41 @@ pub struct CalibratePayload {
     pub samples: u32,
 }
 
+/// Push this instance's digest to a collective hub and record the ack — one cycle of what
+/// `lt collective contribute` does by hand.
+///
+/// `hub_key_ref` is the **name of an environment variable**, never the key: a schedule row and a
+/// job payload are both readable by anything that can read the queue, and a hub credential sitting
+/// in one would be a secret at rest in the observability database. Absent ⇒
+/// `LIGHTTRACK_COLLECTIVE_HUB_KEY`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContributePayload {
+    /// The hub's base URL (`https://hub.example`), trailing slash tolerated.
+    pub hub: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub_key_ref: Option<String>,
+    /// k-anonymity floor for the digest build; `None` ⇒ the server's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_cases: Option<u32>,
+}
+
+impl ContributePayload {
+    /// A hub with no host is the one field with no defensible default, and the failure it produces
+    /// (a POST to nowhere, every interval, forever) is exactly what enqueue-time validation is for.
+    pub fn validate(&self) -> Result<(), String> {
+        let hub = self.hub.trim();
+        if hub.is_empty() {
+            return Err("'hub' is required: the base URL of the collective hub to push to".into());
+        }
+        if !(hub.starts_with("http://") || hub.starts_with("https://")) {
+            return Err(format!(
+                "'hub' must be an absolute http(s) URL, got {hub:?}"
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// The `--rubric` / `--rubric-id` contract, shared by every judging kind. Exactly one is required;
 /// [`JudgeSpec::validate`] says so at enqueue time rather than at the first paid call.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -149,6 +184,7 @@ pub fn validate_payload(kind: JobKind, payload: &Value) -> Result<(), String> {
         }
         JobKind::DatasetSample => parse::<DatasetSamplePayload>(payload).map(|_| ()),
         JobKind::Calibrate => parse::<CalibratePayload>(payload).and_then(|p| p.judge.validate()),
+        JobKind::Contribute => parse::<ContributePayload>(payload).and_then(|p| p.validate()),
     }
     .map_err(|e| format!("invalid payload for job kind '{}': {e}", kind.as_str()))
 }
@@ -222,6 +258,30 @@ mod tests {
             &json!({ "project": "p", "n": 5, "llm_scrub": true }),
         )
         .expect("valid");
+    }
+
+    /// A contribute schedule that names no hub would POST to nowhere on every interval forever;
+    /// one that names a bare hostname would do the same with a friendlier-looking payload.
+    #[test]
+    fn a_contribution_must_name_an_absolute_hub() {
+        let e = validate_payload(JobKind::Contribute, &json!({ "hub": "" })).expect_err("refuse");
+        assert!(e.contains("hub"), "{e}");
+        let e = validate_payload(JobKind::Contribute, &json!({ "hub": "hub.example" }))
+            .expect_err("refuse");
+        assert!(e.contains("absolute"), "{e}");
+        validate_payload(
+            JobKind::Contribute,
+            &json!({ "hub": "https://hub.example/" }),
+        )
+        .expect("valid");
+        // The key is referenced BY NAME. A payload carrying the key itself would put a hub
+        // credential at rest in the queue every schedule tick writes to.
+        let p: ContributePayload = serde_json::from_value(
+            json!({ "hub": "https://hub.example", "hub_key_ref": "MY_HUB_KEY" }),
+        )
+        .expect("payload");
+        assert_eq!(p.hub_key_ref.as_deref(), Some("MY_HUB_KEY"));
+        assert!(p.min_cases.is_none());
     }
 
     #[test]

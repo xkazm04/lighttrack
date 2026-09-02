@@ -34,6 +34,10 @@
       {
       "path": "docs/ALERTS.md",
       "note": "rewritten against crates/api/src/alerts/* for M3 (the persisted alert ledger). The two claims it used to make that the code no longer supports are gone: dedup is durable (Store::insert_alert_dedup, one atomic step per backend) rather than an in-memory map that resets on restart and lets each replica alert independently, and per-project routing exists rather than being deferred. Adds the eight alert kinds, the GET /v1/alerts surface, the X-LightTrack-Signature contract (including the sha256(secret) derived-key rule a receiver must implement), and the destination rules."
+    },
+    {
+      "path": "docs/BENCHMARK_FRAMEWORK.md",
+      "note": "§6 updated by M22 (the contribution ledger): 'what left the building' moves from a preview to a record. Adds the collective_contributions table and its `contributions` Store surface, POST /v1/collective/contribute (the push now happens in the API and appends a row per attempt), GET /v1/collective/contributions, the unchanged-digest hash gate (generated_at excluded, so a no-op push makes no HTTP call and cannot trip a hub's min_interval), the hub_key_ref-by-name rule, JobKind::Contribute + the opt-in auto-contribute schedule, and DELETE ?all=1, which walks the ledger's hubs and reports the ones it cannot resolve to a URL. The rest of the file was NOT re-read against the code in this pass — only §6 is covered."
     }
   ],
 
@@ -63,7 +67,6 @@
       "kind": "frozen-archive",
       "reason": "Dated structural observations from the same campaign. Its facts are stamped 2026-07-16 and read as history, not as a current description."
     },
-    { "path": "docs/BENCHMARK_FRAMEWORK.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/CALIBRATION.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/CI_GATE.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/CURRENCY.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },

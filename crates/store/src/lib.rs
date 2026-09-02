@@ -25,12 +25,12 @@ use thiserror::Error;
 
 use lighttrack_core::{
     scope_matches, Alert, AlertChannel, AlertKind, ApiKey, Benchmark, BenchmarkRun,
-    CollectiveEntry, CostByDimension, CostEvidence, Dataset, DatasetItem, Delivery, Device,
-    DeviceEligibility, Job, JobCancel, JobFinish, LeaseHeld, LimitMetric, LimitRule, LimitScope,
-    LimitStatus, LimitWindow, LlmEvent, MarginPolicy, ModelPriceRow, Project, Prompt,
-    PromptVersion, RedactionStamp, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
-    RollupQuery, RollupRow, Rubric, Schedule, Score, ThresholdBasis, TokensByDimension, Trace,
-    TraceSummary, UnpricedRow,
+    CollectiveEntry, ContributionRecord, CostByDimension, CostEvidence, Dataset, DatasetItem,
+    Delivery, Device, DeviceEligibility, Job, JobCancel, JobFinish, LeaseHeld, LimitMetric,
+    LimitRule, LimitScope, LimitStatus, LimitWindow, LlmEvent, MarginPolicy, ModelPriceRow,
+    Project, Prompt, PromptVersion, RedactionStamp, RelayCancel, RelayOutcome, RelaySettle,
+    RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score, ThresholdBasis,
+    TokensByDimension, Trace, TraceSummary, UnpricedRow,
 };
 
 pub use capabilities::{Capabilities, Surface};
@@ -1863,6 +1863,37 @@ pub trait Store: Send + Sync {
             out.extend(self.list_alert_channels(Some(p))?);
         }
         Ok(out)
+    }
+
+    // --- the contributor-side contribution ledger (M22) ---
+    //
+    // The mirror image of the collective surface above: that one is what a **hub** receives, this
+    // one is what **this instance sent**. Every method refuses by default rather than answering
+    // empty, for the reason the whole manifest exists — an empty ledger reads as "we have never
+    // contributed anything", which is the one answer that makes a hash-gated push send every time
+    // and a `withdraw --all` cover nothing.
+
+    /// Append one contribution attempt to the ledger. Append-only: rows are never updated and never
+    /// deleted (ARCHITECTURE §12), because the record of what left the building is the point.
+    fn insert_contribution(&self, _c: &ContributionRecord) -> Result<()> {
+        Err(StoreError::Unsupported("the contribution ledger"))
+    }
+    /// The ledger newest-first, keyset-paged on `(created_at, id)` — the same opaque cursor shape
+    /// every other listing uses ([`codec::encode_event_cursor`]). `limit` of `0` means
+    /// [`collective::CONTRIBUTIONS_DEFAULT_LIMIT`].
+    fn list_contributions(
+        &self,
+        _limit: usize,
+        _cursor: Option<&str>,
+    ) -> Result<Vec<ContributionRecord>> {
+        Err(StoreError::Unsupported("the contribution ledger"))
+    }
+    /// The newest row for one hub, or `None` if this instance has never pushed to it.
+    ///
+    /// This is the hash gate's read, so it is keyed rather than a scan: the whole point of the gate
+    /// is that a scheduled push which would change nothing costs one indexed probe and no HTTP call.
+    fn latest_contribution(&self, _hub_url_hash: &str) -> Result<Option<ContributionRecord>> {
+        Err(StoreError::Unsupported("the contribution ledger"))
     }
 }
 

@@ -67,6 +67,7 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
         Surface::Metrics => metrics(store),
         Surface::Pricing => pricing(store),
         Surface::Devices => devices(store),
+        Surface::Contributions => contributions(store),
     };
 
     let uncovered: Vec<&str> = surface
@@ -441,6 +442,25 @@ fn devices(store: &dyn Store) -> Vec<&'static str> {
         "touch_device",
         "revoke_device",
         "count_eligible_devices",
+    ]
+}
+
+/// A backend with no contribution ledger must refuse, not answer empty. An empty ledger reads as
+/// "this instance has never contributed anything", which is the one answer that makes a hash-gated
+/// push send on every interval and makes `withdraw --all` cover nothing — while an `Ok(())` from
+/// `insert_contribution` would drop the only record that data left the building.
+fn contributions(store: &dyn Store) -> Vec<&'static str> {
+    let c = super::contributions::sample_contribution();
+    refused("insert_contribution", store.insert_contribution(&c));
+    refused("list_contributions", store.list_contributions(10, None));
+    refused(
+        "latest_contribution",
+        store.latest_contribution(&c.hub_url_hash),
+    );
+    vec![
+        "insert_contribution",
+        "list_contributions",
+        "latest_contribution",
     ]
 }
 

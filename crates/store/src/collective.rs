@@ -17,6 +17,20 @@ use lighttrack_core::CollectiveEntry;
 
 use crate::{Result, Store, StoreError};
 
+/// Default page size for [`Store::list_contributions`] when the caller passes `0`.
+pub const CONTRIBUTIONS_DEFAULT_LIMIT: usize = 100;
+/// Hard ceiling on that page size, so a `?limit=` cannot ask a backend to decode its whole ledger.
+pub const CONTRIBUTIONS_MAX_LIMIT: usize = 1000;
+
+/// The page size to actually use: the caller's, clamped, with `0` meaning the default. Shared so
+/// three backends cannot disagree about what `limit=0` or `limit=100000` means.
+pub fn contributions_limit(limit: usize) -> usize {
+    match limit {
+        0 => CONTRIBUTIONS_DEFAULT_LIMIT,
+        n => n.min(CONTRIBUTIONS_MAX_LIMIT),
+    }
+}
+
 /// What one [`Store::replace_collective_contribution`] actually did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct ReplaceAck {

@@ -570,6 +570,46 @@ LightTrack, the better the data for everyone (the moat).
   - *The hub sees what you send.* Bucketing and the floors bound what a hub *learns*, but a hub is a
     party to the contribution, not an adversary you are hidden from. Contribute only from projects you
     have deliberately opted in (`collective_opt_in`, per project, never inherited).
+- **What left the building is a ledger, not a preview (M22).** `GET /v1/collective/digest` shows what
+  *would* go out; until M22 nothing recorded what *did*. The ack from a hub was printed to a terminal
+  and discarded, so an instance could not answer "have we already sent this", "which hubs hold our
+  data", or "what did they accept". `POST /v1/collective/contribute` (admin; CLI
+  `lt collective contribute --hub <url>`) now performs the push **from the API** and appends a
+  `collective_contributions` row per attempt — the `contributions` Store surface, served by all three
+  backends (`docs/PARITY.md`) and held to its own conformance section. Read it with
+  `GET /v1/collective/contributions` (CLI `lt collective history`, MCP
+  `get_collective_contributions`).
+  - *The row keeps a hash and counts, never the digest.* `digest_sha256`, `entries_count`,
+    `projects_included`/`projects_excluded`, `schema_version`, the hub's verbatim `ack`, and a status
+    of `sent` | `rejected` | `failed` — a hub that answered and declined is a different condition,
+    with a different fix, from one that never answered. The digest **body** is deliberately absent:
+    the ledger must not become a second copy of every model number this instance has measured, and it
+    can therefore never be mined for more than the hub already knows. The hub is identified by
+    `hub_url_hash` (`h-` + 12 hex), for the reason the contributor id is hashed: a ledger an operator
+    pastes into an issue, or an MCP tool drops into an agent transcript, should not be where a private
+    hub's address leaks from.
+  - *The consent envelope is at rest.* `GET /digest` recomputes `projects_included`/`projects_excluded`
+    per call, so before M22 the record of which projects consented to a given push existed on the wire
+    and nowhere else. Each ledger row now carries the envelope that push actually had.
+  - *An unchanged digest is not re-sent.* The hash deliberately **excludes** `generated_at`, so two
+    builds of the same measurements hash the same. If it matches the last row this hub *acked*, the
+    push is skipped with a reason and **no HTTP call is made at all** — which is what makes an
+    automated push safe against a hub's `min_interval` (see the differencing note above): the 429s it
+    would otherwise produce every interval are the kind an operator learns to ignore. A `rejected` or
+    `failed` attempt does not arm the gate — the hub does not have that digest — and a skip writes no
+    row, because the ledger records what left the building. `force=true` (CLI `--force`) is the escape
+    hatch for a hub that lost its database.
+  - *The hub key is named, never carried.* The request takes `hub_key_ref`, the **name** of a
+    server-side environment variable (default `LIGHTTRACK_COLLECTIVE_HUB_KEY`), which the API
+    resolves. A request body is logged and retried, and a schedule row is readable by anything that
+    can read the queue; neither is a place for a credential.
+  - *Contribution can recur like any other workload.* `JobKind::Contribute` is an ordinary job kind, so
+    setting `LIGHTTRACK_COLLECTIVE_AUTO_CONTRIBUTE_SECS` + `LIGHTTRACK_COLLECTIVE_HUB` creates a
+    stored `Contribute` **schedule** at startup (opt-in; idempotent — an existing schedule for that
+    hub keeps the cadence an operator set). It inherits the queue's lease, retry accounting,
+    cancellation and job rows, and appears in `GET /v1/schedules` like everything else. Per-project
+    `collective_opt_in` still gates what the scheduled push contains: it sends the same digest
+    `GET /digest` builds, from consenting projects only.
 - **The right to withdraw + retention.** `DELETE /v1/collective/contribution` (CLI:
   `lt collective withdraw --hub <url> --hub-key <k>`) removes every entry a source contributed,
   authenticated exactly like ingest — you may withdraw what you could have published — so leaving the
@@ -581,6 +621,14 @@ LightTrack, the better the data for everyone (the moat).
   must not be published at all; every user filter still runs after the merge and after the
   source floor. It is also physically swept from storage on the same pass as the next ingest, on all
   three backends.
+  `DELETE /v1/collective/contribution?all=1` (CLI `lt collective withdraw --all`) is the contributor
+  side of the same right: it walks the **ledger** and asks every hub that acked a contribution to
+  delete it, so revoking consent no longer depends on the operator remembering every hub they ever
+  pushed to. Because the ledger stores an opaque hash rather than an address, the URLs are resolved
+  from what this deployment already writes down — repeated `?hub=`, the `Contribute` schedules'
+  payloads, and `LIGHTTRACK_COLLECTIVE_HUBS` — and any ledgered hub none of those can name is
+  returned in `unresolved` rather than silently skipped: a withdrawal that quietly covered less than
+  it claimed would be worse than the gap it reports.
 - **Running a hub on Postgres or Firestore.** The hub endpoints (`POST /v1/collective/ingest`,
   `GET /v1/collective/leaderboard`, `DELETE /v1/collective/contribution`) once answered 501 on
   anything but SQLite, which meant the deployment shape a public hub actually has — a managed

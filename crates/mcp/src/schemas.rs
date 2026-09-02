@@ -42,6 +42,7 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "get_rubric" => rubric(),
         "get_collective_leaderboard" => collective_resp(),
         "get_collective_digest" => collective_digest_resp(),
+        "get_collective_contributions" => list_of(contribution()),
         "list_prompts" => list_of(prompt_entry()),
         "get_prompt" => resolved_prompt(),
         _ => return None,
@@ -282,6 +283,25 @@ fn collective_digest_resp() -> Value {
     })
 }
 
+/// One contribution-ledger row. The digest **body** is deliberately absent from the shape as well
+/// as from the store: `digest_sha256` and the counts are what the ledger knows.
+fn contribution() -> Value {
+    obj(json!({
+        "id": {"type":"string"},
+        "hub_url_hash": {"type":"string"},
+        "contributor_id_as_acked": {"type":["string","null"]},
+        "schema_version": {"type":"integer"},
+        "generated_at": {"type":"string"},
+        "entries_count": {"type":"integer"},
+        "projects_included": {"type":"integer"},
+        "projects_excluded": {"type":"integer"},
+        "digest_sha256": {"type":"string"},
+        "ack": {},
+        "status": {"type":"string", "enum": ["sent", "rejected", "failed"]},
+        "created_at": {"type":"string"}
+    }))
+}
+
 /// The alert ledger's page. An envelope, not a bare array, so `next_cursor` travels with the rows —
 /// and `delivered` is declared explicitly because an EMPTY delivery list is the single most
 /// important thing on this page: it means the alert reached nobody.
@@ -469,6 +489,7 @@ mod tests {
             "get_usecases",
             "get_forecast",
             "get_collective_digest",
+            "get_collective_contributions",
         ] {
             assert!(
                 output_schema(t).is_some(),

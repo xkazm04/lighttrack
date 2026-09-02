@@ -92,16 +92,21 @@ pub enum JobKind {
     DatasetSample,
     /// Re-measure judge/human agreement against a golden set (one cycle).
     Calibrate,
+    /// Push this instance's privacy-safe digest to a collective hub, and record what came back
+    /// (one cycle). Hash-gated: an unchanged digest is a no-op, so a schedule of this kind is not
+    /// a machine for tripping a hub's `min_interval`.
+    Contribute,
 }
 
 impl JobKind {
     /// Every kind, so consumers can enumerate/validate the closed vocabulary.
-    pub const ALL: [JobKind; 5] = [
+    pub const ALL: [JobKind; 6] = [
         JobKind::BenchRun,
         JobKind::ScoreEvents,
         JobKind::ScoreTraces,
         JobKind::DatasetSample,
         JobKind::Calibrate,
+        JobKind::Contribute,
     ];
 
     /// The persisted/wire literal for this kind.
@@ -112,6 +117,7 @@ impl JobKind {
             JobKind::ScoreTraces => "score_traces",
             JobKind::DatasetSample => "dataset_sample",
             JobKind::Calibrate => "calibrate",
+            JobKind::Contribute => "contribute",
         }
     }
 

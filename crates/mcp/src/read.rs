@@ -136,6 +136,11 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({"type":"object","properties":{
                 "min_cases":{"type":"integer","description":"k-anonymity floor: only (model, task) buckets with ≥ this many cases are published (default from server)"}
             }})),
+        tool("get_collective_contributions", "The contribution ledger (admin key required): every digest this instance has PUSHED to a collective hub — when, to which hub (an opaque hash, never the URL), how many buckets, how many projects consented vs were withheld, the digest's content hash, and the hub's verbatim ack. `status` is sent | rejected | failed: a rejection is a hub that answered and declined (its own min_interval, a bad credential), a failure is a push that never got an answer. Two rows sharing a `digest_sha256` were the same measurement re-sent. The digest BODY is never stored here — only the hash and the counts.",
+            json!({"type":"object","properties":{
+                "limit":{"type":"integer","description":"max rows, newest first (default from server)"},
+                "cursor":{"type":"string","description":"keyset cursor from a prior call's next_cursor"}
+            }})),
     ]
 }
 
@@ -231,6 +236,7 @@ pub(crate) fn dispatch_paged(
     let path = match name {
         "query_events" => events_path(args),
         "list_traces" => traces_path(args),
+        "get_collective_contributions" => contributions_path(args),
         _ => return None,
     };
     Some(c.get_paged(&path))
@@ -429,6 +435,25 @@ fn collective_path(args: &Value) -> String {
     p
 }
 
+/// The ledger page. Both parameters are optional and the server decides the default page size, so
+/// an agent that passes nothing still gets a sane page rather than the whole table.
+fn contributions_path(args: &Value) -> String {
+    let mut p = "/v1/collective/contributions".to_string();
+    let mut sep = '?';
+    if let Some(n) = args.get("limit").and_then(Value::as_u64) {
+        p.push_str(&format!("{sep}limit={n}"));
+        sep = '&';
+    }
+    if let Some(c) = args
+        .get("cursor")
+        .and_then(Value::as_str)
+        .filter(|c| !c.is_empty())
+    {
+        p.push_str(&format!("{sep}cursor={c}"));
+    }
+    p
+}
+
 fn collective_digest_path(args: &Value) -> String {
     match args.get("min_cases").and_then(Value::as_u64) {
         Some(n) => format!("/v1/collective/digest?min_cases={n}"),
@@ -598,6 +623,32 @@ mod tests {
         assert!(
             !p.contains("since"),
             "an empty arg is omitted, not sent blank: {p}"
+        );
+    }
+
+    #[test]
+    fn contributions_path_is_bare_by_default_and_pages_on_request() {
+        assert_eq!(
+            contributions_path(&json!({})),
+            "/v1/collective/contributions",
+            "an agent that passes nothing gets the server's default page, not the whole table"
+        );
+        assert_eq!(
+            contributions_path(&json!({ "limit": 5 })),
+            "/v1/collective/contributions?limit=5"
+        );
+        assert_eq!(
+            contributions_path(&json!({ "limit": 5, "cursor": "abc" })),
+            "/v1/collective/contributions?limit=5&cursor=abc"
+        );
+        // A cursor alone must still open the query with `?`, not `&`.
+        assert_eq!(
+            contributions_path(&json!({ "cursor": "abc" })),
+            "/v1/collective/contributions?cursor=abc"
+        );
+        assert_eq!(
+            contributions_path(&json!({ "cursor": "" })),
+            "/v1/collective/contributions"
         );
     }
 

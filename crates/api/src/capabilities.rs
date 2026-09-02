@@ -143,6 +143,12 @@ fn consequence(s: Surface) -> &'static str {
             "Device enrolment (/v1/relay/devices) is unavailable — relay work here can only be              driven by the deprecated shared LIGHTTRACK_RELAY_DEVICE_KEY, which cannot be revoked              per machine, and leases are NOT filtered by what a device can actually run."
         }
         Surface::Collective => "The collective leaderboard hub cannot store contributions here.",
+        Surface::Contributions => {
+            "GET /v1/collective/contributions is unavailable and POST /v1/collective/contribute \
+             records nothing — so a push is never hash-gated (every scheduled one goes out, which \
+             a hub's min_interval will answer 429 to) and `withdraw --all` has no list of hubs to \
+             cover."
+        }
         Surface::ProjectAdmin => {
             "PUT /v1/projects/:id is unavailable — a project's redaction policy cannot be changed."
         }
