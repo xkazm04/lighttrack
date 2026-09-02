@@ -33,6 +33,7 @@ use lighttrack_store::EventFilter;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 /// How many settle events one ledger read may walk, and the page it walks them in. The ledger is a
 /// derived view, so its honesty depends on saying when it stopped rather than on scanning forever.
@@ -99,7 +100,8 @@ pub(crate) async fn list_actions(
         let proj = project.clone();
         let want = PAGE.min(budget - scanned);
         let page =
-            spawn_db(move || store.list_events_filtered(proj.as_deref(), &filter, want)).await?;
+            spawn_db(move || store.list_events_filtered(proj.as_deref().into(), &filter, want))
+                .await?;
         scanned += page.events.len();
         for ev in &page.events {
             fold(&mut acc, ev);
@@ -238,7 +240,7 @@ pub(crate) async fn snapshot_dataset(
     let store = st.store.clone();
     let (pid, at) = (req.project_id.clone(), action_type.clone());
     let tasks = spawn_db(move || {
-        store.list_relay_tasks_by_action(Some(&pid), &at, Some("succeeded"), limit)
+        store.list_relay_tasks_by_action(TenantScope::Project(&pid), &at, Some("succeeded"), limit)
     })
     .await?;
 

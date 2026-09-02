@@ -13,7 +13,6 @@ use serde::Deserialize;
 use lighttrack_core::LlmEvent;
 use lighttrack_store::{CostRow, EventFilter, UseCaseCostRow};
 
-use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_read_project};
 use crate::state::{spawn_db, AppState};
@@ -152,14 +151,16 @@ pub(crate) async fn get_events(
     // array, no next-cursor — the online scorer pages by re-asking after it has scored a batch.
     if is_truthy(q.unscored.as_deref()) {
         let tag = q.prompt.clone().filter(|s| !s.is_empty());
-        let events =
-            spawn_db(move || store.list_unscored_events(project.as_deref(), tag.as_deref(), limit))
-                .await?;
+        let events = spawn_db(move || {
+            store.list_unscored_events(project.as_deref().into(), tag.as_deref(), limit)
+        })
+        .await?;
         return Ok(Json(events).into_response());
     }
 
     let page =
-        spawn_db(move || store.list_events_filtered(project.as_deref(), &filter, limit)).await?;
+        spawn_db(move || store.list_events_filtered(project.as_deref().into(), &filter, limit))
+            .await?;
 
     // The body stays a bare array (the render/CLI shape is a contract), so pagination metadata rides
     // in headers: the next keyset cursor, and — when asked for — the size of the whole matching set.
@@ -203,7 +204,7 @@ pub(crate) async fn get_costs(
     let until = parse_opt_ts("until", q.until.as_deref())?;
     let store = st.store.clone();
     let (rows, prices) = spawn_db(move || {
-        let rows = store.cost_summary_windowed(project.as_deref(), since, until)?;
+        let rows = store.cost_summary_windowed(project.as_deref().into(), since, until)?;
         let prices = store.list_prices()?;
         Ok((rows, prices))
     })
@@ -239,9 +240,10 @@ pub(crate) async fn get_prompt_costs(
     let since =
         parse_opt_ts("since", q.since.as_deref())?.unwrap_or(until - chrono::Duration::days(30));
     let store = st.store.clone();
-    let mut rows =
-        spawn_db(move || store.cost_by_dimension(project.as_deref(), "prompt", since, until))
-            .await?;
+    let mut rows = spawn_db(move || {
+        store.cost_by_dimension(project.as_deref().into(), "prompt", since, until)
+    })
+    .await?;
     rows.sort_by(|a, b| b.cost_usd.total_cmp(&a.cost_usd));
     Ok(Json(rows))
 }
@@ -265,7 +267,7 @@ pub(crate) async fn get_usecases(
     let project = resolve_read_project(&p, q.project.as_deref())?;
     let since = parse_opt_ts("since", q.since.as_deref())?;
     let store = st.store.clone();
-    let rows = spawn_db(move || store.usecase_costs(project.as_deref(), since)).await?;
+    let rows = spawn_db(move || store.usecase_costs(project.as_deref().into(), since)).await?;
     Ok(Json(rows))
 }
 
@@ -278,17 +280,13 @@ pub(crate) async fn get_event_by_id(
     let store = st.store.clone();
     let id2 = id.clone();
     let not_found = || ApiError::not_found(format!("event '{id}' not found"));
-    let ev = spawn_db(move || store.get_event(&id2))
+    // Another project's event answers exactly like a missing one, and now does so because the
+    // scope is IN the query (M17) rather than because a second check runs after the row is read.
+    // A distinct 403 would let any project key probe which ids exist on the instance — a
+    // cross-tenant existence oracle over client-chosen ids.
+    let sc = p.scope_owned();
+    let ev = spawn_db(move || store.get_event(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(not_found)?;
-    // Another project's event answers exactly like a missing one. A distinct 403 would let any
-    // project key probe which ids exist on the instance — a cross-tenant existence oracle over
-    // client-chosen ids — and from a project key's point of view "not yours" and "not there" are
-    // the same fact.
-    if let Principal::Project { project_id, .. } = &p {
-        if &ev.project_id != project_id {
-            return Err(not_found());
-        }
-    }
     Ok(Json(ev))
 }

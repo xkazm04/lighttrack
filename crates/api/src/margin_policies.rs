@@ -107,10 +107,12 @@ pub(crate) async fn delete_policy(
     headers: HeaderMap,
     Path((_pid, id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
-    if !spawn_db(move || store.delete_margin_policy(&id2)).await? {
+    let sc = p.scope_owned();
+    if !spawn_db(move || store.delete_margin_policy(sc.as_deref().into(), &id2)).await? {
         return Err(ApiError::not_found(format!(
             "margin policy '{id}' not found"
         )));

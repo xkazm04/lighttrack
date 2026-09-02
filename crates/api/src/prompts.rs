@@ -23,6 +23,7 @@ use crate::jobs_enqueue::enqueue_bench_run;
 use crate::judges;
 use crate::prompts_gate::{gate_promotion, version_scored_run};
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 #[derive(Deserialize)]
 pub(crate) struct CreatePromptReq {
@@ -150,7 +151,8 @@ pub(crate) async fn add_version(
     // Next monotonic version = max existing + 1.
     let store = st.store.clone();
     let id = prompt.id.clone();
-    let existing = spawn_db(move || store.list_prompt_versions(&id)).await?;
+    let sc = p.scope_owned();
+    let existing = spawn_db(move || store.list_prompt_versions(sc.as_deref().into(), &id)).await?;
     let next = next_version(&existing);
 
     let version = PromptVersion {
@@ -182,7 +184,8 @@ pub(crate) async fn list_versions(
     resolve_read_project(&p, Some(&pid))?;
     let prompt = load_prompt(&st, &pid, &name).await?;
     let store = st.store.clone();
-    let v = spawn_db(move || store.list_prompt_versions(&prompt.id)).await?;
+    let sc = p.scope_owned();
+    let v = spawn_db(move || store.list_prompt_versions(sc.as_deref().into(), &prompt.id)).await?;
     Ok(Json(v))
 }
 
@@ -236,7 +239,8 @@ pub(crate) async fn get_prompt(
     } else {
         let store = st.store.clone();
         let id = prompt.id.clone();
-        let v = spawn_db(move || store.list_prompt_versions(&id))
+        let owner = prompt.project_id.clone();
+        let v = spawn_db(move || store.list_prompt_versions(TenantScope::Project(&owner), &id))
             .await?
             .iter()
             .map(|x| x.version)
@@ -247,7 +251,8 @@ pub(crate) async fn get_prompt(
 
     let store = st.store.clone();
     let id = prompt.id.clone();
-    let pv = spawn_db(move || store.get_prompt_version(&id, version))
+    let owner = prompt.project_id.clone();
+    let pv = spawn_db(move || store.get_prompt_version(TenantScope::Project(&owner), &id, version))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("'{name}' has no version {version}")))?;
     Ok(Json(ResolvedPrompt {
@@ -342,7 +347,8 @@ pub(crate) async fn promote(
     // The target version must exist.
     let store = st.store.clone();
     let (id, ver) = (prompt.id.clone(), req.version);
-    if spawn_db(move || store.get_prompt_version(&id, ver))
+    let sc = p.scope_owned();
+    if spawn_db(move || store.get_prompt_version(sc.as_deref().into(), &id, ver))
         .await?
         .is_none()
     {
@@ -375,7 +381,8 @@ pub(crate) async fn promote(
         // `resolved_prompt_version` is a refusal or a caveat.
         let resolvable = benchmark_resolves(&bench.target, &name);
         let store = st.store.clone();
-        let runs = spawn_db(move || store.list_benchmark_runs(&bid)).await?;
+        let sc = p.scope_owned();
+        let runs = spawn_db(move || store.list_benchmark_runs(sc.as_deref().into(), &bid)).await?;
         let latest = version_scored_run(&runs, &prompt.id, req.version);
         let outcome = gate_promotion(
             latest,
@@ -442,6 +449,7 @@ async fn maybe_enqueue(
         Some(bid) => {
             let job = enqueue_bench_run(
                 st,
+                Some(&prompt.project_id),
                 bid,
                 serde_json::json!({
                     "prompt_id": prompt.id,

@@ -16,6 +16,7 @@ use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 #[derive(Deserialize)]
 pub(crate) struct CreateDatasetReq {
@@ -54,7 +55,7 @@ pub(crate) async fn list_datasets(
     let p = authenticate(&st, &headers).await?;
     resolve_read_project(&p, Some(&pid))?;
     let store = st.store.clone();
-    let v = spawn_db(move || store.list_datasets(&pid)).await?;
+    let v = spawn_db(move || store.list_datasets(TenantScope::Project(&pid))).await?;
     Ok(Json(v))
 }
 
@@ -65,18 +66,11 @@ pub(crate) async fn load_dataset_authorized(
 ) -> Result<Dataset, ApiError> {
     let store = st.store.clone();
     let id2 = id.to_string();
-    let d = spawn_db(move || store.get_dataset(&id2))
+    let sc = p.scope_owned();
+    // The scope IS the authorization (M17): another project's dataset is not found, not refused.
+    spawn_db(move || store.get_dataset(sc.as_deref().into(), &id2))
         .await?
-        .ok_or_else(|| ApiError::not_found(format!("dataset '{id}' not found")))?;
-    if let Principal::Project {
-        project_id: pid, ..
-    } = p
-    {
-        if &d.project_id != pid {
-            return Err(ApiError::forbidden("key not authorized for that dataset"));
-        }
-    }
-    Ok(d)
+        .ok_or_else(|| ApiError::not_found(format!("dataset '{id}' not found")))
 }
 
 pub(crate) async fn get_dataset(
@@ -115,7 +109,8 @@ pub(crate) async fn list_dataset_items(
     let p = authenticate(&st, &headers).await?;
     load_dataset_authorized(&st, &p, &id).await?;
     let store = st.store.clone();
-    let items = spawn_db(move || store.list_dataset_items(&id)).await?;
+    let sc = p.scope_owned();
+    let items = spawn_db(move || store.list_dataset_items(sc.as_deref().into(), &id)).await?;
     Ok(Json(items))
 }
 
@@ -129,7 +124,8 @@ pub(crate) async fn freeze_dataset(
     let mut ds = load_dataset_authorized(&st, &p, &id).await?;
     let store = st.store.clone();
     let id2 = id.clone();
-    spawn_db(move || store.set_dataset_frozen(&id2, true)).await?;
+    let sc = p.scope_owned();
+    spawn_db(move || store.set_dataset_frozen(sc.as_deref().into(), &id2, true)).await?;
     ds.frozen = true;
     Ok(Json(ds))
 }

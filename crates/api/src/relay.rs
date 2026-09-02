@@ -18,7 +18,6 @@ use lighttrack_core::{
     RELAY_DEFAULT_RETRY_INTERVAL_SECS,
 };
 
-use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::events_admission::breach_reason;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
@@ -219,17 +218,11 @@ pub(crate) async fn get_task(
     let p = authenticate(&st, &headers).await?;
     let store = st.store.clone();
     let id2 = id.clone();
-    let task = spawn_db(move || store.get_relay_task(&id2))
+    // The scope IS the authorization (M17): another project's task is not found, not refused.
+    let sc = p.scope_owned();
+    let task = spawn_db(move || store.get_relay_task(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("relay task '{id}' not found")))?;
-    if let Principal::Project {
-        project_id: pid, ..
-    } = &p
-    {
-        if *pid != task.project_id {
-            return Err(ApiError::forbidden("key not authorized for that project"));
-        }
-    }
     Ok(Json(task))
 }
 
@@ -265,8 +258,9 @@ pub(crate) async fn list_tasks(
     let store = st.store.clone();
     let status = q.status;
     let limit = q.limit.unwrap_or(50).min(1000);
-    let tasks =
-        spawn_db(move || store.list_relay_tasks(project.as_deref(), status.as_deref(), limit))
-            .await?;
+    let tasks = spawn_db(move || {
+        store.list_relay_tasks(project.as_deref().into(), status.as_deref(), limit)
+    })
+    .await?;
     Ok(Json(tasks))
 }

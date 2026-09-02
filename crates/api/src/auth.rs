@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use lighttrack_core::{new_id, Scope};
+use lighttrack_store::Scope as TenantScope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthMode {
@@ -114,6 +115,29 @@ impl Principal {
             Principal::Project { key_id, .. } => Some(key_id),
             Principal::Admin | Principal::Dev => None,
         }
+    }
+
+    /// The tenant scope every store read this request makes must carry (M17).
+    ///
+    /// A project key reads exactly its own rows, so a foreign id is simply not found — the 404 D13
+    /// established for traces, now applied to the whole trait. Admin and dev are the operator: every
+    /// project, plus the project-less rows (background jobs, global alert channels) no tenant owns.
+    ///
+    /// This is the only place the mapping is made. A handler that reaches past it and passes
+    /// `TenantScope::Operator` on a project request has re-opened the hole — which is why the post-hoc
+    /// `forbidden(...)` comparisons this replaces are deleted rather than kept as a second belt: a
+    /// 403 on a foreign id is itself the existence oracle.
+    pub(crate) fn scope(&self) -> TenantScope<'_> {
+        match self {
+            Principal::Project { project_id, .. } => TenantScope::Project(project_id),
+            Principal::Admin | Principal::Dev => TenantScope::Operator,
+        }
+    }
+
+    /// [`Principal::scope`] as an owned value, for the `'static` closures `spawn_db` hands to the
+    /// blocking pool. Rebuild the borrowed form inside the closure with `.as_deref().into()`.
+    pub(crate) fn scope_owned(&self) -> Option<String> {
+        self.scope().project().map(str::to_string)
     }
 }
 

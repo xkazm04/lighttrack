@@ -84,7 +84,8 @@ pub(crate) async fn list_traces(
     let store = st.store.clone();
     let limit = q.limit.unwrap_or(50).min(1000);
     let page =
-        spawn_db(move || store.list_traces_filtered(project.as_deref(), &filter, limit)).await?;
+        spawn_db(move || store.list_traces_filtered(project.as_deref().into(), &filter, limit))
+            .await?;
 
     let mut resp = Json(page.traces).into_response();
     if let Some(cursor) = page.next_cursor {
@@ -161,7 +162,7 @@ pub(crate) async fn get_trace(
 
     let store = st.store.clone();
     let tid = id.clone();
-    let scores = spawn_db(move || store.list_trace_scores(scope.as_deref(), &tid)).await?;
+    let scores = spawn_db(move || store.list_trace_scores(scope.as_deref().into(), &tid)).await?;
     let scores = views(scores, &trace.coverage());
     Ok(Json(TraceDetail { trace, scores }))
 }
@@ -282,7 +283,7 @@ pub(crate) async fn score_trace(
 async fn load_trace(st: &AppState, scope: Option<String>, id: &str) -> Result<Trace, ApiError> {
     let store = st.store.clone();
     let tid = id.to_string();
-    spawn_db(move || store.get_trace(scope.as_deref(), &tid, MAX_TRACE_SPANS))
+    spawn_db(move || store.get_trace(scope.as_deref().into(), &tid, MAX_TRACE_SPANS))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("trace '{id}' not found")))
 }

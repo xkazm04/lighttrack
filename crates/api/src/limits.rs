@@ -19,6 +19,7 @@ use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
 use crate::rejections::RejectionStat;
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 /// Evaluate all enabled limit rules for a project against current rolling usage.
 pub(crate) async fn evaluate_project_limits(
@@ -35,7 +36,7 @@ pub(crate) async fn evaluate_project_limits(
         // that cannot serve revenue leaves them unresolved, i.e. inert and labelled `unknown`.
         let resolved =
             lighttrack_store::resolve_thresholds(&rules, now, |since, until| {
-                match store.list_revenue_events(Some(&pid), since, until) {
+                match store.list_revenue_events(TenantScope::Project(&pid), since, until) {
                     Err(StoreError::Unsupported(_)) => Ok(Vec::new()),
                     other => other,
                 }
@@ -168,12 +169,14 @@ pub(crate) async fn update_limit(
     Path(id): Path<String>,
     Json(req): Json<LimitReq>,
 ) -> Result<Json<LimitRule>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
 
     // Load the existing rule so we keep its (immutable) project_id and can 404 an unknown id.
     let store = st.store.clone();
     let id_get = id.clone();
-    let existing = spawn_db(move || store.get_limit_rule(&id_get))
+    let sc = p.scope_owned();
+    let existing = spawn_db(move || store.get_limit_rule(sc.as_deref().into(), &id_get))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("limit rule '{id}' not found")))?;
 
@@ -185,8 +188,9 @@ pub(crate) async fn update_limit(
     rule.validate().map_err(ApiError::bad_request)?;
     let store = st.store.clone();
     let r2 = rule.clone();
+    let sc = p.scope_owned();
     // The row exists (we just read it); a `false` here means a concurrent delete raced us.
-    if !spawn_db(move || store.update_limit_rule(&r2)).await? {
+    if !spawn_db(move || store.update_limit_rule(sc.as_deref().into(), &r2)).await? {
         return Err(ApiError::not_found(format!(
             "limit rule '{}' not found",
             rule.id
@@ -200,10 +204,12 @@ pub(crate) async fn delete_limit(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
-    if !spawn_db(move || store.delete_limit_rule(&id2)).await? {
+    let sc = p.scope_owned();
+    if !spawn_db(move || store.delete_limit_rule(sc.as_deref().into(), &id2)).await? {
         return Err(ApiError::not_found(format!("limit rule '{id}' not found")));
     }
     Ok(Json(serde_json::json!({ "deleted": id })))

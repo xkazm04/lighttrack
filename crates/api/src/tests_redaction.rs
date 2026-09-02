@@ -11,6 +11,7 @@ use lighttrack_store::Store;
 
 use crate::redact::Redactor;
 use crate::tests_ingest::{make_key, setup};
+use lighttrack_store::Scope as TenantScope;
 
 async fn call(app: &axum::Router, method: &str, uri: &str, token: &str, body: Value) -> StatusCode {
     let req = Request::builder()
@@ -71,7 +72,9 @@ async fn ingest_stamps_every_row_with_what_the_boundary_did() {
         StatusCode::OK
     );
 
-    let events: Vec<LlmEvent> = store.list_events(Some("proj-a"), 10).unwrap();
+    let events: Vec<LlmEvent> = store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap();
     assert_eq!(events.len(), 2);
     let stamps: Vec<_> = events.iter().map(|e| e.redaction()).collect();
     assert!(
@@ -99,7 +102,9 @@ async fn a_row_nobody_scrubbed_is_stamped_as_such_rather_than_left_blank() {
         StatusCode::OK
     );
 
-    let e = &store.list_events(Some("proj-a"), 10).unwrap()[0];
+    let e = &store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap()[0];
     let stamp = e.redaction().expect("stamped even with the scrub off");
     assert!(!stamp.scrub);
     assert_eq!(stamp.spans, 0);
@@ -133,7 +138,9 @@ async fn a_client_cannot_forge_the_stamp() {
         StatusCode::OK
     );
 
-    let e = &store.list_events(Some("proj-a"), 10).unwrap()[0];
+    let e = &store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap()[0];
     let stamp = e.redaction().expect("the server's own stamp");
     assert_ne!(stamp.spans, 999, "the forged count did not survive");
     assert_eq!(stamp.rules, lighttrack_anon::rules_fingerprint());

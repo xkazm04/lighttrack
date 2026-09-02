@@ -8,6 +8,7 @@
 //! yields no attribution and the alert still delivers.
 
 use lighttrack_core::{LimitScope, LimitWindow};
+use lighttrack_store::Scope as TenantScope;
 use lighttrack_store::{CostRow, Store, UseCaseCostRow};
 use serde_json::{json, Value};
 
@@ -75,10 +76,10 @@ pub(crate) fn fetch(
 ) -> Attribution {
     let since = window.since(now);
     let cost_rows = store
-        .cost_summary_windowed(Some(project), Some(since), None)
+        .cost_summary_windowed(TenantScope::Project(project), Some(since), None)
         .unwrap_or_default();
     let usecase_rows = store
-        .usecase_costs(Some(project), Some(since))
+        .usecase_costs(TenantScope::Project(project), Some(since))
         .unwrap_or_default();
     compose(&cost_rows, &usecase_rows, scope)
 }

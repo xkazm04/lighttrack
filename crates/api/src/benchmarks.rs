@@ -138,7 +138,11 @@ pub(crate) async fn list_benchmarks(
     Ok(Json(v))
 }
 
-/// Fetch a benchmark and authorize project-key access to it.
+/// Fetch a benchmark **in the caller's scope** (M17).
+///
+/// The authorization is the read: a project key's query carries `project_id`, so another project's
+/// benchmark is not found rather than found-and-refused. The 403 this replaced confirmed that the
+/// id existed, which is the cross-tenant existence oracle D13 removed for traces.
 pub(crate) async fn load_benchmark_authorized(
     st: &AppState,
     p: &Principal,
@@ -146,18 +150,10 @@ pub(crate) async fn load_benchmark_authorized(
 ) -> Result<Benchmark, ApiError> {
     let store = st.store.clone();
     let id2 = id.to_string();
-    let bench = spawn_db(move || store.get_benchmark(&id2))
+    let sc = p.scope_owned();
+    spawn_db(move || store.get_benchmark(sc.as_deref().into(), &id2))
         .await?
-        .ok_or_else(|| ApiError::not_found(format!("benchmark '{id}' not found")))?;
-    if let Principal::Project {
-        project_id: pid, ..
-    } = p
-    {
-        if &bench.project_id != pid {
-            return Err(ApiError::forbidden("key not authorized for that benchmark"));
-        }
-    }
-    Ok(bench)
+        .ok_or_else(|| ApiError::not_found(format!("benchmark '{id}' not found")))
 }
 
 pub(crate) async fn get_benchmark(
@@ -175,9 +171,10 @@ pub(crate) async fn list_benchmark_runs(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<BenchmarkRun>>, ApiError> {
     let p = authenticate(&st, &headers).await?;
-    load_benchmark_authorized(&st, &p, &id).await?; // authorize
+    load_benchmark_authorized(&st, &p, &id).await?; // 404s a foreign benchmark
     let store = st.store.clone();
-    let runs = spawn_db(move || store.list_benchmark_runs(&id)).await?;
+    let sc = p.scope_owned();
+    let runs = spawn_db(move || store.list_benchmark_runs(sc.as_deref().into(), &id)).await?;
     Ok(Json(runs))
 }
 
@@ -301,7 +298,8 @@ pub(crate) async fn benchmark_gate(
         return Err(ApiError::conflict(reason));
     }
     let store = st.store.clone();
-    let runs = spawn_db(move || store.list_benchmark_runs(&id)).await?;
+    let sc = p.scope_owned();
+    let runs = spawn_db(move || store.list_benchmark_runs(sc.as_deref().into(), &id)).await?;
     Ok(Json(decide_gate(&runs, bench.baseline_score, Some(trust))))
 }
 

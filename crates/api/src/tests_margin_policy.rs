@@ -17,6 +17,7 @@ use lighttrack_store::Store;
 use crate::limits::evaluate_project_limits;
 use crate::redact::Redactor;
 use crate::tests_ingest::{make_key, setup};
+use lighttrack_store::Scope as TenantScope;
 
 fn revenue(project: &str, customer: &str, amount: f64) -> RevenueEvent {
     RevenueEvent {
@@ -179,7 +180,10 @@ async fn the_sweep_escalates_a_rule_on_a_breach_eta_and_reverses_when_calm() {
         .ok()
         .expect("the guardrail pass succeeds");
     assert_eq!(acted.escalated, 1, "the breach ETA escalated the rule");
-    let after = store.get_limit_rule(&rule.id).unwrap().unwrap();
+    let after = store
+        .get_limit_rule(TenantScope::Operator, &rule.id)
+        .unwrap()
+        .unwrap();
     assert!(after.escalated_until.is_some());
     assert_eq!(
         after.action,
@@ -201,20 +205,25 @@ async fn the_sweep_escalates_a_rule_on_a_breach_eta_and_reverses_when_calm() {
     assert_eq!(again.escalated, 0, "a standing escalation is left alone");
 
     // Now raise the bar out of reach: the forecast no longer clears it, so the rule de-escalates.
-    let mut calm = store.get_limit_rule(&rule.id).unwrap().unwrap();
+    let mut calm = store
+        .get_limit_rule(TenantScope::Operator, &rule.id)
+        .unwrap()
+        .unwrap();
     calm.escalation = Some(Escalation {
         on_eta_days: 0.001,
         to: LimitAction::Throttle,
         for_hours: 6,
     });
-    store.update_limit_rule(&calm).unwrap();
+    store
+        .update_limit_rule(TenantScope::Operator, &calm)
+        .unwrap();
     let (_, reversed) = crate::forecast_sweep::guardrail_pass(&state, "proj-a")
         .await
         .ok()
         .expect("the guardrail pass succeeds");
     assert_eq!(reversed.de_escalated, 1, "and it comes back down");
     assert!(store
-        .get_limit_rule(&rule.id)
+        .get_limit_rule(TenantScope::Operator, &rule.id)
         .unwrap()
         .unwrap()
         .escalated_until
@@ -313,7 +322,7 @@ async fn the_sweep_never_edits_or_removes_a_hand_made_rule() {
         .ok()
         .expect("the guardrail pass succeeds");
     let after = store
-        .get_limit_rule(&hand.id)
+        .get_limit_rule(TenantScope::Operator, &hand.id)
         .unwrap()
         .expect("the hand-made rule still exists");
     assert_eq!(

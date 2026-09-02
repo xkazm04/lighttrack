@@ -115,7 +115,7 @@ pub(crate) async fn get_prompt_quality(
     let rubric = q.rubric_id.clone();
     let rows = spawn_db(move || {
         store.score_summary_by_dimension(
-            project.as_deref(),
+            project.as_deref().into(),
             Dimension::Prompt,
             since,
             until,

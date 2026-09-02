@@ -164,9 +164,10 @@ pub(crate) async fn list_calibrations(
     let project = resolve_read_project(&p, q.project.as_deref())?;
     let store = st.store.clone();
     let (limit, cursor) = (q.limit.unwrap_or(0), q.cursor);
-    let rows =
-        spawn_db(move || store.list_calibrations(project.as_deref(), limit, cursor.as_deref()))
-            .await?;
+    let rows = spawn_db(move || {
+        store.list_calibrations(project.as_deref().into(), limit, cursor.as_deref())
+    })
+    .await?;
     let next = rows.last().map(|c| {
         lighttrack_store::codec::encode_event_cursor(
             &lighttrack_store::codec::fmt_ts(c.created_at),

@@ -31,6 +31,7 @@ use lighttrack_core::{evaluate_policies, LimitRule, MarginRow, RuleChange};
 
 use crate::forecast_alerts::ForecastAlert;
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 /// Per-(policy, subject) instant of the last applied change, so a policy with a long cooldown does
 /// not re-apply on every tick. Process-local and lost on restart — the same stance (and the same
@@ -118,7 +119,9 @@ pub(crate) async fn escalate(
             if next.is_some() { "escalated" } else { "de-escalated" }
         );
         let store = st.store.clone();
-        if spawn_db(move || store.update_limit_rule(&updated)).await? {
+        let owner = project.to_string();
+        if spawn_db(move || store.update_limit_rule(TenantScope::Project(&owner), &updated)).await?
+        {
             if next.is_some() {
                 out.escalated += 1;
             } else {
@@ -201,7 +204,8 @@ async fn apply_one(
             );
             let store = st.store.clone();
             let r = (*rule).clone();
-            spawn_db(move || store.update_limit_rule(&r)).await?;
+            let owner = project.to_string();
+            spawn_db(move || store.update_limit_rule(TenantScope::Project(&owner), &r)).await?;
             out.rules_updated += 1;
         }
         RuleChange::Delete(id) => {
@@ -212,7 +216,8 @@ async fn apply_one(
             );
             let store = st.store.clone();
             let id2 = id.clone();
-            spawn_db(move || store.delete_limit_rule(&id2)).await?;
+            let owner = project.to_string();
+            spawn_db(move || store.delete_limit_rule(TenantScope::Project(&owner), &id2)).await?;
             out.rules_removed += 1;
         }
     }

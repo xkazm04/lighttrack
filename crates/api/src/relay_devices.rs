@@ -224,7 +224,7 @@ pub(crate) async fn list_devices(
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
     let store = st.store.clone();
     let project = q.project;
-    let devices = spawn_db(move || store.list_devices(project.as_deref())).await?;
+    let devices = spawn_db(move || store.list_devices(project.as_deref().into())).await?;
     let now = Utc::now();
     Ok(Json(devices.iter().map(|d| view(d, now)).collect()))
 }
@@ -243,17 +243,20 @@ pub(crate) async fn revoke_device(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Device>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
-    if !spawn_db(move || store.revoke_device(&id2)).await? {
+    let sc = p.scope_owned();
+    if !spawn_db(move || store.revoke_device(sc.as_deref().into(), &id2)).await? {
         return Err(ApiError::not_found(format!("device '{id}' not found")));
     }
     // Read back rather than reporting success blind: revocation is a security action, and the
     // operator is entitled to see the row that now says `revoked`.
     let store = st.store.clone();
     let id2 = id.clone();
-    let device = spawn_db(move || store.get_device(&id2))
+    let sc = p.scope_owned();
+    let device = spawn_db(move || store.get_device(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("device '{id}' not found")))?;
     Ok(Json(device.redacted()))

@@ -10,6 +10,7 @@ use tower::ServiceExt; // oneshot
 
 use crate::redact::Redactor;
 use crate::tests_ingest::{make_key, setup};
+use lighttrack_store::Scope as TenantScope;
 
 async fn call(
     app: &Router,
@@ -45,7 +46,14 @@ async fn call(
 /// The fence the store currently holds for a task — what its holding device would report with.
 fn fence_of(store: &std::sync::Arc<lighttrack_store::SqliteStore>, id: &str) -> Value {
     use lighttrack_store::Store;
-    serde_json::to_value(store.get_relay_task(id).unwrap().unwrap().lease_fence).unwrap()
+    serde_json::to_value(
+        store
+            .get_relay_task(TenantScope::Operator, id)
+            .unwrap()
+            .unwrap()
+            .lease_fence,
+    )
+    .unwrap()
 }
 
 #[tokio::test]
@@ -137,12 +145,13 @@ async fn device_key_leases_and_reports_project_keys_cannot() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(settled["status"], "succeeded");
 
-    // The owner reads its task back; a foreign project key cannot.
+    // The owner reads its task back; a foreign project key gets a 404, not a 403 (M17): the read
+    // carries the tenant scope, so someone else's task is indistinguishable from no such task.
     let (status, got) = call(&app, "GET", &format!("/v1/relay/tasks/{id}"), &key_a, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(got["result"]["ok"], true);
     let (status, _) = call(&app, "GET", &format!("/v1/relay/tasks/{id}"), &key_b, None).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -185,7 +194,10 @@ async fn terminal_settle_prices_the_run_and_says_where_the_price_came_from() {
         ),
     )
     .await;
-    assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty());
+    assert!(store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap()
+        .is_empty());
 
     // Successful settle: exactly one event at the flat price, traced by task id.
     call(
@@ -207,7 +219,9 @@ async fn terminal_settle_prices_the_run_and_says_where_the_price_came_from() {
         Some(report.clone()),
     )
     .await;
-    let events = store.list_events(Some("proj-a"), 10).unwrap();
+    let events = store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap();
     assert_eq!(events.len(), 1);
     let ev = &events[0];
     // No envelope cost and a model the book does not carry: the flat rate is the LAST resort, not
@@ -230,7 +244,13 @@ async fn terminal_settle_prices_the_run_and_says_where_the_price_came_from() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 /// Enqueue, lease, and settle one task with `body`; answer the resulting event.
@@ -270,7 +290,9 @@ async fn settle_and_read_event(
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let mut events = store.list_events(Some("proj-a"), 10).unwrap();
+    let mut events = store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap();
     assert_eq!(events.len(), 1);
     events.remove(0)
 }
@@ -420,7 +442,7 @@ async fn the_action_ledger_separates_prompt_generations_and_snapshots_into_a_dat
     assert_eq!(snap["skipped"], 0);
     assert_eq!(snap["source"], "relay:xprice/summary");
     let items = store
-        .list_dataset_items(snap["id"].as_str().unwrap())
+        .list_dataset_items(TenantScope::Operator, snap["id"].as_str().unwrap())
         .unwrap();
     assert_eq!(items.len(), 3);
     assert!(items.iter().any(|i| i.input.contains("A-1")));
@@ -551,7 +573,10 @@ async fn a_reclaimed_device_is_refused_on_every_door_and_logs_nothing() {
         "the zombie's result was not written"
     );
     assert!(
-        store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .is_empty(),
         "a refused report must not log a cost event against someone else's run"
     );
 }
@@ -583,7 +608,11 @@ async fn cancel_is_reachable_by_the_owner_and_never_claims_a_false_stop() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "not that project's task");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "not that project's task, and a 404 rather than a 403 so the refusal does not confirm the          id exists (M17)"
+    );
 
     let (status, out) = call(
         &app,
@@ -1049,7 +1078,10 @@ async fn run_one(
 ) -> (Option<f64>, String) {
     use lighttrack_store::Store;
 
-    let before = store.list_events(Some("proj-a"), 100).unwrap().len();
+    let before = store
+        .list_events(TenantScope::Project("proj-a"), 100)
+        .unwrap()
+        .len();
     let (_, task) = call(
         app,
         "POST",
@@ -1078,7 +1110,9 @@ async fn run_one(
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let events = store.list_events(Some("proj-a"), 100).unwrap();
+    let events = store
+        .list_events(TenantScope::Project("proj-a"), 100)
+        .unwrap();
     assert_eq!(
         events.len(),
         before + 1,

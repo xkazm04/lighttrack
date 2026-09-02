@@ -25,6 +25,7 @@ use super::{sign, vet, AlertConfig, Alerter};
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin};
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 /// Synthetic ids for the env-configured channels, so a delivery record can name them.
 pub(crate) const ENV_WEBHOOK: &str = "env:webhook";
@@ -78,7 +79,7 @@ impl Alerter {
         let mut all = env_channels(&self.config);
         if let Some(store) = self.store() {
             let project = alert.project_id.clone();
-            let stored = spawn_db(move || store.channels_for(project.as_deref()))
+            let stored = spawn_db(move || store.channels_for(project.as_deref().into()))
                 .await
                 .unwrap_or_default();
             all.extend(stored);
@@ -178,7 +179,7 @@ pub(crate) async fn list_channels(
     let store = st.store.clone();
     // The project's own channels *and* the globals it inherits: an operator asking "where do this
     // project's alerts go" is asking about the effective set, not about one table.
-    let v = spawn_db(move || store.channels_for(Some(&pid))).await?;
+    let v = spawn_db(move || store.channels_for(TenantScope::Project(&pid))).await?;
     Ok(Json(v.iter().map(AlertChannel::redacted).collect()))
 }
 
@@ -187,10 +188,12 @@ pub(crate) async fn delete_channel(
     headers: HeaderMap,
     Path((_pid, cid)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = cid.clone();
-    if !spawn_db(move || store.delete_alert_channel(&id2)).await? {
+    let sc = p.scope_owned();
+    if !spawn_db(move || store.delete_alert_channel(sc.as_deref().into(), &id2)).await? {
         return Err(ApiError::not_found(format!(
             "alert channel '{cid}' not found"
         )));
@@ -206,10 +209,12 @@ pub(crate) async fn test_channel(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
-    let channel = spawn_db(move || store.get_alert_channel(&id2))
+    let sc = p.scope_owned();
+    let channel = spawn_db(move || store.get_alert_channel(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("alert channel '{id}' not found")))?;
 

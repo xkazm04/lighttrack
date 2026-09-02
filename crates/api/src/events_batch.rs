@@ -24,6 +24,7 @@ use crate::guards::{
 };
 use crate::ingest_proximity::{Proximity, WithProximity};
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 /// One item's outcome, tagged so a client can branch on `status`:
 /// - `accepted`: stored (with its resolved `cost_usd`) — or an acknowledged **replay** of an
@@ -241,7 +242,8 @@ pub(crate) async fn post_batch(
                 // payload differs when we never managed to look at the stored one would send it
                 // minting new ids for an event that is already recorded. Report the failure as
                 // what it is, so the item is retried rather than rewritten.
-                match spawn_db(move || store.get_event(&id)).await {
+                let sc = ev.project_id.clone();
+                match spawn_db(move || store.get_event(TenantScope::Project(&sc), &id)).await {
                     Ok(Some(s)) if same_logical_event(&s, ev) => BatchItem::Accepted {
                         index,
                         id: ev.id.clone(),

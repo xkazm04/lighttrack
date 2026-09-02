@@ -101,7 +101,7 @@ pub(crate) async fn get_scores(
             let limit = q.limit.unwrap_or(5000).min(10_000);
             // The project scope goes into the query, not a post-filter: a project key must not be
             // able to read another project's run by guessing its id.
-            spawn_db(move || store.list_run_scores(&run, project.as_deref(), limit)).await?
+            spawn_db(move || store.list_run_scores(&run, project.as_deref().into(), limit)).await?
         }
         None => {
             let limit = q.limit.unwrap_or(50).min(1000);
@@ -127,10 +127,12 @@ pub(crate) async fn get_scores(
             // The unfiltered listing stays on `list_scores`: it is every dashboard's hot path,
             // and a backend that has not ported the filters must still serve it.
             if filter.is_empty() {
-                spawn_db(move || store.list_scores(project.as_deref(), limit)).await?
+                spawn_db(move || store.list_scores(project.as_deref().into(), limit)).await?
             } else {
-                spawn_db(move || store.list_scores_filtered(project.as_deref(), &filter, limit))
-                    .await?
+                spawn_db(move || {
+                    store.list_scores_filtered(project.as_deref().into(), &filter, limit)
+                })
+                .await?
             }
         }
     };

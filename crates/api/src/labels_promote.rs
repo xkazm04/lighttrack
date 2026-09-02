@@ -20,6 +20,7 @@ use crate::datasets::load_dataset_authorized;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin};
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 /// `GET /v1/datasets/:id/labels` — every human verdict on this set's items.
 ///
@@ -35,8 +36,9 @@ pub(crate) async fn dataset_labels(
     let p = authenticate(&st, &headers).await?;
     let ds = load_dataset_authorized(&st, &p, &id).await?;
     let store = st.store.clone();
+    let sc = p.scope_owned();
     Ok(Json(
-        spawn_db(move || store.labels_for_dataset(&ds.id)).await?,
+        spawn_db(move || store.labels_for_dataset(sc.as_deref().into(), &ds.id)).await?,
     ))
 }
 
@@ -75,7 +77,8 @@ pub(crate) async fn item_from_label(
     };
     let store = st.store.clone();
     let ev_id = event_id.clone();
-    let ev = spawn_db(move || store.get_event(&ev_id))
+    let owner = ds.project_id.clone();
+    let ev = spawn_db(move || store.get_event(TenantScope::Project(&owner), &ev_id))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("event '{event_id}' not found")))?;
 
