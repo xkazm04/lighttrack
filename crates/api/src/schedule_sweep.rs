@@ -65,6 +65,9 @@ pub(crate) fn spawn(st: AppState, cfg: Option<SweepConfig>) {
         let mut ticker = tokio::time::interval(cfg.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await; // the first tick fires immediately; spend it so startup stays quiet
+                             // Before the first real sweep: give every benchmark that opted into the OLD recurrence key
+                             // a schedule, so upgrading to this build never silently stops work an operator configured.
+        crate::schedule_migrate::migrate_benchmark_recurrence(&st).await;
         loop {
             ticker.tick().await;
             sweep_once(&st).await;

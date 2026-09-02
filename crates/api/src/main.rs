@@ -174,6 +174,7 @@ mod relay_lease;
 mod relay_result;
 mod revenue;
 mod rubrics;
+mod schedule_migrate;
 mod schedule_sweep;
 mod schedules;
 mod scores;
