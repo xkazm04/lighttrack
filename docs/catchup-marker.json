@@ -2,18 +2,24 @@
   "marker_version": 1,
   "family": "reference-docs",
   "family_description": "docs/ — the design and operations reference: what the system is, why it is that way, and how to run it. Drifts when the code changes underneath it, which is a different rate and a different repair from the agent-contract surfaces or the shipped SDK READMEs. Hence its own marker: a shared one would force the narrowest pass to lie about the widest surface.",
-
   "anchor": {
     "commit": "b7c28c9133eb7748b0d4f6ea31e51436528d2872",
     "date": "2026-08-24",
     "why": "The commit this pass was measured against. It is the marker's reason to exist: the next pass scans anchor..now instead of re-reading all history (expensive, so it gets skipped) or under-doing the tail (silent, so it gets trusted)."
   },
-
   "surfaces": {
-    "roots": [{ "path": "docs", "extensions": [".md", ".json"], "recursive": true }],
+    "roots": [
+      {
+        "path": "docs",
+        "extensions": [
+          ".md",
+          ".json"
+        ],
+        "recursive": true
+      }
+    ],
     "files": []
   },
-
   "covered": [
     {
       "path": "docs/ARCHITECTURE.md",
@@ -30,14 +36,14 @@
     {
       "path": "docs/PREDICTIVE.md",
       "note": "written by M27 (forecast honesty gates): the evidence floor, the flat band, the burn-rate corroboration, the zero-fill definition seam, and what refused[] means. docs/ALERTS.md ~94 referenced this file before it existed; that reference now resolves."
-      },
-      {
+    },
+    {
       "path": "docs/RELAY.md",
       "note": "\"Cost model\" rewritten and an \"Admission\" section added by M5/D18, against crates/api/src/relay_result.rs and relay.rs. The flat $1 premise is gone: a run is priced envelope -> price book -> flat, and metadata.cost_source says which. Enqueue now evaluates the project's limits (429 on an enforcing breach, `warning` on the soft tier) while the settle-time event stays un-admitted. The stale $1 references elsewhere in the file (the diagram, the window-capacity note, the phase-2 changelog line) were repaired in the same pass; the rest of the document was read but not otherwise re-verified against the code."
     },
     {
       "path": "docs/DECISIONS.md",
-      "note": "D18 appended by M5 (relay runs are metered traffic; enqueue is the admission point), and D17's closing paragraph amended to point at it rather than assert the flat rate it deferred. 2026-09-02, M17 appended a dated addendum to D13 generalising 'the project filter goes in the query' from traces to the whole `Store` trait — what the post-hoc 403 leaked, why `jobs` was worse than the rest, the two signature tests and the tenancy conformance section that now hold the property, and the price book as the one stated exemption. No other decision was re-read against the code in this pass."
+      "note": "D18 appended by M5 (relay runs are metered traffic; enqueue is the admission point), and D17's closing paragraph amended to point at it rather than assert the flat rate it deferred. 2026-09-02, M17 appended a dated addendum to D13 generalising 'the project filter goes in the query' from traces to the whole `Store` trait — what the post-hoc 403 leaked, why `jobs` was worse than the rest, the two signature tests and the tenancy conformance section that now hold the property, and the price book as the one stated exemption. No other decision was re-read against the code in this pass. 2026-09-02, M14 appended D19 (the schema is data; the three DDLs are rendered from it): what became generated and what is guarded by `schema_doc`, the two migrations deliberately kept verbatim (the M26 PK rewrite on both dialects), the BigQuery type map and why Ts is STRING rather than TIMESTAMP, the per-dialect index gap the model now declares instead of hiding, and the backend-agnostic schema fingerprint served at GET /v1/capabilities. Written against crates/store/src/schema/. No other decision was re-read against the code in this pass."
     },
     {
       "path": "docs/ALERTS.md",
@@ -48,18 +54,17 @@
       "note": "§6 updated by M22 (the contribution ledger): 'what left the building' moves from a preview to a record. Adds the collective_contributions table and its `contributions` Store surface, POST /v1/collective/contribute (the push now happens in the API and appends a row per attempt), GET /v1/collective/contributions, the unchanged-digest hash gate (generated_at excluded, so a no-op push makes no HTTP call and cannot trip a hub's min_interval), the hub_key_ref-by-name rule, JobKind::Contribute + the opt-in auto-contribute schedule, and DELETE ?all=1, which walks the ledger's hubs and reports the ones it cannot resolve to a URL. The rest of the file was NOT re-read against the code in this pass — only §6 is covered. Also: section 2 gains 'After promotion - the served-version canary' (M23), written against crates/api/src/quality.rs, prompt_canary_sweep.rs, prompts_canary.rs and core/src/prompt_canary.rs. It closes the doc's own gap: the promotion gate answered 'may this version ship' and nothing answered 'was shipping it right'. Documents GET /v1/quality/prompts (and lt prompts quality / MCP get_prompt_quality), the CanaryPolicy route and its safe defaults, the two-condition regression test (min_n evidence AND non-overlapping ~95% intervals past max_drop), auto_revert reading its target from label_history rather than guessing, the prompt_canary_regressed alert kind, and lt-runner score --prompt-tag. Also: section 1 gains '1a. Lineage: the four strategies, and what a version means' (M24), written against crates/core/src/dataset_lineage.rs, crates/store/src/sqlite/dataset_fork.rs + dataset_import.rs, crates/store-pg/src/dataset_lineage.rs and crates/api/src/datasets_lineage.rs. It closes the oldest gap in the file: section 1 promised four sampling strategies and a versioned dataset, and the code shipped one strategy and a `version` column nothing ever updated. Documents POST /v1/datasets/:id/fork, POST /v1/datasets/:id/items/import (the ImportSpec, the normalised-input dedupe, the scrub-on-the-way-in rule, 409 on a frozen target), GET /v1/projects/:id/datasets/versions, the benchmark-level `regression_dataset` policy the scorer mines failing verdicts into, the new lt/lt-runner/MCP surfaces, and the Surface::DatasetLineage parity row. The rest of the file was NOT re-read against the code in this pass."
     }
   ],
-
   "skipped": [
-   {
-    "path": "docs/PARITY.md",
-    "kind": "not-in-this-pass",
-    "reason": "Generated from the three Store backends' capability manifests by crates/store/tests/parity_doc.rs, which fails when the file is stale. A catch-up pass never edits it by hand; UPDATE_PARITY_DOC=1 regenerates it."
-   },
-   {
-    "path": "docs/design",
-    "kind": "not-in-this-pass",
-    "reason": "Build briefs for the 2026-09 moonshot waves (one per accepted deck item). They describe work being built, not the system as shipped; a docs catch-up pass reads them for intent but does not repair them - each is retired or folded into ARCHITECTURE/DECISIONS when its item lands."
-   },
+    {
+      "path": "docs/PARITY.md",
+      "kind": "not-in-this-pass",
+      "reason": "Generated from the three Store backends' capability manifests by crates/store/tests/parity_doc.rs, which fails when the file is stale. A catch-up pass never edits it by hand; UPDATE_PARITY_DOC=1 regenerates it."
+    },
+    {
+      "path": "docs/design",
+      "kind": "not-in-this-pass",
+      "reason": "Build briefs for the 2026-09 moonshot waves (one per accepted deck item). They describe work being built, not the system as shipped; a docs catch-up pass reads them for intent but does not repair them - each is retired or folded into ARCHITECTURE/DECISIONS when its item lands."
+    },
     {
       "path": "docs/harness/perf-feature-2026-07-16",
       "kind": "frozen-archive",
@@ -75,19 +80,62 @@
       "kind": "frozen-archive",
       "reason": "Dated structural observations from the same campaign. Its facts are stamped 2026-07-16 and read as history, not as a current description."
     },
-    { "path": "docs/CALIBRATION.md", "kind": "not-in-this-pass", "reason": "the persistence half was rewritten 2026-09-02 by the M11 build against the code it describes: the durable fact is now a CalibrationRecord keyed (project, rubric, judge) and the reserved-rubric score is derived from it, plus --dataset calibration, `lt labels`/`lt judges trust`, and the 409 require_trusted_judge blocks with. The one-shot/watch/batch sections around it are unchanged and still unread by a catch-up pass, so the file stays out-of-pass" },
-    { "path": "docs/CI_GATE.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
-    { "path": "docs/CURRENCY.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
-    { "path": "docs/DATA_MODEL.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
-    { "path": "docs/FIRESTORE.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
-    { "path": "docs/MARGIN.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
-    { "path": "docs/OTLP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
-    { "path": "docs/PACKAGING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
-    { "path": "docs/PRICING.md", "kind": "not-in-this-pass", "reason": "authored 2026-09-02 by the M26 build (unpriced ledger, forward fill, dated price book) against the code it describes; still not read by a docs catch-up pass, so it stays out-of-pass rather than claimed as covered here" },
-    { "path": "docs/ROADMAP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
-    { "path": "docs/SCHEDULING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" }
+    {
+      "path": "docs/CALIBRATION.md",
+      "kind": "not-in-this-pass",
+      "reason": "the persistence half was rewritten 2026-09-02 by the M11 build against the code it describes: the durable fact is now a CalibrationRecord keyed (project, rubric, judge) and the reserved-rubric score is derived from it, plus --dataset calibration, `lt labels`/`lt judges trust`, and the 409 require_trusted_judge blocks with. The one-shot/watch/batch sections around it are unchanged and still unread by a catch-up pass, so the file stays out-of-pass"
+    },
+    {
+      "path": "docs/CI_GATE.md",
+      "kind": "not-in-this-pass",
+      "reason": "not read against the code in this pass"
+    },
+    {
+      "path": "docs/CURRENCY.md",
+      "kind": "not-in-this-pass",
+      "reason": "not read against the code in this pass"
+    },
+    {
+      "path": "docs/DATA_MODEL.md",
+      "kind": "not-in-this-pass",
+      "reason": "still not read against the code by a catch-up pass, so its prose stays out-of-pass. One part of it is now generated and cannot drift: M14 (2026-09-02) appended a marked \"Every table (generated)\" index rendered from crates/store/src/schema/tables/ and held true by crates/store/tests/schema_doc.rs, which is what closes the file's own oldest gap - it described 8 of the 25 tables and nothing said so. A catch-up pass never edits the block by hand; UPDATE_SCHEMA_SQL=1 regenerates it."
+    },
+    {
+      "path": "docs/FIRESTORE.md",
+      "kind": "not-in-this-pass",
+      "reason": "not read against the code in this pass"
+    },
+    {
+      "path": "docs/MARGIN.md",
+      "kind": "not-in-this-pass",
+      "reason": "not read against the code in this pass"
+    },
+    {
+      "path": "docs/OTLP.md",
+      "kind": "not-in-this-pass",
+      "reason": "not read against the code in this pass"
+    },
+    {
+      "path": "docs/PACKAGING.md",
+      "kind": "not-in-this-pass",
+      "reason": "not read against the code in this pass"
+    },
+    {
+      "path": "docs/PRICING.md",
+      "kind": "not-in-this-pass",
+      "reason": "authored 2026-09-02 by the M26 build (unpriced ledger, forward fill, dated price book) against the code it describes; still not read by a docs catch-up pass, so it stays out-of-pass rather than claimed as covered here"
+    },
+    {
+      "path": "docs/ROADMAP.md",
+      "kind": "not-in-this-pass",
+      "reason": "not read against the code in this pass"
+    },
+    {
+      "path": "docs/SCHEDULING.md",
+      "kind": "not-in-this-pass",
+      "reason": "not read against the code in this pass"
+    }
   ],
-
   "flagged": [
     {
       "path": "docs/ARCHITECTURE.md",
@@ -96,6 +144,5 @@
       "drained_when": "a pass reads §5 against crates/store-pg and crates/store-firestore and rewrites it, or the BigQuery backend lands"
     }
   ],
-
   "baseline_note": "First marker for this family — 2026-08-24, written by the wave-2b registry-conformance drain. This was NOT a full pass. It rewrote one document (ARCHITECTURE §12, for the disk/retention/maintenance work landed the same day) and created two (the soak lane's contract and criteria), and it read §5/§11 of ARCHITECTURE while doing so. Everything else in docs/ is listed above as `not-in-this-pass`: unread against the code, not judged, not claimed. The three frozen archives are a separate category and stay out of scope permanently. The next pass's scope is therefore anchor..now PLUS the whole `not-in-this-pass` list — which is large, and saying so is the point: unbounded repair debt is not the drift itself, it is not knowing how much drift there is. What the pass incorporated: retention is now a stated, dated operator decision (unbounded, 2026-08-24) rather than an unexamined default, and the store has disk accounting, self-instrumentation and a lossless maintenance pass that ARCHITECTURE §12 describes. 2026-08-24, dated note on the mechanisms around this marker: crates/core/tests/catchup_marker_guard.rs now fails the build when a file under docs/ appears in neither list, and scripts/docs-catchup.sh computes this family's range and refuses loudly on a missing or unparseable marker. That those mechanisms exist is a fact; whether they hold is their own liveness evidence to produce, and no claim about it belongs here."
 }

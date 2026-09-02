@@ -453,3 +453,49 @@ is still free, which is exactly why it is the admission point.
 **Scope.** This does not touch **D4**. The judge and the scoring engine remain unbudgeted; relay
 traffic is monitored ingest, which is what limits have always applied to. It supersedes the "$1 flat
 per request" cost model in `docs/RELAY.md` and the closing paragraph of D17.
+
+## D19 — The schema is data; the three DDLs are rendered from it (2026-09-02)
+
+**Decision.** The logical schema is declared once, as const data in
+`crates/store/src/schema/tables/`. `schema/sqlite/001_init.sql`, `schema/postgres/001_init.sql` and
+`schema/bigquery/001_init.sql` are **generated** from it and guarded by
+`cargo test -p lighttrack-store --test schema_doc` (regenerate with `UPDATE_SCHEMA_SQL=1`), the way
+`docs/PARITY.md` is guarded by `parity_doc`. The two hand-mirrored migration lists —
+`ADDED_COLUMNS`/`ADDED_COLUMNS_LATE` in the SQLite backend and the strewn `ALTER TABLE … ADD COLUMN
+IF NOT EXISTS` lines in the Postgres file — are now one projection of the model,
+`schema::migrations`.
+
+**Why.** The same fact lived in five places whose headers each claimed to mirror another, and they
+had already drifted. Nothing failed when a copy was missed: the column was simply absent on one
+backend, which reads as "no data" — the failure mode the capability manifest exists to refuse,
+arriving one layer further down. Adding a column was about nine coordinated edits across three
+crates; it is now one.
+
+**What is deliberately not declarative.** A migration that is correct *because of how it is
+written* stays verbatim: the M26 `model_prices` primary-key rewrite is a `DO $$ … $$` block guarded
+on `pg_index`, carried as a `schema::migrations::Raw` step, and its SQLite twin is a shape-guarded
+Rust function that reads `PRAGMA table_info` first. Paraphrasing either through a renderer would be
+a way to get it subtly wrong for no gain.
+
+**The BigQuery type map.** `Ts → STRING`, not `TIMESTAMP`. Store timestamps are fixed-width
+`RFC3339(Nanos, Z)` and every range filter in the product is a *string* comparison over that format
+(`crates/store/src/codec.rs`), so a native `TIMESTAMP` would give the warehouse different ordering
+and different boundary semantics from the two backends the tests actually run against — the mirror
+would disagree with the source and look authoritative doing it. `Json → STRING` for the same reason:
+the app writes serialized text, including the empty string a legacy row can carry, which BigQuery's
+`JSON` type rejects on load. BigQuery enforces no keys and has no secondary indexes, so neither is
+rendered; partitioning and clustering carry the read patterns instead. Before this the file had 9 of
+25 tables, 98 of 303 columns, native `TIMESTAMP`, and no test.
+
+**Index parity is declared, not silently closed.** Four `events` composites
+(`idx_events_project_{name,provider,model,status}_ts`) and Postgres's partial
+`idx_limit_rules_origin` exist on one dialect only. The model records that with `Index::only(..)`
+rather than hiding it — creating four indexes on a live production `events` table is a deliberate
+change with its own migration window, not a side effect of a refactor. The *columns* are now
+identical across dialects; the remaining gap is visible in one file instead of invisible across
+three.
+
+**Fingerprint.** `schema_fingerprint()` hashes the model and rides in the capability manifest and
+`GET /v1/capabilities`. It is backend-agnostic on purpose — two deployments on different backends
+but the same build answer the same thing, so "is prod running the schema this SDK was written
+against" is one comparison rather than a version number somebody has to remember to bump.

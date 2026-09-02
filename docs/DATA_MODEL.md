@@ -248,3 +248,41 @@ under materially different criteria must not merge into one leaderboard bucket.
 ```
 `api`/`runner` also read `total_cost_usd` and per-model `usage` from the `claude -p --output-format json`
 envelope to populate `scores.cost_usd`.
+
+<!-- BEGIN generated table index (cargo test -p lighttrack-store --test schema_doc) -->
+
+## Every table (generated)
+
+Rendered from the declarative model in `crates/store/src/schema/tables/`, which is also what generates the three DDLs in `schema/`. A table here without a section above is one this document has not explained yet — which is the point of generating the list.
+
+| Table | Columns | Added after ship | Indexes | Key |
+|---|---|---|---|---|
+| `projects` | 8 | 3 | 0 | `id` |
+| `api_keys` | 10 | 2 | 1 | `id` |
+| `events` | 24 | 2 | 8 | `id` |
+| `limit_rules` | 15 | 8 | 0 | `id` |
+| `scores` | 16 | 5 | 6 | `id` |
+| `benchmarks` | 11 | 0 | 0 | `id` |
+| `rubrics` | 8 | 2 | 0 | `id` |
+| `jobs` | 15 | 3 | 2 | `id` |
+| `prompts` | 9 | 2 | 1 | `id` |
+| `prompt_versions` | 7 | 0 | 1 | `id` |
+| `benchmark_runs` | 13 | 0 | 0 | `id` |
+| `model_prices` | 9 | 0 | 0 | `provider, model, effective_from` |
+| `datasets` | 8 | 1 | 1 | `id` |
+| `dataset_items` | 10 | 1 | 2 | `id` |
+| `revenue_events` | 16 | 4 | 2 | `id` |
+| `collective_entries` | 18 | 6 | 2 | `contributor_id, provider, model, task_type` |
+| `relay_tasks` | 21 | 4 | 3 | `id` |
+| `margin_policies` | 8 | 0 | 1 | `id` |
+| `schedules` | 9 | 0 | 2 | `id` |
+| `devices` | 10 | 0 | 2 | `id` |
+| `alerts` | 11 | 0 | 3 | `id` |
+| `alert_channels` | 10 | 0 | 1 | `id` |
+| `collective_contributions` | 12 | 0 | 2 | `id` |
+| `labels` | 11 | 0 | 3 | `id` |
+| `calibrations` | 14 | 0 | 1 | `id` |
+
+Totals: **25 tables**, **303 columns**, of which **43** were added after their table shipped (those are `ALTER TABLE … ADD COLUMN` on every dialect, never edits to a `CREATE TABLE`). Schema fingerprint: `sha256-d329cc1689cdc517` — the same value `GET /v1/capabilities` reports.
+
+<!-- END generated table index -->
