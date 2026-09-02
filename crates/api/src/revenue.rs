@@ -83,7 +83,20 @@ pub(crate) struct MarginResponse {
     /// Absent (omitted) when the request was unfiltered.
     #[serde(skip_serializing_if = "Option::is_none")]
     below: Option<f64>,
-    rows: Vec<MarginRow>,
+    rows: Vec<GuardedMarginRow>,
+}
+
+/// A margin row plus the guardrail (if any) standing over it. Carrying the rule id on the row is
+/// what turns `/v1/margin?below=0` from a list of complaints into a list of complaints **with the
+/// action already taken beside each one** — the question an operator asks next, answered without a
+/// second request.
+#[derive(Serialize)]
+pub(crate) struct GuardedMarginRow {
+    #[serde(flatten)]
+    row: MarginRow,
+    /// Id of the limit rule a margin policy raised for this key, when one stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    guardrail: Option<String>,
 }
 
 /// Distinct non-convertible currencies present in `revenue` (per the shared FX table): non-USD codes
@@ -139,6 +152,26 @@ pub(crate) async fn get_margin(
     }
     let total_revenue_usd: f64 = rows.iter().map(|r| r.revenue_usd).sum();
     let total_cost_usd: f64 = rows.iter().map(|r| r.llm_cost_usd).sum();
+    // Which of these rows a margin policy has already acted on. Only meaningful per project, and a
+    // backend that cannot read rules simply annotates nothing — the margin numbers are the answer
+    // here, the guardrail is the footnote.
+    let guard_rules = match project.clone() {
+        None => Vec::new(),
+        Some(pid) => {
+            let store = st.store.clone();
+            spawn_db(move || store.list_limit_rules(&pid, false))
+                .await
+                .unwrap_or_default()
+        }
+    };
+    let rows: Vec<GuardedMarginRow> = rows
+        .into_iter()
+        .map(|row| GuardedMarginRow {
+            guardrail: crate::margin_guardrails::guardrail_for(&guard_rules, &row.key)
+                .map(str::to_string),
+            row,
+        })
+        .collect();
     let currency_note = (!unconverted.is_empty()).then(|| {
         format!(
             "unconverted currencies present (stored 1:1, USD figures approximate): {}. \

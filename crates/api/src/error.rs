@@ -183,6 +183,12 @@ impl ApiError {
     pub(crate) fn conflict(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Conflict, m)
     }
+    /// Whether this is a backend declining a surface it does not implement (HTTP 501), as opposed to
+    /// a genuine failure. Background sweeps use it to distinguish "this deployment can never do
+    /// this" — which deserves one line, once — from "this project failed right now".
+    pub(crate) fn is_unsupported(&self) -> bool {
+        matches!(self.code, ErrorCode::Unsupported)
+    }
     pub(crate) fn rate_limited(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::RateLimited, m)
     }

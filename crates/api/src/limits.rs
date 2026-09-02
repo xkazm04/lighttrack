@@ -10,7 +10,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use lighttrack_core::{
-    new_id, LimitAction, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow,
+    new_id, Escalation, LimitAction, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow,
+    Threshold,
 };
 use lighttrack_store::{StoreError, Usage};
 
@@ -29,12 +30,26 @@ pub(crate) async fn evaluate_project_limits(
     let statuses = spawn_db(move || {
         let rules = store.list_limit_rules(&pid, true)?;
         let now = chrono::Utc::now();
+        // The same resolution the admission path runs, against the same helper — so the number on
+        // the status page and the number in the 429 are one value, not two computations. A backend
+        // that cannot serve revenue leaves them unresolved, i.e. inert and labelled `unknown`.
+        let resolved =
+            lighttrack_store::resolve_thresholds(&rules, now, |since, until| {
+                match store.list_revenue_events(Some(&pid), since, until) {
+                    Err(StoreError::Unsupported(_)) => Ok(Vec::new()),
+                    other => other,
+                }
+            })?;
+        let resolve = lighttrack_store::resolver(&resolved);
         // Compute usage once per distinct (window, scope): a scoped rule reads its own dimension's
         // rolling total, an unscoped rule the project-wide total. This is the read-only status view
         // (no candidate event), so nothing is folded in.
         let mut usage: HashMap<(LimitWindow, Option<LimitScope>), Usage> = HashMap::new();
         let mut out: Vec<LimitStatus> = Vec::with_capacity(rules.len());
         for r in &rules {
+            if !r.is_active_at(now) {
+                continue; // an expired policy rule is inert; showing it would misreport the caps
+            }
             let key = (r.window, r.scope.clone());
             let u = match usage.get(&key) {
                 Some(u) => *u,
@@ -49,7 +64,10 @@ pub(crate) async fn evaluate_project_limits(
             };
             // Same evaluator the ingest admission path uses, so the status surface and the 429 can
             // never disagree — including the cost-provenance qualification of a `cost_usd` cap.
-            out.push(lighttrack_store::evaluate_rule(r, &u));
+            let (threshold, basis) = resolve(r);
+            out.push(lighttrack_store::evaluate_rule_resolved(
+                r, &u, threshold, basis,
+            ));
         }
         Ok::<_, StoreError>(out)
     })
@@ -65,7 +83,10 @@ pub(crate) async fn evaluate_project_limits(
 pub(crate) struct LimitReq {
     metric: LimitMetric,
     window: LimitWindow,
-    threshold: f64,
+    /// A bare number (a fixed cap, exactly as before) **or** an object — `{"pct": 80}` — for a cap
+    /// derived from the subject's recognized revenue. `Threshold` is `#[serde(untagged)]`, so both
+    /// wire shapes land on one field and an existing client's body is unchanged.
+    threshold: Threshold,
     #[serde(default)]
     action: LimitAction,
     /// Whether the rule enforces/alerts. Defaults `true`; the old create path hardcoded it, silently
@@ -79,11 +100,21 @@ pub(crate) struct LimitReq {
     /// Optional dimension scope (`{"model":"gpt-4o"}` etc.) — see [`LimitRule::scope`].
     #[serde(default)]
     scope: Option<LimitScope>,
+    /// Optional forecast-driven tightening — see [`Escalation`]. The sweep applies and reverses it;
+    /// nothing here takes effect without the sweep running.
+    #[serde(default)]
+    escalation: Option<Escalation>,
 }
 
 impl LimitReq {
     /// Materialize the rule under a given identity (minted on create, preserved on update).
-    fn into_rule(self, id: String, project_id: String) -> LimitRule {
+    ///
+    /// `prior` is the stored rule on an update path, `None` on create. The sweep-owned fields
+    /// (`escalated_until`, `origin`, `expires_at`) are carried over from it rather than taken from
+    /// the body: they are automation state, not configuration, and letting a plain `PUT` clear them
+    /// would let an operator un-expire a policy rule or de-escalate a project by accident — and
+    /// would make the guardrail engine lose track of a rule it owns.
+    fn into_rule(self, id: String, project_id: String, prior: Option<&LimitRule>) -> LimitRule {
         LimitRule {
             id,
             project_id,
@@ -94,6 +125,10 @@ impl LimitReq {
             enabled: self.enabled,
             warn_at: self.warn_at,
             scope: self.scope,
+            escalation: self.escalation,
+            escalated_until: prior.and_then(|p| p.escalated_until),
+            origin: prior.and_then(|p| p.origin.clone()),
+            expires_at: prior.and_then(|p| p.expires_at),
         }
     }
 }
@@ -119,7 +154,7 @@ pub(crate) async fn create_limit(
         return Err(ApiError::not_found(format!("project '{pid}' not found")));
     }
 
-    let rule = req.into_rule(new_id(), pid);
+    let rule = req.into_rule(new_id(), pid, None);
     rule.validate().map_err(ApiError::bad_request)?;
     let store = st.store.clone();
     let r2 = rule.clone();
@@ -142,7 +177,11 @@ pub(crate) async fn update_limit(
         .await?
         .ok_or_else(|| ApiError::not_found(format!("limit rule '{id}' not found")))?;
 
-    let rule = req.into_rule(existing.id, existing.project_id);
+    let rule = req.into_rule(
+        existing.id.clone(),
+        existing.project_id.clone(),
+        Some(&existing),
+    );
     rule.validate().map_err(ApiError::bad_request)?;
     let store = st.store.clone();
     let r2 = rule.clone();
@@ -220,6 +259,13 @@ pub(crate) struct CostBasis {
     /// `true` when at least one enforcing cost cap has no priced traffic to measure at all, so it is
     /// currently refusing ingest for want of evidence rather than for spend.
     unpriceable: bool,
+    /// How many of the returned statuses rest on a threshold derived from recognized revenue rather
+    /// than on a number an operator typed. Their `basis` says what each one resolved to.
+    derived_thresholds: usize,
+    /// Of those, how many could not be resolved at all and are therefore currently **inert** — they
+    /// will never breach until revenue for their subject can be measured. An inert guardrail that
+    /// looks configured is exactly the thing an operator must not discover mid-incident.
+    inert_thresholds: usize,
     /// Standing caveats, in prose, because their absence is the thing an operator would otherwise
     /// discover during an incident.
     notes: Vec<&'static str>,
@@ -232,7 +278,17 @@ fn cost_basis(statuses: &[LimitStatus]) -> CostBasis {
         imputed_cost_usd: 0.0,
         client_reported_cost_usd: 0.0,
         unpriceable: false,
+        derived_thresholds: 0,
+        inert_thresholds: 0,
         notes: vec![
+            "A `revenue_share` threshold is resolved at evaluation time from recognized revenue \
+             over the rule's own window (the same recognition the /v1/margin rollup uses), so it \
+             follows the invoice instead of going stale. Each status reports the figure it \
+             resolved against in `basis`.",
+            "A derived threshold whose revenue cannot be measured — an un-invoiced customer, or a \
+             backend that does not serve revenue — resolves to infinity and never breaches, \
+             reported as `basis.kind = \"unknown\"`. A guardrail we cannot measure is inert by \
+             design; it is never a guess that could turn into a surprise 429.",
             "Unpriced calls (model absent from the price book) are charged against a cost cap at the \
              mean cost of a priced call in the same window; the estimate is reported per rule in \
              `cost_evidence`, never written onto the event.",
@@ -245,6 +301,12 @@ fn cost_basis(statuses: &[LimitStatus]) -> CostBasis {
         ],
     };
     for s in statuses {
+        if s.derived_threshold() {
+            b.derived_thresholds += 1;
+        }
+        if s.inert() {
+            b.inert_thresholds += 1;
+        }
         if let Some(e) = &s.cost_evidence {
             b.unpriced_calls += e.unpriced_calls;
             b.imputed_cost_usd += e.imputed_cost_usd;

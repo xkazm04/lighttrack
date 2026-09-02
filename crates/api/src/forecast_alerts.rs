@@ -20,6 +20,11 @@ pub(crate) struct ForecastAlert {
     pub subject: String,
     pub eta_days: f64,
     pub message: String,
+    /// For a `margin_erosion` alert: the id of the limit rule a margin policy has standing for this
+    /// subject, when one exists. It turns the alert from "someone should do something" into "this
+    /// is what is already being done", which is the difference between a warning and a report.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_applied: Option<String>,
 }
 
 impl ForecastAlert {
@@ -50,6 +55,7 @@ pub(crate) fn build_alerts(
                 project_id: project.to_string(),
                 subject: b.rule_id.clone(),
                 eta_days: round2(eta),
+                policy_applied: None,
                 message: format!(
                     "project '{project}' is on track to breach its {} {} budget ({:.4}) {} — \
                      projected ~{:.4}/day, current rolling {:.4}",
@@ -72,6 +78,7 @@ pub(crate) fn build_alerts(
                     project_id: project.to_string(),
                     subject: m.key.clone(),
                     eta_days: round2(eta),
+                    policy_applied: None,
                     message: format!(
                         "'{}' is on track to turn unprofitable {} — revenue ~${:.2}/day vs cost \
                          rising to ~${:.2}/day",
@@ -89,6 +96,7 @@ pub(crate) fn build_alerts(
                 project_id: project.to_string(),
                 subject: m.key.clone(),
                 eta_days: 0.0,
+                policy_applied: None,
                 message: format!(
                     "'{}' is already unprofitable (margin ${:.2}) and cost is still rising",
                     m.key, m.margin_usd
@@ -97,6 +105,19 @@ pub(crate) fn build_alerts(
         }
     }
     out
+}
+
+/// Stamp `policy_applied` on every `margin_erosion` alert whose subject has a policy-raised
+/// guardrail standing. Applied after [`build_alerts`] because only the caller has read the rules;
+/// keeping the mapping pure is what lets it be tested without a store.
+pub(crate) fn attach_guardrails(
+    alerts: &mut [ForecastAlert],
+    rules: &[lighttrack_core::LimitRule],
+) {
+    for a in alerts.iter_mut().filter(|a| a.kind == "margin_erosion") {
+        a.policy_applied =
+            crate::margin_guardrails::guardrail_for(rules, &a.subject).map(str::to_string);
+    }
 }
 
 fn severity(eta_days: f64) -> &'static str {

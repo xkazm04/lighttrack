@@ -44,6 +44,8 @@
 //!                                        a redaction change is enforced on the NEXT ingested event
 //!   POST /v1/projects/:id/limits  GET /v1/projects/:id/limits
 //!   PUT  /v1/limits/:id  DELETE /v1/limits/:id   update (incl. enable/disable) or remove a rule
+//!   POST /v1/projects/:id/margin-policies  GET  /v1/projects/:id/margin-policies
+//!   DELETE /v1/projects/:id/margin-policies/:pid   standing margin guardrails (admin)
 //!   GET  /v1/limits/status?project=      evaluate limits -> throttle flag + per-rule status, plus a
 //!                                        `rejected` block (count + est_missed_cost_usd + window) of
 //!                                        429'd ingest attempts per breached rule. That ledger is
@@ -149,6 +151,8 @@ mod jobs;
 mod limits;
 mod limits_usage;
 mod logging;
+mod margin_guardrails;
+mod margin_policies;
 mod otlp;
 mod prices;
 mod projects;
@@ -179,6 +183,8 @@ mod tests_forecast;
 mod tests_ingest;
 #[cfg(test)]
 mod tests_limit_scope;
+#[cfg(test)]
+mod tests_margin_policy;
 #[cfg(test)]
 mod tests_relay;
 #[cfg(test)]
@@ -320,6 +326,7 @@ async fn main() -> anyhow::Result<()> {
         activity: Arc::new(storage::ActivityGauge::default()),
         maintenance: Arc::new(storage::Maintenance::default()),
         maintenance_desc: maintenance_desc.clone(),
+        policy_cooldowns: Default::default(),
     };
 
     let sweep = forecast_sweep::SweepConfig::from_env();
@@ -500,6 +507,14 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route(
             "/v1/limits/:id",
             put(limits::update_limit).delete(limits::delete_limit),
+        )
+        .route(
+            "/v1/projects/:id/margin-policies",
+            post(margin_policies::create_policy).get(margin_policies::list_policies),
+        )
+        .route(
+            "/v1/projects/:id/margin-policies/:pid",
+            delete(margin_policies::delete_policy),
         )
         .route("/v1/limits/status", get(limits::limits_status))
         .route("/v1/limits/usage", get(limits_usage::usage_by_scope))

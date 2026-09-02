@@ -20,7 +20,7 @@ use tower::ServiceExt; // oneshot
 
 use lighttrack_core::{
     new_id, ApiKey, LimitAction, LimitMetric, LimitRule, LimitWindow, ModelPrice, PriceBook,
-    Project, Redaction,
+    Project, Redaction, Threshold,
 };
 use lighttrack_store::{SqliteStore, Store};
 
@@ -71,6 +71,7 @@ pub(crate) fn setup(redact: Redactor) -> (AppState, Arc<SqliteStore>) {
         project_policies: Arc::new(crate::state::ProjectPolicyCache::new(HashMap::new())),
         activity: Arc::new(crate::storage::ActivityGauge::default()),
         maintenance: Arc::new(crate::storage::Maintenance::default()),
+        policy_cooldowns: Default::default(),
         maintenance_desc: "test fixture (no sweep task is spawned)".to_string(),
     };
     (state, store)
@@ -860,11 +861,15 @@ async fn enforcing_actions_reject_ingest_and_do_not_store() {
                 project_id: "proj-a".into(),
                 metric: LimitMetric::Calls,
                 window: LimitWindow::Hour,
-                threshold: 1.0, // the very first call reaches the cap (usage-with-event = 1 >= 1)
+                threshold: Threshold::Fixed(1.0), // the very first call reaches the cap (usage-with-event = 1 >= 1)
                 action,
                 enabled: true,
                 warn_at: None,
                 scope: None,
+                escalation: None,
+                escalated_until: None,
+                origin: None,
+                expires_at: None,
             })
             .unwrap();
         let app = crate::build_router(state);
@@ -921,11 +926,15 @@ async fn rejected_events_are_ledgered_but_never_touch_usage_math() {
             project_id: "proj-a".into(),
             metric: LimitMetric::Calls,
             window: LimitWindow::Hour,
-            threshold: 1.0, // the first call reaches the cap and is rejected
+            threshold: Threshold::Fixed(1.0), // the first call reaches the cap and is rejected
             action: LimitAction::Block,
             enabled: true,
             warn_at: None,
             scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         })
         .unwrap();
     let app = crate::build_router(state.clone());
@@ -990,11 +999,15 @@ async fn alert_limit_flags_but_admits_and_stores() {
             project_id: "proj-a".into(),
             metric: LimitMetric::Calls,
             window: LimitWindow::Hour,
-            threshold: 1.0,
+            threshold: Threshold::Fixed(1.0),
             action: LimitAction::Alert,
             enabled: true,
             warn_at: None,
             scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         })
         .unwrap();
     let app = crate::build_router(state);
@@ -1054,11 +1067,15 @@ async fn batch_returns_per_item_accept_reject_invalid() {
             project_id: "proj-a".into(),
             metric: LimitMetric::Calls,
             window: LimitWindow::Hour,
-            threshold: 3.0,
+            threshold: Threshold::Fixed(3.0),
             action: LimitAction::Block,
             enabled: true,
             warn_at: None,
             scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         })
         .unwrap();
     let app = crate::build_router(state);
@@ -1818,11 +1835,15 @@ async fn an_unpriced_model_cannot_spend_freely_under_a_cost_cap() {
             project_id: "proj-a".into(),
             metric: LimitMetric::CostUsd,
             window: LimitWindow::Hour,
-            threshold: 1.0,
+            threshold: Threshold::Fixed(1.0),
             action: LimitAction::Block,
             enabled: true,
             warn_at: None,
             scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         })
         .unwrap();
     let app = crate::build_router(state.clone());
@@ -1915,11 +1936,15 @@ async fn client_reported_cost_is_distinguishable_from_our_own_estimate() {
             project_id: "proj-a".into(),
             metric: LimitMetric::CostUsd,
             window: LimitWindow::Hour,
-            threshold: 100.0,
+            threshold: Threshold::Fixed(100.0),
             action: LimitAction::Alert,
             enabled: true,
             warn_at: None,
             scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         })
         .unwrap();
     let app = crate::build_router(state);
@@ -2017,11 +2042,15 @@ fn app_with_calls_rule_id(
             project_id: "proj-a".into(),
             metric: LimitMetric::Calls,
             window: LimitWindow::Hour,
-            threshold,
+            threshold: Threshold::Fixed(threshold),
             action,
             enabled: true,
             warn_at,
             scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         })
         .unwrap();
     (crate::build_router(state), key, store)

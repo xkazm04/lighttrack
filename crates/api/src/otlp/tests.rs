@@ -8,7 +8,9 @@ use axum::Router;
 use serde_json::{json, Value};
 use tower::ServiceExt; // oneshot
 
-use lighttrack_core::{new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, Status};
+use lighttrack_core::{
+    new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, Status, Threshold,
+};
 use lighttrack_store::Store;
 
 use crate::redact::Redactor;
@@ -253,11 +255,15 @@ async fn otlp_ingest_respects_limits_and_redaction() {
             project_id: "proj-a".into(),
             metric: LimitMetric::Calls,
             window: LimitWindow::Hour,
-            threshold: 1.0, // the first span reaches the cap
+            threshold: Threshold::Fixed(1.0), // the first span reaches the cap
             action: LimitAction::Block,
             enabled: true,
             warn_at: None,
             scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         })
         .unwrap();
     let app = crate::build_router(state);

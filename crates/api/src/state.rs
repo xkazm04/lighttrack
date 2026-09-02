@@ -71,6 +71,10 @@ pub(crate) struct AppState {
     /// The sweep's configuration as one readable line, so the status surface can say whether
     /// anything will ever checkpoint this database.
     pub(crate) maintenance_desc: String,
+    /// Per-(policy, subject) last-applied instants for the margin guardrail pass. Process-local, in
+    /// the same spirit as the alert cooldowns: it exists so a policy with a long cooldown does not
+    /// rewrite its rule on every sweep tick.
+    pub(crate) policy_cooldowns: Arc<crate::margin_guardrails::PolicyCooldowns>,
 }
 
 /// Env: how long a cached redaction policy may be served before it is re-read from the store.

@@ -27,8 +27,10 @@ use std::time::Duration;
 
 use lighttrack_core::MarginDimension;
 
+use crate::error::ApiError;
 use crate::forecast::compute_forecast;
 use crate::forecast_alerts::ForecastAlert;
+use crate::margin_guardrails::{apply_policies, escalate, GuardrailOutcome};
 use crate::state::{spawn_db, AppState};
 
 /// Cadence in seconds; unset or `0` disables the sweep entirely.
@@ -124,13 +126,41 @@ pub(crate) async fn sweep_once(st: &AppState) -> usize {
         }
     };
     let mut produced = 0;
+    // A backend that does not serve the daily series cannot forecast at all, which is a property of
+    // the DEPLOYMENT, not of a project. Warning per project would print one line per project per
+    // tick, forever — the shape of log noise that trains an operator to stop reading. One line per
+    // sweep says the same thing once.
+    let mut unsupported_warned = false;
     for p in projects.iter().filter(|p| p.enabled) {
-        match forecast_alerts_for(st, &p.id).await {
-            Ok(alerts) if !alerts.is_empty() => {
-                produced += alerts.len();
-                st.alerts.notify_forecast(&alerts);
+        match guardrail_pass(st, &p.id).await {
+            Ok((alerts, acted)) => {
+                if !alerts.is_empty() {
+                    produced += alerts.len();
+                    st.alerts.notify_forecast(&alerts);
+                }
+                if acted.total() > 0 {
+                    tracing::info!(
+                        project_id = %p.id,
+                        escalated = acted.escalated,
+                        de_escalated = acted.de_escalated,
+                        created = acted.rules_created,
+                        updated = acted.rules_updated,
+                        removed = acted.rules_removed,
+                        "forecast sweep acted on limit rules"
+                    );
+                }
             }
-            Ok(_) => {}
+            Err(e) if e.is_unsupported() => {
+                if !unsupported_warned {
+                    unsupported_warned = true;
+                    tracing::warn!(
+                        error = %e,
+                        "forecast sweep is skipping every project: this backend does not serve the \
+                         daily usage series, so budget ETAs, margin erosion and the guardrails \
+                         built on them are unavailable here (see docs/PARITY.md)"
+                    );
+                }
+            }
             Err(e) => {
                 tracing::warn!(project_id = %p.id, error = %e, "forecast sweep failed for a project")
             }
@@ -142,23 +172,62 @@ pub(crate) async fn sweep_once(st: &AppState) -> usize {
     produced
 }
 
-/// The alerts one project's forecast would raise right now — the same list `GET /v1/forecast` returns
-/// in its `alerts` field, produced without a request.
-async fn forecast_alerts_for(
+/// One project: forecast, then act on it. Returns the alerts to deliver and what the two guardrail
+/// passes did.
+///
+/// The passes are best-effort *relative to the alerts*: a store failure while escalating must not
+/// swallow the warning an operator was about to receive, so their errors are logged and the alerts
+/// still go out. A failure to forecast at all is propagated, because there is then nothing to say.
+pub(crate) async fn guardrail_pass(
     st: &AppState,
     project: &str,
-) -> Result<Vec<ForecastAlert>, crate::error::ApiError> {
-    // Horizon/lookback are read per project rather than captured at spawn, so the loop and a direct
-    // call (test, or a future manual trigger) can never disagree about the shape of the projection.
+) -> Result<(Vec<ForecastAlert>, GuardrailOutcome), ApiError> {
     let (horizon, lookback) = SweepConfig::from_env()
         .map_or((DEFAULT_HORIZON, DEFAULT_LOOKBACK), |c| {
             (c.horizon, c.lookback)
         });
-    Ok(
-        compute_forecast(st, project, MarginDimension::Customer, horizon, lookback)
-            .await?
-            .alerts,
-    )
+    let mut f = compute_forecast(st, project, MarginDimension::Customer, horizon, lookback).await?;
+    let mut acted = GuardrailOutcome::default();
+    match escalate(st, project, &f.alerts).await {
+        Ok(o) => {
+            acted.escalated += o.escalated;
+            acted.de_escalated += o.de_escalated;
+        }
+        Err(e) => tracing::warn!(project_id = %project, error = %e, "escalation pass failed"),
+    }
+    match apply_policies(st, project, &f.margin_rows, &f.margins).await {
+        Ok(o) => {
+            acted.rules_created += o.rules_created;
+            acted.rules_updated += o.rules_updated;
+            acted.rules_removed += o.rules_removed;
+        }
+        // A backend with no `margin_policies` table refuses here. That is a declared limitation
+        // (docs/PARITY.md), not a per-project incident, so it stays at debug — the startup banner
+        // has already told the operator which surfaces this backend refuses.
+        Err(e) if e.is_unsupported() => {
+            tracing::debug!(project_id = %project, error = %e, "margin policies unsupported here")
+        }
+        Err(e) => tracing::warn!(project_id = %project, error = %e, "margin policy pass failed"),
+    }
+    // Last, so the stamp reflects the rules as they stand AFTER this pass: an alert that says
+    // "policy_applied: <rule>" while the rule was created a moment ago in the same sweep is the
+    // honest reading, and one that omits a guardrail it just raised is not.
+    let store = st.store.clone();
+    let pid = project.to_string();
+    if let Ok(rules) = spawn_db(move || store.list_limit_rules(&pid, false)).await {
+        crate::forecast_alerts::attach_guardrails(&mut f.alerts, &rules);
+    }
+    Ok((f.alerts, acted))
+}
+
+/// The alerts one project's forecast would raise right now — the same list `GET /v1/forecast` returns
+/// in its `alerts` field, produced without a request.
+#[cfg(test)]
+async fn forecast_alerts_for(
+    st: &AppState,
+    project: &str,
+) -> Result<Vec<ForecastAlert>, crate::error::ApiError> {
+    Ok(guardrail_pass(st, project).await?.0)
 }
 
 fn env_u64(key: &str) -> Option<u64> {
@@ -166,19 +235,19 @@ fn env_u64(key: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use chrono::{Duration as ChronoDuration, Utc};
     use lighttrack_core::{
         new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation, Status,
-        TokenUsage,
+        Threshold, TokenUsage,
     };
     use lighttrack_store::Store;
 
     use crate::redact::Redactor;
     use crate::tests_ingest::setup;
 
-    fn event(project: &str, days_ago: i64, cost: f64) -> LlmEvent {
+    pub(crate) fn event(project: &str, days_ago: i64, cost: f64) -> LlmEvent {
         let ts = Utc::now() - ChronoDuration::days(days_ago);
         LlmEvent {
             id: new_id(),
@@ -229,11 +298,15 @@ mod tests {
                 project_id: "proj-a".into(),
                 metric: LimitMetric::CostUsd,
                 window: LimitWindow::Day,
-                threshold: 60.0,
+                threshold: Threshold::Fixed(60.0),
                 action: LimitAction::Alert,
                 enabled: true,
                 warn_at: None,
                 scope: None,
+                escalation: None,
+                escalated_until: None,
+                origin: None,
+                expires_at: None,
             })
             .unwrap();
 
@@ -261,11 +334,15 @@ mod tests {
                 project_id: "proj-a".into(),
                 metric: LimitMetric::CostUsd,
                 window: LimitWindow::Day,
-                threshold: 60.0,
+                threshold: Threshold::Fixed(60.0),
                 action: LimitAction::Alert,
                 enabled: true,
                 warn_at: None,
                 scope: None,
+                escalation: None,
+                escalated_until: None,
+                origin: None,
+                expires_at: None,
             })
             .unwrap();
 

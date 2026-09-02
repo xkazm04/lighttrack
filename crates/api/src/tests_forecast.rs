@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt; // oneshot
 
 use lighttrack_core::{
-    new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, RevenueEvent, RevenueKind,
+    new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, RevenueEvent, RevenueKind, Threshold,
 };
 use lighttrack_store::Store;
 
@@ -51,11 +51,15 @@ async fn forecast_projects_budget_breach_and_margin_erosion() {
             project_id: "proj-a".into(),
             metric: LimitMetric::CostUsd,
             window: LimitWindow::Day,
-            threshold: 15.0,
+            threshold: Threshold::Fixed(15.0),
             action: LimitAction::Alert,
             enabled: true,
             warn_at: None,
             scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         })
         .unwrap();
 

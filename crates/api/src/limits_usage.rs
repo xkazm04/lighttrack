@@ -232,16 +232,21 @@ mod tests {
     }
 
     fn key_rule(id: &str, key: &str, threshold: f64) -> LimitRule {
+        use lighttrack_core::Threshold;
         LimitRule {
             id: id.into(),
             project_id: "p".into(),
             metric: LimitMetric::CostUsd,
             window: LimitWindow::Day,
-            threshold,
+            threshold: Threshold::Fixed(threshold),
             action: LimitAction::Block,
             enabled: true,
             warn_at: None,
             scope: Some(LimitScope::ApiKey(key.into())),
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         }
     }
 

@@ -61,6 +61,8 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
         tool("list_limits", "List a project's configured limit rules.",
             json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
+        tool("list_margin_policies", "List a project's standing margin guardrails: the policies that turn a loss-making or eroding customer into a limit rule automatically. Read-only — the rules they create show up in `list_limits` carrying an `origin`.",
+            json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
         tool("list_prices", "List the DB-backed model price book.",
             json!({"type":"object","properties":{}})),
         tool("list_benchmarks", "List a project's benchmark definitions (with inline datasets).",
@@ -137,6 +139,9 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         }),
         "list_limits" => bind(args, "project", |p| {
             c.get(&format!("/v1/projects/{p}/limits"))
+        }),
+        "list_margin_policies" => bind(args, "project", |p| {
+            c.get(&format!("/v1/projects/{p}/margin-policies"))
         }),
         "list_prices" => c.get("/v1/prices"),
         "list_benchmarks" => bind(args, "project", |p| {
