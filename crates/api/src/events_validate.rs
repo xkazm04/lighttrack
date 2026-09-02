@@ -69,11 +69,23 @@ const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024; // 2 MiB
 
 /// Resolve the single-event ingest body-size cap (bytes) from the environment.
 pub(crate) fn body_limit_bytes() -> usize {
-    std::env::var(ENV_MAX_BODY_BYTES)
-        .ok()
-        .and_then(|s| s.trim().parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_MAX_BODY_BYTES)
+    env_positive(ENV_MAX_BODY_BYTES, DEFAULT_MAX_BODY_BYTES)
+}
+
+/// A positive numeric setting, or `default`. A value that is set but unparseable (`=2MB`) or zero
+/// is said out loud - the `.parse().ok()` these three caps used silently ran the default while the
+/// operator believed a limit they had typed was in force.
+fn env_positive(key: &str, default: usize) -> usize {
+    let n = crate::state::env_parsed(key, default);
+    if n == 0 {
+        tracing::warn!(
+            var = key,
+            default,
+            "setting must be positive; using the default"
+        );
+        return default;
+    }
+    n
 }
 
 /// Env: max number of events accepted in one `POST /v1/events/batch`. Over this the whole request is
@@ -88,20 +100,12 @@ const DEFAULT_MAX_BATCH_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 /// Resolve the max items-per-batch from the environment.
 pub(crate) fn max_batch() -> usize {
-    std::env::var(ENV_MAX_BATCH)
-        .ok()
-        .and_then(|s| s.trim().parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_MAX_BATCH)
+    env_positive(ENV_MAX_BATCH, DEFAULT_MAX_BATCH)
 }
 
 /// Resolve the batch ingest body-size cap (bytes) from the environment.
 pub(crate) fn batch_body_limit_bytes() -> usize {
-    std::env::var(ENV_MAX_BATCH_BODY_BYTES)
-        .ok()
-        .and_then(|s| s.trim().parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_MAX_BATCH_BODY_BYTES)
+    env_positive(ENV_MAX_BATCH_BODY_BYTES, DEFAULT_MAX_BATCH_BODY_BYTES)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -175,10 +179,17 @@ impl IngestPolicy {
     }
 }
 
+/// `None` when unset (the asymmetric defaults apply); a set-but-unparseable value is warned about
+/// and treated as unset, rather than silently widening the skew window to its defaults.
 fn env_i64(key: &str) -> Option<i64> {
-    std::env::var(key)
-        .ok()
-        .and_then(|s| s.trim().parse::<i64>().ok())
+    let raw = std::env::var(key).ok()?;
+    match raw.trim().parse::<i64>() {
+        Ok(n) => Some(n),
+        Err(_) => {
+            tracing::warn!(var = key, value = %raw, "skew setting is not a number; ignoring it");
+            None
+        }
+    }
 }
 
 /// The process-wide ingest policy, resolved once from the environment.
