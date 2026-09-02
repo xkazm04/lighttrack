@@ -332,20 +332,6 @@ impl Score {
     }
 }
 
-/// One target in a comparison matrix: a provider+model, optionally with a named system-prompt variant.
-/// Stored inline in a benchmark's `target` field as an array (Phase 3.6e).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BenchTarget {
-    pub provider: String,
-    pub model: String,
-    /// System/instruction prompt variant under test.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system_prompt: Option<String>,
-    /// Display label; defaults to `provider/model` if unset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-}
-
 /// One case in a benchmark dataset. `output` is the candidate to judge; `expected` is an optional
 /// reference answer the judge can compare against.
 #[derive(Debug, Clone, Serialize, Deserialize)]

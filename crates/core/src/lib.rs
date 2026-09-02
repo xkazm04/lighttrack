@@ -5,6 +5,7 @@
 //! calculation, per-project [`limits`] evaluation, and the [`score`] /benchmark types.
 
 pub mod alias_table;
+pub mod bench_target;
 pub mod calibration;
 pub mod collective;
 pub mod customer;
@@ -35,6 +36,9 @@ pub mod score;
 pub mod trace;
 
 pub use alias_table::AliasTable;
+pub use bench_target::{
+    url_host, BenchTarget, PromptRef, TargetKind, INPUT_PLACEHOLDER, RESOLVED_PROMPT_VERSION,
+};
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use collective::{
     bucket_cost, build_digest, canon_determinism, merge_leaderboard, task_type_from,
@@ -88,9 +92,9 @@ pub use rollup::{Dimension, RollupQuery, RollupRow, Storage, TimeKey, MAX_GROUP_
 pub use rubric::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
 pub use schedule::{Schedule, MIN_INTERVAL_SECS as SCHEDULE_MIN_INTERVAL_SECS};
 pub use score::{
-    judge_verdict_schema, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, JudgeVerdict, Score,
-    ScoreDetail, ScoreDim, ScoreKind, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM,
-    MAX_REASONING_CHARS, RECURRENCE_KEY,
+    judge_verdict_schema, Benchmark, BenchmarkCase, BenchmarkRun, JudgeVerdict, Score, ScoreDetail,
+    ScoreDim, ScoreKind, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM, MAX_REASONING_CHARS,
+    RECURRENCE_KEY,
 };
 pub use trace::{
     normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,

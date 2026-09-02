@@ -39,6 +39,12 @@ pub struct BenchRunPayload {
     pub prompt_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<u32>,
+    /// The prompt's **registry name** — the key a `BenchTarget.prompt_ref` matches on, and so the
+    /// only way the runner can tell which of a matrix's targets `version` overrides. Without it a
+    /// version-triggered run resolved whatever each target's own ref said, which is precisely the
+    /// "gate that does not see its target" the id/version provenance pair could not fix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_name: Option<String>,
 }
 
 /// Judge recent unscored events for a project — one cycle of what `lt-runner score` loops over.
