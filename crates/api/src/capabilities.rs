@@ -108,6 +108,10 @@ fn consequence(s: Surface) -> &'static str {
         Surface::EventsCore | Surface::EventFilters => {
             "This is the ingest/read floor; a backend missing it cannot serve the API at all."
         }
+        Surface::Rollup => {
+            "/v1/rollup is unavailable, and with it the forecast and margin surfaces that read \
+             through the same primitive."
+        }
         Surface::Traces => "/v1/traces, /v1/traces/:id and whole-trace scoring are unavailable.",
         Surface::Forecast => "/v1/forecast and the pre-emptive breach alerts are unavailable.",
         Surface::MarginBreakdowns => {

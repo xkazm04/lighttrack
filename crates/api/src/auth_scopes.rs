@@ -72,6 +72,9 @@ mod table {
         r("/v1/costs", READ, NoMethod),
         r("/v1/costs/prompts", READ, NoMethod),
         r("/v1/usecases", READ, NoMethod),
+        // The grouped primitive behind every cost surface. Project-scoped like the fixed
+        // rollups above; the `api_key` dimension is gated to admins inside the handler.
+        r("/v1/rollup", READ, NoMethod),
         r("/v1/scores", READ, INGEST),
         r("/v1/prices", READ, NoMethod),
         r("/v1/prices/:provider/:model", NoMethod, Admin),
