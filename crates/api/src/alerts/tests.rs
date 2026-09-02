@@ -187,6 +187,31 @@ fn two_alerters_over_one_store_admit_one_alert() {
     );
 }
 
+/// A rejection flush is a delta the counter has already discarded, so two consecutive flushes for
+/// one project must both be admitted by the durable gate — a shared key would have the second one
+/// `Suppressed` inside the cooldown and its count lost for good.
+#[test]
+fn consecutive_rejection_flushes_are_distinct_rows_not_a_suppressed_duplicate() {
+    let store: Arc<dyn Store + Send + Sync> =
+        Arc::new(SqliteStore::open_in_memory().expect("in-memory store"));
+    store.init_schema().expect("schema");
+    let buckets: HashMap<String, (u64, f64)> =
+        HashMap::from([("p1:CostUsd:Hour:".to_string(), (3u64, 0.5f64))]);
+    let t0 = chrono::Utc::now();
+    let first = compose::ingest_rejected("p1", &buckets, t0);
+    let second = compose::ingest_rejected("p1", &buckets, t0 + chrono::Duration::seconds(900));
+    assert_ne!(first.dedup_key, second.dedup_key);
+    for a in [&first, &second] {
+        assert_eq!(
+            store
+                .insert_alert_dedup(a, Duration::from_secs(3600))
+                .expect("admit"),
+            AlertAdmission::Admitted,
+            "every flush is a new fact, never a repeat of the last one"
+        );
+    }
+}
+
 /// The composed payload IS the delivered body, so a receiver written against the old hard-coded
 /// `{event,text,content,...}` envelope keeps working — and the stored row is what was sent.
 #[test]

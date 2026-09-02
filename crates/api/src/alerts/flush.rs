@@ -60,7 +60,8 @@ pub(crate) fn spawn(state: AppState, every: Option<Duration>) {
 
 /// One pass: take the deltas since the last flush and fire one alert per project that had any.
 pub(crate) async fn flush_once(state: &AppState) {
-    let deltas = state.rejections.take_deltas(Utc::now());
+    let now = Utc::now();
+    let deltas = state.rejections.take_deltas(now);
     if deltas.is_empty() {
         return;
     }
@@ -75,7 +76,7 @@ pub(crate) async fn flush_once(state: &AppState) {
     }
     let alerts = by_project
         .iter()
-        .map(|(p, buckets)| compose::ingest_rejected(p, buckets))
+        .map(|(p, buckets)| compose::ingest_rejected(p, buckets, now))
         .collect();
     Arc::clone(&state.alerts).fire(alerts).await;
 }

@@ -198,7 +198,16 @@ pub(crate) fn bench_run(r: &BenchRunAlert) -> Alert {
 ///
 /// An alert row and never an event — a rejected call is deliberately not stored as an event,
 /// because it would corrupt the usage rollups every cap is evaluated against.
-pub(crate) fn ingest_rejected(project: &str, buckets: &HashMap<String, (u64, f64)>) -> Alert {
+///
+/// The dedup key carries `flushed_at`, so **every flush is its own row**. A flush is a delta the
+/// in-process counter has already thrown away; a key without the instant collided with the previous
+/// flush inside the alert cooldown, the store answered `Suppressed`, and the delta was gone — at the
+/// default cadence (900s) against the default cooldown (3600s), three of every four flushes.
+pub(crate) fn ingest_rejected(
+    project: &str,
+    buckets: &HashMap<String, (u64, f64)>,
+    flushed_at: chrono::DateTime<chrono::Utc>,
+) -> Alert {
     let total: u64 = buckets.values().map(|(n, _)| n).sum();
     let cost: f64 = buckets.values().map(|(_, c)| c).sum();
     let mut names: Vec<&String> = buckets.keys().collect();
@@ -223,7 +232,10 @@ pub(crate) fn ingest_rejected(project: &str, buckets: &HashMap<String, (u64, f64
     Alert::new(
         AlertKind::IngestRejected,
         Some(project.to_string()),
-        format!("ingest-rejected:{project}"),
+        format!(
+            "ingest-rejected:{project}:{}",
+            lighttrack_store::codec::fmt_ts(flushed_at)
+        ),
         body(
             AlertKind::IngestRejected,
             &msg,
