@@ -45,6 +45,7 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "get_collective_contributions" => list_of(contribution()),
         "list_prompts" => list_of(prompt_entry()),
         "get_prompt" => resolved_prompt(),
+        "get_prompt_quality" => list_of(prompt_quality_row()),
         _ => return None,
     };
     Some(s)
@@ -458,6 +459,26 @@ fn resolved_prompt() -> Value {
         "name": {"type":"string"}, "version": {"type":"integer"}, "label": {"type":["string","null"]},
         "content": {"type":"string"}, "config": {}, "note": {"type":["string","null"]}
     }))
+}
+
+/// One served version'''s quality. `n` and the interval are `required` on purpose: an agent handed a
+/// bare mean will compare two versions that are not comparable, and this is the schema that makes
+/// the evidence impossible to omit.
+fn prompt_quality_row() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["tag", "n", "mean", "ci95_low", "ci95_high"],
+        "properties": {
+            "tag": {"type":["string","null"],"description":"the metadata.prompt tag, null for untagged traffic"},
+            "name": {"type":"string"}, "version": {"type":"integer"},
+            "n": {"type":"integer","description":"verdicts behind this row — read it before the mean"},
+            "mean": {"type":"number","description":"mean of value/max, so rubric scales are comparable"},
+            "pass_rate": {"type":"number"},
+            "ci95_low": {"type":"number"}, "ci95_high": {"type":"number"},
+            "cost_usd": {"type":"number","description":"what the judged events cost"}
+        }
+    })
 }
 
 fn collective_resp() -> Value {

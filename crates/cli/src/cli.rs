@@ -48,6 +48,11 @@ pub(crate) enum Cmd {
         #[arg(long)]
         project: Option<String>,
     },
+    /// The prompt registry, and how the versions it serves are actually scoring.
+    Prompts {
+        #[command(subcommand)]
+        action: PromptsCmd,
+    },
     /// The model price book: what is priced, what is not, and what a rate used to be.
     Prices {
         #[command(subcommand)]
@@ -155,6 +160,29 @@ pub(crate) enum RelayDevicesCmd {
     /// Revoke a device: it authenticates nothing and is eligible for nothing. A flag, not a delete,
     /// so tasks it already ran keep naming a device that still resolves.
     Revoke { id: String },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum PromptsCmd {
+    /// Registry entries with their label→version pointers and linked benchmark.
+    List {
+        #[arg(long)]
+        project: String,
+    },
+    /// Per-served-version quality: mean, pass rate, ~95% interval and n for every
+    /// `metadata.prompt` tag. The quality half of `lt costs` — read `n` before the mean.
+    Quality {
+        #[arg(long)]
+        project: Option<String>,
+        /// RFC3339 lower bound on the VERDICT time (default: 7 days ago).
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+        /// Narrow to one rubric — the only way two versions are compared on the same criteria.
+        #[arg(long)]
+        rubric_id: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

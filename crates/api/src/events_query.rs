@@ -59,6 +59,12 @@ pub(crate) struct EventsParams {
     /// `count` above — this was typed `bool` while the docs promised `1`, so the runner's
     /// `?unscored=1` 400'd and online scoring could not make a single judge call.
     unscored: Option<String>,
+    /// Narrows the `unscored` work list to one `metadata.prompt` tag (M23), so the online scorer
+    /// can put its paid judge calls on canary traffic first — a fresh version has minutes of
+    /// traffic against production's days, and an unprioritized scorer spends its budget on the
+    /// version nobody is asking a question about. Ignored outside `?unscored=1`, where the general
+    /// `metadata_key`/`metadata_value` filter already covers it.
+    prompt: Option<String>,
 }
 
 /// Whether a query-string flag reads as set: `1` / `true` / `yes`, case-insensitive (the doc said
@@ -145,8 +151,10 @@ pub(crate) async fn get_events(
     // Unscored work-list mode: a scoped anti-join (project + limit only), no filter/cursor. Bare
     // array, no next-cursor — the online scorer pages by re-asking after it has scored a batch.
     if is_truthy(q.unscored.as_deref()) {
+        let tag = q.prompt.clone().filter(|s| !s.is_empty());
         let events =
-            spawn_db(move || store.list_unscored_events(project.as_deref(), limit)).await?;
+            spawn_db(move || store.list_unscored_events(project.as_deref(), tag.as_deref(), limit))
+                .await?;
         return Ok(Json(events).into_response());
     }
 

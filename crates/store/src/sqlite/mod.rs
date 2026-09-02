@@ -35,6 +35,7 @@ mod rollup;
 mod rubrics;
 mod schedules;
 mod schema;
+mod score_summary;
 mod scores;
 mod usage_cache;
 
@@ -63,10 +64,10 @@ use serde_json::Value;
 
 use lighttrack_core::{
     Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, ContributionRecord,
-    CostByDimension, Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Job, JobCancel,
-    JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
-    PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery,
-    RollupRow, Rubric, Schedule, Score, TokensByDimension, TraceSummary,
+    CostByDimension, Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Dimension, Job,
+    JobCancel, JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project,
+    Prompt, PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
+    RollupQuery, RollupRow, Rubric, Schedule, Score, TokensByDimension, TraceSummary,
 };
 
 use crate::{
@@ -74,8 +75,8 @@ use crate::{
     Admission, AlertAdmission, AlertFilter, CollectiveFilter, CostRow, CustomerCostRow,
     DailyDimCost, DailyUsage, DbMetricsReport, EventFilter, EventPage, MaintenancePass,
     MaintenanceRequest, RedactionPostureRow, ReplaceAck, RepriceReport, Result, ScopeUsage,
-    ScoreFilter, StorageReport, Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage,
-    UseCaseCostRow,
+    ScoreFilter, ScoreSummaryRow, StorageReport, Store, StoreError, TraceEvents, TraceFilter,
+    TracePage, Usage, UseCaseCostRow,
 };
 
 use metrics::DbOp;
@@ -539,6 +540,20 @@ impl Store for SqliteStore {
     }
     fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
         self.read_op(DbOp::ScoresRead, |c| scores::scored_event_ids(c, event_ids))
+    }
+    /// Verdicts grouped by a value on the joined event row (M23) — the served-version quality
+    /// ledger. See the trait for the semantics every backend matches.
+    fn score_summary_by_dimension(
+        &self,
+        project: Option<&str>,
+        dim: Dimension,
+        since: DateTime<Utc>,
+        until: Option<DateTime<Utc>>,
+        rubric_id: Option<&str>,
+    ) -> Result<Vec<ScoreSummaryRow>> {
+        self.read_op(DbOp::ScoresRead, |c| {
+            score_summary::score_summary(c, project, dim, since, until, rubric_id)
+        })
     }
 
     // --- projects / api keys / limits ---

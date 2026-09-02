@@ -55,7 +55,7 @@ pub(super) fn scores(store: &dyn Store, pid: &str) -> Result<()> {
         "empty input -> empty output"
     );
 
-    let unscored = store.list_unscored_events(Some(pid), 50)?;
+    let unscored = store.list_unscored_events(Some(pid), None, 50)?;
     assert!(
         unscored.iter().any(|e| e.id == unscored_ev.id),
         "unscored event is in the work list"

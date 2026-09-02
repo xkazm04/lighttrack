@@ -68,6 +68,7 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
         Surface::Pricing => pricing(store),
         Surface::Devices => devices(store),
         Surface::Contributions => contributions(store),
+        Surface::ScoreSummaries => score_summaries(store),
     };
 
     let uncovered: Vec<&str> = surface
@@ -113,6 +114,23 @@ fn revenue_reprice(store: &dyn Store) -> Vec<&'static str> {
         store.reprice_revenue(Some(&new_id()), "GBP", 1.27, "test", true),
     );
     vec!["reprice_revenue"]
+}
+
+/// A backend that cannot join verdicts to their events must refuse, rather than answer with an empty
+/// quality table — which reads as "this version has not been judged", i.e. exactly the reassurance a
+/// regressed version should not be able to give.
+fn score_summaries(store: &dyn Store) -> Vec<&'static str> {
+    refused(
+        "score_summary_by_dimension",
+        store.score_summary_by_dimension(
+            Some(&new_id()),
+            lighttrack_core::Dimension::Prompt,
+            Utc::now() - chrono::Duration::hours(1),
+            None,
+            None,
+        ),
+    );
+    vec!["score_summary_by_dimension"]
 }
 
 /// A backend that cannot narrow verdicts must refuse, rather than answer a narrowed question with

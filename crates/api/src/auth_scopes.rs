@@ -74,6 +74,10 @@ mod table {
         // The unpriced-traffic ledger. Project-scoped like the cost rollups it qualifies — a
         // project key must be able to see that its OWN cost numbers are a floor.
         r("/v1/costs/unpriced", READ, NoMethod),
+        // Per-served-version quality. The quality half of `/v1/costs/prompts` and project-scoped
+        // for the same reason: a project key must be able to see whether the version IT is serving
+        // has regressed, without an operator in the loop.
+        r("/v1/quality/prompts", READ, NoMethod),
         r("/v1/usecases", READ, NoMethod),
         // The grouped primitive behind every cost surface. Project-scoped like the fixed
         // rollups above; the `api_key` dimension is gated to admins inside the handler.
@@ -104,6 +108,9 @@ mod table {
         r("/v1/projects/:id/prompts/:name", READ, Admin),
         r("/v1/projects/:id/prompts/:name/versions", READ, Admin),
         r("/v1/projects/:id/prompts/:name/promote", NoMethod, Admin),
+        // Setting a canary policy with `auto_revert` hands a background sweep permission to change
+        // what this deployment serves — strictly more power than one promotion, so admin only.
+        r("/v1/projects/:id/prompts/:name/canary", NoMethod, Admin),
         r("/v1/jobs", Admin, Admin),
         r("/v1/jobs/claim", NoMethod, Admin),
         r("/v1/jobs/:id", Admin, NoMethod),

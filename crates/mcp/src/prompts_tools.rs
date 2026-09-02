@@ -37,6 +37,13 @@ pub(crate) fn read_tools() -> Vec<Value> {
                 "label":{"type":"string","description":"resolve the version this label points at (e.g. production)"},
                 "version":{"type":"integer","description":"resolve this exact version number"}
             },"required":["project","name"]})),
+        rtool("get_prompt_quality", "How each SERVED prompt version is actually scoring in production: mean, pass rate, ~95% interval and n per `metadata.prompt` tag. The quality half of the cost-per-version read — use it to decide whether a promotion held up.",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "since":{"type":"string","description":"RFC3339 lower bound on the VERDICT time (default 7 days ago)"},
+                "until":{"type":"string","description":"RFC3339 upper bound on the verdict time"},
+                "rubric_id":{"type":"string","description":"narrow to one rubric — the only way two versions are compared on the same criteria"}
+            },"required":["project"]})),
     ]
 }
 
@@ -106,6 +113,10 @@ pub(crate) fn read_dispatch(c: &Client, name: &str, args: &Value) -> Option<Resu
             (Ok(p), Ok(n)) => c.get(&get_prompt_path(&p, &n, args)),
             (Err(e), _) | (_, Err(e)) => Err(e),
         },
+        "get_prompt_quality" => match need(args, "project") {
+            Ok(p) => c.get(&quality_path(&p, args)),
+            Err(e) => Err(e),
+        },
         _ => return None,
     };
     Some(r)
@@ -134,6 +145,22 @@ pub(crate) fn write_dispatch(
         _ => return None,
     };
     Some(r)
+}
+
+/// Build the `GET /v1/quality/prompts` query. Every narrowing is optional: "how are my served
+/// versions doing" has a useful answer before an agent knows which window or rubric to ask about.
+fn quality_path(project: &str, args: &Value) -> String {
+    let mut p = format!("/v1/quality/prompts?project={project}");
+    for k in ["since", "until", "rubric_id"] {
+        if let Some(v) = args
+            .get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            p.push_str(&format!("&{k}={v}"));
+        }
+    }
+    p
 }
 
 /// Build the `GET /v1/projects/:id/prompts/:name` path with an optional `label`/`version` selector.

@@ -31,6 +31,7 @@ pub(crate) fn score_recent(
     engine: &EngineConfig,
     judge: &Judge,
     project: Option<&str>,
+    prompt_tag: Option<&str>,
     limit: usize,
     interval: u64,
     jobs: usize,
@@ -43,7 +44,7 @@ pub(crate) fn score_recent(
         );
     }
     loop {
-        score_once(cli, http, engine, judge, project, limit, jobs)?;
+        score_once(cli, http, engine, judge, project, prompt_tag, limit, jobs)?;
         if interval == 0 {
             break;
         }
@@ -55,12 +56,14 @@ pub(crate) fn score_recent(
 /// One scoring pass: judge recent events that carry content and aren't already scored. Eligible
 /// events are judged with up to `jobs` concurrency; results are posted/printed in fetch order so the
 /// output is deterministic (identical at any `jobs`). Returns the number newly scored.
+#[allow(clippy::too_many_arguments)]
 fn score_once(
     cli: &Cli,
     http: &reqwest::blocking::Client,
     engine: &EngineConfig,
     judge: &Judge,
     project: Option<&str>,
+    prompt_tag: Option<&str>,
     limit: usize,
     jobs: usize,
 ) -> Result<usize> {
@@ -72,6 +75,12 @@ fn score_once(
     let mut epath = format!("/v1/events?unscored=1&limit={limit}");
     if let Some(p) = project {
         epath.push_str(&format!("&project={p}"));
+    }
+    // Prioritise one served version'''s traffic (M23). The server does the narrowing, for the same
+    // reason it does the anti-join: filtering a page client-side would return almost nothing on a
+    // canary that is a few percent of the stream.
+    if let Some(t) = prompt_tag {
+        epath.push_str(&format!("&prompt={t}"));
     }
     let events: Vec<LlmEvent> = get(cli, http, &epath)?;
 

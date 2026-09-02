@@ -2078,6 +2078,8 @@ fn prompt_registry_versions_and_labels() {
         name: "support-reply".into(),
         benchmark_id: Some("b1".into()),
         labels: BTreeMap::new(),
+        canary: None,
+        label_history: Vec::new(),
         created_at: now,
         updated_at: now,
     };

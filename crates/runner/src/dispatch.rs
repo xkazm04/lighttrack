@@ -130,6 +130,7 @@ fn score_events(
         engine,
         &judge,
         p.project.as_deref(),
+        p.prompt_tag.as_deref(),
         p.limit,
         0,
         cli.jobs,

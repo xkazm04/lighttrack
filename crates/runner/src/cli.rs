@@ -59,6 +59,14 @@ pub(crate) enum Cmd {
         rubric_id: Option<String>,
         #[arg(long)]
         project: Option<String>,
+        /// Only judge events carrying this `metadata.prompt` tag ("<name>@v<version>", M23).
+        ///
+        /// Judge calls cost money and a freshly-promoted version has minutes of traffic against
+        /// production'''s days, so an unprioritized scorer spends its budget re-judging the version
+        /// nobody is asking a question about. Point this at the canary and the online quality read
+        /// (`GET /v1/quality/prompts`) accumulates evidence where a decision is pending.
+        #[arg(long)]
+        prompt_tag: Option<String>,
         #[arg(long, default_value_t = 10)]
         limit: usize,
         /// Run continuously, scoring newly-arrived (unscored) events every N seconds. 0 = one-shot.

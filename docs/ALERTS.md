@@ -22,6 +22,14 @@ acknowledged it, and what came of it.
 | `score_drop` | a (project, rubric) recent mean regressed below its baseline | `warning` |
 | `bench_run` | a benchmark run finished (the CI gate contract's completion hook) | `info` |
 | `ingest_rejected` | periodic flush: how many ingest attempts the caps turned away | `info` |
+| `prompt_canary_regressed` | a prompt's canary label is measurably worse than its production label | `warning` |
+
+`prompt_canary_regressed` is the one alert that fires **after** a promotion, which is where the
+prompt registry used to stop looking. It requires both an evidence floor (`min_n` verdicts on each
+side) and non-overlapping ~95% intervals past the policy's `max_drop` band, so it cannot be tripped
+by noise; the payload carries both means, both intervals and both counts, plus whether an
+`auto_revert` already moved the label back. Off unless `LIGHTTRACK_PROMPT_CANARY_SWEEP_SECS` is set
+and the prompt carries a policy — see `BENCHMARK_FRAMEWORK.md` §2.
 
 `ingest_rejected` is an **alert row and never an event**. A rejected call is deliberately not stored
 as an event — it would corrupt the usage and cost rollups every cap is evaluated against — so the

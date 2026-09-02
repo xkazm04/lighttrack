@@ -33,6 +33,7 @@ mod revenue;
 mod rollup;
 mod rubrics;
 mod schedules;
+mod score_summary;
 mod scores;
 mod traces;
 mod util;
@@ -44,16 +45,16 @@ use tokio::runtime::Runtime;
 
 use lighttrack_core::{
     Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, ContributionRecord,
-    CostByDimension, Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Job, JobCancel,
-    JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
-    PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery,
-    RollupRow, Rubric, Schedule, Score, TraceSummary,
+    CostByDimension, Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Dimension, Job,
+    JobCancel, JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project,
+    Prompt, PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
+    RollupQuery, RollupRow, Rubric, Schedule, Score, TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
     Admission, AlertAdmission, AlertFilter, CollectiveFilter, CostRow, EventFilter, EventPage,
-    RedactionPostureRow, ReplaceAck, RepriceReport, Result, ScopeUsage, ScoreFilter, Store,
-    StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    RedactionPostureRow, ReplaceAck, RepriceReport, Result, ScopeUsage, ScoreFilter,
+    ScoreSummaryRow, Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 use util::pgerr;
@@ -133,6 +134,10 @@ impl PgStore {
         // a scheduled push from tripping a hub'''s own min_interval IS a read of this table, so a
         // backend that answered it empty would push on every single interval.
         Surface::Contributions,
+        // The served-version quality ledger (M23). The registry and the promotion gate already run
+        // here; without this the loop stops at promotion on the one deployment that has production
+        // traffic to measure.
+        Surface::ScoreSummaries,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -372,6 +377,21 @@ impl Store for PgStore {
     fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
         self.rt
             .block_on(scores::scored_event_ids(&self.pool, event_ids))
+    }
+    /// Verdicts grouped by a value on the joined event row (M23) — the served-version quality
+    /// ledger. This is the backend production runs on, so a quality surface that only answered on
+    /// SQLite would be a surface that does not exist.
+    fn score_summary_by_dimension(
+        &self,
+        project: Option<&str>,
+        dim: Dimension,
+        since: DateTime<Utc>,
+        until: Option<DateTime<Utc>>,
+        rubric_id: Option<&str>,
+    ) -> Result<Vec<ScoreSummaryRow>> {
+        self.rt.block_on(score_summary::score_summary(
+            &self.pool, project, dim, since, until, rubric_id,
+        ))
     }
 
     // --- prices ---
