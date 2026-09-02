@@ -287,3 +287,45 @@ pub(crate) async fn post_event(
         prox,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::same_logical_event;
+    use lighttrack_core::LlmEvent;
+    use serde_json::json;
+
+    fn ev(v: serde_json::Value) -> LlmEvent {
+        let mut base = json!({
+            "id": "e1", "project_id": "p", "provider": "openai", "model": "gpt-4o",
+            "ts": "2026-01-01T00:00:00Z", "usage": { "input": 10, "output": 5 }, "cost_usd": 0.1
+        });
+        base.as_object_mut()
+            .unwrap()
+            .extend(v.as_object().unwrap().clone());
+        serde_json::from_value(base).unwrap()
+    }
+
+    /// The replay test decides whether a PK collision is "you already have this" or a true
+    /// conflict. It must ignore what a retry may legitimately differ in (the price the book gave,
+    /// the payload the redactor left) and refuse what identifies a different call.
+    #[test]
+    fn a_retry_matches_on_identity_scalars_and_ignores_cost_and_payloads() {
+        let stored = ev(json!({ "input": "the prompt", "cost_usd": 0.1 }));
+        assert!(same_logical_event(
+            &stored,
+            &ev(json!({ "input": "<EMAIL>", "cost_usd": 0.2 }))
+        ));
+        for different in [
+            json!({ "project_id": "q" }),
+            json!({ "ts": "2026-01-01T00:00:01Z" }),
+            json!({ "model": "gpt-4o-mini" }),
+            json!({ "provider": "anthropic" }),
+            json!({ "usage": { "input": 11, "output": 5 } }),
+        ] {
+            assert!(
+                !same_logical_event(&stored, &ev(different.clone())),
+                "{different}"
+            );
+        }
+    }
+}
