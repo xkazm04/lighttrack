@@ -519,6 +519,9 @@ impl Store for SqliteStore {
     fn set_api_key_revoked(&self, id: &str, revoked: bool) -> Result<bool> {
         self.with(|c| projects::set_key_revoked(c, id, revoked))
     }
+    fn set_api_key_expiry(&self, id: &str, when: Option<DateTime<Utc>>) -> Result<bool> {
+        self.with(|c| projects::set_key_expiry(c, id, when))
+    }
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()> {
         self.with(|c| limits::create(c, r))
     }

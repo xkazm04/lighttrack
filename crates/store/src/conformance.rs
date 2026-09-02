@@ -181,6 +181,7 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
         // Non-default on purpose: pins that the consent flag round-trips on every backend (a backend
         // that drops it silently opts a project out of — or worse, into — collective contribution).
         collective_opt_in: true,
+        archived_at: None,
         created_at: Utc::now(),
     };
     store.create_project(&proj)?;
@@ -192,7 +193,35 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
         "list_projects contains ours"
     );
 
+    // Archiving is the documented `DELETE /v1/projects/:id`, so `archived_at` has to survive a write
+    // on every backend — a backend that drops it turns "archived" back into "live" on the next read.
+    let archived_id = new_id();
+    let archived_at = Utc::now();
+    store.create_project(&Project {
+        id: archived_id.clone(),
+        name: "conf-archived".into(),
+        enabled: false,
+        redaction: Redaction::None,
+        collective_opt_in: false,
+        archived_at: Some(archived_at),
+        created_at: Utc::now(),
+    })?;
+    let back = store
+        .get_project(&archived_id)?
+        .expect("archived project readable");
+    assert_eq!(back.archived_at, Some(archived_at), "archived_at persists");
+    assert!(!back.enabled, "an archived project is not enabled");
+    assert!(
+        got.archived_at.is_none(),
+        "a live project has no archived_at"
+    );
+
     let prefix: String = new_id().chars().take(8).collect();
+    // Non-default on purpose (a *narrower* set than `default_scopes`): a backend that drops the
+    // column reads the permissive back-compat default back, which is exactly the silent widening
+    // this assertion exists to catch.
+    let scopes = vec![lighttrack_core::Scope::Ingest];
+    let expires_at = Utc::now() + chrono::Duration::hours(1);
     let key = ApiKey {
         id: new_id(),
         project_id: pid.into(),
@@ -202,12 +231,16 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
         created_at: Utc::now(),
         last_used_at: None,
         revoked: false,
+        scopes: scopes.clone(),
+        expires_at: Some(expires_at),
     };
     store.create_api_key(&key)?;
     let found = store
         .find_api_key_by_prefix(&prefix)?
         .expect("find_api_key_by_prefix Some");
     assert_eq!(found.project_id, pid);
+    assert_eq!(found.scopes, scopes, "the key's scopes round-trip narrow");
+    assert_eq!(found.expires_at, Some(expires_at), "expires_at round-trips");
     assert!(
         store.find_api_key_by_prefix("zzzzzzzz")?.is_none(),
         "unknown prefix None"
@@ -243,6 +276,38 @@ fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
     assert!(
         !store.set_api_key_revoked(&new_id(), true)?,
         "revoking an unknown id returns false"
+    );
+
+    // Rotation's grace window is a stamped expiry on the predecessor, not a background task, so the
+    // stamp itself has to be a real, readable write on every backend.
+    let grace_end = Utc::now() + chrono::Duration::seconds(30);
+    assert!(
+        store.set_api_key_expiry(&key.id, Some(grace_end))?,
+        "stamping an expiry reports a row changed"
+    );
+    assert_eq!(
+        store
+            .find_api_key_by_prefix(&prefix)?
+            .expect("still present")
+            .expires_at,
+        Some(grace_end),
+        "the stamped expiry persisted"
+    );
+    assert!(
+        store.set_api_key_expiry(&key.id, None)?,
+        "an expiry can be cleared again"
+    );
+    assert!(
+        store
+            .find_api_key_by_prefix(&prefix)?
+            .expect("still present")
+            .expires_at
+            .is_none(),
+        "clearing an expiry persisted"
+    );
+    assert!(
+        !store.set_api_key_expiry(&new_id(), Some(grace_end))?,
+        "expiring an unknown id returns false"
     );
 
     let rule = LimitRule {

@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS projects (
   -- Consent to include this project's benchmark runs in a collective-network digest. Default off:
   -- contribution is an act, not an inheritance.
   collective_opt_in INTEGER NOT NULL DEFAULT 0,
-  created_at  TEXT NOT NULL
+  created_at  TEXT NOT NULL,
+  -- Set by DELETE /v1/projects/:id. Archive, never delete: the events and runs stay.
+  archived_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -20,7 +22,12 @@ CREATE TABLE IF NOT EXISTS api_keys (
   key_hash     TEXT NOT NULL,
   created_at   TEXT NOT NULL,
   last_used_at TEXT,
-  revoked      INTEGER NOT NULL DEFAULT 0
+  revoked      INTEGER NOT NULL DEFAULT 0,
+  -- JSON array of ingest|read|manage. NULL on rows written before scopes existed, which read as
+  -- the permissive back-compat default (core::decode_scopes).
+  scopes       TEXT,
+  -- Fixed-width RFC3339. Past it, the key authenticates as nothing.
+  expires_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(prefix);
 
