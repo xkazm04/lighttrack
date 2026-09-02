@@ -180,6 +180,7 @@ mod jobs;
 mod jobs_enqueue;
 mod judges;
 mod labels;
+mod labels_promote;
 mod limits;
 mod limits_usage;
 mod logging;
@@ -537,9 +538,12 @@ pub(crate) fn build_router(state: AppState) -> Router {
         // its human verdict copied across, instead of the grade evaporating in a spreadsheet.
         .route(
             "/v1/datasets/:id/items/from-label",
-            post(labels::item_from_label),
+            post(labels_promote::item_from_label),
         )
-        .route("/v1/datasets/:id/labels", get(labels::dataset_labels))
+        .route(
+            "/v1/datasets/:id/labels",
+            get(labels_promote::dataset_labels),
+        )
         .route(
             "/v1/labels",
             post(labels::create_label).get(labels::list_labels),
