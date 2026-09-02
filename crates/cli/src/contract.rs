@@ -67,6 +67,62 @@ mod tests {
         assert!(out.is_empty(), "these verbs have no help text: {out:?}");
     }
 
+    /// The module doc at the top of `main.rs` is the operator's quick reference, and it is a
+    /// hand-maintained list of invocations: every `lt …` example on it must still parse, or the
+    /// documentation teaches a verb or flag the binary no longer has. Read from the source so the
+    /// doc and the check cannot drift apart.
+    #[test]
+    fn every_documented_example_invocation_parses() {
+        let src = include_str!("main.rs");
+        let examples: Vec<&str> = src
+            .lines()
+            .take_while(|l| l.starts_with("//!"))
+            .flat_map(|l| l.trim_start_matches("//!").split('|'))
+            .map(str::trim)
+            .filter(|s| s.starts_with("lt "))
+            .collect();
+        assert!(
+            examples.len() > 20,
+            "the example block was not found: {examples:?}"
+        );
+        let mut failed = Vec::new();
+        for ex in examples {
+            // A trailing parenthetical is commentary, not arguments; a single-quoted argument is
+            // one shell word.
+            let line = ex.split("  (").next().unwrap_or(ex);
+            let argv = shell_words(line);
+            if let Err(e) = <Cli as clap::Parser>::try_parse_from(argv) {
+                failed.push(format!("{ex}: {}", e.kind()));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "documented examples that no longer parse: {failed:#?}"
+        );
+    }
+
+    /// Minimal shell splitting for the examples: whitespace-separated, single quotes group.
+    fn shell_words(line: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        let mut quoted = false;
+        for ch in line.chars() {
+            match ch {
+                '\'' => quoted = !quoted,
+                c if c.is_whitespace() && !quoted => {
+                    if !cur.is_empty() {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                }
+                c => cur.push(c),
+            }
+        }
+        if !cur.is_empty() {
+            out.push(cur);
+        }
+        out
+    }
+
     /// A paged endpoint whose verb cannot take a cursor can show you the first page and nothing
     /// else — which reads as "that is all the data", the worst failure an observability tool has.
     #[test]

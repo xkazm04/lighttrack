@@ -19,7 +19,7 @@
 //!   lt labels add --subject event:<id> --value 0.9 --labeler me   |   lt labels list
 //!   lt judges trust anthropic/claude-haiku-4-5 --project <id> --rubric-id <id>
 //!   lt schedules create --project <id> --type bench_run --every 6h --payload '{"benchmark_id":"b1"}'
-//!   lt schedules list   |   lt schedules set <id> --disabled   |   lt jobs list --status running
+//!   lt schedules list   |   lt schedules set <id> --disable   |   lt jobs list --status running
 //!   lt relay devices add --name studio-laptop --capability 'xprice/*'   (key shown ONCE)
 //!   lt relay devices list   |   lt relay devices revoke <device-id>
 //!   lt relay tasks list --status queued   |   lt relay actions --limit 5000
