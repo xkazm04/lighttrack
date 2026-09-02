@@ -147,9 +147,13 @@ def guard(output: str, rules: dict) -> GuardResult:
             record("json", True)
         except Exception:
             record("json", False, "output is not valid JSON")
-    if json_keys and isinstance(parsed, dict):
+    if json_keys and parsed is not None:
+        # Valid JSON that is not an object (`[1, 2]`, `"text"`, `42`) cannot carry the required
+        # keys: every one of them is missing. Skipping the check here let such an output pass with
+        # only "json: ok" recorded, while the Rust/TS guards refused it — one contract, two verdicts.
+        present = parsed if isinstance(parsed, dict) else {}
         for k in json_keys:
-            record(f"key:{k}", k in parsed, f"missing required JSON key '{k}'")
+            record(f"key:{k}", k in present, f"missing required JSON key '{k}'")
 
     stripped = output.strip()
     words = len(stripped.split()) if stripped else 0
