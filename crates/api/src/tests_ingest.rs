@@ -223,6 +223,50 @@ async fn get_json(app: &Router, token: &str, uri: &str) -> (StatusCode, Value) {
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
+/// The M8 headline, end to end: `PUT /v1/prices/mistral/<model>` prices the **next** `mistral` event.
+///
+/// Before M8 this exact sequence was a dead end — the event's provider was coerced to `unknown`, so
+/// the row the operator had just written (keyed `mistral/…`) could never be matched, and the 429 text
+/// that tells them to add a price was advice that could not work.
+#[tokio::test]
+async fn a_price_put_for_an_unmodeled_provider_prices_the_next_event() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/v1/prices/mistral/mistral-large")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer admin-secret")
+        .body(Body::from(
+            json!({ "input_per_mtok": 2.0, "output_per_mtok": 6.0 }).to_string(),
+        ))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let (status, _) = ingest(
+        &app,
+        &key,
+        json!({
+            "id": "mistral-1", "provider": "mistral", "model": "mistral-large",
+            "usage": { "input": 1_000_000, "output": 1_000_000 }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let ev = store.get_event("mistral-1").unwrap().unwrap();
+    assert_eq!(ev.provider.as_str(), "mistral");
+    assert_eq!(ev.cost_usd, Some(8.0), "2.0 in + 6.0 out per Mtok");
+    assert_eq!(
+        ev.cost_source(),
+        Some("book"),
+        "priced from the book we just wrote, not reported by the client"
+    );
+}
+
 #[tokio::test]
 async fn saturated_ingest_sheds_with_503_and_retry_after_never_a_budget_429() {
     // Saturation must be a fast, honest rejection that a client cannot mistake for "you're over
