@@ -20,6 +20,7 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "list_scores" => list_of(score()),
         "get_limit_status" => limit_status_resp(),
         "list_limits" => list_of(limit_rule()),
+        "list_alerts" => alerts_resp(),
         "list_margin_policies" => list_of(margin_policy()),
         "list_prices" => list_of(price_row()),
         "list_benchmarks" => list_of(benchmark()),
@@ -274,6 +275,32 @@ fn collective_digest_resp() -> Value {
                 "quality": {"type":"number"}, "pass_rate": {"type":"number"},
                 "avg_cost_usd": {"type":"number"}, "p50_latency_ms": {"type":["integer","null"]},
                 "n_runs": {"type":"integer"}, "n_cases": {"type":"integer"}
+            })) }
+        }
+    })
+}
+
+/// The alert ledger's page. An envelope, not a bare array, so `next_cursor` travels with the rows —
+/// and `delivered` is declared explicitly because an EMPTY delivery list is the single most
+/// important thing on this page: it means the alert reached nobody.
+fn alerts_resp() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["alerts"],
+        "properties": {
+            "next_cursor": {"type":["string","null"]},
+            "alerts": { "type":"array", "items": obj(json!({
+                "id": {"type":"string"}, "project_id": {"type":["string","null"]},
+                "kind": {"type":"string"}, "dedup_key": {"type":"string"},
+                "severity": {"type":"string"}, "payload": {"type":["object","null"]},
+                "fired_at": {"type":"string"},
+                "delivered": { "type":"array", "items": obj(json!({
+                    "channel_id": {"type":"string"}, "ok": {"type":"boolean"},
+                    "status": {"type":["string","null"]}, "at": {"type":"string"}
+                })) },
+                "acked_at": {"type":["string","null"]}, "acked_by": {"type":["string","null"]},
+                "resolution": {"type":["object","null"]}
             })) }
         }
     })

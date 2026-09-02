@@ -8,6 +8,7 @@
 
 use serde_json::Value;
 
+mod alerts;
 mod benchmarks;
 mod collective;
 mod compare;
@@ -45,6 +46,7 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "list_scores" => scores::list(v),
         "get_limit_status" => limits::status(v),
         "list_limits" => limits::list(v),
+        "list_alerts" => alerts::list(v),
         "list_prices" => prices::list(v),
         "list_benchmarks" => benchmarks::list(v),
         "get_benchmark" => benchmarks::detail(v),

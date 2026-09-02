@@ -4,7 +4,10 @@
 //! These are gated behind `LIGHTTRACK_MCP_ALLOW_WRITES` (see `tools::call`) and annotated
 //! `readOnlyHint: false` so a client/agent treats them with care. The bodies are forwarded to the
 //! API, which validates them — the MCP server cannot bypass that. Note: minting API keys is
-//! deliberately *not* exposed here, to avoid leaking secrets into an agent's context.
+//! deliberately *not* exposed here, to avoid leaking secrets into an agent's context. Alert
+//! CHANNELS are excluded for exactly the same reason — creating one returns a webhook signing
+//! secret exactly once, and that would land verbatim in a transcript — and so is
+//! `POST /v1/alerts/:id/resolution`, which is the responder's door, not an agent's.
 
 use serde_json::{json, Value};
 
@@ -23,6 +26,7 @@ const NAMES: &[&str] = &[
     "create_limit",
     "update_limit",
     "delete_limit",
+    "ack_alert",
     "put_price",
 ];
 
@@ -112,6 +116,13 @@ pub(crate) fn tools() -> Vec<Value> {
                 "baseline_score":{"type":"number"}
             },"required":["project","name"]}),
             false),
+        wtool("ack_alert",
+            "Acknowledge one fired alert: record that a human (or you, on their behalf) has SEEN it. Idempotent — acking twice is the same fact. This does not resolve or silence anything; the alert stays in the ledger and its cooldown is unaffected. Find open alerts with `list_alerts` and `acked: false`.",
+            json!({"type":"object","properties":{
+                "id":{"type":"string","description":"the alert id from list_alerts"},
+                "by":{"type":"string","description":"who saw it — an on-call handle, an email, a runbook link. Defaults server-side to the calling key's label."}
+            },"required":["id"]}),
+            true),
         wtool("create_limit",
             "Add a usage-limit rule to a project (applies to monitored ingest traffic only — the judge is exempt).",
             json!({"type":"object","properties":{
@@ -255,6 +266,10 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
                 ],
                 format!("/v1/projects/{p}/benchmarks"),
             ),
+            Err(e) => Err(e),
+        },
+        "ack_alert" => match need(args, "id") {
+            Ok(id) => c.post(&format!("/v1/alerts/{id}/ack"), &pick(args, &["by"])),
             Err(e) => Err(e),
         },
         "create_limit" => match need(args, "project") {

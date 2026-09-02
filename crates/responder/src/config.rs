@@ -17,6 +17,17 @@ pub(crate) struct Config {
     pub projects: HashMap<String, ProjectEntry>,
     /// Optional email delivery of finished diagnoses (Resend).
     pub email: Option<EmailConfig>,
+    /// Bearer token for the LightTrack API (`LIGHTTRACK_API_KEY`).
+    ///
+    /// The enrichment reads used to send NO token at all, which meant that on any deployment with
+    /// auth enforced — i.e. every real one — every investigation ran on "(enrichment unavailable)"
+    /// and the model was handed the alert's single error string as its whole evidence. It is also
+    /// what authorises posting a diagnosis back as the alert's resolution.
+    pub api_key: Option<String>,
+    /// Shared secret for verifying `X-LightTrack-Signature` on inbound deliveries
+    /// (`LIGHTTRACK_RESPONDER_WEBHOOK_SECRET`). Unset = accept unsigned deliveries, which is only
+    /// appropriate on a loopback-only bind.
+    pub webhook_secret: Option<String>,
 }
 
 pub(crate) struct Defaults {
@@ -76,6 +87,8 @@ impl Config {
             defaults,
             projects,
             email: EmailConfig::from_env(),
+            api_key: env_opt("LIGHTTRACK_API_KEY"),
+            webhook_secret: env_opt("LIGHTTRACK_RESPONDER_WEBHOOK_SECRET"),
         })
     }
 }

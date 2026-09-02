@@ -1,7 +1,22 @@
 //! Context enrichment: pull the project's recent failing events back from LightTrack so the
 //! investigator sees the real request/response shape, not just the one error string from the alert.
+//!
+//! Both reads carry the configured bearer token. They used to send none, so on any deployment with
+//! auth enforced every read 401'd, every investigation ran on "(enrichment unavailable)", and the
+//! model was handed the alert's single error string as its entire evidence — a paid run producing a
+//! guess. The failure was invisible because enrichment is best-effort by design.
 
 use serde_json::Value;
+
+/// Attach the bearer token when one is configured. A missing token is not an error here — a
+/// dev-mode LightTrack accepts unauthenticated reads — but it is the reason enrichment silently
+/// degrades, so the caller's note says so.
+fn authed(req: reqwest::RequestBuilder, api_key: Option<&str>) -> reqwest::RequestBuilder {
+    match api_key {
+        Some(k) => req.bearer_auth(k),
+        None => req,
+    }
+}
 
 /// Fetch up to `limit` recent events for `project` and format the non-success ones as a compact
 /// bullet list. Best-effort: any failure returns a short note instead of erroring the pipeline.
@@ -10,9 +25,10 @@ pub(crate) async fn recent_failures(
     base_url: &str,
     project: &str,
     limit: usize,
+    api_key: Option<&str>,
 ) -> String {
     let url = format!("{base_url}/v1/events?project={project}&limit={limit}");
-    let events: Vec<Value> = match client.get(&url).send().await {
+    let events: Vec<Value> = match authed(client.get(&url), api_key).send().await {
         Ok(resp) => match resp.json().await {
             Ok(v) => v,
             Err(e) => {
@@ -57,9 +73,10 @@ pub(crate) async fn recent_scores(
     project: &str,
     rubric: Option<&str>,
     limit: usize,
+    api_key: Option<&str>,
 ) -> String {
     let url = format!("{base_url}/v1/scores?project={project}&limit={limit}");
-    let scores: Vec<Value> = match client.get(&url).send().await {
+    let scores: Vec<Value> = match authed(client.get(&url), api_key).send().await {
         Ok(resp) => match resp.json().await {
             Ok(v) => v,
             Err(e) => {

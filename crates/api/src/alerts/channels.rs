@@ -51,7 +51,15 @@ pub(crate) async fn deliver(alerter: &Alerter, c: &AlertChannel, a: &Alert) -> D
 /// key order and a signature the receiver cannot verify.
 async fn post_webhook(alerter: &Alerter, c: &AlertChannel, a: &Alert) -> Result<String, String> {
     vet::check(&c.target, alerter.config.dev_destinations).await?;
-    let body = serde_json::to_string(&a.payload).map_err(|e| e.to_string())?;
+    // `alert_id` is added here rather than in `compose`, because the row's own `id` column is the
+    // same fact and duplicating it in the stored payload would be two places to keep in step. On the
+    // wire it is what lets a receiver answer back: the responder POSTs its diagnosis to
+    // `/v1/alerts/<alert_id>/resolution`, which is what closes the loop.
+    let mut payload = a.payload.clone();
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("alert_id".into(), serde_json::Value::String(a.id.clone()));
+    }
+    let body = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
     let mut req = alerter
         .http
         .post(&c.target)

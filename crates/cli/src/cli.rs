@@ -33,6 +33,11 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         action: LimitsCmd,
     },
+    /// The fired-alert ledger: what fired, whether it was delivered, and who acknowledged it.
+    Alerts {
+        #[command(subcommand)]
+        action: AlertsCmd,
+    },
     /// Manage rubrics — the weighted, anchored contract the LLM judge scores against.
     Rubrics {
         #[command(subcommand)]
@@ -103,6 +108,38 @@ pub(crate) enum Cmd {
     Collective {
         #[command(subcommand)]
         action: CollectiveCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AlertsCmd {
+    /// Recent alerts, newest first.
+    List {
+        #[arg(long)]
+        project: Option<String>,
+        /// limit_breach | limit_warning | forecast_alert | relay_task_dead | error_spike |
+        /// score_drop | bench_run | ingest_rejected.
+        #[arg(long)]
+        kind: Option<String>,
+        /// Window start: an RFC3339 instant, or a relative `30m` / `24h` / `7d`.
+        #[arg(long)]
+        since: Option<String>,
+        /// Only alerts someone has acknowledged.
+        #[arg(long, conflicts_with = "open")]
+        acked: bool,
+        /// Only alerts nobody has acknowledged yet — the on-call view.
+        #[arg(long)]
+        open: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Acknowledge one alert: record that a human saw it.
+    Ack {
+        id: String,
+        /// Who saw it — an on-call handle, an email, a runbook link. Defaults server-side to the
+        /// calling key's label.
+        #[arg(long)]
+        by: Option<String>,
     },
 }
 

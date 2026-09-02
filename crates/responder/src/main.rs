@@ -25,6 +25,7 @@ mod enrich;
 mod git;
 mod investigate;
 mod invoke;
+mod ledger;
 mod pipeline;
 mod report;
 mod state;
@@ -81,6 +82,26 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/webhook", post(webhook::receive))
         .with_state(state);
+
+    // An unsigned /webhook on a non-loopback bind is an unauthenticated way to spend money and
+    // edit a repo. Say so once, loudly, rather than letting it be a quiet default.
+    if cfg.webhook_secret.is_none()
+        && !cfg.bind.starts_with("127.")
+        && !cfg.bind.starts_with("localhost")
+    {
+        eprintln!(
+            "[responder] WARNING: bound to {} with no LIGHTTRACK_RESPONDER_WEBHOOK_SECRET — \
+             anyone who can reach this port can spend a Claude run and trigger an auto-fix",
+            cfg.bind
+        );
+    }
+    if cfg.api_key.is_none() {
+        eprintln!(
+            "[responder] no LIGHTTRACK_API_KEY set — context enrichment will read unauthenticated \
+             (fine in dev mode, empty against an enforcing deployment) and diagnoses will not be \
+             posted back as alert resolutions"
+        );
+    }
 
     let listener = tokio::net::TcpListener::bind(&cfg.bind).await?;
     axum::serve(listener, app).await?;

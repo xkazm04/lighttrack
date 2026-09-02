@@ -66,6 +66,15 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
         tool("list_limits", "List a project's configured limit rules.",
             json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
+        tool("list_alerts", "The fired-alert ledger: what LightTrack has actually alerted on (limit breaches, spend forecasts, error spikes, quality regressions, dead relay tasks, finished benchmark runs, rejected ingest), whether each delivery LANDED, who acknowledged it, and what came of it. This is the durable record — an alert that fired while nobody was watching is here, and `delivered: []` means the alert reached no channel at all.",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "kind":{"type":"string","enum":["limit_breach","limit_warning","forecast_alert","relay_task_dead","error_spike","score_drop","bench_run","ingest_rejected"],"description":"only alerts of this kind"},
+                "since":{"type":"string","description":"window start: an RFC3339 instant, or a relative 30m / 24h / 7d"},
+                "acked":{"type":"boolean","description":"true = only acknowledged, false = only open (the on-call view); omit for both"},
+                "limit":{"type":"integer","description":"max alerts (default 20)"},
+                "cursor":{"type":"string","description":"keyset cursor from a prior call's next_cursor"}
+            }})),
         tool("list_margin_policies", "List a project's standing margin guardrails: the policies that turn a loss-making or eroding customer into a limit rule automatically. Read-only — the rules they create show up in `list_limits` carrying an `origin`.",
             json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
         tool("list_prices", "List the DB-backed model price book.",
@@ -160,6 +169,7 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "list_limits" => bind(args, "project", |p| {
             c.get(&format!("/v1/projects/{p}/limits"))
         }),
+        "list_alerts" => c.get(&alerts_path(args)),
         "list_margin_policies" => bind(args, "project", |p| {
             c.get(&format!("/v1/projects/{p}/margin-policies"))
         }),
@@ -256,6 +266,17 @@ fn push_str_params(p: &mut String, args: &Value, keys: &[&str]) {
             p.push_str(&format!("&{k}={v}"));
         }
     }
+}
+
+/// `GET /v1/alerts` with its filter set. `acked` is a genuine tri-state — omitting it must send no
+/// `acked=` at all, because `acked=false` is "open only", not "no filter".
+fn alerts_path(args: &Value) -> String {
+    let mut p = list_path("/v1/alerts", args);
+    push_str_params(&mut p, args, &["kind", "since", "cursor"]);
+    if let Some(a) = args.get("acked").and_then(Value::as_bool) {
+        p.push_str(&format!("&acked={a}"));
+    }
+    p
 }
 
 /// `GET /v1/events` with its full filter + keyset-cursor set (see `get_events` in the API).
