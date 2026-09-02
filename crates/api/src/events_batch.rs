@@ -22,6 +22,7 @@ use crate::events_validate;
 use crate::guards::{
     authenticate, ensure_dev_default_project, resolve_ingest_project, NO_PROJECT_MSG,
 };
+use crate::ingest_proximity::{Proximity, WithProximity};
 use crate::state::{spawn_db, AppState};
 
 /// One item's outcome, tagged so a client can branch on `status`:
@@ -90,7 +91,7 @@ pub(crate) async fn post_batch(
     State(st): State<AppState>,
     headers: HeaderMap,
     Json(evs): Json<Vec<LlmEvent>>,
-) -> Result<Json<BatchResponse>, ApiError> {
+) -> Result<WithProximity<BatchResponse>, ApiError> {
     let principal = authenticate(&st, &headers).await?;
 
     if evs.is_empty() {
@@ -194,12 +195,21 @@ pub(crate) async fn post_batch(
         .await?
     };
 
+    // The batch answers multi-status, so the project's position cannot be a per-item field — it is
+    // one fact about the project, not about item 7. Folded across the whole request and returned in
+    // the shared `X-LightTrack-*` headers instead (worst ratio, worst shed, longest wait).
+    let mut prox = Proximity::default();
     for (k, admission) in admissions.into_iter().enumerate() {
         let ev = &valid[k];
         let index = valid_idx[k];
         let item = match admission {
             Ok(a) => {
                 let breached = on_admission(&st, ev, &a);
+                let mut item_prox = Proximity::of(&a.statuses);
+                if !a.admitted {
+                    item_prox.retry_after_secs = a.retry_after_secs;
+                }
+                prox.merge(&item_prox);
                 if a.admitted {
                     BatchItem::Accepted {
                         index,
@@ -289,10 +299,13 @@ pub(crate) async fn post_batch(
             BatchItem::Invalid { .. } => invalid += 1,
         }
     }
-    Ok(Json(BatchResponse {
-        accepted,
-        rejected,
-        invalid,
-        results,
-    }))
+    Ok(WithProximity::new(
+        BatchResponse {
+            accepted,
+            rejected,
+            invalid,
+            results,
+        },
+        prox,
+    ))
 }

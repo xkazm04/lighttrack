@@ -14,6 +14,8 @@ use serde::Serialize;
 
 use lighttrack_store::StoreError;
 
+use crate::ingest_proximity::Proximity;
+
 /// Stable, machine-readable error codes returned in the `error.code` field.
 ///
 /// These are part of the public API contract: the wire strings (snake_case, via `as_str`) are
@@ -145,6 +147,14 @@ pub(crate) struct ApiError {
     /// cooperating client has a schedule to honor instead of guessing (a graduated throttle asks for
     /// a short pause, a hard cap for the wait until its window ages out).
     retry_after: Option<u64>,
+    /// The project's position against its caps, mirrored into the `X-LightTrack-*` headers. Set on
+    /// a limit rejection: a client that is being refused needs the proximity signal *most*, and it
+    /// is exactly the response that carries no `IngestResponse` body to read it from.
+    ///
+    /// Boxed: `ApiError` is the `Err` half of nearly every handler signature in the crate, and
+    /// carrying ~100 bytes of proximity inline there would bloat every `Result` in the API for the
+    /// sake of the one variant that uses it.
+    proximity: Option<Box<Proximity>>,
 }
 
 impl ApiError {
@@ -153,12 +163,19 @@ impl ApiError {
             code,
             message: m.into(),
             retry_after: None,
+            proximity: None,
         }
     }
 
     /// Attach a `Retry-After` (seconds) to this error response.
     pub(crate) fn retry_after(mut self, secs: Option<u64>) -> Self {
         self.retry_after = secs;
+        self
+    }
+
+    /// Attach the proximity signal, emitted as the `X-LightTrack-*` headers.
+    pub(crate) fn proximity(mut self, p: Proximity) -> Self {
+        self.proximity = Some(Box::new(p));
         self
     }
 
@@ -242,6 +259,9 @@ impl IntoResponse for ApiError {
             if let Ok(v) = axum::http::HeaderValue::from_str(&secs.to_string()) {
                 resp.headers_mut().insert("retry-after", v);
             }
+        }
+        if let Some(p) = &self.proximity {
+            p.apply(resp.headers_mut());
         }
         resp
     }

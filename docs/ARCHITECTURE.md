@@ -272,6 +272,32 @@ was a `ratio` it had to poll a second endpoint to see. `Throttle` is now **propo
 - **Proximity on accepted writes.** `POST /v1/events` returns `usage_ratio` (worst ratio among the
   rules that applied) and `shed_fraction`, so a client learns it is approaching a cap from the response
   it already gets, not from a separate poll.
+- **The same signal on every ingest door, in headers.** The body could only ever carry it on
+  `/v1/events`: `/v1/events/batch` answers multi-status (the project's position is not a property of
+  item 7) and `/v1/traces` answers in the OTLP envelope, whose shape is the exporter's. So all three
+  doors — and the 429 itself, which is the response that needs it most and has no `IngestResponse`
+  body — also return `X-LightTrack-Usage-Ratio`, `X-LightTrack-Shed-Fraction` and
+  `X-LightTrack-Retry-After`. Ratios are exact six-decimal strings; an **absent header means
+  unknown, never `0`** (a project with no limits sends none at all). The batch door folds the worst
+  of each axis, and the longest wait, across its items. `X-LightTrack-Retry-After` mirrors
+  `Retry-After` — it exists because proxies and browser fetch stacks routinely strip or rewrite the
+  standard header, and a back-off schedule that survives only some hops is not a schedule.
+- **Which rule is binding.** `usage_ratio: 0.94` is only actionable if you know what is at 94%.
+  `POST /v1/events` therefore also returns `binding_scope` (`{"kind":"model","value":"gpt-4o"}`, or
+  omitted when the binding rule is project-wide) and `binding_rule` (its id). A project-wide cap
+  means stop; a `model`-scoped one means route the next call elsewhere; a `name`-scoped one means
+  only that call site pauses. `binding_rule` is what lets an SDK reproduce the server's own shed
+  verdict — the decision is a hash of `(rule_id, event_id)`, so without the rule's identity a client
+  can run the same function but never reach the same answer.
+- **Pre-spend admission is the client's half.** The server's caps are record-side: they refuse to
+  *record* a call that already cost money. The SDKs close that gap locally — each keeps the last
+  limit view per (project, key, binding scope), and `admit()` answers from it with no I/O, so a call
+  that would be refused is never made. `enforce: "block"` short-circuits the provider call with a
+  typed budget error; `"warn"` logs and proceeds; `"off"` (the default) only observes. A locally
+  blocked call is not spend and is not recorded as one — with `record_blocked` the SDK emits a
+  zero-usage event tagged `lt_blocked_locally` so the rollups show the refusal without inventing
+  cost. See `clients/README.md` and `clients/contract/fixtures/limits.json`, which fixes the
+  admission verdicts in all three languages.
 - **Attribution.** A shed event is recorded in the rejection ledger exactly like a hard rejection
   (`shedding` on the status names the rule), so `/v1/limits/status` → `rejected` stays complete.
 

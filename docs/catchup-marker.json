@@ -17,7 +17,7 @@
   "covered": [
     {
       "path": "docs/ARCHITECTURE.md",
-      "note": "§12 written this pass (disk accounting, the dated unbounded-retention decision, the quiet-window maintenance ladder); §5 and §11 re-read against the code while writing it."
+      "note": "§12 written this pass (disk accounting, the dated unbounded-retention decision, the quiet-window maintenance ladder); §5 and §11 re-read against the code while writing it. 2026-09-02, M5 (pre-spend admission) extended §7c against crates/api/src/ingest_proximity.rs: the X-LightTrack-Usage-Ratio / -Shed-Fraction / -Retry-After headers now on all three ingest doors and on the 429, the binding_scope/binding_rule fields on IngestResponse, and the SDK-side admission loop the headers exist to feed. The rest of §7c was re-read against the code while writing it; the §5 flag below is untouched and still stands."
     },
     {
       "path": "docs/harness/soak-lane.md",

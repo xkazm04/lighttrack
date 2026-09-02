@@ -13,6 +13,7 @@ use crate::error::ApiError;
 use crate::events_admission::{breach_reason, on_admission};
 use crate::events_validate::{policy, Rejection};
 use crate::guards::{authenticate, resolve_ingest_project_ensuring};
+use crate::ingest_proximity::{BindingScope, Proximity, WithProximity};
 use crate::state::{spawn_db, AppState};
 
 /// Scope one event to its project, validate it, enforce the project's payload-persistence policy,
@@ -155,21 +156,15 @@ pub(crate) struct IngestResponse {
     /// and everything is refused.
     #[serde(skip_serializing_if = "Option::is_none")]
     shed_fraction: Option<f64>,
-}
-
-/// The proximity pair returned on an accepted write: the worst usage ratio across the rules that
-/// applied, and the strongest shedding pressure among them.
-fn proximity(statuses: &[LimitStatus]) -> (Option<f64>, Option<f64>) {
-    let ratio = statuses
-        .iter()
-        .map(|s| s.ratio)
-        .fold(None::<f64>, |a, r| Some(a.map_or(r, |a| a.max(r))));
-    let shed = statuses
-        .iter()
-        .map(|s| s.shed_fraction)
-        .fold(None::<f64>, |a, r| Some(a.map_or(r, |a: f64| a.max(r))))
-        .filter(|f| *f > 0.0);
-    (ratio, shed)
+    /// **Which** rule the `usage_ratio` belongs to, as `{kind, value}` — `None` when the binding
+    /// rule is project-wide. `0.94` alone tells a client to stop everything; `0.94` on
+    /// `model=gpt-4o` tells it to route the next call elsewhere and keep working.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    binding_scope: Option<BindingScope>,
+    /// Id of the binding rule, so a client can reproduce the server's own shed decision (§7c hashes
+    /// `(rule_id, event_id)`). Omitted when the project has no limits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    binding_rule: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -203,7 +198,7 @@ pub(crate) async fn post_event(
     State(st): State<AppState>,
     headers: HeaderMap,
     Json(mut ev): Json<LlmEvent>,
-) -> Result<Json<IngestResponse>, ApiError> {
+) -> Result<WithProximity<IngestResponse>, ApiError> {
     let principal = authenticate(&st, &headers).await?;
     let pid = resolve_ingest_project_ensuring(&st, &principal, &ev.project_id).await?;
     let policy = crate::state::project_policy_for(&st, &pid).await?;
@@ -232,16 +227,23 @@ pub(crate) async fn post_event(
             let id = ev.id.clone();
             let stored = spawn_db(move || store.get_event(&id)).await?;
             return match stored {
-                Some(s) if same_logical_event(&s, &ev) => Ok(Json(IngestResponse {
-                    id: ev.id,
-                    project_id: pid,
-                    cost_usd: s.cost_usd,
-                    ts: s.ts,
-                    breached: Vec::new(),
-                    duplicate: true,
-                    usage_ratio: None,
-                    shed_fraction: None,
-                })),
+                Some(s) if same_logical_event(&s, &ev) => Ok(WithProximity::new(
+                    IngestResponse {
+                        id: ev.id,
+                        project_id: pid,
+                        cost_usd: s.cost_usd,
+                        ts: s.ts,
+                        breached: Vec::new(),
+                        duplicate: true,
+                        usage_ratio: None,
+                        shed_fraction: None,
+                        binding_scope: None,
+                        binding_rule: None,
+                    },
+                    // A replay is answered from the stored row without re-running admission, so
+                    // there is no position to report. Silence beats a stale number.
+                    Proximity::default(),
+                )),
                 _ => Err(ApiError::conflict(format!(
                     "event '{}' already exists with a different payload",
                     ev.id
@@ -255,22 +257,30 @@ pub(crate) async fn post_event(
     if !admission.admitted {
         // 429 for both tiers, but with a retry schedule the client can actually honor: seconds for a
         // graduated shed, the window's own back-off for a hard cap.
+        let mut prox = Proximity::of(&admission.statuses);
+        prox.retry_after_secs = admission.retry_after_secs;
         return Err(ApiError::rate_limited(breach_reason(&admission.statuses))
-            .retry_after(admission.retry_after_secs));
+            .retry_after(admission.retry_after_secs)
+            .proximity(prox));
     }
 
     // Admitted: any remaining breaches are Alert-only (enforcing ones would have 429'd above), so
     // the response carries them as observe-only detail — there is no separate "throttled" flag to
     // report, because an admitted event is by definition one nothing enforcing turned away.
-    let (usage_ratio, shed_fraction) = proximity(&admission.statuses);
-    Ok(Json(IngestResponse {
-        id: ev.id,
-        project_id: pid,
-        cost_usd: ev.cost_usd,
-        ts: ev.ts,
-        breached,
-        duplicate: false,
-        usage_ratio,
-        shed_fraction,
-    }))
+    let prox = Proximity::of(&admission.statuses);
+    Ok(WithProximity::new(
+        IngestResponse {
+            id: ev.id,
+            project_id: pid,
+            cost_usd: ev.cost_usd,
+            ts: ev.ts,
+            breached,
+            duplicate: false,
+            usage_ratio: prox.usage_ratio,
+            shed_fraction: prox.shed_fraction,
+            binding_scope: prox.binding_scope.clone(),
+            binding_rule: prox.binding_rule.clone(),
+        },
+        prox,
+    ))
 }

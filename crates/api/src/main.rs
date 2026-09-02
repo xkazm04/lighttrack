@@ -171,6 +171,7 @@ mod forecast_alerts;
 mod forecast_sweep;
 mod guards;
 mod idempotency;
+mod ingest_proximity;
 mod jobs;
 mod jobs_enqueue;
 mod limits;

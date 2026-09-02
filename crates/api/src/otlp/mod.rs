@@ -52,6 +52,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::ApiError;
+use crate::ingest_proximity::{Proximity, WithProximity};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -112,7 +113,7 @@ pub(crate) async fn post_traces(
     headers: HeaderMap,
     Query(q): Query<OtlpParams>,
     Json(req): Json<proto::ExportTraceServiceRequest>,
-) -> Result<Json<OtlpResponse>, ApiError> {
+) -> Result<WithProximity<OtlpResponse>, ApiError> {
     let spans = proto::flatten(&req);
     let mut outcomes: Vec<Option<SpanOutcome>> = (0..spans.len()).map(|_| None).collect();
     let mut events = Vec::new();
@@ -148,13 +149,16 @@ pub(crate) async fn post_traces(
     if events.is_empty() {
         crate::guards::authenticate(&st, &headers).await?;
         let results: Vec<SpanOutcome> = outcomes.into_iter().flatten().collect();
-        return Ok(Json(finish(0, results)));
+        return Ok(WithProximity::new(finish(0, results), Proximity::default()));
     }
 
     // The one and only write path: the native batch handler. Its response is read back through JSON
     // rather than by destructuring a private type, which keeps this module additive.
+    // The OTLP envelope is the exporter's shape, not ours, so the proximity signal cannot ride in
+    // the body at all here — it is carried through unchanged from the batch door onto the response
+    // headers, which is the one channel all three ingest doors share.
     let batch = crate::events_batch::post_batch(State(st), headers, Json(events)).await?;
-    let body = serde_json::to_value(&batch.0)
+    let body = serde_json::to_value(&batch.body)
         .map_err(|e| ApiError::internal(format!("batch response encode error: {e}")))?;
 
     let mut accepted = 0usize;
@@ -191,7 +195,10 @@ pub(crate) async fn post_traces(
     }
 
     let results: Vec<SpanOutcome> = outcomes.into_iter().flatten().collect();
-    Ok(Json(finish(accepted, results)))
+    Ok(WithProximity::new(
+        finish(accepted, results),
+        batch.proximity,
+    ))
 }
 
 fn str_field(v: &Value, key: &str) -> Option<String> {
