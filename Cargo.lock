@@ -1374,6 +1374,7 @@ dependencies = [
 name = "lighttrack-mcp"
 version = "0.0.1"
 dependencies = [
+ "lighttrack-contract",
  "lighttrack-render",
  "reqwest",
  "serde_json",

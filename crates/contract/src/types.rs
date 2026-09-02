@@ -111,6 +111,16 @@ pub struct Param {
     /// The name this parameter takes as an MCP tool argument, when it differs from the wire name —
     /// a path `:id` is `event` / `trace` / `benchmark` to an agent, and those names are pinned.
     pub mcp_name: Option<&'static str>,
+    /// A complete JSON Schema for this parameter, as raw JSON text, replacing the type/enum/doc
+    /// triple. Only for the handful of write-tool arguments whose value is a nested object or an
+    /// array of them: an agent that cannot see `targets[].prompt_ref` writes a benchmark whose runs
+    /// can never satisfy the promotion gate, and "type: array" alone does not tell it.
+    pub schema: Option<&'static str>,
+    /// Required over MCP even though the wire leaves it optional. Real, and not a wart: a handler
+    /// derives the project from the project key that called it, and an MCP tool has no such key to
+    /// derive from — an agent that omits it gets a 400 it cannot diagnose from the schema. Pinned in
+    /// `crates/mcp/tool-contract.json`, so it is also a compatibility fact, not only a nicety.
+    pub mcp_required: Option<bool>,
 }
 
 impl Param {
@@ -122,7 +132,14 @@ impl Param {
         doc: "",
         enum_values: &[],
         mcp_name: None,
+        schema: None,
+        mcp_required: None,
     };
+
+    /// Is this parameter required of an MCP caller?
+    pub fn required_over_mcp(&self) -> bool {
+        self.mcp_required.unwrap_or(self.required)
+    }
 
     /// The name this parameter answers to over MCP.
     pub fn arg_name(&self) -> &'static str {
@@ -186,7 +203,11 @@ pub struct Endpoint {
     pub mutating: bool,
     /// Is calling it twice the same as calling it once?
     pub idempotent: bool,
-    /// Does it return a keyset cursor in `X-Next-Cursor`? Drives `--cursor` in the CLI.
+    /// Does it hand back a cursor for the next page? Two shapes exist for historical reasons — the
+    /// `X-Next-Cursor` response header (events, traces, the contribution ledger) and a `next_cursor`
+    /// field in the body (labels, calibrations, alerts) — and this flag covers both, because what a
+    /// caller needs to know is that paging exists and that `cursor` is the argument. The generated
+    /// OpenAPI description says which shape.
     pub paged: bool,
     /// A door only a program walks through: an SDK's ingest call, a device agent's lease/renew, a
     /// provider's signed webhook. Exempt from the rule that every endpoint must be reachable from

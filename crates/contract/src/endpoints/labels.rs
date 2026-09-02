@@ -40,6 +40,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         method: Method::Get,
         path: "/v1/labels",
         access: Key(Read),
+        paged: true,
         params: &[
             q("project", ""),
             q("subject", "'<kind>:<id>' with kind one of event, dataset_item, score"),
@@ -47,8 +48,8 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             qt("limit", JsonTy::Integer, ""),
             q("cursor", "opaque keyset cursor from a previous page"),
         ],
-        // Not `paged`: the cursor rides in the body, so there is no `X-Next-Cursor` to drive a
-        // `--cursor` flag off.
+        // `paged`, though the cursor rides in the body rather than `X-Next-Cursor`: `cursor=` is
+        // still how the next page is asked for, and that is what a caller has to know.
         response: TypeRef::Untyped(
             "{ labels: [Label], next_cursor } — the cursor rides in the body here, not a header.",
         ),
@@ -80,6 +81,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         method: Method::Get,
         path: "/v1/calibrations",
         access: Key(Read),
+        paged: true,
         params: &[
             q("project", ""),
             qt("limit", JsonTy::Integer, ""),

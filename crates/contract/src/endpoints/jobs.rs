@@ -199,22 +199,14 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         doc: "Store a recurring workload; its payload is validated against its kind at creation.",
         ..Endpoint::DEFAULT
     },
-    // `list_schedules` is attached here rather than to `/v1/schedules`: the tool's one argument is a
-    // project, and this is the only row that actually has that parameter — the deployment-wide
-    // listing is what it falls back to when the argument is omitted.
     Endpoint {
         id: "list_project_schedules",
         method: Method::Get,
         path: "/v1/projects/:id/schedules",
         access: Key(Read),
-        params: &[pm("id", "project", "one project's schedules; omit over MCP for every project's")],
+        params: &[pm("id", "project", "the project whose schedules to list")],
         response: TypeRef::ArrayOf("Schedule"),
-        mcp: Some(McpTool {
-            name: "list_schedules",
-            description: "List recurring workloads: every stored schedule (a job kind + payload on an interval), for one project or the whole deployment. This is the answer to \"what runs on a schedule here\" — including recurring compare benchmarks, which cannot express recurrence any other way.",
-            args: &["id"],
-            ..McpTool::DEFAULT
-        }),
+        cli: Some(&["schedules", "list"]),
         render_kind: Some("list_schedules"),
         doc: "One project's schedules; a project key reads its own, a mismatch is a 403.",
         ..Endpoint::DEFAULT
@@ -224,7 +216,17 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         method: Method::Get,
         path: "/v1/schedules",
         access: Admin,
+        // `list_schedules` hangs here, not on the per-project row: its `project` argument is
+        // optional, and a required `:id` segment cannot say that. The dispatcher swaps in the
+        // per-project path when the argument is present.
+        params: &[q("project", "one project's schedules; omit for every project's")],
         response: TypeRef::ArrayOf("Schedule"),
+        mcp: Some(McpTool {
+            name: "list_schedules",
+            description: "List recurring workloads: every stored schedule (a job kind + payload on an interval), for one project or the whole deployment. This is the answer to \"what runs on a schedule here\" — including recurring compare benchmarks, which cannot express recurrence any other way.",
+            args: &["project"],
+            ..McpTool::DEFAULT
+        }),
         cli: Some(&["schedules", "list"]),
         render_kind: Some("list_schedules"),
         doc: "Every recurring workload in this deployment, across projects.",

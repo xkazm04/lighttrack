@@ -20,8 +20,22 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             b("rubric_id", JsonTy::String, "structured rubric id (per-dimension mode)"),
             b("judge_model", JsonTy::String, "[provider/]model (default opus@xhigh)"),
             b("target", JsonTy::Object, "single generation target; superseded by `targets`"),
-            b("targets", JsonTy::Array, "comparison matrix: one candidate per target"),
-            b("dataset", JsonTy::Array, "inline cases"),
+            Param {
+                name: "targets",
+                kind: ParamKind::Body,
+                ty: JsonTy::Array,
+                doc: "comparison matrix: one candidate per target",
+                schema: Some(crate::nested::BENCHMARK_TARGETS),
+                ..Param::DEFAULT
+            },
+            Param {
+                name: "dataset",
+                kind: ParamKind::Body,
+                ty: JsonTy::Array,
+                doc: "inline cases",
+                schema: Some(crate::nested::BENCHMARK_DATASET),
+                ..Param::DEFAULT
+            },
             b("dataset_ref", JsonTy::String, "stored dataset id, instead of (or beside) `dataset`"),
             b("baseline_score", JsonTy::Number, "the mean a run must not fall below"),
             b(

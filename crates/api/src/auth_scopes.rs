@@ -8,213 +8,17 @@
 //!
 //! Enforcement lives in the guards every handler already calls — [`crate::guards::
 //! resolve_ingest_project`] requires `Ingest`, `resolve_read_project` requires `Read` — plus the
-//! explicit [`ensure_scope`] calls on the config-write handlers. [`ROUTE_SCOPES`] is the
-//! *declaration* of that map, and the test at the bottom holds it to every route string in
-//! `main.rs`, so a route added without a decision about who may call it fails the build.
+//! explicit [`ensure_scope`] calls on the config-write handlers. The *declaration* of that map used
+//! to be a `ROUTE_SCOPES` table in this file; it is now one column of `lighttrack-contract`, so the
+//! same fact is stated once beside the endpoint's parameters, response and MCP/CLI coverage instead
+//! of in a sixth parallel list. The test at the bottom still holds it to every route string in
+//! `main.rs`, so a route added without a decision about who may call it fails the build — it just
+//! reads that decision from the contract now.
 
 use lighttrack_core::Scope;
 
 use crate::auth::Principal;
 use crate::error::ApiError;
-
-/// The route table below is a **compile-time contract, not runtime dispatch**: enforcement happens
-/// in the guards (which know the principal without a second store read), and a parallel dispatch
-/// table would be a second source of truth that could drift from them silently. So it is compiled
-/// only for the test that holds it against `build_router` — the check that a route cannot be added
-/// without someone deciding who may call it.
-#[cfg(test)]
-mod table {
-    use super::*;
-
-    /// Who may call a route, for one HTTP method family.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) enum Access {
-        /// Admin (or dev-mode) principals only — no project key reaches it, whatever its scopes.
-        Admin,
-        /// A project key carrying this scope, or an admin.
-        Key(Scope),
-        /// No route method of that shape exists.
-        None,
-    }
-
-    /// One route's declared access, split by method family: `read` covers `GET`, `write` covers
-    /// `POST`/`PUT`/`DELETE`.
-    pub(crate) struct RouteScope {
-        pub(crate) path: &'static str,
-        pub(crate) read: Access,
-        pub(crate) write: Access,
-    }
-
-    const fn r(path: &'static str, read: Access, write: Access) -> RouteScope {
-        RouteScope { path, read, write }
-    }
-
-    use Access::{Admin, Key, None as NoMethod};
-    const INGEST: Access = Key(Scope::Ingest);
-    const READ: Access = Key(Scope::Read);
-    const MANAGE: Access = Key(Scope::Manage);
-
-    /// Every `/v1/*` route and the capability a project key needs for it. Kept in the same order as
-    /// `build_router` so the two read as one list.
-    pub(crate) const ROUTE_SCOPES: &[RouteScope] = &[
-        r("/v1/capabilities", READ, NoMethod),
-        r("/v1/events", READ, INGEST),
-        r("/v1/events/batch", NoMethod, INGEST),
-        r("/v1/ingest/status", Admin, NoMethod),
-        r("/v1/storage/status", Admin, NoMethod),
-        r("/v1/events/:id", READ, NoMethod),
-        // The OTLP door writes through the native batch handler, so it carries the batch's scope.
-        r("/v1/traces", READ, INGEST),
-        r("/v1/traces/:id", READ, NoMethod),
-        // Scoring a trace reads it first and then writes an observability record — the same shape as
-        // `POST /v1/scores`, and so the same capability, not `manage`.
-        r("/v1/traces/:id/score", NoMethod, INGEST),
-        r("/v1/costs", READ, NoMethod),
-        r("/v1/costs/prompts", READ, NoMethod),
-        // The unpriced-traffic ledger. Project-scoped like the cost rollups it qualifies — a
-        // project key must be able to see that its OWN cost numbers are a floor.
-        r("/v1/costs/unpriced", READ, NoMethod),
-        // Per-served-version quality. The quality half of `/v1/costs/prompts` and project-scoped
-        // for the same reason: a project key must be able to see whether the version IT is serving
-        // has regressed, without an operator in the loop.
-        r("/v1/quality/prompts", READ, NoMethod),
-        r("/v1/usecases", READ, NoMethod),
-        // The grouped primitive behind every cost surface. Project-scoped like the fixed
-        // rollups above; the `api_key` dimension is gated to admins inside the handler.
-        r("/v1/rollup", READ, NoMethod),
-        r("/v1/scores", READ, INGEST),
-        r("/v1/prices", READ, NoMethod),
-        // The price timeline is a read of the same book `/v1/prices` exposes, so the same scope.
-        r("/v1/prices/history/:provider/:model", READ, NoMethod),
-        r("/v1/prices/:provider/:model", NoMethod, Admin),
-        r("/v1/projects/:id/datasets", READ, Admin),
-        r("/v1/datasets/:id", READ, NoMethod),
-        r("/v1/datasets/:id/items", READ, Admin),
-        r("/v1/datasets/:id/freeze", NoMethod, Admin),
-        // M11 — the human verdict ledger. Writing a label is MANAGE, not INGEST: a label is a
-        // configuration of what "good" means, and an ingest key that could move ground truth would
-        // let the thing being measured edit the measurement.
-        r("/v1/datasets/:id/items/from-label", NoMethod, Admin),
-        r("/v1/datasets/:id/labels", READ, NoMethod),
-        // M24 — lineage. Forking and importing mint the corpus a benchmark run is pinned to, which
-        // is configuration, not observability traffic: admin only, like every other corpus write.
-        // The version walk is an ordinary project read.
-        r("/v1/datasets/:id/fork", NoMethod, Admin),
-        r("/v1/datasets/:id/items/import", NoMethod, Admin),
-        r("/v1/projects/:id/datasets/versions", READ, NoMethod),
-        r("/v1/labels", READ, MANAGE),
-        r("/v1/calibrations", READ, MANAGE),
-        r("/v1/judges/trust", READ, NoMethod),
-        r("/v1/projects/:id/rubrics", READ, Admin),
-        r("/v1/rubrics/:id", READ, NoMethod),
-        // Minting a rubric generation changes what every future verdict means; admin, like every
-        // other rubric write.
-        r("/v1/rubrics/:id/versions", NoMethod, Admin),
-        r("/v1/projects/:id/benchmarks", READ, Admin),
-        r("/v1/benchmarks/:id", READ, NoMethod),
-        r("/v1/benchmarks/:id/runs", READ, NoMethod),
-        r("/v1/benchmarks/:id/gate", READ, NoMethod),
-        // The one benchmark write a project key can reach: recording a run's result.
-        r("/v1/benchmark-runs", NoMethod, MANAGE),
-        r("/v1/benchmarks/:id/enqueue", NoMethod, Admin),
-        r("/v1/projects/:id/prompts", READ, Admin),
-        // The PUT links a prompt to its gating benchmark — a change to what gates a deploy, so admin.
-        r("/v1/projects/:id/prompts/:name", READ, Admin),
-        r("/v1/projects/:id/prompts/:name/versions", READ, Admin),
-        r("/v1/projects/:id/prompts/:name/promote", NoMethod, Admin),
-        // Setting a canary policy with `auto_revert` hands a background sweep permission to change
-        // what this deployment serves — strictly more power than one promotion, so admin only.
-        r("/v1/projects/:id/prompts/:name/canary", NoMethod, Admin),
-        r("/v1/jobs", Admin, Admin),
-        r("/v1/jobs/claim", NoMethod, Admin),
-        r("/v1/jobs/:id", Admin, NoMethod),
-        r("/v1/jobs/:id/cancel", NoMethod, Admin),
-        r("/v1/jobs/:id/progress", NoMethod, Admin),
-        r("/v1/jobs/:id/renew", NoMethod, Admin),
-        r("/v1/jobs/:id/finish", NoMethod, Admin),
-        // Schedules are configuration of what this deployment spends money on, so writing one is
-        // admin-only; a project key may READ its own project's schedules, like its own limits.
-        r("/v1/projects/:id/schedules", READ, Admin),
-        r("/v1/schedules", Admin, NoMethod),
-        r("/v1/schedules/:id", NoMethod, Admin),
-        r("/v1/schedules/:id/runs", Admin, NoMethod),
-        r("/v1/projects", Admin, Admin),
-        r("/v1/projects/:id", NoMethod, Admin),
-        // The posture report names counts and a rule fingerprint, never payload text — so the
-        // project's own read key may ask it. An operator who cannot check whether their own data
-        // was scrubbed has a compliance answer they must take on faith.
-        r("/v1/projects/:id/redaction", READ, NoMethod),
-        r("/v1/projects/:id/keys", Admin, Admin),
-        r("/v1/projects/:id/keys/:kid", NoMethod, Admin),
-        r("/v1/projects/:id/keys/:kid/rotate", NoMethod, Admin),
-        r("/v1/projects/:id/limits", READ, Admin),
-        r("/v1/limits/:id", NoMethod, Admin),
-        // A policy is a standing instruction to CREATE caps — strictly more power than creating one
-        // cap — so a project key never reaches it, whatever its scopes.
-        r("/v1/projects/:id/margin-policies", Admin, Admin),
-        r("/v1/projects/:id/margin-policies/:pid", NoMethod, Admin),
-        r("/v1/limits/status", READ, NoMethod),
-        r("/v1/limits/usage", READ, NoMethod),
-        r("/v1/relay/tasks", READ, INGEST),
-        r("/v1/relay/tasks/:id", READ, NoMethod),
-        // Device-key doors: `ensure_device` accepts the enrolled device key or an admin, never a
-        // project key — so the settle report's `Ingest` character is enforced by the device gate.
-        r("/v1/relay/tasks/:id/result", NoMethod, Admin),
-        r("/v1/relay/lease", NoMethod, Admin),
-        // Renew/progress are device-key doors, gated by `ensure_device` exactly like lease/result.
-        r("/v1/relay/tasks/:id/renew", NoMethod, Admin),
-        r("/v1/relay/tasks/:id/progress", NoMethod, Admin),
-        // Cancel is the operator's, not the device's: the task's OWN project key reaches it (the
-        // handler checks ownership), which is why it is not Admin-only like the device doors.
-        r("/v1/relay/tasks/:id/cancel", NoMethod, MANAGE),
-        // Device enrolment (M18) is admin-only in both directions, and `POST` mints a secret — so
-        // it is also one of the routes that must never be reachable over MCP: a key in a tool
-        // result is a key in a transcript. `GET` is admin rather than `READ` because the fleet is
-        // operator infrastructure, not one project's data: a project key that could enumerate every
-        // enrolled device would be reading across tenants.
-        r("/v1/relay/devices", Admin, Admin),
-        r("/v1/relay/devices/:id", NoMethod, Admin),
-        // The action fingerprint ledger (M19) is derived from the project's OWN settle events and
-        // names no payload text — so a project read key sees its own actions, exactly like the
-        // `/v1/relay/tasks` listing it is a rollup of. Snapshotting one into a dataset is a
-        // dataset write, and every other dataset write on this table is admin.
-        r("/v1/relay/actions", READ, NoMethod),
-        r("/v1/relay/actions/:action_type/dataset", NoMethod, Admin),
-        r("/v1/revenue", NoMethod, Admin),
-        // Admin-only, and never over MCP: this restates stored money in bulk.
-        r("/v1/revenue/reprice", NoMethod, Admin),
-        r("/v1/margin", Admin, NoMethod),
-        r("/v1/margin/trend", Admin, NoMethod),
-        r("/v1/margin/customer/:id", Admin, NoMethod),
-        r("/v1/margin/simulate", Admin, NoMethod),
-        r("/v1/forecast", READ, NoMethod),
-        // The webhook door authenticates against the provider's signing secret, not a LightTrack key.
-        r("/v1/billing/:provider/webhook", NoMethod, Admin),
-        r("/v1/collective/digest", READ, NoMethod),
-        r("/v1/collective/ingest", NoMethod, INGEST),
-        r("/v1/collective/leaderboard", READ, NoMethod),
-        r("/v1/collective/contribution", NoMethod, INGEST),
-        // The contributor side is operator business, not a tenant's: a push spans every consenting
-        // project's benchmark results and spends this deployment's own hub credential, and the
-        // ledger's `projects_included`/`projects_excluded` are instance-wide counts. A project key
-        // that could read it would be reading across tenants.
-        r("/v1/collective/contribute", NoMethod, Admin),
-        r("/v1/collective/contributions", Admin, NoMethod),
-        // The ledger is an observability read like the events it is about, so a project key with
-        // `read` sees its OWN project's alerts (`resolve_read_project` narrows it). Acknowledging
-        // is a state change on shared operational record, so it needs `manage`.
-        r("/v1/alerts", READ, NoMethod),
-        r("/v1/alerts/:id/ack", NoMethod, MANAGE),
-        // A resolution is written by the responder (an admin-keyed service), not by an app.
-        r("/v1/alerts/:id/resolution", NoMethod, Admin),
-        // Routing is where alerts GO: a project key that could add a channel could exfiltrate its
-        // own alerts to any destination, so channel writes are admin, like every other config write.
-        r("/v1/projects/:id/alert-channels", Admin, Admin),
-        r("/v1/projects/:id/alert-channels/:cid", NoMethod, Admin),
-        // Sending a real, signed test alert is a use of the deployment's own credentials.
-        r("/v1/alert-channels/:id/test", NoMethod, Admin),
-    ];
-}
 
 /// Does this principal carry `want`? Admin and dev principals pass everything — they are not keys in
 /// the `api_keys` table, so there is no scope set to consult and no tenant to narrow them to.
@@ -239,7 +43,6 @@ pub(crate) fn ensure_scope(p: &Principal, want: Scope) -> Result<(), ApiError> {
 
 #[cfg(test)]
 mod tests {
-    use super::table::*;
     use super::*;
 
     /// Every `/v1/...` string literal in `build_router`.
@@ -260,11 +63,11 @@ mod tests {
     }
 
     /// The point of the table: a route added without deciding who may call it fails here, rather
-    /// than quietly inheriting whatever guard its handler happened to copy from a neighbour.
+    /// than quietly inheriting whatever guard its handler happened to copy from a neighbour. The
+    /// declaration moved to `lighttrack-contract`; the guarantee did not move with it, it stayed.
     #[test]
     fn every_v1_route_in_the_router_has_a_declared_scope() {
-        let mut declared: Vec<&str> = ROUTE_SCOPES.iter().map(|r| r.path).collect();
-        declared.sort();
+        let declared = lighttrack_contract::route_paths();
         let routed = router_routes();
         assert!(
             !routed.is_empty(),
@@ -273,96 +76,7 @@ mod tests {
         for path in &routed {
             assert!(
                 declared.contains(&path.as_str()),
-                "route {path} has no declared scope — add it to ROUTE_SCOPES"
-            );
-        }
-        for path in &declared {
-            assert!(
-                routed.iter().any(|p| p == path),
-                "ROUTE_SCOPES declares {path}, which build_router no longer serves"
-            );
-        }
-    }
-
-    /// A route that is neither readable nor writable by anyone is a typo, not a decision.
-    #[test]
-    fn no_route_is_declared_unreachable() {
-        for r in ROUTE_SCOPES {
-            assert!(
-                r.read != Access::None || r.write != Access::None,
-                "{} declares no method at all",
-                r.path
-            );
-        }
-    }
-
-    /// The handover test. `ROUTE_SCOPES` is about to be deleted and `lighttrack-contract` is about
-    /// to become the one declaration of who may call what — so before it goes, prove that the two
-    /// say the same thing about every route, row by row and column by column.
-    ///
-    /// One row is deliberately not equal: `POST /v1/billing/:provider/webhook` is declared `Admin`
-    /// here because a two-column table of LightTrack principals had no way to say "the caller's own
-    /// HMAC signature is the credential". The contract says `Unauthenticated`, which is what the
-    /// handler actually does. That is the table being *corrected*, not the contract being wrong, so
-    /// it is named here rather than fudged into equality.
-    #[test]
-    fn the_contract_declares_the_same_access_as_this_table() {
-        use lighttrack_contract::{Access as C, KeyScope};
-
-        fn same(declared: Access, contract: Option<C>) -> bool {
-            matches!(
-                (declared, contract),
-                (Access::None, None)
-                    | (Access::Admin, Some(C::Admin))
-                    | (Access::Key(Scope::Ingest), Some(C::Key(KeyScope::Ingest)))
-                    | (Access::Key(Scope::Read), Some(C::Key(KeyScope::Read)))
-                    | (Access::Key(Scope::Manage), Some(C::Key(KeyScope::Manage)))
-            )
-        }
-
-        const CORRECTED: &[&str] = &["/v1/billing/:provider/webhook"];
-
-        for r in ROUTE_SCOPES {
-            if CORRECTED.contains(&r.path) {
-                continue;
-            }
-            let (read, write) = lighttrack_contract::access_for(r.path);
-            assert!(
-                same(r.read, read),
-                "{}: this table says read={:?}, the contract says {:?}",
-                r.path,
-                r.read,
-                read
-            );
-            assert!(
-                same(r.write, write),
-                "{}: this table says write={:?}, the contract says {:?}",
-                r.path,
-                r.write,
-                write
-            );
-        }
-        for path in CORRECTED {
-            let (_, write) = lighttrack_contract::access_for(path);
-            assert_eq!(
-                write,
-                Some(C::Unauthenticated),
-                "{path} is listed as a correction, so the contract must be the thing that changed"
-            );
-        }
-    }
-
-    /// The contract's `/v1` route set and the router's must be the same set — the property this
-    /// file's own test established for `ROUTE_SCOPES`, restated against its successor so the
-    /// guarantee survives the handover rather than lapsing during it.
-    #[test]
-    fn the_contract_declares_exactly_the_routes_the_router_serves() {
-        let routed = router_routes();
-        let declared = lighttrack_contract::route_paths();
-        for path in &routed {
-            assert!(
-                declared.contains(&path.as_str()),
-                "route {path} has no endpoint in the contract — add a row to crates/contract"
+                "route {path} has no declared scope — add an Endpoint row in crates/contract"
             );
         }
         for path in &declared {
@@ -370,6 +84,34 @@ mod tests {
                 routed.iter().any(|p| p == path),
                 "the contract declares {path}, which build_router no longer serves"
             );
+        }
+    }
+
+    /// A route that is neither readable nor writable by anyone is a typo, not a decision.
+    #[test]
+    fn no_route_is_declared_unreachable() {
+        for path in lighttrack_contract::route_paths() {
+            let (read, write) = lighttrack_contract::access_for(path);
+            assert!(
+                read.is_some() || write.is_some(),
+                "{path} declares no method at all"
+            );
+        }
+    }
+
+    /// The contract states scopes as strings so it can stay dependency-free. This is the seam where
+    /// those strings become the enum the guards actually compare against — an unmappable one would
+    /// mean the declaration and the enforcement had drifted apart in the one place they cannot.
+    #[test]
+    fn every_declared_key_scope_maps_onto_a_real_scope() {
+        for e in lighttrack_contract::endpoints() {
+            if let lighttrack_contract::Access::Key(k) = e.access {
+                let s = Scope::ALL
+                    .into_iter()
+                    .find(|s| s.as_str() == k.as_str())
+                    .unwrap_or_else(|| panic!("{}: '{}' is not a Scope", e.id, k.as_str()));
+                assert!(ensure_scope(&key(&[s]), s).is_ok());
+            }
         }
     }
 

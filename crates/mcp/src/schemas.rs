@@ -43,6 +43,10 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "get_collective_leaderboard" => collective_resp(),
         "get_collective_digest" => collective_digest_resp(),
         "get_collective_contributions" => list_of(contribution()),
+        "list_labels" => list_of(label()),
+        "list_calibrations" => list_of(calibration()),
+        "get_judge_trust" => judge_trust_resp(),
+        "enqueue_job" => job(),
         "list_prompts" => list_of(prompt_entry()),
         "get_prompt" => resolved_prompt(),
         "get_prompt_quality" => list_of(prompt_quality_row()),
@@ -152,6 +156,45 @@ fn trace_detail() -> Value {
             })),
             "spans": {"type":"array"},
             "scores": {"type":"array", "items": score()}
+        }
+    })
+}
+
+/// A human verdict (M11). `subject` is the `kind:id` pair a label is *about* — the field an agent
+/// needs to join a label back to the event, dataset item or score it grades.
+fn label() -> Value {
+    obj(json!({
+        "id": {"type":"string"}, "project_id": {"type":"string"},
+        "subject": {"type":"string","description":"'<kind>:<id>' with kind one of event, dataset_item, score"},
+        "value": {"type":"number"}, "pass": {"type":["boolean","null"]},
+        "rubric_id": {"type":["string","null"]}, "labeler": {"type":"string"},
+        "note": {"type":["string","null"]}, "created_at": {"type":"string"}
+    }))
+}
+
+/// One judge-human calibration. `agreement` is the number a drift check reads; `n` is why it may or
+/// may not be believed.
+fn calibration() -> Value {
+    obj(json!({
+        "id": {"type":"string"}, "project_id": {"type":"string"},
+        "judge": {"type":"string"}, "rubric_id": {"type":["string","null"]},
+        "agreement": {"type":"number"}, "n": {"type":"integer"},
+        "created_at": {"type":"string"}
+    }))
+}
+
+/// `unknown` is not `untrusted`: a judge nobody has measured has taken no check, not failed one.
+/// The verdict is the field an agent branches on, so it is required.
+fn judge_trust_resp() -> Value {
+    json!({
+        "type": "object",
+        "required": ["verdict"],
+        "additionalProperties": true,
+        "properties": {
+            "verdict": {"type":"string","enum":["trusted","untrusted","unknown"]},
+            "judge": {"type":"string"}, "rubric_id": {"type":["string","null"]},
+            "agreement": {"type":["number","null"]}, "n": {"type":["integer","null"]},
+            "calibrated_at": {"type":["string","null"]}
         }
     })
 }

@@ -129,6 +129,28 @@ mod tests {
         );
     }
 
+    /// The drift this item was named after: `limit_rule`'s `outputSchema` had fallen behind the
+    /// input schema beside it, and nothing said so because the two lists were independent. They are
+    /// no longer independent — a tool advertises structured output exactly when its endpoint has a
+    /// renderer, because that is exactly when `tool_rendered` puts `structuredContent` in the result.
+    #[test]
+    fn a_tool_declares_an_output_schema_exactly_when_its_endpoint_has_a_renderer() {
+        for t in crate::tools::list(true)["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            let name = t["name"].as_str().unwrap_or_default();
+            let e = lighttrack_contract::mcp::endpoint_for_tool(name)
+                .unwrap_or_else(|| panic!("'{name}' is listed but has no endpoint"));
+            assert_eq!(
+                t.get("outputSchema").is_some(),
+                e.render_kind.is_some(),
+                "'{name}': outputSchema and render_kind disagree. A tool renders Markdown and returns                  structuredContent together or not at all, so a caller reading the schema must not be                  promised a shape it will never receive."
+            );
+        }
+    }
+
     /// Read-only mode must be a *subset*: gating writes may not change a read tool's shape.
     #[test]
     fn read_only_mode_lists_a_subset_with_identical_shapes() {

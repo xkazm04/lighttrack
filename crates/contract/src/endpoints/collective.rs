@@ -11,7 +11,12 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         id: "get_collective_digest",
         method: Method::Get,
         path: "/v1/collective/digest",
-        access: Key(Read),
+        // `ROUTE_SCOPES` declared this `read`; the handler has always called `ensure_can_admin`, and
+        // its own module doc and MCP description both say "admin key required". The old table's test
+        // only checked that a route existed, so nothing ever compared the two. Corrected here rather
+        // than carried forward: a declaration that is more permissive than the code is how an
+        // operator concludes a project key can read something it cannot.
+        access: Admin,
         params: &[qt(
             "min_cases",
             JsonTy::Integer,
@@ -60,8 +65,10 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
                 "determinism",
                 "rigor filter: every source ran at this level (exact|best-effort|sampled)",
             ),
-            qt("frozen_dataset", JsonTy::Boolean, "rigor filter: every source used a frozen dataset"),
-            qt("significance_tested", JsonTy::Boolean, "rigor filter: every verdict was significance-tested"),
+            // Strings, not booleans: they arrive in a query string, and 'true' is the literal the
+            // handler compares against.
+            q("frozen_dataset", "rigor filter: 'true' keeps only rows whose every source ran against a frozen, single-version dataset"),
+            q("significance_tested", "rigor filter: 'true' keeps only rows whose every source's verdict was significance-tested"),
         ],
         response: TypeRef::Untyped(
             "{ contributors, n_models, n_rows, held_back, task_type?, rows: [LeaderboardRow] } — \

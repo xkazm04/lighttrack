@@ -80,7 +80,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         path: "/v1/quality/prompts",
         access: Key(Read),
         params: &[
-            q("project", ""),
+            Param {
+                            name: "project",
+                            doc: "",
+                            // An MCP caller has no project key to derive this from.
+                            mcp_required: Some(true),
+                            ..Param::DEFAULT
+                        },
             q("since", "RFC3339 lower bound on the VERDICT time (default 7 days ago)"),
             q("until", "RFC3339 upper bound on the verdict time"),
             q(
@@ -109,7 +115,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         path: "/v1/usecases",
         access: Key(Read),
         params: &[
-            q("project", ""),
+            Param {
+                            name: "project",
+                            doc: "",
+                            // An MCP caller has no project key to derive this from.
+                            mcp_required: Some(true),
+                            ..Param::DEFAULT
+                        },
             q("since", "RFC3339 window start (inclusive); omit for full history"),
         ],
         response: TypeRef::Untyped(
@@ -255,7 +267,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         path: "/v1/forecast",
         access: Key(Read),
         params: &[
-            q("project", "required for an admin key; a project key derives it"),
+            Param {
+                            name: "project",
+                            doc: "required for an admin key; a project key derives it",
+                            // An MCP caller has no project key to derive this from.
+                            mcp_required: Some(true),
+                            ..Param::DEFAULT
+                        },
             qe("by", &["customer", "product"], "margin dimension (default customer)"),
             qt("horizon", JsonTy::Integer, "days to project ahead (default 14, 1..=90)"),
             qt(

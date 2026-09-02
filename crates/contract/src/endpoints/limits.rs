@@ -141,6 +141,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             ..McpTool::DEFAULT
         }),
         cli: Some(&["margin-policies", "list"]),
+        render_kind: Some("list_margin_policies"),
         doc: "A project's standing margin guardrails.",
         ..Endpoint::DEFAULT
     },
@@ -162,7 +163,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         method: Method::Get,
         path: "/v1/limits/status",
         access: Key(Read),
-        params: &[q("project", "project id; required unless the key already names one")],
+        params: &[Param {
+            name: "project",
+            doc: "project id; required unless the key already names one",
+            // An MCP caller has no project key to derive it from.
+            mcp_required: Some(true),
+            ..Param::DEFAULT
+        }],
         response: TypeRef::Untyped(
             "{ project_id, throttled, statuses: [LimitStatus], rejected: [{metric, window, scope, \
              …}], cost_basis: {unpriced_calls, imputed_cost_usd, client_reported_cost_usd, \

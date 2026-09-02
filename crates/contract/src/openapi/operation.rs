@@ -50,8 +50,9 @@ fn describe(e: &Endpoint) -> String {
     let mut s = format!("{}\n\n{who}", e.doc);
     if e.paged {
         s.push_str(
-            "\n\nPaged: the next page's keyset cursor is returned in the `X-Next-Cursor` response \
-             header; pass it back as `cursor`.",
+            "\n\nPaged: the next page's keyset cursor comes back in the `X-Next-Cursor` response \
+             header, or as a `next_cursor` field of the body where the handler wraps its rows. \
+             Pass it back as `cursor`.",
         );
     }
     s

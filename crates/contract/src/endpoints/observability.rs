@@ -22,6 +22,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             ..McpTool::DEFAULT
         }),
         cli: Some(&["capabilities"]),
+        render_kind: Some("get_capabilities"),
         doc: "What this deployment's store backend serves, and what it answers 501 for.",
         ..Endpoint::DEFAULT
     },
@@ -216,13 +217,23 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             b("reasoning", JsonTy::String, "why"),
             b("cost_usd", JsonTy::Number, "what judging it cost"),
             b("scored_by", JsonTy::String, "who or what scored it (default `mcp`)"),
+            Param {
+                name: "event_id",
+                kind: ParamKind::Body,
+                doc: "anchor the verdict to one span inside the trace instead of its root",
+                mcp_name: Some("event"),
+                ..Param::DEFAULT
+            },
         ],
         response: TypeRef::Named("Score"),
         mcp: Some(McpTool {
             name: "score_trace",
             description: "Record a verdict on a WHOLE trace (an agent run end to end), not one call. Anchored to the trace's root span, so trace-level quality is comparable across runs.",
             read_only: false,
-            args: &["id", "rubric", "value", "max", "pass", "reasoning", "cost_usd", "scored_by"],
+            args: &[
+                "id", "rubric", "value", "max", "pass", "reasoning", "cost_usd", "scored_by",
+                "event_id",
+            ],
             ..McpTool::DEFAULT
         }),
         doc: "Score a whole trace, anchored to its root span.",

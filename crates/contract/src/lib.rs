@@ -19,6 +19,7 @@
 mod dsl;
 mod endpoints;
 pub mod mcp;
+mod nested;
 pub mod openapi;
 mod types;
 

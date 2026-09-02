@@ -12,5 +12,8 @@ path = "src/main.rs"
 [dependencies]
 serde_json.workspace = true
 lighttrack-render.workspace = true
+# The tool catalog: names, descriptions, input schemas and the write gate all come from the endpoint
+# contract, so this crate holds dispatch and I/O only.
+lighttrack-contract.workspace = true
 # http-only blocking client (local API). Add a TLS feature when pointing at Cloud Run.
 reqwest = { version = "0.13", default-features = false, features = ["json", "blocking"] }

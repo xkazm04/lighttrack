@@ -13,8 +13,10 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         path: "/v1/alerts",
         // `read` sees its OWN project's alerts — `resolve_read_project` narrows a project key.
         access: Key(Read),
-        // The cursor comes back in the body as `next_cursor`, not in `X-Next-Cursor`, so this is
-        // not `paged` in the sense the CLI's `--cursor` plumbing means.
+        paged: true,
+        // The cursor comes back in the body as `next_cursor` rather than in `X-Next-Cursor`. It is
+        // still a cursor and `cursor=` is still how you ask for the next page, so the flag is set:
+        // what a caller needs to know is that paging exists, not which envelope carries it.
         params: &[
             q("project", ""),
             qe(

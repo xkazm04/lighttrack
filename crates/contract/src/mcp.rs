@@ -86,7 +86,7 @@ fn input_schema(e: &Endpoint, t: &McpTool) -> Value {
     for name in t.args {
         let Some(p) = e.param(name) else { continue };
         props.insert(p.arg_name().to_string(), property(p));
-        if p.required {
+        if p.required_over_mcp() {
             required.push(json!(p.arg_name()));
         }
     }
@@ -102,6 +102,12 @@ fn input_schema(e: &Endpoint, t: &McpTool) -> Value {
 /// One argument as a JSON Schema property. Shared with the OpenAPI renderer so a parameter cannot
 /// describe itself one way to an agent and another way to a client generator.
 pub(crate) fn property(p: &Param) -> Value {
+    // A declared full schema wins: it is there precisely because type + prose was not enough.
+    if let Some(raw) = p.schema {
+        if let Ok(v) = serde_json::from_str::<Value>(raw) {
+            return v;
+        }
+    }
     let mut m = Map::new();
     m.insert("type".into(), json!(p.ty.as_str()));
     if !p.enum_values.is_empty() {
@@ -116,6 +122,27 @@ pub(crate) fn property(p: &Param) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A malformed override would silently degrade to the generic property, which is the failure
+    /// mode this whole item is about: a surface that looks fine and says less than it should.
+    #[test]
+    fn every_declared_parameter_schema_is_valid_json() {
+        for e in crate::endpoints() {
+            for p in e.params {
+                if let Some(raw) = p.schema {
+                    let v: Value = serde_json::from_str(raw).unwrap_or_else(|err| {
+                        panic!("{}: {} schema is not JSON: {err}", e.id, p.name)
+                    });
+                    assert!(
+                        v["type"].is_string(),
+                        "{}: {} schema has no type",
+                        e.id,
+                        p.name
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn no_two_tools_share_a_name() {
@@ -167,7 +194,7 @@ mod tests {
             for a in t.args {
                 let p = e.param(a).expect("checked elsewhere");
                 assert_eq!(
-                    p.required,
+                    p.required_over_mcp(),
                     req.contains(&p.arg_name()),
                     "{}: '{}' required-ness disagrees with the schema",
                     t.name,

@@ -16,7 +16,15 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         params: &[
             pm("id", "project", "project id"),
             br("name", JsonTy::String, ""),
-            br("dimensions", JsonTy::Array, "the weighted, anchored dimensions a judge scores against"),
+            Param {
+                name: "dimensions",
+                kind: ParamKind::Body,
+                ty: JsonTy::Array,
+                required: true,
+                doc: "the weighted, anchored dimensions a judge scores against",
+                schema: Some(crate::nested::RUBRIC_DIMENSIONS),
+                ..Param::DEFAULT
+            },
             b("threshold", JsonTy::Number, "overall pass threshold 0-1 (default 0.7)"),
         ],
         response: TypeRef::Named("Rubric"),
@@ -78,7 +86,14 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         mutating: true,
         params: &[
             p("id", "the rubric to supersede"),
-            b("dimensions", JsonTy::Array, "the new dimensions; omitted ⇒ carried forward"),
+            Param {
+                name: "dimensions",
+                kind: ParamKind::Body,
+                ty: JsonTy::Array,
+                doc: "the new dimensions; omitted ⇒ carried forward",
+                schema: Some(crate::nested::RUBRIC_DIMENSIONS),
+                ..Param::DEFAULT
+            },
             b("threshold", JsonTy::Number, "the new pass threshold; omitted ⇒ carried forward"),
         ],
         response: TypeRef::Named("Rubric"),
