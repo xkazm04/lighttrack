@@ -91,6 +91,16 @@ pub(crate) async fn create_benchmark(
     Json(req): Json<CreateBenchmarkReq>,
 ) -> Result<Json<Benchmark>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    // Every run's mean is normalized to 0..=1 (score / max), so a baseline outside that range can
+    // never be met or is met trivially: `80` (a percentage typo) would fail every run forever and
+    // read as a real regression in CI.
+    if let Some(b) = req.baseline_score {
+        if !(0.0..=1.0).contains(&b) || b.is_nan() {
+            return Err(ApiError::bad_request(format!(
+                "baseline_score must be within 0.0..=1.0 (run means are normalized); got {b}"
+            )));
+        }
+    }
     // The target matrix (if any) is stored in the `target` field as a JSON array. A typed `targets`
     // deserialized, but that is not the same as being *runnable*: an `Http` target's URL and a
     // `prompt_ref`'s name are both refusable facts, and both go through the same door.
