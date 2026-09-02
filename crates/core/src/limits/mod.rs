@@ -5,6 +5,7 @@
 mod rule;
 mod scope;
 mod status;
+mod threshold;
 
 #[cfg(test)]
 mod tests;
@@ -12,3 +13,4 @@ mod tests;
 pub use rule::{LimitAction, LimitMetric, LimitRule, LimitWindow, DEFAULT_THROTTLE_START};
 pub use scope::{scope_matches, LimitScope, ScopeDims};
 pub use status::{CostEvidence, LimitStatus};
+pub use threshold::{Escalation, Threshold, ThresholdBasis, ThresholdDimension, ThresholdKind};

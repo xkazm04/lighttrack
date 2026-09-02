@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{LimitAction, LimitMetric, LimitScope, LimitWindow};
+use super::{LimitAction, LimitMetric, LimitScope, LimitWindow, ThresholdBasis, ThresholdKind};
 
 /// Map `(rule, event)` to a stable point in `[0, 1)` — the throttle's shed lottery ticket.
 ///
@@ -95,6 +95,11 @@ pub struct LimitStatus {
     /// The rule's dimension scope, echoed for the status surface / alerts (`None` = project-wide).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<LimitScope>,
+    /// Where `threshold` came from: a constant, a share of measured revenue, or a derived threshold
+    /// whose basis could not be read at all. Estimation announcing itself — the alternative is a
+    /// number on a status page with no story behind it.
+    #[serde(default)]
+    pub basis: ThresholdBasis,
     /// For a `cost_usd` rule: how much of `current` is stored cost, how much is imputed for unpriced
     /// traffic, and how much was client-self-reported. `None` for `calls`/`tokens` rules (nothing to
     /// qualify) and for evaluations made without a usage snapshot.
@@ -122,6 +127,16 @@ impl LimitStatus {
     /// The ingest path returns HTTP 429 when any status reports this.
     pub fn rejects_ingest(&self) -> bool {
         self.action.enforces() && (self.breached || self.unpriceable())
+    }
+
+    /// Whether this status' threshold is derived from revenue rather than typed by an operator.
+    pub fn derived_threshold(&self) -> bool {
+        self.basis.derived()
+    }
+
+    /// True when this rule is a derived cap that could not be resolved, so it is currently inert.
+    pub fn inert(&self) -> bool {
+        matches!(self.basis.kind, ThresholdKind::Unknown)
     }
 
     /// Whether this status is a cost cap with no priceable evidence behind it.

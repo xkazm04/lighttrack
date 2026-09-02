@@ -15,6 +15,7 @@ pub mod forecast;
 pub mod job;
 pub mod limits;
 pub mod margin;
+pub mod margin_policy;
 pub mod margin_sim;
 pub mod margin_trend;
 pub mod model_id;
@@ -45,10 +46,14 @@ pub use job::{
     job_is_terminal, Job, JobCancel, JobFinish, JOB_ERROR_PREFIX_FAILURE, JOB_ERROR_WORKER_LOST,
 };
 pub use limits::{
-    scope_matches, CostEvidence, LimitAction, LimitMetric, LimitRule, LimitScope, LimitStatus,
-    LimitWindow, ScopeDims, DEFAULT_THROTTLE_START,
+    scope_matches, CostEvidence, Escalation, LimitAction, LimitMetric, LimitRule, LimitScope,
+    LimitStatus, LimitWindow, ScopeDims, Threshold, ThresholdBasis, ThresholdDimension,
+    ThresholdKind, DEFAULT_THROTTLE_START,
 };
 pub use margin::{compute_margin, CostByDimension, MarginDimension, MarginRow};
+pub use margin_policy::{
+    evaluate_policies, MarginPolicy, PolicyAction, PolicyTrigger, RuleChange, POLICY_ORIGIN_PREFIX,
+};
 pub use margin_sim::{compute_margin_simulation, SimAssumptions, SimRow, TokensByDimension};
 pub use margin_trend::{
     compute_margin_trend, DailyKeyCost, MarginTrend, MarginTrendPoint, MarginTrendSeries,
