@@ -1,11 +1,11 @@
 # RELAY — cloud→device task queue for local Claude Code execution
 
-Deployed apps enqueue heavy, offline-tolerant LLM tasks on the cloud LightTrack instance; one
-enrolled local device (running the user's Claude Code subscription) leases them over outbound
-HTTPS, executes them against a local action library, pushes results back into the apps, and logs
-every run to LightTrack. The point: route heavy LLM work that doesn't need an online reaction
-through the flat-rate Claude subscription instead of metered APIs, while the Gemini production
-engine keeps serving the latency-sensitive paths.
+Deployed apps enqueue heavy, offline-tolerant LLM tasks on the cloud LightTrack instance; an enrolled
+local device (running the user's Claude Code subscription) leases the ones it advertises the
+capability for, over outbound HTTPS, executes them against a local action library, pushes results
+back into the apps, and logs every run to LightTrack. The point: route heavy LLM work that doesn't
+need an online reaction through the flat-rate Claude subscription instead of metered APIs, while the
+Gemini production engine keeps serving the latency-sensitive paths.
 
 ## Why pull, not push
 
@@ -24,8 +24,8 @@ xprice app A ──┐  POST /v1/relay/tasks (project API key, idempotency key)
 xprice app B ──┼────────────► LightTrack Cloud
 LightTrack ────┘                 relay_tasks: queued → leased → succeeded | dead
   internal                              ▲
-                                        │ outbound lease / result (LIGHTTRACK_RELAY_DEVICE_KEY)
-                              lt-agent (local device)
+                                        │ outbound lease / result (per-device ltd_… key)
+                              lt-agent (local device, one of N enrolled)
                                  │ actions/<type>/  ← gitignored: prompt.md + action.toml + connector
                                  │ claude.exe -p … --output-format json  (engine::invocation::run)
                                  │ connector (http | command) → pushes result into the app
@@ -97,23 +97,78 @@ terminal is a `409`, not a comfortable lie.
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `POST /v1/relay/tasks` | project key | Enqueue `action_type` + `payload` (+ `idempotency_key`, `max_attempts`, `retry_interval_secs`, `source`). A project key is forced into its own project. |
+| `POST /v1/relay/tasks` | project key | Enqueue `action_type` + `payload` (+ `idempotency_key`, `max_attempts`, `retry_interval_secs`, `source`). A project key is forced into its own project. Answers the task plus an **admission verdict** (`queued { eligible_devices }`), or `422 relay_unroutable` when devices are enrolled and none advertises that action type. |
 | `GET /v1/relay/tasks/:id` | project key (own) / admin | Status + result — the originating app's polling fallback. |
 | `GET /v1/relay/tasks?project=&status=&limit=` | project key (own) / admin | List/inspect. |
-| `POST /v1/relay/lease` | device key | Lease up to `max` due tasks for `device`, holding each for `lease_secs` (60s–1800s). Optional `wait_secs` (≤25) long-polls until a task is due. Answers `{ tasks, lease_secs, renew_secs }` — the granted TTL after clamping, and how often to renew. |
+| `POST /v1/relay/lease` | device key | Lease up to `max` due tasks **this device can run**, holding each for `lease_secs` (60s–1800s). Carries `capabilities` + `agent_version`; identity comes from the key, and a client-asserted `device` is ignored. Optional `wait_secs` (≤25) long-polls until a task is due. Answers `{ tasks, lease_secs, renew_secs }` — the granted TTL after clamping, and how often to renew. |
 | `POST /v1/relay/tasks/:id/renew` | device key | Heartbeat, carrying `fence`. `409` = the lease is no longer yours: stop, and do not deliver. |
 | `POST /v1/relay/tasks/:id/progress` | device key | Liveness detail (`fence` + `progress`), visible on the task. Deliberately not on the heartbeat. |
 | `POST /v1/relay/tasks/:id/cancel` | project key (own) / admin | Stop a queued or leased task. `409` if it already finished. |
 | `POST /v1/relay/tasks/:id/result` | device key | Settle: `succeeded` (+`result`) \| `failed` (+`error`) \| `deferred` (+`retry_after_secs`), carrying `fence`. Optional usage/accounting: `model`, `input_tokens`, `output_tokens`, `latency_ms`, `cost_usd`, `mode`. `409` = not held; the result was NOT recorded. |
+| `POST /v1/relay/devices` | admin | Enrol a device: `name`, optional `project_id`, `capabilities`. Returns the row **plus its key, once**. Never exposed over MCP. |
+| `GET /v1/relay/devices?project=` | admin | The fleet: advertised capabilities, `last_seen_at` / `seen_secs_ago` / `online`, agent version, revocation. Never returns a key or a digest. |
+| `DELETE /v1/relay/devices/:id` | admin | Revoke a device. A flag, not a delete — tasks it already ran keep naming a device that still resolves. |
 
-Device enrollment is deliberately minimal for the single-device case: set
-`LIGHTTRACK_RELAY_DEVICE_KEY` on the cloud instance (Secret Manager on Cloud Run) and give the
-same secret to `lt-agent`. No key-minting endpoint exists — nothing to leak over MCP; multi-device
-enrollment (hashed keys in a table, like API keys) is future work if ever needed. The admin key
-(and dev mode) also passes the device guard, for local testing.
+## Enrolment, capabilities, and admission (M18)
+
+Enrolment used to be one shared `LIGHTTRACK_RELAY_DEVICE_KEY`. That is a workable answer for exactly
+one device and a bad one for two: the secret cannot be rotated for a single machine, a leak means
+re-keying the whole fleet at once, and the `device` written onto a task was whatever the client
+asserted — so the cloud's record of *who ran what* was decoration. Multi-device enrolment is no
+longer "future work".
+
+**A device is a row.** `POST /v1/relay/devices` mints `ltd_<prefix>_<secret>`, stored as the same
+salted digest an API key is and **shown exactly once**. `lt relay devices add --name studio-laptop
+--capability 'xprice/*'` is the operator path; `lt relay devices list | revoke <id>` are the others.
+Revocation is a flag, not a delete, so tasks that already named a device keep resolving.
+
+**A device advertises what it can run.** `capabilities` are exact action types or `<ns>/*` namespace
+prefixes; an **empty** list means "everything". `lt-agent` derives its own inventory from the action
+library — every `<ns>/<name>/` holding a `prompt.md` — re-enumerated each poll round and sent on
+every lease, so adding an action folder needs no restart and no config edit. A hand-kept capability
+list would go stale the moment somebody added a folder, and a stale list *is* the routing failure
+this exists to end. A namespace prefix stops at a `/`: `xprice/*` does not cover `xpricey/thing`.
+
+**The lease is filtered, not post-filtered.** The narrowing happens inside the claim, beside the
+due/expired predicates, so a task this device cannot run is left `queued` with no fence and no
+attempt spent. Applied afterwards, the lease would still have stamped its fence on work it then
+dropped — a device silently consuming claims on things it cannot do. Before this, a device whose
+library lacked the action leased it anyway, burned a real attempt reporting "no action", and waited
+out a five-hour retry interval to do it again.
+
+**Enqueue answers with a verdict.** Validation used to be "`action_type` is non-empty", so a typo was
+indistinguishable from a healthy backlog until the task dead-lettered ~20h later having burned every
+attempt. Now `POST /v1/relay/tasks` returns `admission: { verdict: "queued", eligible_devices: N }`,
+or refuses with **`422 relay_unroutable`** naming the action and the fix. The SDKs surface it:
+`RelayError.is_unroutable` / `.isUnroutable` (Python / TS) tells a permanent refusal from a timeout
+worth retrying.
+
+`eligible_devices: 0` is **not** a refusal — it means no devices are enrolled at all, which is the
+legacy shared-key deployment, and refusing its traffic would be this feature breaking the relay it
+hardens. Only an enrolled fleet that advertises nothing matching can refuse.
+
+**`relay_task_unroutable`** closes the half admission cannot see: a task that *was* routable and is
+not any more, because the only device with the action was revoked, narrowed on an upgrade, or never
+re-enrolled. The M7 schedule sweep re-asks the fleet, and a queued task past
+`LIGHTTRACK_RELAY_UNROUTABLE_SECS` (default 900, `0` = off) with zero eligible devices alerts through
+the existing channels. Fifteen minutes, not seconds: a fleet is allowed to be briefly empty during a
+restart, and it is well inside the five-hour retry interval.
+
+**The legacy key still works, deprecated.** `LIGHTTRACK_RELAY_DEVICE_KEY` authenticates with every
+capability and leases unfiltered, exactly as before, and logs a deprecation line at startup naming
+what it costs (no routing, no revocation, no liveness, and no way to tell two holders apart). Kept
+for one release. The admin key (and dev mode) also passes the device guard, for local testing.
+
+**Never over MCP.** `POST /v1/relay/devices` mints a secret, and a key in a tool result is a key in a
+transcript — so device enrolment is HTTP/CLI only however `LIGHTTRACK_MCP_ALLOW_WRITES` is set. What
+MCP does get is three read-only tools (`readOnlyHint`): `list_relay_tasks`, `get_relay_task`, and
+`list_relay_devices`, the last of which carries no key and no digest.
 
 Store: `relay_tasks` on the `Store` trait, declared as `Surface::Relay` in the capability manifest
-(`docs/PARITY.md`). SQLite is the reference implementation; **Postgres implements the full domain**
+(`docs/PARITY.md`); the fleet is its own `Surface::Devices` — a backend can host the task queue and
+have no `devices` table, and "nobody is enrolled" is a load-bearing answer there, so it must never be
+something a missing table says by accident. SQLite and Postgres serve both; Firestore refuses both,
+and the conformance suite asserts every method's refusal. SQLite is the reference implementation; **Postgres implements the full domain**
 (`store-pg/src/relay.rs` + `relay_lease.rs` — `FOR UPDATE SKIP LOCKED` leases, transactional fenced
 settle), so the Neon-backed cloud serves relay natively. Firestore does not declare the surface, so
 every relay method there answers `501 unsupported` and the conformance suite asserts that refusal.
@@ -214,8 +269,10 @@ on flat rate, but it consumes window capacity — prefer batching work into fewe
 
 Don't duplicate the mechanism — the cloud LightTrack instance is the single broker. Each xprice
 app is just a client: its own project API key, an action folder in the device's library under its
-namespace (`actions/xprice/...`), and the SDK helpers. One device, one agent, N apps. If a
-project someday needs its own broker, the agent's multi-source config already covers it.
+namespace (`actions/xprice/...`), and the SDK helpers. N devices, N apps: a task reaches whichever
+enrolled device advertises its namespace, so `actions/xprice/*` can live on one machine and
+`actions/ops/*` on another without either knowing about the other. If a project someday needs its
+own broker, the agent's multi-source config already covers it.
 
 ```python
 task = lt.relay_task("xprice/reprice-summary", {"sku": "A-1"}, idempotency_key="order-42")
@@ -236,8 +293,11 @@ and **raise/throw** (`RelayError`) on failure. Prefer the connector push for del
 - **Subscription terms.** Claude Code headless automation for your own apps is the intended
   gray-zone-safe use; serving external users at volume through a consumer subscription is not.
   Keep relay traffic owner-facing/batch.
-- **Single-device SPOF** — intrinsic; mitigated by the 20h retry envelope and dead-letter alerts.
-  Apps must treat relay results as eventually consistent.
+- **Fleet availability** — no longer intrinsically single-device (M18): enrol several devices and a
+  task goes to whichever advertises its action type. It is still eventually consistent, and a fleet
+  where only one device carries a given capability is that capability's SPOF — which is now at least
+  *visible*, in `GET /v1/relay/devices` and in the enqueue verdict's `eligible_devices`. Mitigated by
+  the 20h retry envelope, dead-letter alerts, and `relay_task_unroutable`.
 - **Payload privacy** — params rest in the cloud DB until executed, and secrets stay device-side by
   construction. Ingest redaction (`LIGHTTRACK_REDACT_INGEST`) covers the **run event** a device posts
   back, including its `error` string — but **not** the task `params` in `relay_tasks`, which are
@@ -260,6 +320,13 @@ and **raise/throw** (`RelayError`) on failure. Prefer the connector push for del
   sweep, webhook-verified), long-poll lease (`wait_secs`, agent-configurable), Python
   `relay_task`/`get_relay_task`/`wait_relay_task` + TS `relayTask`/`getRelayTask`/`waitRelayTask`
   (both raise/throw `RelayError`).
+- **Device fleet — M18 (shipped):** `devices` table + `Surface::Devices` on both SQLite and Postgres
+  (Firestore refuses, conformance asserts it); hashed per-device `ltd_…` keys with three admin
+  routes; leases filtered by advertised capabilities inside the claim; `lt-agent` advertising an
+  inventory derived from its action library; enqueue answering `queued { eligible_devices }` or
+  `422 relay_unroutable`; `relay_task_unroutable` on the M7 sweep; three read-only MCP tools;
+  `lt relay devices`; and `RelayError.is_unroutable` in both SDKs. The legacy shared
+  `LIGHTTRACK_RELAY_DEVICE_KEY` still works, unfiltered and deprecated, for one release.
 - **Postgres (shipped):** all seven relay methods in `store-pg/src/relay.rs` + the
   `relay_tasks` table in `schema/postgres/001_init.sql`. Lease/sweep are single-statement
   `UPDATE … RETURNING` (lease adds `FOR UPDATE SKIP LOCKED`); settle wraps read-branch-update in
