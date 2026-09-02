@@ -191,7 +191,10 @@ fn run_cycle(
         p.kappa_bar,
         p.drift_threshold,
     );
-    calibration_post::persist(
+    // Loud, not fatal - the same rule the one-shot `calibrate` applies. This cycle's judging is
+    // already paid for and its verdict already known; a `?` here threw both away (nothing printed,
+    // the cycle logged only as an error) whenever the API blinked at the moment of recording.
+    if let Err(e) = calibration_post::persist(
         cli,
         http,
         &calibration_post::Measured {
@@ -203,7 +206,13 @@ fn run_cycle(
         },
         &c.agreement,
         reserved,
-    )?;
+    ) {
+        eprintln!(
+            "  warning: measured \u{3ba}={:.3} but could not record it ({e}); this cycle will not \
+             feed the score_drop alert and the next cycle's drift baseline",
+            c.agreement.cohen_kappa
+        );
+    }
     report(&decision, &c.agreement, c.cost, c.skipped);
     Ok(decision.level)
 }
