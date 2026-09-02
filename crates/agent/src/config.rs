@@ -8,7 +8,12 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AgentConfig {
-    /// Device name reported on lease (shows up on tasks as `device`).
+    /// Local label for this device, printed in the startup banner.
+    ///
+    /// **No longer the cloud's idea of who this is** (M18): identity comes from the device key, so
+    /// the cloud resolves it against its own `devices` table and stamps that id on a leased task.
+    /// The field stays because an operator running several agents wants their logs told apart, and
+    /// because removing it would fail every existing `agent.toml` at parse time.
     #[serde(default = "default_device")]
     pub device: String,
     /// Seconds to sleep after a round of empty polls.
@@ -45,7 +50,13 @@ pub(crate) struct AgentConfig {
 pub(crate) struct Source {
     pub name: String,
     pub url: String,
-    /// Env var holding this source's `LIGHTTRACK_RELAY_DEVICE_KEY` value.
+    /// Env var holding this source's **device key** — an enrolled `ltd_…` key from
+    /// `POST /v1/relay/devices` (M18), or the deprecated shared `LIGHTTRACK_RELAY_DEVICE_KEY` for
+    /// one more release. Named, never inlined: `agent.toml` is committable and this is a secret.
+    ///
+    /// Per source rather than global because one device can serve several clouds, and each issues
+    /// its own key — which is the whole point of per-device keys: revoking one cloud's access to
+    /// this machine must not touch another's.
     pub device_key_env: String,
 }
 
