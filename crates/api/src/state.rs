@@ -131,11 +131,7 @@ pub(crate) struct ProjectPolicyCache {
 impl ProjectPolicyCache {
     /// Build a cache pre-warmed with the policies read at startup, with the TTL resolved from env.
     pub(crate) fn new(warm: HashMap<String, ProjectPolicy>) -> Self {
-        let ttl = std::env::var(ENV_POLICY_TTL)
-            .ok()
-            .and_then(|s| s.trim().parse::<u64>().ok())
-            .map(Duration::from_secs)
-            .unwrap_or(DEFAULT_POLICY_TTL);
+        let ttl = Duration::from_secs(env_parsed(ENV_POLICY_TTL, DEFAULT_POLICY_TTL.as_secs()));
         let now = Instant::now();
         let entries = warm.into_iter().map(|(k, v)| (k, (v, now))).collect();
         Self {
@@ -190,6 +186,26 @@ pub(crate) async fn project_policy_for(
         .unwrap_or_default();
     st.project_policies.put(pid, policy);
     Ok(policy)
+}
+
+/// A numeric setting from env, or `default` — and a *warning* when the variable is set to something
+/// that is not a number. The `.parse().ok()` idiom this replaces treated `=60s` exactly like unset,
+/// so an operator's override was silently not in force while the banner still described the default
+/// they thought they had changed.
+pub(crate) fn env_parsed<T: std::str::FromStr + std::fmt::Display + Copy>(
+    key: &str,
+    default: T,
+) -> T {
+    match std::env::var(key) {
+        Ok(raw) if !raw.trim().is_empty() => raw.trim().parse::<T>().unwrap_or_else(|_| {
+            tracing::warn!(
+                var = key, value = %raw, default = %default,
+                "setting is not a number; using the default"
+            );
+            default
+        }),
+        _ => default,
+    }
 }
 
 /// Run a blocking store call on the blocking pool and flatten the two error layers.

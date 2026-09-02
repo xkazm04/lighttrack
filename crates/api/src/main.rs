@@ -314,10 +314,7 @@ async fn main() -> anyhow::Result<()> {
     let relay_device_key = std::env::var("LIGHTTRACK_RELAY_DEVICE_KEY")
         .ok()
         .filter(|s| !s.is_empty());
-    let relay_flat_cost = std::env::var("LIGHTTRACK_RELAY_FLAT_COST_USD")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1.0);
+    let relay_flat_cost = state::env_parsed("LIGHTTRACK_RELAY_FLAT_COST_USD", 1.0_f64);
 
     // Backend selection: LIGHTTRACK_DATABASE_URL=postgres://... → Postgres; else SQLite at LIGHTTRACK_DB.
     let database_url = std::env::var("LIGHTTRACK_DATABASE_URL")
