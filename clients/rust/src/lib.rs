@@ -9,9 +9,9 @@
 //! stderr (see [`Client::quiet`] / `LIGHTTRACK_QUIET=1` to turn that off). It still never panics.
 //!
 //! ```no_run
-//! use lighttrack_client::{Client, Provider};
+//! use lighttrack_client::Client;
 //! let lt = Client::from_env();
-//! lt.event(Provider::OpenAi, "gpt-4o")
+//! lt.event("openai", "gpt-4o")
 //!     .input_tokens(120).output_tokens(45).latency_ms(210)
 //!     .send();
 //! lt.flush(); // drain the background worker before exit
@@ -26,8 +26,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-pub use lighttrack_core::{Operation, Provider, Status};
 use lighttrack_core::{LlmEvent, TokenUsage};
+pub use lighttrack_core::{Operation, Provider, ProviderId, Status};
 
 use diagnostics::{Diagnostics, FailureContext};
 
@@ -52,14 +52,22 @@ impl Client {
     pub fn from_env() -> Self {
         Self::new(
             std::env::var("LIGHTTRACK_URL").unwrap_or_else(|_| DEFAULT_URL.to_string()),
-            std::env::var("LIGHTTRACK_KEY").ok().filter(|s| !s.is_empty()),
-            std::env::var("LIGHTTRACK_PROJECT").ok().filter(|s| !s.is_empty()),
+            std::env::var("LIGHTTRACK_KEY")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            std::env::var("LIGHTTRACK_PROJECT")
+                .ok()
+                .filter(|s| !s.is_empty()),
         )
     }
 
     /// A project key derives the project server-side; set `project` only for dev mode (no key) or an
     /// admin key ingesting into a specific project.
-    pub fn new(base_url: impl Into<String>, api_key: Option<String>, project: Option<String>) -> Self {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: Option<String>,
+        project: Option<String>,
+    ) -> Self {
         let base = base_url.into().trim_end_matches('/').to_string();
         let has_key = api_key.is_some();
         let diag = Arc::new(Diagnostics::from_env());
@@ -86,7 +94,15 @@ impl Client {
                 }
             })
             .ok();
-        Self { base_url: base, project, source: None, has_key, diag, tx: Some(tx), worker }
+        Self {
+            base_url: base,
+            project,
+            source: None,
+            has_key,
+            diag,
+            tx: Some(tx),
+            worker,
+        }
     }
 
     /// Set a `source` label stamped on every event.
@@ -103,13 +119,23 @@ impl Client {
     }
 
     /// Start building an event for one LLM call.
-    pub fn event(&self, provider: Provider, model: impl Into<String>) -> EventBuilder<'_> {
-        EventBuilder::new(self, provider, model.into())
+    ///
+    /// `provider` is any vendor id — `"openai"`, `"anthropic"`, `"mistral"`, `"az.ai.openai"` — not a
+    /// closed enum: LightTrack keys prices, limit scopes and rollups on the id you send (M8).
+    pub fn event(
+        &self,
+        provider: impl Into<ProviderId>,
+        model: impl Into<String>,
+    ) -> EventBuilder<'_> {
+        EventBuilder::new(self, provider.into(), model.into())
     }
 
     /// Low-level: enqueue a fully-built event (best-effort, non-blocking).
     pub fn track(&self, ev: LlmEvent) {
-        self.send_raw("/v1/events", serde_json::to_value(&ev).unwrap_or(Value::Null));
+        self.send_raw(
+            "/v1/events",
+            serde_json::to_value(&ev).unwrap_or(Value::Null),
+        );
     }
 
     /// Enqueue a pre-serialized body to an API path (best-effort, non-blocking).
@@ -118,7 +144,10 @@ impl Client {
         // it: no project and no API key means the server has no way to attribute the event and will
         // answer 400. Checked on the body, so a per-event `.project(...)` override counts.
         if !body_has_project(&body) && !self.has_key {
-            self.diag.warn("no-project", &diagnostics::no_project_message(&self.base_url));
+            self.diag.warn(
+                "no-project",
+                &diagnostics::no_project_message(&self.base_url),
+            );
         }
         if let Some(tx) = &self.tx {
             let _ = tx.send((path, body));
@@ -134,7 +163,9 @@ impl Client {
             id: lighttrack_core::new_id(),
             project_id: self.project.clone().unwrap_or_default(),
             event_id: None,
-            rubric: name.map(|n| format!("guard:{n}")).unwrap_or_else(|| "guard".into()),
+            rubric: name
+                .map(|n| format!("guard:{n}"))
+                .unwrap_or_else(|| "guard".into()),
             value: if result.ok { 1.0 } else { 0.0 },
             max: 1.0,
             pass: Some(result.ok),
@@ -156,18 +187,29 @@ impl Client {
             cost_usd: None,
             created_at: chrono::Utc::now(),
         };
-        self.send_raw("/v1/scores", serde_json::to_value(&score).unwrap_or(Value::Null));
+        self.send_raw(
+            "/v1/scores",
+            serde_json::to_value(&score).unwrap_or(Value::Null),
+        );
         result
     }
 
     /// Track from an OpenAI chat/responses JSON value (extracts model + token usage).
     pub fn track_openai_json(&self, resp: &Value, model: Option<&str>) {
         let u = &resp["usage"];
-        let input = u["prompt_tokens"].as_u64().or_else(|| u["input_tokens"].as_u64()).unwrap_or(0);
-        let output = u["completion_tokens"].as_u64().or_else(|| u["output_tokens"].as_u64()).unwrap_or(0);
+        let input = u["prompt_tokens"]
+            .as_u64()
+            .or_else(|| u["input_tokens"].as_u64())
+            .unwrap_or(0);
+        let output = u["completion_tokens"]
+            .as_u64()
+            .or_else(|| u["output_tokens"].as_u64())
+            .unwrap_or(0);
         let cached = u["prompt_tokens_details"]["cached_tokens"].as_u64();
-        let m = model.or_else(|| resp["model"].as_str()).unwrap_or("unknown");
-        self.event(Provider::OpenAi, m).usage(input, output, cached).send();
+        let m = model
+            .or_else(|| resp["model"].as_str())
+            .unwrap_or("unknown");
+        self.event("openai", m).usage(input, output, cached).send();
     }
 
     /// Track from an Anthropic messages JSON value.
@@ -176,8 +218,12 @@ impl Client {
         let input = u["input_tokens"].as_u64().unwrap_or(0);
         let output = u["output_tokens"].as_u64().unwrap_or(0);
         let cached = u["cache_read_input_tokens"].as_u64();
-        let m = model.or_else(|| resp["model"].as_str()).unwrap_or("unknown");
-        self.event(Provider::Anthropic, m).usage(input, output, cached).send();
+        let m = model
+            .or_else(|| resp["model"].as_str())
+            .unwrap_or("unknown");
+        self.event("anthropic", m)
+            .usage(input, output, cached)
+            .send();
     }
 
     /// Track from a Gemini generateContent JSON value (model is usually passed in).
@@ -186,8 +232,10 @@ impl Client {
         let input = u["promptTokenCount"].as_u64().unwrap_or(0);
         let output = u["candidatesTokenCount"].as_u64().unwrap_or(0);
         let cached = u["cachedContentTokenCount"].as_u64();
-        let m = model.or_else(|| resp["modelVersion"].as_str()).unwrap_or("unknown");
-        self.event(Provider::Google, m).usage(input, output, cached).send();
+        let m = model
+            .or_else(|| resp["modelVersion"].as_str())
+            .unwrap_or("unknown");
+        self.event("google", m).usage(input, output, cached).send();
     }
 
     /// Drain and stop the background worker (call before exit). Dropping the client does the same.
@@ -200,7 +248,9 @@ impl Client {
 /// project serializes as `""`), so presence is not enough — it has to be non-empty, which is exactly
 /// the test the server's own ingest guard applies.
 fn body_has_project(body: &Value) -> bool {
-    body.get("project_id").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty())
+    body.get("project_id")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.trim().is_empty())
 }
 
 /// Turn one send outcome into at most one stderr line. Runs on the worker thread, so it must never
@@ -213,14 +263,24 @@ fn report(
     has_key: bool,
     outcome: reqwest::Result<reqwest::blocking::Response>,
 ) {
-    let ctx = FailureContext { status: None, has_project: body_has_project(body), has_key };
+    let ctx = FailureContext {
+        status: None,
+        has_project: body_has_project(body),
+        has_key,
+    };
     match outcome {
         Ok(resp) if resp.status().is_success() => {}
         Ok(resp) => {
             let status = resp.status().as_u16();
             // The server's explanation of a rejection is the whole point of the diagnostic.
-            let detail = resp.text().map(|b| diagnostics::truncate(&b, 200)).unwrap_or_default();
-            let ctx = FailureContext { status: Some(status), ..ctx };
+            let detail = resp
+                .text()
+                .map(|b| diagnostics::truncate(&b, 200))
+                .unwrap_or_default();
+            let ctx = FailureContext {
+                status: Some(status),
+                ..ctx
+            };
             let msg = diagnostics::send_failure_message(
                 base_url,
                 path,
@@ -253,7 +313,7 @@ pub struct EventBuilder<'a> {
 }
 
 impl<'a> EventBuilder<'a> {
-    fn new(client: &'a Client, provider: Provider, model: String) -> Self {
+    fn new(client: &'a Client, provider: ProviderId, model: String) -> Self {
         let ev = LlmEvent {
             id: lighttrack_core::new_id(),
             project_id: client.project.clone().unwrap_or_default(),
@@ -435,39 +495,79 @@ pub fn guard(output: &str, rules: &GuardRules) -> GuardResult {
     }
     if let Some(obj) = parsed.as_ref().and_then(|v| v.as_object()) {
         for k in &rules.json_keys {
-            record(format!("key:{k}"), obj.contains_key(k), format!("missing required JSON key '{k}'"));
+            record(
+                format!("key:{k}"),
+                obj.contains_key(k),
+                format!("missing required JSON key '{k}'"),
+            );
         }
     } else if !rules.json_keys.is_empty() && parsed.is_some() {
         // parsed but not an object: required keys cannot be satisfied
         for k in &rules.json_keys {
-            record(format!("key:{k}"), false, format!("missing required JSON key '{k}'"));
+            record(
+                format!("key:{k}"),
+                false,
+                format!("missing required JSON key '{k}'"),
+            );
         }
     }
 
     let words = output.split_whitespace().count();
     if let Some(mw) = rules.max_words {
-        record("max_words".into(), words <= mw, format!("too long: {words} words > {mw}"));
+        record(
+            "max_words".into(),
+            words <= mw,
+            format!("too long: {words} words > {mw}"),
+        );
     }
     if let Some(mnw) = rules.min_words {
-        record("min_words".into(), words >= mnw, format!("too short: {words} words < {mnw}"));
+        record(
+            "min_words".into(),
+            words >= mnw,
+            format!("too short: {words} words < {mnw}"),
+        );
     }
     if let Some(mc) = rules.max_chars {
         let n = output.len();
-        record("max_chars".into(), n <= mc, format!("too long: {n} chars > {mc}"));
+        record(
+            "max_chars".into(),
+            n <= mc,
+            format!("too long: {n} chars > {mc}"),
+        );
     }
     for s in &rules.must_include {
-        record(format!("include:{s}"), output.contains(s.as_str()), format!("must include \"{s}\""));
+        record(
+            format!("include:{s}"),
+            output.contains(s.as_str()),
+            format!("must include \"{s}\""),
+        );
     }
     if let Some(pat) = &rules.must_match {
         match regex::Regex::new(pat) {
-            Ok(re) => record("must_match".into(), re.is_match(output), format!("must match {pat}")),
-            Err(_) => record("must_match".into(), false, format!("invalid pattern: {pat}")),
+            Ok(re) => record(
+                "must_match".into(),
+                re.is_match(output),
+                format!("must match {pat}"),
+            ),
+            Err(_) => record(
+                "must_match".into(),
+                false,
+                format!("invalid pattern: {pat}"),
+            ),
         }
     }
     for pat in &rules.must_not_match {
         match regex::Regex::new(pat) {
-            Ok(re) => record(format!("not_match:{pat}"), !re.is_match(output), format!("must not match {pat}")),
-            Err(_) => record(format!("not_match:{pat}"), false, format!("invalid pattern: {pat}")),
+            Ok(re) => record(
+                format!("not_match:{pat}"),
+                !re.is_match(output),
+                format!("must not match {pat}"),
+            ),
+            Err(_) => record(
+                format!("not_match:{pat}"),
+                false,
+                format!("invalid pattern: {pat}"),
+            ),
         }
     }
     if rules.no_pii {
@@ -476,7 +576,11 @@ pub fn guard(output: &str, rules: &GuardRules) -> GuardResult {
             if let Ok(re) = regex::Regex::new(pat) {
                 if re.is_match(output) {
                     clean = false;
-                    record(format!("pii:{name}"), false, format!("contains {name}-like PII"));
+                    record(
+                        format!("pii:{name}"),
+                        false,
+                        format!("contains {name}-like PII"),
+                    );
                 }
             }
         }
@@ -485,7 +589,11 @@ pub fn guard(output: &str, rules: &GuardRules) -> GuardResult {
         }
     }
 
-    GuardResult { ok: violations.is_empty(), violations, checks }
+    GuardResult {
+        ok: violations.is_empty(),
+        violations,
+        checks,
+    }
 }
 
 #[cfg(test)]
@@ -494,14 +602,32 @@ mod tests {
 
     #[test]
     fn guard_catches_violations() {
-        let r = guard("{\"a\":1}", &GuardRules { json_keys: vec!["a".into(), "b".into()], ..Default::default() });
+        let r = guard(
+            "{\"a\":1}",
+            &GuardRules {
+                json_keys: vec!["a".into(), "b".into()],
+                ..Default::default()
+            },
+        );
         assert!(!r.ok);
         assert!(r.violations.iter().any(|v| v.contains("'b'")));
 
-        let r = guard("one two three four five", &GuardRules { max_words: Some(3), ..Default::default() });
+        let r = guard(
+            "one two three four five",
+            &GuardRules {
+                max_words: Some(3),
+                ..Default::default()
+            },
+        );
         assert!(!r.ok);
 
-        let r = guard("reach me at alice@example.com", &GuardRules { no_pii: true, ..Default::default() });
+        let r = guard(
+            "reach me at alice@example.com",
+            &GuardRules {
+                no_pii: true,
+                ..Default::default()
+            },
+        );
         assert!(!r.ok);
         assert!(r.violations.iter().any(|v| v.contains("email")));
     }
@@ -510,7 +636,12 @@ mod tests {
     fn guard_passes_valid() {
         let r = guard(
             "{\"merchant\":\"X\",\"total\":1.5}",
-            &GuardRules { json_keys: vec!["merchant".into(), "total".into()], max_chars: Some(200), no_pii: true, ..Default::default() },
+            &GuardRules {
+                json_keys: vec!["merchant".into(), "total".into()],
+                max_chars: Some(200),
+                no_pii: true,
+                ..Default::default()
+            },
         );
         assert!(r.ok, "violations: {:?}", r.violations);
     }
@@ -522,14 +653,14 @@ mod tests {
 
         // A planner span and a tool call parented to it — the structure a Rust agent instruments for.
         let plan = c
-            .event(Provider::Anthropic, "claude-sonnet-4-5")
+            .event("anthropic", "claude-sonnet-4-5")
             .trace_id("req-123")
             .span_id("s-plan")
             .name("plan")
             .usage(10, 5, None)
             .build();
         let tool = c
-            .event(Provider::Anthropic, "claude-sonnet-4-5")
+            .event("anthropic", "claude-sonnet-4-5")
             .trace_id("req-123")
             .span_id("s-tool")
             .parent_span_id("s-plan")
@@ -543,9 +674,21 @@ mod tests {
         // Fed through the server's own forest builder, the tool nests UNDER the planner instead of
         // both being sibling roots (the flat rendering the missing setters used to force).
         let trace = lighttrack_core::Trace::from_events(vec![plan, tool]).expect("a trace");
-        assert_eq!(trace.spans.len(), 1, "one root, not two: {:?}", trace.spans.len());
+        assert_eq!(
+            trace.spans.len(),
+            1,
+            "one root, not two: {:?}",
+            trace.spans.len()
+        );
         assert_eq!(trace.spans[0].event.span_id.as_deref(), Some("s-plan"));
-        assert_eq!(trace.spans[0].children.len(), 1, "tool nested under planner");
-        assert_eq!(trace.spans[0].children[0].event.span_id.as_deref(), Some("s-tool"));
+        assert_eq!(
+            trace.spans[0].children.len(),
+            1,
+            "tool nested under planner"
+        );
+        assert_eq!(
+            trace.spans[0].children[0].event.span_id.as_deref(),
+            Some("s-tool")
+        );
     }
 }
