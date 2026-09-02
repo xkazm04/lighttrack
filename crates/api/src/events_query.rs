@@ -78,6 +78,27 @@ fn is_truthy(v: Option<&str>) -> bool {
     })
 }
 
+/// A parsed `(since, until)` pair; either side may be open.
+type Window = (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+
+/// The `since`/`until` window, parsed and checked for order. A window whose end precedes its start
+/// matches nothing, and an empty page reads as "no data" - the answer to a swapped pair of flags
+/// must be a 400 that says so, not a silent zero.
+pub(crate) fn parse_window(since: Option<&str>, until: Option<&str>) -> Result<Window, ApiError> {
+    let since = parse_opt_ts("since", since)?;
+    let until = parse_opt_ts("until", until)?;
+    if let (Some(s), Some(u)) = (since, until) {
+        if u <= s {
+            return Err(ApiError::bad_request(format!(
+                "'until' ({}) must be after 'since' ({})",
+                u.to_rfc3339(),
+                s.to_rfc3339()
+            )));
+        }
+    }
+    Ok((since, until))
+}
+
 /// Parse an optional RFC3339 query param into a UTC instant, 400 on malformed input.
 pub(crate) fn parse_opt_ts(
     field: &str,
@@ -127,9 +148,10 @@ pub(crate) async fn get_events(
             )));
         }
     }
+    let (since, until) = parse_window(q.since.as_deref(), q.until.as_deref())?;
     let filter = EventFilter {
-        since: parse_opt_ts("since", q.since.as_deref())?,
-        until: parse_opt_ts("until", q.until.as_deref())?,
+        since,
+        until,
         provider: q.provider.clone(),
         model: q.model.clone(),
         trace_id: q.trace_id.clone(),
@@ -200,8 +222,7 @@ pub(crate) async fn get_costs(
 ) -> Result<Response, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
-    let since = parse_opt_ts("since", q.since.as_deref())?;
-    let until = parse_opt_ts("until", q.until.as_deref())?;
+    let (since, until) = parse_window(q.since.as_deref(), q.until.as_deref())?;
     let store = st.store.clone();
     let (rows, prices) = spawn_db(move || {
         let rows = store.cost_summary_windowed(project.as_deref().into(), since, until)?;
