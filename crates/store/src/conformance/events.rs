@@ -145,7 +145,9 @@ pub(super) fn open_provider_identity(store: &dyn Store) -> Result<()> {
         input_per_mtok: 2.0,
         output_per_mtok: 6.0,
         cached_input_per_mtok: None,
-        effective_date: Utc::now(),
+        effective_from: Utc::now(),
+        verified_at: None,
+        note: None,
         source_url: None,
     }]);
     assert_eq!(

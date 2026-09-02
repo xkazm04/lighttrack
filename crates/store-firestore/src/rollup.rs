@@ -60,6 +60,13 @@ pub(crate) fn rollup(rest: &Rest, q: &RollupQuery<'_>) -> Result<Vec<RollupRow>>
         let day = fstr(m, "ts").map(|s| s.chars().take(10).collect::<String>());
         let day = day.as_deref();
 
+        // The unpriced predicate is applied here rather than pushed down: Firestore cannot query
+        // for an *absent* field beside the project + window predicates without a dedicated index,
+        // and the fold already reads every returned document anyway.
+        if q.unpriced_only && ff64(m, "cost_usd").is_some() {
+            continue;
+        }
+
         let mut skip = false;
         for (d, want) in &q.filter {
             if value_of(m, *d, day)?.as_deref() != Some(want.as_str()) {

@@ -46,6 +46,24 @@ impl PricingMode {
         }
     }
 
+    /// Read the lane off an event's `metadata.pricing_mode`, else its `batch`/`flex`/`priority` tag.
+    ///
+    /// Lives here rather than only on [`crate::LlmEvent`] because the M26 forward fill prices rows
+    /// straight out of the store, without rebuilding an event: two readings of "which lane was this
+    /// call on" would be two ways to price the same row.
+    pub fn from_hints(metadata: &serde_json::Value, tags: &[String]) -> Self {
+        if let Some(m) = metadata.get("pricing_mode").and_then(|v| v.as_str()) {
+            return PricingMode::parse(m);
+        }
+        if tags.iter().any(|t| t == "batch") {
+            return PricingMode::Batch;
+        }
+        if tags.iter().any(|t| t == "flex" || t == "priority") {
+            return PricingMode::Flex;
+        }
+        PricingMode::Standard
+    }
+
     /// The price-row model-name suffix for this lane, if any.
     fn suffix(self) -> Option<&'static str> {
         match self {

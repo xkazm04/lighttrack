@@ -11,6 +11,7 @@ pub mod capabilities;
 pub mod codec;
 pub mod collective;
 pub mod conformance;
+pub mod pricing;
 mod rollup_compat;
 pub mod sqlite;
 pub mod threshold;
@@ -28,7 +29,7 @@ use lighttrack_core::{
     LimitStatus, LimitWindow, LlmEvent, MarginPolicy, ModelPriceRow, Project, Prompt,
     PromptVersion, RedactionStamp, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
     RollupQuery, RollupRow, Rubric, Schedule, Score, ThresholdBasis, TokensByDimension, Trace,
-    TraceSummary,
+    TraceSummary, UnpricedRow,
 };
 
 pub use capabilities::{Capabilities, Surface};
@@ -1667,5 +1668,48 @@ pub trait Store: Send + Sync {
     /// nothing must say so, because an empty report reads as "everything is fast".
     fn db_metrics(&self) -> Result<DbMetricsReport> {
         Err(StoreError::Unsupported("store self-instrumentation"))
+    }
+
+    // --- the unpriced ledger + the dated price book (M26) ---
+
+    /// Which `(provider, model)` pairs carried traffic this store could not price, since `since`.
+    ///
+    /// The null-cost invariant means an unpriceable call stores `cost_usd = NULL` rather than a
+    /// zero — honest, but until now invisible: no surface said *which* models were missing, so the
+    /// only symptom was a cost dashboard that felt low. Ranked and totalled by
+    /// [`UnpricedLedger`](lighttrack_core::UnpricedLedger) above this.
+    ///
+    /// The default folds [`Store::rollup`]; a backend without the rollup refuses through it, which
+    /// is the honest answer — an empty ledger reads as "everything is priced".
+    fn list_unpriced(
+        &self,
+        project: Option<&str>,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<UnpricedRow>> {
+        rollup_compat::refusal(
+            pricing::list_unpriced_via_rollup(self, project, since),
+            "the unpriced-traffic ledger",
+        )
+    }
+
+    /// Price the stored rows for one `(provider, model)` that have no cost on them, from `f`'s
+    /// book. Returns how many rows were written.
+    ///
+    /// Only `cost_usd IS NULL` rows are eligible, which is what makes this compatible with the
+    /// no-retroactive-repricing rule: a row already costed — from the caller's own number
+    /// (`cost_source = "client"`) or from the book at ingest — is never touched, whatever the new
+    /// rate says. Filled rows are stamped `cost_source = "book_fill"` and `priced_at`, so a
+    /// reconstructed cost stays distinguishable from one that was right at the time. Idempotent by
+    /// construction: a second fill finds nothing left to fill and returns 0.
+    fn fill_unpriced_cost(&self, _f: &pricing::PriceFill<'_>) -> Result<u64> {
+        Err(StoreError::Unsupported("the unpriced-cost forward fill"))
+    }
+
+    /// Every stored rate for one key, newest `effective_from` first — the price timeline.
+    ///
+    /// `list_prices` answers "what are we charging *now*"; this answers "what were we charging in
+    /// June", which is the question a cost number from June can only be defended with.
+    fn list_price_history(&self, _provider: &str, _model: &str) -> Result<Vec<ModelPriceRow>> {
+        Err(StoreError::Unsupported("the dated price-book history"))
     }
 }

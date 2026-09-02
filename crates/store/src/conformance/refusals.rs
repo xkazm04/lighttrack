@@ -60,6 +60,7 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
         Surface::Schedules => schedules(store),
         Surface::Maintenance => maintenance(store),
         Surface::Metrics => metrics(store),
+        Surface::Pricing => pricing(store),
     };
 
     let uncovered: Vec<&str> = surface
@@ -374,4 +375,25 @@ fn maintenance(store: &dyn Store) -> Vec<&'static str> {
 fn metrics(store: &dyn Store) -> Vec<&'static str> {
     refused("db_metrics", store.db_metrics());
     vec!["db_metrics"]
+}
+
+fn pricing(store: &dyn Store) -> Vec<&'static str> {
+    // `list_unpriced` defaults *through* `Store::rollup`, so a backend that serves the rollup and
+    // declines this surface must still refuse here — asserted rather than reasoned about, because
+    // the alternative is an empty ledger that reads as "nothing is unpriced".
+    refused("list_unpriced", store.list_unpriced(None, Utc::now()));
+    let book = lighttrack_core::PriceBook::default();
+    refused(
+        "fill_unpriced_cost",
+        store.fill_unpriced_cost(&crate::pricing::PriceFill::new(
+            "conformance",
+            "none",
+            &book,
+        )),
+    );
+    refused(
+        "list_price_history",
+        store.list_price_history("conformance", "none"),
+    );
+    vec!["list_unpriced", "fill_unpriced_cost", "list_price_history"]
 }

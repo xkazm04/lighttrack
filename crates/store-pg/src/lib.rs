@@ -18,6 +18,7 @@ mod datasets;
 mod events;
 mod jobs;
 mod margin_policies;
+mod price_fill;
 mod prices;
 mod projects;
 mod redaction;
@@ -111,6 +112,7 @@ impl PgStore {
         // so a 501 on `/v1/collective/*` was the gap that mattered most.
         Surface::Collective,
         Surface::Schedules,
+        Surface::Pricing,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -358,6 +360,13 @@ impl Store for PgStore {
     }
     fn list_prices(&self) -> Result<Vec<ModelPriceRow>> {
         self.rt.block_on(prices::list(&self.pool))
+    }
+    fn list_price_history(&self, provider: &str, model: &str) -> Result<Vec<ModelPriceRow>> {
+        self.rt
+            .block_on(prices::history(&self.pool, provider, model))
+    }
+    fn fill_unpriced_cost(&self, f: &lighttrack_store::pricing::PriceFill<'_>) -> Result<u64> {
+        self.rt.block_on(price_fill::fill(&self.pool, f))
     }
 
     // --- benchmarks ---

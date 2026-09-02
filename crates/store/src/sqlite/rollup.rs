@@ -54,6 +54,9 @@ pub(super) fn rollup(conn: &Connection, q: &RollupQuery<'_>) -> Result<Vec<Rollu
         args.push(Box::new(fmt_ts(u)));
         conds.push(format!("{time} < ?{}", args.len()));
     }
+    if q.unpriced_only {
+        conds.push("cost_usd IS NULL".to_string());
+    }
     for (d, v) in &q.filter {
         args.push(Box::new(v.clone()));
         conds.push(format!("{} = ?{}", key_expr(*d, time), args.len()));
@@ -247,6 +250,46 @@ mod tests {
                 .project(Some("p1"))
                 .until(Some(u))
                 .filter(Dimension::Customer, "nobody"),
+        )
+        .expect("rollup");
+        assert!(none.is_empty());
+    }
+
+    /// `unpriced_only` must narrow the ROWS, not just the disclosure column: the ledger's token
+    /// sums are the unpriced traffic's, and a bucket with no unpriced call must vanish entirely
+    /// rather than come back with `calls: 0`.
+    #[test]
+    fn unpriced_only_narrows_the_rows_it_sums() {
+        let c = conn();
+        seed(&c);
+        let (s, u) = win();
+        let q = |only| {
+            let q = RollupQuery::new(&[Dimension::Model], s)
+                .project(Some("p1"))
+                .until(Some(u));
+            rollup(&c, &if only { q.only_unpriced() } else { q }).expect("rollup")
+        };
+
+        let all = q(false);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].calls, 5);
+        assert_eq!(all[0].unpriced_calls, 1);
+        assert_eq!(all[0].tokens(), 75);
+
+        let unpriced = q(true);
+        assert_eq!(unpriced.len(), 1);
+        assert_eq!(unpriced[0].calls, 1, "only the NULL-cost call");
+        assert_eq!(unpriced[0].tokens(), 15, "and only ITS tokens");
+        assert!((unpriced[0].cost_usd - 0.0).abs() < 1e-12);
+
+        // A window with nothing unpriced comes back empty, not as the whole bucket at zero.
+        let none = rollup(
+            &c,
+            &RollupQuery::new(&[Dimension::Model], s)
+                .project(Some("p1"))
+                .until(Some(u))
+                .filter(Dimension::Customer, "heavy")
+                .only_unpriced(),
         )
         .expect("rollup");
         assert!(none.is_empty());

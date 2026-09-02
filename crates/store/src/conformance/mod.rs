@@ -28,6 +28,7 @@ mod jobs;
 mod maintenance;
 mod margin;
 mod margin_policy;
+mod pricing;
 mod projects;
 mod prompts;
 mod refusals;

@@ -384,3 +384,54 @@ CREATE INDEX IF NOT EXISTS idx_scores_kind ON scores(kind, created_at);
 -- version is a new row linked to the old one, never a mutation of it.
 ALTER TABLE rubrics ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE rubrics ADD COLUMN IF NOT EXISTS supersedes TEXT;
+
+-- ---------------------------------------------------------------------------
+-- M26 — the price book becomes a dated, append-only timeline. Self-contained
+-- and idempotent like the M9 block above: a fresh database gets the new shape
+-- here, an existing one is migrated here, and re-running the file is a no-op.
+--
+-- Why this is not just an ADD COLUMN: the identity of a rate has to become
+-- (provider, model, effective_from), or a correction overwrites the row that
+-- priced last quarter's traffic and no June cost number can ever be defended.
+-- ---------------------------------------------------------------------------
+
+-- The pre-M26 date column becomes the key's date. Renamed rather than added
+-- beside it, so a row carries exactly one date and nothing has to decide which
+-- of two spellings wins.
+DO $m26$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'model_prices' AND column_name = 'effective_date')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'model_prices' AND column_name = 'effective_from')
+  THEN
+    ALTER TABLE model_prices RENAME COLUMN effective_date TO effective_from;
+  END IF;
+END
+$m26$;
+
+-- Both nullable: nobody vouched for a pre-M26 rate, and stamping "verified
+-- today" onto rows nobody checked would make the staleness warning repeat a lie.
+ALTER TABLE model_prices ADD COLUMN IF NOT EXISTS effective_from TEXT;
+ALTER TABLE model_prices ADD COLUMN IF NOT EXISTS verified_at TEXT;
+ALTER TABLE model_prices ADD COLUMN IF NOT EXISTS note TEXT;
+UPDATE model_prices SET effective_from = '1970-01-01T00:00:00.000000000Z'
+ WHERE effective_from IS NULL;
+ALTER TABLE model_prices ALTER COLUMN effective_from SET NOT NULL;
+
+-- Widen the primary key in place, guarded on the key's own column list so this
+-- runs once and is a no-op on every subsequent apply.
+DO $m26pk$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_index i
+      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+     WHERE i.indrelid = 'model_prices'::regclass AND i.indisprimary
+       AND a.attname = 'effective_from')
+  THEN
+    ALTER TABLE model_prices DROP CONSTRAINT IF EXISTS model_prices_pkey;
+    ALTER TABLE model_prices
+      ADD CONSTRAINT model_prices_pkey PRIMARY KEY (provider, model, effective_from);
+  END IF;
+END
+$m26pk$;
