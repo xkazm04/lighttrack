@@ -284,3 +284,18 @@ fn from_row(row: &PgRow) -> Result<Job> {
         project_id: row.try_get(14).map_err(pgerr)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Postgres list must be the schema model's (M14). The SQLite backend now derives its own
+    /// from `Table::select_list`; this side is still hand-written because the mapper's positions
+    /// cannot be re-verified without a live database, so the model is asserted against it instead —
+    /// which fails the moment a column is added to one and not the other.
+    #[test]
+    fn cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(COLS, tables::JOBS.select_list(Dialect::Postgres));
+    }
+}

@@ -9,8 +9,11 @@ use lighttrack_core::{Job, JobCancel, JobFinish, JOB_ERROR_WORKER_LOST};
 use crate::codec::{fmt_ts, json_or_null, parse_ts, val_or_null};
 use crate::Result;
 
-const COLS: &str = "id, type, payload, status, attempts, max_attempts, progress, error, \
-    result, claimed_at, created_at, updated_at, failures, stale_reclaims, project_id";
+/// Derived from the schema model (M14); `from_row` reads by position, so the list and the `get`
+/// indices are one contract.
+static COLS: crate::schema::SelectList = crate::schema::SelectList::new(|| {
+    crate::schema::tables::JOBS.select_list(crate::schema::Dialect::Sqlite)
+});
 
 pub(super) fn create(conn: &Connection, j: &Job) -> Result<()> {
     let payload = json_or_null(&j.payload)?;
