@@ -19,7 +19,7 @@ use lighttrack_core::{
 };
 
 use crate::error::ApiError;
-use crate::relay::ensure_device;
+use crate::relay_devices::ensure_device;
 use crate::state::{spawn_db, AppState};
 
 #[derive(Deserialize)]

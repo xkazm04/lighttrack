@@ -463,3 +463,293 @@ async fn idempotency_key_collapses_duplicate_enqueues() {
     let (_, listed) = call(&app, "GET", "/v1/relay/tasks?status=queued", &key_a, None).await;
     assert_eq!(listed.as_array().unwrap().len(), 1);
 }
+
+// ---------------------------------------------------------------------------------------------
+// M18 — the device fleet: enrolment, capability-routed leases, and the admission verdict.
+// ---------------------------------------------------------------------------------------------
+
+/// Enrol a device and return `(id, raw key)`. The key is returned exactly once, here.
+async fn enrol(app: &Router, name: &str, capabilities: Value) -> (String, String) {
+    let (status, body) = call(
+        app,
+        "POST",
+        "/v1/relay/devices",
+        "admin-secret",
+        Some(json!({ "name": name, "capabilities": capabilities })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "enrolment failed: {body}");
+    (
+        body["id"].as_str().unwrap().to_string(),
+        body["key"].as_str().unwrap().to_string(),
+    )
+}
+
+#[tokio::test]
+async fn enrolment_shows_the_key_once_and_never_leaks_its_digest() {
+    let (state, _store) = setup(Redactor::off());
+    let app = crate::build_router(state);
+
+    let (status, created) = call(
+        &app,
+        "POST",
+        "/v1/relay/devices",
+        "admin-secret",
+        Some(json!({ "name": "laptop", "capabilities": ["xprice/*"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let key = created["key"].as_str().expect("the key is shown once");
+    assert!(
+        key.starts_with("ltd_"),
+        "device keys carry their own scheme: {key}"
+    );
+    assert_eq!(
+        created["key_hash"], "",
+        "the stored digest never leaves the DB"
+    );
+    assert_eq!(created["capabilities"][0], "xprice/*");
+
+    // The fleet listing carries liveness and — crucially — not the key.
+    let (status, fleet) = call(&app, "GET", "/v1/relay/devices", "admin-secret", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let d = &fleet.as_array().unwrap()[0];
+    assert!(
+        d.get("key").is_none(),
+        "a key appears at enrolment and nowhere else"
+    );
+    assert_eq!(d["key_hash"], "");
+    assert_eq!(
+        d["online"], false,
+        "a device that has never leased has never proved it is alive"
+    );
+
+    // The fleet is operator infrastructure, not one project's data.
+    let (status, _) = call(&app, "GET", "/v1/relay/devices", "not-the-admin-key", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_lease_takes_only_what_the_device_advertises_and_leaves_the_rest_untouched() {
+    let (state, store) = setup(Redactor::off());
+    let key_a = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let (device_id, device_key) = enrol(&app, "xprice-laptop", json!(["xprice/*"])).await;
+    // A second device covers the other namespace, so both tasks are admissible at the door and the
+    // only thing being tested below is ROUTING, not admission.
+    enrol(&app, "ops-box", json!(["ops/*"])).await;
+
+    let (_, mine) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "xprice/summary" })),
+    )
+    .await;
+    let (_, theirs) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "ops/nightly" })),
+    )
+    .await;
+
+    let (status, leased) = call(
+        &app,
+        "POST",
+        "/v1/relay/lease",
+        &device_key,
+        Some(json!({ "capabilities": ["xprice/*"], "agent_version": "1.2.3", "max": 10 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let tasks = leased["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 1, "only the advertised namespace is leasable");
+    assert_eq!(tasks[0]["id"], mine["id"]);
+    assert_eq!(
+        tasks[0]["device"], device_id,
+        "the leasing device is the one the KEY names, not one the body asserted"
+    );
+
+    // The task it cannot run is not merely unreturned — it is untouched, so no attempt was burned
+    // and no fence was stamped. That is the difference between routing and post-filtering.
+    let (_, other) = call(
+        &app,
+        "GET",
+        &format!("/v1/relay/tasks/{}", theirs["id"].as_str().unwrap()),
+        &key_a,
+        None,
+    )
+    .await;
+    assert_eq!(other["status"], "queued");
+    assert_eq!(other["attempts"], 0);
+
+    // The lease is also the heartbeat: liveness and the reported agent version land on the device.
+    let (_, fleet) = call(&app, "GET", "/v1/relay/devices", "admin-secret", None).await;
+    let me = fleet
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == device_id.as_str())
+        .expect("our device in the fleet");
+    assert_eq!(me["online"], true);
+    assert_eq!(me["agent_version"], "1.2.3");
+}
+
+#[tokio::test]
+async fn an_action_nothing_advertises_is_refused_at_the_door_not_hours_later() {
+    let (state, store) = setup(Redactor::off());
+    let key_a = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    // With NOBODY enrolled the enqueue must still be accepted: that is the legacy shared-key
+    // deployment, and refusing its traffic would be this feature breaking the relay it hardens.
+    let (status, accepted) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "xprice/summary" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(accepted["admission"]["verdict"], "queued");
+    assert_eq!(accepted["admission"]["eligible_devices"], 0);
+
+    enrol(&app, "xprice-laptop", json!(["xprice/*"])).await;
+
+    // Now a fleet exists. An action inside it is queued, and says how much of the fleet can run it.
+    let (status, ok) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "xprice/reprice" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ok["admission"]["eligible_devices"], 1);
+
+    // …and one outside it is refused, with a reason that names the action and the fix. Before M18
+    // this was accepted, handed to a device with no such action four times, and dead-lettered
+    // roughly twenty hours later.
+    let (status, refused) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "xpricey/typo" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refused["error"]["code"], "relay_unroutable");
+    let msg = refused["error"]["message"].as_str().unwrap_or_default();
+    assert!(msg.contains("xpricey/typo"), "{msg}");
+
+    // Nothing was stored: a queue entry nothing can lease is a slow-motion dead letter.
+    let (_, listed) = call(&app, "GET", "/v1/relay/tasks?status=queued", &key_a, None).await;
+    let stored: Vec<&str> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["action_type"].as_str().unwrap())
+        .collect();
+    assert!(!stored.contains(&"xpricey/typo"), "{stored:?}");
+}
+
+#[tokio::test]
+async fn a_revoked_device_authenticates_nothing() {
+    let (state, store) = setup(Redactor::off());
+    let key_a = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let (device_id, device_key) = enrol(&app, "laptop", json!(["xprice/*"])).await;
+    call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "xprice/summary" })),
+    )
+    .await;
+
+    let (status, revoked) = call(
+        &app,
+        "DELETE",
+        &format!("/v1/relay/devices/{device_id}"),
+        "admin-secret",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        revoked["revoked"], true,
+        "revocation is read back, not reported blind — it is a security action"
+    );
+
+    // Its key no longer leases. This is the whole point of per-device keys: one machine can be cut
+    // off without re-keying the fleet.
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/relay/lease",
+        &device_key,
+        Some(json!({ "capabilities": ["xprice/*"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Revoking something that does not exist says so rather than reporting success.
+    let (status, _) = call(
+        &app,
+        "DELETE",
+        "/v1/relay/devices/no-such-device",
+        "admin-secret",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_legacy_shared_key_still_leases_everything() {
+    // The deprecation contract: a fleet that has not enrolled anything keeps working exactly as it
+    // did, unfiltered. A relay that stopped leasing the moment this shipped would be the feature
+    // breaking the thing it hardens.
+    let (state, store) = setup(Redactor::off());
+    let key_a = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    for action in ["xprice/summary", "ops/nightly"] {
+        call(
+            &app,
+            "POST",
+            "/v1/relay/tasks",
+            &key_a,
+            Some(json!({ "action_type": action })),
+        )
+        .await;
+    }
+
+    // No `capabilities` in the body — which is what a pre-M18 agent sends.
+    let (status, leased) = call(
+        &app,
+        "POST",
+        "/v1/relay/lease",
+        "device-secret",
+        Some(json!({ "max": 10 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        leased["tasks"].as_array().unwrap().len(),
+        2,
+        "an unadvertised device leases everything, as it always did"
+    );
+    // …and the `device` an old agent asserts in the body is ignored rather than trusted.
+    let stamped = leased["tasks"][0]["device"].as_str().unwrap();
+    assert_eq!(stamped, "default");
+}

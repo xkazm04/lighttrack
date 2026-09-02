@@ -256,9 +256,9 @@ async fn the_sweep_reaps_dead_relay_leases_with_no_device_polling() {
     let id = task["id"].as_str().unwrap().to_string();
 
     // Burn the retry budget, then strand the task under an already-expired lease.
-    store.lease_relay_tasks("pc", 0, 5).unwrap();
+    store.lease_relay_tasks("pc", &[], 0, 5).unwrap();
     for _ in 0..lighttrack_core::RELAY_MAX_STALE_RECLAIMS {
-        store.lease_relay_tasks("pc", 0, 5).unwrap();
+        store.lease_relay_tasks("pc", &[], 0, 5).unwrap();
     }
     assert_eq!(
         store.get_relay_task(&id).unwrap().unwrap().status,
