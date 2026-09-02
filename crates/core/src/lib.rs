@@ -50,7 +50,9 @@ pub use margin_trend::{
     compute_margin_trend, DailyKeyCost, MarginTrend, MarginTrendPoint, MarginTrendSeries,
 };
 pub use pricing::{ModelPrice, ModelPriceRow, PriceBook, PricingMode};
-pub use project::{ApiKey, Project, Redaction};
+pub use project::{
+    decode_scopes, default_scopes, encode_scopes, ApiKey, Project, Redaction, Scope,
+};
 pub use prompt::{Prompt, PromptVersion};
 pub use relay::{
     RelayOutcome, RelayStatus, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS,
