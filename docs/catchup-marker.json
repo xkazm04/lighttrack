@@ -46,6 +46,14 @@
     {
       "path": "docs/BENCHMARK_FRAMEWORK.md",
       "note": "§6 updated by M22 (the contribution ledger): 'what left the building' moves from a preview to a record. Adds the collective_contributions table and its `contributions` Store surface, POST /v1/collective/contribute (the push now happens in the API and appends a row per attempt), GET /v1/collective/contributions, the unchanged-digest hash gate (generated_at excluded, so a no-op push makes no HTTP call and cannot trip a hub's min_interval), the hub_key_ref-by-name rule, JobKind::Contribute + the opt-in auto-contribute schedule, and DELETE ?all=1, which walks the ledger's hubs and reports the ones it cannot resolve to a URL. The rest of the file was NOT re-read against the code in this pass — only §6 is covered. Also: section 2 gains 'After promotion - the served-version canary' (M23), written against crates/api/src/quality.rs, prompt_canary_sweep.rs, prompts_canary.rs and core/src/prompt_canary.rs. It closes the doc's own gap: the promotion gate answered 'may this version ship' and nothing answered 'was shipping it right'. Documents GET /v1/quality/prompts (and lt prompts quality / MCP get_prompt_quality), the CanaryPolicy route and its safe defaults, the two-condition regression test (min_n evidence AND non-overlapping ~95% intervals past max_drop), auto_revert reading its target from label_history rather than guessing, the prompt_canary_regressed alert kind, and lt-runner score --prompt-tag. Also: section 1 gains '1a. Lineage: the four strategies, and what a version means' (M24), written against crates/core/src/dataset_lineage.rs, crates/store/src/sqlite/dataset_fork.rs + dataset_import.rs, crates/store-pg/src/dataset_lineage.rs and crates/api/src/datasets_lineage.rs. It closes the oldest gap in the file: section 1 promised four sampling strategies and a versioned dataset, and the code shipped one strategy and a `version` column nothing ever updated. Documents POST /v1/datasets/:id/fork, POST /v1/datasets/:id/items/import (the ImportSpec, the normalised-input dedupe, the scrub-on-the-way-in rule, 409 on a frozen target), GET /v1/projects/:id/datasets/versions, the benchmark-level `regression_dataset` policy the scorer mines failing verdicts into, the new lt/lt-runner/MCP surfaces, and the Surface::DatasetLineage parity row. The rest of the file was NOT re-read against the code in this pass."
+    },
+    {
+      "path": "docs/API.md",
+      "note": "Written by M15 (typed API contract registry) and GENERATED, not hand-kept: crates/contract/src/matrix.rs renders it from the endpoint table and a test fails when the checked-in copy is stale (regenerate with LIGHTTRACK_WRITE_API_MATRIX=1 cargo test -p lighttrack-contract matrix). It lists every method x path, the capability a project key needs, and the MCP tool / lt verb / Markdown renderer that reaches it, plus the counts and the number of endpoints whose response is still an ad-hoc json! shape. Do not edit it by hand - change crates/contract/src/endpoints/ and regenerate."
+    },
+    {
+      "path": "docs/ROADMAP.md",
+      "note": "M15 rewrote the 'Current tool catalog' bullet in the MCP phase. It used to instruct the reader to count read::tools() + write::tools() by hand and quoted numbers that had drifted by 15 and 6; it now points at the generated docs/API.md and names the two tests that keep it honest (the stale check, and the tool-name pin in crates/mcp/tool-contract.json). No other ROADMAP phase was re-verified in this pass."
     }
   ],
 
@@ -84,7 +92,6 @@
     { "path": "docs/OTLP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/PACKAGING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/PRICING.md", "kind": "not-in-this-pass", "reason": "authored 2026-09-02 by the M26 build (unpriced ledger, forward fill, dated price book) against the code it describes; still not read by a docs catch-up pass, so it stays out-of-pass rather than claimed as covered here" },
-    { "path": "docs/ROADMAP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/SCHEDULING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" }
   ],
 
