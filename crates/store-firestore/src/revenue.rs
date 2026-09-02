@@ -127,6 +127,15 @@ fn to_fields(ev: &RevenueEvent) -> Fields {
     m.insert("period_start".into(), json!(ev.period_start.map(fmt_ts)));
     m.insert("period_end".into(), json!(ev.period_end.map(fmt_ts)));
     m.insert("ts".into(), json!(fmt_ts(ev.ts)));
+    // FX provenance (M9). Written as fields rather than folded into a blob so a future Firestore
+    // query can filter on `converted` the way the SQL backends do.
+    m.insert("amount_minor".into(), json!(ev.amount_minor));
+    m.insert("fx_rate".into(), json!(ev.fx_rate));
+    m.insert("fx_book_version".into(), json!(ev.fx_book_version));
+    // `Option<bool>` as an optional integer, matching how the codec reads booleans elsewhere. The
+    // three-way distinction is preserved on purpose: absent means "written before FX provenance
+    // existed", which `RevenueEvent::is_converted` reads differently from a stored `false`.
+    m.insert("converted".into(), json!(ev.converted.map(|b| b as i64)));
     m
 }
 
@@ -144,6 +153,12 @@ fn from_fields(m: &Fields) -> Result<RevenueEvent> {
         period_start: fstr(m, "period_start").map(|s| parse_ts(&s)).transpose()?,
         period_end: fstr(m, "period_end").map(|s| parse_ts(&s)).transpose()?,
         ts: parse_ts(&freq(m, "ts")?)?,
+        amount_minor: fi64(m, "amount_minor"),
+        fx_rate: ff64(m, "fx_rate"),
+        fx_book_version: fstr(m, "fx_book_version"),
+        // Not `fbool`: that one folds absence into `false`, which here would declare every pre-M9
+        // row a 1:1 fallback and put a spurious "approximate" caveat on historical revenue.
+        converted: fi64(m, "converted").map(|v| v != 0),
     })
 }
 
@@ -176,6 +191,10 @@ mod tests {
             product_id: None,
             amount_usd: 20.0, // whole number must survive as f64, not collapse to an integer value
             currency: "USD".into(),
+            amount_minor: Some(2_000),
+            fx_rate: Some(1.0),
+            fx_book_version: Some("test-book".into()),
+            converted: Some(true),
             kind: RevenueKind::OneTime,
             period_start: None,
             period_end: None,
@@ -203,6 +222,10 @@ mod tests {
             product_id: Some("pro".into()),
             amount_usd: 30.5,
             currency: "EUR".into(),
+            amount_minor: Some(2_000),
+            fx_rate: Some(1.0),
+            fx_book_version: Some("test-book".into()),
+            converted: Some(true),
             kind: RevenueKind::Subscription,
             period_start: Some(t("2026-06-01T00:00:00Z")),
             period_end: Some(t("2026-07-01T00:00:00Z")),
@@ -235,6 +258,10 @@ mod tests {
             product_id: None,
             amount_usd: 1.0,
             currency: "USD".into(),
+            amount_minor: Some(2_000),
+            fx_rate: Some(1.0),
+            fx_book_version: Some("test-book".into()),
+            converted: Some(true),
             kind: RevenueKind::OneTime,
             period_start: None,
             period_end: None,

@@ -72,6 +72,23 @@ pub(crate) enum Cmd {
         #[arg(long)]
         until: Option<String>,
     },
+    /// Restate revenue stored at the 1:1 FX fallback, once a missing rate has been added.
+    ///
+    /// Previews by default. Adding a rate to config/fx_rates.json fixes future syncs only; the rows
+    /// already stored at 1:1 stay wrong until this runs.
+    Reprice {
+        /// ISO-4217 code to restate, e.g. GBP.
+        #[arg(long)]
+        currency: String,
+        #[arg(long)]
+        project: Option<String>,
+        /// USD per one major unit. Defaults to the server's current FX book.
+        #[arg(long)]
+        rate: Option<f64>,
+        /// Actually write. Without it this reports what would change and touches nothing.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Collective Model Intelligence: the shared real-world model leaderboard (network effect).
     Collective {
         #[command(subcommand)]

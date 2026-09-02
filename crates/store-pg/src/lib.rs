@@ -38,8 +38,8 @@ use lighttrack_core::{
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
-    Admission, CostRow, EventFilter, EventPage, RedactionPostureRow, Result, ScopeUsage, Store,
-    StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    Admission, CostRow, EventFilter, EventPage, RedactionPostureRow, RepriceReport, Result,
+    ScopeUsage, Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 use util::pgerr;
@@ -85,6 +85,7 @@ impl PgStore {
         Surface::EventsCore,
         Surface::EventFilters,
         Surface::RedactionPosture,
+        Surface::RevenueReprice,
         Surface::Traces,
         Surface::ProjectAdmin,
         Surface::KeyAdmin,
@@ -441,6 +442,18 @@ impl Store for PgStore {
     ) -> Result<Vec<RevenueEvent>> {
         self.rt
             .block_on(revenue::list(&self.pool, project, since, until))
+    }
+    fn reprice_revenue(
+        &self,
+        project: Option<&str>,
+        currency: &str,
+        rate: f64,
+        version: &str,
+        dry_run: bool,
+    ) -> Result<RepriceReport> {
+        self.rt.block_on(revenue::reprice(
+            &self.pool, project, currency, rate, version, dry_run,
+        ))
     }
     fn cost_by_dimension(
         &self,

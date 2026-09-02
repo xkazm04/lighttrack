@@ -41,6 +41,7 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
             surface
         ),
         Surface::RedactionPosture => redaction_posture(store),
+        Surface::RevenueReprice => revenue_reprice(store),
         Surface::Traces => traces(store),
         Surface::Forecast => forecast(store),
         Surface::MarginBreakdowns => margin(store),
@@ -88,6 +89,16 @@ fn redaction_posture(store: &dyn Store) -> Vec<&'static str> {
         store.redaction_posture(Some(&new_id()), Utc::now() - chrono::Duration::hours(1)),
     );
     vec!["redaction_posture"]
+}
+
+/// A backend that cannot reprice must say so rather than reporting `matched: 0` — which would read
+/// as "there is nothing wrong with your stored revenue".
+fn revenue_reprice(store: &dyn Store) -> Vec<&'static str> {
+    refused(
+        "reprice_revenue",
+        store.reprice_revenue(Some(&new_id()), "GBP", 1.27, "test", true),
+    );
+    vec!["reprice_revenue"]
 }
 
 fn traces(store: &dyn Store) -> Vec<&'static str> {

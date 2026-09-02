@@ -63,6 +63,7 @@
 //!   POST /v1/relay/lease                 device: lease due tasks (device key; outbound-only)
 //!   POST /v1/relay/tasks/:id/result      device: report succeeded | failed | deferred
 //!   POST /v1/revenue                     record revenue (manual / billing sync) for profit tracking
+//!   POST /v1/revenue/reprice?currency=&rate=&dry_run=  restate 1:1-fallback rows at a real rate
 //!   GET  /v1/margin?by=customer|product&since=&until=&below=<pct>   revenue − LLM cost rollup
 //!   GET  /v1/margin/trend?by=&days=&top=   per-day revenue/cost/margin series per customer/product
 //!   GET  /v1/margin/customer/:id?since=&until=   one customer's revenue+cost by model & use-case
@@ -160,6 +161,7 @@ mod redaction;
 mod rejections;
 mod relay;
 mod revenue;
+mod revenue_reprice;
 mod rubrics;
 mod scores;
 mod shed;
@@ -519,6 +521,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/relay/tasks/:id/result", post(relay::post_result))
         .route("/v1/relay/lease", post(relay::lease_tasks))
         .route("/v1/revenue", post(revenue::post_revenue))
+        .route("/v1/revenue/reprice", post(revenue_reprice::post_reprice))
         .route("/v1/margin", get(revenue::get_margin))
         .route("/v1/margin/trend", get(revenue::get_margin_trend))
         .route("/v1/margin/customer/:id", get(revenue::get_customer_margin))

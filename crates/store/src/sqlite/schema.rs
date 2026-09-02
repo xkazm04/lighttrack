@@ -56,6 +56,16 @@ const ADDED_COLUMNS: &[&str] = &[
     "ALTER TABLE api_keys ADD COLUMN scopes TEXT",
     "ALTER TABLE api_keys ADD COLUMN expires_at TEXT",
     "ALTER TABLE projects ADD COLUMN archived_at TEXT",
+    // FX provenance on a revenue row (M9-B). `amount_usd` is derived and a wrong rate makes it
+    // wrong; the provider's minor-unit figure never needs restating, so keeping it — with the rate,
+    // the book version that produced it, and whether a real conversion happened — is what makes a
+    // rate correction a reprice instead of a re-ingest. All nullable: a pre-M9 row carries no
+    // opinion, and `RevenueEvent::is_converted` reads that as "base currency converted, others
+    // unknown" rather than flagging every historical USD invoice as approximate.
+    "ALTER TABLE revenue_events ADD COLUMN amount_minor INTEGER",
+    "ALTER TABLE revenue_events ADD COLUMN fx_rate REAL",
+    "ALTER TABLE revenue_events ADD COLUMN fx_book_version TEXT",
+    "ALTER TABLE revenue_events ADD COLUMN converted INTEGER",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.
@@ -89,6 +99,16 @@ pub(super) fn apply(c: &Connection) -> Result<()> {
     // carried).
     let backfill = add_column(c, ADD_RECEIVED_AT)?;
     c.execute_batch(SCHEMA)?;
+    // …and the columns AGAIN, after the batch. On a *fresh* database the first pass skipped every
+    // statement ("no such table" — nothing exists yet), so a column added here but not also written
+    // into [`SCHEMA`]'s `CREATE TABLE` would be missing for the whole life of the process that
+    // created the file, and appear only on the next open. That is a genuinely nasty shape: the bug
+    // reproduces once, on a new install, and never again on the developer's machine. Running the
+    // list on both sides makes [`ADDED_COLUMNS`] self-sufficient, and the second pass costs a
+    // handful of "duplicate column name" errors on every open.
+    for stmt in ADDED_COLUMNS {
+        add_column(c, stmt)?;
+    }
     if backfill {
         c.execute(
             "UPDATE events SET received_at = ts WHERE received_at IS NULL",

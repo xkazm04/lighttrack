@@ -276,3 +276,20 @@ CREATE TABLE IF NOT EXISTS relay_tasks (
 CREATE INDEX IF NOT EXISTS idx_relay_due ON relay_tasks(status, next_attempt_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_idem ON relay_tasks(project_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- M9 — provenance on the row. Additive columns, applied after every CREATE
+-- above so this block is self-contained and order-independent: a fresh database
+-- gets them here, an existing one is widened here, and re-running the file is a
+-- no-op. Every column is nullable — a pre-M9 row carries no opinion, and the
+-- readers are written to treat absence as "unknown" rather than as a value.
+-- ---------------------------------------------------------------------------
+
+-- B. FX provenance: `amount_usd` is derived, and a wrong rate makes it wrong.
+-- The provider's own minor-unit figure never needs restating, so keeping it —
+-- with the rate, the book version behind it, and whether a real conversion
+-- happened — turns a rate correction into a reprice instead of a re-ingest.
+ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS amount_minor BIGINT;
+ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS fx_rate DOUBLE PRECISION;
+ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS fx_book_version TEXT;
+ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS converted BOOLEAN;

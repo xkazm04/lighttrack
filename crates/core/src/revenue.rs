@@ -62,6 +62,26 @@ pub struct RevenueEvent {
     pub amount_usd: f64,
     #[serde(default = "default_currency")]
     pub currency: String,
+    /// The provider's own figure, in the currency's **minor unit** (Stripe `amount_paid`, Polar
+    /// `total_amount`). The one number on this row that never needs restating: `amount_usd` is a
+    /// derived value and a wrong rate makes it wrong, but ¥5000 was ¥5000 whatever the book said.
+    /// Keeping it is what makes [`crate::RevenueEvent`] repriceable instead of re-ingestible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount_minor: Option<i64>,
+    /// USD per one major unit of `currency` at the time of conversion. `1.0` for the base currency;
+    /// `None` on a row written before FX provenance existed, or on the 1:1 fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fx_rate: Option<f64>,
+    /// Which FX book produced `fx_rate` ([`crate::revenue`]'s caller passes
+    /// `lighttrack_billing::FxTable::version`). Without it, "we fixed the EUR rate" and "these rows
+    /// already had the fixed rate" are the same sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fx_book_version: Option<String>,
+    /// Whether a real conversion happened. `Some(false)` is the **1:1 fallback**: no rate existed,
+    /// so the major-unit figure was stored as if it were USD and is approximate. `None` is a row
+    /// that predates the field — read it through [`RevenueEvent::is_converted`], never as `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub converted: Option<bool>,
     #[serde(default)]
     pub kind: RevenueKind,
     /// Recognition window for subscriptions; if unset the full amount is recognized at `ts`.
@@ -71,6 +91,27 @@ pub struct RevenueEvent {
     pub period_end: Option<DateTime<Utc>>,
     #[serde(default = "Utc::now")]
     pub ts: DateTime<Utc>,
+}
+
+/// The reporting base every stored `amount_usd` is denominated in. Only used to read a row that
+/// predates [`RevenueEvent::converted`]; the live table's base lives in `lighttrack_billing`.
+const REPORTING_BASE: &str = "USD";
+
+impl RevenueEvent {
+    /// Did this row's amount go through a real conversion?
+    ///
+    /// A row written before FX provenance existed carries no answer, and the honest inference is the
+    /// one the old code path guaranteed: a base-currency amount needed no rate, so it converted;
+    /// anything else may or may not have. Inferring rather than defaulting to `false` keeps the
+    /// margin caveat from suddenly flagging every historical USD invoice as approximate.
+    ///
+    /// Deliberately **not** re-derived from the live FX table: that is the bug this replaces. The
+    /// caveat used to be recomputed per request against the current book, so adding a missing rate
+    /// later made the warning disappear while the rows stored at 1:1 stayed wrong.
+    pub fn is_converted(&self) -> bool {
+        self.converted
+            .unwrap_or_else(|| self.currency.eq_ignore_ascii_case(REPORTING_BASE))
+    }
 }
 
 fn default_source() -> String {

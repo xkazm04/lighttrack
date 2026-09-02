@@ -119,6 +119,8 @@ mod table {
         r("/v1/relay/tasks/:id/result", NoMethod, Admin),
         r("/v1/relay/lease", NoMethod, Admin),
         r("/v1/revenue", NoMethod, Admin),
+        // Admin-only, and never over MCP: this restates stored money in bulk.
+        r("/v1/revenue/reprice", NoMethod, Admin),
         r("/v1/margin", Admin, NoMethod),
         r("/v1/margin/trend", Admin, NoMethod),
         r("/v1/margin/customer/:id", Admin, NoMethod),

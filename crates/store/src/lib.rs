@@ -154,6 +154,28 @@ pub struct RedactionPostureRow {
     pub events: u64,
 }
 
+/// What one [`Store::reprice_revenue`] pass did, or would do.
+///
+/// `matched` and `changed` are reported separately because they differ for a reason the caller must
+/// see: a row that took the 1:1 fallback but carries no `amount_minor` (a manual post, a row written
+/// before FX provenance existed) **matches** the correction and cannot **take** it — there is no
+/// original figure to re-multiply, and deriving one from the bad `amount_usd` would launder the
+/// error into a confident-looking number. A single count would hide those rows entirely.
+#[derive(Debug, Clone, Serialize)]
+pub struct RepriceReport {
+    pub currency: String,
+    pub rate: f64,
+    /// The FX book version stamped onto the rows this pass changed.
+    pub book_version: String,
+    /// Unconverted rows in this currency.
+    pub matched: u64,
+    /// …of which this many were (or would be) actually restated.
+    pub changed: u64,
+    /// True when nothing was written. A dry run's `changed` is the count of rows a real run would
+    /// move, so the two runs are directly comparable.
+    pub dry_run: bool,
+}
+
 /// One page of events plus the cursor to fetch the next page (newest-first). `next_cursor` is `Some`
 /// only when more rows exist beyond this page; pass it back as [`EventFilter::cursor`] to continue.
 #[derive(Debug, Clone)]
@@ -1233,6 +1255,25 @@ pub trait Store: Send + Sync {
         _until: DateTime<Utc>,
     ) -> Result<Vec<RevenueEvent>> {
         Err(StoreError::Unsupported("revenue tracking"))
+    }
+    /// Re-convert stored revenue rows of one currency at a corrected `rate`, stamping `version`.
+    ///
+    /// Only rows that took the **1:1 fallback** are touched. A row that converted genuinely is
+    /// recognized revenue at a rate that was correct when it was taken; re-basing it would restate
+    /// history, which is what the redelivery guard on the upsert exists to prevent — this door must
+    /// not be a way around it. `dry_run` counts without writing.
+    ///
+    /// This is the remedy `docs/CURRENCY.md` used to spell "re-ingest from the provider", which is
+    /// not a remedy for a webhook nobody can replay.
+    fn reprice_revenue(
+        &self,
+        _project: Option<&str>,
+        _currency: &str,
+        _rate: f64,
+        _version: &str,
+        _dry_run: bool,
+    ) -> Result<RepriceReport> {
+        Err(StoreError::Unsupported("revenue repricing"))
     }
     /// LLM cost grouped by a billing dimension (`customer` | `product`, from event metadata) over
     /// `[since, until)`.

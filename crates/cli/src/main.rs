@@ -47,6 +47,12 @@ fn main() -> Result<()> {
             since,
             until,
         } => usage::margin(&cli, by, project, since, until),
+        Cmd::Reprice {
+            currency,
+            project,
+            rate,
+            apply,
+        } => usage::reprice(&cli, currency, project, rate, *apply),
         Cmd::Collective { action } => collective::run(&cli, action),
     }
 }

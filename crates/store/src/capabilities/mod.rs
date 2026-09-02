@@ -36,6 +36,8 @@ pub enum Surface {
     EventFilters,
     /// What the ingest boundary did to the stored rows, grouped by stamp (M9).
     RedactionPosture,
+    /// Re-converting stored revenue at a corrected FX rate (M9).
+    RevenueReprice,
     /// Events rolled up by `trace_id`: listing, detail, whole-trace scores.
     Traces,
     /// Daily (UTC) usage/cost series — the input `GET /v1/forecast` fits a trend to.
@@ -68,6 +70,7 @@ impl Surface {
         Surface::EventsCore,
         Surface::EventFilters,
         Surface::RedactionPosture,
+        Surface::RevenueReprice,
         Surface::Traces,
         Surface::Forecast,
         Surface::MarginBreakdowns,
@@ -88,6 +91,7 @@ impl Surface {
             Surface::EventsCore => "events_core",
             Surface::EventFilters => "event_filters",
             Surface::RedactionPosture => "redaction_posture",
+            Surface::RevenueReprice => "revenue_reprice",
             Surface::Traces => "traces",
             Surface::Forecast => "forecast",
             Surface::MarginBreakdowns => "margin_breakdowns",
@@ -216,6 +220,7 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
         ],
     ),
     (Surface::RedactionPosture, &["redaction_posture"]),
+    (Surface::RevenueReprice, &["reprice_revenue"]),
     (
         Surface::Traces,
         &[
