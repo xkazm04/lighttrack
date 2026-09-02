@@ -68,7 +68,16 @@ impl Status {
     }
 }
 
-/// Token accounting for a single call. `cached_input`/`reasoning` are optional and provider-dependent.
+/// Token accounting for a single call.
+///
+/// **The convention, stated once:** `input` is the WHOLE prompt the provider counted, and
+/// `cached_input` is the part of it served from a prompt cache — a subset, never an addition. The
+/// price book bills `input − cached_input` at the input rate and `cached_input` at the cached rate,
+/// so a sender that reports cached tokens *beside* rather than *within* `input` under-bills every
+/// cache hit. Providers differ on the wire (OpenAI's `prompt_tokens` includes cached tokens;
+/// Anthropic's `input_tokens` excludes `cache_read_input_tokens`), and it is each extractor's job to
+/// convert to this shape before the event is sent. `reasoning` is informational: providers count it
+/// inside `output`, which is where it is billed.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TokenUsage {
     #[serde(default)]
