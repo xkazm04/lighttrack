@@ -350,6 +350,16 @@ pub struct BenchmarkCase {
 /// side silently reading `None` for every benchmark and stopping recurrence with no error.
 pub const RECURRENCE_KEY: &str = "schedule_interval_secs";
 
+/// Reserved key under a benchmark's `target` object naming the dataset a failing online verdict
+/// under this benchmark's rubric appends to (M24).
+///
+/// Folded into `target` for the same reason [`RECURRENCE_KEY`] is: a policy field that only some
+/// benchmarks set does not earn a column in three backends' `benchmarks` table, and a reserved key
+/// both the API and the runner import from one place cannot drift the way two spellings of a column
+/// name would. The value is a dataset **name**, not an id — the whole point is that it survives
+/// forking, and a fork mints a new id.
+pub const REGRESSION_DATASET_KEY: &str = "regression_dataset";
+
 /// A benchmark definition: a dataset + rubric + judge run repeatedly to track quality over time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Benchmark {
@@ -378,6 +388,19 @@ pub struct Benchmark {
     pub baseline_score: Option<f64>,
     #[serde(default = "Utc::now")]
     pub created_at: DateTime<Utc>,
+}
+
+impl Benchmark {
+    /// The dataset name failing verdicts under this benchmark append to, if the policy is set
+    /// ([`REGRESSION_DATASET_KEY`]). `None` — the default — means failures are not mined, which is
+    /// what every benchmark did before M24.
+    pub fn regression_dataset(&self) -> Option<&str> {
+        self.target
+            .get(REGRESSION_DATASET_KEY)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
 }
 
 fn default_judge_model() -> String {

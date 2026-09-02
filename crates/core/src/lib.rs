@@ -14,6 +14,7 @@ pub mod calibration_record;
 pub mod collective;
 pub mod customer;
 pub mod dataset;
+pub mod dataset_lineage;
 pub mod device;
 pub mod error;
 pub mod event;
@@ -66,6 +67,10 @@ pub use collective::{
 };
 pub use customer::{BillingProduct, Customer};
 pub use dataset::{Dataset, DatasetItem};
+pub use dataset_lineage::{
+    input_fingerprint, normalize_input, ImportFilter, ImportSource, ImportSpec, SamplingStrategy,
+    MAX_IMPORT_N,
+};
 pub use device::{capability_matches, Device, DeviceEligibility, RelayAdmission};
 pub use error::LtError;
 pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
