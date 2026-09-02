@@ -381,7 +381,11 @@ fn run_simple(
     // Significance-aware verdict: a regression needs the whole ~95% CI below baseline (n≥2), else a
     // scalar fallback. Same regressed/passed/no_baseline vocabulary as the other modes.
     let summary = Summary::of(&scores);
-    let (verdict_status, scalar_fallback) = significance_verdict(bench.baseline_score, &summary);
+    // No verdict was produced (every case lacked an output, or was skipped) → there is nothing to
+    // hold against the baseline. Passing the baseline anyway let the n=0 scalar fallback compare a
+    // mean of 0.0 to it and publish `regressed` over zero cases; compare mode already withholds it.
+    let baseline = bench.baseline_score.filter(|_| n > 0);
+    let (verdict_status, scalar_fallback) = significance_verdict(baseline, &summary);
     // A cancelled run judged only part of its dataset — it must never be published under a verdict
     // that reads as a finished one.
     let status = if cancelled {
