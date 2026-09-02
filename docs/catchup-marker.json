@@ -74,7 +74,7 @@
     { "path": "docs/OTLP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/PACKAGING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/PRICING.md", "kind": "not-in-this-pass", "reason": "authored 2026-09-02 by the M26 build (unpriced ledger, forward fill, dated price book) against the code it describes; still not read by a docs catch-up pass, so it stays out-of-pass rather than claimed as covered here" },
-    { "path": "docs/RELAY.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/RELAY.md", "kind": "not-in-this-pass", "reason": "the 'Quality model' section was written 2026-09-02 by the M19 build (relay runs become judgeable events; actions become fingerprinted prompts) against the code it describes — the settle event's prompt_sha256/action_version/input/output, the report_io privacy default, the prompt_sha256 redaction exemption, and the two /v1/relay/actions routes — and the settle row of the API table and the metadata list were corrected to match. Like docs/PRICING.md it stays out-of-pass rather than claimed as covered: the rest of the file (lifecycle, fencing, enrolment, posture, cost model) was NOT re-read against the code here." },
     { "path": "docs/ROADMAP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/SCHEDULING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" }
   ],
