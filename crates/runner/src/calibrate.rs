@@ -25,12 +25,61 @@ pub(crate) struct Calibrated {
     pub(crate) skipped: u32,
 }
 
+/// Where a calibration set came from — and, when it came from a stored dataset, which one, so the
+/// recorded [`CalibrationRecord`](lighttrack_core::CalibrationRecord) can say what it measured.
+pub(crate) struct CalibrationSet {
+    pub(crate) items: Vec<CalibrationItem>,
+    pub(crate) dataset_id: Option<String>,
+    /// A human-readable name for the source, for messages.
+    pub(crate) source: String,
+}
+
+/// Load the set from exactly one source. Refusing "both" and "neither" here rather than picking a
+/// winner: two sources are two different answers to *what was measured*, on a record that claims to
+/// describe one set.
+pub(crate) fn load_set(
+    cli: &Cli,
+    http: &reqwest::blocking::Client,
+    file: Option<&str>,
+    dataset: Option<&str>,
+) -> Result<CalibrationSet> {
+    match (file, dataset) {
+        (Some(f), None) => Ok(CalibrationSet {
+            items: load_items(f)?,
+            dataset_id: None,
+            source: f.to_string(),
+        }),
+        (None, Some(d)) => {
+            let (items, unlabelled) = crate::labels::from_dataset(cli, http, d)?;
+            if unlabelled > 0 {
+                // Said out loud, never folded in: an ungraded case scored 0.0 would manufacture a
+                // judge regression out of an incomplete labelling pass.
+                eprintln!(
+                    "dataset {d}: {unlabelled} item(s) have no human label (or no stored output) \
+                     and were skipped — κ is measured over the {} that do",
+                    items.len()
+                );
+            }
+            Ok(CalibrationSet {
+                items,
+                dataset_id: Some(d.to_string()),
+                source: format!("dataset {d}"),
+            })
+        }
+        (Some(_), Some(_)) => bail!("give either --file or --dataset, not both"),
+        (None, None) => bail!(
+            "one of --file or --dataset is required (prefer --dataset: a set on one machine's \
+             disk cannot be listed, re-used or attributed)"
+        ),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn calibrate(
     cli: &Cli,
     http: &reqwest::blocking::Client,
     engine: &EngineConfig,
-    file: &str,
+    set: &CalibrationSet,
     rubric_text: Option<&str>,
     rubric_id: Option<&str>,
     threshold: f64,
@@ -39,7 +88,7 @@ pub(crate) fn calibrate(
     report_path: Option<&str>,
     jobs: usize,
 ) -> Result<()> {
-    let items = load_items(file)?;
+    let (items, file) = (&set.items, set.source.as_str());
     if items.is_empty() {
         bail!("no calibration items in {file}");
     }
@@ -57,7 +106,7 @@ pub(crate) fn calibrate(
         &jm,
         &rubric,
         rubric_text,
-        &items,
+        items,
         threshold,
         kappa_bar,
         samples,
@@ -65,6 +114,29 @@ pub(crate) fn calibrate(
         &prices,
         true,
     );
+
+    // Record the measurement, so `GET /v1/judges/trust` and both promotion gates can read it. This
+    // is what turns a one-shot calibration from a number on somebody's terminal into the fact a
+    // gate consults. Best-effort and *loud*: the measurement is already printed and correct, so an
+    // unreachable API must not throw it away — but it must not be silent either, because a gate
+    // that then reports `unknown` would otherwise be inexplicable.
+    let judge = format!("{jp}/{jm}");
+    let measured = crate::calibration_post::Measured {
+        project: None,
+        rubric_id: rubric_id.or(rubric.as_ref().map(|r| r.id.as_str())),
+        judge: &judge,
+        dataset_id: set.dataset_id.as_deref(),
+        cost: c.cost,
+    };
+    let reserved = crate::calibrate_watch::reserved_rubric(&jp, &jm);
+    if let Err(e) = crate::calibration_post::persist(cli, http, &measured, &c.agreement, &reserved)
+    {
+        eprintln!(
+            "warning: measured \u{3ba}={:.3} but could not record it ({e}) - \
+             `GET /v1/judges/trust` will still answer `unknown` for {judge}",
+            c.agreement.cohen_kappa
+        );
+    }
 
     if let Some(p) = report_path {
         let report = serde_json::json!({

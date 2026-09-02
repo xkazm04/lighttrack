@@ -177,8 +177,16 @@ pub(crate) enum Cmd {
     /// Measure judge↔human agreement on a labeled set (Cohen's κ, correlation) to validate a rubric.
     Calibrate {
         /// JSONL (one object per line) or JSON-array file of {input, output, human_score, ...}.
+        ///
+        /// The file path is now an *import* route rather than the only one: a set on one machine's
+        /// disk cannot be listed, re-used by a second calibration or attributed to whoever graded
+        /// it. Prefer `--dataset`; `lt-runner labels import <file>` moves an existing file across.
         #[arg(long)]
-        file: String,
+        file: Option<String>,
+        /// Stored dataset to calibrate against: its items paired with the human labels on them.
+        /// Use this OR --file.
+        #[arg(long)]
+        dataset: Option<String>,
         /// Freeform criteria text for the judge (use this OR --rubric-id).
         #[arg(long)]
         rubric: Option<String>,
@@ -230,6 +238,11 @@ pub(crate) enum Cmd {
         /// (`POST /v1/projects/:id/schedules`); this is the one-shot equivalent.
         #[arg(long)]
         via_queue: bool,
+    },
+    /// Human verdicts: the ground truth a judge is calibrated against.
+    Labels {
+        #[command(subcommand)]
+        action: LabelsCmd,
     },
     /// Periodically sample live events into frozen datasets (online sampling). Daemon by default;
     /// `--once` runs a single cycle (for OS cron / Cloud Scheduler / a systemd timer).
@@ -294,6 +307,27 @@ pub(crate) enum Cmd {
         /// present in the environment.
         #[arg(long, value_delimiter = ',')]
         providers: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum LabelsCmd {
+    /// Write a labelled file into the ledger through the API — the migration path off files.
+    ///
+    /// Accepts the same shape a calibration file already has (`human_score`, `note`) plus a
+    /// `subject` (`event:<id>` / `dataset_item:<id>` / `score:<id>`), so an existing golden file
+    /// becomes importable by adding one field rather than being rewritten.
+    Import {
+        /// JSONL or JSON-array file of label rows.
+        #[arg(long)]
+        file: String,
+        /// Project to attach the labels to (else derived from the API key).
+        #[arg(long)]
+        project: Option<String>,
+        /// Who graded these, when a row does not say. Defaults to `import:<file>` — an
+        /// unattributable verdict is the one thing the ledger refuses.
+        #[arg(long)]
+        labeler: Option<String>,
     },
 }
 

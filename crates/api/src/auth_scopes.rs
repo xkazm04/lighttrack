@@ -91,6 +91,7 @@ mod table {
         // configuration of what "good" means, and an ingest key that could move ground truth would
         // let the thing being measured edit the measurement.
         r("/v1/datasets/:id/items/from-label", NoMethod, Admin),
+        r("/v1/datasets/:id/labels", READ, NoMethod),
         r("/v1/labels", READ, MANAGE),
         r("/v1/calibrations", READ, MANAGE),
         r("/v1/judges/trust", READ, NoMethod),

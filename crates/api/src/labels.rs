@@ -149,6 +149,25 @@ pub(crate) async fn list_labels(
     Ok(Json(json!({ "labels": rows, "next_cursor": next })))
 }
 
+/// `GET /v1/datasets/:id/labels` — every human verdict on this set's items.
+///
+/// The read `lt-runner calibrate --dataset` makes. Its own route rather than a `GET /v1/labels`
+/// filter because it is a join the caller cannot express: labels are keyed by dataset-item id, and
+/// composing it client-side is one request per case — which is what makes calibrating against a
+/// stored set slower than reading a file, and keeps everyone on files.
+pub(crate) async fn dataset_labels(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<Label>>, ApiError> {
+    let p = authenticate(&st, &headers).await?;
+    let ds = load_dataset_authorized(&st, &p, &id).await?;
+    let store = st.store.clone();
+    Ok(Json(
+        spawn_db(move || store.labels_for_dataset(&ds.id)).await?,
+    ))
+}
+
 #[derive(Deserialize)]
 pub(crate) struct FromLabelReq {
     /// The label to promote. Its subject must be an event — a dataset item is already in a set, and

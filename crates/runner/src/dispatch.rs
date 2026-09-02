@@ -199,9 +199,10 @@ fn calibrate(
     p: CalibratePayload,
     ctl: &RunControl,
 ) -> Result<Value> {
-    ctl.note(&format!("calibrating against {}", p.file));
+    let set = crate::calibrate::load_set(cli, http, p.file.as_deref(), p.dataset_id.as_deref())?;
+    ctl.note(&format!("calibrating against {}", set.source));
     let params = calibrate_watch::WatchParams {
-        file: &p.file,
+        set: &set,
         rubric_text: p.judge.rubric.as_deref(),
         rubric_id: p.judge.rubric_id.as_deref(),
         project: p.project.as_deref(),
@@ -219,7 +220,7 @@ fn calibrate(
     // no longer trustworthy, and would hide the verdict behind an error string.
     Ok(json!({
         "kind": "calibrate",
-        "file": p.file,
+        "source": set.source,
         "trusted": code == 0,
         "exit_code": code,
     }))

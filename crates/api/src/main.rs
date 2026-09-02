@@ -33,6 +33,7 @@
 //!   POST /v1/scores  GET /v1/scores?project=&limit=[&run=]   (`run` = one benchmark run's cases)
 //!   GET  /v1/scores?needs_review=1                          verdicts a human should look at (M11)
 //!   POST /v1/labels  GET /v1/labels?project=&subject=&rubric_id=&cursor=   human verdict ledger
+//!   GET  /v1/datasets/:id/labels                            a golden set's grades, joined
 //!   POST /v1/calibrations  GET /v1/calibrations?project=     judge-human agreement history
 //!   GET  /v1/judges/trust?project=&rubric_id=&judge=         trusted | untrusted | unknown
 //!   GET  /v1/prices  PUT /v1/prices/:provider/:model
@@ -538,6 +539,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/datasets/:id/items/from-label",
             post(labels::item_from_label),
         )
+        .route("/v1/datasets/:id/labels", get(labels::dataset_labels))
         .route(
             "/v1/labels",
             post(labels::create_label).get(labels::list_labels),
