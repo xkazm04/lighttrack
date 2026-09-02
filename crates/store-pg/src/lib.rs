@@ -18,6 +18,7 @@ mod events;
 mod jobs;
 mod prices;
 mod projects;
+mod redaction;
 mod relay;
 mod revenue;
 mod rubrics;
@@ -37,8 +38,8 @@ use lighttrack_core::{
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
-    Admission, CostRow, EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, TraceEvents,
-    TraceFilter, TracePage, Usage, UseCaseCostRow,
+    Admission, CostRow, EventFilter, EventPage, RedactionPostureRow, Result, ScopeUsage, Store,
+    StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 use util::pgerr;
@@ -83,6 +84,7 @@ impl PgStore {
     pub const SURFACES: &'static [Surface] = &[
         Surface::EventsCore,
         Surface::EventFilters,
+        Surface::RedactionPosture,
         Surface::Traces,
         Surface::ProjectAdmin,
         Surface::KeyAdmin,
@@ -179,6 +181,14 @@ impl Store for PgStore {
     ) -> Result<Vec<ScopeUsage>> {
         self.rt
             .block_on(events::usage_by_scope(&self.pool, project, since, kind))
+    }
+    fn redaction_posture(
+        &self,
+        project: Option<&str>,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<RedactionPostureRow>> {
+        self.rt
+            .block_on(redaction::posture(&self.pool, project, since))
     }
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
         self.rt.block_on(events::get(&self.pool, id))

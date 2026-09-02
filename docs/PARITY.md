@@ -12,6 +12,7 @@ conformance suite asserts that refusal, so a gap can never quietly become an emp
 |---|---|---|---|
 | `events_core` | full | full | full |
 | `event_filters` | full | full | full |
+| `redaction_posture` | full | full | refused |
 | `traces` | full | full | refused |
 | `forecast` | full | refused | refused |
 | `margin_breakdowns` | full | refused | refused |
@@ -41,6 +42,7 @@ cap that reads as enforced is the failure this row exists to name.
 
 - **`events_core`** — `capabilities`, `init_schema`, `insert_event`, `insert_event_checked`, `insert_events_checked`, `admission_is_atomic`, `list_events`, `cost_summary`, `usage_since`, `create_project`, `get_project`, `list_projects`, `create_api_key`, `find_api_key_by_prefix`, `touch_api_key`, `create_limit_rule`, `list_limit_rules`, `get_event`, `insert_score`, `list_scores`, `list_run_scores`, `scored_event_ids`, `list_unscored_events`, `create_benchmark`, `get_benchmark`, `list_benchmarks`, `create_benchmark_run`, `list_benchmark_runs`, `upsert_price`, `list_prices`, `create_dataset`, `get_dataset`, `list_datasets`, `set_dataset_frozen`, `create_dataset_item`, `list_dataset_items`, `create_rubric`, `get_rubric`, `list_rubrics`, `create_job`, `claim_job`, `update_job_progress`, `finish_job`, `get_job`, `list_jobs`, `insert_revenue_event`, `insert_revenue_events`, `list_revenue_events`, `cost_by_dimension`
 - **`event_filters`** — `list_events_filtered`, `cost_summary_windowed`, `usecase_costs`, `usage_since_scoped`, `usage_by_scope`
+- **`redaction_posture`** — `redaction_posture`
 - **`traces`** — `serves_traces`, `list_traces`, `list_traces_filtered`, `list_trace_events`, `list_trace_scores`, `get_trace`
 - **`forecast`** — `daily_usage`, `daily_cost_by_dimension`
 - **`margin_breakdowns`** — `tokens_by_dimension`, `customer_cost_by_model`, `customer_cost_by_name`

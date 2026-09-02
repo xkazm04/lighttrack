@@ -34,6 +34,8 @@ pub enum Surface {
     EventsCore,
     /// The extended event predicates + keyset paging + scoped/grouped usage rollups.
     EventFilters,
+    /// What the ingest boundary did to the stored rows, grouped by stamp (M9).
+    RedactionPosture,
     /// Events rolled up by `trace_id`: listing, detail, whole-trace scores.
     Traces,
     /// Daily (UTC) usage/cost series — the input `GET /v1/forecast` fits a trend to.
@@ -65,6 +67,7 @@ impl Surface {
     pub const ALL: &'static [Surface] = &[
         Surface::EventsCore,
         Surface::EventFilters,
+        Surface::RedactionPosture,
         Surface::Traces,
         Surface::Forecast,
         Surface::MarginBreakdowns,
@@ -84,6 +87,7 @@ impl Surface {
         match self {
             Surface::EventsCore => "events_core",
             Surface::EventFilters => "event_filters",
+            Surface::RedactionPosture => "redaction_posture",
             Surface::Traces => "traces",
             Surface::Forecast => "forecast",
             Surface::MarginBreakdowns => "margin_breakdowns",
@@ -211,6 +215,7 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
             "usage_by_scope",
         ],
     ),
+    (Surface::RedactionPosture, &["redaction_posture"]),
     (
         Surface::Traces,
         &[

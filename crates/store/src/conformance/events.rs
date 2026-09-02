@@ -156,6 +156,68 @@ pub(super) fn open_provider_identity(store: &dyn Store) -> Result<()> {
     Ok(())
 }
 
+/// `Surface::RedactionPosture`: the stamp survives the round-trip through `metadata`, and the report
+/// groups by it without folding the three postures into one.
+///
+/// The bar is the same one the stamp exists to clear. A backend that stored the stamp but grouped
+/// unstamped rows in with deliberately-unscrubbed ones would answer "everything is accounted for"
+/// about a database half of which nobody can account for.
+pub(super) fn redaction_posture(store: &dyn Store) -> Result<()> {
+    let pid = new_id();
+    let stamp = |v: serde_json::Value| {
+        let mut e = sample_event(&pid, "m-red", 1, 1, 0.0);
+        if !v.is_null() {
+            e.metadata = json!({ "k": "v", "redaction": v });
+        }
+        e
+    };
+    let scrubbed = json!({ "policy": "none", "scrub": true, "spans": 4, "rules": "feedfacecafe" });
+    store.insert_event(&stamp(serde_json::Value::Null))?;
+    store.insert_event(&stamp(
+        json!({ "policy": "none", "scrub": false, "spans": 0, "rules": "" }),
+    ))?;
+    store.insert_event(&stamp(scrubbed.clone()))?;
+    store.insert_event(&stamp(scrubbed))?;
+
+    // The stamp must survive storage as a readable object, not as text nobody can parse back.
+    let stored = store.list_events(Some(&pid), 10)?;
+    assert_eq!(stored.len(), 4);
+    let any = stored
+        .iter()
+        .filter_map(|e| e.redaction())
+        .find(|s| s.scrub)
+        .expect("a scrubbed stamp round-trips through metadata");
+    assert_eq!(any.spans, 4, "span count round-trip");
+    assert_eq!(any.rules, "feedfacecafe", "rule fingerprint round-trip");
+
+    let since = Utc::now() - chrono::Duration::hours(1);
+    let rows = store.redaction_posture(Some(&pid), since)?;
+    let total: u64 = rows.iter().map(|r| r.events).sum();
+    assert_eq!(total, 4, "every event lands in exactly one posture group");
+    assert_eq!(
+        rows.len(),
+        3,
+        "unstamped / stamped-not-scrubbed / scrubbed are three findings, not one: {rows:?}"
+    );
+    let unknown = rows
+        .iter()
+        .find(|r| r.stamp.is_none())
+        .expect("the unstamped bucket is reported on its own");
+    assert_eq!(unknown.events, 1);
+    let scrubbed_row = rows
+        .iter()
+        .find(|r| r.stamp.as_ref().is_some_and(|s| s.scrub))
+        .expect("the scrubbed bucket is reported");
+    assert_eq!(scrubbed_row.events, 2, "identical stamps collapse into one");
+    assert_eq!(scrubbed_row.stamp.as_ref().expect("stamped").spans, 4);
+    assert!(
+        rows.iter()
+            .any(|r| r.stamp.as_ref().is_some_and(|s| !s.scrub)),
+        "a deliberate no-scrub is not folded in with the unknowns"
+    );
+    Ok(())
+}
+
 pub(super) fn parity_gap_methods(store: &dyn Store) -> Result<()> {
     let pid = new_id();
     let now = Utc::now();

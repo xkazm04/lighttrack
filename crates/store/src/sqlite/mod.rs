@@ -21,6 +21,7 @@ mod pool;
 mod prices;
 mod projects;
 mod prompts;
+mod redaction;
 mod relay;
 mod revenue;
 mod rubrics;
@@ -57,8 +58,8 @@ use lighttrack_core::{
 use crate::{
     capabilities::{Capabilities, Surface},
     Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, DbMetricsReport, EventFilter,
-    EventPage, MaintenancePass, MaintenanceRequest, Result, ScopeUsage, StorageReport, Store,
-    StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    EventPage, MaintenancePass, MaintenanceRequest, RedactionPostureRow, Result, ScopeUsage,
+    StorageReport, Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 use metrics::DbOp;
@@ -425,6 +426,13 @@ impl Store for SqliteStore {
         self.read_op(DbOp::UsageRead, |c| {
             events::usage_by_scope(c, project, since, kind)
         })
+    }
+    fn redaction_posture(
+        &self,
+        project: Option<&str>,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<RedactionPostureRow>> {
+        self.read_op(DbOp::EventsRead, |c| redaction::posture(c, project, since))
     }
     fn daily_usage(
         &self,

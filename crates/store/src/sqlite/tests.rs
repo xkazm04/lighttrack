@@ -2310,6 +2310,8 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
         notes: vec!["candidate spoofed a section marker".into()],
         // Whole-trace coverage: not a trace verdict, so none.
         coverage: None,
+        // The judged evidence carried an ingest scrub stamp of 2 spans.
+        evidence_redacted_spans: Some(2),
     };
     let score = Score {
         id: new_id(),

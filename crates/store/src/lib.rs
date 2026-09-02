@@ -23,7 +23,8 @@ use lighttrack_core::{
     scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, CostEvidence,
     Dataset, DatasetItem, Job, JobCancel, JobFinish, LimitMetric, LimitRule, LimitScope,
     LimitStatus, LimitWindow, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
-    RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension, Trace, TraceSummary,
+    RedactionStamp, RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension, Trace,
+    TraceSummary,
 };
 
 pub use capabilities::{Capabilities, Surface};
@@ -91,6 +92,14 @@ pub struct EventFilter {
     /// Minimum resolved `cost_usd` (inclusive). Trace listing already had this; the flat event list
     /// did not, so "which individual calls are expensive" had no answer.
     pub min_cost: Option<f64>,
+    /// Match events stamped by this scrubber rule set (`metadata.redaction.rules`) — the query that
+    /// separates rows scrubbed by the current rules from rows scrubbed by a previous generation,
+    /// which is the first thing anyone needs after a rule change.
+    pub redaction_rules: Option<String>,
+    /// Match events whose scrub replaced at least this many spans (inclusive). `Some(1)` is
+    /// "everything the scrubber actually rewrote" — the candidate set for "did we mangle the
+    /// evidence a judge read".
+    pub min_redacted_spans: Option<u32>,
     /// Also compute the total number of matching events (ignoring the cursor and page limit), so a
     /// client can render "n of N" without paging the whole result set to count it. Opt-in: it costs a
     /// second aggregate query, which a plain "give me the latest 50" should not pay for.
@@ -119,11 +128,30 @@ impl EventFilter {
         if self.min_cost.is_some() {
             return Some("the `min_cost` event filter");
         }
+        if self.redaction_rules.is_some() {
+            return Some("the `redaction_rules` event filter");
+        }
+        if self.min_redacted_spans.is_some() {
+            return Some("the `min_redacted_spans` event filter");
+        }
         if self.with_total {
             return Some("the event total count");
         }
         None
     }
+}
+
+/// One redaction posture: a distinct stamp (or its absence) and how many events carry it.
+///
+/// A tuple would have served the store, but this report is also the body of
+/// `GET /v1/projects/:id/redaction`, and an operator reading `[[null, 4210], [{...}, 17]]` cannot
+/// tell which half is which. Named fields make the payload self-describing where it is read.
+#[derive(Debug, Clone, Serialize)]
+pub struct RedactionPostureRow {
+    /// `None` for rows carrying no stamp at all — "we do not know what happened to these", never
+    /// folded in with rows that recorded a deliberate no-scrub.
+    pub stamp: Option<RedactionStamp>,
+    pub events: u64,
 }
 
 /// One page of events plus the cursor to fetch the next page (newest-first). `next_cursor` is `Some`
@@ -824,6 +852,26 @@ pub trait Store: Send + Sync {
         _kind: &str,
     ) -> Result<Vec<ScopeUsage>> {
         Err(StoreError::Unsupported("per-dimension usage breakdown"))
+    }
+
+    // --- redaction posture (M9): what the ingest boundary did, grouped ---
+    /// Events since `since`, grouped by the [`RedactionStamp`] they carry — the answer to "is this
+    /// database raw, scrubbed, or a mix, and by which rule set".
+    ///
+    /// Unstamped rows (written before the stamp existed, or by a path that does not scrub) group
+    /// under `stamp: None`, which is a *different* finding from a stamped row that recorded no
+    /// scrub, and the two must never be folded together: one says "we do not know", the other says
+    /// "we looked and stored it verbatim".
+    ///
+    /// [`StoreError::Unsupported`] by default rather than an empty list: an empty posture report
+    /// would read as "no events", which is the most reassuring possible lie about this exact
+    /// question.
+    fn redaction_posture(
+        &self,
+        _project: Option<&str>,
+        _since: DateTime<Utc>,
+    ) -> Result<Vec<RedactionPostureRow>> {
+        Err(StoreError::Unsupported("the redaction posture report"))
     }
 
     // --- daily time-series for predictive cost/margin forecasting ---

@@ -40,6 +40,7 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
             store.capabilities().backend,
             surface
         ),
+        Surface::RedactionPosture => redaction_posture(store),
         Surface::Traces => traces(store),
         Surface::Forecast => forecast(store),
         Surface::MarginBreakdowns => margin(store),
@@ -77,6 +78,16 @@ fn refused<T: std::fmt::Debug>(what: &str, r: Result<T>) {
              got {got:?}"
         ),
     }
+}
+
+/// A backend that cannot report its redaction posture must say so. An empty report here would read
+/// as "no events", which is the most reassuring possible lie about "is this database scrubbed".
+fn redaction_posture(store: &dyn Store) -> Vec<&'static str> {
+    refused(
+        "redaction_posture",
+        store.redaction_posture(Some(&new_id()), Utc::now() - chrono::Duration::hours(1)),
+    );
+    vec!["redaction_posture"]
 }
 
 fn traces(store: &dyn Store) -> Vec<&'static str> {

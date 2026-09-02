@@ -52,6 +52,7 @@ fn section(store: &dyn Store, pid: &str, surface: Surface) -> Result<()> {
             events::scoped_usage(store)?;
             events::parity_gap_methods(store)?;
         }
+        Surface::RedactionPosture => events::redaction_posture(store)?,
         Surface::Traces => traces::traces(store)?,
         Surface::Forecast => forecast::forecast(store)?,
         Surface::MarginBreakdowns => margin::margin(store)?,
