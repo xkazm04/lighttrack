@@ -26,6 +26,10 @@
     {
       "path": "docs/harness/soak-criteria.json",
       "note": "written this pass — the lane's declared criteria, read by the harness via include_str!."
+    },
+    {
+      "path": "docs/ALERTS.md",
+      "note": "rewritten against crates/api/src/alerts/* for M3 (the persisted alert ledger). The two claims it used to make that the code no longer supports are gone: dedup is durable (Store::insert_alert_dedup, one atomic step per backend) rather than an in-memory map that resets on restart and lets each replica alert independently, and per-project routing exists rather than being deferred. Adds the eight alert kinds, the GET /v1/alerts surface, the X-LightTrack-Signature contract (including the sha256(secret) derived-key rule a receiver must implement), and the destination rules."
     }
   ],
 
@@ -55,7 +59,6 @@
       "kind": "frozen-archive",
       "reason": "Dated structural observations from the same campaign. Its facts are stamped 2026-07-16 and read as history, not as a current description."
     },
-    { "path": "docs/ALERTS.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/BENCHMARK_FRAMEWORK.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/CALIBRATION.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/CI_GATE.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
