@@ -50,3 +50,47 @@ impl BillingRegistry {
 fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|s| !s.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A provider is enabled by its secret and nothing else; an exported-but-empty secret is unset.
+    /// Both env states run in ONE test so no parallel test can observe the mutation half-applied.
+    #[test]
+    fn a_provider_is_enabled_exactly_when_its_secret_is_set() {
+        let keys = [
+            "LIGHTTRACK_STRIPE_WEBHOOK_SECRET",
+            "LIGHTTRACK_POLAR_WEBHOOK_SECRET",
+        ];
+        let saved: Vec<Option<String>> = keys.iter().map(|k| std::env::var(k).ok()).collect();
+
+        for k in keys {
+            std::env::remove_var(k);
+        }
+        let none = BillingRegistry::from_env();
+        assert_eq!(none.describe(), "none");
+        assert!(none.get("stripe").is_none() && none.get("polar").is_none());
+
+        std::env::set_var(keys[0], "whsec_x");
+        std::env::set_var(keys[1], "");
+        let stripe_only = BillingRegistry::from_env();
+        assert_eq!(stripe_only.describe(), "stripe");
+        assert!(
+            stripe_only.get("polar").is_none(),
+            "an empty secret enables nothing"
+        );
+
+        std::env::set_var(keys[1], "polar_x");
+        let both = BillingRegistry::from_env();
+        assert_eq!(both.describe(), "polar+stripe");
+        assert_eq!(both.get("polar").map(|s| s.provider()), Some("polar"));
+
+        for (k, v) in keys.iter().zip(saved) {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+    }
+}
