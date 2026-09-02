@@ -208,7 +208,7 @@ pub(crate) async fn post_event(
     let pid = resolve_ingest_project_ensuring(&st, &principal, &ev.project_id).await?;
     let policy = crate::state::project_policy_for(&st, &pid).await?;
     if !policy.enabled {
-        return Err(ApiError::forbidden(disabled_project_msg(&pid)));
+        return Err(ApiError::project_disabled(disabled_project_msg(&pid)));
     }
     prepare_event(&st, &mut ev, &pid, principal.key_id(), policy.redaction)?;
 

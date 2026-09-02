@@ -337,6 +337,8 @@ mod tests {
             created_at: Utc::now(),
             last_used_at: None,
             revoked: false,
+            scopes: lighttrack_core::default_scopes(),
+            expires_at: None,
         }];
         let r = resp(
             vec![row(Some("k-staging"), 1.0, 1), row(Some("k-gone"), 1.0, 1)],

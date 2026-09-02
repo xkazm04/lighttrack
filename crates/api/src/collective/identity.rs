@@ -53,7 +53,9 @@ pub(super) async fn resolve_contributor(
     headers: &HeaderMap,
 ) -> Result<String, ApiError> {
     match authenticate(st, headers).await? {
-        Principal::Project { project_id, key_id } => {
+        Principal::Project {
+            project_id, key_id, ..
+        } => {
             let store = st.store.clone();
             let pid = project_id.clone();
             let project = spawn_db(move || store.get_project(&pid)).await?;
