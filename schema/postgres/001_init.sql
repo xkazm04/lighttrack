@@ -535,3 +535,25 @@ CREATE TABLE IF NOT EXISTS alert_channels (
   created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_alert_channels_project ON alert_channels(project_id);
+
+-- ===========================================================================================
+-- M22: the contributor-side contribution ledger. Self-contained block, appended.
+-- Mirrors schema/sqlite/001_init.sql; timestamps stay fixed-width RFC3339 TEXT.
+-- ===========================================================================================
+
+CREATE TABLE IF NOT EXISTS collective_contributions (
+  id                      TEXT PRIMARY KEY,
+  hub_url_hash            TEXT NOT NULL,
+  contributor_id_as_acked TEXT,
+  schema_version          BIGINT NOT NULL,
+  generated_at            TEXT NOT NULL,
+  entries_count           BIGINT NOT NULL,
+  projects_included       BIGINT NOT NULL,
+  projects_excluded       BIGINT NOT NULL,
+  digest_sha256           TEXT NOT NULL,
+  ack                     TEXT,
+  status                  TEXT NOT NULL,
+  created_at              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_contributions_created ON collective_contributions(created_at);
+CREATE INDEX IF NOT EXISTS idx_contributions_hub ON collective_contributions(hub_url_hash, created_at);

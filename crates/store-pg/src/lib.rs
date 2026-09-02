@@ -16,6 +16,7 @@ mod alert_channels;
 mod alerts;
 mod benchmarks;
 mod collective;
+mod contributions;
 mod datasets;
 mod devices;
 mod events;
@@ -42,11 +43,11 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use tokio::runtime::Runtime;
 
 use lighttrack_core::{
-    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension,
-    Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Job, JobCancel, JobFinish,
-    LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
-    RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow,
-    Rubric, Schedule, Score, TraceSummary,
+    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, ContributionRecord,
+    CostByDimension, Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Job, JobCancel,
+    JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
+    PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery,
+    RollupRow, Rubric, Schedule, Score, TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
@@ -128,6 +129,10 @@ impl PgStore {
         // deduplicate across.
         Surface::Alerts,
         Surface::AlertRouting,
+        // The contributor-side ledger. It ships with the hub for a reason: the hash gate that keeps
+        // a scheduled push from tripping a hub'''s own min_interval IS a read of this table, so a
+        // backend that answered it empty would push on every single interval.
+        Surface::Contributions,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -635,6 +640,23 @@ impl Store for PgStore {
         f: &CollectiveFilter,
     ) -> Result<Vec<CollectiveEntry>> {
         self.rt.block_on(collective::list_filtered(&self.pool, f))
+    }
+
+    // --- the contributor-side contribution ledger (M22) ---
+    fn insert_contribution(&self, c: &ContributionRecord) -> Result<()> {
+        self.rt.block_on(contributions::insert(&self.pool, c))
+    }
+    fn list_contributions(
+        &self,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Vec<ContributionRecord>> {
+        self.rt
+            .block_on(contributions::list(&self.pool, limit, cursor))
+    }
+    fn latest_contribution(&self, hub_url_hash: &str) -> Result<Option<ContributionRecord>> {
+        self.rt
+            .block_on(contributions::latest(&self.pool, hub_url_hash))
     }
 
     // --- prompt registry (M10) ---

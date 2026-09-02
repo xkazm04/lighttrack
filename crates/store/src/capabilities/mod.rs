@@ -110,6 +110,16 @@ pub enum Surface {
     /// there (it is what admits a legacy shared-key deployment's traffic), so it must never be
     /// something a missing table says by accident.
     Devices,
+    /// The contributor-side contribution ledger (M22): what this instance pushed to which hub, and
+    /// what the hub acked.
+    ///
+    /// Its own surface rather than part of [`Surface::Collective`] because the two sit at opposite
+    /// ends of the same wire: `Collective` is what a **hub** stores about others, this is what an
+    /// **instance** stores about itself, and a deployment is routinely one and not the other. The
+    /// answer that must never be accidental is the empty one — an empty ledger reads as "we have
+    /// never contributed", which sends a hash-gated push every interval and makes a
+    /// `withdraw --all` silently cover nothing.
+    Contributions,
 }
 
 impl Surface {
@@ -139,6 +149,7 @@ impl Surface {
         Surface::Metrics,
         Surface::Pricing,
         Surface::Devices,
+        Surface::Contributions,
     ];
 
     /// Stable wire/doc name (`snake_case`, matching the `Serialize` impl).
@@ -168,6 +179,7 @@ impl Surface {
             Surface::Metrics => "metrics",
             Surface::Pricing => "pricing",
             Surface::Devices => "devices",
+            Surface::Contributions => "contributions",
         }
     }
 
@@ -420,6 +432,14 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
             "touch_device",
             "revoke_device",
             "count_eligible_devices",
+        ],
+    ),
+    (
+        Surface::Contributions,
+        &[
+            "insert_contribution",
+            "list_contributions",
+            "latest_contribution",
         ],
     ),
 ];

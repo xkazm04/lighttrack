@@ -433,3 +433,35 @@ CREATE TABLE IF NOT EXISTS alert_channels (
   created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_alert_channels_project ON alert_channels(project_id);
+
+-- M22: the contributor-side contribution ledger. Self-contained block, appended.
+-- ===========================================================================================
+
+-- What THIS instance pushed to a collective hub, and what the hub said back. The counterpart to
+-- `collective_entries`, which is what a hub RECEIVES: before this table the ack was printed to a
+-- terminal and dropped, so "have we already sent this", "which hubs hold our data" and "what did
+-- they accept" had no answer at rest.
+--
+-- The digest BODY is deliberately absent: only `digest_sha256` (the gate an unchanged re-push is
+-- skipped by) and the counts. The ledger must not become a second copy of every model number this
+-- instance has measured. `hub_url_hash` is hashed for the same reason the contributor id is -- a
+-- ledger an operator shows someone should not be where a private hub's address leaks from.
+-- Never deleted (ARCHITECTURE 12): this is an audit trail of what left the building.
+CREATE TABLE IF NOT EXISTS collective_contributions (
+  id                      TEXT PRIMARY KEY,
+  hub_url_hash            TEXT NOT NULL,     -- `h-` + 12 hex of sha256(normalized hub URL)
+  contributor_id_as_acked TEXT,              -- what the HUB filed it under; may differ from ours
+  schema_version          INTEGER NOT NULL,
+  generated_at            TEXT NOT NULL,     -- fixed-width RFC3339: when the digest was BUILT
+  entries_count           INTEGER NOT NULL,
+  projects_included       INTEGER NOT NULL,  -- the consent envelope, at rest
+  projects_excluded       INTEGER NOT NULL,
+  digest_sha256           TEXT NOT NULL,     -- the hash gate; excludes generated_at by construction
+  ack                     TEXT,              -- JSON: the hub's answer verbatim, or the failure
+  status                  TEXT NOT NULL,     -- sent | rejected | failed
+  created_at              TEXT NOT NULL      -- fixed-width RFC3339: when the push happened
+);
+-- The listing's keyset order, and the per-hub `latest_contribution` probe the hash gate runs on
+-- every push.
+CREATE INDEX IF NOT EXISTS idx_contributions_created ON collective_contributions(created_at);
+CREATE INDEX IF NOT EXISTS idx_contributions_hub ON collective_contributions(hub_url_hash, created_at);

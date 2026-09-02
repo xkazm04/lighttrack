@@ -20,6 +20,7 @@ mod admission;
 mod alerts;
 mod catalog;
 mod collective;
+mod contributions;
 mod devices;
 mod driver;
 mod events;

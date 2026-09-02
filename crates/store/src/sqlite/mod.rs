@@ -12,6 +12,7 @@ mod alert_channels;
 mod alerts;
 mod benchmarks;
 mod collective;
+mod contributions;
 mod datasets;
 mod devices;
 mod events;
@@ -61,11 +62,11 @@ use rusqlite::Connection;
 use serde_json::Value;
 
 use lighttrack_core::{
-    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension,
-    Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Job, JobCancel, JobFinish,
-    LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
-    RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow,
-    Rubric, Schedule, Score, TokensByDimension, TraceSummary,
+    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, ContributionRecord,
+    CostByDimension, Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Job, JobCancel,
+    JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
+    PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery,
+    RollupRow, Rubric, Schedule, Score, TokensByDimension, TraceSummary,
 };
 
 use crate::{
@@ -907,6 +908,21 @@ impl Store for SqliteStore {
         f: &CollectiveFilter,
     ) -> Result<Vec<CollectiveEntry>> {
         self.read(|c| collective::list_filtered(c, f))
+    }
+
+    // --- the contributor-side contribution ledger (M22) ---
+    fn insert_contribution(&self, c: &ContributionRecord) -> Result<()> {
+        self.with(|conn| contributions::insert(conn, c))
+    }
+    fn list_contributions(
+        &self,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Vec<ContributionRecord>> {
+        self.read(|conn| contributions::list(conn, limit, cursor))
+    }
+    fn latest_contribution(&self, hub_url_hash: &str) -> Result<Option<ContributionRecord>> {
+        self.read(|conn| contributions::latest(conn, hub_url_hash))
     }
 
     // --- storage accounting + lossless maintenance (see [`maintenance`]) ---
