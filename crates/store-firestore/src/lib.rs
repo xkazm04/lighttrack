@@ -9,6 +9,7 @@
 
 mod benchmarks;
 mod codec;
+mod collective;
 mod datasets;
 mod events;
 mod jobs;
@@ -25,15 +26,15 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, JobCancel,
-    JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
-    RevenueEvent, Rubric, Score, TraceSummary,
+    ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
+    JobCancel, JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
+    PromptVersion, RevenueEvent, Rubric, Score, TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
-    insert_event_checked_nonatomic, insert_events_checked_nonatomic, Admission, CostRow,
-    EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, TraceEvents, Usage,
-    UseCaseCostRow,
+    insert_event_checked_nonatomic, insert_events_checked_nonatomic, Admission, CollectiveFilter,
+    CostRow, EventFilter, EventPage, ReplaceAck, Result, ScopeUsage, Store, StoreError,
+    TraceEvents, Usage, UseCaseCostRow,
 };
 
 use rest::Rest;
@@ -80,8 +81,12 @@ impl FirestoreStore {
     /// therefore check-then-act (`atomic_admission: false` — usage is summed client-side from a
     /// document scan, so a concurrent burst can exceed a cap before it takes effect; caps here are
     /// ADVISORY, and Postgres is the backend that enforces them atomically). `Relay`, `Forecast`,
-    /// `MarginBreakdowns`, `Collective` and `ProjectAdmin` are simply not ported. All of them refuse
-    /// with `Unsupported` (HTTP 501) and the conformance suite asserts that refusal.
+    /// `MarginBreakdowns` and `ProjectAdmin` are simply not ported. All of them refuse with
+    /// `Unsupported` (HTTP 501) and the conformance suite asserts that refusal.
+    ///
+    /// `Collective` is served, with one bounded caveat this backend states rather than hides: a
+    /// contributor replacement larger than one `:commit` batch is chunked and reports
+    /// `ReplaceAck::atomic == false` (see [`collective`]).
     pub const SURFACES: &'static [Surface] = &[
         Surface::EventsCore,
         Surface::EventFilters,
@@ -89,6 +94,7 @@ impl FirestoreStore {
         Surface::KeyAdmin,
         Surface::LimitLifecycle,
         Surface::JobLeases,
+        Surface::Collective,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -380,6 +386,37 @@ impl Store for FirestoreStore {
         until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
         revenue::cost_by_dimension(&self.rest, project, dim, since, until)
+    }
+
+    // --- collective model intelligence (the shared leaderboard) ---
+    fn upsert_collective_entry(&self, e: &CollectiveEntry) -> Result<()> {
+        collective::upsert(&self.rest, e)
+    }
+    fn delete_collective_entries(&self, contributor_id: &str) -> Result<u64> {
+        collective::delete(&self.rest, contributor_id)
+    }
+    fn list_collective_entries(&self) -> Result<Vec<CollectiveEntry>> {
+        collective::list(&self.rest)
+    }
+    fn purge_collective_entries_before(&self, cutoff: DateTime<Utc>) -> Result<u64> {
+        collective::purge_before(&self.rest, cutoff)
+    }
+    fn replace_collective_contribution(
+        &self,
+        contributor_id: &str,
+        entries: &[CollectiveEntry],
+        purge_before: Option<DateTime<Utc>>,
+    ) -> Result<ReplaceAck> {
+        collective::replace(&self.rest, contributor_id, entries, purge_before)
+    }
+    fn latest_collective_receipt(&self, contributor_id: &str) -> Result<Option<DateTime<Utc>>> {
+        collective::latest_receipt(&self.rest, contributor_id)
+    }
+    fn list_collective_entries_filtered(
+        &self,
+        f: &CollectiveFilter,
+    ) -> Result<Vec<CollectiveEntry>> {
+        collective::list_filtered(&self.rest, f)
     }
 }
 

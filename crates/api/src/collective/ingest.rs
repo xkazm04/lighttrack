@@ -12,7 +12,6 @@ use serde::Serialize;
 use lighttrack_core::{
     CollectiveDigest, CollectiveEntry, DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
 };
-use lighttrack_store::StoreError;
 
 use crate::error::ApiError;
 use crate::state::{spawn_db, AppState};
@@ -38,8 +37,9 @@ pub(crate) struct IngestAck {
     rejected_implausible: usize,
 }
 
-/// Hub side: accept a contributor's digest and replace its stored entry set (delete-then-upsert so a
-/// bucket that fell below the floor doesn't linger). Off unless `LIGHTTRACK_COLLECTIVE_ACCEPT` is set.
+/// Hub side: accept a contributor's digest and replace its stored entry set — one store call, so a
+/// bucket that fell below the floor doesn't linger and a backend with transactions turns the set
+/// over atomically. Off unless `LIGHTTRACK_COLLECTIVE_ACCEPT` is set.
 ///
 /// Hardening: the contributor identity is **derived from a credential the hub issued**, never trusted
 /// from the request body — so a poster can only ever replace *its own* set, and cannot mint identities
@@ -101,22 +101,24 @@ pub(crate) async fn post_ingest(
     let store = st.store.clone();
     let contrib = contributor.clone();
     let cutoff = st.collective.retention_cutoff(now);
-    spawn_db(move || -> Result<(), StoreError> {
-        store.delete_collective_entries(&contrib)?;
-        for e in &entries {
-            store.upsert_collective_entry(e)?;
-        }
-        // Retention sweep, piggy-backed on the write that already holds the connection. A backend
-        // without a sweep still enforces the policy at read time, so `Unsupported` is not an error.
-        if let Some(c) = cutoff {
-            match store.purge_collective_entries_before(c) {
-                Ok(_) | Err(StoreError::Unsupported(_)) => {}
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    })
-    .await?;
+    // ONE store call, so a backend with transactions turns the whole set over atomically and the
+    // retention sweep rides the same pass. The previous shape — a delete, then N upserts, each
+    // acquiring its own connection — could be interrupted between any two of them, leaving a
+    // contributor's stored set a mixture of the old push and the new one. That is worse than a
+    // failed ingest: the merged leaderboard would publish the mixture as the collective's opinion.
+    let ack =
+        spawn_db(move || store.replace_collective_contribution(&contrib, &entries, cutoff)).await?;
+    if !ack.atomic {
+        // Not fatal — the write did land — but the operator should know this backend cannot promise
+        // the set is coherent if it crashes mid-replacement.
+        tracing::warn!(
+            contributor = %contributor,
+            deleted = ack.deleted,
+            inserted = ack.inserted,
+            "collective contribution was replaced non-atomically; a crash mid-write could have \
+             left a partial set"
+        );
+    }
 
     Ok(Json(IngestAck {
         contributor_id: contributor,
@@ -145,15 +147,9 @@ async fn enforce_min_interval(
     }
     let store = st.store.clone();
     let who = contributor.to_string();
-    let last = spawn_db(move || {
-        store.list_collective_entries().map(|es| {
-            es.iter()
-                .filter(|e| e.contributor_id == who)
-                .map(|e| e.received_at)
-                .max()
-        })
-    })
-    .await?;
+    // A keyed read: this used to decode every entry in the table — every contributor's, every
+    // model's — to find one contributor's newest timestamp, on every single push.
+    let last = spawn_db(move || store.latest_collective_receipt(&who)).await?;
     let Some(last) = last else { return Ok(()) };
     let next = last + chrono::Duration::hours(hours as i64);
     if now < next {

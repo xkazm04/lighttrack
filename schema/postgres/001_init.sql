@@ -276,3 +276,32 @@ CREATE TABLE IF NOT EXISTS relay_tasks (
 CREATE INDEX IF NOT EXISTS idx_relay_due ON relay_tasks(status, next_attempt_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_idem ON relay_tasks(project_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
+
+-- Collective Model Intelligence (the opt-in shared leaderboard). Mirrors
+-- schema/sqlite/001_init.sql: pure aggregate rows, no text and no project/customer ids; the primary
+-- key makes a re-contribution an upsert in place rather than a second vote from the same source.
+-- Timestamps stay fixed-width RFC3339(Nanos,Z) TEXT so `received_at` range filters and ORDER BY
+-- agree with SQLite exactly.
+CREATE TABLE IF NOT EXISTS collective_entries (
+  contributor_id      TEXT NOT NULL,   -- opaque, non-reversible source id (a hash)
+  provider            TEXT NOT NULL,
+  model               TEXT NOT NULL,
+  task_type           TEXT NOT NULL,   -- coarse bucket from a fixed vocabulary
+  quality             DOUBLE PRECISION NOT NULL,
+  pass_rate           DOUBLE PRECISION NOT NULL,
+  avg_cost_usd        DOUBLE PRECISION NOT NULL,
+  p50_latency_ms      BIGINT,
+  p95_latency_ms      BIGINT,
+  n_runs              BIGINT NOT NULL DEFAULT 0,
+  n_cases             BIGINT NOT NULL DEFAULT 0,
+  quality_variance    DOUBLE PRECISION,
+  judge_provider      TEXT,
+  rubric_fingerprint  TEXT,
+  determinism         TEXT,            -- rigor: weakest stamp, NULL = unrecorded
+  frozen_dataset      TEXT,            -- rigor: coverage tag (all|mixed|none), NULL = unknown
+  significance_tested TEXT,            -- rigor: coverage tag (all|mixed|none), NULL = unknown
+  received_at         TEXT NOT NULL,
+  PRIMARY KEY (contributor_id, provider, model, task_type)
+);
+CREATE INDEX IF NOT EXISTS idx_collective_model ON collective_entries(provider, model, task_type);
+CREATE INDEX IF NOT EXISTS idx_collective_received ON collective_entries(received_at);

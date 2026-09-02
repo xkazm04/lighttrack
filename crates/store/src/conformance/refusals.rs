@@ -16,7 +16,9 @@ use serde_json::json;
 use lighttrack_core::{new_id, RelayOutcome};
 
 use super::fixtures::{sample_entry, sample_project, sample_rule};
-use crate::{MaintenanceRequest, Result, Store, StoreError, Surface, TraceFilter};
+use crate::{
+    CollectiveFilter, MaintenanceRequest, Result, Store, StoreError, Surface, TraceFilter,
+};
 
 /// Methods that cannot refuse because they do not return a `Result`. They are pure readers of the
 /// manifest (or of a per-item result vector), so there is nothing for them to refuse *with* — the
@@ -203,11 +205,29 @@ fn collective(store: &dyn Store) -> Vec<&'static str> {
         "purge_collective_entries_before",
         store.purge_collective_entries_before(Utc::now()),
     );
+    // The composed methods refuse *through* the fine-grained ones — asserted rather than reasoned
+    // about, because a backend that overrides only the composed half would otherwise silently
+    // accept a contribution the surface it declares cannot store.
+    refused(
+        "replace_collective_contribution",
+        store.replace_collective_contribution(&e.contributor_id, std::slice::from_ref(&e), None),
+    );
+    refused(
+        "latest_collective_receipt",
+        store.latest_collective_receipt(&e.contributor_id),
+    );
+    refused(
+        "list_collective_entries_filtered",
+        store.list_collective_entries_filtered(&CollectiveFilter::default()),
+    );
     vec![
         "upsert_collective_entry",
         "delete_collective_entries",
         "list_collective_entries",
         "purge_collective_entries_before",
+        "replace_collective_contribution",
+        "latest_collective_receipt",
+        "list_collective_entries_filtered",
     ]
 }
 

@@ -9,6 +9,7 @@
 
 pub mod capabilities;
 pub mod codec;
+pub mod collective;
 pub mod conformance;
 pub mod sqlite;
 
@@ -27,6 +28,7 @@ use lighttrack_core::{
 };
 
 pub use capabilities::{Capabilities, Surface};
+pub use collective::{replace_collective_contribution_nonatomic, CollectiveFilter, ReplaceAck};
 pub use sqlite::SqliteStore;
 
 #[derive(Debug, Error)]
@@ -1299,6 +1301,40 @@ pub trait Store: Send + Sync {
     /// dead rows on disk. The API therefore treats `Unsupported` here as non-fatal.
     fn purge_collective_entries_before(&self, _cutoff: DateTime<Utc>) -> Result<u64> {
         Err(StoreError::Unsupported("the collective leaderboard"))
+    }
+
+    /// Replace **all** of `contributor_id`'s entries with `entries` — and, when `purge_before` is
+    /// given, run the retention sweep on the same pass. One call, so a backend with transactions can
+    /// make the replacement atomic: an interrupted delete-then-upsert loop leaves a contributor
+    /// half-replaced, which publishes a *wrong* merged row rather than a missing one.
+    ///
+    /// The default composes the fine-grained methods and honestly reports `atomic: false`; backends
+    /// that can do better override it. A backend that does not serve the surface at all refuses
+    /// here too, because the first composed call already refuses.
+    fn replace_collective_contribution(
+        &self,
+        contributor_id: &str,
+        entries: &[CollectiveEntry],
+        purge_before: Option<DateTime<Utc>>,
+    ) -> Result<ReplaceAck> {
+        replace_collective_contribution_nonatomic(self, contributor_id, entries, purge_before)
+    }
+    /// The most recent `received_at` this contributor has stored, or `None` if it has none.
+    ///
+    /// Exists so the per-contributor minimum-interval check is a keyed read rather than a decode of
+    /// the entire table on every ingest. The default scans; backends index it.
+    fn latest_collective_receipt(&self, contributor_id: &str) -> Result<Option<DateTime<Utc>>> {
+        collective::latest_receipt_scanned(self, contributor_id)
+    }
+    /// Stored entries narrowed by [`CollectiveFilter`] — today, the retention cutoff.
+    ///
+    /// Only *pre-floor-safe* predicates live here: a user-supplied provider/task filter pushed into
+    /// the store could strip a merged row down to one contributor. See [`CollectiveFilter`].
+    fn list_collective_entries_filtered(
+        &self,
+        f: &CollectiveFilter,
+    ) -> Result<Vec<CollectiveEntry>> {
+        collective::list_filtered_scanned(self, f)
     }
 
     // --- storage accounting + lossless maintenance ---

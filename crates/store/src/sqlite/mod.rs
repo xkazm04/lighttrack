@@ -33,6 +33,8 @@ mod bench;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_collective;
+#[cfg(test)]
 mod tests_concurrency;
 #[cfg(test)]
 mod tests_maintenance;
@@ -56,9 +58,10 @@ use lighttrack_core::{
 
 use crate::{
     capabilities::{Capabilities, Surface},
-    Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, DbMetricsReport, EventFilter,
-    EventPage, MaintenancePass, MaintenanceRequest, Result, ScopeUsage, StorageReport, Store,
-    StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    Admission, CollectiveFilter, CostRow, CustomerCostRow, DailyDimCost, DailyUsage,
+    DbMetricsReport, EventFilter, EventPage, MaintenancePass, MaintenanceRequest, ReplaceAck,
+    Result, ScopeUsage, StorageReport, Store, StoreError, TraceEvents, TraceFilter, TracePage,
+    Usage, UseCaseCostRow,
 };
 
 use metrics::DbOp;
@@ -773,6 +776,23 @@ impl Store for SqliteStore {
     }
     fn purge_collective_entries_before(&self, cutoff: DateTime<Utc>) -> Result<u64> {
         self.with(|c| collective::purge_before(c, cutoff))
+    }
+    fn replace_collective_contribution(
+        &self,
+        contributor_id: &str,
+        entries: &[CollectiveEntry],
+        purge_before: Option<DateTime<Utc>>,
+    ) -> Result<ReplaceAck> {
+        self.with(|c| collective::replace(c, contributor_id, entries, purge_before))
+    }
+    fn latest_collective_receipt(&self, contributor_id: &str) -> Result<Option<DateTime<Utc>>> {
+        self.read(|c| collective::latest_receipt(c, contributor_id))
+    }
+    fn list_collective_entries_filtered(
+        &self,
+        f: &CollectiveFilter,
+    ) -> Result<Vec<CollectiveEntry>> {
+        self.read(|c| collective::list_filtered(c, f))
     }
 
     // --- storage accounting + lossless maintenance (see [`maintenance`]) ---

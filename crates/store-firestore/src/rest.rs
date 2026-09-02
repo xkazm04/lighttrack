@@ -169,6 +169,52 @@ impl Rest {
         Ok(out)
     }
 
+    /// The resource name of a document — what a `:commit` write addresses (the `name` field), as
+    /// opposed to the URL a REST call goes to. Everything from `projects/` on.
+    pub(crate) fn doc_name(&self, collection: &str, id: &str) -> String {
+        let path = match self.base.split_once("/v1/") {
+            Some((_, rest)) => rest,
+            None => self.base.as_str(),
+        };
+        format!("{path}/{collection}/{id}")
+    }
+
+    /// Firestore's per-commit write limit. A batch at or under it applies **atomically**; past it
+    /// the caller must chunk, and the result is no longer one unit — which is why
+    /// [`crate::collective`] reports that fact rather than assuming it.
+    pub(crate) const MAX_BATCH: usize = 500;
+
+    /// One `:commit` of up to [`Rest::MAX_BATCH`] writes, applied atomically. Build the writes with
+    /// [`Rest::write_update`] / [`Rest::write_delete`].
+    pub(crate) fn commit_batch(&self, writes: &[Value]) -> Result<()> {
+        if writes.is_empty() {
+            return Ok(());
+        }
+        debug_assert!(writes.len() <= Self::MAX_BATCH);
+        let url = format!("{}:commit", self.base);
+        json_ok(
+            self.req(Method::POST, url)
+                .json(&json!({ "writes": writes }))
+                .send()
+                .map_err(re)?,
+        )
+        .map(|_| ())
+    }
+
+    /// A create-or-replace write for a batched commit.
+    pub(crate) fn write_update(&self, collection: &str, id: &str, fields: &Fields) -> Value {
+        json!({ "update": {
+            "name": self.doc_name(collection, id),
+            "fields": encode_fields(fields),
+        } })
+    }
+
+    /// A delete write for a batched commit. Deleting a document that is not there is a no-op, which
+    /// is what a replace wants: the previous set is whatever happens to be present.
+    pub(crate) fn write_delete(&self, collection: &str, id: &str) -> Value {
+        json!({ "delete": self.doc_name(collection, id) })
+    }
+
     /// Non-transactional commit of one field update, optionally guarded by an `updateTime`
     /// precondition (optimistic concurrency). Returns `false` when the precondition fails (another
     /// writer changed the doc first) — the basis for a concurrency-safe `claim_job`.
