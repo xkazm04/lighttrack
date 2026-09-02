@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::retry::with_retry;
+use lighttrack_core::ProviderFamily;
+
 use crate::{anthropic_api, claude, Determinism, EngineConfig, EngineError, GenOutcome, Result};
 
 /// Outbound provider calls are bounded so a black-holed/overloaded endpoint can't hang an
@@ -198,18 +200,30 @@ fn generate_once(
     schema: Option<&Value>,
     deterministic: bool,
 ) -> Result<GenOutcome> {
-    match provider {
+    // Route on the provider's **family**, not its literal id: a judge spec may name any provider
+    // (M8), and `azure-openai` / `az.ai.openai` are OpenAI endpoints in every way that matters here.
+    // A provider we cannot classify gets a message that says what is missing — an adapter — rather
+    // than "unknown provider", which reads as "you typed it wrong".
+    match lighttrack_core::family_of(provider) {
         // Prefer the bare Messages API when a key is present: no ~40k-token auto-loaded CLI context
         // (DECISIONS D9) and `temperature: 0` is at least askable. Without a key the only way in is
         // the CLI's subscription OAuth, and that path has no sampling knobs at all.
-        "anthropic" if anthropic_api::available() => {
+        ProviderFamily::Anthropic if anthropic_api::available() => {
             anthropic_api::generate(model, system_prompt, input, schema, deterministic)
         }
         // The Claude CLI has no sampling knobs to pass; the deterministic request is best-effort.
-        "anthropic" => generate_anthropic(cfg, model, system_prompt, input, schema),
-        "google" => generate_gemini(model, system_prompt, input, schema, deterministic),
-        "openai" => generate_openai(model, system_prompt, input, schema, deterministic),
-        other => Err(EngineError::Other(format!("unknown provider '{other}'"))),
+        ProviderFamily::Anthropic => generate_anthropic(cfg, model, system_prompt, input, schema),
+        ProviderFamily::Google => {
+            generate_gemini(model, system_prompt, input, schema, deterministic)
+        }
+        ProviderFamily::OpenAi => {
+            generate_openai(model, system_prompt, input, schema, deterministic)
+        }
+        other => Err(EngineError::Other(format!(
+            "no generation adapter for provider '{provider}' (family {other}); this build can \
+             generate with anthropic, google and openai endpoints only — observability and pricing \
+             accept any provider, generation does not"
+        ))),
     }
 }
 
