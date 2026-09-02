@@ -37,9 +37,10 @@ use lighttrack_store::Scope as TenantScope;
 /// Every variant carries `index` (the item's position in the request array), so positional
 /// correlation is explicit rather than load-bearing-but-unstated, and non-accepted variants carry a
 /// stable machine-readable `code` (the same taxonomy the single-event path returns:
-/// `bad_request` | `ts_too_old` | `ts_too_new` | `forbidden` | `conflict` | `rate_limited` |
-/// `internal`) so a
-/// client can branch without substring-matching English prose.
+/// `bad_request` | `ts_too_old` | `ts_too_new` | `project_disabled` | `conflict` | `rate_limited` |
+/// `internal`) so a client can branch without substring-matching English prose. A key that lacks
+/// the `ingest` scope is refused for the whole request with 403, as on the single-event door —
+/// it is a fact about the key, not about any item.
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub(crate) enum BatchItem {
@@ -94,6 +95,12 @@ pub(crate) async fn post_batch(
     Json(evs): Json<Vec<LlmEvent>>,
 ) -> Result<WithProximity<BatchResponse>, ApiError> {
     let principal = authenticate(&st, &headers).await?;
+    // The ingest scope is a property of the KEY, not of any item: a read-only key fails every item
+    // identically, and the single-event door answers that with a 403. Before this check the batch
+    // path folded the refusal into the per-item project resolution and reported each item as
+    // `bad_request: project_id is required` - the wrong code and a message about a field the
+    // caller had in fact supplied.
+    crate::auth_scopes::ensure_scope(&principal, lighttrack_core::Scope::Ingest)?;
 
     if evs.is_empty() {
         return Err(ApiError::bad_request(
