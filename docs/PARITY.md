@@ -21,6 +21,7 @@ conformance suite asserts that refusal, so a gap can never quietly become an emp
 | `project_admin` | full | full | refused |
 | `key_admin` | full | full | full |
 | `limit_lifecycle` | full | full | full |
+| `margin_policies` | full | full | full |
 | `job_leases` | full | full | full |
 | `maintenance` | full | refused | refused |
 | `metrics` | full | refused | refused |
@@ -50,6 +51,7 @@ cap that reads as enforced is the failure this row exists to name.
 - **`project_admin`** — `update_project`
 - **`key_admin`** — `list_api_keys`, `set_api_key_revoked`, `set_api_key_expiry`
 - **`limit_lifecycle`** — `get_limit_rule`, `update_limit_rule`, `delete_limit_rule`
+- **`margin_policies`** — `create_margin_policy`, `list_margin_policies`, `get_margin_policy`, `delete_margin_policy`
 - **`job_leases`** — `cancel_job`, `renew_job_lease`
 - **`maintenance`** — `storage_report`, `maintenance_pass`
 - **`metrics`** — `db_metrics`

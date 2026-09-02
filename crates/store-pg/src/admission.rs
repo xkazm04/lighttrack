@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::postgres::PgPool;
 use sqlx::{Connection, PgConnection, Postgres, Transaction};
 
@@ -128,11 +128,24 @@ async fn admit_one(
         .await?;
         usages.insert(key, u);
     }
-    let admission = evaluate_admission(rules, ev, event_contribution(ev), |w, scope| {
-        usages.get(&(w, scope.cloned())).copied().ok_or_else(|| {
-            StoreError::Other("admission: usage for an applicable rule was not prefetched".into())
-        })
-    })?;
+    // Revenue-share thresholds are resolved inside the same advisory-locked transaction as the
+    // usage reads and the insert, so the cap and the revenue it derives from are one snapshot. The
+    // helper short-circuits when no rule needs revenue, so a fixed-cap deployment pays nothing.
+    let resolved = resolve_revenue_thresholds(&mut *conn, ev, rules, now).await?;
+    let resolve = lighttrack_store::resolver(&resolved);
+    let admission = evaluate_admission(
+        rules,
+        ev,
+        event_contribution(ev),
+        |w, scope| {
+            usages.get(&(w, scope.cloned())).copied().ok_or_else(|| {
+                StoreError::Other(
+                    "admission: usage for an applicable rule was not prefetched".into(),
+                )
+            })
+        },
+        resolve,
+    )?;
     if admission.admitted {
         insert_query(ev)?
             .execute(&mut *conn)
@@ -140,6 +153,32 @@ async fn admit_one(
             .map_err(|e| insert_err(e, &ev.id))?;
     }
     Ok(admission)
+}
+
+/// Resolve every revenue-share rule's threshold on `conn`. The revenue rows are read here (once per
+/// distinct window, inside the same advisory-locked transaction as the usage reads and the insert),
+/// then handed to the shared pure resolver — so Postgres and SQLite compute "80% of revenue" with
+/// one implementation rather than two that could drift.
+async fn resolve_revenue_thresholds(
+    conn: &mut PgConnection,
+    ev: &LlmEvent,
+    rules: &[LimitRule],
+    now: DateTime<Utc>,
+) -> Result<HashMap<String, (f64, lighttrack_core::ThresholdBasis)>> {
+    if !rules.iter().any(lighttrack_store::needs_revenue) {
+        return Ok(HashMap::new());
+    }
+    let mut windows: lighttrack_store::RevenueWindows = HashMap::new();
+    for r in rules.iter().filter(|r| lighttrack_store::needs_revenue(r)) {
+        let key = lighttrack_store::window_key(r);
+        if let std::collections::hash_map::Entry::Vacant(slot) = windows.entry(key) {
+            let rows =
+                crate::revenue::list_in_tx(&mut *conn, &ev.project_id, r.window.since(now), now)
+                    .await?;
+            slot.insert(rows);
+        }
+    }
+    Ok(lighttrack_store::resolve_from_windows(rules, now, &windows))
 }
 
 pub(crate) async fn insert_event_checked(pool: &PgPool, ev: &LlmEvent) -> Result<Admission> {

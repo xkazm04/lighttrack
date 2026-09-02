@@ -315,6 +315,27 @@ fn renewal_due(current: &LimitRule, next: &LimitRule, now: DateTime<Utc>) -> boo
     }
 }
 
+/// Recognized revenue over `[since, until)` for one customer (or, with `customer = None`, for every
+/// row in the slice).
+///
+/// The basis a [`Threshold::RevenueShare`] resolves against. Deliberately the *same* recognition
+/// rule the margin rollup uses -- period revenue amortized across its overlap with the window,
+/// point-in-time revenue counted whole, refunds subtracting -- so a guardrail derived from revenue
+/// and the `/v1/margin` row an operator is looking at can never disagree about what the customer
+/// paid.
+pub fn recognized_revenue(
+    revenue: &[crate::revenue::RevenueEvent],
+    customer: Option<&str>,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> f64 {
+    revenue
+        .iter()
+        .filter(|r| customer.is_none_or(|c| r.customer_id.as_deref() == Some(c)))
+        .map(|r| crate::margin::recognized_amount(r, since, until))
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -16,6 +16,7 @@ mod forecast;
 mod jobs;
 mod limits;
 mod maintenance;
+mod margin_policies;
 mod metrics;
 mod pool;
 mod prices;
@@ -547,6 +548,23 @@ impl Store for SqliteStore {
     fn update_limit_rule(&self, r: &LimitRule) -> Result<bool> {
         self.with(|c| limits::update(c, r))
     }
+    fn create_margin_policy(&self, p: &lighttrack_core::MarginPolicy) -> Result<()> {
+        self.with(|c| margin_policies::create(c, p))
+    }
+    fn list_margin_policies(
+        &self,
+        project: &str,
+        only_enabled: bool,
+    ) -> Result<Vec<lighttrack_core::MarginPolicy>> {
+        self.read(|c| margin_policies::list(c, project, only_enabled))
+    }
+    fn get_margin_policy(&self, id: &str) -> Result<Option<lighttrack_core::MarginPolicy>> {
+        self.read(|c| margin_policies::get(c, id))
+    }
+    fn delete_margin_policy(&self, id: &str) -> Result<bool> {
+        self.with(|c| margin_policies::delete(c, id))
+    }
+
     fn delete_limit_rule(&self, id: &str) -> Result<bool> {
         self.with(|c| limits::delete(c, id))
     }

@@ -8,7 +8,7 @@
 use chrono::{Duration, Utc};
 use lighttrack_core::{
     new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation, Status,
-    TokenUsage,
+    Threshold, TokenUsage,
 };
 use lighttrack_store::Store;
 use lighttrack_store_pg::PgStore;
@@ -94,11 +94,15 @@ fn windowed_accounting_ignores_a_backdated_client_clock() {
             project_id: pid.clone(),
             metric: LimitMetric::Calls,
             window: LimitWindow::Day,
-            threshold: 2.0,
+            threshold: Threshold::Fixed(2.0),
             action: LimitAction::Block,
             enabled: true,
             warn_at: None,
             scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         })
         .expect("rule");
     let mut sneaky = event(&pid);

@@ -5,7 +5,8 @@ use serde_json::json;
 
 use lighttrack_core::{
     new_id, CollectiveEntry, Coverage, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent,
-    Operation, Project, Redaction, Status, TokenUsage,
+    MarginPolicy, Operation, PolicyAction, PolicyTrigger, Project, Redaction, Status, Threshold,
+    TokenUsage,
 };
 
 pub(super) fn sample_event(pid: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEvent {
@@ -65,11 +66,28 @@ pub(super) fn sample_rule() -> LimitRule {
         project_id: new_id(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold: 1.0,
+        threshold: Threshold::Fixed(1.0),
         action: LimitAction::Alert,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
+    }
+}
+
+pub(super) fn sample_policy() -> MarginPolicy {
+    MarginPolicy {
+        id: new_id(),
+        project_id: new_id(),
+        trigger: PolicyTrigger::NegativeMargin,
+        min_cost_usd: 1.0,
+        action: PolicyAction::Warn,
+        cooldown_secs: 3600,
+        expiry_secs: 86_400,
+        enabled: true,
     }
 }
 

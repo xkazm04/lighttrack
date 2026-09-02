@@ -13,6 +13,7 @@ mod datasets;
 mod events;
 mod jobs;
 mod limits;
+mod margin_policies;
 mod prices;
 mod projects;
 mod prompts;
@@ -88,6 +89,7 @@ impl FirestoreStore {
         Surface::Prompts,
         Surface::KeyAdmin,
         Surface::LimitLifecycle,
+        Surface::MarginPolicies,
         Surface::JobLeases,
     ];
 
@@ -230,6 +232,24 @@ impl Store for FirestoreStore {
     }
     fn delete_limit_rule(&self, id: &str) -> Result<bool> {
         limits::delete_limit_rule(&self.rest, id)
+    }
+
+    // --- margin policies ---
+    fn create_margin_policy(&self, p: &lighttrack_core::MarginPolicy) -> Result<()> {
+        margin_policies::create_margin_policy(&self.rest, p)
+    }
+    fn list_margin_policies(
+        &self,
+        project: &str,
+        only_enabled: bool,
+    ) -> Result<Vec<lighttrack_core::MarginPolicy>> {
+        margin_policies::list_margin_policies(&self.rest, project, only_enabled)
+    }
+    fn get_margin_policy(&self, id: &str) -> Result<Option<lighttrack_core::MarginPolicy>> {
+        margin_policies::get_margin_policy(&self.rest, id)
+    }
+    fn delete_margin_policy(&self, id: &str) -> Result<bool> {
+        margin_policies::delete_margin_policy(&self.rest, id)
     }
 
     fn insert_score(&self, s: &Score) -> Result<()> {

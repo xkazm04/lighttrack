@@ -52,7 +52,8 @@ pub use limits::{
 };
 pub use margin::{compute_margin, CostByDimension, MarginDimension, MarginRow};
 pub use margin_policy::{
-    evaluate_policies, MarginPolicy, PolicyAction, PolicyTrigger, RuleChange, POLICY_ORIGIN_PREFIX,
+    evaluate_policies, recognized_revenue, MarginPolicy, PolicyAction, PolicyTrigger, RuleChange,
+    POLICY_ORIGIN_PREFIX,
 };
 pub use margin_sim::{compute_margin_simulation, SimAssumptions, SimRow, TokensByDimension};
 pub use margin_trend::{

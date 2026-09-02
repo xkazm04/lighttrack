@@ -276,3 +276,26 @@ CREATE TABLE IF NOT EXISTS relay_tasks (
 CREATE INDEX IF NOT EXISTS idx_relay_due ON relay_tasks(status, next_attempt_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_idem ON relay_tasks(project_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
+
+-- Standing margin guardrails (M4). Mirrors schema/sqlite/001_init.sql: `trigger`/`action` are JSON
+-- text because both are open sum types, and this is sweep-time config rather than hot-path data.
+CREATE TABLE IF NOT EXISTS margin_policies (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  trigger_json  TEXT NOT NULL,
+  min_cost_usd  DOUBLE PRECISION NOT NULL DEFAULT 0,
+  action_json   TEXT NOT NULL,
+  cooldown_secs BIGINT NOT NULL DEFAULT 3600,
+  expiry_secs   BIGINT NOT NULL DEFAULT 86400,
+  enabled       BIGINT NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_margin_policies_project ON margin_policies(project_id);
+
+-- Derived thresholds, escalation and rule provenance (M4), additive on limit_rules. All nullable:
+-- an existing rule carries no opinion, which reads back as the fixed threshold it always had.
+ALTER TABLE limit_rules ADD COLUMN IF NOT EXISTS threshold_json TEXT;
+ALTER TABLE limit_rules ADD COLUMN IF NOT EXISTS escalation_json TEXT;
+ALTER TABLE limit_rules ADD COLUMN IF NOT EXISTS escalated_until TEXT;
+ALTER TABLE limit_rules ADD COLUMN IF NOT EXISTS origin TEXT;
+ALTER TABLE limit_rules ADD COLUMN IF NOT EXISTS expires_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_limit_rules_origin ON limit_rules(origin) WHERE origin IS NOT NULL;

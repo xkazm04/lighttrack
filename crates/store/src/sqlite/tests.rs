@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use lighttrack_core::{
     new_id, ApiKey, Job, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation,
-    Project, Prompt, PromptVersion, Redaction, Status, TokenUsage,
+    Project, Prompt, PromptVersion, Redaction, Status, Threshold, TokenUsage,
 };
 
 use super::SqliteStore;
@@ -84,11 +84,15 @@ fn batch_admission_counts_prior_items_no_cap_bypass() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 3.0,
+        threshold: Threshold::Fixed(3.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
 
@@ -938,11 +942,15 @@ fn projects_keys_limits_usage() {
         project_id: "p1".into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold: 0.005,
+        threshold: Threshold::Fixed(0.005),
         action: LimitAction::Alert,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     };
     s.create_limit_rule(&rule).unwrap();
     assert_eq!(s.list_limit_rules("p1", true).unwrap().len(), 1);
@@ -1568,11 +1576,15 @@ fn insert_event_checked_enforces_caps() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 2.0,
+        threshold: Threshold::Fixed(2.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     let blocked = s
@@ -1607,25 +1619,29 @@ fn limit_rule_update_delete_and_toggle() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 2.0,
+        threshold: Threshold::Fixed(2.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     };
     s.create_limit_rule(&rule).unwrap();
 
     // get round-trips.
     let got = s.get_limit_rule("r1").unwrap().unwrap();
-    assert_eq!(got.threshold, 2.0);
+    assert_eq!(got.threshold, Threshold::Fixed(2.0));
     assert!(s.get_limit_rule("nope").unwrap().is_none());
 
     // Update raises the threshold and switches the action; the row reads back changed.
-    rule.threshold = 9.0;
+    rule.threshold = Threshold::Fixed(9.0);
     rule.action = LimitAction::Alert;
     assert!(s.update_limit_rule(&rule).unwrap(), "existing row updates");
     let got = s.get_limit_rule("r1").unwrap().unwrap();
-    assert_eq!(got.threshold, 9.0);
+    assert_eq!(got.threshold, Threshold::Fixed(9.0));
     assert_eq!(got.action, LimitAction::Alert);
     // Updating an unknown id reports no row matched (the API maps that to 404).
     let mut ghost = rule.clone();
@@ -1638,11 +1654,15 @@ fn limit_rule_update_delete_and_toggle() {
         project_id: "p2".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 1.0,
+        threshold: Threshold::Fixed(1.0),
         action: LimitAction::Block,
         enabled: false,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     };
     s.create_limit_rule(&block).unwrap();
     let a = s
@@ -1683,11 +1703,15 @@ fn warn_at_round_trips_and_admission_reports_warning() {
         project_id: "p1".into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold: 1.0,
+        threshold: Threshold::Fixed(1.0),
         action: LimitAction::Alert,
         enabled: true,
         warn_at: Some(0.8),
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     // warn_at persists through the store.
@@ -1723,11 +1747,15 @@ fn scoped_cap_rejects_only_matching_dimension() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 2.0,
+        threshold: Threshold::Fixed(2.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: Some(LimitScope::Model("gpt-4o".into())),
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     // scope round-trips through the store.
@@ -1849,11 +1877,15 @@ fn a_per_key_cap_binds_only_its_own_key_and_usage_is_visible_before_it_breaches(
         project_id: "p1".into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold: 5.0,
+        threshold: Threshold::Fixed(5.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: Some(LimitScope::ApiKey("k-staging".into())),
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     assert_eq!(
@@ -1898,11 +1930,15 @@ fn a_customer_scoped_cap_reads_the_billing_linkage() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 2.0,
+        threshold: Threshold::Fixed(2.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: Some(LimitScope::Customer("acme".into())),
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     let for_customer = |c: &str| {
@@ -1954,11 +1990,15 @@ fn insert_event_checked_alert_never_blocks() {
         project_id: "p1".into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold: 0.001,
+        threshold: Threshold::Fixed(0.001),
         action: LimitAction::Alert,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     // Way over the Alert threshold, but Alert is observe-only: admitted + recorded, breach reported.
@@ -2557,11 +2597,15 @@ fn cost_capped_store(threshold: f64) -> SqliteStore {
         project_id: "p1".into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold,
+        threshold: Threshold::Fixed(threshold),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     s
@@ -2682,11 +2726,15 @@ fn calls_and_tokens_caps_are_untouched_by_unpriced_traffic() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 3.0,
+        threshold: Threshold::Fixed(3.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     for i in 0..4 {
