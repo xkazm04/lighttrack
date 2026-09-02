@@ -36,7 +36,14 @@ pub(crate) fn seed_book(path: &str) -> (PriceBook, PriceSeed) {
                 (embedded(), PriceSeed::Embedded)
             }
         },
-        Err(_) => (embedded(), PriceSeed::Embedded),
+        // Absent is the normal binary-only install and needs no comment. Present-but-unreadable (a
+        // permissions mistake, a directory at that path) is an operator's edited book being silently
+        // ignored — the exact failure the boot-time "source" field exists to expose.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (embedded(), PriceSeed::Embedded),
+        Err(e) => {
+            tracing::warn!(path = %path, error = %e, "pricing file exists but could not be read; using the compiled-in price book");
+            (embedded(), PriceSeed::Embedded)
+        }
     }
 }
 
