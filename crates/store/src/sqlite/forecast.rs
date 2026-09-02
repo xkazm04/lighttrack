@@ -88,8 +88,7 @@ mod tests {
 
     fn conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch(include_str!("../../../../schema/sqlite/001_init.sql"))
-            .unwrap();
+        crate::sqlite::schema::apply(&c).expect("schema");
         c
     }
 
