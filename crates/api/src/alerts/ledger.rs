@@ -248,7 +248,15 @@ impl Alerter {
                 if let Some(store) = self.store() {
                     let id = alert.id.clone();
                     let d2 = d.clone();
-                    let _ = spawn_db(move || store.mark_delivery(&id, &d2)).await;
+                    // Best-effort like everything here, but never silent: a delivery record that
+                    // fails to land is the ledger saying "nobody was told" about an alert that was
+                    // in fact delivered — the exact lie the ledger exists to end. Record it.
+                    if let Err(e) = spawn_db(move || store.mark_delivery(&id, &d2)).await {
+                        tracing::warn!(
+                            alert_id = %alert.id, channel = %c.id, delivered_ok = d.ok, error = %e,
+                            "alert was delivered but its delivery record could not be written"
+                        );
+                    }
                 }
             }
         }
