@@ -22,8 +22,10 @@ mod prices;
 mod projects;
 mod prompts;
 mod relay;
+mod relay_lease;
 mod revenue;
 mod rubrics;
+mod schedules;
 mod schema;
 mod scores;
 mod usage_cache;
@@ -49,9 +51,9 @@ use serde_json::Value;
 
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
-    JobCancel, JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
-    PromptVersion, RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension,
-    TraceSummary,
+    JobCancel, JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project,
+    Prompt, PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, Rubric,
+    Schedule, Score, TokensByDimension, TraceSummary,
 };
 
 use crate::{
@@ -611,8 +613,8 @@ impl Store for SqliteStore {
     fn create_job(&self, j: &Job) -> Result<()> {
         self.with_op(DbOp::JobsWrite, |c| jobs::create(c, j))
     }
-    fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
-        self.with_op(DbOp::JobsWrite, |c| jobs::claim(c, stale_before))
+    fn claim_job(&self, stale_before: DateTime<Utc>, kinds: &[&str]) -> Result<Option<Job>> {
+        self.with_op(DbOp::JobsWrite, |c| jobs::claim(c, stale_before, kinds))
     }
     fn cancel_job(&self, id: &str) -> Result<Option<JobCancel>> {
         self.with_op(DbOp::JobsWrite, |c| jobs::cancel(c, id))
@@ -640,6 +642,26 @@ impl Store for SqliteStore {
     }
     fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
         self.read_op(DbOp::JobsRead, |c| jobs::list(c, status, limit))
+    }
+
+    // --- stored schedules ---
+    fn create_schedule(&self, s: &Schedule) -> Result<()> {
+        self.with(|c| schedules::create(c, s))
+    }
+    fn get_schedule(&self, id: &str) -> Result<Option<Schedule>> {
+        self.read(|c| schedules::get(c, id))
+    }
+    fn list_schedules(&self, project: &str) -> Result<Vec<Schedule>> {
+        self.read(|c| schedules::list(c, project))
+    }
+    fn update_schedule(&self, s: &Schedule) -> Result<bool> {
+        self.with(|c| schedules::update(c, s))
+    }
+    fn delete_schedule(&self, id: &str) -> Result<bool> {
+        self.with(|c| schedules::delete(c, id))
+    }
+    fn due_schedules(&self, now: DateTime<Utc>) -> Result<Vec<Schedule>> {
+        self.read(|c| schedules::due(c, now))
     }
 
     // --- prompt registry ---
@@ -757,8 +779,32 @@ impl Store for SqliteStore {
     fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {
         self.with(relay::sweep_dead)
     }
-    fn settle_relay_task(&self, id: &str, outcome: &RelayOutcome) -> Result<Option<RelayTask>> {
-        self.with(|c| relay::settle(c, id, outcome))
+    fn settle_relay_task(
+        &self,
+        id: &str,
+        fence: Option<DateTime<Utc>>,
+        outcome: &RelayOutcome,
+    ) -> Result<RelaySettle> {
+        self.with(|c| relay_lease::settle(c, id, fence, outcome))
+    }
+    fn renew_relay_lease(
+        &self,
+        id: &str,
+        fence: DateTime<Utc>,
+        lease_secs: i64,
+    ) -> Result<LeaseHeld> {
+        self.with(|c| relay_lease::renew(c, id, fence, lease_secs))
+    }
+    fn update_relay_progress(
+        &self,
+        id: &str,
+        fence: DateTime<Utc>,
+        progress: &str,
+    ) -> Result<LeaseHeld> {
+        self.with(|c| relay_lease::update_progress(c, id, fence, progress))
+    }
+    fn cancel_relay_task(&self, id: &str) -> Result<Option<RelayCancel>> {
+        self.with(|c| relay_lease::cancel(c, id))
     }
 
     // --- collective model intelligence ---

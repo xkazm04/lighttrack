@@ -19,8 +19,10 @@ mod jobs;
 mod prices;
 mod projects;
 mod relay;
+mod relay_lease;
 mod revenue;
 mod rubrics;
+mod schedules;
 mod scores;
 mod traces;
 mod util;
@@ -32,8 +34,8 @@ use tokio::runtime::Runtime;
 
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, JobCancel,
-    JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, RelayOutcome, RelayTask,
-    RevenueEvent, Rubric, Score, TraceSummary,
+    JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, RelayCancel,
+    RelayOutcome, RelaySettle, RelayTask, RevenueEvent, Rubric, Schedule, Score, TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
@@ -89,6 +91,7 @@ impl PgStore {
         Surface::LimitLifecycle,
         Surface::JobLeases,
         Surface::Relay,
+        Surface::Schedules,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -352,8 +355,9 @@ impl Store for PgStore {
     fn create_job(&self, j: &Job) -> Result<()> {
         self.rt.block_on(jobs::create(&self.pool, j))
     }
-    fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
-        self.rt.block_on(jobs::claim(&self.pool, stale_before))
+    fn claim_job(&self, stale_before: DateTime<Utc>, kinds: &[&str]) -> Result<Option<Job>> {
+        self.rt
+            .block_on(jobs::claim(&self.pool, stale_before, kinds))
     }
     fn cancel_job(&self, id: &str) -> Result<Option<JobCancel>> {
         self.rt.block_on(jobs::cancel(&self.pool, id))
@@ -381,6 +385,26 @@ impl Store for PgStore {
     }
     fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
         self.rt.block_on(jobs::list(&self.pool, status, limit))
+    }
+
+    // --- stored schedules ---
+    fn create_schedule(&self, s: &Schedule) -> Result<()> {
+        self.rt.block_on(schedules::create(&self.pool, s))
+    }
+    fn get_schedule(&self, id: &str) -> Result<Option<Schedule>> {
+        self.rt.block_on(schedules::get(&self.pool, id))
+    }
+    fn list_schedules(&self, project: &str) -> Result<Vec<Schedule>> {
+        self.rt.block_on(schedules::list(&self.pool, project))
+    }
+    fn update_schedule(&self, s: &Schedule) -> Result<bool> {
+        self.rt.block_on(schedules::update(&self.pool, s))
+    }
+    fn delete_schedule(&self, id: &str) -> Result<bool> {
+        self.rt.block_on(schedules::delete(&self.pool, id))
+    }
+    fn due_schedules(&self, now: DateTime<Utc>) -> Result<Vec<Schedule>> {
+        self.rt.block_on(schedules::due(&self.pool, now))
     }
 
     // --- cloud→device relay queue ---
@@ -415,8 +439,36 @@ impl Store for PgStore {
     fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {
         self.rt.block_on(relay::sweep_dead(&self.pool))
     }
-    fn settle_relay_task(&self, id: &str, outcome: &RelayOutcome) -> Result<Option<RelayTask>> {
-        self.rt.block_on(relay::settle(&self.pool, id, outcome))
+    fn settle_relay_task(
+        &self,
+        id: &str,
+        fence: Option<DateTime<Utc>>,
+        outcome: &RelayOutcome,
+    ) -> Result<RelaySettle> {
+        self.rt
+            .block_on(relay_lease::settle(&self.pool, id, fence, outcome))
+    }
+    fn renew_relay_lease(
+        &self,
+        id: &str,
+        fence: DateTime<Utc>,
+        lease_secs: i64,
+    ) -> Result<LeaseHeld> {
+        self.rt
+            .block_on(relay_lease::renew(&self.pool, id, fence, lease_secs))
+    }
+    fn update_relay_progress(
+        &self,
+        id: &str,
+        fence: DateTime<Utc>,
+        progress: &str,
+    ) -> Result<LeaseHeld> {
+        self.rt.block_on(relay_lease::update_progress(
+            &self.pool, id, fence, progress,
+        ))
+    }
+    fn cancel_relay_task(&self, id: &str) -> Result<Option<RelayCancel>> {
+        self.rt.block_on(relay_lease::cancel(&self.pool, id))
     }
 
     // --- revenue + margin (profit tracking) ---

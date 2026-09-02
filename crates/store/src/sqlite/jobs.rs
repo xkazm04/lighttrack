@@ -69,9 +69,27 @@ pub(super) fn cancel(conn: &Connection, id: &str) -> Result<Option<JobCancel>> {
     Ok(existing.map(|status| JobCancel::AlreadyFinished { status }))
 }
 
-pub(super) fn claim(conn: &Connection, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
+/// Claim the oldest claimable job **this worker can actually run**.
+///
+/// `kinds` is the worker's capability declaration: empty = "anything" (what every worker meant
+/// before the queue carried more than one kind, and what an old runner still sends). Filtering in
+/// SQL rather than after the claim is the whole point — a worker that claimed a kind it cannot
+/// execute has already taken the job off the queue and stamped a lease on it, so the job then fails
+/// its way through the retry budget while a capable worker sits idle beside it.
+pub(super) fn claim(
+    conn: &Connection,
+    stale_before: DateTime<Utc>,
+    kinds: &[&str],
+) -> Result<Option<Job>> {
     let now = fmt_ts(Utc::now());
     let stale = fmt_ts(stale_before);
+    // A JSON array + `json_each` keeps this ONE statement with a fixed parameter count: building an
+    // `IN (?,?,?)` list would make the SQL vary with the caller and defeat the statement cache.
+    let kinds_json = if kinds.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(kinds)?)
+    };
     // Atomic: pick the oldest queued (or stale-running) job and flip it to running. Still ONE
     // statement — the load-bearing property of this queue.
     //
@@ -84,13 +102,17 @@ pub(super) fn claim(conn: &Connection, stale_before: DateTime<Utc>) -> Result<Op
                 stale_reclaims = stale_reclaims + (status='running'), \
                 error = CASE WHEN status='running' THEN ?3 ELSE error END \
          WHERE id = (SELECT id FROM jobs \
-                     WHERE status='queued' OR (status='running' AND claimed_at < ?2) \
+                     WHERE (status='queued' OR (status='running' AND claimed_at < ?2)) \
+                       AND (?4 IS NULL OR type IN (SELECT value FROM json_each(?4))) \
                      ORDER BY created_at LIMIT 1) \
          RETURNING {COLS}"
     );
     let mut stmt = conn.prepare(&sql)?;
     let raw = stmt
-        .query_row(params![now, stale, JOB_ERROR_WORKER_LOST], map_raw)
+        .query_row(
+            params![now, stale, JOB_ERROR_WORKER_LOST, kinds_json],
+            map_raw,
+        )
         .optional()?;
     raw.map(from_raw).transpose()
 }

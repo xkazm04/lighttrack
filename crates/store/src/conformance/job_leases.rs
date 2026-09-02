@@ -41,7 +41,7 @@ pub(super) fn job_cancellation(store: &dyn Store) -> Result<()> {
     let running = new_job();
     store.create_job(&running)?;
     let claimed = store
-        .claim_job(Utc::now())?
+        .claim_job(Utc::now(), &[])?
         .expect("claim the job just enqueued");
     assert_eq!(
         claimed.id, running.id,
@@ -83,7 +83,7 @@ pub(super) fn job_leases(store: &dyn Store) -> Result<()> {
     drain_jobs(store)?;
     let j = new_job();
     store.create_job(&j)?;
-    let held = store.claim_job(Utc::now())?.expect("claim");
+    let held = store.claim_job(Utc::now(), &[])?.expect("claim");
     assert_eq!(held.id, j.id, "the drained queue's only job is ours");
     let fence = held
         .claimed_at

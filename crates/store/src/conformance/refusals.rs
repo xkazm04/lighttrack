@@ -50,6 +50,7 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
         Surface::KeyAdmin => key_admin(store),
         Surface::LimitLifecycle => limit_lifecycle(store),
         Surface::JobLeases => job_leases(store),
+        Surface::Schedules => schedules(store),
         Surface::Maintenance => maintenance(store),
         Surface::Metrics => metrics(store),
     };
@@ -178,8 +179,17 @@ fn relay(store: &dyn Store) -> Vec<&'static str> {
     refused("sweep_relay_dead", store.sweep_relay_dead());
     refused(
         "settle_relay_task",
-        store.settle_relay_task(&t.id, &RelayOutcome::Succeeded(json!({}))),
+        store.settle_relay_task(&t.id, None, &RelayOutcome::Succeeded(json!({}))),
     );
+    refused(
+        "renew_relay_lease",
+        store.renew_relay_lease(&t.id, Utc::now(), 60),
+    );
+    refused(
+        "update_relay_progress",
+        store.update_relay_progress(&t.id, Utc::now(), "x"),
+    );
+    refused("cancel_relay_task", store.cancel_relay_task(&t.id));
     vec![
         "create_relay_task",
         "get_relay_task",
@@ -188,6 +198,27 @@ fn relay(store: &dyn Store) -> Vec<&'static str> {
         "lease_relay_tasks",
         "sweep_relay_dead",
         "settle_relay_task",
+        "renew_relay_lease",
+        "update_relay_progress",
+        "cancel_relay_task",
+    ]
+}
+
+fn schedules(store: &dyn Store) -> Vec<&'static str> {
+    let s = super::schedules::sample_schedule(&new_id());
+    refused("create_schedule", store.create_schedule(&s));
+    refused("get_schedule", store.get_schedule(&s.id));
+    refused("list_schedules", store.list_schedules(&s.project_id));
+    refused("update_schedule", store.update_schedule(&s));
+    refused("delete_schedule", store.delete_schedule(&s.id));
+    refused("due_schedules", store.due_schedules(Utc::now()));
+    vec![
+        "create_schedule",
+        "get_schedule",
+        "list_schedules",
+        "update_schedule",
+        "delete_schedule",
+        "due_schedules",
     ]
 }
 

@@ -303,8 +303,8 @@ impl Store for FirestoreStore {
     fn create_job(&self, j: &Job) -> Result<()> {
         jobs::create_job(&self.rest, j)
     }
-    fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
-        jobs::claim_job(&self.rest, stale_before)
+    fn claim_job(&self, stale_before: DateTime<Utc>, kinds: &[&str]) -> Result<Option<Job>> {
+        jobs::claim_job(&self.rest, stale_before, kinds)
     }
     fn cancel_job(&self, id: &str) -> Result<Option<JobCancel>> {
         jobs::cancel_job(&self.rest, id)

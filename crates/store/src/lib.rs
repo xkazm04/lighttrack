@@ -21,9 +21,10 @@ use thiserror::Error;
 
 use lighttrack_core::{
     scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, CostEvidence,
-    Dataset, DatasetItem, Job, JobCancel, JobFinish, LimitMetric, LimitRule, LimitScope,
-    LimitStatus, LimitWindow, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
-    RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension, Trace, TraceSummary,
+    Dataset, DatasetItem, Job, JobCancel, JobFinish, LeaseHeld, LimitMetric, LimitRule, LimitScope,
+    LimitStatus, LimitWindow, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayCancel,
+    RelayOutcome, RelaySettle, RelayTask, RevenueEvent, Rubric, Schedule, Score, TokensByDimension,
+    Trace, TraceSummary,
 };
 
 pub use capabilities::{Capabilities, Surface};
@@ -1077,7 +1078,13 @@ pub trait Store: Send + Sync {
     /// Reclaiming a stale `running` job counts a **worker death** (`stale_reclaims` + the
     /// `JOB_ERROR_WORKER_LOST` marker), never a benchmark failure. `cancelling`/`cancelled` jobs are
     /// outside the claimable set, so a cancelled run can never be restarted by the reclaim path.
-    fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>>;
+    ///
+    /// `kinds` is the claiming worker's capability declaration — the job kinds it can actually
+    /// execute. Empty means "any kind", which is what every worker meant while `bench_run` was the
+    /// only one and what an older runner still sends. The filter belongs INSIDE the claim: a worker
+    /// that claims a kind it cannot run has already taken the job off the queue and stamped a lease
+    /// on it, so the job burns its retry budget failing while a capable worker idles beside it.
+    fn claim_job(&self, stale_before: DateTime<Utc>, kinds: &[&str]) -> Result<Option<Job>>;
     /// Ask a queued/running job to stop. `queued` → `cancelled` outright; `running` → `cancelling`,
     /// which the worker notices at its next case boundary. `Ok(None)` = no such job.
     ///
@@ -1124,6 +1131,33 @@ pub trait Store: Send + Sync {
     ) -> Result<JobFinish>;
     fn get_job(&self, id: &str) -> Result<Option<Job>>;
     fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>>;
+
+    // --- stored schedules (M7): recurrence as a row, swept by the API ---
+    // Default impls so a backend that has not ported the table compiles unchanged — but they refuse
+    // rather than answer empty: a `due_schedules` that quietly returned `[]` would read as "nothing
+    // recurring is configured here", which is the exact lie an operator would act on.
+    fn create_schedule(&self, _s: &Schedule) -> Result<()> {
+        Err(StoreError::Unsupported("stored schedules"))
+    }
+    fn get_schedule(&self, _id: &str) -> Result<Option<Schedule>> {
+        Err(StoreError::Unsupported("stored schedules"))
+    }
+    fn list_schedules(&self, _project: &str) -> Result<Vec<Schedule>> {
+        Err(StoreError::Unsupported("stored schedules"))
+    }
+    /// Replace a schedule's mutable fields; `Ok(false)` = no such id. The id and `project_id` are
+    /// identity and are never written — a schedule that could change project would be a way around
+    /// project scoping.
+    fn update_schedule(&self, _s: &Schedule) -> Result<bool> {
+        Err(StoreError::Unsupported("stored schedules"))
+    }
+    fn delete_schedule(&self, _id: &str) -> Result<bool> {
+        Err(StoreError::Unsupported("stored schedules"))
+    }
+    /// Enabled schedules whose `next_due` has passed — the sweep's one read per tick.
+    fn due_schedules(&self, _now: DateTime<Utc>) -> Result<Vec<Schedule>> {
+        Err(StoreError::Unsupported("stored schedules"))
+    }
 
     // --- prompt registry (versioned prompts + label-gated promotion) ---
     // Default impls so backends that don't (yet) host the registry compile unchanged: writes are a
@@ -1270,10 +1304,52 @@ pub trait Store: Send + Sync {
     fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {
         Err(StoreError::Unsupported("the relay queue"))
     }
-    /// Settle a leased task with the device's outcome; returns the updated row (`None` if the id is
-    /// unknown). Settling a task that is no longer leased returns it unchanged, so a duplicate
-    /// result report is harmless.
-    fn settle_relay_task(&self, _id: &str, _outcome: &RelayOutcome) -> Result<Option<RelayTask>> {
+    /// Settle a leased task with the device's outcome — **conditioned on the caller still holding
+    /// the lease**, exactly like `finish_job`.
+    ///
+    /// `fence` is the `lease_fence` the caller was handed at lease time; `None` is the
+    /// operator-shaped settle, which waives the ownership condition but never the liveness one.
+    /// Returns [`RelaySettle::NotHeld`] rather than an error when the write is refused, carrying
+    /// what the record holds now — the check it replaces (`status == "leased"`) asked about
+    /// liveness where ownership was meant, so a device reclaimed mid-run reported back onto its
+    /// successor's task and overwrote the run in progress.
+    fn settle_relay_task(
+        &self,
+        _id: &str,
+        _fence: Option<DateTime<Utc>>,
+        _outcome: &RelayOutcome,
+    ) -> Result<RelaySettle> {
+        Err(StoreError::Unsupported("the relay queue"))
+    }
+    /// Extend the holder's lease by `lease_secs`, conditioned on `fence`. Moves the DEADLINE, never
+    /// the fence: one device's lease keeps one identity for its whole run, so the report it sends
+    /// hours later carries the token it was given.
+    ///
+    /// This is what turns `lease_secs` from "the longest a run may take" (it was clamped to 6 h, and
+    /// was simultaneously the detection latency for a dead device) into detection latency alone.
+    fn renew_relay_lease(
+        &self,
+        _id: &str,
+        _fence: DateTime<Utc>,
+        _lease_secs: i64,
+    ) -> Result<LeaseHeld> {
+        Err(StoreError::Unsupported("the relay queue"))
+    }
+    /// Publish the holder's liveness detail, on its own door — never on the renewal, or a device
+    /// that is alive but stuck computing something to say reads as a dead one.
+    fn update_relay_progress(
+        &self,
+        _id: &str,
+        _fence: DateTime<Utc>,
+        _progress: &str,
+    ) -> Result<LeaseHeld> {
+        Err(StoreError::Unsupported("the relay queue"))
+    }
+    /// Ask a task to stop: `queued` → `cancelled`, `leased` → `cancelling` (outside the leasable
+    /// set, so it is never handed to a second device), terminal → untouched. `Ok(None)` = no such
+    /// task. A backend that cannot do this atomically must refuse rather than default quietly: a
+    /// cancel that silently did nothing leaves the operator believing the run stopped.
+    fn cancel_relay_task(&self, _id: &str) -> Result<Option<RelayCancel>> {
         Err(StoreError::Unsupported("the relay queue"))
     }
 

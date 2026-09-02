@@ -214,14 +214,18 @@ fn doc_by_id(rest: &Rest, id: &str) -> Result<Option<Value>> {
 /// `running` flip guarded by the doc's `updateTime`. A lost race fails the precondition → re-query the
 /// next candidate (which now skips the just-claimed one). A few rounds handle contention; single
 /// workers always win first try.
-pub(crate) fn claim_job(rest: &Rest, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
+pub(crate) fn claim_job(
+    rest: &Rest,
+    stale_before: DateTime<Utc>,
+    kinds: &[&str],
+) -> Result<Option<Job>> {
     let now = fmt_ts(Utc::now());
     let stale = fmt_ts(stale_before);
 
     for _ in 0..5 {
-        let candidate = match oldest_queued(rest)? {
+        let candidate = match oldest_queued(rest, kinds)? {
             Some(d) => Some(d),
-            None => oldest_stale(rest, &stale)?,
+            None => oldest_stale(rest, &stale, kinds)?,
         };
         let Some(doc) = candidate else {
             return Ok(None);
@@ -281,20 +285,32 @@ pub(crate) fn claim_job(rest: &Rest, stale_before: DateTime<Utc>) -> Result<Opti
     Ok(None)
 }
 
-fn oldest_queued(rest: &Rest) -> Result<Option<Value>> {
-    let filters: Vec<(&str, &str, Value)> = vec![("status", "EQUAL", json!("queued"))];
+/// The worker's capability declaration as a query filter, or nothing when it declared none.
+///
+/// Firestore's `IN` caps at 30 values, which the five-kind vocabulary is nowhere near, and pairing
+/// it with the existing `status`/`created_at` predicates needs a composite index in a real project
+/// (the emulator builds one on demand) — the same operational requirement the status+created_at
+/// query already carries.
+fn kind_filter(kinds: &[&str]) -> Option<(&'static str, &'static str, Value)> {
+    (!kinds.is_empty()).then(|| ("type", "IN", json!(kinds)))
+}
+
+fn oldest_queued(rest: &Rest, kinds: &[&str]) -> Result<Option<Value>> {
+    let mut filters: Vec<(&str, &str, Value)> = vec![("status", "EQUAL", json!("queued"))];
+    filters.extend(kind_filter(kinds));
     Ok(rest
         .query_raw("jobs", &filters, Some(("created_at", false)), Some(1))?
         .into_iter()
         .next())
 }
 
-fn oldest_stale(rest: &Rest, stale: &str) -> Result<Option<Value>> {
+fn oldest_stale(rest: &Rest, stale: &str, kinds: &[&str]) -> Result<Option<Value>> {
     // status == running AND claimed_at < stale. (No orderBy: avoids the inequality-order constraint.)
-    let filters: Vec<(&str, &str, Value)> = vec![
+    let mut filters: Vec<(&str, &str, Value)> = vec![
         ("status", "EQUAL", json!("running")),
         ("claimed_at", "LESS_THAN", json!(stale)),
     ];
+    filters.extend(kind_filter(kinds));
     Ok(rest
         .query_raw("jobs", &filters, None, Some(1))?
         .into_iter()

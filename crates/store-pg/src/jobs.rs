@@ -41,7 +41,15 @@ pub(crate) async fn create(pool: &PgPool, j: &Job) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn claim(pool: &PgPool, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
+/// Claim the oldest claimable job **this worker can actually run**. `kinds` is the worker's
+/// capability declaration; empty = "any kind" (what an older runner still sends). The filter is
+/// inside the claim because a worker that claims a kind it cannot execute has already taken the job
+/// off the queue and stamped a lease on it.
+pub(crate) async fn claim(
+    pool: &PgPool,
+    stale_before: DateTime<Utc>,
+    kinds: &[&str],
+) -> Result<Option<Job>> {
     let now = fmt_ts(Utc::now());
     let stale = fmt_ts(stale_before);
     // Atomic + concurrency-safe: FOR UPDATE SKIP LOCKED so parallel workers don't grab the same job.
@@ -54,14 +62,21 @@ pub(crate) async fn claim(pool: &PgPool, stale_before: DateTime<Utc>) -> Result<
                 stale_reclaims = stale_reclaims + (CASE WHEN status='running' THEN 1 ELSE 0 END), \
                 error = CASE WHEN status='running' THEN $3 ELSE error END \
          WHERE id = (SELECT id FROM jobs \
-                     WHERE status='queued' OR (status='running' AND claimed_at < $2) \
+                     WHERE (status='queued' OR (status='running' AND claimed_at < $2)) \
+                       AND ($4::text[] IS NULL OR type = ANY($4)) \
                      ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) \
          RETURNING {COLS}"
     );
+    // `= ANY($4)` with a nullable array keeps this ONE statement at a fixed parameter count; an
+    // `IN (…)` list built per call would make the SQL vary with the caller and defeat the prepared
+    // statement cache.
+    let kinds_arr: Option<Vec<String>> =
+        (!kinds.is_empty()).then(|| kinds.iter().map(|k| k.to_string()).collect());
     let row = sqlx::query(&sql)
         .bind(now)
         .bind(stale)
         .bind(JOB_ERROR_WORKER_LOST)
+        .bind(kinds_arr)
         .fetch_optional(pool)
         .await
         .map_err(pgerr)?;

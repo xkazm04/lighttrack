@@ -58,6 +58,31 @@ const ADDED_COLUMNS: &[&str] = &[
     "ALTER TABLE projects ADD COLUMN archived_at TEXT",
 ];
 
+/// Columns added **after** the batch rather than before it.
+///
+/// [`ADDED_COLUMNS`] runs first because [`SCHEMA`] indexes some of the columns it adds, and an index
+/// over a column an old table lacks is a hard error. These are the opposite case: the table they
+/// widen is *defined further up the same file they are appended to*, so on a fresh database a
+/// pre-batch `ALTER` finds no table, no-ops, and the `CREATE TABLE` then defines the table without
+/// them — the column exists on upgraded databases and is missing on new ones, which is the worst of
+/// both. Running them after the batch gives one order that is right for both: the table exists
+/// either way, and "duplicate column name" is the success case on a database that already has them.
+///
+/// Nothing in [`SCHEMA`] may index a column listed here (`idx_relay_lease` keys on `status` +
+/// `lease_deadline`, both original).
+///
+/// M7 — the relay's fenced, renewable lease. `failures` is the retry budget (runs that actually ran
+/// and failed) and `stale_reclaims` counts device deaths, kept apart for the same reason the job
+/// queue keeps them apart: a device killed mid-run must not consume one of the task's chances.
+/// `lease_fence` is the holding device's identity, compared exactly by settle/renew/progress, and
+/// `progress` is the liveness detail those writes publish.
+const ADDED_COLUMNS_AFTER_SCHEMA: &[&str] = &[
+    "ALTER TABLE relay_tasks ADD COLUMN failures INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE relay_tasks ADD COLUMN stale_reclaims INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE relay_tasks ADD COLUMN lease_fence TEXT",
+    "ALTER TABLE relay_tasks ADD COLUMN progress TEXT",
+];
+
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.
 const ADD_RECEIVED_AT: &str = "ALTER TABLE events ADD COLUMN received_at TEXT";
 
@@ -89,6 +114,9 @@ pub(super) fn apply(c: &Connection) -> Result<()> {
     // carried).
     let backfill = add_column(c, ADD_RECEIVED_AT)?;
     c.execute_batch(SCHEMA)?;
+    for stmt in ADDED_COLUMNS_AFTER_SCHEMA {
+        add_column(c, stmt)?;
+    }
     if backfill {
         c.execute(
             "UPDATE events SET received_at = ts WHERE received_at IS NULL",

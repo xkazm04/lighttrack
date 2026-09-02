@@ -276,3 +276,28 @@ CREATE TABLE IF NOT EXISTS relay_tasks (
 CREATE INDEX IF NOT EXISTS idx_relay_due ON relay_tasks(status, next_attempt_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_idem ON relay_tasks(project_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
+
+-- ===========================================================================================
+-- M7: stored schedules + the fenced, renewable relay lease. Self-contained block, appended.
+-- Mirrors schema/sqlite/001_init.sql; timestamps stay fixed-width RFC3339 TEXT.
+-- ===========================================================================================
+
+CREATE TABLE IF NOT EXISTS schedules (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  payload       TEXT,
+  interval_secs BIGINT NOT NULL,
+  next_due      TEXT NOT NULL,
+  last_job_id   TEXT,
+  enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_due);
+CREATE INDEX IF NOT EXISTS idx_schedules_project ON schedules(project_id);
+
+ALTER TABLE relay_tasks ADD COLUMN IF NOT EXISTS failures BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE relay_tasks ADD COLUMN IF NOT EXISTS stale_reclaims BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE relay_tasks ADD COLUMN IF NOT EXISTS lease_fence TEXT;
+ALTER TABLE relay_tasks ADD COLUMN IF NOT EXISTS progress TEXT;
+CREATE INDEX IF NOT EXISTS idx_relay_lease ON relay_tasks(status, lease_deadline);
