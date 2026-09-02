@@ -154,6 +154,19 @@ mod table {
         r("/v1/collective/ingest", NoMethod, INGEST),
         r("/v1/collective/leaderboard", READ, NoMethod),
         r("/v1/collective/contribution", NoMethod, INGEST),
+        // The ledger is an observability read like the events it is about, so a project key with
+        // `read` sees its OWN project's alerts (`resolve_read_project` narrows it). Acknowledging
+        // is a state change on shared operational record, so it needs `manage`.
+        r("/v1/alerts", READ, NoMethod),
+        r("/v1/alerts/:id/ack", NoMethod, MANAGE),
+        // A resolution is written by the responder (an admin-keyed service), not by an app.
+        r("/v1/alerts/:id/resolution", NoMethod, Admin),
+        // Routing is where alerts GO: a project key that could add a channel could exfiltrate its
+        // own alerts to any destination, so channel writes are admin, like every other config write.
+        r("/v1/projects/:id/alert-channels", Admin, Admin),
+        r("/v1/projects/:id/alert-channels/:cid", NoMethod, Admin),
+        // Sending a real, signed test alert is a use of the deployment's own credentials.
+        r("/v1/alert-channels/:id/test", NoMethod, Admin),
     ];
 }
 
