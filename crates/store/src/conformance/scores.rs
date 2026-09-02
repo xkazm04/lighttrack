@@ -89,6 +89,10 @@ fn run_scoped_cases(store: &dyn Store, pid: &str) -> Result<()> {
         parse_failures: Some(1),
         injection_suspected: Some(false),
         determinism: Some("exact".into()),
+        // How mangled the judged evidence already was. Asserted through the whole-detail equality
+        // below: a backend that dropped it would answer "nothing was rewritten" about text the
+        // ingest scrub had rewritten, which is the exact claim M9 exists to stop being free.
+        evidence_redacted_spans: Some(2),
         ..Default::default()
     };
     let case = |run: &str, idx: Option<u32>, value: f64| Score {

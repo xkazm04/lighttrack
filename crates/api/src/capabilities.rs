@@ -108,6 +108,9 @@ fn consequence(s: Surface) -> &'static str {
         Surface::EventsCore | Surface::EventFilters => {
             "This is the ingest/read floor; a backend missing it cannot serve the API at all."
         }
+        Surface::RedactionPosture => {
+            "GET /v1/projects/:id/redaction is unavailable — this deployment cannot say whether its              stored rows were scrubbed, or by which rule set."
+        }
         Surface::Traces => "/v1/traces, /v1/traces/:id and whole-trace scoring are unavailable.",
         Surface::Forecast => "/v1/forecast and the pre-emptive breach alerts are unavailable.",
         Surface::MarginBreakdowns => {

@@ -95,7 +95,11 @@ fn score_once(
     let mut scored = 0usize;
     for (i, verdict) in judged.into_iter().enumerate() {
         let (ev, _, _) = &eligible[i];
-        let v = verdict?;
+        let mut v = verdict?;
+        // The judge read the *stored* text, which the ingest scrub may already have rewritten. Copy
+        // what the boundary did onto the verdict, so "why is this score odd" has an answer at the
+        // verdict rather than only at the row.
+        crate::provenance::stamp_evidence(&mut v.detail, ev);
         let score = build_score(&ev.project_id, Some(&ev.id), judge.label(), &v);
         post(cli, http, "/v1/scores", &score)?;
         scored += 1;

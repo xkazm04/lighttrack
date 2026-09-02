@@ -30,13 +30,28 @@ The heart of the system. Emitted by monitored apps, normalized + costed by `api`
 | `output` | json? | completion — optional, redactable |
 | `tags` | json (array) | freeform labels |
 | `source` | string? | host / app instance |
-| `metadata` | json | arbitrary app-supplied fields |
+| `metadata` | json | arbitrary app-supplied fields, **plus the server-owned keys below** |
+
+#### Server-owned `metadata` keys
+Written by the server and stripped from whatever the client sent, so they can be trusted as
+attribution and provenance rather than as claims: `api_key_id` (the authenticated principal),
+`cost_source` / `pricing_mode` (how `cost_usd` was resolved), and `redaction` — the
+[`RedactionStamp`](../crates/core/src/project.rs) `{policy, scrub, spans, rules}` recording what the
+ingest boundary did to this row. `rules` is `lighttrack_anon::rules_fingerprint()`, the digest of the
+scrubber's ordered rule set, so a span count written before a rule change is never silently compared
+with one written after. `customer_id` / `product_id` are client-supplied but pass the PII scrub
+un-rewritten (they are join keys, not payloads).
+
+A row with **no** `redaction` key predates the stamp or was written by a path that does not scrub —
+which is a different finding from `scrub: false` (the boundary looked and stored the text verbatim),
+and `GET /v1/projects/:id/redaction` reports the two separately rather than folding them together.
 
 ### Querying `events`
 `GET /v1/events` AND-combines: `project`, `since`/`until` (client `ts`), `provider`, `model`,
 `trace_id`, `name`, `status` (`success|error|timeout`), `tag` (array **membership**, not substring),
 `meta` (`key` or `key=value` over `metadata` — how per-customer/product questions are asked, since that
-linkage rides in metadata rather than a column) and `min_cost`. `count=1` additionally returns
+linkage rides in metadata rather than a column), `min_cost`, `redaction_rules` (rows stamped by one
+scrubber rule set) and `min_redacted_spans` (rows the scrub actually rewrote). `count=1` additionally returns
 `X-Total-Count`: the size of the whole matching set, independent of the cursor and page limit, so a
 client can render "n of N" without paging to count. Paging is keyset (`X-Next-Cursor`) and the cursor
 predicate is independent of the content predicates, so traversal is exact under every filter

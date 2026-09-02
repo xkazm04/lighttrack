@@ -101,6 +101,10 @@ mod table {
         r("/v1/jobs/:id/finish", NoMethod, Admin),
         r("/v1/projects", Admin, Admin),
         r("/v1/projects/:id", NoMethod, Admin),
+        // The posture report names counts and a rule fingerprint, never payload text — so the
+        // project's own read key may ask it. An operator who cannot check whether their own data
+        // was scrubbed has a compliance answer they must take on faith.
+        r("/v1/projects/:id/redaction", READ, NoMethod),
         r("/v1/projects/:id/keys", Admin, Admin),
         r("/v1/projects/:id/keys/:kid", NoMethod, Admin),
         r("/v1/projects/:id/keys/:kid/rotate", NoMethod, Admin),

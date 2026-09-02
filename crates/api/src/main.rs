@@ -42,6 +42,7 @@
 //!   POST /v1/projects  GET /v1/projects   POST /v1/projects/:id/keys
 //!   PUT  /v1/projects/:id                update name/enabled/redaction/collective_opt_in (admin);
 //!                                        a redaction change is enforced on the NEXT ingested event
+//!   GET  /v1/projects/:id/redaction     what the ingest boundary did to the stored rows (M9)
 //!   POST /v1/projects/:id/limits  GET /v1/projects/:id/limits
 //!   PUT  /v1/limits/:id  DELETE /v1/limits/:id   update (incl. enable/disable) or remove a rule
 //!   GET  /v1/limits/status?project=      evaluate limits -> throttle flag + per-rule status, plus a
@@ -155,6 +156,7 @@ mod projects;
 mod projects_keys;
 mod prompts;
 mod redact;
+mod redaction;
 mod rejections;
 mod relay;
 mod revenue;
@@ -179,6 +181,8 @@ mod tests_forecast;
 mod tests_ingest;
 #[cfg(test)]
 mod tests_limit_scope;
+#[cfg(test)]
+mod tests_redaction;
 #[cfg(test)]
 mod tests_relay;
 #[cfg(test)]
@@ -480,6 +484,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route(
             "/v1/projects/:id",
             put(projects::update_project).delete(projects::archive_project),
+        )
+        .route(
+            "/v1/projects/:id/redaction",
+            get(redaction::get_redaction_posture),
         )
         .route(
             "/v1/projects/:id/keys",
