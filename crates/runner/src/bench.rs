@@ -127,9 +127,12 @@ pub(crate) fn run_benchmark(
     // A referenced dataset also contributes its frozen-state + version to the run's provenance, so
     // "which cases was this scored on?" is answerable from the run alone.
     let mut extra_owned: Option<Value> = None;
-    let cases: Vec<BenchmarkCase> = if !bench.dataset.is_empty() {
-        bench.dataset.clone()
-    } else if let Some(ds) = bench.dataset_ref.as_deref() {
+    // Inline cases AND the referenced dataset's, as the API documents ("instead of, or in addition
+    // to"). The inline set used to win outright, so a benchmark carrying both silently ran only its
+    // inline cases and recorded no dataset pin - the referenced cases were paid attention to by
+    // nobody.
+    let mut cases: Vec<BenchmarkCase> = bench.dataset.clone();
+    if let Some(ds) = bench.dataset_ref.as_deref() {
         let items: Vec<DatasetItem> = get(cli, http, &format!("/v1/datasets/{ds}/items"))?;
         match get::<Dataset>(cli, http, &format!("/v1/datasets/{ds}")) {
             Ok(d) => {
@@ -149,17 +152,12 @@ pub(crate) fn run_benchmark(
                                  will not record its frozen-state/version"
             ),
         }
-        items
-            .into_iter()
-            .map(|it| BenchmarkCase {
-                input: it.input,
-                expected: it.expected,
-                output: it.output,
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+        cases.extend(items.into_iter().map(|it| BenchmarkCase {
+            input: it.input,
+            expected: it.expected,
+            output: it.output,
+        }));
+    }
     let report_extra = extra_owned.as_ref().or(report_extra);
 
     let targets = parse_targets(&bench.target)?;
