@@ -24,7 +24,12 @@ pub(crate) fn execute(cfg: &AgentConfig, engine: &EngineConfig, task: &RelayTask
     };
     // Which prompt text is about to run, computed before anything is spawned so that every other
     // outcome — including a posture refusal that costs nothing — can name it.
-    let prompt = actions::render(&action.prompt_template, task);
+    let prompt = match actions::render(&action.prompt_template, task) {
+        Ok(p) => p,
+        // Nothing was spawned; like a broken action this is retryable (the payload or the template
+        // can be fixed between attempts) and unstamped: there is no complete prompt to fingerprint.
+        Err(e) => return RunReport::failed(format!("prompt: {e:#}")),
+    };
     let identity = PromptIdentity::new(
         &prompt,
         action.spec.version.as_deref(),

@@ -176,8 +176,14 @@ pub(crate) fn load(actions_dir: &str, action_type: &str) -> Result<Action> {
 
 /// Substitute `{{…}}` placeholders: `{{params.<dotted.path>}}` reads from the task payload
 /// (strings verbatim, other values as JSON), `{{payload}}` is the whole payload as JSON, plus
-/// `{{task_id}}` / `{{action_type}}`. Unknown placeholders render empty (a warning on stderr).
-pub(crate) fn render(template: &str, task: &RelayTask) -> String {
+/// `{{task_id}}` / `{{action_type}}`.
+///
+/// A placeholder that resolves to nothing is an error, not an empty string. It used to render
+/// empty with a warning on stderr — and then the prompt with the hole in it was sent to a paid run
+/// whose result was settled as a success: a template typo (`{{params.skuu}}`) or a payload missing
+/// a field produced a confident answer to a question with its subject deleted. Failing here costs
+/// nothing and names the placeholder.
+pub(crate) fn render(template: &str, task: &RelayTask) -> Result<String> {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(start) = rest.find("{{") {
@@ -185,17 +191,20 @@ pub(crate) fn render(template: &str, task: &RelayTask) -> String {
         let after = &rest[start + 2..];
         let Some(end) = after.find("}}") else {
             out.push_str(&rest[start..]);
-            return out;
+            return Ok(out);
         };
         let token = after[..end].trim();
         match resolve(token, task) {
             Some(v) => out.push_str(&v),
-            None => eprintln!("warn: prompt placeholder '{{{{{token}}}}}' resolved empty"),
+            None => bail!(
+                "prompt placeholder '{{{{{token}}}}}' resolved to nothing (the payload has no such \
+                 field, or the template names one it does not define)"
+            ),
         }
         rest = &after[end + 2..];
     }
     out.push_str(rest);
-    out
+    Ok(out)
 }
 
 fn resolve(token: &str, task: &RelayTask) -> Option<String> {
@@ -264,16 +273,29 @@ mod tests {
     fn render_substitutes_params_payload_and_ids() {
         let t = task(json!({ "sku": "A-1", "n": 3, "nest": { "deep": "x" } }));
         let got = render(
-            "sku={{params.sku}} n={{params.n}} deep={{ params.nest.deep }} id={{task_id}} all={{payload}} missing={{params.nope}}!",
+            "sku={{params.sku}} n={{params.n}} deep={{ params.nest.deep }} id={{task_id}} all={{payload}}!",
             &t,
-        );
+        )
+        .unwrap();
         assert_eq!(
             got,
             format!(
-                "sku=A-1 n=3 deep=x id=t-1 all={} missing=!",
+                "sku=A-1 n=3 deep=x id=t-1 all={}!",
                 serde_json::to_string(&t.payload).unwrap()
             )
         );
+    }
+
+    /// A hole in the prompt is a failed run at zero cost, not a paid run with its subject missing.
+    #[test]
+    fn an_unresolved_placeholder_is_an_error_that_names_it() {
+        let t = task(json!({ "sku": "A-1" }));
+        let err = render("sku={{params.skuu}}", &t).unwrap_err().to_string();
+        assert!(err.contains("params.skuu"), "{err}");
+        assert!(render("{{params.sku.deeper}}", &t).is_err());
+        assert!(render("{{unknown}}", &t).is_err());
+        // An unterminated brace is literal text, as before.
+        assert_eq!(render("a {{b", &t).unwrap(), "a {{b");
     }
 
     #[test]
