@@ -33,7 +33,11 @@
       },
       {
       "path": "docs/ALERTS.md",
-      "note": "rewritten against crates/api/src/alerts/* for M3 (the persisted alert ledger). The two claims it used to make that the code no longer supports are gone: dedup is durable (Store::insert_alert_dedup, one atomic step per backend) rather than an in-memory map that resets on restart and lets each replica alert independently, and per-project routing exists rather than being deferred. Adds the eight alert kinds, the GET /v1/alerts surface, the X-LightTrack-Signature contract (including the sha256(secret) derived-key rule a receiver must implement), and the destination rules."
+      "note": "rewritten against crates/api/src/alerts/* for M3 (the persisted alert ledger). The two claims it used to make that the code no longer supports are gone: dedup is durable (Store::insert_alert_dedup, one atomic step per backend) rather than an in-memory map that resets on restart and lets each replica alert independently, and per-project routing exists rather than being deferred. Adds the eight alert kinds, the GET /v1/alerts surface, the X-LightTrack-Signature contract (including the sha256(secret) derived-key rule a receiver must implement), and the destination rules. Updated again by M23: the kinds table gains prompt_canary_regressed (nine kinds now, not eight), with the two-condition gate and the sweep env var that arms it."
+    },
+    {
+      "path": "docs/BENCHMARK_FRAMEWORK.md",
+      "note": "section 2 gains 'After promotion - the served-version canary' (M23), written against crates/api/src/quality.rs, prompt_canary_sweep.rs, prompts_canary.rs and core/src/prompt_canary.rs. It closes the doc's own gap: the promotion gate answered 'may this version ship' and nothing answered 'was shipping it right'. Documents GET /v1/quality/prompts (and lt prompts quality / MCP get_prompt_quality), the CanaryPolicy route and its safe defaults, the two-condition regression test (min_n evidence AND non-overlapping ~95% intervals past max_drop), auto_revert reading its target from label_history rather than guessing, the prompt_canary_regressed alert kind, and lt-runner score --prompt-tag."
     }
   ],
 
@@ -63,7 +67,7 @@
       "kind": "frozen-archive",
       "reason": "Dated structural observations from the same campaign. Its facts are stamped 2026-07-16 and read as history, not as a current description."
     },
-    { "path": "docs/BENCHMARK_FRAMEWORK.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+
     { "path": "docs/CALIBRATION.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/CI_GATE.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/CURRENCY.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },

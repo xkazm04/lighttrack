@@ -138,6 +138,57 @@ This is **deliberately weaker than the old rule in one direction**: a 0.001 dip 
 It is **not weaker for real regressions** — a drop larger than the run's own uncertainty still blocks, and
 so does a run the runner itself called regressed. `force=true` still overrides everything.
 
+### After promotion — the served-version canary
+
+The gate above answers "may this version ship". Nothing used to answer **"was shipping it right"**:
+`labels.insert(label, version)` was the last thing the registry ever observed about a version, so a
+regression in production was visible only to whoever happened to scroll `/v1/scores`. A benchmark is
+a rehearsal on frozen cases; production is the performance, and the two disagree.
+
+Three pieces close the loop, each opt-in:
+
+1. **The measurement.** `GET /v1/quality/prompts?project=&since=&until=&rubric_id=` groups verdicts by
+   the `metadata.prompt` tag (`"<name>@v<version>"`) that `GET …/prompts/:name` hands you and that
+   your app is expected to stamp on every event the prompt produces — the same tag `GET
+   /v1/costs/prompts` already grouped **cost** by. Each row carries `n`, `mean` (normalized by the
+   verdict's `max`, so two rubric scales are comparable), `pass_rate`, a ~95% interval, and what the
+   judged events cost. Read `n` first: a version judged four times has not beaten one judged four
+   hundred. Also `lt prompts quality`, and the MCP read tool `get_prompt_quality`.
+   Store surface `score_summaries`; Firestore refuses it (501) — see `PARITY.md`.
+
+2. **The policy.** `PUT /v1/projects/:id/prompts/:name/canary` stores a `CanaryPolicy`:
+
+   ```json
+   { "label": "canary", "production_label": "production", "min_n": 20,
+     "window_secs": 86400, "max_drop": 0.05, "auto_revert": false }
+   ```
+
+   `null` clears it. Every default is the safe one, and `auto_revert` is off: the first thing a canary
+   does is tell you, not act.
+
+3. **The sweep.** With `LIGHTTRACK_PROMPT_CANARY_SWEEP_SECS` set, the API compares each policied
+   prompt's canary label against its production label on a timer and raises a
+   `prompt_canary_regressed` alert through the normal ledger and routing. A regression requires
+   **both** conditions, for the same reason the promotion gate above is significance-aware:
+   - `min_n` verdicts on **each** side (evidence — below it the sweep is silent), and
+   - the canary's whole ~95% interval below production's, **and** a relative drop past `max_drop`.
+     The interval test stops noise from tripping a rollback; the band stops a real-but-trivial dip
+     from doing it.
+
+   The comparison is **paired on the rubric** the prompt's linked benchmark names, so both sides are
+   judged against the same criteria.
+
+   With `auto_revert`, the label is moved back to the version it replaced — read out of the prompt's
+   append-only `label_history`, never guessed; a label with no recorded predecessor is not reverted,
+   and the alert says so. Every label move (promotion and revert alike) appends a `LabelChange
+   { label, version, at, reason }`, with `reason` `"promote"` or `"canary_regressed"`, so a served
+   version always records how it got there.
+
+**Feeding it.** A fresh version has minutes of traffic against production's days, so an unprioritized
+online scorer spends its judge budget on the version nobody is asking a question about. `lt-runner
+score --prompt-tag "<name>@v<version>"` narrows the unscored work list server-side, which is how a
+canary accumulates evidence while a decision is pending.
+
 ## 3. Golden-standard LLM-as-judge methodology  (#3)  ← the core
 A clear, defensible scoring system. Defaults encode current best practice (see Sources).
 
