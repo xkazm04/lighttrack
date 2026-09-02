@@ -5,7 +5,7 @@
 //! into the originating apps via per-action connectors, and settles every task back to its cloud.
 //!
 //! This file is wiring only: parse args, load config, run the loop. Logic lives in the sibling
-//! modules (`config`, `actions`, `inventory`, `exec`, `connect`, `cloud`, `run`).
+//! modules (`config`, `actions`, `inventory`, `exec`, `connect`, `cloud`, `report`, `run`).
 
 mod actions;
 mod cloud;
@@ -13,6 +13,7 @@ mod config;
 mod connect;
 mod exec;
 mod inventory;
+mod report;
 mod run;
 
 use anyhow::Result;

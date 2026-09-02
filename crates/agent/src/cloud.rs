@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use lighttrack_core::RelayTask;
 
 use crate::config::Source;
-use crate::exec::RunReport;
+use crate::report::RunReport;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -130,6 +130,13 @@ impl Client {
                 "latency_ms": report.latency_ms,
                 "cost_usd": report.cost_usd,
                 "mode": report.mode,
+                // Which prompt ran (always) and what it said (only under the action's `report_io`).
+                // `input`/`output` are `null` for an action that has not opted in, which is what
+                // makes the settle event unjudgeable-by-default rather than unjudgeable-by-design.
+                "prompt_sha256": report.prompt_sha256,
+                "action_version": report.action_version,
+                "input": report.rendered_prompt,
+                "output": report.result_text,
                 "fence": fence,
             }),
         )?;
