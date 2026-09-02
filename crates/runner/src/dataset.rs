@@ -83,13 +83,26 @@ pub(crate) fn build_from_events(
             }
             None => (None, 0),
         };
-        let redactions = r_in + r_out;
+        // Tags are client-set free text and travel into the corpus too. The ingest redactor scrubs
+        // them on the way in (D14), but not on a deployment that turned it off — and a dataset is
+        // built to be shared further than the event store is. Same regex pass as the payloads.
+        let mut r_tags = 0usize;
+        let tags: Vec<String> = ev
+            .tags
+            .iter()
+            .map(|t| {
+                let r = scrub(t);
+                r_tags += r.redactions;
+                r.text
+            })
+            .collect();
+        let redactions = r_in + r_out + r_tags;
         total_redactions += redactions;
         let item = json!({
             "input": input_clean,
             "output": output_clean,
             "source_event_id": ev.id,
-            "tags": ev.tags,
+            "tags": tags,
             "anonymization": { "method": method, "redactions": redactions },
         });
         post(cli, http, &format!("/v1/datasets/{dsid}/items"), &item)?;
