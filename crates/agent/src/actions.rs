@@ -5,12 +5,14 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
 use lighttrack_core::RelayTask;
+use lighttrack_engine::invocation::{self, Mode};
 
 use crate::connect::ConnectorSpec;
 
@@ -26,8 +28,39 @@ pub(crate) struct ActionSpec {
     /// schema-conforming JSON instead of free text.
     #[serde(default)]
     pub schema_file: Option<String>,
+    /// What this action's run is allowed to be: `generate` (default — a completion with no tools
+    /// and no repository), `readonly-scan`, or `edit`. `docs/RELAY.md` always promised that allowed
+    /// tools live on the device; until the seam landed the library could not actually say so, and
+    /// every action silently ran as a plain completion.
+    #[serde(default)]
+    pub mode: Mode,
+    /// Workspace for a scan/edit run, relative to the agent's `workspaces_root`. Required by any
+    /// mode other than `generate`, and resolved under that root — the cloud never names a path.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    /// Extra tools beyond the mode's base allowlist. The seam rejects a write-capable entry on a
+    /// `readonly-scan`.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    /// `--permission-mode`. Required by `edit`; `plan`/`default` are the legal values for a scan.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    /// Per-run spend ceiling handed to the CLI.
+    #[serde(default)]
+    pub max_budget_usd: Option<f64>,
+    /// Wall-clock ceiling for this action's run; defaults to the engine's.
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub connector: Option<ConnectorSpec>,
+}
+
+impl ActionSpec {
+    pub fn timeout(&self) -> Duration {
+        self.timeout_secs
+            .map(Duration::from_secs)
+            .unwrap_or(invocation::DEFAULT_TIMEOUT)
+    }
 }
 
 fn default_model() -> String {
@@ -55,6 +88,42 @@ pub(crate) fn validate_action_type(action_type: &str) -> Result<()> {
         bail!("invalid action_type '{action_type}'");
     }
     Ok(())
+}
+
+/// Resolve an action's `workspace` under the agent's `workspaces_root`.
+///
+/// A scan or edit run needs a directory, and the only safe place for that decision is the device:
+/// the cloud names an `action_type`, never a path. So the name is constrained exactly like
+/// `action_type` (no absolute path, no `..`, no drive letters or backslashes), joined under a root
+/// the operator opted into, and required to exist — an edit run that silently created its own
+/// workspace would be an edit run nobody could review.
+pub(crate) fn resolve_workspace(
+    workspaces_root: Option<&Path>,
+    workspace: Option<&str>,
+    mode: Mode,
+) -> Result<Option<PathBuf>> {
+    if mode == Mode::Generate {
+        // A completion has no repository by construction; naming one is a config mistake worth
+        // saying out loud rather than ignoring.
+        if workspace.is_some() {
+            bail!("action mode 'generate' takes no workspace — set mode = \"readonly-scan\" or \"edit\"");
+        }
+        return Ok(None);
+    }
+    let name = workspace.ok_or_else(|| {
+        anyhow::anyhow!("action mode '{mode}' requires a workspace (relative to workspaces_root)")
+    })?;
+    validate_action_type(name).with_context(|| format!("invalid workspace '{name}'"))?;
+    let root = workspaces_root.ok_or_else(|| {
+        anyhow::anyhow!(
+            "action mode '{mode}' needs a workspace, but the agent config sets no workspaces_root"
+        )
+    })?;
+    let path = root.join(name);
+    if !path.is_dir() {
+        bail!("workspace '{name}' does not exist under {}", root.display());
+    }
+    Ok(Some(path))
 }
 
 pub(crate) fn load(actions_dir: &str, action_type: &str) -> Result<Action> {
@@ -214,7 +283,58 @@ mod tests {
         assert_eq!(a.spec.model, "haiku");
         assert_eq!(a.schema.as_deref(), Some("{\"type\":\"object\"}"));
         assert!(a.spec.connector.is_some());
+        // An action that says nothing about posture is a plain completion, as it always was.
+        assert_eq!(a.spec.mode, Mode::Generate);
+        assert!(a.spec.workspace.is_none());
+        assert!(a.spec.allowed_tools.is_empty());
+        assert_eq!(a.spec.timeout(), invocation::DEFAULT_TIMEOUT);
         assert!(load(dir.path().to_str().unwrap(), "ns/missing").is_err());
+    }
+
+    #[test]
+    fn an_action_can_declare_its_whole_posture() {
+        let dir = tempfile::tempdir().unwrap();
+        let act = dir.path().join("ns").join("scan");
+        std::fs::create_dir_all(&act).unwrap();
+        std::fs::write(act.join("prompt.md"), "look").unwrap();
+        std::fs::write(
+            act.join("action.toml"),
+            "mode = \"readonly-scan\"\nworkspace = \"my-repo\"\nallowed_tools = [\"Bash(git log:*)\"]\n\
+             permission_mode = \"plan\"\nmax_budget_usd = 0.5\ntimeout_secs = 120\n",
+        )
+        .unwrap();
+
+        let a = load(dir.path().to_str().unwrap(), "ns/scan").unwrap();
+        assert_eq!(a.spec.mode, Mode::ReadonlyScan);
+        assert_eq!(a.spec.workspace.as_deref(), Some("my-repo"));
+        assert_eq!(a.spec.allowed_tools, vec!["Bash(git log:*)"]);
+        assert_eq!(a.spec.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(a.spec.max_budget_usd, Some(0.5));
+        assert_eq!(a.spec.timeout(), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn a_workspace_cannot_escape_its_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("repo")).unwrap();
+        let r = Some(root.path());
+
+        assert_eq!(
+            resolve_workspace(r, Some("repo"), Mode::Edit).unwrap(),
+            Some(root.path().join("repo"))
+        );
+        for bad in ["../repo", "/abs", "a\\b", "repo/", "", "a/../b"] {
+            assert!(
+                resolve_workspace(r, Some(bad), Mode::Edit).is_err(),
+                "'{bad}' should be rejected"
+            );
+        }
+        // Named but absent, no root configured, missing entirely, or named by a generate action.
+        assert!(resolve_workspace(r, Some("nope"), Mode::Edit).is_err());
+        assert!(resolve_workspace(None, Some("repo"), Mode::Edit).is_err());
+        assert!(resolve_workspace(r, None, Mode::ReadonlyScan).is_err());
+        assert!(resolve_workspace(r, Some("repo"), Mode::Generate).is_err());
+        assert_eq!(resolve_workspace(r, None, Mode::Generate).unwrap(), None);
     }
 
     #[test]
