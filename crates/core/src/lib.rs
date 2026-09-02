@@ -31,6 +31,7 @@ pub mod price_row;
 pub mod pricing;
 pub mod project;
 pub mod prompt;
+pub mod prompt_canary;
 pub mod provider;
 pub mod relay;
 pub mod relay_verdict;
@@ -97,6 +98,10 @@ pub use project::{
     Scope, REDACTION_KEY,
 };
 pub use prompt::{Prompt, PromptVersion};
+pub use prompt_canary::{
+    CanaryPolicy, LabelChange, DEFAULT_CANARY_LABEL, DEFAULT_PRODUCTION_LABEL, MAX_LABEL_HISTORY,
+    REASON_CANARY_REGRESSED, REASON_PROMOTE,
+};
 pub use provider::{family_of, ProviderFamily, ProviderId, UNKNOWN_PROVIDER};
 pub use relay::{
     RelayOutcome, RelayStatus, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS,

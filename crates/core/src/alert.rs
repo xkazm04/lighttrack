@@ -41,6 +41,10 @@ pub enum AlertKind {
     /// away. Deliberately an alert row and never an event — a rejected call was never stored as an
     /// event precisely because it would corrupt the usage rollups every cap is evaluated against.
     IngestRejected,
+    /// The version a prompt label serves is measurably worse than the version it is being compared
+    /// against (M23). The one alert that fires *after* a promotion, which is where a registry
+    /// previously stopped looking.
+    PromptCanaryRegressed,
 }
 
 impl AlertKind {
@@ -53,6 +57,7 @@ impl AlertKind {
         AlertKind::ScoreDrop,
         AlertKind::BenchRun,
         AlertKind::IngestRejected,
+        AlertKind::PromptCanaryRegressed,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -65,6 +70,7 @@ impl AlertKind {
             AlertKind::ScoreDrop => "score_drop",
             AlertKind::BenchRun => "bench_run",
             AlertKind::IngestRejected => "ingest_rejected",
+            AlertKind::PromptCanaryRegressed => "prompt_canary_regressed",
         }
     }
 
@@ -81,7 +87,8 @@ impl AlertKind {
             AlertKind::LimitWarning
             | AlertKind::ForecastAlert
             | AlertKind::ErrorSpike
-            | AlertKind::ScoreDrop => Severity::Warning,
+            | AlertKind::ScoreDrop
+            | AlertKind::PromptCanaryRegressed => Severity::Warning,
             AlertKind::BenchRun | AlertKind::IngestRejected => Severity::Info,
         }
     }
