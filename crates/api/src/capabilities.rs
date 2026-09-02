@@ -124,6 +124,12 @@ fn consequence(s: Surface) -> &'static str {
             "GET /v1/scores?rubric_id=&kind= is unavailable — verdicts here can only be listed \
              newest-first, not narrowed to one rubric or one kind of verdict."
         }
+        Surface::Labels => {
+            "POST/GET /v1/labels and GET /v1/scores?needs_review=1 are unavailable — human              verdicts cannot be stored here, so a calibration can only be run from a file on the              worker's disk and nothing can be re-used or audited."
+        }
+        Surface::Calibrations => {
+            "GET /v1/judges/trust is unavailable and no gate can report `judge_trust` — this              deployment cannot say whether the judge behind a green badge has ever been checked              against a human."
+        }
         Surface::Pricing => {
             "GET /v1/costs/unpriced, PUT /v1/prices/…?fill_unpriced=1 and the price history are \
              unavailable — this deployment cannot say WHICH models it failed to price, and a rate \

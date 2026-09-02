@@ -8,13 +8,16 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{new_id, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun};
+use lighttrack_core::{
+    new_id, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, JudgeTrustVerdict,
+};
 
 use crate::alerts::BenchRunAlert;
 use crate::auth::Principal;
 use crate::benchmarks_target::{ensure_prompt_refs_exist, validate_target_matrix};
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
+use crate::judges;
 use crate::state::{spawn_db, AppState};
 
 #[derive(Deserialize)]
@@ -217,13 +220,23 @@ pub(crate) struct GateResponse {
     baseline: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     n: Option<u64>,
+    /// Whether the judge behind this verdict has ever been checked against a human, for the rubric
+    /// it judged under (M11). A green `status` from an `unknown` judge is a badge that means "the
+    /// judge said so" and nothing about whether the judge is worth believing, so the gate reports
+    /// both rather than making a caller ask a second question.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    judge_trust: Option<JudgeTrustVerdict>,
 }
 
 /// Decide the gate verdict from a benchmark's runs (newest-first, as the store returns them) and its
 /// baseline. Uses the latest *finished* run's honest status (Direction 1/2); legacy runs that predate
 /// the honest-status work fall back to a scalar mean-vs-baseline compare. `n` prefers the report's
 /// significance `n`, else `n_cases`.
-pub(crate) fn decide_gate(runs: &[BenchmarkRun], baseline: Option<f64>) -> GateResponse {
+pub(crate) fn decide_gate(
+    runs: &[BenchmarkRun],
+    baseline: Option<f64>,
+    judge_trust: Option<JudgeTrustVerdict>,
+) -> GateResponse {
     let Some(run) = runs.iter().find(|r| r.finished_at.is_some()) else {
         return GateResponse {
             status: "no_runs".into(),
@@ -231,6 +244,7 @@ pub(crate) fn decide_gate(runs: &[BenchmarkRun], baseline: Option<f64>) -> GateR
             mean: None,
             baseline,
             n: None,
+            judge_trust,
         };
     };
     let status = match run.status.as_str() {
@@ -259,6 +273,7 @@ pub(crate) fn decide_gate(runs: &[BenchmarkRun], baseline: Option<f64>) -> GateR
         mean: run.mean_score,
         baseline,
         n,
+        judge_trust,
     }
 }
 
@@ -269,14 +284,36 @@ pub(crate) async fn benchmark_gate(
 ) -> Result<Json<GateResponse>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let bench = load_benchmark_authorized(&st, &p, &id).await?;
+    // Keyed on the benchmark's own (rubric, judge) pair, so a benchmark that switched judges does
+    // not inherit the previous one's calibration.
+    let trust = judges::lookup(
+        &st,
+        &bench.project_id,
+        bench.rubric_id.as_deref(),
+        &bench.judge_model,
+    )
+    .await?;
+    // A project that requires a trusted judge gets a 409 rather than a `pass` beside an `unknown`:
+    // the evidence is unqualified, and a green badge from an unverified instrument is the
+    // uncalibrated gate at its most convincing.
+    let project = judges::load_project(&st, &bench.project_id).await?;
+    if let Some(reason) = judges::policy_block(project.as_ref(), &trust) {
+        return Err(ApiError::conflict(reason));
+    }
     let store = st.store.clone();
     let runs = spawn_db(move || store.list_benchmark_runs(&id)).await?;
-    Ok(Json(decide_gate(&runs, bench.baseline_score)))
+    Ok(Json(decide_gate(&runs, bench.baseline_score, Some(trust))))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{decide_gate, embed_recurrence};
+    use super::embed_recurrence;
+
+    /// The judge-trust annotation is exercised through the handler and `judges::policy_block`;
+    /// these cases are about the *evidence* verdict, so they pass none.
+    fn decide_gate(runs: &[BenchmarkRun], baseline: Option<f64>) -> super::GateResponse {
+        super::decide_gate(runs, baseline, None)
+    }
     use lighttrack_core::BenchmarkRun;
     use serde_json::json;
 

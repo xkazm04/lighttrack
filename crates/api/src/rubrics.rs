@@ -6,9 +6,9 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{new_id, Rubric, RubricDimension};
+use lighttrack_core::{new_id, CalibrationRecord, Rubric, RubricDimension};
 
 use crate::auth::Principal;
 use crate::error::ApiError;
@@ -63,11 +63,29 @@ pub(crate) async fn list_rubrics(
     Ok(Json(v))
 }
 
+/// A rubric, plus whether anything has ever been measured against it (M11).
+///
+/// `active` is not a switch anybody flips: it is `trust != unknown` — "at least one judge has been
+/// calibrated for this rubric". It matters because a **new version is a new id**, so a version
+/// inherits none of its predecessor's calibration: promoting to it silently swaps a measured
+/// instrument for an unmeasured one, and until now nothing said so.
+#[derive(Serialize)]
+pub(crate) struct RubricView {
+    #[serde(flatten)]
+    rubric: Rubric,
+    /// At least one calibration exists for this rubric id.
+    active: bool,
+    /// The judges measured against it, newest first — so "calibrate this version" is an actionable
+    /// instruction rather than a flag to hunt for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    calibrated_judges: Vec<String>,
+}
+
 pub(crate) async fn get_rubric(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<Rubric>, ApiError> {
+) -> Result<Json<RubricView>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let store = st.store.clone();
     let id2 = id.clone();
@@ -82,7 +100,73 @@ pub(crate) async fn get_rubric(
             return Err(ApiError::forbidden("key not authorized for that rubric"));
         }
     }
-    Ok(Json(r))
+    let store = st.store.clone();
+    let project = r.project_id.clone();
+    let history = spawn_db(move || store.list_calibrations(Some(&project), 0, None)).await?;
+    let calibrated_judges = judges_for(&history, &r.id);
+    Ok(Json(RubricView {
+        active: !calibrated_judges.is_empty(),
+        calibrated_judges,
+        rubric: r,
+    }))
+}
+
+/// Distinct judges calibrated for `rubric_id`, newest-first and deduplicated. Exact on the rubric
+/// id, so a sibling rubric's — or a freeform — calibration never makes this one look measured.
+fn judges_for(history: &[CalibrationRecord], rubric_id: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for c in history {
+        if c.rubric_id.as_deref() == Some(rubric_id) && !out.contains(&c.judge) {
+            out.push(c.judge.clone());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(rubric: Option<&str>, judge: &str) -> CalibrationRecord {
+        CalibrationRecord {
+            id: new_id(),
+            project_id: "p".into(),
+            judge: judge.into(),
+            rubric_id: rubric.map(str::to_string),
+            dataset_id: None,
+            dataset_version: None,
+            kappa: 0.8,
+            pearson: 0.9,
+            mae: 0.1,
+            rmse: 0.1,
+            n: 20,
+            kappa_bar: 0.6,
+            trusted: true,
+            created_at: Utc::now(),
+        }
+    }
+
+    /// The whole point of `active`: a new rubric version is a new id and starts unmeasured, however
+    /// well-calibrated the version it superseded was.
+    #[test]
+    fn a_rubric_is_active_only_on_its_own_calibrations() {
+        let history = vec![
+            rec(Some("v1"), "anthropic/haiku"),
+            rec(Some("v1"), "openai/gpt"),
+            rec(Some("v1"), "anthropic/haiku"),
+            rec(None, "anthropic/haiku"),
+        ];
+        assert_eq!(
+            judges_for(&history, "v1"),
+            vec!["anthropic/haiku".to_string(), "openai/gpt".into()],
+            "each judge once, newest first"
+        );
+        assert!(
+            judges_for(&history, "v2").is_empty(),
+            "a new version inherits nothing — not from its predecessor, not from the freeform \
+             calibration"
+        );
+    }
 }
 
 /// Body for `POST /v1/rubrics/:id/versions` — a copy-with-changes of an existing rubric.

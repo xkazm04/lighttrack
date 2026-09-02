@@ -27,6 +27,10 @@ pub(crate) struct CreateProjectReq {
     /// Consent to include this project's benchmark runs in collective digests. Default off.
     #[serde(default)]
     collective_opt_in: bool,
+    /// Refuse to promote on a judge that is not `trusted` for the rubric being gated (M11).
+    /// Default off — see [`lighttrack_core::Project::require_trusted_judge`].
+    #[serde(default)]
+    require_trusted_judge: bool,
 }
 
 /// Longest accepted caller-supplied project id. A project id is a URL path segment, a query value
@@ -101,6 +105,7 @@ pub(crate) async fn create_project(
         enabled: true,
         redaction: req.redaction,
         collective_opt_in: req.collective_opt_in,
+        require_trusted_judge: req.require_trusted_judge,
         archived_at: None,
         created_at: Utc::now(),
     };
@@ -139,6 +144,7 @@ pub(crate) struct UpdateProjectReq {
     enabled: Option<bool>,
     redaction: Option<Redaction>,
     collective_opt_in: Option<bool>,
+    require_trusted_judge: Option<bool>,
 }
 
 /// Update a project (admin). The reason this endpoint exists at all is `redaction`: it is the one
@@ -167,6 +173,9 @@ pub(crate) async fn update_project(
     }
     if let Some(c) = req.collective_opt_in {
         proj.collective_opt_in = c;
+    }
+    if let Some(t) = req.require_trusted_judge {
+        proj.require_trusted_judge = t;
     }
 
     let store = st.store.clone();

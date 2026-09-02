@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::calibration::Agreement;
 
 /// One completed judge↔human calibration, stored.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CalibrationRecord {
     #[serde(default = "crate::new_id")]
     pub id: String,
@@ -128,7 +128,7 @@ impl JudgeTrust {
 /// The deciding record travels with the verdict rather than being fetched separately, because
 /// "untrusted" is not actionable on its own — an operator needs the κ, the `n` and the date to know
 /// whether to recalibrate or to change judges.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JudgeTrustVerdict {
     pub trust: JudgeTrust,
     #[serde(skip_serializing_if = "Option::is_none")]

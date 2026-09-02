@@ -13,13 +13,14 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use lighttrack_core::{new_id, Prompt, PromptVersion};
+use lighttrack_core::{new_id, JudgeTrustVerdict, Prompt, PromptVersion};
 
 use crate::benchmarks::load_benchmark_authorized;
 use crate::benchmarks_target::validate_target_matrix;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
 use crate::jobs_enqueue::enqueue_bench_run;
+use crate::judges;
 use crate::prompts_gate::{gate_promotion, version_scored_run};
 use crate::state::{spawn_db, AppState};
 
@@ -315,6 +316,12 @@ pub(crate) struct PromotedPrompt {
     /// actually generated with this version — see [`crate::prompts_gate`].
     #[serde(skip_serializing_if = "Option::is_none")]
     warning: Option<String>,
+    /// Whether the judge behind the gating benchmark has ever been checked against a human, for
+    /// the rubric it was judged under (M11). Always reported when there is a linked benchmark,
+    /// including when it is `unknown` — a promotion whose evidence came from an unverified
+    /// instrument should say so on the way through, not only when a policy stops it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    judge_trust: Option<JudgeTrustVerdict>,
 }
 
 /// Point a label at a version. Blocked (409) when the prompt's linked benchmark has regressed
@@ -346,8 +353,22 @@ pub(crate) async fn promote(
     // The gate: the latest run of the linked benchmark that scored THE VERSION BEING PROMOTED must
     // have actually generated with that version, and must not have regressed against the baseline.
     let mut warning = None;
+    let mut judge_trust = None;
     if let Some(bid) = prompt.benchmark_id.clone() {
         let bench = load_benchmark_authorized(&st, &p, &bid).await?;
+        // What the gate is really being asked: can the judge that produced this evidence be
+        // believed for this rubric? Keyed on the benchmark's own (rubric, judge) pair, so a
+        // benchmark that switched judges does not inherit the old one's calibration.
+        let trust = judges::lookup(
+            &st,
+            &bench.project_id,
+            bench.rubric_id.as_deref(),
+            &bench.judge_model,
+        )
+        .await?;
+        let project = judges::load_project(&st, &bench.project_id).await?;
+        let trust_refusal = judges::policy_block(project.as_ref(), &trust);
+        judge_trust = Some(trust);
         // Whether the benchmark can resolve this prompt at all decides whether a missing
         // `resolved_prompt_version` is a refusal or a caveat.
         let resolvable = benchmark_resolves(&bench.target, &name);
@@ -360,6 +381,7 @@ pub(crate) async fn promote(
             req.force,
             req.version,
             resolvable,
+            trust_refusal,
         );
         if let Some(reason) = outcome.blocked() {
             return Err(ApiError::conflict(reason.to_string()));
@@ -372,7 +394,11 @@ pub(crate) async fn promote(
     let store = st.store.clone();
     let p2 = prompt.clone();
     spawn_db(move || store.update_prompt(&p2)).await?;
-    Ok(Json(PromotedPrompt { prompt, warning }))
+    Ok(Json(PromotedPrompt {
+        prompt,
+        warning,
+        judge_trust,
+    }))
 }
 
 /// Does this benchmark's target matrix name `prompt_name` in a `prompt_ref`? Only then can a run of

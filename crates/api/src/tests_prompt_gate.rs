@@ -46,7 +46,7 @@ fn resolved(mean: f64, version: u32) -> Option<GateEvidence> {
 
 /// Legacy call shape: no `prompt_ref` on the benchmark (advisory mode).
 fn gate(latest: Option<GateEvidence>, baseline: Option<f64>, force: bool) -> GateOutcome {
-    gate_promotion(latest, baseline, force, 9, false)
+    gate_promotion(latest, baseline, force, 9, false, None)
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn gate_allows_when_no_baseline_or_forced() {
         "no baseline → allow"
     );
     assert_eq!(
-        gate_promotion(None, Some(0.9), true, 9, true),
+        gate_promotion(None, Some(0.9), true, 9, true, None),
         GateOutcome::Allow,
         "force overrides a block — including the resolution check"
     );
@@ -194,16 +194,16 @@ fn an_incomplete_run_cannot_promote_however_good_its_mean_looks() {
 fn a_resolvable_benchmark_refuses_a_run_that_never_read_the_registry() {
     // THE M10 failure: a run whose score is excellent and whose provenance tags say v9, but
     // which generated from the target's stored system_prompt. Before, this promoted.
-    let out = gate_promotion(scalar(0.99), Some(0.80), false, 9, true);
+    let out = gate_promotion(scalar(0.99), Some(0.80), false, 9, true, None);
     let reason = out.blocked().expect("must block");
     assert!(reason.contains(RESOLVED_PROMPT_VERSION), "got: {reason}");
     // A run that DID resolve v9 promotes.
     assert_eq!(
-        gate_promotion(resolved(0.99, 9), Some(0.80), false, 9, true),
+        gate_promotion(resolved(0.99, 9), Some(0.80), false, 9, true, None),
         GateOutcome::Allow
     );
     // A run that resolved a DIFFERENT version is evidence about other content.
-    let reason = gate_promotion(resolved(0.99, 3), Some(0.80), false, 9, true)
+    let reason = gate_promotion(resolved(0.99, 3), Some(0.80), false, 9, true, None)
         .blocked()
         .expect("must block")
         .to_string();
@@ -211,12 +211,12 @@ fn a_resolvable_benchmark_refuses_a_run_that_never_read_the_registry() {
     assert!(reason.contains("v9"), "got: {reason}");
     // Resolution is checked BEFORE the score, and with no baseline at all — a gate that only
     // engages once someone sets a baseline is not a gate on what ran.
-    assert!(gate_promotion(scalar(0.99), None, false, 9, true)
+    assert!(gate_promotion(scalar(0.99), None, false, 9, true, None)
         .blocked()
         .is_some());
     // …and a resolved run with no baseline is allowed, as before.
     assert_eq!(
-        gate_promotion(resolved(0.10, 9), None, false, 9, true),
+        gate_promotion(resolved(0.10, 9), None, false, 9, true, None),
         GateOutcome::Allow
     );
 }
@@ -225,14 +225,16 @@ fn a_resolvable_benchmark_refuses_a_run_that_never_read_the_registry() {
 fn a_benchmark_with_no_prompt_ref_warns_rather_than_blocking_for_one_release() {
     // Existing projects have benchmarks whose targets carry a literal system_prompt. Blocking
     // them all would break working gates, so they promote with the honest caveat attached.
-    let out = gate_promotion(scalar(0.99), Some(0.80), false, 9, false);
+    let out = gate_promotion(scalar(0.99), Some(0.80), false, 9, false, None);
     let w = out.warning().expect("advisory, not a block");
     assert!(w.contains("prompt_ref"), "the warning says how to fix it");
     assert!(out.blocked().is_none());
     // The score rules still apply underneath the advisory — a regression is still a block.
-    assert!(gate_promotion(scalar(0.10), Some(0.80), false, 9, false)
-        .blocked()
-        .is_some());
+    assert!(
+        gate_promotion(scalar(0.10), Some(0.80), false, 9, false, None)
+            .blocked()
+            .is_some()
+    );
 }
 
 #[test]

@@ -86,13 +86,23 @@ pub(crate) struct GateEvidence {
 ///   a wide interval means the evidence is weak in both directions, and the fix is more cases.
 /// - A run with no recorded interval (legacy, or `n < 2`) keeps the plain scalar compare, so the
 ///   `scalar_fallback` honesty of the small-n path is preserved rather than silently upgraded.
+/// - **Judge trust (M11) is checked first, and `force` does not clear it.** Every other refusal
+///   here is about the *evidence*; this one is about whether the instrument that produced the
+///   evidence has ever been checked against a human. `force` is a flag on the promoting request —
+///   set by exactly the person who wants the promotion — while `require_trusted_judge` is a policy
+///   an admin set on the project. Letting the former override the latter would make the policy
+///   decorative. The escape hatch is the deliberate one: clear the flag, or calibrate the judge.
 pub(crate) fn gate_promotion(
     latest: Option<GateEvidence>,
     baseline: Option<f64>,
     force: bool,
     promoting: u32,
     resolvable: bool,
+    trust_refusal: Option<String>,
 ) -> GateOutcome {
+    if let Some(reason) = trust_refusal {
+        return GateOutcome::Block(reason);
+    }
     if force {
         return GateOutcome::Allow;
     }
