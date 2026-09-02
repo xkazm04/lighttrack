@@ -24,10 +24,10 @@ pub struct ScrubResult {
     pub redactions: usize,
 }
 
-struct Rule {
+pub(crate) struct Rule {
     kind: &'static str,
-    re: Regex,
-    placeholder: &'static str,
+    pub(crate) re: Regex,
+    pub(crate) placeholder: &'static str,
 }
 
 /// One scrubbing rule, flattened for export.
@@ -59,7 +59,7 @@ pub fn rule_set() -> Vec<PiiRule> {
         .collect()
 }
 
-fn rules() -> &'static [Rule] {
+pub(crate) fn rules() -> &'static [Rule] {
     static RULES: OnceLock<Vec<Rule>> = OnceLock::new();
     RULES.get_or_init(|| {
         let r = |k: &'static str, p: &str, ph: &'static str| Rule {
@@ -127,6 +127,10 @@ pub fn scrub(text: &str) -> ScrubResult {
         redactions,
     }
 }
+
+mod stamp;
+
+pub use stamp::{rules_fingerprint, scrub_detailed, ScrubReport};
 
 #[cfg(test)]
 mod export;

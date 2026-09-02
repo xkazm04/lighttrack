@@ -115,6 +115,15 @@ pub struct ScoreDetail {
     /// instead of aging silently. `None` on every non-trace score.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<crate::trace::TraceCoverage>,
+    /// How many PII spans the ingest scrub had already replaced in the evidence this verdict was
+    /// computed from ([`crate::LlmEvent::redaction`]'s `spans`, copied at judge time).
+    ///
+    /// The judge reads the *stored* text, so a scrub that mangled a payload silently changes what
+    /// was judged — D14's un-observable defect, now observable at the verdict rather than only at
+    /// the row. `Some(0)` is a scrubbed-and-untouched payload; `None` is a verdict whose event
+    /// carried no stamp at all, which is a weaker statement and kept distinct from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_redacted_spans: Option<u32>,
 }
 
 /// Truncate on a char boundary, marking that it happened.

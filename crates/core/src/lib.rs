@@ -56,7 +56,8 @@ pub use margin_trend::{
 pub use model_id::{canonicalize, canonicalize_with, judge_family, ModelId};
 pub use pricing::{ModelPrice, ModelPriceRow, PriceBook, PricingMode};
 pub use project::{
-    decode_scopes, default_scopes, encode_scopes, ApiKey, Project, Redaction, Scope,
+    decode_scopes, default_scopes, encode_scopes, ApiKey, Project, Redaction, RedactionStamp,
+    Scope, REDACTION_KEY,
 };
 pub use prompt::{Prompt, PromptVersion};
 pub use provider::{family_of, ProviderFamily, ProviderId, UNKNOWN_PROVIDER};

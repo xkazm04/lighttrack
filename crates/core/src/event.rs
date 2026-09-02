@@ -204,6 +204,19 @@ impl LlmEvent {
         self.metadata.get("api_key_id").and_then(Value::as_str)
     }
 
+    /// What the ingest boundary did to this row, read from `metadata.redaction`.
+    ///
+    /// `None` means the row carries no stamp — it was written before the stamp existed, or by a
+    /// path that does not scrub. That is deliberately **not** the same as `Some(stamp)` with
+    /// `scrub: false`, which is a row the boundary looked at and decided to leave verbatim.
+    ///
+    /// Like `api_key_id`, the value is server-owned: the redactor strips whatever a client sent
+    /// under this key before stamping its own, so a caller cannot claim to have been scrubbed.
+    pub fn redaction(&self) -> Option<crate::project::RedactionStamp> {
+        let raw = self.metadata.get(crate::project::REDACTION_KEY)?;
+        serde_json::from_value(raw.clone()).ok()
+    }
+
     /// The dimensions limit scopes are matched against.
     pub fn scope_dims(&self) -> crate::limits::ScopeDims<'_> {
         crate::limits::ScopeDims {
@@ -270,6 +283,36 @@ mod tests {
         // …and it still round-trips out on reads.
         let v = serde_json::to_value(&e).unwrap();
         assert!(v.get("received_at").is_some());
+    }
+
+    /// The stamp round-trips through `metadata`, and the three states an operator must be able to
+    /// tell apart stay apart: no stamp, stamped-and-not-scrubbed, stamped-and-scrubbed.
+    #[test]
+    fn the_redaction_stamp_round_trips_and_keeps_its_three_states_distinct() {
+        assert!(ev(Value::Null).redaction().is_none(), "no stamp at all");
+
+        let verbatim = ev(json!({ "redaction": { "policy": "none", "scrub": false } }))
+            .redaction()
+            .expect("stamped");
+        assert!(!verbatim.scrub);
+        assert_eq!(verbatim.spans, 0);
+
+        let scrubbed = ev(json!({
+            "redaction": { "policy": "hash", "scrub": true, "spans": 3, "rules": "abc123" }
+        }))
+        .redaction()
+        .expect("stamped");
+        assert!(scrubbed.scrub);
+        assert_eq!(scrubbed.spans, 3);
+        assert_eq!(scrubbed.rules, "abc123");
+        assert_eq!(scrubbed.policy, crate::Redaction::Hash);
+    }
+
+    /// A client that writes garbage under the reserved key must not make the reader panic or lie;
+    /// it reads as "no stamp" (and ingest strips the key before storage anyway).
+    #[test]
+    fn an_unreadable_stamp_reads_as_absent() {
+        assert!(ev(json!({ "redaction": "nope" })).redaction().is_none());
     }
 
     #[test]

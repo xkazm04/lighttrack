@@ -1271,6 +1271,7 @@ version = "0.0.1"
 dependencies = [
  "regex",
  "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
