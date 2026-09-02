@@ -4,6 +4,12 @@ Fire-and-forget client for ingesting LLM call events into [LightTrack](https://g
 Uses the global `fetch` (Node 18+ / browsers); zero runtime dependencies. `track*` never blocks and
 never throws.
 
+**What this SDK can do, next to the other two:** the generated capability matrix in
+[`clients/README.md`](../README.md#what-each-sdk-can-do) — rendered from
+[`lighttrack.manifest.json`](lighttrack.manifest.json), not from prose. The behaviour it shares with
+the Python and Rust clients is pinned by [`clients/contract/`](../contract/) and asserted here by
+`src/contract.test.ts`.
+
 ## Install / build
 
 ```bash

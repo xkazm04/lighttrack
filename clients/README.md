@@ -8,6 +8,49 @@ The API fills in the rest: it derives the **project from the API key**, assigns 
 timestamp, and computes **cost** from its price book. So the minimal event is just
 `{provider, model, usage}`.
 
+## What each SDK can do
+
+The three clients are not identical, and the table below is generated from each one's own
+`lighttrack.manifest.json` rather than written by hand — so a gap shows up here instead of being
+inferred from the silence of a README. CI regenerates it and fails if it has gone stale.
+
+<!-- BEGIN GENERATED: sdk-capability-matrix (scripts/gen-sdk-matrix.mjs) -->
+
+<!-- Generated from clients/*/lighttrack.manifest.json. Do not edit by hand: run
+     `node scripts/gen-sdk-matrix.mjs`. CI fails if this block is stale. -->
+
+| Capability | python | typescript | rust |
+|---|---|---|---|
+| Record one call (`track*`) | yes | yes | yes |
+| Time a call (`span` / context manager) | yes | yes | no |
+| Wrap the provider SDK (auto-capture) | yes | yes | no |
+| Crash-surviving breadcrumbs | yes | yes | no |
+| Inline output guardrails (`guard`) | yes | yes | yes |
+| Relay tasks (cloud -> device) | yes | yes | no |
+| Pre-spend admission on limits | planned | planned | planned |
+| Client-side batching | no | no | no |
+
+Where a cell is not `yes`, the SDK says why:
+
+- **rust / Time a call (`span` / context manager)** (no): The builder emits only on send(); there is no timed span type, so latency is caller-measured.
+- **rust / Wrap the provider SDK (auto-capture)** (no): No provider-SDK wrapping. Rust provider clients are third-party and un-monkey-patchable; instrumentation would need per-crate adapters.
+- **rust / Crash-surviving breadcrumbs** (no): No crash-surviving breadcrumb. A Rust process killed mid-call leaves no record of it, where the Python and TypeScript clients would recover one. This is a gap, not a design choice - clients/catchup-marker.json has carried it as a flagged debt since 2026-08-24.
+- **rust / Relay tasks (cloud -> device)** (no): No relay client. Enqueue tasks over plain HTTP against /v1/relay/tasks (docs/RELAY.md).
+- **python / Pre-spend admission on limits** (planned): Pre-spend admission (act on the limit view before the call). parse_limit_view reads the signals today; deciding on them is M5.
+- **typescript / Pre-spend admission on limits** (planned): Pre-spend admission (act on the limit view before the call). parseLimitView reads the signals today; deciding on them is M5.
+- **rust / Pre-spend admission on limits** (planned): Pre-spend admission (act on the limit view before the call). parse_limit_view reads the signals today; deciding on them is M5.
+- **python / Client-side batching** (no): No client-side batching: events go one per POST from the background thread. /v1/events/batch exists server-side.
+- **typescript / Client-side batching** (no): No client-side batching: sends are individual un-awaited POSTs. /v1/events/batch exists server-side.
+
+<!-- END GENERATED: sdk-capability-matrix -->
+
+They *do* share one contract. Provider extraction, `guard` verdicts, the journal format, the limit
+signals on an ingest response, and the failure diagnostics are pinned by shared fixtures in
+[`clients/contract/`](contract/) and asserted by all three suites, so a behaviour that exists in two
+languages cannot quietly mean something different in the third. `guard`'s PII rules are exported from
+the server's own scrubber (`crates/anon`), so a client-side check can no longer contradict what the
+ingest path would redact.
+
 ## One-line auto-instrumentation
 
 Don't want to write a `track*` per call? **Wrap the provider SDK once** and every call it makes is
@@ -44,6 +87,7 @@ Wrapped methods: OpenAI `chat.completions` / `responses` / `embeddings`, Anthrop
 Google GenAI `models.generate_content` (Python also patches the legacy `google.generativeai`
 `GenerativeModel`). Streaming calls are recorded with latency + model (token usage isn't captured
 from a stream yet). The hand-written `track*` / `span` API below still works for full control.
+**Python and TypeScript only** — see the matrix above.
 
 | Language   | Dir                 | Install / run                              | Notes |
 |------------|---------------------|--------------------------------------------|-------|
@@ -149,9 +193,14 @@ Each SDK extracts model + token usage from the native response object:
 
 | Provider  | model            | input tokens                         | output tokens                          | cached |
 |-----------|------------------|--------------------------------------|----------------------------------------|--------|
-| OpenAI    | `model`          | `usage.prompt_tokens` / `input_tokens` | `usage.completion_tokens` / `output_tokens` | `usage.prompt_tokens_details.cached_tokens` |
-| Anthropic | `model`          | `usage.input_tokens`                 | `usage.output_tokens`                  | `usage.cache_read_input_tokens` |
-| Gemini    | `model_version`  | `usageMetadata.promptTokenCount`     | `usageMetadata.candidatesTokenCount`   | `usageMetadata.cachedContentTokenCount` |
+| OpenAI    | `model`          | `usage.prompt_tokens` / `input_tokens` | `usage.completion_tokens` / `output_tokens` | `usage.prompt_tokens_details.cached_tokens` / `input_tokens_details.cached_tokens` (Responses API) |
+| Anthropic | `model`          | `usage.input_tokens`                 | `usage.output_tokens`                  | `usage.cache_read_input_tokens` (not `cache_creation_…`) |
+| Gemini    | `modelVersion` / `model_version` | `usageMetadata.promptTokenCount` / `usage_metadata.prompt_token_count` | `…candidatesTokenCount` / `…candidates_token_count` | `…cachedContentTokenCount` / `…cached_content_token_count` |
+
+Both casings, everywhere they occur: the REST/JS shapes are camelCase and the google-genai Python
+objects are snake_case for the same fields. A missing token count is `0`; a *cached* count that was
+never reported is unknown, not zero. These readings are pinned for all three SDKs by
+[`contract/fixtures/extractors.json`](contract/fixtures/extractors.json).
 
 Provider names are normalized to the API's enum (`openai` / `anthropic` / `google`); common aliases
 (`claude`, `gemini`, `vertex`, `azure`, …) are mapped for you.
