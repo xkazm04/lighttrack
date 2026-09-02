@@ -68,8 +68,13 @@ fn the_matrix_reports_the_gaps_that_exist() {
     assert!(pg.atomic_admission, "Postgres enforces caps atomically");
     assert!(pg.has(Surface::Traces) && pg.has(Surface::ProjectAdmin));
     assert!(
-        !pg.has(Surface::Prompts),
-        "the registry is not ported to PG"
+        pg.has(Surface::Prompts),
+        "the registry is ported to PG (M10): the promotion gate has to exist where the product is \
+         actually deployed, and a managed Postgres is where that is"
+    );
+    assert!(
+        !pg.has(Surface::Maintenance) && !pg.has(Surface::Metrics),
+        "vacuum/analyze and file-size metrics are SQLite-file concerns a managed Postgres owns"
     );
 
     let fs = FirestoreStore::manifest();

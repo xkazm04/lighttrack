@@ -20,6 +20,7 @@ mod jobs;
 mod margin_policies;
 mod prices;
 mod projects;
+mod prompts;
 mod redaction;
 mod relay;
 mod relay_lease;
@@ -39,8 +40,8 @@ use tokio::runtime::Runtime;
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
     JobCancel, JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project,
-    RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow,
-    Rubric, Schedule, Score, TraceSummary,
+    Prompt, PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
+    RollupQuery, RollupRow, Rubric, Schedule, Score, TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
@@ -88,9 +89,9 @@ impl PgStore {
     /// once is what makes `Forecast` and `MarginBreakdowns` answer here (their methods default over
     /// it), instead of the 501s `/v1/forecast` and three `/v1/margin/*` routes used to return.
     ///
-    /// The absent surfaces are honest gaps, not oversights: `Prompts` needs the registry tables,
-    /// and `Maintenance`/`Metrics` are SQLite-file concerns a managed Postgres owns itself. Each
-    /// refuses with `Unsupported` (HTTP 501) and the conformance suite asserts that refusal.
+    /// The absent surfaces are honest gaps, not oversights: `Maintenance`/`Metrics` are SQLite-file
+    /// concerns a managed Postgres owns itself. Each refuses with `Unsupported` (HTTP 501) and the
+    /// conformance suite asserts that refusal.
     pub const SURFACES: &'static [Surface] = &[
         Surface::EventsCore,
         Surface::EventFilters,
@@ -111,6 +112,10 @@ impl PgStore {
         // so a 501 on `/v1/collective/*` was the gap that mattered most.
         Surface::Collective,
         Surface::Schedules,
+        // The prompt registry, and with it the promotion gate. It used to 501 here, which meant the
+        // one place a prompt edit becomes a measurable quality step did not exist on the managed
+        // deployments the product actually runs on.
+        Surface::Prompts,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -605,5 +610,33 @@ impl Store for PgStore {
         f: &CollectiveFilter,
     ) -> Result<Vec<CollectiveEntry>> {
         self.rt.block_on(collective::list_filtered(&self.pool, f))
+    }
+
+    // --- prompt registry (M10) ---
+    fn create_prompt(&self, p: &Prompt) -> Result<()> {
+        self.rt.block_on(prompts::create(&self.pool, p))
+    }
+    fn update_prompt(&self, p: &Prompt) -> Result<()> {
+        self.rt.block_on(prompts::update(&self.pool, p))
+    }
+    fn get_prompt(&self, project: &str, name: &str) -> Result<Option<Prompt>> {
+        self.rt.block_on(prompts::get(&self.pool, project, name))
+    }
+    fn get_prompt_by_id(&self, id: &str) -> Result<Option<Prompt>> {
+        self.rt.block_on(prompts::get_by_id(&self.pool, id))
+    }
+    fn list_prompts(&self, project: &str) -> Result<Vec<Prompt>> {
+        self.rt.block_on(prompts::list(&self.pool, project))
+    }
+    fn create_prompt_version(&self, v: &PromptVersion) -> Result<()> {
+        self.rt.block_on(prompts::create_version(&self.pool, v))
+    }
+    fn get_prompt_version(&self, prompt_id: &str, version: u32) -> Result<Option<PromptVersion>> {
+        self.rt
+            .block_on(prompts::get_version(&self.pool, prompt_id, version))
+    }
+    fn list_prompt_versions(&self, prompt_id: &str) -> Result<Vec<PromptVersion>> {
+        self.rt
+            .block_on(prompts::list_versions(&self.pool, prompt_id))
     }
 }
