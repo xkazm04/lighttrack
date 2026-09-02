@@ -105,7 +105,16 @@ pub(crate) fn build_from_events(
             "tags": tags,
             "anonymization": { "method": method, "redactions": redactions },
         });
-        post(cli, http, &format!("/v1/datasets/{dsid}/items"), &item)?;
+        // A failure here used to propagate with nothing said about the dataset it left behind:
+        // created, partially filled, UNFROZEN, and invisible to the operator who saw only an HTTP
+        // error. Name what exists so it can be finished (`dataset import`), forked, or ignored.
+        if let Err(e) = post(cli, http, &format!("/v1/datasets/{dsid}/items"), &item) {
+            return Err(e.context(format!(
+                "dataset {dsid} '{name}' was created and holds {built} item(s) but is NOT frozen; \
+                 the item from event {} failed to post",
+                short(&ev.id)
+            )));
+        }
         built += 1;
         println!("  + item from {} ({redactions} redactions)", short(&ev.id));
     }
@@ -115,7 +124,12 @@ pub(crate) fn build_from_events(
         http,
         &format!("/v1/datasets/{dsid}/freeze"),
         &json!({}),
-    )?;
+    )
+    .with_context(|| {
+        format!(
+            "dataset {dsid} '{name}' holds all {built} item(s) but the freeze failed; it is open"
+        )
+    })?;
     println!(
         "built dataset {dsid} '{name}': {built} items, {total_redactions} total redactions, frozen"
     );
