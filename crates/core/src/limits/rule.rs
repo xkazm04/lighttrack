@@ -88,8 +88,10 @@ impl LimitWindow {
 /// - **`Block`** — an unambiguous hard stop at the threshold, with no shedding beforehand. A strict
 ///   cap stays strict.
 ///
-/// Both enforcing tiers reject at ingest admission (the event is not recorded). Inline *pre-call*
-/// blocking still requires the future gateway/proxy mode.
+/// Both enforcing tiers reject at ingest admission (the event is not recorded). Pre-call refusal —
+/// stopping the provider call before a token is bought — is the SDKs' pre-spend admission
+/// (`gate()` in the Rust/Python/TS clients), decided from the last ingest response's proximity
+/// signal; it mirrors these tiers, it does not replace them.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
 )]
