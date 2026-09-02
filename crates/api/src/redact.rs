@@ -533,8 +533,13 @@ fn walk(v: &mut Value, depth: usize, w: &mut Walk) {
         Value::Object(map) => {
             if map.len() > MAX_BREADTH {
                 let shed = map.len() - MAX_BREADTH;
-                let keep: Vec<String> = map.keys().take(MAX_BREADTH).cloned().collect();
-                map.retain(|k, _| keep.iter().any(|kk| kk == k));
+                // Positional: `retain` visits in the map's own order, so the first MAX_BREADTH
+                // entries survive without cloning and re-scanning the key set for each one.
+                let mut seen = 0;
+                map.retain(|_, _| {
+                    seen += 1;
+                    seen <= MAX_BREADTH
+                });
                 map.insert(
                     "<UNSCANNED>".to_string(),
                     unscanned(&format!("breadth, {shed} keys dropped")),
