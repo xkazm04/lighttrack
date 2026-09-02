@@ -47,6 +47,55 @@ Composite indexes `(project_id, provider|model|status, ts)` serve each equality 
 that have not ported the extended predicates answer **501 `unsupported`** naming the filter — never an
 unfiltered page presented as if the filter had been honored.
 
+### Rolling `events` up — the dimension vocabulary
+
+One primitive answers every "usage and cost over a window, grouped by X" question:
+`Store::rollup(RollupQuery)` (`crates/core/src/rollup.rs`), surfaced as
+`GET /v1/rollup?by=…&since=…&until=…&time=…&filter=…`. `/v1/costs`, `/v1/costs/prompts`,
+`/v1/usecases`, `/v1/limits/usage`, `/v1/margin/*` and `/v1/forecast` are all fixed groupings of it,
+and every backend implements the primitive once rather than one query per surface.
+
+`Dimension` is the **single** vocabulary — limit scopes (`LimitScope::kind_str`), the legacy `dim`
+arguments and the SQL/JSON extraction all route through it, so a dimension cannot exist in one place
+and silently not in another.
+
+| Dimension  | Where it lives on the row              | Also a limit scope? |
+|------------|----------------------------------------|:-------------------:|
+| `project`  | `project_id` column                    |                     |
+| `provider` | `provider` column                      | yes                 |
+| `model`    | `model` column                         | yes                 |
+| `name`     | `name` column (the use-case label)     | yes                 |
+| `api_key`  | `metadata.api_key_id` (server-stamped) | yes                 |
+| `customer` | `metadata.customer_id`                 | yes                 |
+| `product`  | `metadata.product_id`                  |                     |
+| `prompt`   | `metadata.prompt` (`name@vN`)          |                     |
+| `day`      | UTC day of the query's time key        |                     |
+
+A rollup groups by 1..=3 distinct dimensions; a row's `keys` align positionally with `group_by`. A
+row that carries no value on a dimension folds into a single `null` bucket rather than being dropped,
+so the parts always sum to the whole. Filters are equality only, and a `null` value never matches one
+(an untagged call cannot be charged to a customer).
+
+`time` selects the window and `day` bucket key: `ts` (client-declared) or `received_at` (server
+arrival). **Accounting reads use `received_at`** — a caller able to slide its spend out of a window by
+backdating its own events is a caller with no cap. Firestore stores no `received_at` and answers both
+on `ts`; see `docs/PARITY.md`.
+
+`api_key` is admin-only in both `by` and `filter`: grouping on it enumerates a project's key ids.
+
+### The `unpriced_calls` disclosure rule
+
+`cost_usd` is the **stored** sum — what `SUM(cost_usd)` sees. A call whose model was absent from the
+price book has `cost_usd IS NULL` on the row (we never write a phantom zero), so it contributes
+nothing. Every rollup row therefore also carries `unpriced_calls`, and `CostRow`, `UseCaseCostRow` and
+`CostByDimension` carry it too.
+
+The rule for anything that displays a cost: **when `unpriced_calls > 0`, the number is a floor, not a
+total, and must be presented as one.** A zero indistinguishable from "we don't know" is the failure
+this field exists to remove — it is why the limit path charges unpriced traffic by imputation
+(`Usage::cost_for_limits`) instead of letting an unpriced model be spent for free, and why the
+rendered rollup table prints the caveat under the total.
+
 ## traces — a derived end-to-end view (no table)
 A *trace* is every `event` sharing a `trace_id`, rolled up into one view of a multi-step / agentic
 request. There is **no `traces` table**: the rollup is computed on read (`core::trace::Trace::from_events`)
