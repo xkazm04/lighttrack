@@ -202,12 +202,15 @@ fn unix_dt(v: Option<&Value>) -> Option<DateTime<Utc>> {
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
+    // Byte chunks, never `&s[i..i + 2]`: an unauthenticated caller controls this header, and a
+    // multi-byte character at an odd offset made the string slice panic mid-char (a 500 on the
+    // webhook route from a body nobody had verified yet). A non-ASCII byte is simply not hex.
+    if !s.len().is_multiple_of(2) || !s.is_ascii() {
         return None;
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+    s.as_bytes()
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
         .collect()
 }
 
@@ -315,6 +318,22 @@ mod tests {
         assert!(StripeSource::new(secret)
             .verify_webhook(&lookup(&header), &body, signed_at + 3600)
             .is_err());
+    }
+
+    /// The signature header is attacker-controlled and unverified when it is decoded. A multi-byte
+    /// character that lands across a two-byte hex pair used to panic the byte-offset slice.
+    #[test]
+    fn a_non_ascii_signature_is_a_mismatch_not_a_panic() {
+        let body = invoice_envelope();
+        let now = 1_780_000_100_i64;
+        for bad in ["a€", "€€", "zz", "0"] {
+            let header = format!("t={now},v1={bad}");
+            let r = StripeSource::new("whsec_test").verify_webhook(&lookup(&header), &body, now);
+            assert!(
+                r.is_err(),
+                "{bad:?} must be refused, not accepted or panicked on"
+            );
+        }
     }
 
     #[test]
