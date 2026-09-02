@@ -260,6 +260,24 @@ request will succeed shortly.
 ## 9. Security
 - **API keys per project** for ingest (`Authorization: Bearer lt_<prefix>_<secret>`); only a salted hash is
   stored. An **admin key** guards management endpoints.
+- **Scoped keys.** A key carries a set of capabilities — `ingest` (the event / batch / OTLP doors),
+  `read` (the project's GETs), `manage` (its configuration writes). Three capabilities on a key, **not
+  RBAC**: no roles, no inheritance, no per-resource grants — that non-goal still stands. What it buys is
+  the case that used to be unaddressable: an ingest key embedded in a shipped client app could read back
+  every prompt and completion stored for its project, because a project key had exactly one shape.
+  `POST /v1/projects/:id/keys {"scopes": ["ingest"]}` (or `lt keys create --scope ingest`) fixes that.
+  A key minted before scopes existed reads as `["ingest","read"]` — the permissive back-compat default
+  for **one release**; the documented next default is `["ingest"]`.
+- **Key expiry and rotation.** A key may carry `expires_at`; past it, it authenticates as nothing
+  (401 `key_expired`). `POST /v1/projects/:id/keys/:kid/rotate {"grace_secs": 3600}` mints a successor with
+  the same name and scopes and stamps the predecessor's expiry, so a fleet gets a window to redeploy
+  instead of a cliff. The window is durable state on the row, not a background task a restart would drop.
+- **The project switch is real.** `enabled = false` is checked when the key is verified, so a disabled
+  project's keys open nothing — not ingest, not reads (403 `project_disabled`). Admin principals are
+  unaffected, so an operator can always re-enable it.
+- **`DELETE /v1/projects/:id` archives, it does not delete.** It sets `enabled = false` and stamps
+  `archived_at`; the events, scores and benchmark runs stay, because they are what every cost report and
+  gate decision was computed from. Archiving is idempotent, and effective — the tenant stops accepting work.
 - **Local dev:** bind to `127.0.0.1`; auth can run in a relaxed `dev` mode.
 - **e2-micro:** API keys enforced; TLS via Cloud Run (managed) or Caddy in front of the VM. Secrets live in
   **Secret Manager** (cloud) / a git-ignored `.env`/`*.local.toml` (local), never committed.
@@ -277,7 +295,9 @@ their canonical HTTP status (see `crates/api/src/error.rs`):
 |------|--------|---------|
 | `bad_request`  | 400 | malformed / invalid request (validation) |
 | `unauthorized` | 401 | missing or invalid credentials |
-| `forbidden`    | 403 | authenticated but not permitted |
+| `key_expired`  | 401 | a valid key that is past its `expires_at` — rotate it, do not retry |
+| `forbidden`    | 403 | authenticated but not permitted (includes a key missing the route's scope) |
+| `project_disabled` | 403 | the key is fine, but its project is disabled — re-enable the project |
 | `not_found`    | 404 | resource does not exist |
 | `conflict`     | 409 | conflicts with current state (duplicate / frozen / gated regression) |
 | `rate_limited` | 429 | ingest rejected: an enforcing (`throttle`/`block`) limit was breached (see §7) |
