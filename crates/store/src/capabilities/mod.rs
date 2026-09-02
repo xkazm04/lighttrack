@@ -245,6 +245,10 @@ pub struct Capabilities {
     pub backend: &'static str,
     pub surfaces: BTreeSet<Surface>,
     pub atomic_admission: bool,
+    /// A short hash of the logical schema this build carries (M14, `crate::schema::fingerprint`).
+    /// The same on every backend, because the *model* is: it answers "are these two deployments
+    /// running the same schema", which `backend` cannot and which nothing else here could be asked.
+    pub schema_fingerprint: String,
 }
 
 impl Capabilities {
@@ -253,6 +257,7 @@ impl Capabilities {
             backend,
             surfaces: surfaces.iter().copied().collect(),
             atomic_admission,
+            schema_fingerprint: crate::schema::fingerprint(),
         }
     }
 

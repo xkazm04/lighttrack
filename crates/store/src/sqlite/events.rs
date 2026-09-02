@@ -30,10 +30,15 @@ fn insert_err(e: rusqlite::Error, id: &str) -> StoreError {
     }
 }
 
-const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
-    operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
-    latency_ms, status, error, input, output, tags, source, metadata, name, \
-    COALESCE(received_at, ts) AS received_at";
+/// The event select list, derived from the schema model rather than restated here (M14).
+///
+/// `from_row` reads by position, so this list and the `get` indices are one contract: adding a
+/// column mid-list without moving the reads shifts every field after it — a silent corruption no
+/// type error would catch, since most of these are strings. Deriving it means the list can only
+/// change when the model does, and the arity assertion in the tests below fails the moment it has.
+static COLS: crate::schema::SelectList = crate::schema::SelectList::new(|| {
+    crate::schema::tables::EVENTS.select_list(crate::schema::Dialect::Sqlite)
+});
 
 pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
     let tags = serde_json::to_string(&ev.tags)?;

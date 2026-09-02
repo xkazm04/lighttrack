@@ -25,6 +25,11 @@ pub(crate) struct CapabilitiesBody {
     /// Whether a configured usage cap is genuinely enforced under concurrent ingest. `false` means
     /// caps here are **advisory**: a burst can exceed one before it takes effect.
     pub atomic_admission: bool,
+    /// A short hash of the logical schema this deployment's binary carries (M14). Backend-agnostic
+    /// on purpose: two deployments on different backends but the same build answer the same thing,
+    /// so "is prod running the schema this SDK was written against" is one comparison rather than a
+    /// version number somebody has to remember to bump.
+    pub schema_fingerprint: String,
 }
 
 impl From<Capabilities> for CapabilitiesBody {
@@ -34,6 +39,7 @@ impl From<Capabilities> for CapabilitiesBody {
             surfaces: c.surfaces.iter().map(|s| s.as_str()).collect(),
             unsupported: c.missing().iter().map(|s| s.as_str()).collect(),
             atomic_admission: c.atomic_admission,
+            schema_fingerprint: c.schema_fingerprint,
         }
     }
 }
@@ -81,6 +87,7 @@ pub(crate) fn log_posture(caps: &Capabilities) {
         backend = caps.backend,
         surfaces = caps.surfaces.len(),
         atomic_admission = caps.atomic_admission,
+        schema = %caps.schema_fingerprint,
         "store capability manifest (see docs/PARITY.md)"
     );
     if !caps.atomic_admission {
@@ -214,6 +221,19 @@ mod tests {
             Surface::ALL.len(),
             "every surface appears in exactly one of the two lists"
         );
+    }
+
+    /// The schema fingerprint is published, not merely computed — the whole point is that a client
+    /// can compare two deployments without reading either one's database.
+    #[test]
+    fn the_body_publishes_the_schema_fingerprint() {
+        let body = CapabilitiesBody::from(Capabilities::new("test", &[Surface::EventsCore], true));
+        assert_eq!(
+            body.schema_fingerprint,
+            lighttrack_store::schema_fingerprint(),
+            "the served fingerprint must be the model's own"
+        );
+        assert!(body.schema_fingerprint.starts_with("sha256-"));
     }
 
     /// Every surface has a sentence saying what its absence costs; a fallback would let a new

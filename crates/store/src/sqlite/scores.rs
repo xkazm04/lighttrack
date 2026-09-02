@@ -7,8 +7,11 @@ use lighttrack_core::{Score, ScoreDetail, ScoreKind};
 use crate::codec::{fmt_ts, parse_ts};
 use crate::{Result, ScoreFilter};
 
-const COLS: &str = "id, project_id, event_id, rubric, value, max, pass, reasoning, detail, \
-    run_id, case_index, scored_by, cost_usd, created_at, rubric_id, kind";
+/// Derived from the schema model (M14); `from_row` reads by position, so the list and the `get`
+/// indices are one contract.
+static COLS: crate::schema::SelectList = crate::schema::SelectList::new(|| {
+    crate::schema::tables::SCORES.select_list(crate::schema::Dialect::Sqlite)
+});
 
 pub(super) fn insert(conn: &Connection, s: &Score) -> Result<()> {
     // Verdict provenance rides as JSON in one column: it is read back whole with the score and never
@@ -91,7 +94,8 @@ pub(super) fn list_by_trace(
 
 /// `COLS` with each column qualified by `alias` (for joins that share column names across tables).
 fn prefixed_cols(alias: &str) -> String {
-    COLS.split(", ")
+    COLS.as_str()
+        .split(", ")
         .map(|c| format!("{alias}.{c}"))
         .collect::<Vec<_>>()
         .join(", ")
