@@ -9,8 +9,16 @@ use serde_json::Value;
 
 use crate::cli::Cli;
 
+/// Wall-clock bound on one request. An unreachable-but-accepting address (a firewall that
+/// blackholes, a server wedged mid-response) used to hang the command until the operator killed it,
+/// with nothing printed; every verb is one request, so one generous bound covers them all.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub(crate) fn client() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::new()
+    reqwest::blocking::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .unwrap_or_else(|_| reqwest::blocking::Client::new())
 }
 
 /// Whether a response should be shown as a rendered table. Only ever true for a *successful* body on
