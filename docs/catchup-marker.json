@@ -30,6 +30,11 @@
   ],
 
   "skipped": [
+   {
+    "path": "docs/design",
+    "kind": "not-in-this-pass",
+    "reason": "Build briefs for the 2026-09 moonshot waves (one per accepted deck item). They describe work being built, not the system as shipped; a docs catch-up pass reads them for intent but does not repair them - each is retired or folded into ARCHITECTURE/DECISIONS when its item lands."
+   },
     {
       "path": "docs/harness/perf-feature-2026-07-16",
       "kind": "frozen-archive",

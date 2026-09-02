@@ -181,6 +181,7 @@ is configured from these strings.
 | `cargo test (rust sdk)` — the detached `clients/rust` project | yes |
 | `python suite (python sdk)` — builds the wheel, runs `clients/python/tests` against it | yes |
 | `npm test (typescript sdk)` — `npm ci` + `tsc` + the suite + a `dist/` load smoke | yes |
+| `sdk contract (all three)` — the shared `clients/contract/` fixtures in all three SDKs, the anon PII export check, the generated capability matrix | yes |
 | `cargo clippy -D warnings` | yes |
 | `cargo fmt --check` | yes |
 | `cargo deny (policy)` — bans, licenses, crate sources | yes |

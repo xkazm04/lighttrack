@@ -73,3 +73,6 @@ Thumbs.db
 
 # Registry consult log (append-only, local; the registry's signals lane folds it into counts)
 .ai/consults.jsonl
+
+# agent worktrees (Claude Code isolation)
+/.claude/worktrees/
