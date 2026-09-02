@@ -66,7 +66,7 @@
     { "path": "docs/MARGIN.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/OTLP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/PACKAGING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
-    { "path": "docs/PRICING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/PRICING.md", "kind": "not-in-this-pass", "reason": "authored 2026-09-02 by the M26 build (unpriced ledger, forward fill, dated price book) against the code it describes; still not read by a docs catch-up pass, so it stays out-of-pass rather than claimed as covered here" },
     { "path": "docs/RELAY.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/ROADMAP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/SCHEDULING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" }
