@@ -10,8 +10,11 @@ CREATE TABLE IF NOT EXISTS projects (
   redaction   TEXT NOT NULL DEFAULT 'none',
   -- Consent to include this project's benchmark runs in a collective-network digest. Default off.
   collective_opt_in BIGINT NOT NULL DEFAULT 0,
-  created_at  TEXT NOT NULL
+  created_at  TEXT NOT NULL,
+  -- Set by DELETE /v1/projects/:id. Archive, never delete: the events and runs stay.
+  archived_at TEXT
 );
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS archived_at TEXT;
 
 CREATE TABLE IF NOT EXISTS api_keys (
   id           TEXT PRIMARY KEY,
@@ -21,8 +24,15 @@ CREATE TABLE IF NOT EXISTS api_keys (
   key_hash     TEXT NOT NULL,
   created_at   TEXT NOT NULL,
   last_used_at TEXT,
-  revoked      BIGINT NOT NULL DEFAULT 0
+  revoked      BIGINT NOT NULL DEFAULT 0,
+  -- JSON array of ingest|read|manage. NULL on rows written before scopes existed, which read as
+  -- the permissive back-compat default (core::decode_scopes).
+  scopes       TEXT,
+  -- Fixed-width RFC3339. Past it, the key authenticates as nothing.
+  expires_at   TEXT
 );
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS scopes TEXT;
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS expires_at TEXT;
 CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(prefix);
 
 CREATE TABLE IF NOT EXISTS events (

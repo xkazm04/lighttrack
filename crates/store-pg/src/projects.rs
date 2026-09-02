@@ -4,7 +4,9 @@ use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
-use lighttrack_core::{ApiKey, LimitRule, LimitScope, Project, Redaction};
+use lighttrack_core::{
+    decode_scopes, encode_scopes, ApiKey, LimitRule, LimitScope, Project, Redaction,
+};
 use lighttrack_store::Result;
 
 use crate::util::{enum_to_str, fmt_ts, parse_enum, parse_ts, pgerr};
@@ -13,8 +15,9 @@ use crate::util::{enum_to_str, fmt_ts, parse_enum, parse_ts, pgerr};
 
 pub(crate) async fn create(pool: &PgPool, p: &Project) -> Result<()> {
     sqlx::query(
-        "INSERT INTO projects (id, name, enabled, redaction, collective_opt_in, created_at) \
-         VALUES ($1,$2,$3,$4,$5,$6)",
+        "INSERT INTO projects \
+         (id, name, enabled, redaction, collective_opt_in, created_at, archived_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7)",
     )
     .bind(p.id.clone())
     .bind(p.name.clone())
@@ -22,6 +25,7 @@ pub(crate) async fn create(pool: &PgPool, p: &Project) -> Result<()> {
     .bind(enum_to_str(&p.redaction)?)
     .bind(p.collective_opt_in as i64)
     .bind(fmt_ts(p.created_at))
+    .bind(p.archived_at.map(fmt_ts))
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -30,7 +34,7 @@ pub(crate) async fn create(pool: &PgPool, p: &Project) -> Result<()> {
 
 pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Project>> {
     let row = sqlx::query(
-        "SELECT id, name, enabled, redaction, collective_opt_in, created_at \
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at \
          FROM projects WHERE id = $1",
     )
     .bind(id.to_string())
@@ -42,7 +46,7 @@ pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Project>> {
 
 pub(crate) async fn list(pool: &PgPool) -> Result<Vec<Project>> {
     let rows = sqlx::query(
-        "SELECT id, name, enabled, redaction, collective_opt_in, created_at \
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at \
          FROM projects ORDER BY created_at DESC",
     )
     .fetch_all(pool)
@@ -55,8 +59,9 @@ pub(crate) async fn list(pool: &PgPool) -> Result<Vec<Project>> {
 
 pub(crate) async fn create_key(pool: &PgPool, k: &ApiKey) -> Result<()> {
     sqlx::query(
-        "INSERT INTO api_keys (id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        "INSERT INTO api_keys \
+         (id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked, scopes, expires_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
     )
     .bind(k.id.clone())
     .bind(k.project_id.clone())
@@ -66,6 +71,8 @@ pub(crate) async fn create_key(pool: &PgPool, k: &ApiKey) -> Result<()> {
     .bind(fmt_ts(k.created_at))
     .bind(k.last_used_at.map(fmt_ts))
     .bind(k.revoked as i64)
+    .bind(encode_scopes(&k.scopes))
+    .bind(k.expires_at.map(fmt_ts))
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -74,8 +81,8 @@ pub(crate) async fn create_key(pool: &PgPool, k: &ApiKey) -> Result<()> {
 
 pub(crate) async fn find_key_by_prefix(pool: &PgPool, prefix: &str) -> Result<Option<ApiKey>> {
     let row = sqlx::query(
-        "SELECT id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked \
-         FROM api_keys WHERE prefix = $1",
+        "SELECT id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked, \
+         scopes, expires_at FROM api_keys WHERE prefix = $1",
     )
     .bind(prefix.to_string())
     .fetch_optional(pool)
@@ -96,8 +103,8 @@ pub(crate) async fn touch_key(pool: &PgPool, id: &str, when: DateTime<Utc>) -> R
 
 pub(crate) async fn list_keys(pool: &PgPool, project: &str) -> Result<Vec<ApiKey>> {
     let rows = sqlx::query(
-        "SELECT id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked \
-         FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC",
+        "SELECT id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked, \
+         scopes, expires_at FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC",
     )
     .bind(project.to_string())
     .fetch_all(pool)
@@ -110,6 +117,21 @@ pub(crate) async fn set_key_revoked(pool: &PgPool, id: &str, revoked: bool) -> R
     let res = sqlx::query("UPDATE api_keys SET revoked = $2 WHERE id = $1")
         .bind(id.to_string())
         .bind(revoked as i64)
+        .execute(pool)
+        .await
+        .map_err(pgerr)?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Stamp (or clear) a key's expiry — the durable half of a rotation's grace window.
+pub(crate) async fn set_key_expiry(
+    pool: &PgPool,
+    id: &str,
+    when: Option<DateTime<Utc>>,
+) -> Result<bool> {
+    let res = sqlx::query("UPDATE api_keys SET expires_at = $2 WHERE id = $1")
+        .bind(id.to_string())
+        .bind(when.map(fmt_ts))
         .execute(pool)
         .await
         .map_err(pgerr)?;
@@ -220,6 +242,7 @@ pub(crate) async fn delete_limit(pool: &PgPool, id: &str) -> Result<bool> {
 fn project_from_row(row: &PgRow) -> Result<Project> {
     let redaction: String = row.try_get(3).map_err(pgerr)?;
     let created_at: String = row.try_get(5).map_err(pgerr)?;
+    let archived_at: Option<String> = row.try_get(6).map_err(pgerr)?;
     Ok(Project {
         id: row.try_get(0).map_err(pgerr)?,
         name: row.try_get(1).map_err(pgerr)?,
@@ -227,12 +250,15 @@ fn project_from_row(row: &PgRow) -> Result<Project> {
         redaction: parse_enum::<Redaction>("redaction", &redaction)?,
         collective_opt_in: row.try_get::<i64, _>(4).map_err(pgerr)? != 0,
         created_at: parse_ts(&created_at)?,
+        archived_at: archived_at.as_deref().map(parse_ts).transpose()?,
     })
 }
 
 fn api_key_from_row(row: &PgRow) -> Result<ApiKey> {
     let created_at: String = row.try_get(5).map_err(pgerr)?;
     let last_used: Option<String> = row.try_get(6).map_err(pgerr)?;
+    let scopes: Option<String> = row.try_get(8).map_err(pgerr)?;
+    let expires_at: Option<String> = row.try_get(9).map_err(pgerr)?;
     Ok(ApiKey {
         id: row.try_get(0).map_err(pgerr)?,
         project_id: row.try_get(1).map_err(pgerr)?,
@@ -245,6 +271,8 @@ fn api_key_from_row(row: &PgRow) -> Result<ApiKey> {
             None => None,
         },
         revoked: row.try_get::<i64, _>(7).map_err(pgerr)? != 0,
+        scopes: decode_scopes(scopes.as_deref()),
+        expires_at: expires_at.as_deref().map(parse_ts).transpose()?,
     })
 }
 

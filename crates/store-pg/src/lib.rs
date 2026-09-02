@@ -220,6 +220,10 @@ impl Store for PgStore {
         self.rt
             .block_on(projects::set_key_revoked(&self.pool, id, revoked))
     }
+    fn set_api_key_expiry(&self, id: &str, when: Option<DateTime<Utc>>) -> Result<bool> {
+        self.rt
+            .block_on(projects::set_key_expiry(&self.pool, id, when))
+    }
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()> {
         self.rt.block_on(projects::create_limit(&self.pool, r))
     }

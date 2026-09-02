@@ -204,6 +204,9 @@ impl Store for FirestoreStore {
     fn set_api_key_revoked(&self, id: &str, revoked: bool) -> Result<bool> {
         projects::set_api_key_revoked(&self.rest, id, revoked)
     }
+    fn set_api_key_expiry(&self, id: &str, when: Option<DateTime<Utc>>) -> Result<bool> {
+        projects::set_api_key_expiry(&self.rest, id, when)
+    }
     fn touch_api_key(&self, id: &str, when: DateTime<Utc>) -> Result<()> {
         projects::touch_api_key(&self.rest, id, when)
     }

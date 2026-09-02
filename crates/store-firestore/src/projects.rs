@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
-use lighttrack_core::{ApiKey, Project, Redaction};
+use lighttrack_core::{decode_scopes, encode_scopes, ApiKey, Project, Redaction};
 use lighttrack_store::Result;
 
 use crate::codec::*;
@@ -20,6 +20,7 @@ pub(crate) fn create_project(rest: &Rest, p: &Project) -> Result<()> {
         json!(p.collective_opt_in as i64),
     );
     m.insert("created_at".into(), json!(fmt_ts(p.created_at)));
+    m.insert("archived_at".into(), json!(p.archived_at.map(fmt_ts)));
     rest.put_doc("projects", &p.id, &m)
 }
 
@@ -45,6 +46,8 @@ pub(crate) fn create_api_key(rest: &Rest, k: &ApiKey) -> Result<()> {
     m.insert("created_at".into(), json!(fmt_ts(k.created_at)));
     m.insert("last_used_at".into(), json!(k.last_used_at.map(fmt_ts)));
     m.insert("revoked".into(), json!(k.revoked as i64));
+    m.insert("scopes".into(), json!(encode_scopes(&k.scopes)));
+    m.insert("expires_at".into(), json!(k.expires_at.map(fmt_ts)));
     rest.put_doc("api_keys", &k.id, &m)
 }
 
@@ -78,6 +81,22 @@ pub(crate) fn set_api_key_revoked(rest: &Rest, id: &str, revoked: bool) -> Resul
     Ok(true)
 }
 
+/// Stamp (or clear) a key's expiry — the durable half of a rotation's grace window. Same
+/// existence probe as [`set_api_key_revoked`]: a PATCH alone cannot tell "written" from "typo".
+pub(crate) fn set_api_key_expiry(
+    rest: &Rest,
+    id: &str,
+    when: Option<DateTime<Utc>>,
+) -> Result<bool> {
+    if rest.get_doc("api_keys", id)?.is_none() {
+        return Ok(false);
+    }
+    let mut m = Fields::new();
+    m.insert("expires_at".into(), json!(when.map(fmt_ts)));
+    rest.patch_fields("api_keys", id, &m, &["expires_at"])?;
+    Ok(true)
+}
+
 fn project_from(m: &Fields) -> Result<Project> {
     Ok(Project {
         id: freq(m, "id")?,
@@ -87,6 +106,10 @@ fn project_from(m: &Fields) -> Result<Project> {
         // Docs written before the consent field existed read as opted OUT — the safe default.
         collective_opt_in: fbool(m, "collective_opt_in"),
         created_at: parse_ts(&freq(m, "created_at")?)?,
+        archived_at: match fstr(m, "archived_at") {
+            Some(s) => Some(parse_ts(&s)?),
+            None => None,
+        },
     })
 }
 
@@ -103,5 +126,12 @@ fn api_key_from(m: &Fields) -> Result<ApiKey> {
             None => None,
         },
         revoked: fbool(m, "revoked"),
+        // Docs written before scopes existed carry no field, which `decode_scopes` reads as the
+        // permissive back-compat default rather than locking a live key out on upgrade.
+        scopes: decode_scopes(fstr(m, "scopes").as_deref()),
+        expires_at: match fstr(m, "expires_at") {
+            Some(s) => Some(parse_ts(&s)?),
+            None => None,
+        },
     })
 }
