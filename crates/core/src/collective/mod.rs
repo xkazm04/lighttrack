@@ -25,6 +25,7 @@
 
 mod aliases;
 mod classify;
+mod contribution;
 mod merge;
 mod privacy;
 pub mod rigor;
@@ -68,6 +69,9 @@ pub const TASK_TYPES: &[&str] = &[
 
 pub use aliases::ModelAliases;
 pub use classify::task_type_from;
+pub use contribution::{
+    digest_sha256, hub_url_hash, normalize_hub_url, ContributionRecord, ContributionStatus,
+};
 pub use merge::{build_digest, merge_leaderboard, MAX_SOURCE_WEIGHT_SHARE};
 pub use privacy::bucket_cost;
 pub use rigor::{canon_determinism, Coverage, RowRigor, DETERMINISM_LEVELS};
