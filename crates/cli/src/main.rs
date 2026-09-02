@@ -13,18 +13,21 @@
 //!   lt rubrics create --project <id> --file rubric.json
 //!   lt schedules create --project <id> --type bench_run --every 6h --payload '{"benchmark_id":"b1"}'
 //!   lt schedules list   |   lt schedules set <id> --disabled   |   lt jobs list --status running
+//!   lt relay devices add --name studio-laptop --capability 'xprice/*'   (key shown ONCE)
+//!   lt relay devices list   |   lt relay devices revoke <device-id>
 //!   lt costs --project <id>
 //!   lt events --project <id> --limit 20
 //!
 //! Layout: `cli` (args), `http` (API client + output), then one module per domain — `projects`
 //! (projects + keys), `limits`, `rubrics`, `schedules` (recurring work + the job queue), `usage`
-//! (costs / events / traces / margin), `collective`.
+//! (costs / events / traces / margin), `collective`, `relay` (the device fleet).
 
 mod cli;
 mod collective;
 mod http;
 mod limits;
 mod projects;
+mod relay;
 mod rubrics;
 mod schedules;
 mod usage;
@@ -60,5 +63,6 @@ fn main() -> Result<()> {
             apply,
         } => usage::reprice(&cli, currency, project, rate, *apply),
         Cmd::Collective { action } => collective::run(&cli, action),
+        Cmd::Relay { action } => relay::run(&cli, action),
     }
 }

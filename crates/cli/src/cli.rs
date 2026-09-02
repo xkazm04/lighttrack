@@ -104,6 +104,47 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         action: CollectiveCmd,
     },
+    /// The cloud→device relay: which devices are enrolled, and what each can run.
+    Relay {
+        #[command(subcommand)]
+        action: RelayCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum RelayCmd {
+    /// The enrolled device fleet.
+    Devices {
+        #[command(subcommand)]
+        action: RelayDevicesCmd,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum RelayDevicesCmd {
+    /// List enrolled devices: advertised capabilities, liveness, agent version, revocation.
+    List {
+        /// One project's devices; operator-wide devices are always included.
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Enrol a device. Prints its key ONCE — only a salted digest is stored, so a lost key is
+    /// re-enrolled, never recovered.
+    Add {
+        /// Human name for the machine, e.g. `studio-laptop`.
+        #[arg(long)]
+        name: String,
+        /// Scope it to one project; omit for an operator-wide device serving every project.
+        #[arg(long)]
+        project: Option<String>,
+        /// What it may run — an exact action type or a `ns/*` namespace. Repeatable. Omit for
+        /// "everything"; the device's own action inventory narrows this at its first lease.
+        #[arg(long = "capability")]
+        capability: Vec<String>,
+    },
+    /// Revoke a device: it authenticates nothing and is eligible for nothing. A flag, not a delete,
+    /// so tasks it already ran keep naming a device that still resolves.
+    Revoke { id: String },
 }
 
 #[derive(Subcommand)]
