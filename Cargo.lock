@@ -1329,8 +1329,10 @@ name = "lighttrack-core"
 version = "0.0.1"
 dependencies = [
  "chrono",
+ "hmac 0.12.1",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror",
  "uuid",
 ]
@@ -1374,6 +1376,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "lighttrack-core",
  "lighttrack-engine",
  "pulldown-cmark",
  "reqwest",

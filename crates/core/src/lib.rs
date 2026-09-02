@@ -4,6 +4,9 @@
 //! the normalized [`event::LlmEvent`] model, the [`pricing::PriceBook`] and cost
 //! calculation, per-project [`limits`] evaluation, and the [`score`] /benchmark types.
 
+pub mod alert;
+pub mod alert_channel;
+pub mod alert_sign;
 pub mod alias_table;
 pub mod bench_target;
 pub mod calibration;
@@ -39,6 +42,12 @@ pub mod score;
 pub mod trace;
 pub mod unpriced;
 
+pub use alert::{Alert, AlertKind, Delivery, Severity};
+pub use alert_channel::{AlertChannel, ChannelKind};
+pub use alert_sign::{
+    derive_key as derive_signing_key, signature_header, verify as verify_signature,
+    SIGNATURE_HEADER,
+};
 pub use alias_table::AliasTable;
 pub use bench_target::{
     url_host, BenchTarget, PromptRef, TargetKind, INPUT_PLACEHOLDER, RESOLVED_PROMPT_VERSION,

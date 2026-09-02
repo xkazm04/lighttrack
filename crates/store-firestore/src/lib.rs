@@ -7,6 +7,8 @@
 //! Part 1 (this module): the core data plane — events (incl. client-side cost/usage aggregation),
 //! projects, api_keys, scores, prices, limits. Benchmark/dataset/rubric/job methods are part 2.
 
+mod alert_channels;
+mod alerts;
 mod benchmarks;
 mod codec;
 mod collective;
@@ -29,15 +31,16 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
-    JobCancel, JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
-    PromptVersion, RevenueEvent, RollupQuery, RollupRow, Rubric, Score, TraceSummary,
+    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension,
+    Dataset, DatasetItem, Delivery, Job, JobCancel, JobFinish, LimitRule, LimitScope, LlmEvent,
+    ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent, RollupQuery, RollupRow, Rubric,
+    Score, TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
-    insert_event_checked_nonatomic, insert_events_checked_nonatomic, Admission, CollectiveFilter,
-    CostRow, EventFilter, EventPage, ReplaceAck, Result, ScopeUsage, Store, StoreError,
-    TraceEvents, Usage, UseCaseCostRow,
+    insert_event_checked_nonatomic, insert_events_checked_nonatomic, Admission, AlertAdmission,
+    AlertFilter, CollectiveFilter, CostRow, EventFilter, EventPage, ReplaceAck, Result, ScopeUsage,
+    Store, StoreError, TraceEvents, Usage, UseCaseCostRow,
 };
 
 use rest::Rest;
@@ -108,6 +111,11 @@ impl FirestoreStore {
         Surface::JobLeases,
         Surface::Collective,
         Surface::Pricing,
+        // The ledger and its routing table. Declared rather than inherited as `Unsupported`
+        // for the reason the whole manifest exists: a Firestore deployment answering `[]` to
+        // `GET /v1/alerts` would tell an operator nothing has ever fired here.
+        Surface::Alerts,
+        Surface::AlertRouting,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -459,6 +467,43 @@ impl Store for FirestoreStore {
         f: &CollectiveFilter,
     ) -> Result<Vec<CollectiveEntry>> {
         collective::list_filtered(&self.rest, f)
+    }
+
+    // --- alert ledger + routing (M3) ---
+    fn insert_alert_dedup(
+        &self,
+        a: &Alert,
+        cooldown: std::time::Duration,
+    ) -> Result<AlertAdmission> {
+        alerts::insert_alert_dedup(&self.rest, a, cooldown)
+    }
+    fn mark_delivery(&self, alert_id: &str, d: &Delivery) -> Result<bool> {
+        alerts::mark_delivery(&self.rest, alert_id, d)
+    }
+    fn list_alerts(&self, f: &AlertFilter) -> Result<Vec<Alert>> {
+        alerts::list_alerts(&self.rest, f)
+    }
+    fn get_alert(&self, id: &str) -> Result<Option<Alert>> {
+        alerts::get_alert(&self.rest, id)
+    }
+    fn ack_alert(&self, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
+        alerts::ack_alert(&self.rest, id, by, at)
+    }
+    fn attach_alert_resolution(&self, id: &str, resolution: &Value) -> Result<bool> {
+        alerts::attach_alert_resolution(&self.rest, id, resolution)
+    }
+
+    fn create_alert_channel(&self, c: &AlertChannel) -> Result<()> {
+        alert_channels::create_alert_channel(&self.rest, c)
+    }
+    fn get_alert_channel(&self, id: &str) -> Result<Option<AlertChannel>> {
+        alert_channels::get_alert_channel(&self.rest, id)
+    }
+    fn list_alert_channels(&self, project: Option<&str>) -> Result<Vec<AlertChannel>> {
+        alert_channels::list_alert_channels(&self.rest, project)
+    }
+    fn delete_alert_channel(&self, id: &str) -> Result<bool> {
+        alert_channels::delete_alert_channel(&self.rest, id)
     }
 }
 

@@ -340,7 +340,13 @@ async fn main() -> anyhow::Result<()> {
     let n_prices = book.len();
 
     let alerts = Arc::new(alerts::Alerter::from_env());
+    // The ledger, the routing table and breach attribution all hang off this. Attribution used to
+    // open a SECOND SQLite handle from a path re-derived from env, which meant it was simply absent
+    // on Postgres and Firestore — the backends carrying production traffic.
+    alerts.attach_store(store.clone());
     let alerts_desc = alerts.describe();
+    let rejection_flush = alerts::flush::interval();
+    let rejection_flush_desc = alerts::flush::describe();
     let redact = Arc::new(redact::Redactor::from_env());
     let redact_desc = redact.describe();
     let billing = Arc::new(lighttrack_billing::BillingRegistry::from_env());
@@ -395,6 +401,7 @@ async fn main() -> anyhow::Result<()> {
         admin_key = if state.admin_key.is_some() { "set" } else { "unset" },
         auth_throttle = %auth_throttle_desc,
         alerts = %alerts_desc,
+        alert_rejection_flush = %rejection_flush_desc,
         forecast_sweep = %sweep_desc,
         schedule_sweep = %sched_sweep_desc,
         ingest = %shed_desc,
@@ -429,6 +436,11 @@ async fn main() -> anyhow::Result<()> {
     // wrote down and that never fires is a broken feature, not a respected default. It is also the
     // only thing that reaps a vanished device's tasks when nothing is polling for a lease.
     schedule_sweep::spawn(state.clone(), sched_sweep);
+
+    // Flush the in-process rejection ledger into `ingest_rejected` alert rows. The counter itself
+    // stays in RAM (a store write per rejected call would be on the ingest path); its deltas become
+    // durable here, so "the caps turned 4,000 calls away last night" survives a restart.
+    alerts::flush::spawn(state.clone(), rejection_flush);
 
     // Quiet-window store maintenance: checkpoint the journal and hand already-freed pages back to
     // the filesystem, gated on the activity gauge. Lossless — it never deletes a row — and every
@@ -656,6 +668,25 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route(
             "/v1/collective/contribution",
             delete(collective::delete_contribution),
+        )
+        // The alert ledger: what fired, who was told, who acknowledged it, and what came of it.
+        .route("/v1/alerts", get(alerts::read::list_alerts))
+        .route("/v1/alerts/:id/ack", post(alerts::read::ack_alert))
+        .route(
+            "/v1/alerts/:id/resolution",
+            post(alerts::read::attach_resolution),
+        )
+        .route(
+            "/v1/projects/:id/alert-channels",
+            get(alerts::routing::list_channels).put(alerts::routing::put_channel),
+        )
+        .route(
+            "/v1/projects/:id/alert-channels/:cid",
+            delete(alerts::routing::delete_channel),
+        )
+        .route(
+            "/v1/alert-channels/:id/test",
+            post(alerts::routing::test_channel),
         )
         // Over every route: the maintenance sweep's activity gauge. It must see ALL foreground work,
         // not just the ingest doors — a long analytical read holds a WAL snapshot and is exactly the

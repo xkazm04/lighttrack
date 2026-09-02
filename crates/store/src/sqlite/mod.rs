@@ -8,6 +8,8 @@
 //! pool of read-only connections ([`pool`]) that, under WAL, take a consistent snapshot without
 //! blocking or being blocked by ingest. See [`SqliteStore::read`] vs [`SqliteStore::with`].
 
+mod alert_channels;
+mod alerts;
 mod benchmarks;
 mod collective;
 mod datasets;
@@ -59,19 +61,20 @@ use rusqlite::Connection;
 use serde_json::Value;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem,
-    Device, DeviceEligibility, Job, JobCancel, JobFinish, LeaseHeld, LimitRule, LimitScope,
-    LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayCancel, RelayOutcome,
-    RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score,
-    TokensByDimension, TraceSummary,
+    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension,
+    Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Job, JobCancel, JobFinish,
+    LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
+    RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow,
+    Rubric, Schedule, Score, TokensByDimension, TraceSummary,
 };
 
 use crate::{
     capabilities::{Capabilities, Surface},
-    Admission, CollectiveFilter, CostRow, CustomerCostRow, DailyDimCost, DailyUsage,
-    DbMetricsReport, EventFilter, EventPage, MaintenancePass, MaintenanceRequest,
-    RedactionPostureRow, ReplaceAck, RepriceReport, Result, ScopeUsage, ScoreFilter, StorageReport,
-    Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    Admission, AlertAdmission, AlertFilter, CollectiveFilter, CostRow, CustomerCostRow,
+    DailyDimCost, DailyUsage, DbMetricsReport, EventFilter, EventPage, MaintenancePass,
+    MaintenanceRequest, RedactionPostureRow, ReplaceAck, RepriceReport, Result, ScopeUsage,
+    ScoreFilter, StorageReport, Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage,
+    UseCaseCostRow,
 };
 
 use metrics::DbOp;
@@ -952,5 +955,44 @@ impl Store for SqliteStore {
     }
     fn count_eligible_devices(&self, action_type: &str) -> Result<DeviceEligibility> {
         self.read(|c| devices::count_eligible(c, action_type))
+    }
+
+    // --- alert ledger + routing (M3) ---
+    fn insert_alert_dedup(
+        &self,
+        a: &Alert,
+        cooldown: std::time::Duration,
+    ) -> Result<AlertAdmission> {
+        // The write connection: this is the cooldown gate, and it decides nothing unless the
+        // look-back and the insert share one critical section.
+        self.with(|c| alerts::insert_dedup(c, a, cooldown))
+    }
+    fn mark_delivery(&self, alert_id: &str, d: &Delivery) -> Result<bool> {
+        self.with(|c| alerts::mark_delivery(c, alert_id, d))
+    }
+    fn list_alerts(&self, f: &AlertFilter) -> Result<Vec<Alert>> {
+        self.read(|c| alerts::list(c, f))
+    }
+    fn get_alert(&self, id: &str) -> Result<Option<Alert>> {
+        self.read(|c| alerts::get(c, id))
+    }
+    fn ack_alert(&self, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
+        self.with(|c| alerts::ack(c, id, by, at))
+    }
+    fn attach_alert_resolution(&self, id: &str, resolution: &Value) -> Result<bool> {
+        self.with(|c| alerts::attach_resolution(c, id, resolution))
+    }
+
+    fn create_alert_channel(&self, c: &AlertChannel) -> Result<()> {
+        self.with(|conn| alert_channels::create(conn, c))
+    }
+    fn get_alert_channel(&self, id: &str) -> Result<Option<AlertChannel>> {
+        self.read(|c| alert_channels::get(c, id))
+    }
+    fn list_alert_channels(&self, project: Option<&str>) -> Result<Vec<AlertChannel>> {
+        self.read(|c| alert_channels::list(c, project))
+    }
+    fn delete_alert_channel(&self, id: &str) -> Result<bool> {
+        self.with(|c| alert_channels::delete(c, id))
     }
 }

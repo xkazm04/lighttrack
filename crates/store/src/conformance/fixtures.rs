@@ -4,9 +4,9 @@ use chrono::Utc;
 use serde_json::json;
 
 use lighttrack_core::{
-    new_id, CollectiveEntry, Coverage, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent,
-    MarginPolicy, Operation, PolicyAction, PolicyTrigger, Project, Redaction, Status, Threshold,
-    TokenUsage,
+    new_id, Alert, AlertChannel, AlertKind, ChannelKind, CollectiveEntry, Coverage, LimitAction,
+    LimitMetric, LimitRule, LimitWindow, LlmEvent, MarginPolicy, Operation, PolicyAction,
+    PolicyTrigger, Project, Redaction, Severity, Status, Threshold, TokenUsage,
 };
 
 pub(super) fn sample_event(pid: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEvent {
@@ -111,5 +111,34 @@ pub(super) fn sample_entry() -> CollectiveEntry {
         frozen_dataset: Coverage::Unknown,
         significance_tested: Coverage::Unknown,
         received_at: Utc::now(),
+    }
+}
+
+/// One fired alert for `pid`, keyed on `dedup_key`. Shared by the ledger section and the refusal
+/// walk so both assert against exactly the row the API would write.
+pub(super) fn sample_alert(pid: &str, kind: AlertKind, dedup_key: &str) -> Alert {
+    Alert::new(
+        kind,
+        Some(pid.to_string()),
+        dedup_key.to_string(),
+        json!({ "text": "conformance", "n": 1 }),
+    )
+}
+
+/// One routing destination. `project` is `None` for a global channel — the shape the env-configured
+/// destinations have always had.
+pub(super) fn sample_alert_channel(project: Option<&str>) -> AlertChannel {
+    AlertChannel {
+        id: new_id(),
+        project_id: project.map(str::to_string),
+        kind: ChannelKind::Webhook,
+        target: "https://receiver.invalid/hook".into(),
+        // A plausible derived signing key: 32 bytes of sha256, hex.
+        secret_hash: Some("0".repeat(64)),
+        prev_secret_hash: None,
+        min_severity: Severity::Warning,
+        kinds: vec![AlertKind::LimitBreach],
+        enabled: true,
+        created_at: Utc::now(),
     }
 }

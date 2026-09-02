@@ -12,17 +12,22 @@ use crate::breaker::Breaker;
 use crate::classify::{classify, Class};
 use crate::config::{Config, ProjectEntry};
 use crate::webhook::{Drop, Spike, Trigger};
-use crate::{act, email, enrich, investigate, report};
+use crate::{act, email, enrich, investigate, ledger, report};
 
-pub(crate) async fn handle_trigger(cfg: Arc<Config>, breaker: Arc<Breaker>, trigger: Trigger) {
+pub(crate) async fn handle_trigger(
+    cfg: Arc<Config>,
+    breaker: Arc<Breaker>,
+    trigger: Trigger,
+    alert_id: Option<String>,
+) {
     let project = trigger.project_id().to_string();
     let Some(entry) = cfg.projects.get(&project) else {
         eprintln!("[responder] no repo mapped for project '{project}' — skipping");
         return;
     };
     match &trigger {
-        Trigger::Error(spike) => run_error(&cfg, &breaker, entry, spike).await,
-        Trigger::Quality(drop) => run_quality(&cfg, &breaker, entry, drop).await,
+        Trigger::Error(spike) => run_error(&cfg, &breaker, entry, spike, alert_id).await,
+        Trigger::Quality(drop) => run_quality(&cfg, &breaker, entry, drop, alert_id).await,
     }
 }
 
@@ -30,14 +35,46 @@ pub(crate) async fn handle_trigger(cfg: Arc<Config>, breaker: Arc<Breaker>, trig
 /// concurrency permit. Returns the RAII guard to hold for the run, or `None` if the run was shed
 /// (already logged). The read stage runs first and always, so this — not the ACT breaker — is what
 /// actually bounds a flapping project's spend.
-fn admit(
+async fn admit(
     breaker: &Breaker,
     cfg: &Config,
     project: &str,
 ) -> Option<crate::breaker::InvestigationGuard> {
+    let cooldown = Duration::from_secs(cfg.defaults.investigate_cooldown_secs);
+
+    // The durable half, consulted first. The in-process counters below are empty after a restart,
+    // so a still-firing spike used to buy a fresh paid run the moment the responder came back up.
+    // The ledger remembers: an alert this responder investigated carries a resolution. Best-effort
+    // in the honest direction — an unreachable ledger only ever falls back to the memory below.
+    if let Some(a) = ledger::admission(
+        &cfg.lighttrack_url,
+        cfg.api_key.as_deref(),
+        project,
+        cooldown,
+    )
+    .await
+    {
+        if a.project_recent {
+            println!(
+                "[responder] '{project}': investigation skipped (the alert ledger shows one \
+                 already resolved within the cooldown, {}s)",
+                cooldown.as_secs()
+            );
+            return None;
+        }
+        if a.hour_count >= cfg.defaults.max_investigations_per_hour {
+            println!(
+                "[responder] '{project}': investigation skipped (the alert ledger shows {} \
+                 resolved in the last hour, cap {}/h)",
+                a.hour_count, cfg.defaults.max_investigations_per_hour
+            );
+            return None;
+        }
+    }
+
     match breaker.try_admit_investigation(
         project,
-        Duration::from_secs(cfg.defaults.investigate_cooldown_secs),
+        cooldown,
         cfg.defaults.max_investigations_per_hour,
     ) {
         Ok(guard) => Some(guard),
@@ -48,7 +85,13 @@ fn admit(
     }
 }
 
-async fn run_error(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, spike: &Spike) {
+async fn run_error(
+    cfg: &Config,
+    breaker: &Breaker,
+    entry: &ProjectEntry,
+    spike: &Spike,
+    alert_id: Option<String>,
+) {
     let project = &spike.project_id;
     match classify(spike.status.as_deref(), spike.error.as_deref()) {
         Class::Transient => {
@@ -63,7 +106,7 @@ async fn run_error(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, spike:
 
     // Gate the paid investigation after classification, so transient errors (which never spawn)
     // don't consume a permit or the per-project cooldown. Held across investigate + act + deliver.
-    let Some(_guard) = admit(breaker, cfg, project) else {
+    let Some(_guard) = admit(breaker, cfg, project).await else {
         return;
     };
 
@@ -79,6 +122,7 @@ async fn run_error(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, spike:
         &cfg.lighttrack_url,
         project,
         cfg.defaults.enrich_limit,
+        cfg.api_key.as_deref(),
     )
     .await;
     let prompt = investigate::error_prompt(entry, spike, &context);
@@ -111,16 +155,23 @@ async fn run_error(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, spike:
         &detail,
         &diag,
         act_outcome.as_ref(),
+        alert_id.as_deref(),
     )
     .await;
 }
 
-async fn run_quality(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, drop: &Drop) {
+async fn run_quality(
+    cfg: &Config,
+    breaker: &Breaker,
+    entry: &ProjectEntry,
+    drop: &Drop,
+    alert_id: Option<String>,
+) {
     let project = &drop.project_id;
     let rubric = drop.rubric.as_deref().unwrap_or("?");
 
     // Same admission gate as the error path — a quality-drop investigation is an equally billable run.
-    let Some(_guard) = admit(breaker, cfg, project) else {
+    let Some(_guard) = admit(breaker, cfg, project).await else {
         return;
     };
 
@@ -134,6 +185,7 @@ async fn run_quality(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, drop
         project,
         drop.rubric.as_deref(),
         30,
+        cfg.api_key.as_deref(),
     )
     .await;
     let prompt = investigate::quality_prompt(entry, drop, &context);
@@ -155,11 +207,14 @@ async fn run_quality(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, drop
         &detail,
         &diag,
         None,
+        alert_id.as_deref(),
     )
     .await;
 }
 
-/// Render the report once, persist it, and (if email is configured) send the same body.
+/// Render the report once, persist it, post it back as the alert's resolution, and (if email is
+/// configured) send the same body.
+#[allow(clippy::too_many_arguments)]
 async fn deliver(
     cfg: &Config,
     ts: &str,
@@ -168,11 +223,33 @@ async fn deliver(
     detail: &str,
     diag: &crate::invoke::ClaudeRun,
     act_outcome: Option<&act::ActOutcome>,
+    alert_id: Option<&str>,
 ) {
     let md = report::render(project, ts, kind, detail, diag, act_outcome);
-    match report::write(&cfg.report_dir, project, ts, &md) {
-        Ok(path) => println!("[responder] '{project}': report -> {}", path.display()),
-        Err(e) => eprintln!("[responder] '{project}': could not write report: {e}"),
+    let report_path = match report::write(&cfg.report_dir, project, ts, &md) {
+        Ok(path) => {
+            println!("[responder] '{project}': report -> {}", path.display());
+            Some(path.display().to_string())
+        }
+        Err(e) => {
+            eprintln!("[responder] '{project}': could not write report: {e}");
+            None
+        }
+    };
+    // Close the loop. Until this existed, the diagnosis lived only on this machine's disk: the
+    // alert that caused a paid investigation carried no trace that anyone — human or model — had
+    // ever looked at it.
+    if let Some(id) = alert_id {
+        ledger::post_resolution(
+            &cfg.lighttrack_url,
+            cfg.api_key.as_deref(),
+            id,
+            report_path.as_deref(),
+            diag.cost_usd,
+            diag.ok,
+            act_outcome.map(act_summary).as_deref(),
+        )
+        .await;
     }
     if let Some(cfg_email) = &cfg.email {
         let subject = format!("LightTrack diagnosis: {project} ({kind})");
@@ -206,4 +283,23 @@ fn log_act(project: &str, o: &act::ActOutcome) {
     } else {
         println!("[responder] '{project}': auto-fix made no changes (no confident fix)");
     }
+}
+
+/// One line describing what the auto-fix stage did, for the alert's resolution.
+fn act_summary(o: &act::ActOutcome) -> String {
+    if let Some(reason) = &o.skipped_reason {
+        return format!("skipped: {reason}");
+    }
+    if !o.applied {
+        return "no confident fix".to_string();
+    }
+    let tests = match o.tests {
+        Some(true) => "tests passed",
+        Some(false) => "tests FAILED",
+        None => "no test run",
+    };
+    format!(
+        "applied on {} — {tests}",
+        o.branch.as_deref().unwrap_or("-")
+    )
 }

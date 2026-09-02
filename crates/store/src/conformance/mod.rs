@@ -17,6 +17,7 @@
 //! ([`refusals`]). There is no third answer, so a silent empty page cannot pass.
 
 mod admission;
+mod alerts;
 mod catalog;
 mod collective;
 mod devices;

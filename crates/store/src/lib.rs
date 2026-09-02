@@ -24,12 +24,13 @@ use serde_json::Value;
 use thiserror::Error;
 
 use lighttrack_core::{
-    scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, CostEvidence,
-    Dataset, DatasetItem, Device, DeviceEligibility, Job, JobCancel, JobFinish, LeaseHeld,
-    LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow, LlmEvent, MarginPolicy,
-    ModelPriceRow, Project, Prompt, PromptVersion, RedactionStamp, RelayCancel, RelayOutcome,
-    RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score,
-    ThresholdBasis, TokensByDimension, Trace, TraceSummary, UnpricedRow,
+    scope_matches, Alert, AlertChannel, AlertKind, ApiKey, Benchmark, BenchmarkRun,
+    CollectiveEntry, CostByDimension, CostEvidence, Dataset, DatasetItem, Delivery, Device,
+    DeviceEligibility, Job, JobCancel, JobFinish, LeaseHeld, LimitMetric, LimitRule, LimitScope,
+    LimitStatus, LimitWindow, LlmEvent, MarginPolicy, ModelPriceRow, Project, Prompt,
+    PromptVersion, RedactionStamp, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
+    RollupQuery, RollupRow, Rubric, Schedule, Score, ThresholdBasis, TokensByDimension, Trace,
+    TraceSummary, UnpricedRow,
 };
 
 pub use capabilities::{Capabilities, Surface};
@@ -1776,5 +1777,119 @@ pub trait Store: Send + Sync {
     /// oppositely (see [`DeviceEligibility::admit`]).
     fn count_eligible_devices(&self, _action_type: &str) -> Result<DeviceEligibility> {
         Err(StoreError::Unsupported("the relay device fleet"))
+    }
+
+    // --- alert ledger + routing (M3): the product's own audit trail ---
+    //
+    // Every method refuses by default rather than answering empty. An `Ok(())` here would drop the
+    // one record that says an operator was told; a `[]` from `list_alerts` would read as "nothing
+    // has fired", which is the single most reassuring lie this system could tell.
+
+    /// Admit or suppress one fired alert, as **one atomic store step**.
+    ///
+    /// This is the durable replacement for the in-process cooldown map. A row with the same
+    /// `dedup_key` fired inside `cooldown` means the same ongoing condition, so the new one is
+    /// suppressed and nothing is written. Atomicity is the whole point: two API replicas evaluating
+    /// the same breach in the same second must produce **one** delivered alert, and that can only be
+    /// decided by the store they share.
+    fn insert_alert_dedup(
+        &self,
+        _a: &Alert,
+        _cooldown: std::time::Duration,
+    ) -> Result<AlertAdmission> {
+        Err(StoreError::Unsupported("the alert ledger"))
+    }
+    /// Append one channel's delivery outcome to an alert; `Ok(false)` = no such alert id.
+    fn mark_delivery(&self, _alert_id: &str, _d: &Delivery) -> Result<bool> {
+        Err(StoreError::Unsupported("the alert ledger"))
+    }
+    /// Fired alerts newest-first, narrowed by [`AlertFilter`] and keyset-paged on `(fired_at, id)`.
+    fn list_alerts(&self, _f: &AlertFilter) -> Result<Vec<Alert>> {
+        Err(StoreError::Unsupported("the alert ledger"))
+    }
+    fn get_alert(&self, _id: &str) -> Result<Option<Alert>> {
+        Err(StoreError::Unsupported("the alert ledger"))
+    }
+    /// Acknowledge an alert. Idempotent in effect but honest in its answer: `Ok(false)` = no such id.
+    fn ack_alert(&self, _id: &str, _by: &str, _at: DateTime<Utc>) -> Result<bool> {
+        Err(StoreError::Unsupported("the alert ledger"))
+    }
+    /// Attach what came of an alert — the responder's diagnosis, or an operator's note.
+    fn attach_alert_resolution(&self, _id: &str, _resolution: &Value) -> Result<bool> {
+        Err(StoreError::Unsupported("the alert ledger"))
+    }
+
+    /// Register a routing destination. `project_id: None` is a global channel.
+    fn create_alert_channel(&self, _c: &AlertChannel) -> Result<()> {
+        Err(StoreError::Unsupported("alert routing"))
+    }
+    fn get_alert_channel(&self, _id: &str) -> Result<Option<AlertChannel>> {
+        Err(StoreError::Unsupported("alert routing"))
+    }
+    /// Channels owned by `project`, or — with `None` — the global ones. Exactly one of the two sets,
+    /// never both: [`Store::channels_for`] is the method that unions them.
+    fn list_alert_channels(&self, _project: Option<&str>) -> Result<Vec<AlertChannel>> {
+        Err(StoreError::Unsupported("alert routing"))
+    }
+    fn delete_alert_channel(&self, _id: &str) -> Result<bool> {
+        Err(StoreError::Unsupported("alert routing"))
+    }
+    /// Where an alert for `project` goes: its own channels **∪** the global ones. A deployment that
+    /// has configured nothing per-project therefore behaves exactly as it did before routing existed.
+    ///
+    /// The default composes the two `list_alert_channels` reads, so a backend that serves those
+    /// serves this — and one that serves neither refuses here too, through the first call.
+    fn channels_for(&self, project: Option<&str>) -> Result<Vec<AlertChannel>> {
+        let mut out = self.list_alert_channels(None)?;
+        if let Some(p) = project {
+            out.extend(self.list_alert_channels(Some(p))?);
+        }
+        Ok(out)
+    }
+}
+
+/// What [`Store::insert_alert_dedup`] decided. There is no third answer on purpose: an alert was
+/// either written and is now the caller's to deliver, or an identical one is already live and this
+/// caller must stay quiet.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "admission")]
+pub enum AlertAdmission {
+    /// The row was written; the caller owns delivering it.
+    Admitted,
+    /// A row with the same `dedup_key` fired at this time, inside the cooldown.
+    Suppressed { fired_at: DateTime<Utc> },
+}
+
+impl AlertAdmission {
+    pub fn admitted(&self) -> bool {
+        matches!(self, AlertAdmission::Admitted)
+    }
+}
+
+/// How `GET /v1/alerts` narrows the ledger.
+#[derive(Debug, Clone, Default)]
+pub struct AlertFilter {
+    pub project: Option<String>,
+    pub kind: Option<AlertKind>,
+    /// Only alerts fired at or after this instant.
+    pub since: Option<DateTime<Utc>>,
+    /// `Some(true)` = acknowledged only, `Some(false)` = open only, `None` = both.
+    pub acked: Option<bool>,
+    /// `0` means [`AlertFilter::DEFAULT_LIMIT`].
+    pub limit: usize,
+    /// Opaque keyset cursor from a previous page (see [`codec::encode_event_cursor`]).
+    pub cursor: Option<String>,
+}
+
+impl AlertFilter {
+    pub const DEFAULT_LIMIT: usize = 100;
+    pub const MAX_LIMIT: usize = 1000;
+
+    /// The page size to actually use: the caller's, clamped, with `0` meaning the default.
+    pub fn effective_limit(&self) -> usize {
+        match self.limit {
+            0 => Self::DEFAULT_LIMIT,
+            n => n.min(Self::MAX_LIMIT),
+        }
     }
 }

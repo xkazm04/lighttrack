@@ -154,6 +154,15 @@ fn consequence(s: Surface) -> &'static str {
             "Stored recurrence (/v1/schedules) is unavailable: recurring work must be driven from              outside, by an external scheduler posting to /v1/jobs."
         }
         Surface::JobLeases => "Jobs cannot be cancelled and leases cannot be renewed.",
+        Surface::Alerts => {
+            "GET /v1/alerts is unavailable: alerts are still delivered, but nothing records what \
+             fired, whether it landed, or who acknowledged it — and deduplication falls back to \
+             each replica's own memory, so a multi-instance deployment alerts once per instance."
+        }
+        Surface::AlertRouting => {
+            "Per-project alert channels (/v1/projects/:id/alert-channels) are unavailable — every \
+             alert goes to the env-configured destinations only."
+        }
         Surface::Maintenance => {
             "Disk accounting and the maintenance sweep are the managed service's job here."
         }

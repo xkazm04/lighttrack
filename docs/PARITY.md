@@ -28,6 +28,8 @@ conformance suite asserts that refusal, so a gap can never quietly become an emp
 | `margin_policies` | full | full | full |
 | `job_leases` | full | full | full |
 | `schedules` | full | full | refused |
+| `alerts` | full | full | full |
+| `alert_routing` | full | full | full |
 | `maintenance` | full | refused | refused |
 | `metrics` | full | refused | refused |
 | `pricing` | full | full | full |
@@ -65,6 +67,8 @@ cap that reads as enforced is the failure this row exists to name.
 - **`margin_policies`** — `create_margin_policy`, `list_margin_policies`, `get_margin_policy`, `delete_margin_policy`
 - **`job_leases`** — `cancel_job`, `renew_job_lease`
 - **`schedules`** — `create_schedule`, `get_schedule`, `list_schedules`, `update_schedule`, `delete_schedule`, `due_schedules`
+- **`alerts`** — `insert_alert_dedup`, `mark_delivery`, `list_alerts`, `get_alert`, `ack_alert`, `attach_alert_resolution`
+- **`alert_routing`** — `create_alert_channel`, `get_alert_channel`, `list_alert_channels`, `delete_alert_channel`, `channels_for`
 - **`maintenance`** — `storage_report`, `maintenance_pass`
 - **`metrics`** — `db_metrics`
 - **`pricing`** — `list_unpriced`, `fill_unpriced_cost`, `list_price_history`

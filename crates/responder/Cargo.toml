@@ -12,6 +12,9 @@ path = "src/main.rs"
 [dependencies]
 # The one headless-Claude invocation seam (posture, spawn, envelope, probe, bin resolution).
 lighttrack-engine = { path = "../engine" }
+# The alert-signature contract. The API SIGNS with this same code — see
+# `lighttrack_core::alert_sign` for why one implementation is the only workable number.
+lighttrack-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

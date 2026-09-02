@@ -12,6 +12,8 @@
 //! `FOR UPDATE SKIP LOCKED … RETURNING` for concurrency-safe atomic dequeues.
 
 mod admission;
+mod alert_channels;
+mod alerts;
 mod benchmarks;
 mod collective;
 mod datasets;
@@ -40,17 +42,17 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use tokio::runtime::Runtime;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem,
-    Device, DeviceEligibility, Job, JobCancel, JobFinish, LeaseHeld, LimitRule, LimitScope,
-    LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayCancel, RelayOutcome,
-    RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score,
-    TraceSummary,
+    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension,
+    Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Job, JobCancel, JobFinish,
+    LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
+    RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow,
+    Rubric, Schedule, Score, TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
-    Admission, CollectiveFilter, CostRow, EventFilter, EventPage, RedactionPostureRow, ReplaceAck,
-    RepriceReport, Result, ScopeUsage, ScoreFilter, Store, StoreError, TraceEvents, TraceFilter,
-    TracePage, Usage, UseCaseCostRow,
+    Admission, AlertAdmission, AlertFilter, CollectiveFilter, CostRow, EventFilter, EventPage,
+    RedactionPostureRow, ReplaceAck, RepriceReport, Result, ScopeUsage, ScoreFilter, Store,
+    StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 use util::pgerr;
@@ -121,6 +123,11 @@ impl PgStore {
         // deployments the product actually runs on.
         Surface::Prompts,
         Surface::Pricing,
+        // The ledger and its routing table: this is the backend that actually runs
+        // multi-replica, which is the deployment an in-memory cooldown map could never
+        // deduplicate across.
+        Surface::Alerts,
+        Surface::AlertRouting,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -687,5 +694,45 @@ impl Store for PgStore {
     fn count_eligible_devices(&self, action_type: &str) -> Result<DeviceEligibility> {
         self.rt
             .block_on(devices::count_eligible(&self.pool, action_type))
+    }
+
+    // --- alert ledger + routing (M3) ---
+    fn insert_alert_dedup(
+        &self,
+        a: &Alert,
+        cooldown: std::time::Duration,
+    ) -> Result<AlertAdmission> {
+        self.rt
+            .block_on(alerts::insert_dedup(&self.pool, a, cooldown))
+    }
+    fn mark_delivery(&self, alert_id: &str, d: &Delivery) -> Result<bool> {
+        self.rt
+            .block_on(alerts::mark_delivery(&self.pool, alert_id, d))
+    }
+    fn list_alerts(&self, f: &AlertFilter) -> Result<Vec<Alert>> {
+        self.rt.block_on(alerts::list(&self.pool, f))
+    }
+    fn get_alert(&self, id: &str) -> Result<Option<Alert>> {
+        self.rt.block_on(alerts::get(&self.pool, id))
+    }
+    fn ack_alert(&self, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
+        self.rt.block_on(alerts::ack(&self.pool, id, by, at))
+    }
+    fn attach_alert_resolution(&self, id: &str, resolution: &Value) -> Result<bool> {
+        self.rt
+            .block_on(alerts::attach_resolution(&self.pool, id, resolution))
+    }
+
+    fn create_alert_channel(&self, c: &AlertChannel) -> Result<()> {
+        self.rt.block_on(alert_channels::create(&self.pool, c))
+    }
+    fn get_alert_channel(&self, id: &str) -> Result<Option<AlertChannel>> {
+        self.rt.block_on(alert_channels::get(&self.pool, id))
+    }
+    fn list_alert_channels(&self, project: Option<&str>) -> Result<Vec<AlertChannel>> {
+        self.rt.block_on(alert_channels::list(&self.pool, project))
+    }
+    fn delete_alert_channel(&self, id: &str) -> Result<bool> {
+        self.rt.block_on(alert_channels::delete(&self.pool, id))
     }
 }

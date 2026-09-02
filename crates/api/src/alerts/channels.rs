@@ -1,281 +1,142 @@
-//! Alert transport: the actual HTTP posts to webhook / ntfy / Resend (email), and the per-alert-type
-//! `deliver_*` composers that the orchestrator (`super`) spawns off the request path. Free functions
-//! over `&AlertConfig` + `&reqwest::Client` with no state of their own, mirroring the store's
-//! per-domain function split. Every path is best-effort: a down sink logs to stderr, never panics.
+//! Alert transport: the actual HTTP post for one channel, and the [`Delivery`] it produces.
+//!
+//! One function, three arms. Before the ledger there were six `deliver_*` composers, each fanning
+//! out to three hard-coded env destinations and logging the outcome to stderr; now the *body* is
+//! already assembled ([`super::compose`]) and the *destination* is already chosen
+//! ([`super::routing`]), so this is a driver.
+//!
+//! Every path is best-effort and returns rather than propagates: a down sink is a recorded failed
+//! delivery, never a failed ingest. And every path returns a [`Delivery`], so "was anyone actually
+//! told" is a stored fact instead of a line in a log nobody kept.
 
-use std::collections::HashMap;
+use chrono::Utc;
+use lighttrack_core::{Alert, AlertChannel, ChannelKind, Delivery};
+use serde_json::json;
 
-use lighttrack_core::{LimitStatus, RelayTask};
-use reqwest::Client;
-use serde_json::{json, Value};
+use super::{compose, sign, vet, Alerter};
 
-use super::attribution::Attribution;
-use super::{AlertConfig, BenchRunAlert, ErrorSpike, ScoreDrop};
-use crate::forecast_alerts::ForecastAlert;
+/// Cap on how much of a receiver's response body we read. A webhook endpoint that answers with a
+/// megabyte of HTML must not be able to make an alert delivery expensive.
+const MAX_RESPONSE_BYTES: usize = 2048;
 
-/// POST a finished benchmark run to the bench-completion webhook. Standalone (its own URL, not the
-/// shared `AlertConfig` webhook) so a CI receiver can subscribe to run completions specifically.
-pub(super) async fn deliver_bench_run(http: &Client, url: &str, r: &BenchRunAlert) {
-    let msg = format!(
-        "LightTrack benchmark '{}' run {} finished: {}{}",
-        r.benchmark,
-        r.run_id,
-        r.status,
-        match (r.mean, r.baseline) {
-            (Some(m), Some(b)) => format!(" (mean {m:.3} vs baseline {b:.3})"),
-            (Some(m), None) => format!(" (mean {m:.3})"),
-            _ => String::new(),
-        },
-    );
-    let body = json!({
-        "event": "bench_run", "text": &msg, "content": &msg,
-        "benchmark": r.benchmark, "run_id": r.run_id, "status": r.status,
-        "mean": r.mean, "baseline": r.baseline,
-    });
-    match http.post(url).json(&body).send().await {
-        Ok(resp) if !resp.status().is_success() => {
-            tracing::warn!(channel = "webhook", event = "bench_run", status = %resp.status(), "alert delivery rejected")
-        }
+/// Deliver one alert down one channel and report what happened.
+pub(crate) async fn deliver(alerter: &Alerter, c: &AlertChannel, a: &Alert) -> Delivery {
+    let status = match c.kind {
+        ChannelKind::Webhook => post_webhook(alerter, c, a).await,
+        ChannelKind::Ntfy => post_ntfy(alerter, c, a).await,
+        ChannelKind::Email => post_resend(alerter, c, a).await,
+    };
+    let (ok, status) = match status {
+        Ok(s) => (true, Some(s)),
         Err(e) => {
-            tracing::warn!(channel = "webhook", event = "bench_run", error = %e, "alert delivery failed")
+            tracing::warn!(
+                channel = %c.id, kind = c.kind.as_str(), event = a.kind.as_str(), error = %e,
+                "alert delivery failed"
+            );
+            (false, Some(e))
         }
-        _ => {}
-    }
-}
-
-pub(super) async fn deliver_breaches(
-    cfg: &AlertConfig,
-    http: &Client,
-    breaches: &[LimitStatus],
-    rejections: &HashMap<String, u64>,
-    attributions: &HashMap<String, Attribution>,
-) {
-    for b in breaches {
-        // For an enforcing breach, `rejections` carries how many ingest attempts this cap has turned
-        // away (429'd) in the current rolling window — surfaced so the alert isn't blind to them.
-        let rejected = rejections.get(&b.alert_key());
-        // Top spenders that drove the breached window (absent on a failed/empty rollup).
-        let attribution = attributions.get(&b.alert_key());
-        let msg = breach_message(b, rejected, attribution);
-        let contributors = attribution.map(|a| a.to_json());
-        post_webhook(
-            cfg,
-            http,
-            "limit_breach",
-            &msg,
-            json!({ "breach": b, "rejected_count": rejected, "attribution": contributors }),
-        )
-        .await;
-        post_ntfy(cfg, http, "LightTrack limit breach", &msg).await;
-        post_resend(
-            cfg,
-            http,
-            &format!("LightTrack: limit breach in '{}'", b.project_id),
-            &msg,
-        )
-        .await;
-    }
-}
-
-/// Deliver soft-warning alerts: a rule is approaching its cap (`ratio >= warn_at`) but hasn't
-/// breached. A distinct event type (`limit_warning`) and message so a receiver can route it apart
-/// from the hard `limit_breach`.
-pub(super) async fn deliver_warnings(cfg: &AlertConfig, http: &Client, warnings: &[LimitStatus]) {
-    for w in warnings {
-        let msg = warning_message(w);
-        post_webhook(cfg, http, "limit_warning", &msg, json!({ "warning": w })).await;
-        post_ntfy(cfg, http, "LightTrack limit warning", &msg).await;
-        post_resend(
-            cfg,
-            http,
-            &format!("LightTrack: approaching limit in '{}'", w.project_id),
-            &msg,
-        )
-        .await;
-    }
-}
-
-pub(super) async fn deliver_forecast(cfg: &AlertConfig, http: &Client, alerts: &[ForecastAlert]) {
-    for a in alerts {
-        post_webhook(
-            cfg,
-            http,
-            "forecast_alert",
-            &a.message,
-            json!({ "forecast": a }),
-        )
-        .await;
-        post_ntfy(cfg, http, "LightTrack forecast", &a.message).await;
-        post_resend(cfg, http, "LightTrack: spend forecast alert", &a.message).await;
-    }
-}
-
-pub(super) async fn deliver_relay_dead(cfg: &AlertConfig, http: &Client, tasks: &[RelayTask]) {
-    for t in tasks {
-        let msg = format!(
-            "LightTrack alert: relay task '{}' ({}) in project '{}' dead-lettered after {} \
-             attempt(s) — {}",
-            t.id,
-            t.action_type,
-            t.project_id,
-            t.attempts,
-            t.error.as_deref().unwrap_or("no error recorded"),
-        );
-        // Not the full row: payload/result can be large and may carry app data.
-        let trimmed = json!({ "task": {
-            "id": t.id, "project_id": t.project_id, "action_type": t.action_type,
-            "source": t.source, "attempts": t.attempts, "error": t.error,
-        }});
-        post_webhook(cfg, http, "relay_task_dead", &msg, trimmed).await;
-        post_ntfy(cfg, http, "LightTrack relay task dead", &msg).await;
-        post_resend(
-            cfg,
-            http,
-            &format!("LightTrack: relay task dead in '{}'", t.project_id),
-            &msg,
-        )
-        .await;
-    }
-}
-
-pub(super) async fn deliver_error_spike(cfg: &AlertConfig, http: &Client, s: &ErrorSpike) {
-    let mins = (s.window_secs / 60).max(1);
-    let sample = s.error.as_deref().unwrap_or("(no error message)");
-    let msg = format!(
-        "LightTrack alert: project '{}' logged {} failed call(s) within {}m. \
-         Latest: {} on model '{}'. Sample error: {}",
-        s.project_id, s.count, mins, s.status, s.model, sample
-    );
-    let extra = json!({ "spike": {
-        "project_id": s.project_id, "count": s.count, "window_secs": s.window_secs,
-        "model": s.model, "status": s.status, "error": s.error,
-    }});
-    post_webhook(cfg, http, "error_spike", &msg, extra).await;
-    post_ntfy(cfg, http, "LightTrack error spike", &msg).await;
-    post_resend(
-        cfg,
-        http,
-        &format!("LightTrack: error spike in '{}'", s.project_id),
-        &msg,
-    )
-    .await;
-}
-
-pub(super) async fn deliver_score_drop(cfg: &AlertConfig, http: &Client, d: &ScoreDrop) {
-    let msg = format!(
-        "LightTrack alert: quality regression in '{}' — rubric '{}' down {:.0}% (recent mean {:.2} vs \
-         baseline {:.2} over {} scores, judge {}).",
-        d.project_id, d.rubric, d.drop_pct, d.recent_avg, d.baseline_avg, d.samples, d.scored_by
-    );
-    let extra = json!({ "drop": {
-        "project_id": d.project_id, "rubric": d.rubric, "recent_avg": d.recent_avg,
-        "baseline_avg": d.baseline_avg, "drop_pct": d.drop_pct, "samples": d.samples,
-        "scored_by": d.scored_by,
-    }});
-    post_webhook(cfg, http, "score_drop", &msg, extra).await;
-    post_ntfy(cfg, http, "LightTrack quality regression", &msg).await;
-    post_resend(
-        cfg,
-        http,
-        &format!("LightTrack: quality regression in '{}'", d.project_id),
-        &msg,
-    )
-    .await;
-}
-
-fn warning_message(w: &LimitStatus) -> String {
-    let warn_pct = w.warn_at.map(|f| f * 100.0).unwrap_or(0.0);
-    format!(
-        "LightTrack warning: project '{}' is approaching its {:?}/{:?} limit — current {:.4} is \
-         {:.0}% of threshold {:.4} (warns at {:.0}%). No traffic has been blocked.",
-        w.project_id,
-        w.metric,
-        w.window,
-        w.current,
-        w.ratio * 100.0,
-        w.threshold,
-        warn_pct
-    )
-}
-
-fn breach_message(
-    b: &LimitStatus,
-    rejected: Option<&u64>,
-    attribution: Option<&Attribution>,
-) -> String {
-    let tail = match rejected {
-        Some(n) => format!(" — {n} ingest attempt(s) rejected so far in this window"),
-        None => String::new(),
     };
-    // Name the scoped dimension so a "cap gpt-4o" breach reads differently from a project-wide one.
-    let scope = match &b.scope {
-        Some(s) => format!(" [scope {}]", s.label()),
-        None => String::new(),
-    };
-    // What drove the spend: top contributors over the breached window (empty when unavailable).
-    let spenders = attribution
-        .and_then(|a| a.message_tail())
-        .unwrap_or_default();
-    format!(
-        "LightTrack alert: project '{}'{scope} breached {:?}/{:?} limit — current {:.4} >= threshold \
-         {:.4} ({:.0}% of limit), action={:?}{tail}.{spenders}",
-        b.project_id, b.metric, b.window, b.current, b.threshold, b.ratio * 100.0, b.action
-    )
-}
-
-/// POST a JSON body to the configured webhook: `text` (Slack) + `content` (Discord) + whatever
-/// structured fields `extra` carries (custom receivers). No-op when no webhook is configured.
-async fn post_webhook(cfg: &AlertConfig, http: &Client, event: &str, msg: &str, extra: Value) {
-    let Some(url) = &cfg.webhook else { return };
-    let mut body = json!({ "event": event, "text": msg, "content": msg });
-    if let (Some(obj), Some(add)) = (body.as_object_mut(), extra.as_object()) {
-        for (k, v) in add {
-            obj.insert(k.clone(), v.clone());
-        }
-    }
-    match http.post(url).json(&body).send().await {
-        Ok(r) if !r.status().is_success() => {
-            tracing::warn!(channel = "webhook", event, status = %r.status(), "alert delivery rejected")
-        }
-        Err(e) => tracing::warn!(channel = "webhook", event, error = %e, "alert delivery failed"),
-        _ => {}
+    Delivery {
+        channel_id: c.id.clone(),
+        ok,
+        status,
+        at: Utc::now(),
     }
 }
 
-async fn post_ntfy(cfg: &AlertConfig, http: &Client, title: &str, msg: &str) {
-    let Some(url) = &cfg.ntfy else { return };
-    let req = http
-        .post(url)
-        .header("Title", title)
+/// POST the composed body, signed when the channel carries a key.
+///
+/// The signature covers the exact bytes on the wire, so the body is serialized once and both the
+/// header and the request are built from that one string — re-serializing would risk a different
+/// key order and a signature the receiver cannot verify.
+async fn post_webhook(alerter: &Alerter, c: &AlertChannel, a: &Alert) -> Result<String, String> {
+    vet::check(&c.target, alerter.config.dev_destinations).await?;
+    // `alert_id` is added here rather than in `compose`, because the row's own `id` column is the
+    // same fact and duplicating it in the stored payload would be two places to keep in step. On the
+    // wire it is what lets a receiver answer back: the responder POSTs its diagnosis to
+    // `/v1/alerts/<alert_id>/resolution`, which is what closes the loop.
+    let mut payload = a.payload.clone();
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("alert_id".into(), serde_json::Value::String(a.id.clone()));
+    }
+    let body = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    let mut req = alerter
+        .http
+        .post(&c.target)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body.clone());
+    if let Some(h) = sign::signature_header(
+        c.secret_hash.as_deref(),
+        c.prev_secret_hash.as_deref(),
+        Utc::now().timestamp(),
+        &body,
+    ) {
+        req = req.header(sign::SIGNATURE_HEADER, h);
+    }
+    send(req).await
+}
+
+async fn post_ntfy(alerter: &Alerter, c: &AlertChannel, a: &Alert) -> Result<String, String> {
+    vet::check(&c.target, alerter.config.dev_destinations).await?;
+    let req = alerter
+        .http
+        .post(&c.target)
+        .header("Title", compose::subject_of(a))
         .header("Tags", "warning")
         .header("Priority", "high")
-        .body(msg.to_string());
-    match req.send().await {
-        Ok(r) if !r.status().is_success() => {
-            tracing::warn!(channel = "ntfy", status = %r.status(), "alert delivery rejected")
-        }
-        Err(e) => tracing::warn!(channel = "ntfy", error = %e, "alert delivery failed"),
-        _ => {}
-    }
+        .body(compose::text_of(a).to_string());
+    send(req).await
 }
 
-/// Send the alert as a plain-text email via Resend's REST API. No-op when Resend isn't configured.
-async fn post_resend(cfg: &AlertConfig, http: &Client, subject: &str, text: &str) {
-    let Some(r) = &cfg.resend else { return };
-    let body = json!({ "from": r.from, "to": r.to, "subject": subject, "text": text });
-    match http
+/// Send the alert as a plain-text email via Resend's REST API. The channel's `target` is the
+/// recipient list; the API key and sender stay env-global, because they are the *account*, not the
+/// destination — a per-project channel should not be able to send as someone else's domain.
+async fn post_resend(alerter: &Alerter, c: &AlertChannel, a: &Alert) -> Result<String, String> {
+    let Some(r) = &alerter.config.resend else {
+        return Err("email channel configured but LIGHTTRACK_ALERT_RESEND_KEY is not set".into());
+    };
+    let to: Vec<&str> = c.target.split(',').map(str::trim).collect();
+    let body = json!({
+        "from": r.from,
+        "to": to,
+        "subject": compose::subject_of(a),
+        "text": compose::text_of(a),
+    });
+    let req = alerter
+        .http
         .post("https://api.resend.com/emails")
         .bearer_auth(&r.key)
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(resp) if !resp.status().is_success() => {
-            let code = resp.status();
-            let detail = resp.text().await.unwrap_or_default();
-            tracing::warn!(channel = "resend", status = %code, detail = detail.trim(), "alert delivery rejected");
-        }
-        Err(e) => tracing::warn!(channel = "resend", error = %e, "alert delivery failed"),
-        _ => {}
+        .json(&body);
+    send(req).await
+}
+
+/// Send, and reduce the answer to a short status string. A non-2xx is a failure with the code and a
+/// capped snippet of the body — enough for an operator to see "401 invalid token" in the ledger,
+/// which is the detail that used to live only in stderr.
+async fn send(req: reqwest::RequestBuilder) -> Result<String, String> {
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let code = resp.status();
+    if code.is_success() {
+        return Ok(code.as_u16().to_string());
     }
+    let detail = capped_body(resp).await;
+    Err(if detail.is_empty() {
+        code.as_u16().to_string()
+    } else {
+        format!("{} {}", code.as_u16(), detail)
+    })
+}
+
+/// Read at most [`MAX_RESPONSE_BYTES`] of the response, streaming so an oversized body is never
+/// fully buffered.
+async fn capped_body(mut resp: reqwest::Response) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    while buf.len() < MAX_RESPONSE_BYTES {
+        match resp.chunk().await {
+            Ok(Some(c)) => buf.extend_from_slice(&c),
+            _ => break,
+        }
+    }
+    buf.truncate(MAX_RESPONSE_BYTES);
+    String::from_utf8_lossy(&buf).trim().replace('\n', " ")
 }

@@ -10,6 +10,7 @@
 //!   lt keys list --project <id>   |   lt keys rotate --project <id> <key-id> --grace-secs 3600
 //!   lt limits set --project <id> --metric cost_usd --window day --threshold 5 --action alert
 //!   lt limits status --project <id>
+//!   lt alerts list --open --since 7d   |   lt alerts ack <alert-id> --by oncall
 //!   lt rubrics create --project <id> --file rubric.json
 //!   lt schedules create --project <id> --type bench_run --every 6h --payload '{"benchmark_id":"b1"}'
 //!   lt schedules list   |   lt schedules set <id> --disabled   |   lt jobs list --status running
@@ -20,9 +21,10 @@
 //!   lt events --project <id> --limit 20
 //!
 //! Layout: `cli` (args), `http` (API client + output), then one module per domain — `projects`
-//! (projects + keys), `limits`, `rubrics`, `schedules` (recurring work + the job queue), `usage`
-//! (costs / events / traces / margin), `collective`, `relay` (the device fleet).
+//! (projects + keys), `limits`, `alerts`, `rubrics`, `schedules` (recurring work + the job queue),
+//! `usage` (costs / events / traces / margin), `collective`, `relay` (the device fleet).
 
+mod alerts;
 mod cli;
 mod collective;
 mod http;
@@ -45,6 +47,7 @@ fn main() -> Result<()> {
         Cmd::Projects { action } => projects::run(&cli, action),
         Cmd::Keys { action } => projects::run_keys(&cli, action),
         Cmd::Limits { action } => limits::run(&cli, action),
+        Cmd::Alerts { action } => alerts::run(&cli, action),
         Cmd::Rubrics { action } => rubrics::run(&cli, action),
         Cmd::Costs { project } => usage::costs(&cli, project),
         Cmd::Prices { action } => prices::run(&cli, action),
