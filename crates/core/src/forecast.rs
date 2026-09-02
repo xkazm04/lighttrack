@@ -132,8 +132,10 @@ pub fn forecast_budget(
 ) -> BudgetForecast {
     let trend = Trend::fit(series);
     let eta_days = match rule.window {
-        LimitWindow::Day => trend.days_until_daily(rule.threshold, horizon),
-        LimitWindow::Month => trend.days_until_cumulative(rule.threshold - current, horizon),
+        LimitWindow::Day => trend.days_until_daily(rule.nominal_threshold(), horizon),
+        LimitWindow::Month => {
+            trend.days_until_cumulative(rule.nominal_threshold() - current, horizon)
+        }
         LimitWindow::Hour => None,
     }
     // Drop eta==0 (already breached) — only surface a genuinely *pre-emptive* ETA.
@@ -142,7 +144,7 @@ pub fn forecast_budget(
         rule_id: rule.id.clone(),
         metric: rule.metric,
         window: rule.window,
-        threshold: rule.threshold,
+        threshold: rule.nominal_threshold(),
         current: round(current),
         projected_daily: round(trend.project(1.0)),
         trend,
@@ -241,7 +243,7 @@ fn round(x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::limits::{LimitAction, LimitMetric, LimitWindow};
+    use crate::limits::{LimitAction, LimitMetric, LimitWindow, Threshold};
 
     fn cost_rule(window: LimitWindow, threshold: f64) -> LimitRule {
         LimitRule {
@@ -249,11 +251,15 @@ mod tests {
             project_id: "p1".into(),
             metric: LimitMetric::CostUsd,
             window,
-            threshold,
+            threshold: Threshold::Fixed(threshold),
             action: LimitAction::Alert,
             enabled: true,
             warn_at: None,
             scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         }
     }
 

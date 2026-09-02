@@ -6,11 +6,15 @@ fn rule() -> LimitRule {
         project_id: "p1".into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Day,
-        threshold: 10.0,
+        threshold: Threshold::Fixed(10.0),
         action: LimitAction::Alert,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     }
 }
 
@@ -141,15 +145,15 @@ fn ratio_tracks_usage() {
 fn validate_rejects_nonpositive_or_nonfinite_threshold() {
     let mut r = rule();
     assert!(r.validate().is_ok());
-    r.threshold = 0.0;
+    r.threshold = Threshold::Fixed(0.0);
     assert!(r.validate().is_err(), "zero threshold is invalid");
-    r.threshold = -1.0;
+    r.threshold = Threshold::Fixed(-1.0);
     assert!(r.validate().is_err(), "negative threshold is invalid");
-    r.threshold = f64::INFINITY;
+    r.threshold = Threshold::Fixed(f64::INFINITY);
     assert!(r.validate().is_err(), "non-finite threshold is invalid");
-    r.threshold = f64::NAN;
+    r.threshold = Threshold::Fixed(f64::NAN);
     assert!(r.validate().is_err(), "NaN threshold is invalid");
-    r.threshold = 0.0001;
+    r.threshold = Threshold::Fixed(0.0001);
     assert!(r.validate().is_ok(), "small positive threshold is valid");
 }
 

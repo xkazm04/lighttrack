@@ -319,3 +319,18 @@ CREATE TABLE IF NOT EXISTS relay_tasks (
 CREATE INDEX IF NOT EXISTS idx_relay_due ON relay_tasks(status, next_attempt_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_relay_idem ON relay_tasks(project_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
+
+-- Standing margin guardrails (M4): the policies the forecast sweep turns into limit rules. `trigger`
+-- and `action` are JSON because both are open sum types that gain variants; this is config read once
+-- per sweep, never on the ingest path, so schema stability beats shredded columns.
+CREATE TABLE IF NOT EXISTS margin_policies (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  trigger_json  TEXT NOT NULL,   -- PolicyTrigger: {"below_pct":20} | "negative_margin" | {"erosion_eta_days":5}
+  min_cost_usd  REAL NOT NULL DEFAULT 0,
+  action_json   TEXT NOT NULL,   -- PolicyAction: "warn" | {"cap_to_revenue":{"factor":0.8}} | "throttle" | "block"
+  cooldown_secs INTEGER NOT NULL DEFAULT 3600,
+  expiry_secs   INTEGER NOT NULL DEFAULT 86400,
+  enabled       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_margin_policies_project ON margin_policies(project_id);

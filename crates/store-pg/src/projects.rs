@@ -5,7 +5,8 @@ use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
 use lighttrack_core::{
-    decode_scopes, encode_scopes, ApiKey, LimitRule, LimitScope, Project, Redaction,
+    decode_scopes, encode_scopes, ApiKey, Escalation, LimitRule, LimitScope, Project, Redaction,
+    Threshold,
 };
 use lighttrack_store::Result;
 
@@ -162,8 +163,27 @@ pub(crate) async fn set_key_expiry(
 // --- limit rules ------------------------------------------------------------
 
 /// The columns a rule row exposes, in the order [`limit_rule_from_row`] reads them.
-pub(crate) const LIMIT_COLS: &str =
-    "id, project_id, metric, \"window\", threshold, action, enabled, warn_at, scope_kind, scope_value";
+pub(crate) const LIMIT_COLS: &str = "id, project_id, metric, \"window\", threshold, action, \
+     enabled, warn_at, scope_kind, scope_value, threshold_json, escalation_json, escalated_until, \
+     origin, expires_at";
+
+/// Split a threshold into its `(DOUBLE PRECISION, JSON)` column pair. The original `threshold`
+/// column stays the home of a plain `Fixed` cap, so every row written before derived thresholds
+/// existed reads back byte-identically; anything richer lands in `threshold_json`, whose presence is
+/// what [`limit_rule_from_row`] keys on.
+fn threshold_parts(t: &Threshold) -> Result<(f64, Option<String>)> {
+    match t {
+        Threshold::Fixed(v) => Ok((*v, None)),
+        other => Ok((0.0, Some(serde_json::to_string(other)?))),
+    }
+}
+
+fn escalation_json(e: &Option<Escalation>) -> Result<Option<String>> {
+    Ok(match e {
+        None => None,
+        Some(e) => Some(serde_json::to_string(e)?),
+    })
+}
 
 /// Split an optional scope into its `(kind, value)` column pair (both `None` when unscoped).
 fn scope_parts(scope: &Option<LimitScope>) -> (Option<&'static str>, Option<String>) {
@@ -175,21 +195,28 @@ fn scope_parts(scope: &Option<LimitScope>) -> (Option<&'static str>, Option<Stri
 
 pub(crate) async fn create_limit(pool: &PgPool, r: &LimitRule) -> Result<()> {
     let (scope_kind, scope_value) = scope_parts(&r.scope);
+    let (threshold, threshold_json) = threshold_parts(&r.threshold)?;
     sqlx::query(
         "INSERT INTO limit_rules \
-         (id, project_id, metric, \"window\", threshold, action, enabled, warn_at, scope_kind, scope_value) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+         (id, project_id, metric, \"window\", threshold, action, enabled, warn_at, scope_kind, \
+          scope_value, threshold_json, escalation_json, escalated_until, origin, expires_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
     )
     .bind(r.id.clone())
     .bind(r.project_id.clone())
     .bind(enum_to_str(&r.metric)?)
     .bind(enum_to_str(&r.window)?)
-    .bind(r.threshold)
+    .bind(threshold)
     .bind(enum_to_str(&r.action)?)
     .bind(r.enabled as i64)
     .bind(r.warn_at)
     .bind(scope_kind)
     .bind(scope_value)
+    .bind(threshold_json)
+    .bind(escalation_json(&r.escalation)?)
+    .bind(r.escalated_until.map(fmt_ts))
+    .bind(r.origin.clone())
+    .bind(r.expires_at.map(fmt_ts))
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -228,21 +255,28 @@ pub(crate) async fn get_limit(pool: &PgPool, id: &str) -> Result<Option<LimitRul
 /// Returns whether a row matched.
 pub(crate) async fn update_limit(pool: &PgPool, r: &LimitRule) -> Result<bool> {
     let (scope_kind, scope_value) = scope_parts(&r.scope);
+    let (threshold, threshold_json) = threshold_parts(&r.threshold)?;
     let res = sqlx::query(
         "UPDATE limit_rules \
          SET metric = $2, \"window\" = $3, threshold = $4, action = $5, enabled = $6, \
-             warn_at = $7, scope_kind = $8, scope_value = $9 \
+             warn_at = $7, scope_kind = $8, scope_value = $9, threshold_json = $10, \
+             escalation_json = $11, escalated_until = $12, origin = $13, expires_at = $14 \
          WHERE id = $1",
     )
     .bind(r.id.clone())
     .bind(enum_to_str(&r.metric)?)
     .bind(enum_to_str(&r.window)?)
-    .bind(r.threshold)
+    .bind(threshold)
     .bind(enum_to_str(&r.action)?)
     .bind(r.enabled as i64)
     .bind(r.warn_at)
     .bind(scope_kind)
     .bind(scope_value)
+    .bind(threshold_json)
+    .bind(escalation_json(&r.escalation)?)
+    .bind(r.escalated_until.map(fmt_ts))
+    .bind(r.origin.clone())
+    .bind(r.expires_at.map(fmt_ts))
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -306,7 +340,16 @@ pub(crate) fn limit_rule_from_row(row: &PgRow) -> Result<LimitRule> {
         project_id: row.try_get(1).map_err(pgerr)?,
         metric: parse_enum("metric", &metric)?,
         window: parse_enum("window", &window)?,
-        threshold: row.try_get(4).map_err(pgerr)?,
+        // `threshold_json` wins when present; its absence is a pre-derived-threshold row, whose
+        // numeric column is the whole story.
+        threshold: match row
+            .try_get::<Option<String>, _>(10)
+            .map_err(pgerr)?
+            .as_deref()
+        {
+            Some(j) => serde_json::from_str(j)?,
+            None => Threshold::Fixed(row.try_get(4).map_err(pgerr)?),
+        },
         action: parse_enum("action", &action)?,
         enabled: row.try_get::<i64, _>(6).map_err(pgerr)? != 0,
         warn_at: row.try_get(7).map_err(pgerr)?,
@@ -317,6 +360,27 @@ pub(crate) fn limit_rule_from_row(row: &PgRow) -> Result<LimitRule> {
             (Some(kind), Some(value)) => LimitScope::from_parts(&kind, value),
             _ => None,
         },
+        escalation: match row
+            .try_get::<Option<String>, _>(11)
+            .map_err(pgerr)?
+            .as_deref()
+        {
+            Some(j) => Some(serde_json::from_str(j)?),
+            None => None,
+        },
+        escalated_until: row
+            .try_get::<Option<String>, _>(12)
+            .map_err(pgerr)?
+            .as_deref()
+            .map(parse_ts)
+            .transpose()?,
+        origin: row.try_get(13).map_err(pgerr)?,
+        expires_at: row
+            .try_get::<Option<String>, _>(14)
+            .map_err(pgerr)?
+            .as_deref()
+            .map(parse_ts)
+            .transpose()?,
     })
 }
 
@@ -367,7 +431,12 @@ mod tests {
                 "enabled",
                 "warn_at",
                 "scope_kind",
-                "scope_value"
+                "scope_value",
+                "threshold_json",
+                "escalation_json",
+                "escalated_until",
+                "origin",
+                "expires_at"
             ]
         );
     }

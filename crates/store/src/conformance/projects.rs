@@ -5,7 +5,7 @@ use chrono::Utc;
 
 use lighttrack_core::{
     new_id, ApiKey, LimitAction, LimitMetric, LimitRule, LimitScope, LimitWindow, Project,
-    Redaction,
+    Redaction, Threshold,
 };
 
 use crate::{Result, Store};
@@ -90,11 +90,15 @@ pub(super) fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
         project_id: pid.into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold: 0.0015,
+        threshold: Threshold::Fixed(0.0015),
         action: LimitAction::Alert,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     };
     store.create_limit_rule(&rule)?;
     let enabled = store.list_limit_rules(pid, true)?;
@@ -251,11 +255,15 @@ pub(super) fn limit_lifecycle(store: &dyn Store, pid: &str) -> Result<()> {
         project_id: pid.into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Day,
-        threshold: 50.0,
+        threshold: Threshold::Fixed(50.0),
         action: LimitAction::Throttle,
         enabled: true,
         warn_at: Some(0.8),
         scope: Some(LimitScope::Model("conf-scoped-model".into())),
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     };
     store.create_limit_rule(&scoped)?;
     let got = store
@@ -268,14 +276,15 @@ pub(super) fn limit_lifecycle(store: &dyn Store, pid: &str) -> Result<()> {
         "scope round-trips (dropping it silently widens a scoped cap to the whole project)"
     );
     let mut updated = got.clone();
-    updated.threshold = 75.0;
+    updated.threshold = Threshold::Fixed(75.0);
     updated.scope = Some(LimitScope::Provider("conf-prov".into()));
     assert!(store.update_limit_rule(&updated)?, "update matches the row");
     let after = store
         .get_limit_rule(&scoped.id)?
         .expect("rule still present after update");
-    assert!(
-        (after.threshold - 75.0).abs() < 1e-9,
+    assert_eq!(
+        after.threshold,
+        Threshold::Fixed(75.0),
         "threshold update persists"
     );
     assert_eq!(

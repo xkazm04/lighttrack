@@ -109,6 +109,10 @@ mod table {
         r("/v1/projects/:id/keys/:kid/rotate", NoMethod, Admin),
         r("/v1/projects/:id/limits", READ, Admin),
         r("/v1/limits/:id", NoMethod, Admin),
+        // A policy is a standing instruction to CREATE caps — strictly more power than creating one
+        // cap — so a project key never reaches it, whatever its scopes.
+        r("/v1/projects/:id/margin-policies", Admin, Admin),
+        r("/v1/projects/:id/margin-policies/:pid", NoMethod, Admin),
         r("/v1/limits/status", READ, NoMethod),
         r("/v1/limits/usage", READ, NoMethod),
         r("/v1/relay/tasks", READ, INGEST),

@@ -17,6 +17,7 @@ mod collective;
 mod datasets;
 mod events;
 mod jobs;
+mod margin_policies;
 mod prices;
 mod projects;
 mod relay;
@@ -95,6 +96,7 @@ impl PgStore {
         Surface::ProjectAdmin,
         Surface::KeyAdmin,
         Surface::LimitLifecycle,
+        Surface::MarginPolicies,
         Surface::JobLeases,
         Surface::Relay,
         // The hub runs here: a managed Postgres is where a public leaderboard is actually deployed,
@@ -282,6 +284,25 @@ impl Store for PgStore {
     }
     fn delete_limit_rule(&self, id: &str) -> Result<bool> {
         self.rt.block_on(projects::delete_limit(&self.pool, id))
+    }
+
+    // --- margin policies ---
+    fn create_margin_policy(&self, p: &lighttrack_core::MarginPolicy) -> Result<()> {
+        self.rt.block_on(margin_policies::create(&self.pool, p))
+    }
+    fn list_margin_policies(
+        &self,
+        project: &str,
+        only_enabled: bool,
+    ) -> Result<Vec<lighttrack_core::MarginPolicy>> {
+        self.rt
+            .block_on(margin_policies::list(&self.pool, project, only_enabled))
+    }
+    fn get_margin_policy(&self, id: &str) -> Result<Option<lighttrack_core::MarginPolicy>> {
+        self.rt.block_on(margin_policies::get(&self.pool, id))
+    }
+    fn delete_margin_policy(&self, id: &str) -> Result<bool> {
+        self.rt.block_on(margin_policies::delete(&self.pool, id))
     }
 
     // --- scores ---

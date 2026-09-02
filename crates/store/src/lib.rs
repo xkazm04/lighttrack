@@ -13,6 +13,7 @@ pub mod collective;
 pub mod conformance;
 mod rollup_compat;
 pub mod sqlite;
+pub mod threshold;
 
 use std::collections::HashMap;
 
@@ -24,14 +25,18 @@ use thiserror::Error;
 use lighttrack_core::{
     scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, CostEvidence,
     Dataset, DatasetItem, Job, JobCancel, JobFinish, LimitMetric, LimitRule, LimitScope,
-    LimitStatus, LimitWindow, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion,
-    RelayOutcome, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Score,
-    TokensByDimension, Trace, TraceSummary,
+    LimitStatus, LimitWindow, LlmEvent, MarginPolicy, ModelPriceRow, Project, Prompt,
+    PromptVersion, RelayOutcome, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Score,
+    ThresholdBasis, TokensByDimension, Trace, TraceSummary,
 };
 
 pub use capabilities::{Capabilities, Surface};
 pub use collective::{replace_collective_contribution_nonatomic, CollectiveFilter, ReplaceAck};
 pub use sqlite::SqliteStore;
+pub use threshold::{
+    needs_revenue, resolve_all as resolve_thresholds, resolve_from_windows, resolver,
+    revenue_subject, window_key, RevenueWindows,
+};
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -341,8 +346,22 @@ pub struct ScopeUsage {
 /// `cost_usd` rules carry their [`CostEvidence`]; `calls`/`tokens` rules don't (there is nothing to
 /// qualify — a call is a call).
 pub fn evaluate_rule(rule: &LimitRule, usage: &Usage) -> LimitStatus {
+    let (threshold, basis) = rule.threshold.resolve(None);
+    evaluate_rule_resolved(rule, usage, threshold, basis)
+}
+
+/// [`evaluate_rule`] against an already-resolved threshold — what a caller that has read revenue for
+/// a [`Threshold::RevenueShare`](lighttrack_core::Threshold) rule uses (see [`threshold`]). Keeping
+/// this the only other door means the enforced number and the reported number are the same value,
+/// not two computations that could drift.
+pub fn evaluate_rule_resolved(
+    rule: &LimitRule,
+    usage: &Usage,
+    threshold: f64,
+    basis: ThresholdBasis,
+) -> LimitStatus {
     let evidence = matches!(rule.metric, LimitMetric::CostUsd).then(|| usage.cost_evidence());
-    rule.evaluate_with_evidence(usage.metric_value(rule.metric), evidence)
+    rule.evaluate_resolved(usage.metric_value(rule.metric), threshold, basis, evidence)
 }
 
 /// Outcome of an admission-controlled ingest ([`Store::insert_event_checked`]).
@@ -429,21 +448,27 @@ pub fn event_contribution(ev: &LlmEvent) -> Usage {
 /// **Unpriced traffic:** a `cost_usd` rule evaluates against [`Usage::cost_for_limits`], which charges
 /// calls the price book couldn't price at the window's own mean priced cost. When the window has *no*
 /// priced call at all the cap is unpriceable and an enforcing rule rejects — see [`CostEvidence`].
-pub fn evaluate_admission<F>(
+pub fn evaluate_admission<F, R>(
     rules: &[LimitRule],
     ev: &LlmEvent,
     contribution: Usage,
     mut current_usage: F,
+    resolve_threshold: R,
 ) -> Result<Admission>
 where
     F: FnMut(LimitWindow, Option<&LimitScope>) -> Result<Usage>,
+    R: Fn(&LimitRule) -> (f64, ThresholdBasis),
 {
+    let now = Utc::now();
     let dims = ev.scope_dims();
     // Usage cache now keys by (window, scope): a scoped cap and a project-wide cap over the same
     // window read different rolling totals.
     let mut prospective: HashMap<(LimitWindow, Option<LimitScope>), Usage> = HashMap::new();
     let mut statuses = Vec::new();
     for r in rules {
+        if !r.is_active_at(now) {
+            continue; // a policy-created rule past its expiry is inert, sweep or no sweep
+        }
         if !scope_matches(r.scope.as_ref(), &dims) {
             continue; // a scoped rule the candidate doesn't match can neither count it nor reject it
         }
@@ -457,7 +482,8 @@ where
                 u
             }
         };
-        let mut st = evaluate_rule(r, &usage);
+        let (threshold, basis) = resolve_threshold(r);
+        let mut st = evaluate_rule_resolved(r, &usage, threshold, basis);
         // Graduated throttling is decided here, where the candidate event is known: a `Throttle`
         // rule past its ramp start sheds a proportional, deterministic share of traffic. Recorded on
         // the status so the rejection ledger and the alerts attribute the shed to the right rule.
@@ -482,11 +508,27 @@ pub fn insert_event_checked_nonatomic<S: Store + ?Sized>(
 ) -> Result<Admission> {
     let rules = store.list_limit_rules(&ev.project_id, true)?;
     let now = Utc::now();
-    let admission =
-        evaluate_admission(&rules, ev, event_contribution(ev), |w, scope| match scope {
+    // Revenue-share rules are resolved before the usage walk and only when at least one exists, so a
+    // deployment that uses none pays nothing here. A backend that cannot serve revenue at all
+    // (`Unsupported`) leaves them unresolved, which is the inert `+inf` case — an unmeasurable
+    // guardrail must not become a surprise block.
+    let resolved = threshold::resolve_all(&rules, now, |since, until| {
+        match store.list_revenue_events(Some(&ev.project_id), since, until) {
+            Err(StoreError::Unsupported(_)) => Ok(Vec::new()),
+            other => other,
+        }
+    })?;
+    let resolve = threshold::resolver(&resolved);
+    let admission = evaluate_admission(
+        &rules,
+        ev,
+        event_contribution(ev),
+        |w, scope| match scope {
             None => store.usage_since(&ev.project_id, w.since(now)),
             Some(s) => store.usage_since_scoped(&ev.project_id, w.since(now), s),
-        })?;
+        },
+        resolve,
+    )?;
     if admission.admitted {
         store.insert_event(ev)?;
     }
@@ -951,6 +993,35 @@ pub trait Store: Send + Sync {
     /// (the API maps that to 404). Default is a clear unimplemented error (see `update_limit_rule`).
     fn delete_limit_rule(&self, _id: &str) -> Result<bool> {
         Err(StoreError::Unsupported("deleting limit rules"))
+    }
+
+    // --- margin policies (the standing guardrails that create limit rules) ---
+    //
+    // A policy is configuration for the forecast sweep, never read on the ingest hot path, so these
+    // are ordinary CRUD. They default to `Unsupported` rather than to an empty list: a backend that
+    // has not ported the table must say so, or an operator who configured a guardrail on Postgres
+    // would watch `list_margin_policies` return `[]` and conclude the feature simply did nothing.
+    /// Persist one margin policy.
+    fn create_margin_policy(&self, _p: &MarginPolicy) -> Result<()> {
+        Err(StoreError::Unsupported("margin policies"))
+    }
+    /// A project's policies, optionally only the enabled ones (what the sweep reads).
+    fn list_margin_policies(
+        &self,
+        _project: &str,
+        _only_enabled: bool,
+    ) -> Result<Vec<MarginPolicy>> {
+        Err(StoreError::Unsupported("margin policies"))
+    }
+    /// One policy by id, or `None` when it does not exist.
+    fn get_margin_policy(&self, _id: &str) -> Result<Option<MarginPolicy>> {
+        Err(StoreError::Unsupported("margin policies"))
+    }
+    /// Remove a policy; `false` when no row matched (the API maps that to 404). Rules the policy
+    /// created are NOT deleted here — the sweep's reverse pass reaps them, so removal goes through
+    /// exactly one code path.
+    fn delete_margin_policy(&self, _id: &str) -> Result<bool> {
+        Err(StoreError::Unsupported("margin policies"))
     }
 
     // --- single event lookup + scores (Phase 3) ---

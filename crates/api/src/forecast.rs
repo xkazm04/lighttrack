@@ -20,7 +20,7 @@ use lighttrack_core::forecast::{forecast_budget, forecast_margin, BudgetForecast
 use lighttrack_core::margin::UNATTRIBUTED;
 use lighttrack_core::{
     compute_margin, CostByDimension, LimitMetric, LimitRule, LimitWindow, MarginDimension,
-    RevenueEvent, Trend,
+    MarginRow, RevenueEvent, Trend,
 };
 use lighttrack_store::{DailyDimCost, DailyUsage, StoreError, Usage};
 
@@ -61,10 +61,16 @@ pub(crate) struct ForecastResponse {
     lookback_days: u32,
     spend: SpendProjection,
     budgets: Vec<BudgetForecast>,
-    margins: Vec<MarginForecast>,
+    pub(crate) margins: Vec<MarginForecast>,
     /// Pre-emptive warnings derived from the forecasts (also delivered best-effort to alert sinks,
     /// by the handler and by the scheduled sweep alike).
     pub(crate) alerts: Vec<ForecastAlert>,
+    /// The windowed margin rows the `margins` forecasts were built from. Not serialized — the
+    /// `/v1/margin` surface is where an operator reads these — but carried so the guardrail pass
+    /// acts on exactly the numbers this forecast was computed from, rather than re-reading the
+    /// window and possibly deciding against a slightly different picture.
+    #[serde(skip)]
+    pub(crate) margin_rows: Vec<MarginRow>,
 }
 
 /// Raw store reads gathered in one blocking hop, before any pure shaping.
@@ -193,6 +199,7 @@ pub(crate) async fn compute_forecast(
         budgets,
         margins,
         alerts,
+        margin_rows: rows,
     })
 }
 

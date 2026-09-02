@@ -4,7 +4,7 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{CostEvidence, LimitScope, LimitStatus};
+use super::{CostEvidence, Escalation, LimitScope, LimitStatus, Threshold, ThresholdBasis};
 
 /// What a limit measures over its window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -116,13 +116,19 @@ impl LimitAction {
 pub const DEFAULT_THROTTLE_START: f64 = 0.8;
 
 /// A per-project limit. Tripped by **monitored traffic only** — the scoring engine is exempt.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LimitRule {
     pub id: String,
     pub project_id: String,
     pub metric: LimitMetric,
     pub window: LimitWindow,
-    pub threshold: f64,
+    /// The number usage is compared against — a constant, or a share of recognized revenue that is
+    /// resolved at evaluation time (see [`Threshold`]). Untagged, so a stored bare number still
+    /// deserializes to `Fixed` with byte-identical behaviour.
+    pub threshold: Threshold,
+    /// The rule's **configured** reaction. While an escalation is live this is shadowed by
+    /// [`Escalation::to`] rather than overwritten, so de-escalation is a field clear and never a
+    /// remembered undo — see [`LimitRule::effective_action`].
     pub action: LimitAction,
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -137,6 +143,26 @@ pub struct LimitRule {
     /// traffic matching its scope.
     #[serde(default)]
     pub scope: Option<LimitScope>,
+    /// Optional forecast-driven tightening: when the budget ETA drops under
+    /// [`Escalation::on_eta_days`], the sweep stamps [`LimitRule::escalated_until`] and this rule
+    /// acts as [`Escalation::to`] until it lapses. `None` (serde-default) = the pre-escalation
+    /// behaviour, unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalation: Option<Escalation>,
+    /// When a live escalation lapses. Set by the sweep, cleared by the sweep's reverse pass, and
+    /// self-expiring so a sweep that stops running cannot leave a project throttled forever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalated_until: Option<DateTime<Utc>>,
+    /// What created this rule, when it was not a human: `margin_policy:<policy id>:<subject>`. The
+    /// policy engine only ever touches rules carrying its own origin, which is what keeps an
+    /// operator's hand-made cap safe from automation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// When a policy-created rule stops applying. Past it the rule is inert (and the sweep deletes
+    /// it), so a guardrail raised by automation cannot outlive the condition that raised it even if
+    /// the sweep is turned off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 fn default_true() -> bool {
@@ -149,11 +175,9 @@ impl LimitRule {
     /// evaluated `ratio = ∞`, so the cap breached on *any* usage. Callers surface the `Err` as HTTP
     /// 400. Kept pure (and here, beside the type) so create and update share exactly one rule.
     pub fn validate(&self) -> Result<(), String> {
-        if !(self.threshold.is_finite() && self.threshold > 0.0) {
-            return Err(format!(
-                "threshold must be a finite number greater than 0 (got {})",
-                self.threshold
-            ));
+        self.threshold.validate()?;
+        if let Some(e) = &self.escalation {
+            e.validate()?;
         }
         if let Some(w) = self.warn_at {
             if !(w.is_finite() && w > 0.0 && w < 1.0) {
@@ -181,6 +205,33 @@ impl LimitRule {
         self.evaluate_with_evidence(current, None)
     }
 
+    /// The action in force right now: the configured one, or [`Escalation::to`] while an escalation
+    /// is live. Reading it (rather than mutating `action`) is what makes escalation reversible.
+    pub fn effective_action(&self) -> LimitAction {
+        self.effective_action_at(Utc::now())
+    }
+
+    pub fn effective_action_at(&self, now: DateTime<Utc>) -> LimitAction {
+        match (self.escalation, self.escalated_until) {
+            (Some(e), Some(until)) if until > now => e.to,
+            _ => self.action,
+        }
+    }
+
+    /// Whether this rule counts at all right now: enabled, and not past a policy-set expiry. An
+    /// expired rule is inert rather than deleted-on-read — the sweep removes it, so a store with no
+    /// sweep running still stops enforcing on time.
+    pub fn is_active_at(&self, now: DateTime<Utc>) -> bool {
+        self.enabled && self.expires_at.is_none_or(|e| e > now)
+    }
+
+    /// The constant a forecast can project against. `+inf` for a revenue-share rule, whose threshold
+    /// is only knowable at evaluation time — a forecast against `+inf` yields no ETA, which is the
+    /// honest answer rather than a projection against a number we made up.
+    pub fn nominal_threshold(&self) -> f64 {
+        self.threshold.fixed().unwrap_or(f64::INFINITY)
+    }
+
     /// [`LimitRule::evaluate`] carrying the cost provenance of `current` (see [`CostEvidence`]). The
     /// store passes `Some(..)` for `cost_usd` rules so an operator — and the enforcement decision —
     /// can tell a cap breached on measured spend from one resting on imputation, and so a cap with no
@@ -190,19 +241,35 @@ impl LimitRule {
         current: f64,
         cost_evidence: Option<CostEvidence>,
     ) -> LimitStatus {
-        let ratio = if self.threshold > 0.0 {
-            current / self.threshold
+        let (threshold, basis) = self.threshold.resolve(None);
+        self.evaluate_resolved(current, threshold, basis, cost_evidence)
+    }
+
+    /// [`LimitRule::evaluate_with_evidence`] against an **already-resolved** threshold and the basis
+    /// that explains it. The admission path and the status surface both resolve a revenue-share rule
+    /// against the store before calling this, so the number they enforce on and the number they
+    /// report are provably the same one.
+    pub fn evaluate_resolved(
+        &self,
+        current: f64,
+        threshold: f64,
+        basis: ThresholdBasis,
+        cost_evidence: Option<CostEvidence>,
+    ) -> LimitStatus {
+        let action = self.effective_action();
+        let ratio = if threshold > 0.0 {
+            current / threshold
         } else {
             f64::INFINITY
         };
-        let breached = current >= self.threshold;
+        let breached = current >= threshold;
         // Warning tier: approaching the cap (ratio past warn_at) but not yet breached. A breached
         // rule is never "warning" — it has already crossed into enforcement/breach alerting.
         let warning = !breached && self.warn_at.is_some_and(|w| ratio >= w);
         // Graduated throttling: linear from `throttle_start` (0% shed) to the threshold (100%). At
         // the threshold and beyond the rule is breached and shedding is moot — reported as 1.0 so the
         // signal is continuous rather than snapping back to zero. `Block` and `Alert` never shed.
-        let shed_fraction = if !self.action.sheds() {
+        let shed_fraction = if !action.sheds() {
             0.0
         } else if breached {
             1.0
@@ -215,14 +282,15 @@ impl LimitRule {
             project_id: self.project_id.clone(),
             metric: self.metric,
             window: self.window,
-            action: self.action,
+            action,
             current,
-            threshold: self.threshold,
+            threshold,
             breached,
             ratio,
             warn_at: self.warn_at,
             warning,
             scope: self.scope.clone(),
+            basis,
             cost_evidence,
             shed_fraction,
             shedding: false, // set by the admission path, which knows the candidate event

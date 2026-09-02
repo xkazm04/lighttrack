@@ -120,6 +120,28 @@ tiers: **Alert** (notify only — the event is still recorded), **Throttle** (gr
 readable via `GET /v1/limits/status` and MCP. Inline *pre-call* blocking (before the provider spend)
 still requires gateway mode. The scoring/benchmark engine is **not** subject to limits.
 
+### 7a1. A threshold can be derived, and a rule can be written by the system
+A `threshold` is a number **or** `{"pct": N, "dimension": "customer"}` — a share of the subject's
+recognized revenue, resolved at *evaluation* time against the same recognition the `/v1/margin`
+rollup uses, so a cap follows the invoice instead of going stale on it. Every `LimitStatus` carries a
+`basis` naming what the number came from, and the 429 says it in words. A derived threshold whose
+revenue cannot be measured resolves to `+inf` and never breaches (`basis.kind = "unknown"`): a
+guardrail we cannot measure is inert by design, never a guess that could become a surprise 429.
+
+Rules therefore have **provenance**. `origin` records what created a rule when it was not a human
+(`margin_policy:<policy id>:<subject>`), `expires_at` when a machine-made rule lapses, and
+`escalated_until` when a forecast-driven tightening reverses. Three consequences an operator can rely
+on, each pinned by a test:
+
+- The forecast sweep is the **only** writer of these fields, and it only ever touches rules carrying
+  its own `origin`. A hand-made cap is untouchable by automation.
+- Escalation *shadows* `action` rather than overwriting it, so de-escalation is a field clear and not
+  a remembered undo — and a sweep that stops running cannot leave a project throttled, because the
+  lapse is on the row.
+- An expired rule is inert at evaluation, sweep or no sweep.
+
+`docs/MARGIN.md` ("Guardrails") has the policy vocabulary and the full behaviour.
+
 ### 7a0. Scoped rules and per-key budgets
 A rule's optional `scope` narrows it to one value of one dimension:
 `{"provider":…}` · `{"model":…}` · `{"name":…}` (use-case) · `{"api_key":…}` · `{"customer":…}`.

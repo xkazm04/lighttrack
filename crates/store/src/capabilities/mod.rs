@@ -56,6 +56,12 @@ pub enum Surface {
     KeyAdmin,
     /// Reading, updating and deleting a limit rule after creation.
     LimitLifecycle,
+    /// Standing margin guardrails: the policies the forecast sweep turns into limit rules. Its own
+    /// surface rather than part of `LimitLifecycle` because it is a separate table with a separate
+    /// admin route set — a backend can serve every limit-rule method and still have no
+    /// `margin_policies` table, and an operator needs to be told that rather than shown an empty
+    /// list.
+    MarginPolicies,
     /// Job cancellation and lease renewal — the liveness half of the job queue.
     JobLeases,
     /// Disk accounting and the quiet-window maintenance pass.
@@ -79,6 +85,7 @@ impl Surface {
         Surface::ProjectAdmin,
         Surface::KeyAdmin,
         Surface::LimitLifecycle,
+        Surface::MarginPolicies,
         Surface::JobLeases,
         Surface::Maintenance,
         Surface::Metrics,
@@ -99,6 +106,7 @@ impl Surface {
             Surface::ProjectAdmin => "project_admin",
             Surface::KeyAdmin => "key_admin",
             Surface::LimitLifecycle => "limit_lifecycle",
+            Surface::MarginPolicies => "margin_policies",
             Surface::JobLeases => "job_leases",
             Surface::Maintenance => "maintenance",
             Surface::Metrics => "metrics",
@@ -286,6 +294,15 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
     (
         Surface::LimitLifecycle,
         &["get_limit_rule", "update_limit_rule", "delete_limit_rule"],
+    ),
+    (
+        Surface::MarginPolicies,
+        &[
+            "create_margin_policy",
+            "list_margin_policies",
+            "get_margin_policy",
+            "delete_margin_policy",
+        ],
     ),
     (Surface::JobLeases, &["cancel_job", "renew_job_lease"]),
     (

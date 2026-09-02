@@ -117,6 +117,9 @@ fn consequence(s: Surface) -> &'static str {
         Surface::MarginBreakdowns => {
             "The per-customer margin drill-down and pricing what-if are unavailable."
         }
+        Surface::MarginPolicies => {
+            "Margin guardrails (/v1/projects/:id/margin-policies) are unavailable — the forecast              sweep cannot turn a losing customer into a cap here."
+        }
         Surface::Prompts => "The prompt registry (/v1/projects/:id/prompts) is unavailable.",
         Surface::Relay => "The device relay queue (/v1/relay/*) is unavailable.",
         Surface::Collective => "The collective leaderboard hub cannot store contributions here.",

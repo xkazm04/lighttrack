@@ -15,7 +15,7 @@ use serde_json::json;
 
 use lighttrack_core::{new_id, RelayOutcome};
 
-use super::fixtures::{sample_entry, sample_project, sample_rule};
+use super::fixtures::{sample_entry, sample_policy, sample_project, sample_rule};
 use crate::{
     CollectiveFilter, MaintenanceRequest, Result, Store, StoreError, Surface, TraceFilter,
 };
@@ -52,6 +52,7 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
         Surface::ProjectAdmin => project_admin(store),
         Surface::KeyAdmin => key_admin(store),
         Surface::LimitLifecycle => limit_lifecycle(store),
+        Surface::MarginPolicies => margin_policies(store),
         Surface::JobLeases => job_leases(store),
         Surface::Maintenance => maintenance(store),
         Surface::Metrics => metrics(store),
@@ -261,6 +262,23 @@ fn limit_lifecycle(store: &dyn Store) -> Vec<&'static str> {
     refused("update_limit_rule", store.update_limit_rule(&r));
     refused("delete_limit_rule", store.delete_limit_rule(&r.id));
     vec!["get_limit_rule", "update_limit_rule", "delete_limit_rule"]
+}
+
+fn margin_policies(store: &dyn Store) -> Vec<&'static str> {
+    let p = sample_policy();
+    refused("create_margin_policy", store.create_margin_policy(&p));
+    refused(
+        "list_margin_policies",
+        store.list_margin_policies(&p.project_id, true),
+    );
+    refused("get_margin_policy", store.get_margin_policy(&p.id));
+    refused("delete_margin_policy", store.delete_margin_policy(&p.id));
+    vec![
+        "create_margin_policy",
+        "list_margin_policies",
+        "get_margin_policy",
+        "delete_margin_policy",
+    ]
 }
 
 fn job_leases(store: &dyn Store) -> Vec<&'static str> {

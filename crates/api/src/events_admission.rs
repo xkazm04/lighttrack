@@ -154,9 +154,16 @@ pub(crate) fn breach_reason(statuses: &[LimitStatus]) -> String {
                 );
             }
             let estimated = if s.estimated() { " (includes imputed cost for unpriced calls)" } else { "" };
+            // A derived threshold has to explain itself here above all: "$329.60" with no story is
+            // a number the caller cannot act on, while "80% of $412.00 recognized customer revenue"
+            // tells them both why they were stopped and what would move the cap.
+            let basis = match s.basis.describe() {
+                Some(d) => format!(" — {d}"),
+                None => String::new(),
+            };
             format!(
                 "ingest blocked: project '{}'{scope} is over its {:?}/{:?} limit \
-                 ({:.4} >= {:.4}, action={:?}){estimated}",
+                 ({:.4} >= {:.4}, action={:?}){estimated}{basis}",
                 s.project_id, s.metric, s.window, s.current, s.threshold, s.action
             )
         })

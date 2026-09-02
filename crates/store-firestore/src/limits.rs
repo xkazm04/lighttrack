@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 
-use lighttrack_core::{LimitRule, LimitScope};
+use lighttrack_core::{Escalation, LimitRule, LimitScope, Threshold};
 use lighttrack_store::Result;
 
 use crate::codec::*;
@@ -18,7 +18,37 @@ fn limit_fields(r: &LimitRule) -> Result<Fields> {
     m.insert("project_id".into(), json!(r.project_id));
     m.insert("metric".into(), json!(enum_to_str(&r.metric)?));
     m.insert("window".into(), json!(enum_to_str(&r.window)?));
-    m.insert("threshold".into(), json!(r.threshold));
+    // A plain `Fixed` cap keeps writing the bare number it always did (so a document written before
+    // derived thresholds existed reads back byte-identically); anything richer rides in
+    // `threshold_json`, whose presence is what `limit_from` keys on.
+    let (threshold, threshold_json) = match &r.threshold {
+        Threshold::Fixed(v) => (*v, Value::Null),
+        other => (0.0, json!(serde_json::to_string(other)?)),
+    };
+    m.insert("threshold".into(), json!(threshold));
+    m.insert("threshold_json".into(), threshold_json);
+    m.insert(
+        "escalation_json".into(),
+        match &r.escalation {
+            None => Value::Null,
+            Some(e) => json!(serde_json::to_string(e)?),
+        },
+    );
+    m.insert(
+        "escalated_until".into(),
+        match r.escalated_until {
+            None => Value::Null,
+            Some(t) => json!(fmt_ts(t)),
+        },
+    );
+    m.insert("origin".into(), json!(r.origin));
+    m.insert(
+        "expires_at".into(),
+        match r.expires_at {
+            None => Value::Null,
+            Some(t) => json!(fmt_ts(t)),
+        },
+    );
     m.insert("action".into(), json!(enum_to_str(&r.action)?));
     m.insert("enabled".into(), json!(r.enabled as i64));
     m.insert("warn_at".into(), json!(r.warn_at));
@@ -72,7 +102,10 @@ fn limit_from(m: &Fields) -> Result<LimitRule> {
         project_id: freq(m, "project_id")?,
         metric: parse_enum("metric", &fstr(m, "metric").unwrap_or_default())?,
         window: parse_enum("window", &fstr(m, "window").unwrap_or_default())?,
-        threshold: ff64(m, "threshold").unwrap_or(0.0),
+        threshold: match fstr(m, "threshold_json") {
+            Some(j) => serde_json::from_str(&j)?,
+            None => Threshold::Fixed(ff64(m, "threshold").unwrap_or(0.0)),
+        },
         action: parse_enum("action", &fstr(m, "action").unwrap_or_default())?,
         enabled: fbool(m, "enabled"),
         warn_at: ff64(m, "warn_at"),
@@ -80,5 +113,15 @@ fn limit_from(m: &Fields) -> Result<LimitRule> {
             (Some(kind), Some(value)) => LimitScope::from_parts(&kind, value),
             _ => None,
         },
+        escalation: match fstr(m, "escalation_json") {
+            Some(j) => Some(serde_json::from_str::<Escalation>(&j)?),
+            None => None,
+        },
+        escalated_until: fstr(m, "escalated_until")
+            .as_deref()
+            .map(parse_ts)
+            .transpose()?,
+        origin: fstr(m, "origin"),
+        expires_at: fstr(m, "expires_at").as_deref().map(parse_ts).transpose()?,
     })
 }

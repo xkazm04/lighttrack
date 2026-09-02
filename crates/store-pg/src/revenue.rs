@@ -44,27 +44,50 @@ pub(crate) async fn insert(pool: &PgPool, ev: &RevenueEvent) -> Result<()> {
     Ok(())
 }
 
+/// Revenue rows that may be recognized within `[since, until)`. One SQL string, used by both the
+/// pooled read and the transaction-scoped one below, so the admission path's revenue basis and the
+/// `/v1/margin` rollup can never be reading different sets of rows.
+const LIST_SQL: &str =
+    "SELECT id, project_id, source, external_id, customer_id, product_id, amount_usd, currency, \
+     kind, period_start, period_end, ts FROM revenue_events \
+     WHERE ($1::text IS NULL OR project_id = $1) AND ( \
+         (period_start IS NOT NULL AND period_end IS NOT NULL \
+          AND period_start < $3 AND period_end > $2) \
+      OR ((period_start IS NULL OR period_end IS NULL) AND ts >= $2 AND ts < $3) \
+     ) ORDER BY ts DESC";
+
 pub(crate) async fn list(
     pool: &PgPool,
     project: Option<&str>,
     since: DateTime<Utc>,
     until: DateTime<Utc>,
 ) -> Result<Vec<RevenueEvent>> {
-    let rows = sqlx::query(
-        "SELECT id, project_id, source, external_id, customer_id, product_id, amount_usd, currency, \
-         kind, period_start, period_end, ts FROM revenue_events \
-         WHERE ($1::text IS NULL OR project_id = $1) AND ( \
-             (period_start IS NOT NULL AND period_end IS NOT NULL \
-              AND period_start < $3 AND period_end > $2) \
-          OR ((period_start IS NULL OR period_end IS NULL) AND ts >= $2 AND ts < $3) \
-         ) ORDER BY ts DESC",
-    )
-    .bind(project.map(|s| s.to_string()))
-    .bind(fmt_ts(since))
-    .bind(fmt_ts(until))
-    .fetch_all(pool)
-    .await
-    .map_err(pgerr)?;
+    let rows = sqlx::query(LIST_SQL)
+        .bind(project.map(|s| s.to_string()))
+        .bind(fmt_ts(since))
+        .bind(fmt_ts(until))
+        .fetch_all(pool)
+        .await
+        .map_err(pgerr)?;
+    rows.iter().map(from_row).collect()
+}
+
+/// [`list`] on a caller-held connection — what the admission path uses so the revenue a
+/// revenue-share cap is derived from is read inside the same advisory-locked transaction as the
+/// usage and the insert.
+pub(crate) async fn list_in_tx(
+    conn: &mut sqlx::PgConnection,
+    project: &str,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> Result<Vec<RevenueEvent>> {
+    let rows = sqlx::query(LIST_SQL)
+        .bind(Some(project.to_string()))
+        .bind(fmt_ts(since))
+        .bind(fmt_ts(until))
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(pgerr)?;
     rows.iter().map(from_row).collect()
 }
 

@@ -20,6 +20,7 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "list_scores" => list_of(score()),
         "get_limit_status" => limit_status_resp(),
         "list_limits" => list_of(limit_rule()),
+        "list_margin_policies" => list_of(margin_policy()),
         "list_prices" => list_of(price_row()),
         "list_benchmarks" => list_of(benchmark()),
         "get_benchmark" => benchmark(),
@@ -280,8 +281,20 @@ fn collective_digest_resp() -> Value {
 fn limit_rule() -> Value {
     obj(json!({
         "id": {"type":"string"}, "project_id": {"type":"string"}, "metric": {"type":"string"},
-        "window": {"type":"string"}, "threshold": {"type":"number"}, "action": {"type":"string"},
-        "enabled": {"type":"boolean"}
+        "window": {"type":"string"}, "threshold": {"type":["number","object"]},
+        "action": {"type":"string"}, "enabled": {"type":"boolean"},
+        "origin": {"type":["string","null"]}, "expires_at": {"type":["string","null"]}
+    }))
+}
+
+/// A limit rule's threshold is now a number OR an object (a share of recognized revenue), so the
+/// schema says so rather than promising a number the server may not send.
+fn margin_policy() -> Value {
+    obj(json!({
+        "id": {"type":"string"}, "project_id": {"type":"string"},
+        "trigger": {"type":["object","string"]}, "action": {"type":["object","string"]},
+        "min_cost_usd": {"type":"number"}, "cooldown_secs": {"type":"integer"},
+        "expiry_secs": {"type":"integer"}, "enabled": {"type":"boolean"}
     }))
 }
 

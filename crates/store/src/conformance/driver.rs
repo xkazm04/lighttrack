@@ -9,7 +9,7 @@ use lighttrack_core::new_id;
 
 use super::{
     admission, catalog, collective, events, forecast, job_leases, jobs, maintenance, margin,
-    projects, prompts, refusals, relay, revenue, rollup, scores, traces,
+    margin_policy, projects, prompts, refusals, relay, revenue, rollup, scores, traces,
 };
 use crate::{Result, Store, Surface};
 
@@ -62,6 +62,7 @@ fn section(store: &dyn Store, pid: &str, surface: Surface) -> Result<()> {
         Surface::ProjectAdmin => projects::project_admin(store)?,
         Surface::KeyAdmin => projects::key_admin(store, pid)?,
         Surface::LimitLifecycle => projects::limit_lifecycle(store, pid)?,
+        Surface::MarginPolicies => margin_policy::margin_policies(store, pid)?,
         Surface::JobLeases => {
             job_leases::job_cancellation(store)?;
             job_leases::job_leases(store)?;

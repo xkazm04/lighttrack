@@ -75,6 +75,7 @@ fn setup_k(
         project_policies: Arc::new(crate::state::ProjectPolicyCache::new(HashMap::new())),
         activity: Arc::new(crate::storage::ActivityGauge::default()),
         maintenance: Arc::new(crate::storage::Maintenance::default()),
+        policy_cooldowns: Default::default(),
         maintenance_desc: "test fixture (no sweep task is spawned)".to_string(),
     };
     (state, store)

@@ -58,6 +58,29 @@ const ADDED_COLUMNS: &[&str] = &[
     "ALTER TABLE projects ADD COLUMN archived_at TEXT",
 ];
 
+/// Columns added **after** the [`SCHEMA`] batch instead of before it.
+///
+/// The pre-batch list above exists for columns the batch's own indexes reference, which must be in
+/// place before `CREATE INDEX` runs. These have the opposite requirement: nothing in [`SCHEMA`]
+/// indexes them, and on a *fresh* database their table does not exist until the batch creates it —
+/// so an `ALTER` attempted first is a tolerated "no such table" and the column never appears at all.
+/// Running them here widens the table the batch just created, and is still a no-op ("duplicate
+/// column name") on a database that already has them.
+///
+/// The alternative — editing the `CREATE TABLE` in `schema/sqlite/001_init.sql` — would put the
+/// same fact in two places, which is how the two drift.
+const ADDED_COLUMNS_LATE: &[&str] = &[
+    // Measure-to-act guardrails (M4): a threshold that is not a bare number (`threshold_json`), a
+    // forecast-driven action override and its deadline, what created the rule, and when a
+    // policy-created rule lapses. All nullable — an existing row reads back as exactly the fixed,
+    // human-made, never-expiring rule it always was.
+    "ALTER TABLE limit_rules ADD COLUMN threshold_json TEXT",
+    "ALTER TABLE limit_rules ADD COLUMN escalation_json TEXT",
+    "ALTER TABLE limit_rules ADD COLUMN escalated_until TEXT",
+    "ALTER TABLE limit_rules ADD COLUMN origin TEXT",
+    "ALTER TABLE limit_rules ADD COLUMN expires_at TEXT",
+];
+
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.
 const ADD_RECEIVED_AT: &str = "ALTER TABLE events ADD COLUMN received_at TEXT";
 
@@ -89,6 +112,11 @@ pub(super) fn apply(c: &Connection) -> Result<()> {
     // carried).
     let backfill = add_column(c, ADD_RECEIVED_AT)?;
     c.execute_batch(SCHEMA)?;
+    // After the batch: columns on tables the batch may itself have just created (see
+    // [`ADDED_COLUMNS_LATE`]).
+    for stmt in ADDED_COLUMNS_LATE {
+        add_column(c, stmt)?;
+    }
     if backfill {
         c.execute(
             "UPDATE events SET received_at = ts WHERE received_at IS NULL",

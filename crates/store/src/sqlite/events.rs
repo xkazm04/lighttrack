@@ -111,9 +111,21 @@ pub(super) fn insert_checked_with_rules(
     rules: &[lighttrack_core::LimitRule],
 ) -> Result<Admission> {
     let now = Utc::now();
-    let admission = evaluate_admission(rules, ev, event_contribution(ev), |w, scope| {
-        cache.usage(conn, &ev.project_id, w, scope, now)
+    // Revenue-share thresholds are resolved on the SAME locked connection that is about to do the
+    // check-and-insert, so the number a cap enforces on and the revenue it was derived from are one
+    // consistent snapshot. `resolve_all` short-circuits entirely when no rule needs revenue, which
+    // is the overwhelmingly common case — a fixed cap still costs zero extra queries.
+    let resolved = crate::threshold::resolve_all(rules, now, |since, until| {
+        super::revenue::list(conn, Some(&ev.project_id), since, until)
     })?;
+    let resolve = crate::threshold::resolver(&resolved);
+    let admission = evaluate_admission(
+        rules,
+        ev,
+        event_contribution(ev),
+        |w, scope| cache.usage(conn, &ev.project_id, w, scope, now),
+        resolve,
+    )?;
     if admission.admitted {
         insert(conn, ev)?;
     }

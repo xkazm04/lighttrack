@@ -3,7 +3,9 @@
 
 use chrono::Utc;
 
-use lighttrack_core::{new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent};
+use lighttrack_core::{
+    new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Threshold,
+};
 
 use super::fixtures::sample_event;
 use crate::{Admission, Result, Store};
@@ -22,11 +24,15 @@ pub(super) fn admission(store: &dyn Store) -> Result<()> {
         project_id: pid.clone(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 1.0,
+        threshold: Threshold::Fixed(1.0),
         action: LimitAction::Alert,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     };
     store.create_limit_rule(&alert)?;
     let alerted =
@@ -44,11 +50,15 @@ pub(super) fn admission(store: &dyn Store) -> Result<()> {
         project_id: pid.clone(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold: 2.5,
+        threshold: Threshold::Fixed(2.5),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     };
     store.create_limit_rule(&block)?;
     let blocked =
@@ -81,11 +91,15 @@ pub(super) fn admission_batch(store: &dyn Store) -> Result<()> {
         project_id: pid.clone(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 3.0,
+        threshold: Threshold::Fixed(3.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })?;
     let batch: Vec<LlmEvent> = (0..5)
         .map(|_| sample_event(&pid, "claude-haiku-4-5", 1, 1, 0.0))
@@ -174,11 +188,15 @@ pub fn admission_race_probe(
         project_id: pid.clone(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: CAP as f64,
+        threshold: Threshold::Fixed(CAP as f64),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })?;
 
     let evs: Vec<LlmEvent> = (0..RACERS)
