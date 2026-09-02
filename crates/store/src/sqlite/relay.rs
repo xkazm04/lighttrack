@@ -9,6 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use lighttrack_core::{RelayStatus, RelayTask, RELAY_ERROR_DEVICE_LOST, RELAY_MAX_STALE_RECLAIMS};
 
+use super::devices::CapabilityFilter;
 use crate::codec::{fmt_ts, json_or_null, parse_ts, val_or_null};
 use crate::Result;
 
@@ -133,12 +134,18 @@ pub(super) fn sweep_dead(conn: &Connection) -> Result<Vec<RelayTask>> {
 pub(super) fn lease(
     conn: &Connection,
     device: &str,
+    capabilities: &[String],
     lease_secs: i64,
     max: usize,
 ) -> Result<Vec<RelayTask>> {
     let now = Utc::now();
     let now_s = fmt_ts(now);
     let deadline = fmt_ts(now + Duration::seconds(lease_secs.max(0)));
+    // The capability narrowing goes INSIDE the sub-select, beside the due/expired predicates: it is
+    // part of what makes a task leasable *by this device*, not a filter on rows already claimed.
+    // Applied outside, the `UPDATE` would still have stamped its fence on the tasks it then dropped
+    // — a device would silently consume claims on work it cannot run.
+    let caps = CapabilityFilter::build(capabilities, 7);
     let sql = format!(
         "UPDATE relay_tasks SET status='leased', device=?1, lease_deadline=?2, lease_fence=?3, \
              attempts=attempts+1, progress=NULL, \
@@ -146,25 +153,28 @@ pub(super) fn lease(
              error = CASE WHEN status='leased' THEN ?5 ELSE error END, \
              updated_at=?3 \
          WHERE id IN (SELECT id FROM relay_tasks \
-                      WHERE (status='queued' AND next_attempt_at <= ?3) \
+                      WHERE ((status='queued' AND next_attempt_at <= ?3) \
                          OR (status='leased' AND lease_deadline < ?3 \
-                             AND failures < max_attempts AND stale_reclaims < ?6) \
+                             AND failures < max_attempts AND stale_reclaims < ?6)) \
+                        AND {} \
                       ORDER BY created_at LIMIT ?4) \
-         RETURNING {COLS}"
+         RETURNING {COLS}",
+        caps.clause
     );
     let mut stmt = conn.prepare(&sql)?;
+    let max = max as i64;
+    let reclaims = RELAY_MAX_STALE_RECLAIMS as i64;
+    let mut args: Vec<&dyn rusqlite::ToSql> = vec![
+        &device,
+        &deadline,
+        &now_s,
+        &max,
+        &RELAY_ERROR_DEVICE_LOST,
+        &reclaims,
+    ];
+    args.extend(caps.values.iter().map(|v| v as &dyn rusqlite::ToSql));
     let raws = stmt
-        .query_map(
-            params![
-                device,
-                deadline,
-                now_s,
-                max as i64,
-                RELAY_ERROR_DEVICE_LOST,
-                RELAY_MAX_STALE_RECLAIMS as i64
-            ],
-            map_raw,
-        )?
+        .query_map(args.as_slice(), map_raw)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(from_raw).collect()
 }

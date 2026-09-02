@@ -362,3 +362,31 @@ CREATE INDEX IF NOT EXISTS idx_schedules_project ON schedules(project_id);
 -- longer burns one of the task's chances. `lease_fence` is the holding device's identity, compared
 -- exactly on settle/renew/progress. See schema/sqlite ADDED_COLUMNS for pre-existing databases.
 CREATE INDEX IF NOT EXISTS idx_relay_lease ON relay_tasks(status, lease_deadline);
+
+-- ===========================================================================================
+-- M18: the enrolled relay device fleet. Self-contained block, appended.
+-- ===========================================================================================
+
+-- Who may lease relay tasks, and what each one can actually run. The relay used to have exactly
+-- one anonymous device: a shared LIGHTTRACK_RELAY_DEVICE_KEY authorized every lease and the
+-- `device` written onto a task was whatever the client asserted, so identity was un-revocable and
+-- routing was blind -- a task went to whoever asked first, including a device whose action library
+-- lacked the action, which burned a real attempt and then a five-hour retry interval to do it
+-- again. `key_hash` is the api_keys scheme verbatim ("<salt>:<sha256hex>"); the raw
+-- `ltd_<prefix>_<secret>` is shown once and never stored. `capabilities` is a JSON array of action
+-- types / "<ns>/*" prefixes -- EMPTY means "everything", the back-compat answer a pre-M18 agent
+-- gives. `relay_tasks.device` keeps its column and now carries this table's `id`.
+CREATE TABLE IF NOT EXISTS devices (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT,                            -- NULL = operator-wide: serves every project
+  name          TEXT NOT NULL,
+  key_prefix    TEXT NOT NULL,
+  key_hash      TEXT NOT NULL,
+  capabilities  TEXT NOT NULL DEFAULT '[]',      -- JSON array; [] = no advertisement = everything
+  last_seen_at  TEXT,                            -- liveness: there is no inbound path to a device
+  agent_version TEXT,
+  created_at    TEXT NOT NULL,
+  revoked       INTEGER NOT NULL DEFAULT 0       -- a flag, not a delete: past tasks still resolve
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_prefix ON devices(key_prefix);
+CREATE INDEX IF NOT EXISTS idx_devices_project ON devices(project_id);

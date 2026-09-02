@@ -81,6 +81,14 @@ pub enum Surface {
     Maintenance,
     /// The store's own per-family latency profile.
     Metrics,
+    /// The enrolled relay device fleet (M18): hashed per-device keys, advertised capabilities,
+    /// liveness, and the eligibility count the enqueue door admits against.
+    ///
+    /// Its own surface rather than part of [`Surface::Relay`], because a backend can host the task
+    /// queue and have no `devices` table — and "nobody is enrolled" is a *load-bearing* answer
+    /// there (it is what admits a legacy shared-key deployment's traffic), so it must never be
+    /// something a missing table says by accident.
+    Devices,
 }
 
 impl Surface {
@@ -106,6 +114,7 @@ impl Surface {
         Surface::Schedules,
         Surface::Maintenance,
         Surface::Metrics,
+        Surface::Devices,
     ];
 
     /// Stable wire/doc name (`snake_case`, matching the `Serialize` impl).
@@ -131,6 +140,7 @@ impl Surface {
             Surface::Schedules => "schedules",
             Surface::Maintenance => "maintenance",
             Surface::Metrics => "metrics",
+            Surface::Devices => "devices",
         }
     }
 
@@ -348,6 +358,18 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
         &["storage_report", "maintenance_pass"],
     ),
     (Surface::Metrics, &["db_metrics"]),
+    (
+        Surface::Devices,
+        &[
+            "create_device",
+            "get_device",
+            "list_devices",
+            "find_device_by_key_prefix",
+            "touch_device",
+            "revoke_device",
+            "count_eligible_devices",
+        ],
+    ),
 ];
 
 /// Method names declared inside `pub trait Store` in `lib.rs`, in source order.

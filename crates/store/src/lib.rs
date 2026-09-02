@@ -24,11 +24,11 @@ use thiserror::Error;
 
 use lighttrack_core::{
     scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, CostEvidence,
-    Dataset, DatasetItem, Job, JobCancel, JobFinish, LeaseHeld, LimitMetric, LimitRule, LimitScope,
-    LimitStatus, LimitWindow, LlmEvent, MarginPolicy, ModelPriceRow, Project, Prompt,
-    PromptVersion, RedactionStamp, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
-    RollupQuery, RollupRow, Rubric, Schedule, Score, ThresholdBasis, TokensByDimension, Trace,
-    TraceSummary,
+    Dataset, DatasetItem, Device, DeviceEligibility, Job, JobCancel, JobFinish, LeaseHeld,
+    LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow, LlmEvent, MarginPolicy,
+    ModelPriceRow, Project, Prompt, PromptVersion, RedactionStamp, RelayCancel, RelayOutcome,
+    RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score,
+    ThresholdBasis, TokensByDimension, Trace, TraceSummary,
 };
 
 pub use capabilities::{Capabilities, Surface};
@@ -1522,9 +1522,20 @@ pub trait Store: Send + Sync {
     }
     /// Atomically lease up to `max` due tasks for `device`: queued tasks past `next_attempt_at`
     /// plus expired leases with attempts to spare (each lease consumes an attempt).
+    ///
+    /// **Filtered by what the device can actually run** (M18). `capabilities` is the leasing
+    /// device's advertised action types — exact names, or `"<ns>/*"` namespace prefixes — and only
+    /// tasks it covers are handed over. Before this the lease gave any due task to whoever asked,
+    /// so a device whose action library lacked the action burned a real attempt reporting "no
+    /// action" and then waited out a five-hour retry interval to do it again.
+    ///
+    /// An **empty** slice means no filter, which is what a pre-M18 agent and the legacy shared
+    /// device key send: a device that suddenly leased nothing after an upgrade would be a worse
+    /// failure than an unfiltered one.
     fn lease_relay_tasks(
         &self,
         _device: &str,
+        _capabilities: &[String],
         _lease_secs: i64,
         _max: usize,
     ) -> Result<Vec<RelayTask>> {
@@ -1667,5 +1678,59 @@ pub trait Store: Send + Sync {
     /// nothing must say so, because an empty report reads as "everything is fast".
     fn db_metrics(&self) -> Result<DbMetricsReport> {
         Err(StoreError::Unsupported("store self-instrumentation"))
+    }
+
+    // --- the relay device fleet (M18, docs/RELAY.md) ---
+    //
+    // `Unsupported` by default rather than an empty fleet, for the reason the whole manifest
+    // exists: "no devices are enrolled" is a *load-bearing* answer here — it is what tells the
+    // enqueue door to admit a task it cannot route (the legacy shared-key deployment) — so a
+    // backend that simply has no `devices` table must not be able to say it by accident.
+
+    /// Enrol one device. `key_hash` is the salted digest of a key shown to the operator exactly
+    /// once; the raw key is never stored.
+    fn create_device(&self, _d: &Device) -> Result<()> {
+        Err(StoreError::Unsupported("the relay device fleet"))
+    }
+    /// One device by id, revoked ones included — an operator listing a fleet has to see what they
+    /// revoked, and a task that named a device must keep resolving after the revocation.
+    fn get_device(&self, _id: &str) -> Result<Option<Device>> {
+        Err(StoreError::Unsupported("the relay device fleet"))
+    }
+    /// The fleet, newest first: one project's devices, or (with `None`) every device on the
+    /// instance — including the operator-wide ones, which belong to no project.
+    fn list_devices(&self, _project: Option<&str>) -> Result<Vec<Device>> {
+        Err(StoreError::Unsupported("the relay device fleet"))
+    }
+    /// Resolve a presented `ltd_<prefix>_<secret>` by its non-secret prefix, so the caller can
+    /// verify the secret against the stored digest. Exactly the `api_keys` lookup shape.
+    fn find_device_by_key_prefix(&self, _prefix: &str) -> Result<Option<Device>> {
+        Err(StoreError::Unsupported("the relay device fleet"))
+    }
+    /// Record that this device is alive and what it currently advertises: `last_seen_at = now`,
+    /// plus the capability set and agent version it reported.
+    ///
+    /// The device's own advertisement is authoritative on purpose. A stored capability list an
+    /// operator typed at enrolment goes stale the moment somebody adds an action folder, and a
+    /// stale list is exactly the routing failure this surface exists to end.
+    fn touch_device(
+        &self,
+        _id: &str,
+        _capabilities: &[String],
+        _agent_version: Option<&str>,
+    ) -> Result<()> {
+        Err(StoreError::Unsupported("the relay device fleet"))
+    }
+    /// Revoke a device: it authenticates nothing and is eligible for nothing. A flag, not a delete,
+    /// so the tasks it already ran keep naming a device that still resolves. `Ok(false)` = no such
+    /// device.
+    fn revoke_device(&self, _id: &str) -> Result<bool> {
+        Err(StoreError::Unsupported("the relay device fleet"))
+    }
+    /// How much of the fleet could run `action_type` — both figures, because one count cannot tell
+    /// "nothing is enrolled" from "nothing advertises this", and the enqueue door treats those
+    /// oppositely (see [`DeviceEligibility::admit`]).
+    fn count_eligible_devices(&self, _action_type: &str) -> Result<DeviceEligibility> {
+        Err(StoreError::Unsupported("the relay device fleet"))
     }
 }

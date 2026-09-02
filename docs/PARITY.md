@@ -30,6 +30,7 @@ conformance suite asserts that refusal, so a gap can never quietly become an emp
 | `schedules` | full | full | refused |
 | `maintenance` | full | refused | refused |
 | `metrics` | full | refused | refused |
+| `devices` | full | full | refused |
 
 ## Atomic admission
 
@@ -65,3 +66,4 @@ cap that reads as enforced is the failure this row exists to name.
 - **`schedules`** — `create_schedule`, `get_schedule`, `list_schedules`, `update_schedule`, `delete_schedule`, `due_schedules`
 - **`maintenance`** — `storage_report`, `maintenance_pass`
 - **`metrics`** — `db_metrics`
+- **`devices`** — `create_device`, `get_device`, `list_devices`, `find_device_by_key_prefix`, `touch_device`, `revoke_device`, `count_eligible_devices`

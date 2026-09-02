@@ -11,6 +11,7 @@
 mod benchmarks;
 mod collective;
 mod datasets;
+mod devices;
 mod events;
 mod forecast;
 mod jobs;
@@ -55,10 +56,11 @@ use rusqlite::Connection;
 use serde_json::Value;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
-    JobCancel, JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project,
-    Prompt, PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
-    RollupQuery, RollupRow, Rubric, Schedule, Score, TokensByDimension, TraceSummary,
+    ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem,
+    Device, DeviceEligibility, Job, JobCancel, JobFinish, LeaseHeld, LimitRule, LimitScope,
+    LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayCancel, RelayOutcome,
+    RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score,
+    TokensByDimension, TraceSummary,
 };
 
 use crate::{
@@ -827,10 +829,11 @@ impl Store for SqliteStore {
     fn lease_relay_tasks(
         &self,
         device: &str,
+        capabilities: &[String],
         lease_secs: i64,
         max: usize,
     ) -> Result<Vec<RelayTask>> {
-        self.with(|c| relay::lease(c, device, lease_secs, max))
+        self.with(|c| relay::lease(c, device, capabilities, lease_secs, max))
     }
     fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {
         self.with(relay::sweep_dead)
@@ -912,5 +915,33 @@ impl Store for SqliteStore {
         // The write connection, because a checkpoint and a vacuum are writers. One chunk per call:
         // the lock is released before the caller re-reads its activity gauge, never held across it.
         self.with_op(DbOp::Maintenance, |c| maintenance::pass(c, req))
+    }
+
+    // --- the relay device fleet (M18, see [`devices`]) ---
+    fn create_device(&self, d: &Device) -> Result<()> {
+        self.with(|c| devices::create(c, d))
+    }
+    fn get_device(&self, id: &str) -> Result<Option<Device>> {
+        self.read(|c| devices::get(c, id))
+    }
+    fn list_devices(&self, project: Option<&str>) -> Result<Vec<Device>> {
+        self.read(|c| devices::list(c, project))
+    }
+    fn find_device_by_key_prefix(&self, prefix: &str) -> Result<Option<Device>> {
+        self.read(|c| devices::find_by_key_prefix(c, prefix))
+    }
+    fn touch_device(
+        &self,
+        id: &str,
+        capabilities: &[String],
+        agent_version: Option<&str>,
+    ) -> Result<()> {
+        self.with(|c| devices::touch(c, id, capabilities, agent_version))
+    }
+    fn revoke_device(&self, id: &str) -> Result<bool> {
+        self.with(|c| devices::revoke(c, id))
+    }
+    fn count_eligible_devices(&self, action_type: &str) -> Result<DeviceEligibility> {
+        self.read(|c| devices::count_eligible(c, action_type))
     }
 }

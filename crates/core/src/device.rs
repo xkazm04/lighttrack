@@ -101,6 +101,50 @@ pub fn capability_matches(capabilities: &[String], action_type: &str) -> bool {
     })
 }
 
+/// How much of the fleet could take one action type, as two numbers rather than one.
+///
+/// One count could not distinguish the two situations the enqueue door has to treat oppositely:
+/// **no devices are enrolled at all** (the legacy shared-key deployment — accept, there is nothing
+/// to route against) and **devices are enrolled and none advertises this** (refuse — it will never
+/// run). `enrolled` counts unrevoked devices; `eligible` counts the subset that serves the action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceEligibility {
+    pub enrolled: u32,
+    pub eligible: u32,
+}
+
+impl DeviceEligibility {
+    /// Count both figures over a device list — the shared rule, so every backend and the API's own
+    /// admission check agree on what "eligible" means instead of each re-deriving it.
+    pub fn count<'a>(devices: impl IntoIterator<Item = &'a Device>, action_type: &str) -> Self {
+        let mut e = DeviceEligibility {
+            enrolled: 0,
+            eligible: 0,
+        };
+        for d in devices {
+            if d.revoked {
+                continue;
+            }
+            e.enrolled += 1;
+            e.eligible += u32::from(d.serves(action_type));
+        }
+        e
+    }
+
+    /// The verdict these counts imply. An **empty fleet** admits: a deployment still on the legacy
+    /// shared device key has no rows here, and refusing its traffic would be this feature breaking
+    /// the relay it was meant to make reliable.
+    pub fn admit(&self, action_type: &str) -> RelayAdmission {
+        if self.eligible > 0 || self.enrolled == 0 {
+            RelayAdmission::Queued {
+                eligible_devices: self.eligible,
+            }
+        } else {
+            RelayAdmission::unroutable(action_type, self.enrolled)
+        }
+    }
+}
+
 /// What the enqueue door decided about a relay task — the answer to "will anything ever run this?".
 ///
 /// A value, not an error, and a **closed vocabulary**: the failure it replaces was silence. Enqueue
@@ -183,6 +227,70 @@ mod tests {
         assert!(!d.serves("xprice/x"));
         // …and the stored digest never leaves the database on the way to a response.
         assert!(d.redacted().key_hash.is_empty());
+    }
+
+    fn dev(name: &str, caps: &[&str]) -> Device {
+        Device {
+            id: name.into(),
+            project_id: None,
+            name: name.into(),
+            key_prefix: "abcd1234".into(),
+            key_hash: "salt:digest".into(),
+            capabilities: caps.iter().map(|s| (*s).to_string()).collect(),
+            last_seen_at: None,
+            agent_version: None,
+            created_at: Utc::now(),
+            revoked: false,
+        }
+    }
+
+    #[test]
+    fn an_empty_fleet_admits_but_a_fleet_that_cannot_run_it_refuses() {
+        // The distinction one count could not make. No rows at all is the legacy shared-key
+        // deployment — refusing its traffic would be this feature breaking the relay.
+        let empty = DeviceEligibility::count(&[], "xprice/foo");
+        assert_eq!(empty.enrolled, 0);
+        assert_eq!(
+            empty.admit("xprice/foo"),
+            RelayAdmission::Queued {
+                eligible_devices: 0
+            }
+        );
+
+        // Enrolled, and none of them advertises it: this task would never run, so it is refused at
+        // the door instead of dead-lettering four attempts later.
+        let fleet = vec![dev("a", &["ops/*"]), dev("b", &["other/thing"])];
+        let e = DeviceEligibility::count(&fleet, "xprice/foo");
+        assert_eq!(
+            e,
+            DeviceEligibility {
+                enrolled: 2,
+                eligible: 0
+            }
+        );
+        assert!(e.admit("xprice/foo").is_refused());
+
+        // One device that serves it is enough, and the count says how much of the fleet does.
+        let fleet = vec![dev("a", &["xprice/*"]), dev("b", &["ops/*"])];
+        assert_eq!(
+            DeviceEligibility::count(&fleet, "xprice/foo").admit("xprice/foo"),
+            RelayAdmission::Queued {
+                eligible_devices: 1
+            }
+        );
+
+        // A revoked device counts for neither number — an eligibility figure that included it
+        // would promise a fleet that cannot answer.
+        let mut revoked = dev("a", &["xprice/*"]);
+        revoked.revoked = true;
+        let e = DeviceEligibility::count(&[revoked], "xprice/foo");
+        assert_eq!(
+            e,
+            DeviceEligibility {
+                enrolled: 0,
+                eligible: 0
+            }
+        );
     }
 
     #[test]

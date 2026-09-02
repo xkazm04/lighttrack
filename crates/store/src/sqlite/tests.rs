@@ -2173,7 +2173,7 @@ fn relay_lease_settle_success_roundtrip() {
     let t = relay_task("p1", "xprice/summary", 4);
     s.create_relay_task(&t).unwrap();
 
-    let leased = s.lease_relay_tasks("dev-1", 600, 5).unwrap();
+    let leased = s.lease_relay_tasks("dev-1", &[], 600, 5).unwrap();
     assert_eq!(leased.len(), 1);
     assert_eq!(leased[0].status, "leased");
     assert_eq!(leased[0].attempts, 1);
@@ -2181,7 +2181,10 @@ fn relay_lease_settle_success_roundtrip() {
     assert_eq!(leased[0].payload["sku"], "A-1");
 
     // Held lease is not re-leasable.
-    assert!(s.lease_relay_tasks("dev-1", 600, 5).unwrap().is_empty());
+    assert!(s
+        .lease_relay_tasks("dev-1", &[], 600, 5)
+        .unwrap()
+        .is_empty());
 
     let fence = leased[0].lease_fence.expect("a lease stamps its fence");
     let done = settled(
@@ -2216,7 +2219,7 @@ fn relay_failure_requeues_then_dead_letters() {
     s.create_relay_task(&t).unwrap();
 
     // Attempt 1 fails → back to queued (zero interval ⇒ due immediately), error recorded.
-    s.lease_relay_tasks("dev-1", 600, 1).unwrap();
+    s.lease_relay_tasks("dev-1", &[], 600, 1).unwrap();
     let requeued = settled(
         s.settle_relay_task(
             &t.id,
@@ -2234,7 +2237,7 @@ fn relay_failure_requeues_then_dead_letters() {
     assert_eq!(requeued.error.as_deref(), Some("boom"));
 
     // Attempt 2 fails → the RETRY budget is exhausted → dead.
-    assert_eq!(s.lease_relay_tasks("dev-1", 600, 1).unwrap().len(), 1);
+    assert_eq!(s.lease_relay_tasks("dev-1", &[], 600, 1).unwrap().len(), 1);
     let dead = settled(
         s.settle_relay_task(
             &t.id,
@@ -2256,7 +2259,7 @@ fn relay_deferred_hands_the_attempt_back() {
     let t = relay_task("p1", "xprice/summary", 1);
     s.create_relay_task(&t).unwrap();
 
-    s.lease_relay_tasks("dev-1", 600, 1).unwrap();
+    s.lease_relay_tasks("dev-1", &[], 600, 1).unwrap();
     let deferred = settled(
         s.settle_relay_task(
             &t.id,
@@ -2273,7 +2276,7 @@ fn relay_deferred_hands_the_attempt_back() {
     assert_eq!(deferred.failures, 0); // …and records no failure: the window is not the action
 
     // Still leasable despite max_attempts = 1.
-    let released = s.lease_relay_tasks("dev-1", 600, 1).unwrap();
+    let released = s.lease_relay_tasks("dev-1", &[], 600, 1).unwrap();
     assert_eq!(released.len(), 1);
     assert_eq!(released[0].attempts, 1);
 }
@@ -2293,7 +2296,7 @@ fn relay_expired_lease_is_reclaimed_then_dead_lettered_on_the_device_budget() {
 
     // Zero-second leases expire immediately (the device "vanished") — repeatedly.
     for expected in 0..lighttrack_core::RELAY_MAX_STALE_RECLAIMS {
-        let leased = s.lease_relay_tasks("dev-1", 0, 5).unwrap();
+        let leased = s.lease_relay_tasks("dev-1", &[], 0, 5).unwrap();
         assert_eq!(leased.len(), 1, "still reclaimable at {expected} deaths");
         assert_eq!(leased[0].stale_reclaims, expected);
         assert_eq!(
@@ -2306,7 +2309,7 @@ fn relay_expired_lease_is_reclaimed_then_dead_lettered_on_the_device_budget() {
         );
     }
     // The last reclaim this task gets: it spends the final death.
-    let last = s.lease_relay_tasks("dev-1", 0, 5).unwrap();
+    let last = s.lease_relay_tasks("dev-1", &[], 0, 5).unwrap();
     assert_eq!(last.len(), 1);
     assert_eq!(
         last[0].stale_reclaims,
@@ -2320,7 +2323,10 @@ fn relay_expired_lease_is_reclaimed_then_dead_lettered_on_the_device_budget() {
         .contains("device lost"));
 
     // Budget gone: not re-leasable, and the sweep dead-letters it (returning it, for alerting).
-    assert!(s.lease_relay_tasks("dev-2", 600, 5).unwrap().is_empty());
+    assert!(s
+        .lease_relay_tasks("dev-2", &[], 600, 5)
+        .unwrap()
+        .is_empty());
     let dead = s.sweep_relay_dead().unwrap();
     assert_eq!(dead.len(), 1);
     assert_eq!(dead[0].id, t.id);
