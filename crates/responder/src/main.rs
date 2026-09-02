@@ -85,10 +85,7 @@ async fn main() -> anyhow::Result<()> {
 
     // An unsigned /webhook on a non-loopback bind is an unauthenticated way to spend money and
     // edit a repo. Say so once, loudly, rather than letting it be a quiet default.
-    if cfg.webhook_secret.is_none()
-        && !cfg.bind.starts_with("127.")
-        && !cfg.bind.starts_with("localhost")
-    {
+    if cfg.webhook_secret.is_none() && !config::bind_is_loopback(&cfg.bind) {
         eprintln!(
             "[responder] WARNING: bound to {} with no LIGHTTRACK_RESPONDER_WEBHOOK_SECRET — \
              anyone who can reach this port can spend a Claude run and trigger an auto-fix",

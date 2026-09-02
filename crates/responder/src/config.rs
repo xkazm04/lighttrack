@@ -74,9 +74,18 @@ impl Config {
     pub(crate) fn from_env() -> anyhow::Result<Self> {
         let map_path = env_or("LIGHTTRACK_RESPONDER_MAP", "responder.map.json");
         let (mut defaults, projects) = load_map(&map_path);
-        // Env override for the one setting we tune per-run during testing.
-        if let Some(t) = env_opt("LIGHTTRACK_RESPONDER_TIMEOUT_SECS").and_then(|s| s.parse().ok()) {
-            defaults.timeout_secs = t;
+        // Env override for the one setting we tune per-run during testing. Present-but-unparseable
+        // is said out loud: `=4m` used to be silently ignored, and the map file's value ran instead
+        // while the operator believed their override was in force.
+        if let Some(raw) = env_opt("LIGHTTRACK_RESPONDER_TIMEOUT_SECS") {
+            match raw.trim().parse::<u64>() {
+                Ok(t) => defaults.timeout_secs = t,
+                Err(_) => eprintln!(
+                    "[responder] LIGHTTRACK_RESPONDER_TIMEOUT_SECS={raw:?} is not a number of \
+                     seconds; keeping {}s",
+                    defaults.timeout_secs
+                ),
+            }
         }
         Ok(Config {
             bind: env_or("LIGHTTRACK_RESPONDER_BIND", "127.0.0.1:8790"),
@@ -170,6 +179,21 @@ impl Defaults {
     }
 }
 
+/// Is this bind address reachable only from the machine itself? Decides whether an unsigned
+/// `/webhook` is a local convenience or an open door — so it has to recognise every loopback
+/// spelling, not only the IPv4 one (`[::1]:8790` was warned about as if it were public).
+pub(crate) fn bind_is_loopback(bind: &str) -> bool {
+    let host = bind
+        .strip_prefix('[')
+        .and_then(|r| r.split(']').next())
+        .unwrap_or_else(|| bind.rsplit_once(':').map_or(bind, |(h, _)| h));
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+}
+
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key)
         .ok()
@@ -179,4 +203,33 @@ fn env_or(key: &str, default: &str) -> String {
 
 fn env_opt(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bind_is_loopback;
+
+    /// The unsigned-webhook warning keys on this. Every loopback spelling is local; anything routable
+    /// is not — and the IPv6 literal is the one the old prefix check got wrong.
+    #[test]
+    fn loopback_is_recognised_in_every_spelling_and_nothing_else_is() {
+        for local in [
+            "127.0.0.1:8790",
+            "127.1.2.3:80",
+            "localhost:8790",
+            "[::1]:8790",
+            "LOCALHOST:1",
+        ] {
+            assert!(bind_is_loopback(local), "{local}");
+        }
+        for open in [
+            "0.0.0.0:8790",
+            "[::]:8790",
+            "10.0.0.5:8790",
+            "192.168.1.2:80",
+            "example.test:80",
+        ] {
+            assert!(!bind_is_loopback(open), "{open}");
+        }
+    }
 }
