@@ -23,7 +23,10 @@ use crate::{anthropic_api, Determinism, EngineConfig, EngineError, GenOutcome, R
 /// Outbound provider calls are bounded so a black-holed/overloaded endpoint can't hang an
 /// (unbudgeted) benchmark worker forever, and a pathological body can't be buffered into memory.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Long enough for a reasoning model to finish a rubric verdict. At 30s a thinking model that
+/// takes 45s timed out three times in a row — 90s spent, the sample lost, and the retry policy
+/// working exactly as designed against a call that was never going to fit.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// Hard ceiling on a single provider response body (a completion is KBs; this stops a multi-GB body).
 const MAX_BODY_BYTES: u64 = 32 * 1024 * 1024;
 
