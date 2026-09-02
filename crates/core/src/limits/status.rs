@@ -173,7 +173,10 @@ impl LimitStatus {
     /// window to age out ([`LimitWindow::retry_after_secs`]); a graduated shed is transient
     /// back-pressure, so it asks for a short pause that grows with the pressure (1–15s).
     pub fn retry_after_secs(&self) -> u64 {
-        if self.breached {
+        // An unpriceable cap is not breached, but nothing about it changes on a retry either — an
+        // operator has to add a price. It used to fall into the shed branch and advertise a 1s
+        // pause, so a cooperating client hammered a refusal that could only ever answer the same.
+        if self.breached || self.unpriceable() {
             self.window.retry_after_secs()
         } else {
             1 + (14.0 * self.shed_fraction.clamp(0.0, 1.0)).ceil() as u64

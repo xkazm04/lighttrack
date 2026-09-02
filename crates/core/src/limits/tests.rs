@@ -130,6 +130,17 @@ fn validate_rejects_bad_warn_at() {
 }
 
 #[test]
+fn validate_rejects_a_blank_scope_value() {
+    let mut r = rule();
+    r.scope = Some(LimitScope::Model("   ".into()));
+    assert!(r.validate().is_err(), "a blank model scope caps nothing");
+    r.scope = Some(LimitScope::ApiKey(String::new()));
+    assert!(r.validate().is_err());
+    r.scope = Some(LimitScope::Customer("cus_1".into()));
+    assert!(r.validate().is_ok());
+}
+
+#[test]
 fn breaches_at_threshold() {
     assert!(rule().evaluate(10.0).breached);
     assert!(rule().evaluate(12.5).breached);
@@ -179,6 +190,8 @@ fn an_unpriceable_cost_cap_rejects_even_though_nothing_breached() {
         s.unpriceable() && s.rejects_ingest(),
         "an unmeasurable cap must still refuse ingest"
     );
+    // ...and the retry hint is the window's, not the 1s shed pause: a retry changes nothing here.
+    assert_eq!(s.retry_after_secs(), LimitWindow::Day.retry_after_secs());
     // Alert-only rules are observe-only in every state, unpriceable included.
     r.action = LimitAction::Alert;
     assert!(!r.evaluate_with_evidence(0.0, Some(ev)).rejects_ingest());
