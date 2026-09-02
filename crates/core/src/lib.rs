@@ -12,6 +12,7 @@ pub mod dataset;
 pub mod error;
 pub mod event;
 pub mod forecast;
+pub mod forecast_gate;
 pub mod job;
 pub mod job_kinds;
 pub mod lease;
@@ -47,6 +48,7 @@ pub use dataset::{Dataset, DatasetItem};
 pub use error::LtError;
 pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
+pub use forecast_gate::{Refusal, FLAT_BAND, MIN_OBSERVED_DAYS, MIN_SPAN_DAYS};
 pub use job::{
     job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_PREFIX_FAILURE,
     JOB_ERROR_WORKER_LOST,
