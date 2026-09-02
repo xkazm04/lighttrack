@@ -2039,14 +2039,14 @@ fn job_queue_claim_finish() {
     };
     s.create_job(&job).unwrap();
 
-    let claimed = s.claim_job(now).unwrap().unwrap();
+    let claimed = s.claim_job(now, &[]).unwrap().unwrap();
     assert_eq!(claimed.id, "j1");
     assert_eq!(claimed.status, "running");
     assert_eq!(claimed.attempts, 1);
     assert_eq!(claimed.payload["benchmark_id"], "b1");
 
     assert!(s
-        .claim_job(now - chrono::Duration::seconds(1))
+        .claim_job(now - chrono::Duration::seconds(1), &[])
         .unwrap()
         .is_none());
 
@@ -2131,6 +2131,10 @@ fn relay_task(project: &str, action: &str, max_attempts: u32) -> lighttrack_core
         payload: serde_json::json!({ "sku": "A-1" }),
         status: "queued".into(),
         attempts: 0,
+        failures: 0,
+        stale_reclaims: 0,
+        lease_fence: None,
+        progress: None,
         max_attempts,
         retry_interval_secs: 0,
         idempotency_key: None,
@@ -2142,6 +2146,19 @@ fn relay_task(project: &str, action: &str, max_attempts: u32) -> lighttrack_core
         created_at: now,
         updated_at: now,
     }
+}
+
+/// Unwrap a settle that is expected to land, naming what refused instead.
+fn settled(v: lighttrack_core::RelaySettle) -> lighttrack_core::RelayTask {
+    match v {
+        lighttrack_core::RelaySettle::Settled(t) => *t,
+        other => panic!("expected the settle to land, got {other:?}"),
+    }
+}
+
+/// The fence the store handed the current holder at lease time.
+fn fence_of(s: &SqliteStore, id: &str) -> Option<chrono::DateTime<Utc>> {
+    s.get_relay_task(id).unwrap().unwrap().lease_fence
 }
 
 #[test]
@@ -2162,22 +2179,28 @@ fn relay_lease_settle_success_roundtrip() {
     // Held lease is not re-leasable.
     assert!(s.lease_relay_tasks("dev-1", 600, 5).unwrap().is_empty());
 
-    let done = s
-        .settle_relay_task(
+    let fence = leased[0].lease_fence.expect("a lease stamps its fence");
+    let done = settled(
+        s.settle_relay_task(
             &t.id,
+            Some(fence),
             &RelayOutcome::Succeeded(serde_json::json!({ "ok": true })),
         )
-        .unwrap()
-        .unwrap();
+        .unwrap(),
+    );
     assert_eq!(done.status, "succeeded");
     assert_eq!(done.result["ok"], true);
 
-    // A duplicate result report is harmless: the settled row comes back unchanged.
-    let again = s
-        .settle_relay_task(&t.id, &RelayOutcome::Failed("late duplicate".into()))
-        .unwrap()
-        .unwrap();
-    assert_eq!(again.status, "succeeded");
+    // A duplicate result report is refused rather than re-applied — and the verdict stands.
+    assert!(matches!(
+        s.settle_relay_task(&t.id, Some(fence), &RelayOutcome::Failed("late".into()))
+            .unwrap(),
+        lighttrack_core::RelaySettle::NotHeld { .. }
+    ));
+    assert_eq!(
+        s.get_relay_task(&t.id).unwrap().unwrap().status,
+        "succeeded"
+    );
 }
 
 #[test]
@@ -2190,22 +2213,35 @@ fn relay_failure_requeues_then_dead_letters() {
 
     // Attempt 1 fails → back to queued (zero interval ⇒ due immediately), error recorded.
     s.lease_relay_tasks("dev-1", 600, 1).unwrap();
-    let requeued = s
-        .settle_relay_task(&t.id, &RelayOutcome::Failed("boom".into()))
-        .unwrap()
-        .unwrap();
+    let requeued = settled(
+        s.settle_relay_task(
+            &t.id,
+            fence_of(&s, &t.id),
+            &RelayOutcome::Failed("boom".into()),
+        )
+        .unwrap(),
+    );
     assert_eq!(requeued.status, "queued");
     assert_eq!(requeued.attempts, 1);
+    assert_eq!(
+        requeued.failures, 1,
+        "a reported failure is the retry budget"
+    );
     assert_eq!(requeued.error.as_deref(), Some("boom"));
 
-    // Attempt 2 fails → attempts exhausted → dead.
+    // Attempt 2 fails → the RETRY budget is exhausted → dead.
     assert_eq!(s.lease_relay_tasks("dev-1", 600, 1).unwrap().len(), 1);
-    let dead = s
-        .settle_relay_task(&t.id, &RelayOutcome::Failed("boom again".into()))
-        .unwrap()
-        .unwrap();
+    let dead = settled(
+        s.settle_relay_task(
+            &t.id,
+            fence_of(&s, &t.id),
+            &RelayOutcome::Failed("boom again".into()),
+        )
+        .unwrap(),
+    );
     assert_eq!(dead.status, "dead");
     assert_eq!(dead.attempts, 2);
+    assert_eq!(dead.failures, 2);
 }
 
 #[test]
@@ -2217,18 +2253,20 @@ fn relay_deferred_hands_the_attempt_back() {
     s.create_relay_task(&t).unwrap();
 
     s.lease_relay_tasks("dev-1", 600, 1).unwrap();
-    let deferred = s
-        .settle_relay_task(
+    let deferred = settled(
+        s.settle_relay_task(
             &t.id,
+            fence_of(&s, &t.id),
             &RelayOutcome::Deferred {
                 retry_after_secs: Some(0),
                 reason: Some("subscription window exhausted".into()),
             },
         )
-        .unwrap()
-        .unwrap();
+        .unwrap(),
+    );
     assert_eq!(deferred.status, "queued");
-    assert_eq!(deferred.attempts, 0); // handed back — deferral never burns an attempt
+    assert_eq!(deferred.attempts, 0); // handed back — deferral never burns a claim
+    assert_eq!(deferred.failures, 0); // …and records no failure: the window is not the action
 
     // Still leasable despite max_attempts = 1.
     let released = s.lease_relay_tasks("dev-1", 600, 1).unwrap();
@@ -2236,35 +2274,54 @@ fn relay_deferred_hands_the_attempt_back() {
     assert_eq!(released[0].attempts, 1);
 }
 
+/// A device that vanishes is not an action that failed, and the two have separate budgets. An
+/// expired lease is RECLAIMED while the device-death budget lasts — counted as a death, and marked
+/// as one rather than invented as a failure — and only the sweep, once that budget is gone, kills it.
+///
+/// A single counter could not tell the two apart: a task whose device dies every time never reports
+/// a failure, so a `max_attempts`-only rule either re-leased it forever or dead-lettered work that
+/// had never actually been tried.
 #[test]
-fn relay_expired_lease_is_reclaimed_or_dead_lettered() {
+fn relay_expired_lease_is_reclaimed_then_dead_lettered_on_the_device_budget() {
     let s = SqliteStore::open_in_memory().unwrap();
-    // Two tasks: one with attempts to spare, one on its last attempt.
-    let spare = relay_task("p1", "a/retry", 2);
-    let last = relay_task("p1", "a/last", 1);
-    s.create_relay_task(&spare).unwrap();
-    s.create_relay_task(&last).unwrap();
+    let t = relay_task("p1", "a/retry", 9); // retries to spare: only device deaths can end this
+    s.create_relay_task(&t).unwrap();
 
-    // Zero-second leases expire immediately (the device "vanished").
-    assert_eq!(s.lease_relay_tasks("dev-1", 0, 5).unwrap().len(), 2);
+    // Zero-second leases expire immediately (the device "vanished") — repeatedly.
+    for expected in 0..lighttrack_core::RELAY_MAX_STALE_RECLAIMS {
+        let leased = s.lease_relay_tasks("dev-1", 0, 5).unwrap();
+        assert_eq!(leased.len(), 1, "still reclaimable at {expected} deaths");
+        assert_eq!(leased[0].stale_reclaims, expected);
+        assert_eq!(
+            leased[0].failures, 0,
+            "a dead device never failed the action"
+        );
+        assert!(
+            s.sweep_relay_dead().unwrap().is_empty(),
+            "a task with device budget left must be reclaimed, not killed"
+        );
+    }
+    // The last reclaim this task gets: it spends the final death.
+    let last = s.lease_relay_tasks("dev-1", 0, 5).unwrap();
+    assert_eq!(last.len(), 1);
+    assert_eq!(
+        last[0].stale_reclaims,
+        lighttrack_core::RELAY_MAX_STALE_RECLAIMS
+    );
+    let held = s.get_relay_task(&t.id).unwrap().unwrap();
+    assert!(held
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("device lost"));
 
-    // The sweep dead-letters the exhausted task (and returns it, for alerting) …
+    // Budget gone: not re-leasable, and the sweep dead-letters it (returning it, for alerting).
+    assert!(s.lease_relay_tasks("dev-2", 600, 5).unwrap().is_empty());
     let dead = s.sweep_relay_dead().unwrap();
     assert_eq!(dead.len(), 1);
-    assert_eq!(dead[0].id, last.id);
+    assert_eq!(dead[0].id, t.id);
     assert_eq!(dead[0].status, "dead");
-    assert_eq!(
-        dead[0].error.as_deref(),
-        Some("lease expired without a result")
-    );
     assert!(s.sweep_relay_dead().unwrap().is_empty()); // idempotent
-
-    // … while the one with attempts to spare is re-leased on attempt 2.
-    let reclaimed = s.lease_relay_tasks("dev-2", 600, 5).unwrap();
-    assert_eq!(reclaimed.len(), 1);
-    assert_eq!(reclaimed[0].id, spare.id);
-    assert_eq!(reclaimed[0].attempts, 2);
-    assert_eq!(reclaimed[0].device.as_deref(), Some("dev-2"));
 }
 
 #[test]
@@ -2480,7 +2537,7 @@ fn a_database_predating_job_failure_accounting_migrates_on_open() {
 
     // …and the widened table serves the statements that now reference the new columns.
     let claimed = s
-        .claim_job(Utc::now())
+        .claim_job(Utc::now(), &[])
         .unwrap()
         .expect("claim the legacy job");
     assert_eq!(claimed.id, "old-1");
@@ -2538,7 +2595,7 @@ fn cancel_is_race_safe_against_stale_reclaim() {
     s.create_job(&mk("a")).unwrap();
     assert_eq!(s.cancel_job("a").unwrap(), Some(JobCancel::Cancelled));
     assert!(
-        s.claim_job(Utc::now()).unwrap().is_none(),
+        s.claim_job(Utc::now(), &[]).unwrap().is_none(),
         "a cancelled job is not claimable"
     );
 
@@ -2547,11 +2604,11 @@ fn cancel_is_race_safe_against_stale_reclaim() {
     // `status='running' AND claimed_at < stale`, so a cancelled runaway was handed straight back to
     // the next worker and kept spending.
     s.create_job(&mk("b")).unwrap();
-    let claimed = s.claim_job(Utc::now()).unwrap().expect("claim b");
+    let claimed = s.claim_job(Utc::now(), &[]).unwrap().expect("claim b");
     assert_eq!(claimed.id, "b");
     assert_eq!(s.cancel_job("b").unwrap(), Some(JobCancel::Cancelling));
     assert!(
-        s.claim_job(Utc::now() + chrono::Duration::seconds(1))
+        s.claim_job(Utc::now() + chrono::Duration::seconds(1), &[])
             .unwrap()
             .is_none(),
         "a cancelling job must never be reclaimed as stale"
@@ -2573,7 +2630,7 @@ fn cancel_is_race_safe_against_stale_reclaim() {
     let done = s.get_job("b").unwrap().unwrap();
     assert_eq!((done.status.as_str(), done.failures), ("cancelled", 0));
     assert!(s
-        .claim_job(Utc::now() + chrono::Duration::seconds(1))
+        .claim_job(Utc::now() + chrono::Duration::seconds(1), &[])
         .unwrap()
         .is_none());
 }

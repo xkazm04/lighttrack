@@ -59,10 +59,20 @@
 //!                                        is spending" BEFORE a cap trips, and "which key drove this
 //!                                        breach" after — over the API, not only via an alert channel.
 //!                                        501 `unsupported` on backends without the grouped query.
+//!   POST /v1/jobs                        enqueue any job kind (admin; payload validated per kind)
+//!   POST/GET /v1/projects/:id/schedules  stored recurrence: a job kind + payload on an interval
+//!   GET  /v1/schedules                   every recurring workload in this deployment (admin)
+//!   PUT/DELETE /v1/schedules/:id         patch (incl. enable/disable) or remove a schedule
+//!   GET  /v1/schedules/:id/runs          the jobs one schedule has produced
 //!   POST /v1/relay/tasks                 enqueue a device task (GET ?project=&status=&limit= lists)
 //!   GET  /v1/relay/tasks/:id             task status/result (the originating app polls this)
-//!   POST /v1/relay/lease                 device: lease due tasks (device key; outbound-only)
-//!   POST /v1/relay/tasks/:id/result      device: report succeeded | failed | deferred
+//!   POST /v1/relay/lease                 device: lease due tasks (device key; outbound-only).
+//!                                        Answers { tasks, lease_secs, renew_secs } — the TTL is
+//!                                        detection latency now, not "how long a run may take"
+//!   POST /v1/relay/tasks/:id/renew       device: heartbeat, fenced (409 = stop, you lost it)
+//!   POST /v1/relay/tasks/:id/progress    device: liveness detail, fenced
+//!   POST /v1/relay/tasks/:id/cancel      stop a queued/leased task (own project key or admin)
+//!   POST /v1/relay/tasks/:id/result      device: report succeeded | failed | deferred, fenced
 //!   POST /v1/revenue                     record revenue (manual / billing sync) for profit tracking
 //!   GET  /v1/margin?by=customer|product&since=&until=&below=<pct>   revenue − LLM cost rollup
 //!   GET  /v1/margin/trend?by=&days=&top=   per-day revenue/cost/margin series per customer/product
@@ -105,6 +115,8 @@
 //!      LIGHTTRACK_FORECAST_SWEEP_SECS (cadence of the scheduled budget-ETA / margin-erosion alert
 //!        sweep; unset or 0 = off, floor 60s), LIGHTTRACK_FORECAST_SWEEP_HORIZON /
 //!        LIGHTTRACK_FORECAST_SWEEP_LOOKBACK (projection shape; default 14/14 days),
+//!      LIGHTTRACK_SCHEDULE_SWEEP_SECS (cadence of the stored-schedule sweep, which also reaps
+//!        dead relay leases; default 60, floor 10, 0 = off — stored schedules then never fire),
 //!      LIGHTTRACK_MAINTENANCE_SECS (how often the quiet-window maintenance gate is evaluated;
 //!        default 300, floor 30, 0 = no maintenance at all — the journal and the freelist then grow
 //!        unattended), LIGHTTRACK_MAINTENANCE_MIN_INTERVAL_SECS (minimum spacing between passes;
@@ -148,6 +160,7 @@ mod forecast_sweep;
 mod guards;
 mod idempotency;
 mod jobs;
+mod jobs_enqueue;
 mod limits;
 mod limits_usage;
 mod logging;
@@ -161,9 +174,14 @@ mod prompts;
 mod redact;
 mod rejections;
 mod relay;
+mod relay_lease;
+mod relay_result;
 mod revenue;
 mod rollup;
 mod rubrics;
+mod schedule_migrate;
+mod schedule_sweep;
+mod schedules;
 mod scores;
 mod shed;
 mod state;
@@ -190,6 +208,8 @@ mod tests_margin_policy;
 mod tests_relay;
 #[cfg(test)]
 mod tests_rollup;
+#[cfg(test)]
+mod tests_schedules;
 #[cfg(test)]
 mod tests_storage;
 #[cfg(test)]
@@ -334,6 +354,8 @@ async fn main() -> anyhow::Result<()> {
 
     let sweep = forecast_sweep::SweepConfig::from_env();
     let sweep_desc = forecast_sweep::describe(sweep);
+    let sched_sweep = schedule_sweep::SweepConfig::from_env();
+    let sched_sweep_desc = schedule_sweep::describe(sched_sweep);
     // The whole runtime configuration as one indexed event: "why did prod behave differently" is a
     // field comparison across two boots, not a diff of two prose lines. The human-critical part (are
     // we up, and on what address) stays in the message so it reads at a glance in either format.
@@ -346,6 +368,7 @@ async fn main() -> anyhow::Result<()> {
         auth_throttle = %auth_throttle_desc,
         alerts = %alerts_desc,
         forecast_sweep = %sweep_desc,
+        schedule_sweep = %sched_sweep_desc,
         ingest = %shed_desc,
         maintenance = %maintenance_desc,
         redact = %redact_desc,
@@ -368,6 +391,11 @@ async fn main() -> anyhow::Result<()> {
     // Pre-emptive forecast alerts on a timer (off unless configured). Detached: it never shares a
     // task with a request, and its store reads go to the blocking pool like any handler's.
     forecast_sweep::spawn(state.clone(), sweep);
+
+    // Stored schedules, and the relay's dead-letter reap. On by default: a schedule an operator
+    // wrote down and that never fires is a broken feature, not a respected default. It is also the
+    // only thing that reaps a vanished device's tasks when nothing is polling for a lease.
+    schedule_sweep::spawn(state.clone(), sched_sweep);
 
     // Quiet-window store maintenance: checkpoint the journal and hand already-freed pages back to
     // the filesystem, gated on the activity gauge. Lossless — it never deletes a row — and every
@@ -463,7 +491,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/benchmarks/:id/gate", get(benchmarks::benchmark_gate))
         .route("/v1/benchmark-runs", post(benchmarks::post_benchmark_run))
-        .route("/v1/benchmarks/:id/enqueue", post(jobs::enqueue_benchmark))
+        .route(
+            "/v1/benchmarks/:id/enqueue",
+            post(jobs_enqueue::enqueue_benchmark),
+        )
         .route(
             "/v1/projects/:id/prompts",
             post(prompts::create_prompt).get(prompts::list_prompts),
@@ -477,13 +508,26 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/projects/:id/prompts/:name/promote",
             post(prompts::promote),
         )
-        .route("/v1/jobs", get(jobs::list_jobs))
+        .route(
+            "/v1/jobs",
+            get(jobs::list_jobs).post(jobs_enqueue::enqueue_job),
+        )
         .route("/v1/jobs/claim", post(jobs::claim_job))
         .route("/v1/jobs/:id", get(jobs::get_job))
         .route("/v1/jobs/:id/cancel", post(jobs::cancel_job))
         .route("/v1/jobs/:id/progress", post(jobs::job_progress))
         .route("/v1/jobs/:id/renew", post(jobs::job_renew))
         .route("/v1/jobs/:id/finish", post(jobs::job_finish))
+        .route(
+            "/v1/projects/:id/schedules",
+            post(schedules::create_schedule).get(schedules::list_schedules),
+        )
+        .route("/v1/schedules", get(schedules::list_all_schedules))
+        .route(
+            "/v1/schedules/:id",
+            put(schedules::update_schedule).delete(schedules::delete_schedule),
+        )
+        .route("/v1/schedules/:id/runs", get(schedules::schedule_runs))
         .route(
             "/v1/projects",
             post(projects::create_project).get(projects::list_projects),
@@ -527,8 +571,17 @@ pub(crate) fn build_router(state: AppState) -> Router {
             post(relay::enqueue_task).get(relay::list_tasks),
         )
         .route("/v1/relay/tasks/:id", get(relay::get_task))
-        .route("/v1/relay/tasks/:id/result", post(relay::post_result))
-        .route("/v1/relay/lease", post(relay::lease_tasks))
+        .route(
+            "/v1/relay/tasks/:id/result",
+            post(relay_result::post_result),
+        )
+        .route("/v1/relay/tasks/:id/renew", post(relay_lease::renew_lease))
+        .route(
+            "/v1/relay/tasks/:id/progress",
+            post(relay_lease::post_progress),
+        )
+        .route("/v1/relay/tasks/:id/cancel", post(relay_lease::cancel_task))
+        .route("/v1/relay/lease", post(relay_lease::lease_tasks))
         .route("/v1/revenue", post(revenue::post_revenue))
         .route("/v1/margin", get(revenue::get_margin))
         .route("/v1/margin/trend", get(revenue::get_margin_trend))

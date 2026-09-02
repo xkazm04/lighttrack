@@ -34,24 +34,64 @@ LightTrack ────┘                 relay_tasks: queued → leased → su
 
 ## Task lifecycle
 
-Statuses: `queued → leased → succeeded | dead`. A failed attempt goes back to `queued` with the
-error recorded and `next_attempt_at` pushed out; exhausting `max_attempts` flips it to `dead`.
-Dead-lettering **alerts** through the existing channels (`LIGHTTRACK_ALERT_WEBHOOK` /
-`LIGHTTRACK_ALERT_NTFY`, event `relay_task_dead` — see `docs/ALERTS.md`), from both paths: a
-failure report that exhausts the attempts, and the pre-lease sweep that catches vanished devices.
+Statuses: `queued → leased → succeeded | dead`, plus `cancelling → cancelled` when an operator stops
+a task. A failed attempt goes back to `queued` with the error recorded and `next_attempt_at` pushed
+out. Dead-lettering **alerts** through the existing channels (`LIGHTTRACK_ALERT_WEBHOOK` /
+`LIGHTTRACK_ALERT_NTFY`, event `relay_task_dead` — see `docs/ALERTS.md`) from every path: a failure
+report that exhausts the retries, the pre-lease sweep, and — since M7 — the **timed** sweep in the
+API's `schedule_sweep`. That last one closed a real hole: the reap used to run only inside
+`lease_relay_tasks`, so a fleet with no device polling (which is exactly what "the device is gone"
+looks like from the cloud) never dead-lettered anything and never raised the alert that says so.
 
 - **Retry policy** (per task, defaults): `max_attempts = 4`, `retry_interval_secs = 18000` (5h —
   one Claude subscription usage window). A fully offline device therefore has a ~20h envelope
   before tasks dead-letter.
-- **Attempts are consumed on lease**, so a device that vanishes mid-run can't loop a task
-  forever: an expired lease is re-leasable while attempts remain, dead-lettered once exhausted.
-- **`deferred` hands the attempt back.** When the device can't attempt at all (subscription
-  window exhausted, weekly cap), it settles `deferred` with an optional `retry_after_secs`.
-  Rate limits never burn one of the 4 real attempts.
-- **Duplicate result reports are harmless**: settling a task that is no longer leased returns it
-  unchanged. Delivery is at-least-once end to end, so connectors must be idempotent — the
-  `idempotency_key` is carried on the task for exactly that purpose, and re-enqueueing with the
-  same key returns the existing task instead of a duplicate.
+- **Two budgets, kept apart.** `failures` counts runs that actually ran and reported a failure — it
+  is the retry budget, measured against `max_attempts`. `stale_reclaims` counts *device deaths*: a
+  lease that expired without a report, reclaimed for another device, capped at
+  `RELAY_MAX_STALE_RECLAIMS` (3). One counter could not tell the two apart, and the difference is
+  load-bearing: a task whose device dies every time never reports a failure, so a `max_attempts`-only
+  rule either re-leased it forever or dead-lettered work that had never actually been tried.
+  `attempts` still counts leases, for observability, and no longer decides anything.
+- **`deferred` hands the claim back.** When the device can't attempt at all (subscription window
+  exhausted, weekly cap), it settles `deferred` with an optional `retry_after_secs`. It records no
+  failure: a closed window is not the action failing.
+- **Duplicate result reports are refused, not re-applied.** A settle on a terminal task answers
+  `409` with what the record actually holds. Delivery is at-least-once end to end, so connectors
+  must be idempotent — the `idempotency_key` is carried on the task for exactly that purpose, and
+  re-enqueueing with the same key returns the existing task instead of a duplicate.
+
+## The lease is fenced and renewable (M7)
+
+`lease_secs` used to be two quantities wearing one name: how long a Claude Code run may legitimately
+take, **and** how long a vanished device may go unnoticed. That is why it was clamped to six hours —
+and why a dead device's task sat untouchable for most of a day. Those are now separate:
+
+- a lease is granted for minutes (60s–1800s), and the holder **renews it on a timer** at the
+  `renew_secs` cadence the lease response names (a third of the TTL, so two consecutive misses — a
+  sleeping laptop, a transient error — do not forfeit a live run);
+- the staleness window is therefore **detection latency alone**, roughly `3 × renew_secs`, while a
+  run takes as long as it takes.
+
+Every lease stamps a **`lease_fence`**: the instant it was granted, carried by every write the holder
+makes and compared for exact equality. The check it replaces was `status == "leased"`, which asks
+about *liveness* where *ownership* was meant — a task whose lease expired and was re-leased to a
+second device is still `leased`, so the first device's late report landed on the second device's run
+and overwrote it, silently, with a plausible-looking result. A refused write answers `409` and the
+run stops **without delivering**: unlike a stale write to a database row, the delivery half of an
+action is a connector call the cloud cannot take back.
+
+Renewal moves the *deadline*, never the fence, so one device's lease keeps one identity for its whole
+run. Progress rides its own endpoint and never the heartbeat — the moment liveness is conditioned on
+having something to report, a live-but-stuck device reads as a dead one, and those are the two states
+the mechanism exists to tell apart.
+
+**Cancellation.** `POST /v1/relay/tasks/:id/cancel` (the task's own project key, or admin): a queued
+task becomes `cancelled` outright; a leased one becomes `cancelling`, which is outside the leasable
+set — so the reclaim path can never hand a cancelled task to a second device — and its device learns
+at its next renewal. Whatever it then reports, the task ends `cancelled` and consumes no retry: an
+operator stopped it, so its outcome is not a verdict on the action. Cancelling something already
+terminal is a `409`, not a comfortable lie.
 
 ## API surface (Phase 1 — shipped)
 
@@ -60,8 +100,11 @@ failure report that exhausts the attempts, and the pre-lease sweep that catches 
 | `POST /v1/relay/tasks` | project key | Enqueue `action_type` + `payload` (+ `idempotency_key`, `max_attempts`, `retry_interval_secs`, `source`). A project key is forced into its own project. |
 | `GET /v1/relay/tasks/:id` | project key (own) / admin | Status + result — the originating app's polling fallback. |
 | `GET /v1/relay/tasks?project=&status=&limit=` | project key (own) / admin | List/inspect. |
-| `POST /v1/relay/lease` | device key | Lease up to `max` due tasks for `device`, holding each for `lease_secs` (60s–6h). Optional `wait_secs` (≤25) long-polls until a task is due. |
-| `POST /v1/relay/tasks/:id/result` | device key | Settle: `succeeded` (+`result`) \| `failed` (+`error`) \| `deferred` (+`retry_after_secs`). Optional usage/accounting: `model`, `input_tokens`, `output_tokens`, `latency_ms`, `cost_usd`, `mode`. |
+| `POST /v1/relay/lease` | device key | Lease up to `max` due tasks for `device`, holding each for `lease_secs` (60s–1800s). Optional `wait_secs` (≤25) long-polls until a task is due. Answers `{ tasks, lease_secs, renew_secs }` — the granted TTL after clamping, and how often to renew. |
+| `POST /v1/relay/tasks/:id/renew` | device key | Heartbeat, carrying `fence`. `409` = the lease is no longer yours: stop, and do not deliver. |
+| `POST /v1/relay/tasks/:id/progress` | device key | Liveness detail (`fence` + `progress`), visible on the task. Deliberately not on the heartbeat. |
+| `POST /v1/relay/tasks/:id/cancel` | project key (own) / admin | Stop a queued or leased task. `409` if it already finished. |
+| `POST /v1/relay/tasks/:id/result` | device key | Settle: `succeeded` (+`result`) \| `failed` (+`error`) \| `deferred` (+`retry_after_secs`), carrying `fence`. Optional usage/accounting: `model`, `input_tokens`, `output_tokens`, `latency_ms`, `cost_usd`, `mode`. `409` = not held; the result was NOT recorded. |
 
 Device enrollment is deliberately minimal for the single-device case: set
 `LIGHTTRACK_RELAY_DEVICE_KEY` on the cloud instance (Secret Manager on Cloud Run) and give the
@@ -69,10 +112,16 @@ same secret to `lt-agent`. No key-minting endpoint exists — nothing to leak ov
 enrollment (hashed keys in a table, like API keys) is future work if ever needed. The admin key
 (and dev mode) also passes the device guard, for local testing.
 
-Store: `relay_tasks` on the `Store` trait with default "unsupported"/empty impls. SQLite is the
-reference implementation; **Postgres implements the full domain** (`store-pg/src/relay.rs` —
-`FOR UPDATE SKIP LOCKED` leases, transactional settle), so the Neon-backed cloud serves relay
-natively. Firestore stays on defaults until needed (its conformance skips the relay section).
+Store: `relay_tasks` on the `Store` trait, declared as `Surface::Relay` in the capability manifest
+(`docs/PARITY.md`). SQLite is the reference implementation; **Postgres implements the full domain**
+(`store-pg/src/relay.rs` + `relay_lease.rs` — `FOR UPDATE SKIP LOCKED` leases, transactional fenced
+settle), so the Neon-backed cloud serves relay natively. Firestore does not declare the surface, so
+every relay method there answers `501 unsupported` and the conformance suite asserts that refusal.
+
+The fence is proved, not assumed: the shared conformance suite's `relay_lease` section drives a
+device to lease, renew, report progress, lose its lease to a reclaim, and then settle — and asserts
+the late settle is `NotHeld` with the successor's task untouched. There is no way to observe that
+race from outside, which is exactly why it is pinned there.
 
 ## Cost model: $1 flat per request
 
@@ -106,9 +155,12 @@ library), `exec` (run one task → `RunReport`), `connect` (result propagation),
 Execution is serial and rotates across sources round-robin — one Claude run at a time respects
 the machine and the subscription window, and one busy cloud can't starve the others.
 
-There is deliberately **no local queue**: crash recovery is lease-based. If the agent dies
-mid-run, the cloud reclaims the task when its lease expires and the retry consumes an attempt.
-`lease_secs` (default 1800) must cover the longest expected run.
+There is deliberately **no local queue**: crash recovery is lease-based. If the agent dies mid-run,
+the cloud reclaims the task once its lease expires. `lease_secs` no longer has to cover the longest
+expected run — a heartbeat thread renews the lease at the `renew_secs` the cloud hands back, so the
+TTL is detection latency and a Claude Code run takes as long as it takes. A renewal refused with
+`409` stops the run and **suppresses the settle entirely**: the task belongs to someone else now, and
+delivering its result through a connector is not something the cloud could undo.
 
 Action library — gitignored except `actions/README.md` + `actions/_example/`
 (see `actions/README.md` for the authoring guide):

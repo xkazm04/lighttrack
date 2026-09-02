@@ -79,6 +79,13 @@ const ADDED_COLUMNS_LATE: &[&str] = &[
     "ALTER TABLE limit_rules ADD COLUMN escalated_until TEXT",
     "ALTER TABLE limit_rules ADD COLUMN origin TEXT",
     "ALTER TABLE limit_rules ADD COLUMN expires_at TEXT",
+    // M7 — the relay's fenced, renewable lease: `failures` is the retry budget, `stale_reclaims`
+    // counts device deaths (kept apart so a sleeping laptop does not burn a chance), `lease_fence` is
+    // the holding device's identity compared exactly on settle/renew/progress, `progress` its liveness.
+    "ALTER TABLE relay_tasks ADD COLUMN failures INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE relay_tasks ADD COLUMN stale_reclaims INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE relay_tasks ADD COLUMN lease_fence TEXT",
+    "ALTER TABLE relay_tasks ADD COLUMN progress TEXT",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.

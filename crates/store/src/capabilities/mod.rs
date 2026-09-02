@@ -64,6 +64,13 @@ pub enum Surface {
     MarginPolicies,
     /// Job cancellation and lease renewal — the liveness half of the job queue.
     JobLeases,
+    /// Stored schedules: recurrence as a row, and the sweep's due-list read.
+    ///
+    /// Its own surface rather than part of `EventsCore`, because it is genuinely optional: a
+    /// deployment can run every recurring workload from an external scheduler (cron, Cloud
+    /// Scheduler) hitting `POST /v1/jobs`, and a backend that cannot host the table must be able to
+    /// say so instead of answering an empty due-list that reads as "nothing is scheduled here".
+    Schedules,
     /// Disk accounting and the quiet-window maintenance pass.
     Maintenance,
     /// The store's own per-family latency profile.
@@ -87,6 +94,7 @@ impl Surface {
         Surface::LimitLifecycle,
         Surface::MarginPolicies,
         Surface::JobLeases,
+        Surface::Schedules,
         Surface::Maintenance,
         Surface::Metrics,
     ];
@@ -108,6 +116,7 @@ impl Surface {
             Surface::LimitLifecycle => "limit_lifecycle",
             Surface::MarginPolicies => "margin_policies",
             Surface::JobLeases => "job_leases",
+            Surface::Schedules => "schedules",
             Surface::Maintenance => "maintenance",
             Surface::Metrics => "metrics",
         }
@@ -272,6 +281,9 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
             "lease_relay_tasks",
             "sweep_relay_dead",
             "settle_relay_task",
+            "renew_relay_lease",
+            "update_relay_progress",
+            "cancel_relay_task",
         ],
     ),
     (
@@ -305,6 +317,17 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
         ],
     ),
     (Surface::JobLeases, &["cancel_job", "renew_job_lease"]),
+    (
+        Surface::Schedules,
+        &[
+            "create_schedule",
+            "get_schedule",
+            "list_schedules",
+            "update_schedule",
+            "delete_schedule",
+            "due_schedules",
+        ],
+    ),
     (
         Surface::Maintenance,
         &["storage_report", "maintenance_pass"],

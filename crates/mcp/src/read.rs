@@ -101,6 +101,8 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({"type":"object","properties":{"status":{"type":"string","description":"queued|running|done|error"},"limit":{"type":"integer"}}})),
         tool("get_job", "Fetch one job by id — poll a benchmark run's status / progress / result.",
             json!({"type":"object","properties":{"job":{"type":"string"}},"required":["job"]})),
+        tool("list_schedules", "List recurring workloads: every stored schedule (a job kind + payload on an interval), for one project or the whole deployment. This is the answer to \"what runs on a schedule here\" — including recurring compare benchmarks, which cannot express recurrence any other way.",
+            json!({"type":"object","properties":{"project":{"type":"string","description":"one project's schedules; omit for every project's"}}})),
         tool("get_collective_leaderboard", "The collective real-world model leaderboard: quality × cost × latency per (provider, model, task type), merged across contributing LightTrack instances. Optionally filter by task_type or provider.",
             json!({"type":"object","properties":{
                 "task_type":{"type":"string","description":"filter to one task bucket (qa, summarization, coding, …)"},
@@ -178,6 +180,10 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "get_rubric" => bind(args, "rubric", |r| c.get(&format!("/v1/rubrics/{r}"))),
         "list_jobs" => c.get(&jobs_path(args)),
         "get_job" => bind(args, "job", |j| c.get(&format!("/v1/jobs/{j}"))),
+        "list_schedules" => c.get(&match args.get("project").and_then(Value::as_str) {
+            Some(p) => format!("/v1/projects/{p}/schedules"),
+            None => "/v1/schedules".to_string(),
+        }),
         "get_collective_leaderboard" => c.get(&collective_path(args)),
         "get_collective_digest" => c.get(&collective_digest_path(args)),
         _ => return None,

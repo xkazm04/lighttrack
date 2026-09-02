@@ -40,7 +40,7 @@ pub(super) fn jobs(store: &dyn Store) -> Result<()> {
 
     // Claim is global (oldest queued/stale first), so on a shared DB it may return another job —
     // assert only that a job was claimed and flipped to running with a bumped attempt count.
-    let claimed = store.claim_job(now)?.expect("claim_job returns a job");
+    let claimed = store.claim_job(now, &[])?.expect("claim_job returns a job");
     assert_eq!(claimed.status, "running");
     assert!(claimed.attempts >= 1, "claim bumps attempts");
 
@@ -56,7 +56,49 @@ pub(super) fn jobs(store: &dyn Store) -> Result<()> {
         .any(|x| x.id == j.id));
     job_cancellation(store)?;
     job_failure_accounting(store)?;
+    job_kind_filter(store)?;
     job_leases(store)?;
+    Ok(())
+}
+
+/// A worker declares which kinds it can run, and the claim must honour that declaration **inside**
+/// the atomic statement. Claiming a kind you cannot execute is not a harmless mistake: the job is
+/// already off the queue with a lease stamped on it, so it burns its retry budget failing while a
+/// capable worker idles beside it.
+fn job_kind_filter(store: &dyn Store) -> Result<()> {
+    drain_jobs(store)?;
+    // A staleness cutoff in the PAST, so the drained (now running) jobs stay out of the claimable
+    // set and every claim below is answered by one of the two jobs this check enqueues.
+    let fresh = Utc::now() - chrono::Duration::hours(1);
+    let mut wanted = new_job();
+    wanted.job_type = "score_traces".into();
+    let mut other = new_job();
+    other.job_type = "bench_run".into();
+    // `other` is OLDER, so an unfiltered claim would return it first — which is what makes this a
+    // test of the filter rather than of the ordering.
+    store.create_job(&other)?;
+    store.create_job(&wanted)?;
+
+    let claimed = store
+        .claim_job(fresh, &["score_traces"])?
+        .expect("a worker that declares score_traces gets the score_traces job");
+    assert_eq!(claimed.id, wanted.id, "the filter must beat the ordering");
+    assert_eq!(claimed.job_type, "score_traces");
+
+    // A kind nobody has enqueued yields nothing rather than the next job along.
+    assert!(
+        store.claim_job(fresh, &["calibrate"])?.is_none(),
+        "a declaration nothing matches must claim NOTHING, not the nearest job"
+    );
+
+    // An empty declaration means "any kind" — what every worker meant before the queue carried more
+    // than one, and what an older runner still sends.
+    let any = store
+        .claim_job(fresh, &[])?
+        .expect("an undeclared worker still claims");
+    assert_eq!(any.id, other.id);
+    store.finish_job(&wanted.id, "done", &Value::Null, None, claimed.claimed_at)?;
+    store.finish_job(&other.id, "done", &Value::Null, None, any.claimed_at)?;
     Ok(())
 }
 
@@ -65,7 +107,7 @@ pub(super) fn jobs(store: &dyn Store) -> Result<()> {
 pub(super) fn drain_jobs(store: &dyn Store) -> Result<Vec<String>> {
     let mut ids = Vec::new();
     for _ in 0..50 {
-        match store.claim_job(Utc::now())? {
+        match store.claim_job(Utc::now(), &[])? {
             Some(j) => ids.push(j.id),
             None => break,
         }
@@ -80,7 +122,7 @@ fn job_failure_accounting(store: &dyn Store) -> Result<()> {
     drain_jobs(store)?;
     let j = new_job();
     store.create_job(&j)?;
-    let first = store.claim_job(Utc::now())?.expect("claim");
+    let first = store.claim_job(Utc::now(), &[])?.expect("claim");
     assert_eq!(first.id, j.id);
     assert_eq!(
         (first.attempts, first.failures, first.stale_reclaims),
@@ -88,7 +130,9 @@ fn job_failure_accounting(store: &dyn Store) -> Result<()> {
     );
 
     // Simulate the worker being killed: never finish, let the claim go stale, reclaim it.
-    let second = store.claim_job(Utc::now())?.expect("reclaim the stale job");
+    let second = store
+        .claim_job(Utc::now(), &[])?
+        .expect("reclaim the stale job");
     assert_eq!(second.id, j.id);
     assert_eq!(second.attempts, 2, "a claim is a claim, crash or not");
     assert_eq!(second.failures, 0, "a dead worker must not burn a retry");

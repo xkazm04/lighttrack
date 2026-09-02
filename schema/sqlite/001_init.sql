@@ -334,3 +334,31 @@ CREATE TABLE IF NOT EXISTS margin_policies (
   enabled       INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_margin_policies_project ON margin_policies(project_id);
+
+-- ===========================================================================================
+-- M7: stored schedules + the fenced, renewable relay lease. Self-contained block, appended.
+-- ===========================================================================================
+
+-- Recurring workloads as rows. Before this, recurrence lived either in a benchmark's
+-- `target.schedule_interval_secs` (so a matrix/compare target could not carry it at all) or in a
+-- daemon's `--interval` flag (so nothing could enumerate it). A schedule names a job kind + payload,
+-- carries its own next_due, and is swept by the API — the process that is always deployed.
+CREATE TABLE IF NOT EXISTS schedules (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  kind          TEXT NOT NULL,                   -- JobKind wire literal (bench_run | score_events | ...)
+  payload       TEXT,                            -- JSON, enqueued verbatim as the job's payload
+  interval_secs INTEGER NOT NULL,
+  next_due      TEXT NOT NULL,                   -- fixed-width RFC3339: string range filters are correct
+  last_job_id   TEXT,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_due);
+CREATE INDEX IF NOT EXISTS idx_schedules_project ON schedules(project_id);
+
+-- Relay lease fencing + honest failure accounting. `failures` is the retry budget (runs that
+-- actually failed) and `stale_reclaims` counts device deaths, so a laptop that sleeps mid-run no
+-- longer burns one of the task's chances. `lease_fence` is the holding device's identity, compared
+-- exactly on settle/renew/progress. See schema/sqlite ADDED_COLUMNS for pre-existing databases.
+CREATE INDEX IF NOT EXISTS idx_relay_lease ON relay_tasks(status, lease_deadline);

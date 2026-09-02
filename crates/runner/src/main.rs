@@ -4,6 +4,12 @@
 //! Subcommands: `score` / `score-text` (judge events or ad-hoc pairs), `bench` (run a benchmark:
 //! compare / rubric / simple), `dataset build` (sample + anonymize), `serve` (job-queue worker).
 //!
+//! Since M7 the queue carries all five workloads, not just benchmark runs: `serve` declares which
+//! kinds it can run (`--kinds`) and dispatches through `dispatch`, and the daemon subcommands take
+//! `--via-queue` to route one cycle through the queue instead of running it in-process. Recurrence
+//! is no longer a `--interval` flag or a sweep in this binary — it is a stored `Schedule` the API
+//! sweeps, so it exists in deployments that never run a companion worker.
+//!
 //! Layout: `cli` (args), `http` (API client), `util` (helpers), `judge_spec` (the `--rubric` /
 //! `--rubric-id` contract), `score`, `dataset`, `bench` (+`compare`, `rubric`), `serve`.
 
@@ -17,19 +23,22 @@ mod calibrate_watch;
 mod cli;
 mod compare;
 mod dataset;
+mod dispatch;
+mod enqueue;
 mod gate;
 mod history;
 mod http;
 mod judge_spec;
 mod pairwise;
 mod provenance;
-mod recurrence;
 mod rubric;
 mod runctl;
 mod schedule;
 mod score;
 mod score_traces;
 mod serve;
+mod serve_api;
+mod serve_job;
 mod stats;
 mod util;
 
@@ -37,7 +46,9 @@ use anyhow::Result;
 use clap::Parser;
 
 use cli::{BillingCmd, Cli, Cmd, DatasetCmd};
+use lighttrack_core::JobKind;
 use lighttrack_engine::EngineConfig;
+use serde_json::{json, Map, Value};
 
 fn main() -> Result<()> {
     let _ = dotenvy::dotenv(); // load .env (GEMINI_API_KEY, OPENAI_API_KEY, LIGHTTRACK_*) if present
@@ -56,7 +67,23 @@ fn main() -> Result<()> {
             project,
             limit,
             interval,
+            via_queue,
         } => {
+            if *via_queue {
+                let mut p = Map::new();
+                enqueue::judge_fields(&mut p, rubric.as_deref(), rubric_id.as_deref())?;
+                p.insert("limit".into(), json!(limit));
+                if let Some(pr) = project {
+                    p.insert("project".into(), json!(pr));
+                }
+                return enqueue::run_via_queue(
+                    &cli,
+                    &http,
+                    &engine,
+                    JobKind::ScoreEvents,
+                    Value::Object(p),
+                );
+            }
             // Resolved once, before any judging: a bad rubric id fails immediately instead of on
             // every tick of an `--interval` loop.
             let judge =
@@ -94,7 +121,27 @@ fn main() -> Result<()> {
             judge,
             interval,
             once,
+            via_queue,
         } => {
+            if *via_queue {
+                let mut p = Map::new();
+                enqueue::judge_fields(&mut p, rubric.as_deref(), rubric_id.as_deref())?;
+                p.insert("project".into(), json!(project));
+                p.insert("sample_every".into(), json!(sample_every));
+                p.insert("errors_always".into(), json!(errors_always));
+                p.insert("settle_secs".into(), json!(settle_secs));
+                p.insert("limit".into(), json!(limit));
+                if let Some(j) = judge {
+                    p.insert("judge_model".into(), json!(j));
+                }
+                return enqueue::run_via_queue(
+                    &cli,
+                    &http,
+                    &engine,
+                    JobKind::ScoreTraces,
+                    Value::Object(p),
+                );
+            }
             // Per-command judge override, else the global --model. Built without cloning EngineConfig.
             let eng = EngineConfig {
                 claude_bin: engine.claude_bin.clone(),
@@ -170,33 +217,62 @@ fn main() -> Result<()> {
             n,
             name_prefix,
             llm_scrub,
-        } => schedule::schedule(
-            &cli,
-            &http,
-            &engine,
-            project,
-            *interval,
-            *once,
-            *n,
-            name_prefix,
-            *llm_scrub,
-        ),
+            via_queue,
+        } => {
+            if *via_queue {
+                return enqueue::run_via_queue(
+                    &cli,
+                    &http,
+                    &engine,
+                    JobKind::DatasetSample,
+                    json!({ "project": project, "n": n, "name_prefix": name_prefix,
+                            "llm_scrub": llm_scrub }),
+                );
+            }
+            schedule::schedule(
+                &cli,
+                &http,
+                &engine,
+                project,
+                *interval,
+                *once,
+                *n,
+                name_prefix,
+                *llm_scrub,
+            )
+        }
         Cmd::Serve {
             once,
             interval,
             stale_secs,
             lease_renew_secs,
-            recur_interval,
-        } => serve::serve(
-            &cli,
-            &http,
-            &engine,
-            *once,
-            *interval,
-            *stale_secs,
-            *lease_renew_secs,
-            *recur_interval,
-        ),
+            kinds,
+            providers,
+        } => {
+            // An unknown kind is refused here rather than silently narrowing the worker to the ones
+            // spelled correctly — which would look, from the outside, exactly like an empty queue.
+            for k in kinds {
+                if JobKind::from_wire(k).is_none() {
+                    anyhow::bail!(
+                        "unknown --kinds value '{k}': expected {}",
+                        JobKind::vocabulary()
+                    );
+                }
+            }
+            let params = serve::ServeParams {
+                once: *once,
+                interval: *interval,
+                stale_secs: *stale_secs,
+                lease_renew_secs: *lease_renew_secs,
+                kinds: kinds.clone(),
+                providers: if providers.is_empty() {
+                    serve::providers_from_env()
+                } else {
+                    providers.clone()
+                },
+            };
+            serve::serve(&cli, &http, &engine, &params)
+        }
         Cmd::Calibrate {
             file,
             rubric,
@@ -211,7 +287,27 @@ fn main() -> Result<()> {
             interval,
             drift_threshold,
             project,
+            via_queue,
         } => {
+            if *via_queue {
+                let mut p = Map::new();
+                enqueue::judge_fields(&mut p, rubric.as_deref(), rubric_id.as_deref())?;
+                p.insert("file".into(), json!(file));
+                p.insert("threshold".into(), json!(threshold));
+                p.insert("kappa_bar".into(), json!(kappa_bar));
+                p.insert("drift_threshold".into(), json!(drift_threshold));
+                p.insert("samples".into(), json!(samples));
+                if let Some(pr) = project {
+                    p.insert("project".into(), json!(pr));
+                }
+                return enqueue::run_via_queue(
+                    &cli,
+                    &http,
+                    &engine,
+                    JobKind::Calibrate,
+                    Value::Object(p),
+                );
+            }
             if *watch || *once {
                 let params = calibrate_watch::WatchParams {
                     file,

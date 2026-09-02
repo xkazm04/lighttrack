@@ -1,4 +1,5 @@
-//! Job queue (Phase 3.6d) — enqueue returns immediately; `lt-runner serve` executes.
+//! Job queue (Phase 3.6d) — the worker-facing half: claim, progress, renew, finish, and the
+//! operator's cancel/read. Enqueue lives in [`crate::jobs_enqueue`].
 
 use axum::{
     extract::{Path, Query, State},
@@ -8,78 +9,12 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 
-use lighttrack_core::{new_id, Job, JobCancel, JobFinish};
+use lighttrack_core::{Job, JobCancel, JobFinish};
 
-use crate::benchmarks::load_benchmark_authorized;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin};
+use crate::jobs_enqueue::parse_kind;
 use crate::state::{spawn_db, AppState};
-
-#[derive(Deserialize)]
-pub(crate) struct EnqueueReq {
-    #[serde(default = "default_samples")]
-    samples: u32,
-    #[serde(default)]
-    heal: bool,
-}
-
-fn default_samples() -> u32 {
-    1
-}
-
-pub(crate) async fn enqueue_benchmark(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    Json(req): Json<EnqueueReq>,
-) -> Result<Json<Job>, ApiError> {
-    let p = authenticate(&st, &headers).await?;
-    ensure_can_admin(&p)?;
-    let bench = load_benchmark_authorized(&st, &p, &id).await?;
-    let job = enqueue_bench_run(
-        &st,
-        &bench.id,
-        serde_json::json!({ "samples": req.samples, "heal": req.heal }),
-    )
-    .await?;
-    Ok(Json(job))
-}
-
-/// Enqueue a `bench_run` job for a benchmark, merging `extra` payload keys (e.g. `samples`, `heal`,
-/// or a `prompt_id`/`version` for traceability). Shared by the manual enqueue route and the prompt
-/// registry's auto-enqueue on a new version.
-pub(crate) async fn enqueue_bench_run(
-    st: &AppState,
-    benchmark_id: &str,
-    extra: serde_json::Value,
-) -> Result<Job, ApiError> {
-    let mut payload = serde_json::json!({ "benchmark_id": benchmark_id });
-    if let (Some(obj), Some(into)) = (extra.as_object(), payload.as_object_mut()) {
-        for (k, v) in obj {
-            into.insert(k.clone(), v.clone());
-        }
-    }
-    let job = Job {
-        id: new_id(),
-        job_type: "bench_run".to_string(),
-        payload,
-        status: "queued".to_string(),
-        attempts: 0,
-        max_attempts: 3,
-        failures: 0,
-        stale_reclaims: 0,
-        progress: None,
-        error: None,
-        result: serde_json::Value::Null,
-        claimed_at: None,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    };
-    let store = st.store.clone();
-    let j2 = job.clone();
-    spawn_db(move || store.create_job(&j2)).await?;
-    Ok(job)
-}
 
 #[derive(Deserialize)]
 pub(crate) struct JobsParams {
@@ -118,6 +53,17 @@ pub(crate) async fn get_job(
 pub(crate) struct ClaimReq {
     #[serde(default = "default_stale_secs")]
     stale_secs: i64,
+    /// The kinds this worker can execute. Empty (or absent — what an older runner sends) means
+    /// "any kind", which is what every worker meant while `bench_run` was the only one.
+    #[serde(default)]
+    kinds: Vec<String>,
+    /// Which model providers this worker has credentials for. Advisory today: it is recorded in the
+    /// claim log so an operator can see *why* a queue is not draining, but it does not filter,
+    /// because a job's provider is a property of the benchmark/rubric it names rather than of the
+    /// job row — filtering on it would need a read per candidate inside the atomic claim. Declared
+    /// now so a worker fleet's capabilities are in one place when M18 gives it teeth.
+    #[serde(default)]
+    providers: Vec<String>,
 }
 
 /// How long a dead worker may go unnoticed — **not** how long a job may legitimately run.
@@ -140,8 +86,21 @@ pub(crate) async fn claim_job(
 ) -> Result<Json<Option<Job>>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
     let stale_before = Utc::now() - chrono::Duration::seconds(req.stale_secs.max(0));
+    // Refuse an unknown kind rather than silently dropping it from the filter: a typo'd declaration
+    // would otherwise narrow the worker to the kinds it spelled correctly, and it would look like
+    // an empty queue.
+    for k in &req.kinds {
+        parse_kind(k)?;
+    }
+    if !req.providers.is_empty() {
+        tracing::debug!(providers = ?req.providers, kinds = ?req.kinds, "worker claim");
+    }
     let store = st.store.clone();
-    let job = spawn_db(move || store.claim_job(stale_before)).await?;
+    let job = spawn_db(move || {
+        let kinds: Vec<&str> = req.kinds.iter().map(String::as_str).collect();
+        store.claim_job(stale_before, &kinds)
+    })
+    .await?;
     Ok(Json(job))
 }
 

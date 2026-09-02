@@ -18,7 +18,7 @@ use lighttrack_core::{new_id, BenchmarkRun, Prompt, PromptVersion};
 use crate::benchmarks::load_benchmark_authorized;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
-use crate::jobs::enqueue_bench_run;
+use crate::jobs_enqueue::enqueue_bench_run;
 use crate::state::{spawn_db, AppState};
 
 const EPS: f64 = 1e-9;

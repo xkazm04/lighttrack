@@ -24,6 +24,7 @@ mod projects;
 mod prompts;
 mod rollup;
 mod rubrics;
+mod schedules;
 mod scores;
 mod traces;
 
@@ -50,6 +51,7 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "get_benchmark_runs" => benchmarks::runs(v),
         "check_benchmark_gate" => benchmarks::gate(v),
         "list_jobs" => jobs::list(v),
+        "list_schedules" => schedules::list(v),
         "get_job" => jobs::detail(v),
         "list_datasets" => datasets::list(v),
         "get_dataset" => datasets::detail(v),

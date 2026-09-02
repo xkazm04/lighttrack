@@ -1,11 +1,13 @@
-//! `Surface::Relay`: the cloud→device task queue (docs/RELAY.md).
+//! `Surface::Relay`: the cloud→device task queue (docs/RELAY.md), including the fenced lease.
 
 use chrono::Utc;
 use serde_json::{json, Value};
 
-use lighttrack_core::{new_id, RelayOutcome, RelayTask};
+use lighttrack_core::{new_id, RelayOutcome, RelaySettle, RelayTask};
 
 use crate::{Result, Store};
+
+use super::relay_lease::{relay_cancellation, relay_fencing};
 
 /// A queued task with an immediate retry interval, so a failed attempt becomes due again at once.
 /// Shared with the refusal probe so both describe the same shape.
@@ -19,6 +21,10 @@ pub(super) fn sample_task(pid: &str, max_attempts: u32) -> RelayTask {
         payload: json!({ "k": "v" }),
         status: "queued".into(),
         attempts: 0,
+        failures: 0,
+        stale_reclaims: 0,
+        lease_fence: None,
+        progress: None,
         max_attempts,
         retry_interval_secs: 0, // failed attempts become due again immediately
         idempotency_key: None,
@@ -32,17 +38,28 @@ pub(super) fn sample_task(pid: &str, max_attempts: u32) -> RelayTask {
     }
 }
 
+/// The settled row, or a panic naming what refused instead. Every case below settles a task it
+/// genuinely holds, so anything else is the failure, not a branch to handle.
+pub(super) fn settled(v: RelaySettle, what: &str) -> RelayTask {
+    match v {
+        RelaySettle::Settled(t) => *t,
+        other => panic!("{what}: expected the settle to land, got {other:?}"),
+    }
+}
+
+/// Lease for this device and pick out our own task — lease is global (oldest-due first), so on a
+/// shared DB the batch may carry other rows.
+pub(super) fn leased_ours(store: &dyn Store, id: &str, secs: i64) -> Result<Option<RelayTask>> {
+    Ok(store
+        .lease_relay_tasks("conf-dev", secs, 20)?
+        .into_iter()
+        .find(|t| t.id == id))
+}
+
 /// Relay queue (docs/RELAY.md): enqueue → lease → settle round-trips, retry/deferral accounting,
 /// and the dead-letter sweep. Like the job claim, lease/sweep are global (oldest-due first), so on a
 /// shared DB we assert on our ids and tolerate other rows in the results.
 pub(super) fn relay(store: &dyn Store, pid: &str) -> Result<()> {
-    fn leased_ours(store: &dyn Store, id: &str) -> Result<Option<RelayTask>> {
-        Ok(store
-            .lease_relay_tasks("conf-dev", 60, 20)?
-            .into_iter()
-            .find(|t| t.id == id))
-    }
-
     let mut t = sample_task(pid, 2);
     t.idempotency_key = Some(new_id());
     store.create_relay_task(&t)?;
@@ -59,76 +76,168 @@ pub(super) fn relay(store: &dyn Store, pid: &str) -> Result<()> {
         .find_relay_task_by_key("other-project", &key)?
         .is_none());
 
-    // Lease consumes an attempt; a failure requeues (zero interval ⇒ due again) with the error.
-    let leased = leased_ours(store, &t.id)?.expect("our task leased");
+    // A lease stamps a fence and consumes a CLAIM (not a retry); a reported failure requeues (zero
+    // interval ⇒ due again) with the error, and consumes one of the retry budget instead.
+    let leased = leased_ours(store, &t.id, 60)?.expect("our task leased");
     assert_eq!(leased.status, "leased");
     assert_eq!(leased.attempts, 1);
-    let requeued = store
-        .settle_relay_task(&t.id, &RelayOutcome::Failed("conf boom".into()))?
-        .expect("settle failed");
+    assert_eq!(leased.failures, 0, "leasing is not failing");
+    let fence = leased.lease_fence.expect("a lease stamps its fence");
+    let requeued = settled(
+        store.settle_relay_task(
+            &t.id,
+            Some(fence),
+            &RelayOutcome::Failed("conf boom".into()),
+        )?,
+        "failed settle",
+    );
     assert_eq!(requeued.status, "queued");
     assert_eq!(requeued.error.as_deref(), Some("conf boom"));
+    assert_eq!(
+        requeued.failures, 1,
+        "a reported failure is the retry budget"
+    );
+    assert!(
+        requeued.lease_fence.is_none(),
+        "settling releases the fence, so the next lease mints a fresh one"
+    );
 
-    // A deferral hands the consumed attempt back.
-    assert_eq!(leased_ours(store, &t.id)?.expect("re-leased").attempts, 2);
-    let deferred = store
-        .settle_relay_task(
+    // A deferral hands the consumed claim back and records no failure: the subscription window
+    // being closed is not the action failing.
+    let re = leased_ours(store, &t.id, 60)?.expect("re-leased");
+    assert_eq!(re.attempts, 2);
+    let deferred = settled(
+        store.settle_relay_task(
             &t.id,
+            re.lease_fence,
             &RelayOutcome::Deferred {
                 retry_after_secs: Some(0),
                 reason: Some("window".into()),
             },
-        )?
-        .expect("settle deferred");
+        )?,
+        "deferred settle",
+    );
     assert_eq!(deferred.status, "queued");
-    assert_eq!(deferred.attempts, 1, "deferral hands the attempt back");
+    assert_eq!(deferred.attempts, 1, "deferral hands the claim back");
+    assert_eq!(deferred.failures, 1, "…and records no new failure");
 
-    // Success is terminal; a duplicate report returns the settled row unchanged.
-    leased_ours(store, &t.id)?.expect("leased again");
-    let done = store
-        .settle_relay_task(&t.id, &RelayOutcome::Succeeded(json!({ "ok": true })))?
-        .expect("settle succeeded");
+    // Success is terminal; a duplicate report is refused as NotHeld rather than re-applied.
+    let held = leased_ours(store, &t.id, 60)?.expect("leased again");
+    let done = settled(
+        store.settle_relay_task(
+            &t.id,
+            held.lease_fence,
+            &RelayOutcome::Succeeded(json!({ "ok": true })),
+        )?,
+        "success settle",
+    );
     assert_eq!(done.status, "succeeded");
     assert_eq!(
         done.result,
         json!({ "ok": true }),
         "relay result round-trip"
     );
-    let dup = store
-        .settle_relay_task(&t.id, &RelayOutcome::Failed("late".into()))?
-        .expect("duplicate settle");
-    assert_eq!(dup.status, "succeeded", "duplicate report is a no-op");
+    assert!(
+        matches!(
+            store.settle_relay_task(
+                &t.id,
+                held.lease_fence,
+                &RelayOutcome::Failed("late".into())
+            )?,
+            RelaySettle::NotHeld { .. }
+        ),
+        "a duplicate report must not re-open or overwrite a settled task"
+    );
+    assert_eq!(
+        store.get_relay_task(&t.id)?.expect("get").status,
+        "succeeded",
+        "…and must leave the terminal verdict exactly as it was"
+    );
     assert!(store
         .list_relay_tasks(Some(pid), Some("succeeded"), 100)?
         .iter()
         .any(|x| x.id == t.id));
+    assert!(matches!(
+        store.settle_relay_task(&new_id(), None, &RelayOutcome::Failed("x".into()))?,
+        RelaySettle::NoSuchTask
+    ));
 
-    // Exhausted failure dead-letters…
+    // An exhausted RETRY budget dead-letters…
     let doomed = sample_task(pid, 1);
     store.create_relay_task(&doomed)?;
-    leased_ours(store, &doomed.id)?.expect("doomed leased");
-    let dead = store
-        .settle_relay_task(&doomed.id, &RelayOutcome::Failed("final".into()))?
-        .expect("settle dead");
+    let held = leased_ours(store, &doomed.id, 60)?.expect("doomed leased");
+    let dead = settled(
+        store.settle_relay_task(
+            &doomed.id,
+            held.lease_fence,
+            &RelayOutcome::Failed("final".into()),
+        )?,
+        "final settle",
+    );
     assert_eq!(dead.status, "dead");
+    assert_eq!(dead.failures, 1);
 
-    // …and so does the sweep, when a vanished device's expired lease has no attempts left.
-    let vanished = sample_task(pid, 1);
-    store.create_relay_task(&vanished)?;
-    let held = store.lease_relay_tasks("conf-dev", 0, 20)?; // zero-second lease: expires at once
+    relay_dead_sweep(store, pid)?;
+    relay_fencing(store, pid)?;
+    relay_cancellation(store, pid)?;
+    Ok(())
+}
+
+/// A device that vanishes is not an action that failed. The sweep dead-letters an expired lease
+/// only once a budget is genuinely gone — and a task with retries left goes back to a device
+/// instead, carrying a `stale_reclaims` count that says what actually happened.
+fn relay_dead_sweep(store: &dyn Store, pid: &str) -> Result<()> {
+    // Retries to spare: the expired lease is RECLAIMED, counted as a device death, and not killed.
+    let survivor = sample_task(pid, 3);
+    store.create_relay_task(&survivor)?;
+    leased_ours(store, &survivor.id, 0)?.expect("survivor leased");
+    let swept = store.sweep_relay_dead()?;
     assert!(
-        held.iter().any(|x| x.id == vanished.id),
-        "vanished task leased"
+        !swept.iter().any(|x| x.id == survivor.id),
+        "a device death must not dead-letter a task that still has retries"
+    );
+    let again = leased_ours(store, &survivor.id, 60)?.expect("reclaimed after the lease expired");
+    assert_eq!(again.stale_reclaims, 1, "…it is counted as a device death");
+    assert_eq!(again.failures, 0, "…and never as an action failure");
+    assert!(
+        again
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("device lost"),
+        "the stored error must say the device died: {:?}",
+        again.error
+    );
+
+    // Device deaths have their own budget, and it is what the sweep enforces. A task nothing ever
+    // reports on cannot exhaust the RETRY budget — no device lives long enough to report a failure —
+    // so a single counter would re-lease it forever. Keep killing the device until that budget is
+    // gone, and the sweep is the thing that finally dead-letters it.
+    let cursed = sample_task(pid, 9);
+    store.create_relay_task(&cursed)?;
+    for _ in 0..=lighttrack_core::RELAY_MAX_STALE_RECLAIMS {
+        leased_ours(store, &cursed.id, 0)?; // zero-second lease: expires at once
+    }
+    let held = store.get_relay_task(&cursed.id)?.expect("get cursed");
+    assert_eq!(held.status, "leased");
+    assert_eq!(
+        held.stale_reclaims,
+        lighttrack_core::RELAY_MAX_STALE_RECLAIMS
+    );
+    assert!(
+        leased_ours(store, &cursed.id, 0)?.is_none(),
+        "a task that has killed its device budget must not be leased again"
     );
     let swept = store.sweep_relay_dead()?;
     let ours = swept
         .iter()
-        .find(|x| x.id == vanished.id)
-        .expect("sweep returns our task");
+        .find(|x| x.id == cursed.id)
+        .expect("the sweep returns our task");
     assert_eq!(ours.status, "dead");
-    assert_eq!(
-        ours.error.as_deref(),
-        Some("lease expired without a result")
+    assert!(
+        ours.error.as_deref().unwrap_or_default().contains("device"),
+        "the dead-letter must say a device died, not invent an action failure: {:?}",
+        ours.error
     );
     Ok(())
 }

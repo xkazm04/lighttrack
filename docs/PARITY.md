@@ -24,6 +24,7 @@ conformance suite asserts that refusal, so a gap can never quietly become an emp
 | `limit_lifecycle` | full | full | full |
 | `margin_policies` | full | full | full |
 | `job_leases` | full | full | full |
+| `schedules` | full | full | refused |
 | `maintenance` | full | refused | refused |
 | `metrics` | full | refused | refused |
 
@@ -48,12 +49,13 @@ cap that reads as enforced is the failure this row exists to name.
 - **`forecast`** — `daily_usage`, `daily_cost_by_dimension`
 - **`margin_breakdowns`** — `tokens_by_dimension`, `customer_cost_by_model`, `customer_cost_by_name`
 - **`prompts`** — `create_prompt`, `update_prompt`, `get_prompt`, `get_prompt_by_id`, `list_prompts`, `create_prompt_version`, `get_prompt_version`, `list_prompt_versions`
-- **`relay`** — `create_relay_task`, `get_relay_task`, `find_relay_task_by_key`, `list_relay_tasks`, `lease_relay_tasks`, `sweep_relay_dead`, `settle_relay_task`
+- **`relay`** — `create_relay_task`, `get_relay_task`, `find_relay_task_by_key`, `list_relay_tasks`, `lease_relay_tasks`, `sweep_relay_dead`, `settle_relay_task`, `renew_relay_lease`, `update_relay_progress`, `cancel_relay_task`
 - **`collective`** — `upsert_collective_entry`, `delete_collective_entries`, `list_collective_entries`, `purge_collective_entries_before`, `replace_collective_contribution`, `latest_collective_receipt`, `list_collective_entries_filtered`
 - **`project_admin`** — `update_project`
 - **`key_admin`** — `list_api_keys`, `set_api_key_revoked`, `set_api_key_expiry`
 - **`limit_lifecycle`** — `get_limit_rule`, `update_limit_rule`, `delete_limit_rule`
 - **`margin_policies`** — `create_margin_policy`, `list_margin_policies`, `get_margin_policy`, `delete_margin_policy`
 - **`job_leases`** — `cancel_job`, `renew_job_lease`
+- **`schedules`** — `create_schedule`, `get_schedule`, `list_schedules`, `update_schedule`, `delete_schedule`, `due_schedules`
 - **`maintenance`** — `storage_report`, `maintenance_pass`
 - **`metrics`** — `db_metrics`

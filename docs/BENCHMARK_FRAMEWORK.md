@@ -407,46 +407,56 @@ Both are closed:
   naming the status and lease that actually hold, and the worker logs `VERDICT NOT RECORDED` instead
   of believing it finished. Omitting `claimed_at` is the operator-shaped finish — it waives the
   ownership condition, never the finality one.
-- The invariant is pinned in the **shared conformance suite** (`crates/store/src/conformance.rs`,
-  `job_leases`), so SQLite, Postgres and Firestore each prove it in CI. Each expresses the
+- The invariant is pinned in the **shared conformance suite**
+  (`crates/store/src/conformance/job_leases.rs`), so SQLite, Postgres and Firestore each prove it in CI. Each expresses the
   conditioned write in its own dialect (SQL `UPDATE … WHERE`; Firestore an `updateTime` precondition
   over a read-compare-commit loop), and a divergence in any one of them is a silent correctness hole.
 
-### 4a. Self-running benchmarks (opt-in recurrence)
+### 4a. Self-running benchmarks (recurrence is a stored schedule)
 By default a benchmark runs **only** on a manual enqueue (`POST /v1/benchmarks/:id/enqueue`) or a
 prompt-version cut (the registry auto-enqueues) — there is no cron in the benchmark path. Turn a
-benchmark into **continuous quality monitoring** by giving it a recurrence interval:
+benchmark into **continuous quality monitoring** by storing a schedule for it:
 
 ```bash
-# create a recurring benchmark: re-run itself ~every hour
-curl -sX POST "$LIGHTTRACK_URL/v1/projects/$PID/benchmarks" -H "authorization: Bearer $KEY" \
-  -H 'content-type: application/json' \
-  -d '{ "name": "support-quality", "rubric": "…", "dataset_ref": "online-latest",
-        "baseline_score": 0.8, "schedule_interval_secs": 3600 }'
+lt schedules create --project $PID --type bench_run --every 1h \
+  --payload '{"benchmark_id":"'"$BID"'","samples":1}'
 ```
 
-- **Storage:** `schedule_interval_secs` rides inside the benchmark's free-form `target` JSON — **no
-  schema/column change** (benchmarks are fixed-column rows; `target` is the only free-form field, and
-  it round-trips unchanged through SQLite *and* Postgres). It is therefore **not supported alongside a
-  comparison-matrix** benchmark (an array `target`/`targets` has no room for it) — that combination is
-  rejected with a `400`. Use a single-target, rubric, or simple benchmark for recurrence.
-- **Enable / disable:** set the interval to enable, `0`/unset to disable. There is no `PATCH` surface
-  today, so "changing" recurrence on an existing benchmark means recreating it (v1 story).
-- **Who runs it:** `lt-runner serve` performs a **recurrence sweep** on a subsampled cadence
-  (`--recur-interval`, default 60s; `0` disables). A benchmark is **due** when (a) it has an interval,
-  (b) it has **no** queued/running `bench_run` job, and (c) its most recent run's `finished_at` (or
-  `started_at` fallback) is older than the interval. The sweep enqueues a normal `bench_run` (reusing
-  the existing job path) — the same worker then claims and runs it. This is **idempotent**: an
-  in-flight job or a recent run means "not due", so repeated sweeps never pile up jobs.
-- **OS cron instead of a daemon:** `lt-runner serve --once` runs exactly one sweep + claims one job,
-  so an external scheduler can drive recurrence:
+```bash
+# or over HTTP
+curl -sX POST "$LIGHTTRACK_URL/v1/projects/$PID/schedules" -H "authorization: Bearer $ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{ "type": "bench_run", "interval_secs": 3600, "payload": { "benchmark_id": "'"$BID"'" } }'
+```
+
+- **It works for every benchmark mode, including compare.** This is the reason the mechanism moved.
+  Recurrence used to ride inside the benchmark's free-form `target` JSON as `schedule_interval_secs`,
+  and a comparison matrix is an *array* `target` — there was no room for the key, so the headline
+  benchmark mode simply could not recur. A schedule is a separate row that names the benchmark, so
+  the target's shape is irrelevant to it.
+- **Enable / disable / retime** without recreating anything: `lt schedules set <id> --disable`,
+  `--every 6h`, `--payload '{…}'`. A paused schedule stays listed — an operator has to be able to see
+  the thing they paused.
+- **Who runs it:** the **API** sweeps due schedules (`LIGHTTRACK_SCHEDULE_SWEEP_SECS`, default 60s)
+  and enqueues a normal `bench_run`; a worker then claims and runs it. The sweep is idempotent — a
+  schedule whose previous job is still queued or running is skipped, so a benchmark slower than its
+  own interval never stacks copies of itself — and it does not catch up: `next_due` advances from
+  *now*, so a sweep that was down for a day fires each schedule once rather than a day's worth of
+  generation spend.
+- **Migration:** on boot, every benchmark still carrying `target.schedule_interval_secs` gets an
+  equivalent schedule if it does not already have one. The key stays readable for one release;
+  nothing deletes it, and recurrence you configured keeps working.
+- **External schedulers** are still fully supported — post a job instead of storing a schedule:
 
   ```cron
-  */15 * * * *  cd /srv/lighttrack && lt-runner serve --once >> /var/log/lt-serve.log 2>&1
+  0 * * * *  curl -sX POST "$LIGHTTRACK_URL/v1/jobs" -H "authorization: Bearer $ADMIN_KEY" \
+               -H 'content-type: application/json' \
+               -d '{"type":"bench_run","payload":{"benchmark_id":"b-1"}}'
   ```
 
-  Running "too often" is harmless — the due-check keeps it idempotent. Discovery uses existing read
-  endpoints (list projects → list benchmarks → list runs/jobs) with the runner's admin key.
+  Running "too often" is harmless: enqueue is cheap and the queue's own accounting is what bounds it.
+
+See `docs/SCHEDULING.md` for the full job/schedule model — benchmark runs are one of five kinds.
 
 ## 5. Latency + token cost, DB-backed price table  (#5)
 - **Per-call metrics** captured on generation/judge: `latency_ms`, `input/output/cached tokens`, `cost_usd`.

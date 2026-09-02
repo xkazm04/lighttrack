@@ -1,0 +1,230 @@
+//! Typed payloads for each [`JobKind`](crate::JobKind).
+//!
+//! The queue's payload stays a `serde_json::Value` on the row — a typed column would force a
+//! migration for every new kind — but the *shape* each kind expects is declared here rather than
+//! rediscovered by a chain of `payload.get("x").and_then(Value::as_u64).unwrap_or(1)` at the one
+//! place that executes it. Two things follow, and both were missing while `bench_run` was the only
+//! kind:
+//!
+//! * `POST /v1/jobs` can **validate before enqueue**, so a typo'd payload is a 400 at the door
+//!   instead of a job that claims, runs, fails, retries twice and dead-letters;
+//! * the worker parses once, at the top of its dispatch, and works with a struct.
+//!
+//! Every field that has a sensible default has one, so a payload stays as small as the caller's
+//! intent. The required fields are the ones with no defensible default — the benchmark to run, the
+//! project to score — and their absence is exactly what validation is for.
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::job::JobKind;
+
+/// Run a stored benchmark (the original, and still the only kind that spends generation budget).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchRunPayload {
+    pub benchmark_id: String,
+    #[serde(default = "one_u32")]
+    pub samples: u32,
+    #[serde(default = "one_u32")]
+    pub gen_samples: u32,
+    #[serde(default)]
+    pub heal: bool,
+    #[serde(default)]
+    pub pairwise: bool,
+    /// Bounded parallelism; `None` = the worker's own `--jobs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jobs: Option<usize>,
+    /// Provenance passthrough for a version-triggered enqueue (prompt registry).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+}
+
+/// Judge recent unscored events for a project — one cycle of what `lt-runner score` loops over.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoreEventsPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(flatten)]
+    pub judge: JudgeSpec,
+    #[serde(default = "ten")]
+    pub limit: usize,
+}
+
+/// Judge whole traces for a project — one cycle of `lt-runner score-traces`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoreTracesPayload {
+    pub project: String,
+    #[serde(flatten)]
+    pub judge: JudgeSpec,
+    #[serde(default = "one_usize")]
+    pub sample_every: usize,
+    #[serde(default)]
+    pub errors_always: bool,
+    #[serde(default = "settle_secs")]
+    pub settle_secs: i64,
+    #[serde(default = "hundred")]
+    pub limit: usize,
+    /// Judge spec `[provider/]model` override for this cycle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge_model: Option<String>,
+}
+
+/// Sample live events into a frozen dataset — one cycle of `lt-runner schedule`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatasetSamplePayload {
+    pub project: String,
+    #[serde(default = "online")]
+    pub name_prefix: String,
+    #[serde(default = "fifty")]
+    pub n: usize,
+    #[serde(default)]
+    pub llm_scrub: bool,
+}
+
+/// Re-measure judge/human agreement against a golden set — one cycle of `lt-runner calibrate --watch`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalibratePayload {
+    /// Path to the golden set, **on the worker's filesystem**: calibration items are the operator's
+    /// own labelled data and deliberately never transit the API.
+    pub file: String,
+    #[serde(flatten)]
+    pub judge: JudgeSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default = "seven_tenths")]
+    pub threshold: f64,
+    #[serde(default = "six_tenths")]
+    pub kappa_bar: f64,
+    #[serde(default = "fifteen_hundredths")]
+    pub drift_threshold: f64,
+    #[serde(default = "one_u32")]
+    pub samples: u32,
+}
+
+/// The `--rubric` / `--rubric-id` contract, shared by every judging kind. Exactly one is required;
+/// [`JudgeSpec::validate`] says so at enqueue time rather than at the first paid call.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JudgeSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rubric: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rubric_id: Option<String>,
+}
+
+impl JudgeSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        match (self.rubric.as_deref(), self.rubric_id.as_deref()) {
+            (Some(_), None) | (None, Some(_)) => Ok(()),
+            (Some(_), Some(_)) => {
+                Err("pass exactly one of 'rubric' or 'rubric_id', not both".into())
+            }
+            (None, None) => Err("one of 'rubric' or 'rubric_id' is required".into()),
+        }
+    }
+}
+
+/// Parse-and-check `payload` against what `kind` expects, returning a human reason on refusal.
+///
+/// Used by `POST /v1/jobs` and by the schedule sweep before it enqueues, so a malformed schedule is
+/// caught when it is written rather than every interval forever.
+pub fn validate_payload(kind: JobKind, payload: &Value) -> Result<(), String> {
+    fn parse<T: for<'de> Deserialize<'de>>(p: &Value) -> Result<T, String> {
+        serde_json::from_value(p.clone()).map_err(|e| e.to_string())
+    }
+    match kind {
+        JobKind::BenchRun => parse::<BenchRunPayload>(payload).map(|_| ()),
+        JobKind::ScoreEvents => {
+            parse::<ScoreEventsPayload>(payload).and_then(|p| p.judge.validate())
+        }
+        JobKind::ScoreTraces => {
+            parse::<ScoreTracesPayload>(payload).and_then(|p| p.judge.validate())
+        }
+        JobKind::DatasetSample => parse::<DatasetSamplePayload>(payload).map(|_| ()),
+        JobKind::Calibrate => parse::<CalibratePayload>(payload).and_then(|p| p.judge.validate()),
+    }
+    .map_err(|e| format!("invalid payload for job kind '{}': {e}", kind.as_str()))
+}
+
+fn one_u32() -> u32 {
+    1
+}
+fn one_usize() -> usize {
+    1
+}
+fn ten() -> usize {
+    10
+}
+fn fifty() -> usize {
+    50
+}
+fn hundred() -> usize {
+    100
+}
+fn settle_secs() -> i64 {
+    120
+}
+fn online() -> String {
+    "online".to_string()
+}
+fn seven_tenths() -> f64 {
+    0.7
+}
+fn six_tenths() -> f64 {
+    0.6
+}
+fn fifteen_hundredths() -> f64 {
+    0.15
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_minimal_payload_fills_in_the_rest() {
+        let p: BenchRunPayload =
+            serde_json::from_value(json!({ "benchmark_id": "b1" })).expect("minimal bench payload");
+        assert_eq!(p.samples, 1);
+        assert_eq!(p.gen_samples, 1);
+        assert!(!p.heal);
+        assert!(p.jobs.is_none());
+    }
+
+    #[test]
+    fn validation_catches_at_the_door_what_would_otherwise_dead_letter() {
+        // Missing the one field that has no defensible default.
+        let e = validate_payload(JobKind::BenchRun, &json!({})).expect_err("must refuse");
+        assert!(e.contains("bench_run"), "{e}");
+        // A judging kind with neither half of the rubric contract is refused, not queued.
+        let e = validate_payload(JobKind::ScoreEvents, &json!({ "project": "p" }))
+            .expect_err("must refuse");
+        assert!(e.contains("rubric"), "{e}");
+        // …and with both halves, which is ambiguous rather than merely incomplete.
+        let e = validate_payload(
+            JobKind::ScoreEvents,
+            &json!({ "rubric": "be good", "rubric_id": "r1" }),
+        )
+        .expect_err("must refuse");
+        assert!(e.contains("not both"), "{e}");
+        // A well-formed one passes.
+        validate_payload(JobKind::ScoreEvents, &json!({ "rubric": "be good" })).expect("valid");
+        validate_payload(
+            JobKind::DatasetSample,
+            &json!({ "project": "p", "n": 5, "llm_scrub": true }),
+        )
+        .expect("valid");
+    }
+
+    #[test]
+    fn the_judge_contract_flattens_into_every_judging_payload() {
+        let p: ScoreTracesPayload =
+            serde_json::from_value(json!({ "project": "p", "rubric_id": "r1" }))
+                .expect("traces payload");
+        assert_eq!(p.judge.rubric_id.as_deref(), Some("r1"));
+        assert_eq!(p.sample_every, 1);
+        assert_eq!(p.settle_secs, 120);
+    }
+}
