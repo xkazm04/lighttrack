@@ -25,8 +25,10 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from .diagnostics import Diagnostics, no_project_message, send_failure_message, truncate
+from .diagnostics import (Diagnostics, diagnostic_kind, no_project_message, send_failure_message,
+                          truncate)
 from .journal import RECOVERED_TAG, SpanJournal, unsettled_error
+from .pii import PII_RULES
 
 _DEFAULT_URL = "http://127.0.0.1:8787"
 
@@ -61,7 +63,12 @@ def _extract_openai(resp: Any):
     usage = _get(resp, "usage")
     inp = _get(usage, "prompt_tokens", "input_tokens") or 0
     out = _get(usage, "completion_tokens", "output_tokens") or 0
+    # The Responses API renamed the pair AND moved the cache counter: `input_tokens_details`, not
+    # `prompt_tokens_details`. Reading only the older place reported every cached Responses call as
+    # uncached, which the price book then charged at full input rate.
     cached = _get(_get(usage, "prompt_tokens_details"), "cached_tokens")
+    if cached is None:
+        cached = _get(_get(usage, "input_tokens_details"), "cached_tokens")
     return (_get(resp, "model"), int(inp), int(out), cached)
 
 
@@ -83,12 +90,21 @@ def _extract_gemini(resp: Any):
 
 # ---- Output guardrails ------------------------------------------------------
 
-_PII_PATTERNS = [
-    ("email", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
-    ("phone", re.compile(r"(?:\+?\d[\s().-]?){10,}")),
-    ("credit_card", re.compile(r"\b(?:\d[ -]?){13,16}\b")),
-    ("ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
-]
+#: Compiled once. `PII_RULES` is generated from the server's own scrubber (see `lighttrack.pii`).
+_PII_COMPILED = [(r["kind"], re.compile(r["pattern"])) for r in PII_RULES]
+
+
+def pii_kinds(text: str) -> list:
+    """The PII families present in `text`, in rule order, each reported once.
+
+    A kind is a family, not a regex: a phone number has three shapes and a secret three prefixes, and
+    a caller wants to know *a phone number leaked*, not which of three patterns noticed.
+    """
+    found = []
+    for kind, rx in _PII_COMPILED:
+        if kind not in found and rx.search(text):
+            found.append(kind)
+    return found
 
 
 @dataclass
@@ -142,12 +158,10 @@ def guard(output: str, rules: dict) -> GuardResult:
     for pat in rules.get("must_not_match") or []:
         record(f"not_match:{pat}", re.search(pat, output) is None, f"must not match {pat}")
     if rules.get("no_pii"):
-        clean = True
-        for name, rx in _PII_PATTERNS:
-            if rx.search(output):
-                clean = False
-                record(f"pii:{name}", False, f"contains {name}-like PII")
-        if clean:
+        kinds = pii_kinds(output)
+        for kind in kinds:
+            record(f"pii:{kind}", False, f"contains {kind}-like PII")
+        if not kinds:
             record("no_pii", True)
 
     return GuardResult(ok=len(violations) == 0, violations=violations, checks=checks)
@@ -469,10 +483,14 @@ class LightTrack:
             with urllib.request.urlopen(req, timeout=self.timeout):
                 pass
         except urllib.error.HTTPError as e:
-            self.diag.warn(f"http-{e.code}", send_failure_message(
+            self.diag.warn(diagnostic_kind(e.code), send_failure_message(
                 self.base_url, path, f"HTTP {e.code} {_error_body(e)}", status=e.code, **ctx))
         except Exception as e:
-            self.diag.warn("network", send_failure_message(
+            # urlopen surfaces a timeout either directly or wrapped in URLError.reason, so both are
+            # checked: a timeout bucketed as "network" hides behind (and crowds out) real connection
+            # failures, which is exactly the confusion the per-kind rate limiter exists to avoid.
+            timed_out = isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+            self.diag.warn(diagnostic_kind(timed_out=timed_out), send_failure_message(
                 self.base_url, path, f"{type(e).__name__}: {e}", **ctx))
 
 

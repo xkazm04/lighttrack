@@ -208,27 +208,37 @@ class SpanJournal:
         return self._fh
 
 
-def _unsettled(path: str) -> List[Dict[str, Any]]:
-    """The open records in one journal file that never got a matching close."""
+def unsettled(text: str) -> List[Dict[str, Any]]:
+    """The open records in one journal file body that never got a matching close.
+
+    Takes the TEXT, not a path — the journal is an on-disk format two SDKs may read from the same
+    directory, so the parse has to be testable against a shared fixture
+    (`clients/contract/fixtures/journal.json`) rather than only against a file this process wrote.
+    """
     opens: Dict[Any, Dict[str, Any]] = {}
-    with open(path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                # A kill mid-write leaves a partial last line. Everything before it is still good;
-                # dropping only the torn record is the point of a line-per-record journal.
-                continue
-            if not isinstance(rec, dict):
-                continue
-            if rec.get("o") == "b":
-                opens[rec.get("k")] = rec
-            elif rec.get("o") == "e":
-                opens.pop(rec.get("k"), None)
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            # A kill mid-write leaves a partial last line. Everything before it is still good;
+            # dropping only the torn record is the point of a line-per-record journal.
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("o") == "b":
+            opens[rec.get("k")] = rec
+        elif rec.get("o") == "e":
+            opens.pop(rec.get("k"), None)
     return list(opens.values())
+
+
+def _unsettled(path: str) -> List[Dict[str, Any]]:
+    """The unsettled records in the journal file at `path`."""
+    with open(path, "r", encoding="utf-8") as fh:
+        return unsettled(fh.read())
 
 
 def unsettled_error(rec: Dict[str, Any]) -> str:
