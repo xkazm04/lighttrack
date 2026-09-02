@@ -66,6 +66,7 @@ fn main() -> Result<()> {
             rubric,
             rubric_id,
             project,
+            prompt_tag,
             limit,
             interval,
             via_queue,
@@ -76,6 +77,9 @@ fn main() -> Result<()> {
                 p.insert("limit".into(), json!(limit));
                 if let Some(pr) = project {
                     p.insert("project".into(), json!(pr));
+                }
+                if let Some(t) = prompt_tag {
+                    p.insert("prompt_tag".into(), json!(t));
                 }
                 return enqueue::run_via_queue(
                     &cli,
@@ -95,6 +99,7 @@ fn main() -> Result<()> {
                 &engine,
                 &judge,
                 project.as_deref(),
+                prompt_tag.as_deref(),
                 *limit,
                 *interval,
                 cli.jobs,

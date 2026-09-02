@@ -16,6 +16,7 @@
 //!   lt schedules list   |   lt schedules set <id> --disabled   |   lt jobs list --status running
 //!   lt relay devices add --name studio-laptop --capability 'xprice/*'   (key shown ONCE)
 //!   lt relay devices list   |   lt relay devices revoke <device-id>
+//!   lt prompts list --project <id>   |   lt prompts quality --project <id> --rubric-id <r>
 //!   lt costs --project <id>
 //!   lt prices unpriced --project <id>   |   lt prices history openai gpt-5.5
 //!   lt events --project <id> --limit 20
@@ -31,6 +32,7 @@ mod http;
 mod limits;
 mod prices;
 mod projects;
+mod prompts;
 mod relay;
 mod rubrics;
 mod schedules;
@@ -51,6 +53,7 @@ fn main() -> Result<()> {
         Cmd::Rubrics { action } => rubrics::run(&cli, action),
         Cmd::Costs { project } => usage::costs(&cli, project),
         Cmd::Prices { action } => prices::run(&cli, action),
+        Cmd::Prompts { action } => prompts::run(&cli, action),
         Cmd::Events { project, limit } => usage::events(&cli, project, *limit),
         Cmd::Traces { project, limit } => usage::traces(&cli, project, *limit),
         Cmd::Trace { id } => usage::trace(&cli, id),

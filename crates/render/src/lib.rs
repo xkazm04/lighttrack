@@ -23,6 +23,7 @@ mod md;
 mod prices;
 mod projects;
 mod prompts;
+mod quality;
 mod rollup;
 mod rubrics;
 mod schedules;
@@ -65,6 +66,7 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "get_rubric" => rubrics::detail(v),
         "list_prompts" => prompts::list(v),
         "get_prompt" => prompts::resolved(v),
+        "get_prompt_quality" => quality::table(v),
         "compare" => compare::leaderboard(v),
         "get_margin" => margin::report(v),
         "get_margin_trend" => margin::trend(v),

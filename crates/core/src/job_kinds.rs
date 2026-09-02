@@ -54,6 +54,10 @@ pub struct ScoreEventsPayload {
     pub project: Option<String>,
     #[serde(flatten)]
     pub judge: JudgeSpec,
+    /// Only judge events carrying this `metadata.prompt` tag (M23), so a queued scoring cycle can
+    /// put its paid judge calls on the version a promotion decision is pending for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tag: Option<String>,
     #[serde(default = "ten")]
     pub limit: usize,
 }
