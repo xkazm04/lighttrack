@@ -43,6 +43,16 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         action: RubricsCmd,
     },
+    /// Human verdicts (M11) — the ground truth a judge is calibrated against.
+    Labels {
+        #[command(subcommand)]
+        action: LabelsCmd,
+    },
+    /// Judge trust — may the judge behind a green badge be believed for this rubric?
+    Judges {
+        #[command(subcommand)]
+        action: JudgesCmd,
+    },
     /// Cost/usage rollup.
     Costs {
         #[arg(long)]
@@ -343,6 +353,67 @@ pub(crate) enum ProjectsCmd {
         id: Option<String>,
     },
     List,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum LabelsCmd {
+    /// List human verdicts, newest first.
+    List {
+        #[arg(long)]
+        project: Option<String>,
+        /// Narrow to one subject: `event:<id>` / `dataset_item:<id>` / `score:<id>`.
+        #[arg(long)]
+        subject: Option<String>,
+        #[arg(long)]
+        rubric_id: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    /// Record one verdict. `--labeler` is required: a human verdict with no attribution cannot be
+    /// audited, which is how a calibration result becomes a number nobody can defend.
+    Add {
+        /// `event:<id>` / `dataset_item:<id>` / `score:<id>`.
+        #[arg(long)]
+        subject: String,
+        /// Overall quality 0-1, on the same scale a judge verdict normalizes to.
+        #[arg(long)]
+        value: f64,
+        /// Who said so.
+        #[arg(long)]
+        labeler: String,
+        #[arg(long)]
+        project: Option<String>,
+        /// An explicit pass/fail call; omit to derive it from `--value`.
+        #[arg(long)]
+        pass: Option<bool>,
+        /// The rubric this opinion was formed under, if any.
+        #[arg(long)]
+        rubric_id: Option<String>,
+        #[arg(long)]
+        note: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum JudgesCmd {
+    /// Is this judge trusted for this rubric? `trusted` | `untrusted` | `unknown` — and `unknown`
+    /// is a real answer, not a missing one: nobody has measured this pair.
+    Trust {
+        /// The judge model, e.g. `anthropic/claude-haiku-4-5`.
+        judge: String,
+        #[arg(long)]
+        project: Option<String>,
+        /// Omit for the freeform judge; a rubric never inherits that trust.
+        #[arg(long)]
+        rubric_id: Option<String>,
+    },
+    /// The project's calibration history, newest first — the series a drift check reads.
+    History {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]

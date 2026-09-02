@@ -17,6 +17,7 @@ mod datasets;
 mod events;
 mod forecast;
 mod jobs;
+mod labels;
 mod limits;
 mod margin;
 mod md;
@@ -61,6 +62,9 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "list_datasets" => datasets::list(v),
         "get_dataset" => datasets::detail(v),
         "list_dataset_items" => datasets::items(v),
+        "list_labels" => labels::list(v),
+        "list_calibrations" => labels::calibrations(v),
+        "get_judge_trust" => labels::trust(v),
         "list_rubrics" => rubrics::list(v),
         "get_rubric" => rubrics::detail(v),
         "list_prompts" => prompts::list(v),

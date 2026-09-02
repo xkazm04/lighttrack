@@ -22,6 +22,7 @@ const NAMES: &[&str] = &[
     "add_dataset_item",
     "freeze_dataset",
     "create_rubric",
+    "record_label",
     "create_benchmark",
     "create_limit",
     "update_limit",
@@ -93,6 +94,18 @@ pub(crate) fn tools() -> Vec<Value> {
             "Freeze a dataset so it becomes immutable, fixing the input half of run comparability. \n             Runs months apart are only comparable if the models under test have gained no exposure \n             to the cases meanwhile, which imported datasets cannot guarantee. Idempotent.",
             json!({"type":"object","properties":{"dataset":{"type":"string"}},"required":["dataset"]}),
             true),
+        wtool("record_label",
+            "Record one human verdict (M11) — the ground truth a judge is calibrated against. `labeler` is required: a verdict with no attribution cannot be audited, which is how a calibration result becomes a number nobody can defend.",
+            json!({"type":"object","properties":{
+                "project_id":{"type":"string"},
+                "subject":{"type":"string","description":"'<kind>:<id>' with kind one of event, dataset_item, score"},
+                "value":{"type":"number","description":"overall quality 0-1, on the same scale a judge verdict normalizes to"},
+                "pass":{"type":"boolean","description":"an explicit human pass/fail; omit to derive it from `value`"},
+                "rubric_id":{"type":"string","description":"the rubric this opinion was formed under, if any"},
+                "labeler":{"type":"string","description":"who said so — a person, a team"},
+                "note":{"type":"string"}
+            },"required":["subject","value","labeler"]}),
+            false),
         wtool("create_rubric",
             "Create a structured, weighted rubric for per-dimension judging.",
             json!({"type":"object","properties":{
@@ -239,6 +252,21 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
             Ok(d) => c.post(&format!("/v1/datasets/{d}/freeze"), &json!({})),
             Err(e) => Err(e),
         },
+        "record_label" => post_with(
+            c,
+            args,
+            &["subject", "value", "labeler"],
+            &[
+                "project_id",
+                "subject",
+                "value",
+                "pass",
+                "rubric_id",
+                "labeler",
+                "note",
+            ],
+            "/v1/labels".to_string(),
+        ),
         "create_rubric" => match need(args, "project") {
             Ok(p) => post_with(
                 c,

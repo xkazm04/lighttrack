@@ -118,6 +118,22 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
         tool("get_rubric", "Fetch one rubric by id.",
             json!({"type":"object","properties":{"rubric":{"type":"string"}},"required":["rubric"]})),
+        tool("list_labels", "Human verdicts (M11): what a person said about an event, a golden-set item, or a judge's own verdict — the ground truth a judge is calibrated against. Narrow with `subject` (`event:<id>` / `dataset_item:<id>` / `score:<id>`) or `rubric_id`.",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "subject":{"type":"string","description":"'<kind>:<id>' with kind one of event, dataset_item, score"},
+                "rubric_id":{"type":"string"},
+                "limit":{"type":"integer"},
+                "cursor":{"type":"string","description":"opaque keyset cursor from a previous page"}
+            }})),
+        tool("get_judge_trust", "Whether a judge may be believed for a rubric: `trusted` | `untrusted` | `unknown`, with the calibration record that decided it. `unknown` is NOT `untrusted` — a judge nobody has measured has taken no check, not failed one. Ask this before reading a benchmark gate's green badge as evidence.",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "judge":{"type":"string","description":"the judge model, e.g. anthropic/claude-haiku-4-5"},
+                "rubric_id":{"type":"string","description":"omit for the freeform (rubric-less) judge; a rubric never inherits that trust"}
+            },"required":["judge"]})),
+        tool("list_calibrations", "A project's judge-human calibration history, newest first — the series a drift check reads.",
+            json!({"type":"object","properties":{"project":{"type":"string"},"limit":{"type":"integer"},"cursor":{"type":"string"}}})),
         tool("list_jobs", "List background jobs (benchmark runs). Optionally filter by status.",
             json!({"type":"object","properties":{"status":{"type":"string","description":"queued|running|done|error"},"limit":{"type":"integer"}}})),
         tool("get_job", "Fetch one job by id — poll a benchmark run's status / progress / result.",
@@ -208,6 +224,21 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
             c.get(&format!("/v1/projects/{p}/rubrics"))
         }),
         "get_rubric" => bind(args, "rubric", |r| c.get(&format!("/v1/rubrics/{r}"))),
+        "list_labels" => {
+            let mut p = list_path("/v1/labels", args);
+            push_str_params(&mut p, args, &["subject", "rubric_id", "cursor"]);
+            c.get(&p)
+        }
+        "get_judge_trust" => bind(args, "judge", |j| {
+            let mut p = format!("/v1/judges/trust?judge={j}");
+            push_str_params(&mut p, args, &["project", "rubric_id"]);
+            c.get(&p)
+        }),
+        "list_calibrations" => {
+            let mut p = list_path("/v1/calibrations", args);
+            push_str_params(&mut p, args, &["cursor"]);
+            c.get(&p)
+        }
         "list_jobs" => c.get(&jobs_path(args)),
         "get_job" => bind(args, "job", |j| c.get(&format!("/v1/jobs/{j}"))),
         "list_schedules" => c.get(&match args.get("project").and_then(Value::as_str) {
