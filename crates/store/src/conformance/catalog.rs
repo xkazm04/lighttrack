@@ -18,7 +18,9 @@ pub(super) fn prices(store: &dyn Store) -> Result<()> {
         input_per_mtok: 1.0,
         output_per_mtok: 2.0,
         cached_input_per_mtok: Some(0.1),
-        effective_date: Utc::now(),
+        effective_from: Utc::now(),
+        verified_at: None,
+        note: None,
         source_url: None,
     };
     store.upsert_price(&row)?;
@@ -29,7 +31,9 @@ pub(super) fn prices(store: &dyn Store) -> Result<()> {
         .expect("upserted price present");
     assert!((found.input_per_mtok - 1.0).abs() < 1e-9);
 
-    // Conflict path: a second upsert on the same (provider, model) updates in place.
+    // Conflict path: a second upsert on the same (provider, model, effective_from) corrects that
+    // one point on the timeline in place. Adding a *later* row instead appends — see
+    // `conformance::pricing`, which is where the dated-book semantics are pinned.
     row.output_per_mtok = 9.0;
     store.upsert_price(&row)?;
     let updated = store

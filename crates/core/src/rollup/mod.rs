@@ -44,6 +44,14 @@ pub struct RollupQuery<'a> {
     /// Equality predicates, AND-combined. A row whose dimension value is absent never matches
     /// (an untagged call cannot satisfy a customer filter), mirroring [`crate::LimitScope::matches`].
     pub filter: Vec<(Dimension, String)>,
+    /// Restrict to rows with **no price on them** (`cost_usd IS NULL`) — the unpriced-traffic
+    /// ledger (M26).
+    ///
+    /// Not expressible as a [`Dimension`] filter: "unpriced" is a property of the cost column, not
+    /// a groupable value, and `RollupRow::unpriced_calls` alone cannot answer it because the token
+    /// sums beside it cover the whole bucket, priced calls included. One flag on the one rollup
+    /// keeps the predicate in a single place per backend instead of a fourth hand-written query.
+    pub unpriced_only: bool,
 }
 
 impl<'a> RollupQuery<'a> {
@@ -56,7 +64,14 @@ impl<'a> RollupQuery<'a> {
             until: None,
             time_key: TimeKey::Ts,
             filter: Vec::new(),
+            unpriced_only: false,
         }
+    }
+
+    /// Narrow to calls with no price on the row — see [`RollupQuery::unpriced_only`].
+    pub fn only_unpriced(mut self) -> Self {
+        self.unpriced_only = true;
+        self
     }
 
     pub fn project(mut self, project: Option<&'a str>) -> Self {

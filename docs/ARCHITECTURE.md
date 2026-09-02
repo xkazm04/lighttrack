@@ -180,8 +180,9 @@ points at `/v1/limits/usage`. The dimension is not exposed over MCP.
 An event whose model is absent from the price book stores `cost_usd = NULL` — never a phantom zero,
 because that invariant is what makes margin/analytics honest. But `SUM(cost_usd)` reads `NULL` as
 `0.00`, so a **cost cap used to be free to walk past on exactly the newest, least-vetted traffic**
-(`cost_usd` is also the *default* limit metric). Fixed **inside the limit path only** — nothing is
-written onto the event row, and there is no price discovery from providers:
+(`cost_usd` is also the *default* limit metric). Fixed **inside the limit path** — there is still no
+price discovery from providers, and nothing is written onto the event row *at ingest*; M26 added one
+explicit, operator-initiated exception (the forward fill below):
 
 - **Imputation.** Each unpriced call in a window is charged the mean cost of a *priced* call in the
   same window (`SUM(cost_usd) / priced_calls`). It uses only evidence already inside the window, and
@@ -198,6 +199,15 @@ written onto the event row, and there is no price discovery from providers:
   entry does not restate spend already inside a window — the cap stays wrong until the window rolls.
   Only *unpriced* traffic self-corrects (its charge is computed at evaluation time). This absence is
   stated in `GET /v1/limits/status` → `cost_basis.notes`, not left to be discovered during an incident.
+- **Seeing the gap, and closing it (M26).** `GET /v1/costs/unpriced` lists the `(provider, model)`
+  pairs carrying unpriced traffic, ranked by calls, with the price book's own freshness beside them —
+  before this, nothing said *which* models were missing, so the only symptom was a cost number that
+  felt low. `PUT /v1/prices/:provider/:model?fill_unpriced=1` prices the stored `cost_usd IS NULL`
+  rows for that key and answers `{filled, remaining_unpriced}`. The fill is opt-in, never automatic;
+  it touches only rows that were never costed, so the no-retroactive-repricing rule above is intact;
+  and every row it writes is stamped `metadata.cost_source = "book_fill"` + `priced_at`, so a cost
+  reconstructed later stays distinguishable from one that was right at the time. See
+  `docs/PRICING.md`.
 - **Client-reported cost** (`metadata.cost_source = "client"`) is summed separately and reported in
   `cost_evidence` / `cost_basis`, so an operator can see when a cap rests on the caller's own number.
 

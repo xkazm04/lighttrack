@@ -7,21 +7,7 @@ use crate::alias_table::AliasTable;
 use crate::error::{LtError, Result};
 use crate::event::TokenUsage;
 use crate::model_id::{canonicalize_with, ModelId};
-
-/// A persisted price-book row (the DB-backed source of truth; `pricing.json` is just the seed).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelPriceRow {
-    pub provider: String,
-    pub model: String,
-    pub input_per_mtok: f64,
-    pub output_per_mtok: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cached_input_per_mtok: Option<f64>,
-    #[serde(default = "Utc::now")]
-    pub effective_date: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_url: Option<String>,
-}
+use crate::price_row::{parse_price_date, ModelPriceRow};
 
 /// Per-model price, in USD per 1,000,000 tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +46,24 @@ impl PricingMode {
         }
     }
 
+    /// Read the lane off an event's `metadata.pricing_mode`, else its `batch`/`flex`/`priority` tag.
+    ///
+    /// Lives here rather than only on [`crate::LlmEvent`] because the M26 forward fill prices rows
+    /// straight out of the store, without rebuilding an event: two readings of "which lane was this
+    /// call on" would be two ways to price the same row.
+    pub fn from_hints(metadata: &serde_json::Value, tags: &[String]) -> Self {
+        if let Some(m) = metadata.get("pricing_mode").and_then(|v| v.as_str()) {
+            return PricingMode::parse(m);
+        }
+        if tags.iter().any(|t| t == "batch") {
+            return PricingMode::Batch;
+        }
+        if tags.iter().any(|t| t == "flex" || t == "priority") {
+            return PricingMode::Flex;
+        }
+        PricingMode::Standard
+    }
+
     /// The price-row model-name suffix for this lane, if any.
     fn suffix(self) -> Option<&'static str> {
         match self {
@@ -81,12 +85,23 @@ impl PricingMode {
 pub struct PriceBook {
     entries: HashMap<String, ModelPrice>,
     aliases: AliasTable,
+    verified_at: Option<DateTime<Utc>>,
 }
 
 /// Shape of `config/pricing.json`.
 #[derive(Debug, Deserialize)]
 struct PricingFile {
+    #[serde(rename = "_meta", default)]
+    meta: PricingMeta,
     models: HashMap<String, ModelPrice>,
+}
+
+/// The seed's `_meta` block. Only `last_verified` is read: it is the one field that says how much
+/// the rates below can be trusted, and it used to reach nothing at runtime.
+#[derive(Debug, Default, Deserialize)]
+struct PricingMeta {
+    #[serde(default)]
+    last_verified: Option<String>,
 }
 
 impl PriceBook {
@@ -101,7 +116,22 @@ impl PriceBook {
                 .iter()
                 .map(move |a| (a.clone(), canonical.clone()))
         }));
-        Self { entries, aliases }
+        Self {
+            entries,
+            aliases,
+            verified_at: None,
+        }
+    }
+
+    /// When the rates in this book were last checked (the seed's `_meta.last_verified`).
+    pub fn verified_at(&self) -> Option<DateTime<Utc>> {
+        self.verified_at
+    }
+
+    /// Stamp a verification date onto this book.
+    pub fn with_verified_at(mut self, at: Option<DateTime<Utc>>) -> Self {
+        self.verified_at = at;
+        self
     }
 
     /// The declared alias table this book carries — step 5 of
@@ -125,7 +155,12 @@ impl PriceBook {
     pub fn from_json_str(s: &str) -> Result<Self> {
         let parsed: PricingFile =
             serde_json::from_str(s).map_err(|e| LtError::InvalidPriceBook(e.to_string()))?;
-        Ok(Self::new(parsed.models))
+        let verified = parsed
+            .meta
+            .last_verified
+            .as_deref()
+            .and_then(parse_price_date);
+        Ok(Self::new(parsed.models).with_verified_at(verified))
     }
 
     /// The storage key for a `(provider, model)` pair — **the raw strings**, so the key a `PUT
@@ -135,13 +170,35 @@ impl PriceBook {
         format!("{provider}/{model}")
     }
 
-    /// Build a price book from persisted rows (keyed `"<provider>/<model>"`).
+    /// Build a price book from persisted rows (keyed `"<provider>/<model>"`), as of **now**.
     pub fn from_rows(rows: &[ModelPriceRow]) -> Self {
-        let entries = rows
-            .iter()
-            .map(|r| {
+        Self::from_rows_at(rows, Utc::now())
+    }
+
+    /// Build a price book from persisted rows as of `at`.
+    ///
+    /// The table is append-only and dated, so a key may carry several rows: the one that applies is
+    /// the **latest `effective_from <= at`**. A future-dated row (a rate announced ahead of its
+    /// switch-over) is therefore stored without being charged yet, and a key whose only rows are
+    /// future-dated is simply unpriced until one of them lands — which the unpriced ledger shows,
+    /// rather than the book quietly billing at next month's rate.
+    pub fn from_rows_at(rows: &[ModelPriceRow], at: DateTime<Utc>) -> Self {
+        let mut current: HashMap<String, &ModelPriceRow> = HashMap::new();
+        for r in rows.iter().filter(|r| r.effective_from <= at) {
+            current
+                .entry(r.key())
+                .and_modify(|best| {
+                    if r.effective_from >= best.effective_from {
+                        *best = r;
+                    }
+                })
+                .or_insert(r);
+        }
+        let entries = current
+            .into_iter()
+            .map(|(k, r)| {
                 (
-                    format!("{}/{}", r.provider, r.model),
+                    k,
                     ModelPrice {
                         input_per_mtok: r.input_per_mtok,
                         output_per_mtok: r.output_per_mtok,
@@ -156,11 +213,16 @@ impl PriceBook {
         Self {
             entries,
             aliases: AliasTable::default(),
+            verified_at: rows.iter().filter_map(|r| r.verified_at).min(),
         }
     }
 
     /// Flatten this book into rows (for seeding the DB from `pricing.json`).
+    ///
+    /// Every seeded row carries the seed's `_meta.last_verified` as its `verified_at`, which is what
+    /// makes the boot-time staleness warning measure something real instead of `None`.
     pub fn rows(&self) -> Vec<ModelPriceRow> {
+        let now = Utc::now();
         self.entries
             .iter()
             .filter_map(|(k, v)| {
@@ -171,8 +233,13 @@ impl PriceBook {
                     input_per_mtok: v.input_per_mtok,
                     output_per_mtok: v.output_per_mtok,
                     cached_input_per_mtok: v.cached_input_per_mtok,
-                    effective_date: Utc::now(),
+                    // Seeded rows date from the seed's verification, not from the moment the process
+                    // happened to boot: a book whose rows all say "effective now" cannot answer
+                    // "what did we charge in June?" the first time someone corrects a rate.
+                    effective_from: self.verified_at.unwrap_or(now),
                     source_url: None,
+                    verified_at: self.verified_at,
+                    note: None,
                 })
             })
             .collect()
@@ -408,8 +475,10 @@ mod tests {
             input_per_mtok: 1.0,
             output_per_mtok: 1.0,
             cached_input_per_mtok: None,
-            effective_date: Utc::now(),
+            effective_from: Utc::now(),
             source_url: None,
+            verified_at: None,
+            note: None,
         }];
         let hand = PriceBook::from_rows(&rows);
         assert_eq!(hand.cost_usd("Cerebras", "ZOO-1", &u), Some(1.0));
@@ -440,6 +509,56 @@ mod tests {
             book.cost_usd("anthropic", "claude-haiku-4-5-20251001", &u),
             book.cost_usd("anthropic", "claude-haiku-4-5", &u)
         );
+    }
+
+    fn dated(model: &str, input: f64, from: &str) -> ModelPriceRow {
+        ModelPriceRow {
+            provider: "openai".into(),
+            model: model.into(),
+            input_per_mtok: input,
+            output_per_mtok: 0.0,
+            cached_input_per_mtok: None,
+            effective_from: parse_price_date(from).expect("date"),
+            source_url: None,
+            verified_at: None,
+            note: None,
+        }
+    }
+
+    /// The M26 headline: `model_prices` is a timeline, and the book reads the row that was in force.
+    #[test]
+    fn the_book_picks_the_latest_row_that_had_taken_effect() {
+        let rows = vec![
+            dated("gpt-9", 1.0, "2026-01-01"),
+            dated("gpt-9", 3.0, "2026-06-01"),
+            // Announced ahead of its switch-over: stored, not yet charged.
+            dated("gpt-9", 9.0, "2027-01-01"),
+        ];
+        let u = usage(1_000_000, 0);
+        let at = |d: &str| {
+            PriceBook::from_rows_at(&rows, parse_price_date(d).expect("date"))
+                .cost_usd("openai", "gpt-9", &u)
+        };
+        assert_eq!(at("2026-03-01"), Some(1.0), "the January rate was in force");
+        assert_eq!(at("2026-08-01"), Some(3.0), "the June correction applies");
+        assert_eq!(at("2027-06-01"), Some(9.0));
+        assert_eq!(
+            at("2025-01-01"),
+            None,
+            "before the first row the model is unpriced, not free"
+        );
+    }
+
+    /// The seed's `_meta.last_verified` has to reach the rows, or the staleness warning is decoration.
+    #[test]
+    fn the_seed_stamps_its_verification_date_onto_every_row() {
+        let book = PriceBook::from_json_str(SEED).expect("seed parses");
+        let at = book
+            .verified_at()
+            .expect("seed declares _meta.last_verified");
+        let rows = book.rows();
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|r| r.verified_at == Some(at)));
     }
 
     #[test]

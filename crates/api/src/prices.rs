@@ -6,12 +6,11 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use serde::Deserialize;
 
-use lighttrack_core::{AliasTable, ModelPriceRow, PriceBook};
+use lighttrack_core::{AliasTable, ModelPriceRow, PriceBook, PriceBookPosture};
 
 use crate::error::ApiError;
-use crate::guards::{authenticate, ensure_can_admin};
+use crate::guards::authenticate;
 use crate::state::{spawn_db, AppState};
 
 /// The price book shipped with the source tree, compiled in. Release archives carry only the
@@ -58,6 +57,77 @@ fn embedded() -> PriceBook {
     PriceBook::from_json_str(EMBEDDED_PRICING).unwrap_or_default()
 }
 
+pub(crate) async fn get_prices(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ModelPriceRow>>, ApiError> {
+    authenticate(&st, &headers).await?;
+    let store = st.store.clone();
+    let rows = spawn_db(move || store.list_prices()).await?;
+    Ok(Json(rows))
+}
+
+/// One key's price timeline, newest first — `GET /v1/prices/history/:provider/:model`.
+///
+/// `GET /v1/prices` answers "what are we charging now". This answers "what were we charging in
+/// June", which is the only thing a June cost number can be defended with now that the book is
+/// dated and append-only (M26).
+pub(crate) async fn get_price_history(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((provider, model)): Path<(String, String)>,
+) -> Result<Json<Vec<ModelPriceRow>>, ApiError> {
+    authenticate(&st, &headers).await?;
+    let store = st.store.clone();
+    let rows = spawn_db(move || store.list_price_history(&provider, &model)).await?;
+    Ok(Json(rows))
+}
+
+/// Re-read the book from the store and hot-swap the in-memory copy, returning the new book.
+///
+/// Build outside the lock, swap under it: the critical section is one pointer-sized assignment, and
+/// a poisoned lock is recovered rather than propagated (see `events::prepare_event`).
+pub(crate) async fn refresh_book(st: &AppState) -> Result<PriceBook, ApiError> {
+    let store = st.store.clone();
+    let rows = spawn_db(move || store.list_prices()).await?;
+    let fresh = PriceBook::from_rows(&rows).with_aliases(declared_aliases());
+    {
+        let mut book = st.prices.write().unwrap_or_else(|p| p.into_inner());
+        *book = fresh.clone();
+    }
+    Ok(fresh)
+}
+
+/// How fresh the stored book is, measured against `LIGHTTRACK_PRICE_STALE_DAYS` (default 60).
+///
+/// Read from the store rather than the in-memory book, because `verified_at` is a property of the
+/// *rows*: the in-memory `PriceBook` is an index of rates, and the question here is who last
+/// vouched for them.
+pub(crate) fn measure_posture(rows: &[ModelPriceRow]) -> PriceBookPosture {
+    PriceBookPosture::measure(rows, Utc::now(), PriceBookPosture::budget_from_env())
+}
+
+/// The boot-time staleness line. Its own log record at `warn`, not a field on the startup posture
+/// event: a price book nobody has checked in months makes every cost, margin and limit number
+/// quietly wrong, and that does not belong buried in a field list.
+pub(crate) fn log_price_posture(p: &PriceBookPosture) {
+    if !p.stale {
+        return;
+    }
+    match p.verified_at {
+        Some(v) => tracing::warn!(
+            verified_at = %v, stale_after_days = p.stale_after_days, rows = p.rows,
+            "the model price book has not been verified recently — every cost, margin and limit \
+             number is computed from these rates; re-check them against the vendors' pricing pages"
+        ),
+        None => tracing::warn!(
+            rows = p.rows,
+            "no row in the model price book carries a verification date — costs are computed from \
+             rates nobody has vouched for; set `verified_at` when you next confirm them"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,57 +149,18 @@ mod tests {
             "a binary-only install must still price events"
         );
     }
-}
 
-pub(crate) async fn get_prices(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<Vec<ModelPriceRow>>, ApiError> {
-    authenticate(&st, &headers).await?;
-    let store = st.store.clone();
-    let rows = spawn_db(move || store.list_prices()).await?;
-    Ok(Json(rows))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct PutPriceReq {
-    input_per_mtok: f64,
-    output_per_mtok: f64,
-    #[serde(default)]
-    cached_input_per_mtok: Option<f64>,
-    #[serde(default)]
-    source_url: Option<String>,
-}
-
-pub(crate) async fn put_price(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Path((provider, model)): Path<(String, String)>,
-    Json(req): Json<PutPriceReq>,
-) -> Result<Json<ModelPriceRow>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
-    let row = ModelPriceRow {
-        provider,
-        model,
-        input_per_mtok: req.input_per_mtok,
-        output_per_mtok: req.output_per_mtok,
-        cached_input_per_mtok: req.cached_input_per_mtok,
-        effective_date: Utc::now(),
-        source_url: req.source_url,
-    };
-    let store = st.store.clone();
-    let row2 = row.clone();
-    spawn_db(move || store.upsert_price(&row2)).await?;
-
-    // Hot-swap the in-memory price book so new prices take effect without a restart.
-    let store2 = st.store.clone();
-    let rows = spawn_db(move || store2.list_prices()).await?;
-    // Build outside the lock, swap under it: the critical section is one pointer-sized assignment,
-    // and a poisoned lock is recovered rather than propagated (see `events::prepare_event`).
-    let fresh = PriceBook::from_rows(&rows).with_aliases(declared_aliases());
-    {
-        let mut book = st.prices.write().unwrap_or_else(|p| p.into_inner());
-        *book = fresh;
+    /// The seed's `_meta.last_verified` has to survive into the rows the API stores, or the boot
+    /// warning measures nothing on a fresh install.
+    #[test]
+    fn the_seeded_rows_carry_the_books_verification_date() {
+        let (book, _) = seed_book("no/such/pricing.json");
+        let rows = book.rows();
+        let at = book.verified_at().expect("the seed declares last_verified");
+        assert!(rows.iter().all(|r| r.verified_at == Some(at)));
+        // …and a book nobody has re-checked in over a year is judged stale rather than trusted.
+        let p = PriceBookPosture::measure(&rows, at + chrono::Duration::days(400), 60);
+        assert!(p.stale);
+        assert_eq!(p.rows, rows.len());
     }
-    Ok(Json(row))
 }

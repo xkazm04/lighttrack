@@ -164,7 +164,76 @@ pub(super) fn apply(c: &Connection) -> Result<()> {
             [],
         )?;
     }
+    dated_price_book(c)?;
     Ok(())
+}
+
+/// M26 — turn `model_prices` from one overwritten row per model into a dated, append-only table
+/// keyed `(provider, model, effective_from)`.
+///
+/// This is the one migration in the file that an `ALTER` cannot express: SQLite can add columns but
+/// not change a primary key, so the table has to be rebuilt. Detection is by *shape*, not by a
+/// version counter — if `effective_from` is already a column the rebuild is skipped — which makes it
+/// idempotent on every open, including the very first one on a fresh database (where the `CREATE
+/// TABLE IF NOT EXISTS` in `001_init.sql` has just laid down the pre-M26 shape and this immediately
+/// replaces it, on an empty table).
+///
+/// The copy preserves history rather than inventing it: an existing row's `effective_date` becomes
+/// its `effective_from`, and `verified_at` stays NULL — nobody vouched for those rates, and writing
+/// "verified today" would be a lie the staleness warning would then repeat.
+fn dated_price_book(c: &Connection) -> Result<()> {
+    if !table_exists(c, "model_prices")? || has_column(c, "model_prices", "effective_from")? {
+        return Ok(());
+    }
+    c.execute_batch(
+        "BEGIN;
+         CREATE TABLE model_prices_m26 (
+           provider              TEXT NOT NULL,
+           model                 TEXT NOT NULL,
+           input_per_mtok        REAL NOT NULL,
+           output_per_mtok       REAL NOT NULL,
+           cached_input_per_mtok REAL,
+           effective_from        TEXT NOT NULL,
+           source_url            TEXT,
+           verified_at           TEXT,
+           note                  TEXT,
+           PRIMARY KEY (provider, model, effective_from)
+         );
+         INSERT OR IGNORE INTO model_prices_m26
+           (provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok,
+            effective_from, source_url, verified_at, note)
+           SELECT provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok,
+                  effective_date, source_url, NULL, NULL
+             FROM model_prices;
+         DROP TABLE model_prices;
+         ALTER TABLE model_prices_m26 RENAME TO model_prices;
+         COMMIT;",
+    )?;
+    Ok(())
+}
+
+fn table_exists(c: &Connection, table: &str) -> Result<bool> {
+    let n: i64 = c.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        [table],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// Whether `table` carries `column`, read off `PRAGMA table_info` — the shape check the rebuild
+/// keys on.
+fn has_column(c: &Connection, table: &str, column: &str) -> Result<bool> {
+    // `PRAGMA table_info` takes no bound parameters; `table` is a compile-time literal at every
+    // call site, never caller text.
+    let mut stmt = c.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        if r.get::<_, String>(1)? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Run one `ADD COLUMN`, reporting whether it actually widened an existing table. "Already applied"

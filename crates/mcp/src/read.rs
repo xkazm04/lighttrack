@@ -68,8 +68,15 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
         tool("list_margin_policies", "List a project's standing margin guardrails: the policies that turn a loss-making or eroding customer into a limit rule automatically. Read-only — the rules they create show up in `list_limits` carrying an `origin`.",
             json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
-        tool("list_prices", "List the DB-backed model price book.",
+        tool("list_prices", "List the DB-backed model price book (the rate currently in force per model). Rows carry `effective_from` and `verified_at`: the book is a dated timeline, not one row per model.",
             json!({"type":"object","properties":{}})),
+        tool("list_price_history", "Every stored rate for one model, newest first — the price timeline. Use it to answer what a call in a PAST window actually cost, which the current book cannot tell you.",
+            json!({"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"}},"required":["provider","model"]})),
+        tool("list_unpriced_models", "Which (provider, model) pairs carried traffic the price book could NOT cost, ranked by call count. Those calls are stored with no cost at all — never a zero — so while this list is non-empty EVERY cost, margin, forecast and limit number over the window is a floor, not a total. Check it before reporting a spend figure. Closing a row is `PUT /v1/prices/{provider}/{model}?fill_unpriced=1` (admin, not exposed here). The response also carries `price_book.stale`: rates nobody has re-verified recently are their own reason to distrust a cost number.",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "since":{"type":"string","description":"RFC3339 window start (default: 30 days ago)"}
+            }})),
         tool("list_benchmarks", "List a project's benchmark definitions (with inline datasets).",
             json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
         tool("get_benchmark", "Fetch one benchmark definition by id.",
@@ -164,6 +171,10 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
             c.get(&format!("/v1/projects/{p}/margin-policies"))
         }),
         "list_prices" => c.get("/v1/prices"),
+        "list_price_history" => bind2(args, "provider", "model", |p, m| {
+            c.get(&format!("/v1/prices/history/{p}/{m}"))
+        }),
+        "list_unpriced_models" => c.get(&unpriced_path(args)),
         "list_benchmarks" => bind(args, "project", |p| {
             c.get(&format!("/v1/projects/{p}/benchmarks"))
         }),
@@ -225,6 +236,41 @@ fn bind(
         Some(v) => f(v),
         None => Err(format!("missing required argument: {key}")),
     }
+}
+
+/// [`bind`] for a tool that needs two required arguments (a `(provider, model)` key).
+fn bind2(
+    args: &Value,
+    a: &str,
+    b: &str,
+    f: impl FnOnce(&str, &str) -> Result<Value, String>,
+) -> Result<Value, String> {
+    match (
+        args.get(a).and_then(Value::as_str),
+        args.get(b).and_then(Value::as_str),
+    ) {
+        (Some(x), Some(y)) => f(x, y),
+        (None, _) => Err(format!("missing required argument: {a}")),
+        (_, None) => Err(format!("missing required argument: {b}")),
+    }
+}
+
+/// `/v1/costs/unpriced`, with the optional narrowing the caller gave. Both parameters are optional:
+/// the default (every project this key can read, last 30 days) is the question an agent asks first.
+fn unpriced_path(args: &Value) -> String {
+    let mut p = "/v1/costs/unpriced".to_string();
+    let mut sep = '?';
+    for k in ["project", "since"] {
+        if let Some(v) = args
+            .get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            p.push_str(&format!("{sep}{k}={v}"));
+            sep = '&';
+        }
+    }
+    p
 }
 
 fn with_project(base: &str, args: &Value) -> String {
@@ -404,6 +450,53 @@ mod tests {
             t["outputSchema"]["properties"]["unsupported"]["type"], "array",
             "the refused surfaces are part of the declared contract"
         );
+    }
+
+    /// The unpriced ledger is a read like any other, and its default — no project, no window — has
+    /// to be the bare route: an agent asking "what are we failing to price" should not have to know
+    /// a window to get an answer.
+    #[test]
+    fn the_unpriced_ledger_is_a_read_only_tool_with_no_required_arguments() {
+        let t = tools()
+            .into_iter()
+            .find(|t| t["name"] == "list_unpriced_models")
+            .expect("list_unpriced_models is listed");
+        assert_eq!(t["annotations"]["readOnlyHint"], true);
+        assert!(
+            t["inputSchema"].get("required").is_none(),
+            "no argument is required"
+        );
+        assert_eq!(
+            t["outputSchema"]["properties"]["price_book"]["properties"]["stale"]["type"], "boolean",
+            "book staleness is part of the declared contract, not an incidental field"
+        );
+        assert_eq!(unpriced_path(&json!({})), "/v1/costs/unpriced");
+        assert_eq!(
+            unpriced_path(&json!({ "project": "p1", "since": "2026-01-01T00:00:00Z" })),
+            "/v1/costs/unpriced?project=p1&since=2026-01-01T00:00:00Z"
+        );
+        // A blank value must not become a `?project=` that scopes the read to nothing.
+        assert_eq!(
+            unpriced_path(&json!({ "project": "" })),
+            "/v1/costs/unpriced"
+        );
+    }
+
+    /// Both halves of the price key are required — a history call missing one must name which.
+    #[test]
+    fn the_price_history_tool_names_the_argument_it_is_missing() {
+        let err = |args: Value| {
+            bind2(&args, "provider", "model", |_, _| Ok(Value::Null)).expect_err("should refuse")
+        };
+        assert!(err(json!({})).contains("provider"));
+        assert!(err(json!({ "provider": "openai" })).contains("model"));
+        assert!(bind2(
+            &json!({ "provider": "openai", "model": "gpt-4o" }),
+            "provider",
+            "model",
+            |p, m| { Ok(json!(format!("{p}/{m}"))) }
+        )
+        .is_ok());
     }
 
     #[test]

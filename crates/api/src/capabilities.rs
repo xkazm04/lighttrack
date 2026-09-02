@@ -124,6 +124,11 @@ fn consequence(s: Surface) -> &'static str {
             "GET /v1/scores?rubric_id=&kind= is unavailable — verdicts here can only be listed \
              newest-first, not narrowed to one rubric or one kind of verdict."
         }
+        Surface::Pricing => {
+            "GET /v1/costs/unpriced, PUT /v1/prices/…?fill_unpriced=1 and the price history are \
+             unavailable — this deployment cannot say WHICH models it failed to price, and a rate \
+             added later cannot close the historical gap."
+        }
         Surface::Traces => "/v1/traces, /v1/traces/:id and whole-trace scoring are unavailable.",
         Surface::Forecast => "/v1/forecast and the pre-emptive breach alerts are unavailable.",
         Surface::MarginBreakdowns => {

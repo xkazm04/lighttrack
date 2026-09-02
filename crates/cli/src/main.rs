@@ -14,6 +14,7 @@
 //!   lt schedules create --project <id> --type bench_run --every 6h --payload '{"benchmark_id":"b1"}'
 //!   lt schedules list   |   lt schedules set <id> --disabled   |   lt jobs list --status running
 //!   lt costs --project <id>
+//!   lt prices unpriced --project <id>   |   lt prices history openai gpt-5.5
 //!   lt events --project <id> --limit 20
 //!
 //! Layout: `cli` (args), `http` (API client + output), then one module per domain — `projects`
@@ -24,6 +25,7 @@ mod cli;
 mod collective;
 mod http;
 mod limits;
+mod prices;
 mod projects;
 mod rubrics;
 mod schedules;
@@ -42,6 +44,7 @@ fn main() -> Result<()> {
         Cmd::Limits { action } => limits::run(&cli, action),
         Cmd::Rubrics { action } => rubrics::run(&cli, action),
         Cmd::Costs { project } => usage::costs(&cli, project),
+        Cmd::Prices { action } => prices::run(&cli, action),
         Cmd::Events { project, limit } => usage::events(&cli, project, *limit),
         Cmd::Traces { project, limit } => usage::traces(&cli, project, *limit),
         Cmd::Trace { id } => usage::trace(&cli, id),

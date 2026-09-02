@@ -54,6 +54,9 @@ fn build(q: &RollupQuery<'_>) -> std::result::Result<(String, Vec<String>), Stri
         binds.push(fmt_ts(u));
         conds.push(format!("{time} < ${}", binds.len()));
     }
+    if q.unpriced_only {
+        conds.push("cost_usd IS NULL".to_string());
+    }
     for (d, v) in &q.filter {
         binds.push(v.clone());
         conds.push(format!("{} = ${}", key_expr(*d, time), binds.len()));
@@ -183,6 +186,17 @@ mod tests {
         assert!(!sql.contains("project_id"), "{sql}");
         assert_eq!(binds.len(), 1);
         assert!(sql.contains("ts >= $1"), "{sql}");
+    }
+
+    /// The unpriced ledger's predicate narrows the rows the sums are taken over — not just the
+    /// `unpriced_calls` disclosure column, whose token sums cover priced calls too.
+    #[test]
+    fn unpriced_only_adds_a_row_predicate_not_a_projection() {
+        let (plain, _) = build(&q(&[Dimension::Model])).expect("valid");
+        assert!(!plain.contains("WHERE project_id = $1 AND ts >= $2 AND cost_usd IS NULL"));
+        let (only, binds) = build(&q(&[Dimension::Model]).only_unpriced()).expect("valid");
+        assert!(only.contains("AND cost_usd IS NULL"), "{only}");
+        assert_eq!(binds.len(), 2, "the predicate binds nothing");
     }
 
     #[test]

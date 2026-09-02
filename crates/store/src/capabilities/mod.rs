@@ -81,6 +81,15 @@ pub enum Surface {
     Maintenance,
     /// The store's own per-family latency profile.
     Metrics,
+    /// The unpriced-traffic ledger, the forward fill that closes it, and the dated price book's
+    /// history (M26).
+    ///
+    /// Its own surface rather than part of `EventsCore`, whose `upsert_price`/`list_prices` are the
+    /// price *book*: this is the loop around it — see what is unpriced, add the rate, price the
+    /// history. A backend can serve the book perfectly and still be unable to rewrite stored event
+    /// rows, and an operator told "0 filled" by a backend that never looked would draw exactly the
+    /// wrong conclusion.
+    Pricing,
 }
 
 impl Surface {
@@ -106,6 +115,7 @@ impl Surface {
         Surface::Schedules,
         Surface::Maintenance,
         Surface::Metrics,
+        Surface::Pricing,
     ];
 
     /// Stable wire/doc name (`snake_case`, matching the `Serialize` impl).
@@ -131,6 +141,7 @@ impl Surface {
             Surface::Schedules => "schedules",
             Surface::Maintenance => "maintenance",
             Surface::Metrics => "metrics",
+            Surface::Pricing => "pricing",
         }
     }
 
@@ -348,6 +359,10 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
         &["storage_report", "maintenance_pass"],
     ),
     (Surface::Metrics, &["db_metrics"]),
+    (
+        Surface::Pricing,
+        &["list_unpriced", "fill_unpriced_cost", "list_price_history"],
+    ),
 ];
 
 /// Method names declared inside `pub trait Store` in `lib.rs`, in source order.

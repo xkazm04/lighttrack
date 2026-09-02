@@ -231,16 +231,7 @@ impl LlmEvent {
     /// The pricing lane for this call: an explicit `metadata.pricing_mode`, else a `batch` / `flex`
     /// (or `priority`) tag, else standard.
     fn pricing_mode(&self) -> PricingMode {
-        if let Some(m) = self.metadata.get("pricing_mode").and_then(Value::as_str) {
-            return PricingMode::parse(m);
-        }
-        if self.tags.iter().any(|t| t == "batch") {
-            return PricingMode::Batch;
-        }
-        if self.tags.iter().any(|t| t == "flex" || t == "priority") {
-            return PricingMode::Flex;
-        }
-        PricingMode::Standard
+        PricingMode::from_hints(&self.metadata, &self.tags)
     }
 }
 

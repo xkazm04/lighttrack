@@ -292,6 +292,9 @@ fn cost_basis(statuses: &[LimitStatus]) -> CostBasis {
             "Unpriced calls (model absent from the price book) are charged against a cost cap at the \
              mean cost of a priced call in the same window; the estimate is reported per rule in \
              `cost_evidence`, never written onto the event.",
+            "WHICH models are unpriced is answered by GET /v1/costs/unpriced, ranked by call count. \
+             Adding the rate there with `?fill_unpriced=1` prices the historical rows too, which is \
+             the only way the imputed share above ever reaches zero for past traffic.",
             "An enforcing cost cap whose window contains no priced call at all is unpriceable and \
              refuses ingest — add a price for the model, or cap on `calls`/`tokens` instead.",
             "There is no repricing of history: an event's `cost_usd` is stamped once at ingest, so \

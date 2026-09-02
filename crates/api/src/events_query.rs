@@ -74,7 +74,10 @@ fn is_truthy(v: Option<&str>) -> bool {
 }
 
 /// Parse an optional RFC3339 query param into a UTC instant, 400 on malformed input.
-fn parse_opt_ts(field: &str, raw: Option<&str>) -> Result<Option<DateTime<Utc>>, ApiError> {
+pub(crate) fn parse_opt_ts(
+    field: &str,
+    raw: Option<&str>,
+) -> Result<Option<DateTime<Utc>>, ApiError> {
     match raw {
         Some(s) => Ok(Some(
             DateTime::parse_from_rfc3339(s)
@@ -175,19 +178,42 @@ pub(crate) struct CostsParams {
     until: Option<String>,
 }
 
+/// Cost rollup, with the price book's freshness disclosed beside it.
+///
+/// The freshness rides in **headers** (`x-price-book-verified-at`, `x-price-book-stale`) rather than
+/// in the body, for the same reason the paging metadata does above: the body is a bare array and
+/// that shape is a contract the render layer and the CLI are written against. `/v1/costs/unpriced`
+/// carries the same posture as a `price_book` object, where there was no shape to break.
 pub(crate) async fn get_costs(
     State(st): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<CostsParams>,
-) -> Result<Json<Vec<CostRow>>, ApiError> {
+) -> Result<Response, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
     let since = parse_opt_ts("since", q.since.as_deref())?;
     let until = parse_opt_ts("until", q.until.as_deref())?;
     let store = st.store.clone();
-    let rows =
-        spawn_db(move || store.cost_summary_windowed(project.as_deref(), since, until)).await?;
-    Ok(Json(rows))
+    let (rows, prices) = spawn_db(move || {
+        let rows = store.cost_summary_windowed(project.as_deref(), since, until)?;
+        let prices = store.list_prices()?;
+        Ok((rows, prices))
+    })
+    .await?;
+
+    let posture = crate::prices::measure_posture(&prices);
+    let mut resp = Json::<Vec<CostRow>>(rows).into_response();
+    if let Some(v) = posture
+        .verified_at
+        .and_then(|v| HeaderValue::from_str(&v.to_rfc3339()).ok())
+    {
+        resp.headers_mut().insert("x-price-book-verified-at", v);
+    }
+    resp.headers_mut().insert(
+        "x-price-book-stale",
+        HeaderValue::from_static(if posture.stale { "true" } else { "false" }),
+    );
+    Ok(resp)
 }
 
 /// Cost grouped by prompt tag — the analytics half of prompt-version attribution. Events stamped

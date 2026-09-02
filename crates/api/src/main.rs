@@ -151,6 +151,7 @@ mod benchmarks_target;
 mod billing;
 mod capabilities;
 mod collective;
+mod costs_unpriced;
 mod datasets;
 mod error;
 mod events;
@@ -172,6 +173,7 @@ mod margin_guardrails;
 mod margin_policies;
 mod otlp;
 mod prices;
+mod prices_fill;
 mod projects;
 mod projects_keys;
 mod prompts;
@@ -228,6 +230,8 @@ mod tests_tenancy;
 #[cfg(test)]
 mod tests_traces;
 #[cfg(test)]
+mod tests_unpriced;
+#[cfg(test)]
 mod tests_verdict_identity;
 
 use std::sync::{Arc, RwLock};
@@ -280,9 +284,10 @@ async fn main() -> anyhow::Result<()> {
     type StartupState = (
         Arc<dyn Store + Send + Sync>,
         PriceBook,
+        lighttrack_core::PriceBookPosture,
         std::collections::HashMap<String, state::ProjectPolicy>,
     );
-    let (store, book, project_policies) = tokio::task::spawn_blocking(
+    let (store, book, price_posture, project_policies) = tokio::task::spawn_blocking(
         move || -> anyhow::Result<StartupState> {
             let store: Arc<dyn Store + Send + Sync> = match &database_url {
                 Some(url) if url.starts_with("postgres") => {
@@ -306,8 +311,9 @@ async fn main() -> anyhow::Result<()> {
                 };
                 tracing::info!(count = seed.len(), source = %source, "seeded model prices into the DB");
             }
-            let book = PriceBook::from_rows(&store.list_prices()?)
-                .with_aliases(crate::prices::declared_aliases());
+            let price_rows = store.list_prices()?;
+            let price_posture = crate::prices::measure_posture(&price_rows);
+            let book = PriceBook::from_rows(&price_rows).with_aliases(crate::prices::declared_aliases());
             // Warm the per-project persistence-policy cache here too: this closure is the one
             // startup context allowed to call the store synchronously (Postgres `block_on`s
             // internally and panics on the async main thread — created-after-startup projects
@@ -318,7 +324,7 @@ async fn main() -> anyhow::Result<()> {
                 .into_iter()
                 .map(|p| (p.id.clone(), state::ProjectPolicy::from(&p)))
                 .collect();
-            Ok((store, book, project_policies))
+            Ok((store, book, price_posture, project_policies))
         },
     )
     .await??;
@@ -393,6 +399,10 @@ async fn main() -> anyhow::Result<()> {
     // Redaction is a *storage* posture: what an operator believes is in the DB has to match what is
     // actually in it, and the default changed (D14). Its own line, at a level that matches the risk.
     state.redact.log_posture();
+    // Same discipline, for the same reason: every cost, margin, limit and forecast number is
+    // computed from the price book, so an unverified book is a posture an operator must be told
+    // about at boot rather than discover from a number that felt wrong.
+    prices::log_price_posture(&price_posture);
     // What this backend can and cannot serve, named once at boot. Until the manifest existed the
     // only record of a gap was a 501 someone hit in production.
     capabilities::log_posture(&state.store.capabilities());
@@ -470,6 +480,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/traces/:id/score", post(traces::score_trace))
         .route("/v1/costs", get(events_query::get_costs))
         .route("/v1/costs/prompts", get(events_query::get_prompt_costs))
+        .route("/v1/costs/unpriced", get(costs_unpriced::get_unpriced))
         .route("/v1/usecases", get(events_query::get_usecases))
         .route("/v1/rollup", get(rollup::get_rollup))
         .route(
@@ -477,7 +488,11 @@ pub(crate) fn build_router(state: AppState) -> Router {
             post(scores::post_score).get(scores::get_scores),
         )
         .route("/v1/prices", get(prices::get_prices))
-        .route("/v1/prices/:provider/:model", put(prices::put_price))
+        .route(
+            "/v1/prices/history/:provider/:model",
+            get(prices::get_price_history),
+        )
+        .route("/v1/prices/:provider/:model", put(prices_fill::put_price))
         .route(
             "/v1/projects/:id/datasets",
             post(datasets::create_dataset).get(datasets::list_datasets),

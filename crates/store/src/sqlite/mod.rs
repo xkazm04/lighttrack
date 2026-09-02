@@ -19,6 +19,7 @@ mod maintenance;
 mod margin_policies;
 mod metrics;
 mod pool;
+mod price_fill;
 mod prices;
 mod projects;
 mod prompts;
@@ -45,6 +46,8 @@ mod tests_concurrency;
 mod tests_maintenance;
 #[cfg(test)]
 mod tests_metrics;
+#[cfg(test)]
+mod tests_migration;
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -619,6 +622,12 @@ impl Store for SqliteStore {
     }
     fn list_prices(&self) -> Result<Vec<ModelPriceRow>> {
         self.read(prices::list)
+    }
+    fn list_price_history(&self, provider: &str, model: &str) -> Result<Vec<ModelPriceRow>> {
+        self.read(|c| prices::history(c, provider, model))
+    }
+    fn fill_unpriced_cost(&self, f: &crate::pricing::PriceFill<'_>) -> Result<u64> {
+        self.with_op(DbOp::EventsWrite, |c| price_fill::fill(c, f))
     }
 
     // --- datasets ---

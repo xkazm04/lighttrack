@@ -15,6 +15,7 @@ mod events;
 mod jobs;
 mod limits;
 mod margin_policies;
+mod price_fill;
 mod prices;
 mod projects;
 mod prompts;
@@ -106,6 +107,7 @@ impl FirestoreStore {
         Surface::MarginPolicies,
         Surface::JobLeases,
         Surface::Collective,
+        Surface::Pricing,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -295,6 +297,12 @@ impl Store for FirestoreStore {
     }
     fn list_prices(&self) -> Result<Vec<ModelPriceRow>> {
         prices::list_prices(&self.rest)
+    }
+    fn list_price_history(&self, provider: &str, model: &str) -> Result<Vec<ModelPriceRow>> {
+        prices::history(&self.rest, provider, model)
+    }
+    fn fill_unpriced_cost(&self, f: &lighttrack_store::pricing::PriceFill<'_>) -> Result<u64> {
+        price_fill::fill(&self.rest, f)
     }
 
     // ---- benchmarks / datasets / rubrics / jobs (part 2) -------------------
