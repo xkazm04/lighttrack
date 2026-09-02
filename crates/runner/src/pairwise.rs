@@ -7,12 +7,11 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use lighttrack_core::{BenchTarget, Benchmark, BenchmarkCase, ModelPriceRow, Rubric, ScoreKind};
-use lighttrack_engine::{
-    generate_deterministic, run_pairwise, same_family, Determinism, EngineConfig, PairwiseWinner,
-};
+use lighttrack_engine::{run_pairwise, same_family, Determinism, EngineConfig, PairwiseWinner};
 
 use crate::cli::Cli;
 use crate::http::post;
+use crate::targets::ResolvedTarget;
 use crate::util::{parallel_map, price_gen_cost, stamp_determinism};
 
 /// A target's round-robin standing.
@@ -76,7 +75,7 @@ pub(crate) fn run_pairwise_matrix(
     engine: &EngineConfig,
     bench: &Benchmark,
     cases: &[BenchmarkCase],
-    targets: &[BenchTarget],
+    targets: &[ResolvedTarget],
     rubric: &Option<Rubric>,
     prices: &[ModelPriceRow],
     jp: &str,
@@ -87,14 +86,14 @@ pub(crate) fn run_pairwise_matrix(
         println!("\nPAIRWISE: need ≥2 targets to compare; skipping.");
         return Ok(());
     }
-    let labels: Vec<String> = targets.iter().map(label_of).collect();
+    let labels: Vec<String> = targets.iter().map(|r| label_of(&r.target)).collect();
     // Self-preference control (BENCHMARK_FRAMEWORK §3): targets judged by their own model family.
     // Warned and recorded on the run, never fatal — pairwise with a neutral judge is the documented
     // remedy, and this is what tells an operator they don't have one.
     let self_preference: Vec<String> = targets
         .iter()
         .zip(&labels)
-        .filter(|(t, _)| same_family(jp, jm, &t.provider, &t.model))
+        .filter(|(r, _)| same_family(jp, jm, &r.target.family_provider(), &r.target.model))
         .map(|(_, l)| l.clone())
         .collect();
     if !self_preference.is_empty() {
@@ -142,14 +141,16 @@ pub(crate) fn run_pairwise_matrix(
     // judging of it was.
     let cells: Vec<GenCell> = parallel_map(n_t * n_c, jobs, |idx| {
         let (ti, ci) = (idx / n_c, idx % n_c);
-        let t = &targets[ti];
-        match generate_deterministic(
+        let rt = &targets[ti];
+        let t = &rt.target;
+        // PINNED (temperature 0 + the fixed seed) where the target has knobs to pin, and generating
+        // from the RESOLVED prompt — a pairwise verdict about a version has to be about that
+        // version's content.
+        match rt.generate(
             engine,
-            &t.provider,
-            &t.model,
-            t.system_prompt.as_deref(),
             &cases[ci].input,
-            None,
+            cases[ci].expected.as_deref(),
+            true,
         ) {
             Ok(g) => GenCell {
                 cost: g.cost_usd.unwrap_or_else(|| {

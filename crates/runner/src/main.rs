@@ -40,6 +40,7 @@ mod serve;
 mod serve_api;
 mod serve_job;
 mod stats;
+mod targets;
 mod util;
 
 use anyhow::Result;

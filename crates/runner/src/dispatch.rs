@@ -76,6 +76,11 @@ fn bench_run(
     if let Some(v) = p.version {
         extra.insert("prompt_version".into(), json!(v));
     }
+    // The registry NAME, not just the id: it is the key a target's `prompt_ref` matches on, so it
+    // is what tells the resolver which target of a matrix this version overrides.
+    if let Some(n) = &p.prompt_name {
+        extra.insert("prompt_name".into(), json!(n));
+    }
     let extra = (!extra.is_empty()).then_some(Value::Object(extra));
     let status = run_benchmark(
         cli,
