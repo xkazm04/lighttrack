@@ -40,6 +40,18 @@ fn main() -> Result<()> {
     // The inventory is printed at startup because "why is nothing being picked up" should be
     // answerable here, not in the cloud's logs: since M18 a lease is filtered by what this device
     // advertises, so an empty or unexpected library is the first thing to check.
+    // An agent with no runnable CLI would still lease tasks, fail each one, and burn a real attempt
+    // (plus the retry interval) per task discovering it — the one failure the inventory filter
+    // cannot catch, because the library is fine. Refuse to claim work instead, as the responder does.
+    let probe = lighttrack_engine::probe(&lighttrack_engine::resolve_claude_bin(&cfg.claude_bin));
+    println!("[lt-agent] {}", probe.summary());
+    if !probe.installed {
+        anyhow::bail!(
+            "the Claude CLI is not runnable at '{}' — set claude_bin in {} or install it",
+            cfg.claude_bin,
+            cli.config
+        );
+    }
     let actions = inventory::inventory(&cfg.actions_dir);
     println!(
         "lt-agent v{}  device={} sources={} actions={} poll={}s
