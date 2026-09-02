@@ -70,18 +70,24 @@ fn verify_signature(
     body: &[u8],
     now_unix: i64,
 ) -> Result<(), BillingError> {
-    let (mut t, mut v1) = (None, None);
+    // Every `v1=` entry, not the last one: while a signing secret is being rotated Stripe signs each
+    // delivery with both secrets and sends both signatures, and a verifier that kept only one of
+    // them refused a valid delivery whenever the other secret's signature came last.
+    let mut t = None;
+    let mut v1s: Vec<&str> = Vec::new();
     for part in header.split(',') {
         if let Some((k, val)) = part.split_once('=') {
             match k.trim() {
                 "t" => t = Some(val.trim()),
-                "v1" => v1 = Some(val.trim()),
+                "v1" => v1s.push(val.trim()),
                 _ => {}
             }
         }
     }
     let t = t.ok_or_else(|| BillingError::Signature("missing timestamp".into()))?;
-    let v1 = v1.ok_or_else(|| BillingError::Signature("missing v1 signature".into()))?;
+    if v1s.is_empty() {
+        return Err(BillingError::Signature("missing v1 signature".into()));
+    }
     let ts: i64 = t
         .parse()
         .map_err(|_| BillingError::Signature("bad timestamp".into()))?;
@@ -90,15 +96,19 @@ fn verify_signature(
             "timestamp outside tolerance".into(),
         ));
     }
-    let expected =
-        decode_hex(v1).ok_or_else(|| BillingError::Signature("bad hex signature".into()))?;
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
         .map_err(|_| BillingError::Signature("bad signing key".into()))?;
     mac.update(t.as_bytes());
     mac.update(b".");
     mac.update(body);
-    mac.verify_slice(&expected)
-        .map_err(|_| BillingError::Signature("signature mismatch".into()))
+    let matched = v1s.iter().any(|v1| {
+        decode_hex(v1).is_some_and(|expected| mac.clone().verify_slice(&expected).is_ok())
+    });
+    if matched {
+        Ok(())
+    } else {
+        Err(BillingError::Signature("signature mismatch".into()))
+    }
 }
 
 /// Normalize a Stripe event envelope `{type, data:{object}}` into revenue records. Events we don't
@@ -318,6 +328,32 @@ mod tests {
         assert!(StripeSource::new(secret)
             .verify_webhook(&lookup(&header), &body, signed_at + 3600)
             .is_err());
+    }
+
+    /// During a secret rotation Stripe sends one `v1=` per active secret. A valid signature must be
+    /// accepted wherever it sits in the list, and a list with no valid signature still refused.
+    #[test]
+    fn any_matching_v1_among_several_is_accepted() {
+        let body = invoice_envelope();
+        let now = 1_780_000_100_i64;
+        let good = sign("whsec_new", now, &body);
+        let bad = sign("whsec_old", now, &body);
+        let (good_v1, bad_v1) = (
+            good.split_once(",v1=").unwrap().1,
+            bad.split_once(",v1=").unwrap().1,
+        );
+        let src = StripeSource::new("whsec_new");
+        for header in [
+            format!("t={now},v1={good_v1},v1={bad_v1}"),
+            format!("t={now},v1={bad_v1},v1={good_v1}"),
+        ] {
+            assert!(
+                src.verify_webhook(&lookup(&header), &body, now).is_ok(),
+                "{header}"
+            );
+        }
+        let none = format!("t={now},v1={bad_v1},v1={bad_v1}");
+        assert!(src.verify_webhook(&lookup(&none), &body, now).is_err());
     }
 
     /// The signature header is attacker-controlled and unverified when it is decoded. A multi-byte
