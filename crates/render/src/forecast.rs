@@ -38,6 +38,10 @@ pub(crate) fn report(v: &Value) -> Option<String> {
         out.push('\n');
         out.push_str(&a);
     }
+    if let Some(r) = refused_block(v) {
+        out.push('\n');
+        out.push_str(&r);
+    }
     Some(out)
 }
 
@@ -138,6 +142,21 @@ fn alerts_block(v: &Value) -> Option<String> {
     Some(out)
 }
 
+/// The projections that were withheld for want of evidence. Rendered *after* the alerts, and never
+/// omitted when present: an empty alert list beside a silent report reads as "all is well", which is
+/// the one thing a refused forecast does not mean.
+fn refused_block(v: &Value) -> Option<String> {
+    let rows = v.get("refused")?.as_array()?;
+    if rows.is_empty() {
+        return None;
+    }
+    let mut out = String::from("**Not forecast** (too little history to project honestly)\n\n");
+    for r in rows {
+        out.push_str(&format!("- `{}` — {}\n", s(r, "subject"), s(r, "reason")));
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +213,20 @@ mod tests {
         assert!(!md.contains("Budgets"));
         assert!(!md.contains("Margins"));
         assert!(!md.contains("Pre-emptive alerts"));
+        assert!(!md.contains("Not forecast"));
+    }
+
+    #[test]
+    fn a_refused_projection_is_reported_not_silently_dropped() {
+        let mut v = sample();
+        v["alerts"] = json!([]);
+        v["refused"] = json!([
+            { "subject": "spend", "reason": "4 observed days needed, 2 seen" },
+            { "subject": "r1", "reason": "observations span 2 days, 4 needed" }
+        ]);
+        let md = report(&v).unwrap();
+        assert!(md.contains("Not forecast"));
+        assert!(md.contains("4 observed days needed, 2 seen"));
+        assert!(md.contains("`r1`"));
     }
 }
