@@ -114,11 +114,19 @@ fn verify_signature(
         .map_err(|_| BillingError::Signature("bad signing key".into()))?;
     mac.update(format!("{id}.{ts}.").as_bytes());
     mac.update(body);
-    let expected = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
 
-    // `webhook-signature` is space-separated `version,signature`; accept any matching `v1`.
+    // `webhook-signature` is space-separated `version,signature`; accept any matching `v1`. Each
+    // candidate is base64-decoded and checked with the MAC's own `verify_slice` — the same
+    // constant-time compare Stripe's path uses — rather than a hand-rolled XOR fold, which carries
+    // none of the optimization barriers that keep a compiler from reintroducing the early exit.
     let matched = sig_header.split(' ').any(|entry| {
-        matches!(entry.split_once(','), Some(("v1", sig)) if ct_eq(sig.as_bytes(), expected.as_bytes()))
+        let Some(("v1", sig)) = entry.split_once(',') else {
+            return false;
+        };
+        base64::engine::general_purpose::STANDARD
+            .decode(sig)
+            .map(|bytes| mac.clone().verify_slice(&bytes).is_ok())
+            .unwrap_or(false)
     });
     if matched {
         Ok(())
@@ -297,14 +305,6 @@ fn rfc_dt(v: Option<&Value>) -> Option<DateTime<Utc>> {
     v.and_then(Value::as_str)
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         .map(|d| d.with_timezone(&Utc))
-}
-
-/// Constant-time byte-slice equality (lengths are public — base64 of a 32-byte HMAC is fixed-width).
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[cfg(test)]
