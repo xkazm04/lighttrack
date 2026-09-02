@@ -124,6 +124,7 @@
 
 mod alerts;
 mod auth;
+mod auth_scopes;
 mod auth_throttle;
 mod benchmarks;
 mod billing;
@@ -147,6 +148,7 @@ mod logging;
 mod otlp;
 mod prices;
 mod projects;
+mod projects_keys;
 mod prompts;
 mod redact;
 mod rejections;
@@ -175,6 +177,8 @@ mod tests_limit_scope;
 mod tests_relay;
 #[cfg(test)]
 mod tests_storage;
+#[cfg(test)]
+mod tests_tenancy;
 #[cfg(test)]
 mod tests_traces;
 
@@ -462,12 +466,22 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/projects",
             post(projects::create_project).get(projects::list_projects),
         )
-        .route("/v1/projects/:id", put(projects::update_project))
+        .route(
+            "/v1/projects/:id",
+            put(projects::update_project).delete(projects::archive_project),
+        )
         .route(
             "/v1/projects/:id/keys",
-            post(projects::create_key).get(projects::list_keys),
+            post(projects_keys::create_key).get(projects_keys::list_keys),
         )
-        .route("/v1/projects/:id/keys/:kid", delete(projects::revoke_key))
+        .route(
+            "/v1/projects/:id/keys/:kid",
+            delete(projects_keys::revoke_key),
+        )
+        .route(
+            "/v1/projects/:id/keys/:kid/rotate",
+            post(projects_keys::rotate_key),
+        )
         .route(
             "/v1/projects/:id/limits",
             post(limits::create_limit).get(limits::list_limits),

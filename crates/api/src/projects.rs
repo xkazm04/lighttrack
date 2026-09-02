@@ -1,16 +1,15 @@
-//! Projects & API keys management (admin-only).
+//! Project CRUD and archival (admin-only). Their API keys live in [`crate::projects_keys`].
 
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
     Json,
 };
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
+use serde::Deserialize;
 
-use lighttrack_core::{new_id, ApiKey, Project, Redaction};
+use lighttrack_core::{new_id, Project, Redaction};
 
-use crate::auth;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin};
 use crate::state::{spawn_db, AppState};
@@ -102,6 +101,7 @@ pub(crate) async fn create_project(
         enabled: true,
         redaction: req.redaction,
         collective_opt_in: req.collective_opt_in,
+        archived_at: None,
         created_at: Utc::now(),
     };
     insert_project(&st, &proj).await?;
@@ -119,6 +119,16 @@ pub(crate) async fn insert_project(st: &AppState, proj: &Project) -> Result<(), 
     st.project_policies
         .put(&proj.id, crate::state::ProjectPolicy::from(proj));
     Ok(())
+}
+
+/// One project by id, or the 404 both this module and [`crate::projects_keys`] answer with. Shared
+/// so "unknown project" reads identically whether you were creating a key or updating the tenant.
+pub(crate) async fn load_project(st: &AppState, pid: &str) -> Result<Project, ApiError> {
+    let store = st.store.clone();
+    let id = pid.to_string();
+    spawn_db(move || store.get_project(&id))
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("project '{pid}' not found")))
 }
 
 /// Mutable fields of a project. Every field is optional: an omitted one is left as-is, so a caller
@@ -145,11 +155,7 @@ pub(crate) async fn update_project(
 ) -> Result<Json<Project>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
 
-    let store = st.store.clone();
-    let id = pid.clone();
-    let mut proj = spawn_db(move || store.get_project(&id))
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("project '{pid}' not found")))?;
+    let mut proj = load_project(&st, &pid).await?;
     if let Some(n) = req.name {
         proj.name = n;
     }
@@ -175,6 +181,37 @@ pub(crate) async fn update_project(
     Ok(Json(proj))
 }
 
+/// Archive a project (admin): `enabled = false`, `archived_at = now`, **rows kept**.
+///
+/// `DELETE` here is a lifecycle verb, not a `DROP`. A project's events, scores and benchmark runs
+/// are the record every cost report, margin figure and gate decision was computed from; deleting
+/// the tenant row would orphan all of it while leaving the numbers in place, so the endpoint that
+/// operators reach for does the safe thing and says so. Archiving is also *effective* — a disabled
+/// project's keys open nothing (see [`crate::guards`]) — so it stops the spend a delete was meant to.
+///
+/// Idempotent: archiving an already-archived project returns it unchanged rather than 404-ing.
+pub(crate) async fn archive_project(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(pid): Path<String>,
+) -> Result<Json<Project>, ApiError> {
+    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let mut proj = load_project(&st, &pid).await?;
+    if proj.archived_at.is_none() {
+        proj.archived_at = Some(Utc::now());
+    }
+    proj.enabled = false;
+
+    let store = st.store.clone();
+    let pc = proj.clone();
+    let changed = spawn_db(move || store.update_project(&pc)).await?;
+    if !changed {
+        return Err(ApiError::not_found(format!("project '{pid}' not found")));
+    }
+    st.project_policies.invalidate(&proj.id);
+    Ok(Json(proj))
+}
+
 pub(crate) async fn list_projects(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -183,148 +220,6 @@ pub(crate) async fn list_projects(
     let store = st.store.clone();
     let v = spawn_db(move || store.list_projects()).await?;
     Ok(Json(v))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct CreateKeyReq {
-    #[serde(default = "default_key_name")]
-    name: String,
-}
-
-fn default_key_name() -> String {
-    "default".to_string()
-}
-
-#[derive(Serialize)]
-pub(crate) struct CreateKeyResp {
-    id: String,
-    project_id: String,
-    name: String,
-    prefix: String,
-    /// The full secret — shown exactly once.
-    key: String,
-    created_at: DateTime<Utc>,
-}
-
-pub(crate) async fn create_key(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Path(pid): Path<String>,
-    Json(req): Json<CreateKeyReq>,
-) -> Result<Json<CreateKeyResp>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
-
-    let store = st.store.clone();
-    let pid_check = pid.clone();
-    if spawn_db(move || store.get_project(&pid_check))
-        .await?
-        .is_none()
-    {
-        return Err(ApiError::not_found(format!("project '{pid}' not found")));
-    }
-
-    let generated = auth::generate_key();
-    let now = Utc::now();
-    let key = ApiKey {
-        id: new_id(),
-        project_id: pid.clone(),
-        name: req.name,
-        prefix: generated.prefix.clone(),
-        key_hash: generated.key_hash,
-        created_at: now,
-        last_used_at: None,
-        revoked: false,
-    };
-
-    let store = st.store.clone();
-    let key2 = key.clone();
-    spawn_db(move || store.create_api_key(&key2)).await?;
-
-    Ok(Json(CreateKeyResp {
-        id: key.id,
-        project_id: pid,
-        name: key.name,
-        prefix: generated.prefix,
-        key: generated.full_key,
-        created_at: now,
-    }))
-}
-
-/// A key's non-secret metadata — everything an operator needs to audit and rotate, and **never**
-/// `key_hash`. (A bare `ApiKey` derives `Serialize` over the hash, so we project into this instead.)
-#[derive(Serialize)]
-pub(crate) struct KeyInfo {
-    id: String,
-    name: String,
-    prefix: String,
-    created_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_used_at: Option<DateTime<Utc>>,
-    revoked: bool,
-}
-
-/// List a project's API keys (admin). Surfaces `last_used_at` (previously write-only) and `revoked`
-/// so an operator can spot stale keys and confirm a rotation drained the old one.
-pub(crate) async fn list_keys(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Path(pid): Path<String>,
-) -> Result<Json<Vec<KeyInfo>>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
-    let store = st.store.clone();
-    let pid_check = pid.clone();
-    if spawn_db(move || store.get_project(&pid_check))
-        .await?
-        .is_none()
-    {
-        return Err(ApiError::not_found(format!("project '{pid}' not found")));
-    }
-    let store = st.store.clone();
-    let keys = spawn_db(move || store.list_api_keys(&pid)).await?;
-    Ok(Json(
-        keys.into_iter()
-            .map(|k| KeyInfo {
-                id: k.id,
-                name: k.name,
-                prefix: k.prefix,
-                created_at: k.created_at,
-                last_used_at: k.last_used_at,
-                revoked: k.revoked,
-            })
-            .collect(),
-    ))
-}
-
-/// Revoke an API key (admin, soft — the row is kept for audit). Revocation is immediate: auth reads
-/// the store per request and rejects a revoked key, so a leaked key is dead on the next call. 404 when
-/// the key id is unknown. The key is scoped to the path project so an admin can't revoke across tenants
-/// by id-guessing beyond the projects they can already see.
-pub(crate) async fn revoke_key(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Path((pid, kid)): Path<(String, String)>,
-) -> Result<Json<KeyInfo>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
-    let store = st.store.clone();
-    let keys = {
-        let pid = pid.clone();
-        spawn_db(move || store.list_api_keys(&pid)).await?
-    };
-    let key = keys
-        .into_iter()
-        .find(|k| k.id == kid)
-        .ok_or_else(|| ApiError::not_found(format!("key '{kid}' not found on project '{pid}'")))?;
-    let store = st.store.clone();
-    let kid2 = kid.clone();
-    spawn_db(move || store.set_api_key_revoked(&kid2, true)).await?;
-    Ok(Json(KeyInfo {
-        id: key.id,
-        name: key.name,
-        prefix: key.prefix,
-        created_at: key.created_at,
-        last_used_at: key.last_used_at,
-        revoked: true,
-    }))
 }
 
 #[cfg(test)]
