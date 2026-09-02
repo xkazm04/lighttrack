@@ -95,7 +95,8 @@ mod table {
         r("/v1/benchmark-runs", NoMethod, MANAGE),
         r("/v1/benchmarks/:id/enqueue", NoMethod, Admin),
         r("/v1/projects/:id/prompts", READ, Admin),
-        r("/v1/projects/:id/prompts/:name", READ, NoMethod),
+        // The PUT links a prompt to its gating benchmark — a change to what gates a deploy, so admin.
+        r("/v1/projects/:id/prompts/:name", READ, Admin),
         r("/v1/projects/:id/prompts/:name/versions", READ, Admin),
         r("/v1/projects/:id/prompts/:name/promote", NoMethod, Admin),
         r("/v1/jobs", Admin, Admin),

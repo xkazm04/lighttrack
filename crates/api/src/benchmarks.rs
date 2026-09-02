@@ -12,6 +12,7 @@ use lighttrack_core::{new_id, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRu
 
 use crate::alerts::BenchRunAlert;
 use crate::auth::Principal;
+use crate::benchmarks_target::{ensure_prompt_refs_exist, validate_target_matrix};
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
 use crate::state::{spawn_db, AppState};
@@ -80,25 +81,6 @@ fn embed_recurrence(target: serde_json::Value, secs: u64) -> Result<serde_json::
     }
 }
 
-/// Validate the stored `target` field before it reaches the store. An **array** is unambiguously a
-/// comparison matrix and must deserialize as `Vec<BenchTarget>`; a malformed one is rejected here
-/// (400) rather than silently degrading to a different benchmark mode at run time. Non-array targets
-/// (null / object / string) are legacy free-form and pass through untouched.
-fn validate_target_matrix(target: &serde_json::Value) -> Result<(), String> {
-    if target.is_array() {
-        serde_json::from_value::<Vec<BenchTarget>>(target.clone())
-            .map(|_| ())
-            .map_err(|e| {
-                format!(
-                    "`target` is an array but not a valid comparison matrix \
-                 (expected [{{provider, model, system_prompt?, label?}}, ...]): {e}"
-                )
-            })
-    } else {
-        Ok(())
-    }
-}
-
 pub(crate) async fn create_benchmark(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -107,13 +89,15 @@ pub(crate) async fn create_benchmark(
 ) -> Result<Json<Benchmark>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
     // The target matrix (if any) is stored in the `target` field as a JSON array. A typed `targets`
-    // is already valid; a raw `target` array must be validated before we persist it.
+    // deserialized, but that is not the same as being *runnable*: an `Http` target's URL and a
+    // `prompt_ref`'s name are both refusable facts, and both go through the same door.
     let target = if req.targets.is_empty() {
-        validate_target_matrix(&req.target).map_err(ApiError::bad_request)?;
         req.target
     } else {
         serde_json::to_value(&req.targets).unwrap_or(serde_json::Value::Null)
     };
+    let parsed = validate_target_matrix(&target).map_err(ApiError::bad_request)?;
+    ensure_prompt_refs_exist(&st, &pid, &parsed).await?;
     // Opt-in recurrence rides inside `target` (no schema/column change); reject the one combination
     // it can't carry (a comparison matrix) up front.
     let target = match req.schedule_interval_secs.filter(|s| *s > 0) {
@@ -292,7 +276,7 @@ pub(crate) async fn benchmark_gate(
 
 #[cfg(test)]
 mod tests {
-    use super::{decide_gate, embed_recurrence, validate_target_matrix};
+    use super::{decide_gate, embed_recurrence};
     use lighttrack_core::BenchmarkRun;
     use serde_json::json;
 
@@ -377,23 +361,6 @@ mod tests {
             run("passed", true, Some(0.9), json!(null)),
         ];
         assert_eq!(decide_gate(&runs, Some(0.8)).status, "regressed");
-    }
-
-    #[test]
-    fn non_array_targets_pass_through() {
-        assert!(validate_target_matrix(&json!(null)).is_ok());
-        assert!(validate_target_matrix(&json!({ "endpoint": "https://x" })).is_ok());
-        assert!(validate_target_matrix(&json!("legacy")).is_ok());
-    }
-
-    #[test]
-    fn valid_matrix_ok_malformed_rejected() {
-        assert!(
-            validate_target_matrix(&json!([{ "provider": "openai", "model": "gpt-4o" }])).is_ok()
-        );
-        // Missing required `provider` → rejected (would otherwise silently degrade to simple mode).
-        assert!(validate_target_matrix(&json!([{ "model": "x" }])).is_err());
-        assert!(validate_target_matrix(&json!(["nope"])).is_err());
     }
 
     #[test]

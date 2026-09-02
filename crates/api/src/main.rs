@@ -37,6 +37,7 @@
 //!                                        (pass|regressed|no_baseline|no_runs + run_id/mean/baseline/n)
 //!   POST /v1/projects/:id/prompts  GET /v1/projects/:id/prompts          prompt registry
 //!   GET  /v1/projects/:id/prompts/:name?label=production|version=N       runtime fetch by label
+//!   PUT  /v1/projects/:id/prompts/:name                                  link/unlink its gating benchmark
 //!   POST /v1/projects/:id/prompts/:name/versions                         new version (auto-benchmarks)
 //!   POST /v1/projects/:id/prompts/:name/promote                          label promote (regression-gated)
 //!   POST /v1/projects  GET /v1/projects   POST /v1/projects/:id/keys
@@ -146,6 +147,7 @@ mod auth;
 mod auth_scopes;
 mod auth_throttle;
 mod benchmarks;
+mod benchmarks_target;
 mod billing;
 mod capabilities;
 mod collective;
@@ -173,6 +175,7 @@ mod prices;
 mod projects;
 mod projects_keys;
 mod prompts;
+mod prompts_gate;
 mod redact;
 mod redaction;
 mod rejections;
@@ -200,6 +203,8 @@ mod tests_capabilities;
 mod tests_collective;
 #[cfg(test)]
 mod tests_dev_mode;
+#[cfg(test)]
+mod tests_eval_targets;
 #[cfg(test)]
 mod tests_forecast;
 #[cfg(test)]
@@ -511,7 +516,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/projects/:id/prompts",
             post(prompts::create_prompt).get(prompts::list_prompts),
         )
-        .route("/v1/projects/:id/prompts/:name", get(prompts::get_prompt))
+        .route(
+            "/v1/projects/:id/prompts/:name",
+            get(prompts::get_prompt).put(prompts::link_benchmark),
+        )
         .route(
             "/v1/projects/:id/prompts/:name/versions",
             post(prompts::add_version).get(prompts::list_versions),
