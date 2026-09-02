@@ -43,6 +43,46 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
 - **Output:** a comparison table — for each dimension and overall: score, pass-rate, **p50/p95 latency**,
   **tokens**, **$ cost** — so "best" is a quality/latency/cost trade-off, not just quality.
 
+**Target vocabulary.** One row of the matrix is:
+
+```json
+{ "provider": "openai", "model": "gpt-4o",
+  "system_prompt": "you are terse",                          // a literal, OR:
+  "prompt_ref": { "name": "support-reply", "label": "production" },
+  "label": "gpt4o-prod",
+  "kind": { "type": "http", "url": "https://rag.acme.com/answer" } }
+```
+
+- `system_prompt` — the literal instruction, as before. Everything below is additive; a stored
+  matrix that uses only `provider`/`model`/`system_prompt`/`label` is unchanged.
+- **`prompt_ref`** — resolve this target's prompt from the **registry** at run start instead of
+  using the literal, by `version`, by `label`, or (neither) the latest. Pass at most one of the two.
+  The name must already be a prompt in the benchmark's project; a typo is a 400 when the benchmark
+  is written, not a surprise inside the run that was meant to gate a deploy. A prompt containing
+  `{{input}}` is treated as a **template** (the case is substituted in, and there is no separate
+  system turn); without the placeholder it becomes the system prompt and the case stays the user
+  turn. That is the whole templating language on purpose — anything richer is a rendering engine
+  whose bugs would surface as quality regressions.
+  A run that resolved a ref records **`resolved_prompt_version`** in its report, and that is the
+  evidence the promotion gate requires (see `CI_GATE.md`).
+- **`kind`** — `{"type":"model"}` (the default) or `{"type":"http","url":…}`. An **HTTP target** is
+  an endpoint you own: LightTrack POSTs `{input, expected?, system_prompt?}` and reads back
+  `{output, usage?, latency_ms?, cost_usd?}`. This is how a benchmark reaches a RAG pipeline, a
+  retrieval chain, or an agent — a whole system whose quality does not live in one model call.
+  - The URL must be **https** and must not name a loopback, private, link-local, CGNAT or
+    single-label/`.internal` host: a worker POSTs there once per case, unattended, from inside your
+    deployment.
+  - Each request carries `X-LightTrack-Signature: sha256=<hex>`, an HMAC-SHA256 of the exact request
+    body keyed by **`LIGHTTRACK_HTTP_TARGET_SECRET`**, so your endpoint can tell LightTrack's traffic
+    from anyone who learned the URL. With no secret set, the header is omitted rather than sent
+    meaningless.
+  - An endpoint that reports no `usage` and no `cost_usd` is left **unpriced** on the existing
+    unpriced path — never assigned an invented number — and its reproducibility stamp is
+    `best-effort`, because a black box has no sampling knobs to pin.
+  - Its **family** for the self-preference control (§3) is its **host**, never the declared
+    `provider`. Whatever answers at `rag.acme.com` is opaque to us, so it can neither read as the
+    judge's own family nor as any other.
+
 ### 2a. Earning the words "B beats A" — the statistical contract
 A benchmark tool's entire value is a verdict you can act on, so every claim it prints is now backed by a
 test, and every test that could not be run is disclosed. Four rules:

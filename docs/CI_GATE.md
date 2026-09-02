@@ -51,6 +51,38 @@ Returns the verdict of the **latest finished run**, without re-running anything:
 exists yet). Useful for a dashboard badge or a pipeline step that reads the last recorded run
 instead of running the benchmark itself.
 
+## 2a. Promotion gate — `POST /v1/projects/:id/prompts/:name/promote`
+
+Pointing a label at a version is refused (**409**) when the linked benchmark says the version is not
+ready. Two questions, in this order:
+
+1. **Did the run actually run this version?** A benchmark whose target matrix carries a
+   `prompt_ref` naming this prompt produces runs that record `resolved_prompt_version` — written
+   only by the code that fetched the registry content and handed it to the generator. Promotion is
+   refused when that key is **absent** (the run generated from the target's stored `system_prompt`
+   and never read the registry) or **differs** from the version being promoted (its score is
+   evidence about other content). This runs before the score check, and applies even with no
+   baseline set: a score means nothing until you know what was scored.
+2. **Is the score good enough?** The latest run that scored *this* version must not have regressed —
+   the runner's own significance-aware verdict, its 95% interval, and its completeness all count.
+   A cancelled or budget-halted run never promotes, however good its partial mean looks.
+
+`force: true` overrides both, as before.
+
+**Advisory for one release.** A benchmark whose targets carry **no** `prompt_ref` cannot resolve
+anything, so requiring proof from it would break every gate that works today. Those promotions
+succeed and the response carries a `warning` field saying the gate scored the target's stored
+content rather than the version:
+
+```json
+{ "id": "…", "name": "support-reply", "labels": { "production": 4 },
+  "warning": "promoted without a resolved-version check: the linked benchmark has no target with a `prompt_ref` …" }
+```
+
+Add a `prompt_ref` to the benchmark's targets to turn that caveat into a real gate. The setup order
+is forced by what has to exist first: create the **prompt**, then the **benchmark** whose target
+references it, then link them with `PUT /v1/projects/:id/prompts/:name` (`{"benchmark_id": "…"}`).
+
 ## 3. Completion webhook (optional)
 
 Set `LIGHTTRACK_BENCH_WEBHOOK` (falls back to `LIGHTTRACK_ALERT_WEBHOOK`) and the API POSTs each

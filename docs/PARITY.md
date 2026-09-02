@@ -19,7 +19,7 @@ conformance suite asserts that refusal, so a gap can never quietly become an emp
 | `traces` | full | full | refused |
 | `forecast` | full | full | full |
 | `margin_breakdowns` | full | full | full |
-| `prompts` | full | refused | full |
+| `prompts` | full | full | full |
 | `relay` | full | full | refused |
 | `collective` | full | full | full |
 | `project_admin` | full | full | refused |

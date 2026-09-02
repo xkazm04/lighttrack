@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use lighttrack_core::{
     BenchTarget, Benchmark, BenchmarkCase, Dataset, DatasetItem, ModelPriceRow, Rubric,
-    ScoreDetail, ScoreKind,
+    ScoreDetail, ScoreKind, RESOLVED_PROMPT_VERSION,
 };
 use lighttrack_engine::{
     build_eval_prompt, parse_judge_spec, run_judge, run_rubric_judge, Determinism, EngineConfig,
@@ -22,6 +22,7 @@ use crate::provenance::{freeform_detail, rubric_detail};
 use crate::rubric::run_rubric_benchmark;
 use crate::runctl::RunControl;
 use crate::stats::{annotate_significance, significance_verdict, Summary};
+use crate::targets::{resolve_targets, run_resolved_version};
 use crate::util::{
     add_price_warnings, cost_or_book, join_csv, now_ts, parallel_map, percentiles,
     stamp_determinism,
@@ -35,7 +36,7 @@ pub(crate) fn parse_targets(target: &Value) -> Result<Vec<BenchTarget>> {
     if target.is_array() {
         serde_json::from_value(target.clone()).context(
             "benchmark `target` is an array but not a valid comparison matrix \
-             (expected [{provider, model, system_prompt?, label?}, ...])",
+             (expected [{provider, model, system_prompt?, label?, prompt_ref?, kind?}, ...])",
         )
     } else {
         Ok(Vec::new())
@@ -163,13 +164,34 @@ pub(crate) fn run_benchmark(
 
     let targets = parse_targets(&bench.target)?;
     if !targets.is_empty() {
+        // Resolve every target's registry prompt BEFORE the first paid call: a run that cannot
+        // fetch what it is supposed to be testing must fail whole, not half-spent. The version
+        // override rides in the report_extra the version-triggered enqueue stamped.
+        let override_version = report_extra.and_then(|e| {
+            let name = e.get("prompt_name")?.as_str()?;
+            let v = e.get("prompt_version")?.as_u64()? as u32;
+            Some((name, v))
+        });
+        let resolved = resolve_targets(cli, http, &bench.project_id, &targets, override_version)?;
+        // What the run ACTUALLY generated with — the evidence the promotion gate requires, and the
+        // one report key no provenance passthrough can fake.
+        let mut extra_with_version = None;
+        if let Some(v) = run_resolved_version(&resolved, override_version.map(|(n, _)| n)) {
+            let mut m = match report_extra {
+                Some(Value::Object(o)) => o.clone(),
+                _ => serde_json::Map::new(),
+            };
+            m.insert(RESOLVED_PROMPT_VERSION.into(), json!(v));
+            extra_with_version = Some(Value::Object(m));
+        }
+        let report_extra = extra_with_version.as_ref().or(report_extra);
         return run_compare(
             cli,
             http,
             engine,
             &bench,
             &cases,
-            &targets,
+            &resolved,
             samples,
             gen_samples,
             pairwise,

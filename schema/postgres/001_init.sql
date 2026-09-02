@@ -384,3 +384,39 @@ CREATE INDEX IF NOT EXISTS idx_scores_kind ON scores(kind, created_at);
 -- version is a new row linked to the old one, never a mutation of it.
 ALTER TABLE rubrics ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE rubrics ADD COLUMN IF NOT EXISTS supersedes TEXT;
+
+-- ---------------------------------------------------------------------------
+-- M10 — the prompt registry. Self-contained and appended at the end of the file
+-- so it is order-independent: both tables are created here, and re-running the
+-- file is a no-op. The registry used to be SQLite-only, which meant the
+-- promotion gate — the one place a prompt edit becomes a measurable quality
+-- step — returned 501 on every managed Postgres deployment.
+-- ---------------------------------------------------------------------------
+
+-- Named, versioned prompts fetched at runtime by label (e.g. production | staging).
+-- Cutting a new version auto-enqueues the linked benchmark; promoting a label is blocked when that
+-- benchmark's run did not generate with the version being promoted, or regressed against baseline.
+CREATE TABLE IF NOT EXISTS prompts (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  name          TEXT NOT NULL,
+  benchmark_id  TEXT,                         -- linked benchmark; its regression check gates promotion
+  labels        TEXT NOT NULL DEFAULT '{}',   -- JSON object: label -> version (e.g. {"production": 3})
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  UNIQUE (project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_prompts_project ON prompts(project_id, name);
+
+-- Immutable prompt versions (one row per cut). `version` is monotonic per prompt.
+CREATE TABLE IF NOT EXISTS prompt_versions (
+  id          TEXT PRIMARY KEY,
+  prompt_id   TEXT NOT NULL REFERENCES prompts(id),
+  version     INTEGER NOT NULL,
+  content     TEXT NOT NULL,
+  config      TEXT,           -- JSON (model, params, variable schema)
+  note        TEXT,           -- change note / "commit message"
+  created_at  TEXT NOT NULL,
+  UNIQUE (prompt_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_pid ON prompt_versions(prompt_id, version);

@@ -49,15 +49,34 @@ pub(crate) fn benchmark_dataset() -> Value {
 pub(crate) fn benchmark_targets() -> Value {
     json!({
         "type": "array",
-        "description": "comparison matrix: one row per (provider, model[, system prompt]) under test",
+        "description": "comparison matrix: one row per target under test. A target is a (provider, model) with either a literal system_prompt or a prompt_ref that resolves from the registry at run time, or an HTTP endpoint of your own (kind.type=http) that receives {input, expected?, system_prompt?} and returns {output, usage?, latency_ms?, cost_usd?}.",
         "items": {
             "type": "object",
             "required": ["provider", "model"],
             "properties": {
-                "provider": {"type":"string","description":"e.g. anthropic, openai"},
+                "provider": {"type":"string","description":"e.g. anthropic, openai; for an http target, a label for whatever answers there"},
                 "model": {"type":"string"},
-                "system_prompt": {"type":"string","description":"system/instruction prompt variant under test"},
-                "label": {"type":"string","description":"display label; defaults to provider/model"}
+                "system_prompt": {"type":"string","description":"literal system/instruction prompt variant under test"},
+                "label": {"type":"string","description":"display label; defaults to provider/model"},
+                "prompt_ref": {
+                    "type": "object",
+                    "description": "resolve this target's prompt from the registry at run start instead of using the literal system_prompt. Required for the promotion gate to certify the version it ran: a run only reports resolved_prompt_version when it fetched the content. Pass at most one of version/label.",
+                    "required": ["name"],
+                    "properties": {
+                        "name": {"type":"string","description":"registry name, must already exist in this project"},
+                        "version": {"type":"integer","description":"pin an exact version"},
+                        "label": {"type":"string","description":"resolve through a label, e.g. production"}
+                    }
+                },
+                "kind": {
+                    "type": "object",
+                    "description": "how this target produces output. Omit for a model call.",
+                    "required": ["type"],
+                    "properties": {
+                        "type": {"type":"string","enum":["model","http"]},
+                        "url": {"type":"string","description":"https endpoint (http target only). Private, loopback and link-local addresses are refused."}
+                    }
+                }
             }
         }
     })
@@ -110,5 +129,24 @@ mod tests {
             "the real field is system_prompt"
         );
         assert!(props.get("label").is_some());
+    }
+
+    /// An agent that cannot see `prompt_ref` writes benchmarks whose runs can never satisfy the
+    /// promotion gate — so the schema has to carry it, spelled exactly as the API deserializes it.
+    #[test]
+    fn benchmark_targets_expose_the_resolvable_and_http_shapes() {
+        let s = benchmark_targets();
+        let props = &s["items"]["properties"];
+        let pr = props.get("prompt_ref").expect("prompt_ref is offered");
+        assert_eq!(pr["required"], serde_json::json!(["name"]));
+        for f in ["name", "version", "label"] {
+            assert!(pr["properties"].get(f).is_some(), "prompt_ref.{f}");
+        }
+        let kind = props.get("kind").expect("kind is offered");
+        assert_eq!(
+            kind["properties"]["type"]["enum"],
+            serde_json::json!(["model", "http"])
+        );
+        assert!(kind["properties"].get("url").is_some());
     }
 }
