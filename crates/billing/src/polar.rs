@@ -146,9 +146,16 @@ pub fn normalize(envelope: &Value, customer_meta_key: &str, fx: &FxTable) -> Vec
         "order.paid" => normalize_order(data, customer_meta_key, fx)
             .into_iter()
             .collect(),
-        "order.refunded" => normalize_order_refund(data, customer_meta_key, fx)
-            .into_iter()
-            .collect(),
+        // The envelope's own `timestamp` is when the refund happened; the Order inside it carries
+        // only the sale's `created_at`, which is the wrong month for a clawback.
+        "order.refunded" => normalize_order_refund(
+            data,
+            rfc_dt(envelope.get("timestamp")),
+            customer_meta_key,
+            fx,
+        )
+        .into_iter()
+        .collect(),
         "refund.created" => normalize_refund(data, customer_meta_key, fx)
             .into_iter()
             .collect(),
@@ -200,8 +207,11 @@ pub fn normalize_order(obj: &Value, customer_meta_key: &str, fx: &FxTable) -> Op
 /// An `order.refunded` event (data is an Order with `refunded_amount`) → a refund record, keyed on
 /// the order (its `data.id` *is* the order id). `refunded_amount` is Polar's running total for the
 /// order, so this record naturally tracks the order's cumulative refunds rather than one delta.
+/// `refunded_at` is the delivery's own timestamp — the Order has no refund time of its own, and its
+/// `created_at` is the sale.
 pub fn normalize_order_refund(
     obj: &Value,
+    refunded_at: Option<DateTime<Utc>>,
     customer_meta_key: &str,
     fx: &FxTable,
 ) -> Option<RevenueEvent> {
@@ -213,7 +223,11 @@ pub fn normalize_order_refund(
     if amount == 0 {
         return None;
     }
-    Some(refund_event(order_id, amount, obj, customer_meta_key, fx))
+    let mut ev = refund_event(order_id, amount, obj, customer_meta_key, fx);
+    if let Some(at) = refunded_at {
+        ev.ts = at;
+    }
+    Some(ev)
 }
 
 /// A `refund.created` event (data is a Refund) → a refund record. Keyed on the Refund's `order_id`
@@ -465,6 +479,33 @@ mod tests {
         assert_eq!(r[0].kind, RevenueKind::Refund);
         assert!((r[0].amount_usd - 5.0).abs() < 1e-9);
         assert_eq!(r[0].id, "polar:refund:ord_1");
+    }
+
+    /// `order.refunded` carries the Order, whose `created_at` is the sale; the clawback is dated by
+    /// the delivery's own `timestamp`, so a refund issued months later lands in the month it happened.
+    #[test]
+    fn an_order_refund_is_dated_by_the_delivery_not_the_sale() {
+        let r = normalize(
+            &json!({
+                "type": "order.refunded",
+                "timestamp": "2026-09-01T12:00:00Z",
+                "data": { "id": "ord_5", "refunded_amount": 500, "currency": "usd",
+                          "customer_id": "cust_1", "created_at": "2026-06-01T00:00:00Z" }
+            }),
+            "userId",
+            &fx(),
+        );
+        assert_eq!(r[0].ts.to_rfc3339(), "2026-09-01T12:00:00+00:00");
+        // Without an envelope timestamp the Order's own date is still the fallback.
+        let bare = normalize_order_refund(
+            &json!({ "id": "ord_6", "refunded_amount": 100, "currency": "usd",
+                     "created_at": "2026-06-01T00:00:00Z" }),
+            None,
+            "userId",
+            &fx(),
+        )
+        .unwrap();
+        assert_eq!(bare.ts.to_rfc3339(), "2026-06-01T00:00:00+00:00");
     }
 
     #[test]

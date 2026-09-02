@@ -202,8 +202,24 @@ pub fn normalize_refund(obj: &Value, fx: &FxTable) -> Option<RevenueEvent> {
         kind: RevenueKind::Refund,
         period_start: None,
         period_end: None,
-        ts: unix_dt(obj.get("created")).unwrap_or_else(Utc::now),
+        // WHEN the money went back, not when the charge was made. `charge.refunded` delivers the
+        // Charge, whose `created` is the sale; stamping the refund with it booked a clawback issued
+        // three months later into the sale's month and overstated that month's margin. The newest
+        // refund on the charge is the event this delivery announces.
+        ts: latest_refund_at(obj)
+            .or_else(|| unix_dt(obj.get("created")))
+            .unwrap_or_else(Utc::now),
     })
+}
+
+/// The `created` of the most recent entry in a Charge's `refunds.data`, when present.
+fn latest_refund_at(charge: &Value) -> Option<DateTime<Utc>> {
+    charge
+        .pointer("/refunds/data")?
+        .as_array()?
+        .iter()
+        .filter_map(|r| unix_dt(r.get("created")))
+        .max()
 }
 
 fn unix_dt(v: Option<&Value>) -> Option<DateTime<Utc>> {
@@ -388,6 +404,38 @@ mod tests {
         assert_eq!(r[0].kind, RevenueKind::Refund);
         assert!((r[0].amount_usd - 5.0).abs() < 1e-9);
         assert_eq!(r[0].id, "stripe:refund:ch_7");
+    }
+
+    /// A refund is booked when the money went back, not when the charge was made.
+    #[test]
+    fn a_refund_is_dated_by_the_refund_not_the_original_charge() {
+        let sold = 1_780_000_000_i64;
+        let refunded = sold + 90 * 86_400;
+        let r = normalize(
+            &json!({
+                "type": "charge.refunded",
+                "data": { "object": {
+                    "id": "ch_8", "amount_refunded": 500, "currency": "usd", "created": sold,
+                    "refunds": { "data": [
+                        { "id": "re_1", "created": sold + 86_400 },
+                        { "id": "re_2", "created": refunded }
+                    ] }
+                } }
+            }),
+            &fx(),
+        );
+        assert_eq!(
+            r[0].ts.timestamp(),
+            refunded,
+            "the newest refund dates the record"
+        );
+        // A charge payload without the refunds list still falls back to the charge date.
+        let bare = normalize_refund(
+            &json!({ "id": "ch_9", "amount_refunded": 100, "currency": "usd", "created": sold }),
+            &fx(),
+        )
+        .unwrap();
+        assert_eq!(bare.ts.timestamp(), sold);
     }
 
     #[test]
