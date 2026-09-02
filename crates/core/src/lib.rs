@@ -21,6 +21,7 @@ pub mod margin_policy;
 pub mod margin_sim;
 pub mod margin_trend;
 pub mod model_id;
+pub mod price_row;
 pub mod pricing;
 pub mod project;
 pub mod prompt;
@@ -33,6 +34,7 @@ pub mod rubric;
 pub mod schedule;
 pub mod score;
 pub mod trace;
+pub mod unpriced;
 
 pub use alias_table::AliasTable;
 pub use calibration::{agreement, Agreement, CalibrationItem};
@@ -71,7 +73,8 @@ pub use margin_trend::{
     compute_margin_trend, DailyKeyCost, MarginTrend, MarginTrendPoint, MarginTrendSeries,
 };
 pub use model_id::{canonicalize, canonicalize_with, judge_family, ModelId};
-pub use pricing::{ModelPrice, ModelPriceRow, PriceBook, PricingMode};
+pub use price_row::{parse_price_date, ModelPriceRow, PriceBookPosture, DEFAULT_PRICE_STALE_DAYS};
+pub use pricing::{ModelPrice, PriceBook, PricingMode};
 pub use project::{
     decode_scopes, default_scopes, encode_scopes, ApiKey, Project, Redaction, RedactionStamp,
     Scope, REDACTION_KEY,
@@ -96,6 +99,7 @@ pub use trace::{
     normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,
     TraceTotals,
 };
+pub use unpriced::{UnpricedLedger, UnpricedRow, UNPRICED_NOTES};
 
 /// Convenience: a fresh UUIDv4 as a `String` (our canonical id form).
 pub fn new_id() -> String {
