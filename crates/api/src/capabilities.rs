@@ -123,6 +123,9 @@ fn consequence(s: Surface) -> &'static str {
         Surface::LimitLifecycle => {
             "A limit rule cannot be read, updated or deleted after it is created."
         }
+        Surface::Schedules => {
+            "Stored recurrence (/v1/schedules) is unavailable: recurring work must be driven from              outside, by an external scheduler posting to /v1/jobs."
+        }
         Surface::JobLeases => "Jobs cannot be cancelled and leases cannot be renewed.",
         Surface::Maintenance => {
             "Disk accounting and the maintenance sweep are the managed service's job here."

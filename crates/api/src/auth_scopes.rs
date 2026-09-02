@@ -92,13 +92,19 @@ mod table {
         r("/v1/projects/:id/prompts/:name", READ, NoMethod),
         r("/v1/projects/:id/prompts/:name/versions", READ, Admin),
         r("/v1/projects/:id/prompts/:name/promote", NoMethod, Admin),
-        r("/v1/jobs", Admin, NoMethod),
+        r("/v1/jobs", Admin, Admin),
         r("/v1/jobs/claim", NoMethod, Admin),
         r("/v1/jobs/:id", Admin, NoMethod),
         r("/v1/jobs/:id/cancel", NoMethod, Admin),
         r("/v1/jobs/:id/progress", NoMethod, Admin),
         r("/v1/jobs/:id/renew", NoMethod, Admin),
         r("/v1/jobs/:id/finish", NoMethod, Admin),
+        // Schedules are configuration of what this deployment spends money on, so writing one is
+        // admin-only; a project key may READ its own project's schedules, like its own limits.
+        r("/v1/projects/:id/schedules", READ, Admin),
+        r("/v1/schedules", Admin, NoMethod),
+        r("/v1/schedules/:id", NoMethod, Admin),
+        r("/v1/schedules/:id/runs", Admin, NoMethod),
         r("/v1/projects", Admin, Admin),
         r("/v1/projects/:id", NoMethod, Admin),
         r("/v1/projects/:id/keys", Admin, Admin),
@@ -114,6 +120,12 @@ mod table {
         // project key — so the settle report's `Ingest` character is enforced by the device gate.
         r("/v1/relay/tasks/:id/result", NoMethod, Admin),
         r("/v1/relay/lease", NoMethod, Admin),
+        // Renew/progress are device-key doors, gated by `ensure_device` exactly like lease/result.
+        r("/v1/relay/tasks/:id/renew", NoMethod, Admin),
+        r("/v1/relay/tasks/:id/progress", NoMethod, Admin),
+        // Cancel is the operator's, not the device's: the task's OWN project key reaches it (the
+        // handler checks ownership), which is why it is not Admin-only like the device doors.
+        r("/v1/relay/tasks/:id/cancel", NoMethod, MANAGE),
         r("/v1/revenue", NoMethod, Admin),
         r("/v1/margin", Admin, NoMethod),
         r("/v1/margin/trend", Admin, NoMethod),
