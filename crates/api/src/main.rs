@@ -6,6 +6,9 @@
 //!
 //! Routes:
 //!   GET  /health                         liveness + the store backend's declared surfaces
+//!   GET  /openapi.json                   this deployment's OpenAPI 3.1 description, generated from
+//!                                        `lighttrack-contract` (unauthenticated: it describes the
+//!                                        API's shape, never anyone's data)
 //!   GET  /v1/capabilities                what this deployment's store backend serves, and what
 //!                                        it answers 501 for (any authenticated principal)
 //!   POST /v1/events                      ingest one event (cost computed; limits evaluated)
