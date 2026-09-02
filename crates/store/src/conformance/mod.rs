@@ -32,6 +32,7 @@ mod prompts;
 mod refusals;
 mod relay;
 mod revenue;
+mod rollup;
 mod scores;
 mod traces;
 

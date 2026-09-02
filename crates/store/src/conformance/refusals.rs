@@ -40,6 +40,7 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
             store.capabilities().backend,
             surface
         ),
+        Surface::Rollup => rollup(store),
         Surface::Traces => traces(store),
         Surface::Forecast => forecast(store),
         Surface::MarginBreakdowns => margin(store),
@@ -103,6 +104,16 @@ fn traces(store: &dyn Store) -> Vec<&'static str> {
         "list_trace_scores",
         "get_trace",
     ]
+}
+
+/// A backend with no rollup primitive must say so. It is the one refusal that also decides nine
+/// others: the legacy grouped methods default over it, so a silent empty rollup would make every
+/// cost, margin and forecast surface answer "nobody spent anything" at once.
+fn rollup(store: &dyn Store) -> Vec<&'static str> {
+    let q = lighttrack_core::RollupQuery::new(&[lighttrack_core::Dimension::Model], Utc::now())
+        .project(Some("probe"));
+    refused("rollup", store.rollup(&q));
+    vec!["rollup"]
 }
 
 fn forecast(store: &dyn Store) -> Vec<&'static str> {

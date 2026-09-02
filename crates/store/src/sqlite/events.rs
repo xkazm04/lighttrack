@@ -595,7 +595,8 @@ fn trace_summary_from_raw(r: TraceSummaryRaw) -> Result<TraceSummary> {
 pub(super) fn cost_summary(conn: &Connection, project: Option<&str>) -> Result<Vec<CostRow>> {
     let cols = "project_id, provider, model, COUNT(*) AS calls, \
         COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
-        COALESCE(SUM(cost_usd),0.0) AS cost";
+        COALESCE(SUM(cost_usd),0.0) AS cost, \
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),0) AS unpriced";
     let map = |row: &Row| -> rusqlite::Result<CostRow> {
         Ok(CostRow {
             project_id: row.get(0)?,
@@ -605,6 +606,7 @@ pub(super) fn cost_summary(conn: &Connection, project: Option<&str>) -> Result<V
             input_tokens: row.get(4)?,
             output_tokens: row.get(5)?,
             cost_usd: row.get(6)?,
+            unpriced_calls: row.get(7)?,
         })
     };
     let rows = if let Some(p) = project {
@@ -640,7 +642,8 @@ pub(super) fn cost_summary_windowed(
 ) -> Result<Vec<CostRow>> {
     let cols = "project_id, provider, model, COUNT(*) AS calls, \
         COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
-        COALESCE(SUM(cost_usd),0.0) AS cost";
+        COALESCE(SUM(cost_usd),0.0) AS cost, \
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),0) AS unpriced";
     let mut conds: Vec<&str> = Vec::new();
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
     if let Some(p) = project {
@@ -674,6 +677,7 @@ pub(super) fn cost_summary_windowed(
                 input_tokens: row.get(4)?,
                 output_tokens: row.get(5)?,
                 cost_usd: row.get(6)?,
+                unpriced_calls: row.get(7)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -907,7 +911,8 @@ pub(super) fn usecase_costs(
 ) -> Result<Vec<UseCaseCostRow>> {
     let cols = "name, provider, model, COUNT(*) AS calls, \
         COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
-        COALESCE(SUM(cost_usd),0.0) AS cost";
+        COALESCE(SUM(cost_usd),0.0) AS cost, \
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),0) AS unpriced";
     let tail = "GROUP BY name, provider, model ORDER BY cost DESC";
     let map = |row: &Row| -> rusqlite::Result<UseCaseCostRow> {
         Ok(UseCaseCostRow {
@@ -918,6 +923,7 @@ pub(super) fn usecase_costs(
             input_tokens: row.get(4)?,
             output_tokens: row.get(5)?,
             cost_usd: row.get(6)?,
+            unpriced_calls: row.get(7)?,
         })
     };
     let since_str = since.map(fmt_ts);

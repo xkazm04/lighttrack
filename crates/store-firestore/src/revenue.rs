@@ -90,14 +90,12 @@ pub(crate) fn cost_by_dimension(
     }
     Ok(agg
         .into_iter()
-        .map(
-            |(key, (calls, cost_usd, unpriced_calls))| CostByDimension {
-                key,
-                calls,
-                cost_usd,
-                unpriced_calls,
-            },
-        )
+        .map(|(key, (calls, cost_usd, unpriced_calls))| CostByDimension {
+            key,
+            calls,
+            cost_usd,
+            unpriced_calls,
+        })
         .collect())
 }
 

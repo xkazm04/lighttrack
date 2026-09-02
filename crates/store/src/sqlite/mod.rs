@@ -23,6 +23,7 @@ mod projects;
 mod prompts;
 mod relay;
 mod revenue;
+mod rollup;
 mod rubrics;
 mod schema;
 mod scores;
@@ -50,8 +51,8 @@ use serde_json::Value;
 use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
     JobCancel, JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
-    PromptVersion, RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension,
-    TraceSummary,
+    PromptVersion, RelayOutcome, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Score,
+    TokensByDimension, TraceSummary,
 };
 
 use crate::{
@@ -383,6 +384,9 @@ impl Store for SqliteStore {
     }
     fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
         self.read_op(DbOp::UsageRead, |c| events::cost_summary(c, project))
+    }
+    fn rollup(&self, q: &RollupQuery<'_>) -> Result<Vec<RollupRow>> {
+        self.read_op(DbOp::UsageRead, |c| rollup::rollup(c, q))
     }
     fn cost_summary_windowed(
         &self,
