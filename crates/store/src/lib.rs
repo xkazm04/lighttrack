@@ -1522,6 +1522,24 @@ pub trait Store: Send + Sync {
     ) -> Result<Vec<RelayTask>> {
         Err(StoreError::Unsupported("the relay queue"))
     }
+    /// Tasks of one `action_type`, newest first — the same list as [`Store::list_relay_tasks`]
+    /// narrowed to a single action.
+    ///
+    /// Its own method rather than a fourth argument on the existing one because the caller is a
+    /// different question: `POST /v1/relay/actions/:action_type/dataset` snapshots what one action
+    /// actually produced into an eval dataset, so an action with a hundred runs behind a thousand
+    /// of its neighbours' must not be paged past. Filtering client-side would make the `limit` a
+    /// cap on *scanned* rows rather than returned ones, which is how a dataset silently comes back
+    /// short and gets trusted anyway.
+    fn list_relay_tasks_by_action(
+        &self,
+        _project: Option<&str>,
+        _action_type: &str,
+        _status: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<RelayTask>> {
+        Err(StoreError::Unsupported("the relay queue"))
+    }
     /// Atomically lease up to `max` due tasks for `device`: queued tasks past `next_attempt_at`
     /// plus expired leases with attempts to spare (each lease consumes an attempt).
     ///

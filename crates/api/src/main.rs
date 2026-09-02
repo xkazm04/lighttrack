@@ -78,6 +78,13 @@
 //!   POST /v1/relay/tasks/:id/progress    device: liveness detail, fenced
 //!   POST /v1/relay/tasks/:id/cancel      stop a queued/leased task (own project key or admin)
 //!   POST /v1/relay/tasks/:id/result      device: report succeeded | failed | deferred, fenced
+//!   GET  /v1/relay/actions?project=&limit=   the action fingerprint ledger, derived from the settle
+//!                                        events: action_type × prompt_sha256, first/last seen, run
+//!                                        and error counts, and how many runs a judge can read
+//!   POST /v1/relay/actions/:action_type/dataset   (admin) snapshot that action's succeeded runs
+//!                                        (payload → input, result → output) into a dataset, so a
+//!                                        benchmark can gate the next prompt edit. A namespaced
+//!                                        action_type percent-encodes its `/`.
 //!   POST /v1/revenue                     record revenue (manual / billing sync) for profit tracking
 //!   POST /v1/revenue/reprice?currency=&rate=&dry_run=  restate 1:1-fallback rows at a real rate
 //!   GET  /v1/margin?by=customer|product&since=&until=&below=<pct>   revenue − LLM cost rollup
@@ -189,6 +196,7 @@ mod redact;
 mod redaction;
 mod rejections;
 mod relay;
+mod relay_actions;
 mod relay_devices;
 mod relay_lease;
 mod relay_result;
@@ -650,6 +658,11 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route(
             "/v1/relay/devices/:id",
             delete(relay_devices::revoke_device),
+        )
+        .route("/v1/relay/actions", get(relay_actions::list_actions))
+        .route(
+            "/v1/relay/actions/:action_type/dataset",
+            post(relay_actions::snapshot_dataset),
         )
         .route("/v1/revenue", post(revenue::post_revenue))
         .route("/v1/revenue/reprice", post(revenue_reprice::post_reprice))

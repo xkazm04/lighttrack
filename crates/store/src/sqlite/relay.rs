@@ -78,15 +78,37 @@ pub(super) fn list(
     status: Option<&str>,
     limit: usize,
 ) -> Result<Vec<RelayTask>> {
-    // Both filters are optional; a NULL parameter disables its clause.
+    list_where(conn, project, None, status, limit)
+}
+
+/// [`list`] narrowed to one `action_type` (M19).
+pub(super) fn list_by_action(
+    conn: &Connection,
+    project: Option<&str>,
+    action_type: &str,
+    status: Option<&str>,
+    limit: usize,
+) -> Result<Vec<RelayTask>> {
+    list_where(conn, project, Some(action_type), status, limit)
+}
+
+fn list_where(
+    conn: &Connection,
+    project: Option<&str>,
+    action_type: Option<&str>,
+    status: Option<&str>,
+    limit: usize,
+) -> Result<Vec<RelayTask>> {
+    // Every filter is optional; a NULL parameter disables its clause.
     let sql = format!(
         "SELECT {COLS} FROM relay_tasks \
          WHERE (?1 IS NULL OR project_id = ?1) AND (?2 IS NULL OR status = ?2) \
+           AND (?4 IS NULL OR action_type = ?4) \
          ORDER BY created_at DESC LIMIT ?3"
     );
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
-        .query_map(params![project, status, limit as i64], map_raw)?
+        .query_map(params![project, status, limit as i64, action_type], map_raw)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(from_raw).collect()
 }

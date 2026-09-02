@@ -59,7 +59,7 @@ cap that reads as enforced is the failure this row exists to name.
 - **`forecast`** — `daily_usage`, `daily_cost_by_dimension`
 - **`margin_breakdowns`** — `tokens_by_dimension`, `customer_cost_by_model`, `customer_cost_by_name`
 - **`prompts`** — `create_prompt`, `update_prompt`, `get_prompt`, `get_prompt_by_id`, `list_prompts`, `create_prompt_version`, `get_prompt_version`, `list_prompt_versions`
-- **`relay`** — `create_relay_task`, `get_relay_task`, `find_relay_task_by_key`, `list_relay_tasks`, `lease_relay_tasks`, `sweep_relay_dead`, `settle_relay_task`, `renew_relay_lease`, `update_relay_progress`, `cancel_relay_task`
+- **`relay`** — `create_relay_task`, `get_relay_task`, `find_relay_task_by_key`, `list_relay_tasks`, `list_relay_tasks_by_action`, `lease_relay_tasks`, `sweep_relay_dead`, `settle_relay_task`, `renew_relay_lease`, `update_relay_progress`, `cancel_relay_task`
 - **`collective`** — `upsert_collective_entry`, `delete_collective_entries`, `list_collective_entries`, `purge_collective_entries_before`, `replace_collective_contribution`, `latest_collective_receipt`, `list_collective_entries_filtered`
 - **`project_admin`** — `update_project`
 - **`key_admin`** — `list_api_keys`, `set_api_key_revoked`, `set_api_key_expiry`

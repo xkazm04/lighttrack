@@ -230,6 +230,224 @@ async fn terminal_settle_logs_one_flat_cost_event_deferred_none() {
     assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
 }
 
+/// Enqueue, lease, and settle one task with `body`; answer the resulting event.
+async fn settle_and_read_event(
+    redactor: Redactor,
+    action_type: &str,
+    report: impl Fn(Value) -> Value,
+) -> lighttrack_core::LlmEvent {
+    use lighttrack_store::Store;
+
+    let (state, store) = setup(redactor);
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    let (_, task) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key,
+        Some(json!({ "action_type": action_type })),
+    )
+    .await;
+    let id = task["id"].as_str().unwrap().to_string();
+    call(
+        &app,
+        "POST",
+        "/v1/relay/lease",
+        "device-secret",
+        Some(json!({})),
+    )
+    .await;
+    let (status, _) = call(
+        &app,
+        "POST",
+        &format!("/v1/relay/tasks/{id}/result"),
+        "device-secret",
+        Some(report(fence_of(&store, &id))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let mut events = store.list_events(Some("proj-a"), 10).unwrap();
+    assert_eq!(events.len(), 1);
+    events.remove(0)
+}
+
+/// M19: the settle event is judgeable exactly when the action opted in, and it always says which
+/// prompt ran.
+///
+/// Both judges skip an event with no content (`runner/score.rs` "no content"), so before this the
+/// relay — the one LLM workload LightTrack originates — was unscoreable by construction. The
+/// device now decides per action: `report_io` off sends the fingerprint alone, which still detects
+/// a prompt that regressed, and on sends the rendered prompt and result text as `input`/`output`.
+#[tokio::test]
+async fn a_settled_relay_run_is_judgeable_only_when_the_action_opted_in() {
+    // Not opted in: fingerprint yes, content no — so a judge still skips it.
+    let ev = settle_and_read_event(Redactor::off(), "xprice/summary", |fence| {
+        json!({ "status": "succeeded", "result": { "ok": true }, "action_version": "3",
+                "prompt_sha256": "a".repeat(64), "fence": fence })
+    })
+    .await;
+    assert!(ev.input.is_none(), "no content without report_io");
+    assert!(ev.output.is_none());
+    assert_eq!(ev.metadata["prompt_sha256"], "a".repeat(64));
+    assert_eq!(ev.metadata["action_version"], "3");
+    assert_eq!(ev.metadata["action_type"], "xprice/summary");
+
+    // Opted in: the content lands, and the event now carries what a judge needs.
+    let ev = settle_and_read_event(Redactor::off(), "xprice/summary", |fence| {
+        json!({ "status": "succeeded", "result": { "text": "A-1 is $12" },
+                "input": "Price SKU A-1", "output": "A-1 is $12",
+                "prompt_sha256": "b".repeat(64), "fence": fence })
+    })
+    .await;
+    assert_eq!(
+        ev.input.as_ref().and_then(|v| v.as_str()),
+        Some("Price SKU A-1")
+    );
+    assert_eq!(
+        ev.output.as_ref().and_then(|v| v.as_str()),
+        Some("A-1 is $12")
+    );
+    // The exact predicate `lt-runner score` partitions on: input AND output present.
+    assert!(ev.input.is_some() && ev.output.is_some());
+    assert!(ev.tags.contains(&"relay".to_string()));
+    assert_eq!(ev.name.as_deref(), Some("relay-run"));
+}
+
+/// The relay's payload goes through the same redaction door every other ingest door uses — and the
+/// prompt fingerprint survives it.
+///
+/// The scrubber treats 32+ hex characters as a secret, so an un-exempted `prompt_sha256` would
+/// collapse to `<SECRET>` on every row: identical everywhere, which is not a fingerprint. That is
+/// the same reasoning that already exempts the `hash` persistence policy's digests.
+#[tokio::test]
+async fn relay_content_is_scrubbed_but_the_prompt_fingerprint_survives() {
+    let sha = "c".repeat(64);
+    let ev = settle_and_read_event(Redactor::all(), "xprice/summary", |fence| {
+        json!({ "status": "succeeded", "result": {},
+                "input": "email ada@example.com about A-1", "output": "sent to ada@example.com",
+                "prompt_sha256": sha, "fence": fence })
+    })
+    .await;
+    let input = ev.input.as_ref().and_then(|v| v.as_str()).unwrap_or("");
+    let output = ev.output.as_ref().and_then(|v| v.as_str()).unwrap_or("");
+    assert!(input.contains("<EMAIL>"), "{input}");
+    assert!(!input.contains("ada@example.com"), "{input}");
+    assert!(output.contains("<EMAIL>"), "{output}");
+    assert_eq!(
+        ev.metadata["prompt_sha256"],
+        "c".repeat(64),
+        "the fingerprint must not be scrubbed into <SECRET>"
+    );
+}
+
+/// M19's two action doors, end to end: run an action twice under two prompt texts, read the
+/// fingerprint ledger back, and snapshot the action's succeeded runs into a dataset a benchmark
+/// can be linked to.
+#[tokio::test]
+async fn the_action_ledger_separates_prompt_generations_and_snapshots_into_a_dataset() {
+    use lighttrack_store::Store;
+
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let sha = |n: char| std::iter::repeat_n(n, 64).collect::<String>();
+    for (payload, out, fp) in [
+        (json!({ "sku": "A-1" }), "A-1 is $12", sha('a')),
+        (json!({ "sku": "B-2" }), "B-2 is $30", sha('a')),
+        // Same action, a different prompt text — the generation the ledger must not merge.
+        (json!({ "sku": "C-3" }), "C-3 is $7", sha('d')),
+    ] {
+        let (_, task) = call(
+            &app,
+            "POST",
+            "/v1/relay/tasks",
+            &key,
+            Some(json!({ "action_type": "xprice/summary", "payload": payload })),
+        )
+        .await;
+        let id = task["id"].as_str().unwrap().to_string();
+        call(
+            &app,
+            "POST",
+            "/v1/relay/lease",
+            "device-secret",
+            Some(json!({})),
+        )
+        .await;
+        call(
+            &app,
+            "POST",
+            &format!("/v1/relay/tasks/{id}/result"),
+            "device-secret",
+            Some(json!({ "status": "succeeded", "result": { "text": out },
+                          "input": "price it", "output": out, "prompt_sha256": fp,
+                          "action_version": "1", "fence": fence_of(&store, &id) })),
+        )
+        .await;
+    }
+
+    let (status, ledger) = call(&app, "GET", "/v1/relay/actions", &key, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ledger["scanned"], 3);
+    assert_eq!(ledger["truncated"], false);
+    let rows = ledger["actions"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "two prompt generations, two rows: {ledger}");
+    let older = rows
+        .iter()
+        .find(|r| r["prompt_sha256"] == sha('a'))
+        .expect("the two-run generation");
+    assert_eq!(older["action_type"], "xprice/summary");
+    assert_eq!(older["runs"], 2);
+    assert_eq!(older["judgeable"], 2);
+    assert_eq!(older["versions"], json!(["1"]));
+
+    // Snapshot into a dataset. The namespaced action type percent-encodes its `/`.
+    let (status, snap) = call(
+        &app,
+        "POST",
+        "/v1/relay/actions/xprice%2Fsummary/dataset",
+        "admin-secret",
+        Some(json!({ "project_id": "proj-a" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{snap}");
+    assert_eq!(snap["items"], 3);
+    assert_eq!(snap["skipped"], 0);
+    assert_eq!(snap["source"], "relay:xprice/summary");
+    let items = store
+        .list_dataset_items(snap["id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(items.len(), 3);
+    assert!(items.iter().any(|i| i.input.contains("A-1")));
+    assert!(items
+        .iter()
+        .any(|i| i.output.as_deref() == Some("A-1 is $12")));
+
+    // A project key never mints a dataset, and an action with no runs is an empty one rather than
+    // somebody else's traffic.
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/relay/actions/xprice%2Fsummary/dataset",
+        &key,
+        Some(json!({ "project_id": "proj-a" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, snap) = call(
+        &app,
+        "POST",
+        "/v1/relay/actions/xprice%2Fnothing/dataset",
+        "admin-secret",
+        Some(json!({ "project_id": "proj-a" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(snap["items"], 0);
+}
+
 /// The router-level shape of the fence: a device whose lease was reclaimed is told 409 on renew,
 /// progress AND result — and its run is never recorded against the task its successor now holds.
 ///

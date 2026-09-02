@@ -237,6 +237,10 @@ fn relay(store: &dyn Store) -> Vec<&'static str> {
         store.list_relay_tasks(Some(&pid), None, 10),
     );
     refused(
+        "list_relay_tasks_by_action",
+        store.list_relay_tasks_by_action(Some(&pid), "ns/act", None, 10),
+    );
+    refused(
         "lease_relay_tasks",
         store.lease_relay_tasks("dev-1", &[], 60, 5),
     );
@@ -259,6 +263,7 @@ fn relay(store: &dyn Store) -> Vec<&'static str> {
         "get_relay_task",
         "find_relay_task_by_key",
         "list_relay_tasks",
+        "list_relay_tasks_by_action",
         "lease_relay_tasks",
         "sweep_relay_dead",
         "settle_relay_task",

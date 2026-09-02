@@ -157,6 +157,19 @@ pub(super) fn relay(store: &dyn Store, pid: &str) -> Result<()> {
         .list_relay_tasks(Some(pid), Some("succeeded"), 100)?
         .iter()
         .any(|x| x.id == t.id));
+    // Narrowed to one action (M19): the snapshot behind `POST /v1/relay/actions/:t/dataset` must
+    // return this action's runs and nobody else's. A filter that quietly ignored `action_type`
+    // would build a dataset out of a neighbouring action's traffic and look perfectly healthy.
+    assert!(store
+        .list_relay_tasks_by_action(Some(pid), &t.action_type, Some("succeeded"), 100)?
+        .iter()
+        .any(|x| x.id == t.id));
+    assert!(
+        store
+            .list_relay_tasks_by_action(Some(pid), "conf/not-an-action", None, 100)?
+            .is_empty(),
+        "an action_type nothing was enqueued under must return nothing, not everything"
+    );
     assert!(matches!(
         store.settle_relay_task(&new_id(), None, &RelayOutcome::Failed("x".into()))?,
         RelaySettle::NoSuchTask
