@@ -192,6 +192,16 @@ impl LimitRule {
                 ));
             }
         }
+        // A scope with a blank value matches no event, ever: the rule reads as configured on every
+        // surface and caps nothing. Refuse it here, where a typo is a 400 and not a silent hole.
+        if let Some(s) = &self.scope {
+            if s.value().trim().is_empty() {
+                return Err(format!(
+                    "scope `{}` needs a non-empty value (a blank scope matches no traffic)",
+                    s.kind_str()
+                ));
+            }
+        }
         Ok(())
     }
 
