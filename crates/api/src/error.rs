@@ -99,6 +99,27 @@ pub(crate) enum ErrorCode {
 }
 
 impl ErrorCode {
+    /// Every code, for the test that holds the frozen wire table to the enum (a variant added here
+    /// and not there fails the build - five codes had shipped unpinned before it existed).
+    #[cfg(test)]
+    pub(crate) const ALL: [ErrorCode; 15] = [
+        ErrorCode::BadRequest,
+        ErrorCode::TsTooOld,
+        ErrorCode::TsTooNew,
+        ErrorCode::Unauthorized,
+        ErrorCode::Forbidden,
+        ErrorCode::ProjectDisabled,
+        ErrorCode::KeyExpired,
+        ErrorCode::NotFound,
+        ErrorCode::RelayUnroutable,
+        ErrorCode::Conflict,
+        ErrorCode::RateLimited,
+        ErrorCode::Overloaded,
+        ErrorCode::Timeout,
+        ErrorCode::Internal,
+        ErrorCode::Unsupported,
+    ];
+
     /// The canonical HTTP status for this code.
     pub(crate) fn status(self) -> StatusCode {
         match self {
@@ -288,44 +309,41 @@ mod tests {
         );
     }
 
+    /// The frozen wire contract, one row per code. Consumers `match` on these strings, so a row here
+    /// is a promise; the loop holds the table to [`ErrorCode::ALL`] so a new variant cannot ship
+    /// without a row, and checks the serde spelling against `as_str` so the two cannot drift.
     #[test]
-    fn code_status_mapping_is_canonical() {
-        assert_eq!(ErrorCode::BadRequest.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(ErrorCode::Unauthorized.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(ErrorCode::Forbidden.status(), StatusCode::FORBIDDEN);
-        assert_eq!(ErrorCode::NotFound.status(), StatusCode::NOT_FOUND);
-        assert_eq!(ErrorCode::Conflict.status(), StatusCode::CONFLICT);
-        assert_eq!(
-            ErrorCode::RateLimited.status(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
-        assert_eq!(
-            ErrorCode::Overloaded.status(),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
-        assert_eq!(ErrorCode::Timeout.status(), StatusCode::GATEWAY_TIMEOUT);
-        assert_eq!(
-            ErrorCode::Internal.status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-        assert_eq!(ErrorCode::Unsupported.status(), StatusCode::NOT_IMPLEMENTED);
-    }
-
-    #[test]
-    fn code_wire_strings_are_stable() {
-        assert_eq!(ErrorCode::BadRequest.as_str(), "bad_request");
-        assert_eq!(ErrorCode::Unauthorized.as_str(), "unauthorized");
-        assert_eq!(ErrorCode::Forbidden.as_str(), "forbidden");
-        assert_eq!(ErrorCode::NotFound.as_str(), "not_found");
-        assert_eq!(ErrorCode::Conflict.as_str(), "conflict");
-        assert_eq!(ErrorCode::RateLimited.as_str(), "rate_limited");
-        assert_eq!(ErrorCode::Overloaded.as_str(), "overloaded");
-        assert_eq!(ErrorCode::Timeout.as_str(), "timeout");
-        assert_eq!(ErrorCode::Internal.as_str(), "internal");
-        assert_eq!(ErrorCode::Unsupported.as_str(), "unsupported");
-        // Serialize matches as_str (the enum and the wire string can't drift).
-        let s = serde_json::to_string(&ErrorCode::NotFound).unwrap();
-        assert_eq!(s, "\"not_found\"");
+    fn every_code_has_a_frozen_wire_string_and_canonical_status() {
+        use ErrorCode::*;
+        use StatusCode as S;
+        let frozen = [
+            (BadRequest, "bad_request", S::BAD_REQUEST),
+            (TsTooOld, "ts_too_old", S::BAD_REQUEST),
+            (TsTooNew, "ts_too_new", S::BAD_REQUEST),
+            (Unauthorized, "unauthorized", S::UNAUTHORIZED),
+            (Forbidden, "forbidden", S::FORBIDDEN),
+            (ProjectDisabled, "project_disabled", S::FORBIDDEN),
+            (KeyExpired, "key_expired", S::UNAUTHORIZED),
+            (NotFound, "not_found", S::NOT_FOUND),
+            (RelayUnroutable, "relay_unroutable", S::UNPROCESSABLE_ENTITY),
+            (Conflict, "conflict", S::CONFLICT),
+            (RateLimited, "rate_limited", S::TOO_MANY_REQUESTS),
+            (Overloaded, "overloaded", S::SERVICE_UNAVAILABLE),
+            (Timeout, "timeout", S::GATEWAY_TIMEOUT),
+            (Internal, "internal", S::INTERNAL_SERVER_ERROR),
+            (Unsupported, "unsupported", S::NOT_IMPLEMENTED),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for code in ErrorCode::ALL {
+            let (_, wire, status) = frozen
+                .iter()
+                .find(|(c, _, _)| *c == code)
+                .unwrap_or_else(|| panic!("{code:?} has no frozen wire row"));
+            assert_eq!(code.as_str(), *wire);
+            assert_eq!(code.status(), *status);
+            assert_eq!(serde_json::to_string(&code).unwrap(), format!("\"{wire}\""));
+            assert!(seen.insert(*wire), "wire string {wire} is used twice");
+        }
     }
 
     #[tokio::test]
