@@ -7,6 +7,9 @@ description = "LightTrack persistence: Store trait + SQLite backend (local). Big
 
 [dependencies]
 lighttrack-core.workspace = true
+# M24: a server-side dataset import mines production text, and that text is scrubbed on the way in
+# (see dataset_import) rather than by whichever caller happens to remember to.
+lighttrack-anon = { path = "../anon" }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

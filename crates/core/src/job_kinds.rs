@@ -17,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::dataset_lineage::ImportSpec;
 use crate::job::JobKind;
 
 /// Run a stored benchmark (the original, and still the only kind that spends generation budget).
@@ -91,6 +92,12 @@ pub struct DatasetSamplePayload {
     pub n: usize,
     #[serde(default)]
     pub llm_scrub: bool,
+    /// How to choose the cases (M24). `None` keeps the historical cycle — scrub the newest `n`
+    /// events client-side and freeze — so an existing queued payload runs exactly as it did.
+    /// `Some` makes the cycle a server-side import instead, which is the only way `stratified`,
+    /// `random`, `errors` and dedupe can be expressed at all: they are SQL, not a client loop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import: Option<ImportSpec>,
 }
 
 /// Re-measure judge/human agreement against a golden set — one cycle of `lt-runner calibrate --watch`.

@@ -14,7 +14,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde_json::Value;
 
-use lighttrack_core::{new_id, DatasetItem, Label, LabelFilter, LabelSubject};
+use lighttrack_core::{input_fingerprint, new_id, DatasetItem, Label, LabelFilter, LabelSubject};
 
 use crate::datasets::load_dataset_authorized;
 use crate::error::ApiError;
@@ -82,6 +82,11 @@ pub(crate) async fn item_from_label(
     let item = DatasetItem {
         id: new_id(),
         dataset_id: ds.id.clone(),
+        // The fingerprint every writer of a case stamps (M24), so a later `import --dedupe` into
+        // this set can see the promoted case is already here.
+        input_hash: Some(input_fingerprint(
+            &as_text(ev.input.as_ref()).unwrap_or_default(),
+        )),
         input: as_text(ev.input.as_ref()).unwrap_or_default(),
         output: as_text(ev.output.as_ref()),
         // The human's verdict is what makes this a *golden* case, so the expectation the case

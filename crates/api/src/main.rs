@@ -181,6 +181,7 @@ mod collective;
 mod collective_auto;
 mod costs_unpriced;
 mod datasets;
+mod datasets_lineage;
 mod error;
 mod events;
 mod events_admission;
@@ -580,6 +581,19 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route(
             "/v1/datasets/:id/labels",
             get(labels_promote::dataset_labels),
+        )
+        // Eval corpus lineage (M24): a frozen set is a checkpoint, not a dead end.
+        .route(
+            "/v1/datasets/:id/fork",
+            post(datasets_lineage::fork_dataset),
+        )
+        .route(
+            "/v1/datasets/:id/items/import",
+            post(datasets_lineage::import_dataset_items),
+        )
+        .route(
+            "/v1/projects/:id/datasets/versions",
+            get(datasets_lineage::list_dataset_versions),
         )
         .route(
             "/v1/labels",

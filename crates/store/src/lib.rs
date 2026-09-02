@@ -11,6 +11,7 @@ pub mod capabilities;
 pub mod codec;
 pub mod collective;
 pub mod conformance;
+pub mod dataset_import;
 pub mod pricing;
 mod rollup_compat;
 pub mod sqlite;
@@ -26,7 +27,7 @@ use thiserror::Error;
 use lighttrack_core::{
     scope_matches, Alert, AlertChannel, AlertKind, ApiKey, Benchmark, BenchmarkRun,
     CalibrationRecord, CollectiveEntry, ContributionRecord, CostByDimension, CostEvidence, Dataset,
-    DatasetItem, Delivery, Device, DeviceEligibility, Job, JobCancel, JobFinish, Label,
+    DatasetItem, Delivery, Device, DeviceEligibility, ImportSpec, Job, JobCancel, JobFinish, Label,
     LabelFilter, LeaseHeld, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow, LlmEvent,
     MarginPolicy, ModelPriceRow, Project, Prompt, PromptVersion, RedactionStamp, RelayCancel,
     RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule,
@@ -2016,6 +2017,47 @@ pub trait Store: Send + Sync {
         _cursor: Option<&str>,
     ) -> Result<Vec<CalibrationRecord>> {
         Err(StoreError::Unsupported("the calibration ledger"))
+    }
+
+    // --- eval corpus lineage (M24) ---
+    //
+    // `Dataset::version` was written once as `1` and never updated by anything, which made every
+    // guard that reads it — the runner's paired-test refusal, a run's `dataset_pin` — a comparison
+    // of 1 with 1. These three methods are what make it move.
+
+    /// Fork `id` into the next version of the same name: items copied, `frozen` cleared,
+    /// `parent_id` linked, `version` incremented past the highest version that name already has.
+    ///
+    /// A fork rather than an unfreeze, because unfreezing would rewrite the corpus a finished run
+    /// was scored against and silently make two runs incomparable while both still claim the same
+    /// dataset. The labels on the copied items come with them (M11): a golden case whose human
+    /// verdict did not survive the fork is no longer golden.
+    ///
+    /// `project` scopes the lookup — `None` is an admin/unscoped call.
+    fn fork_dataset(&self, _project: Option<&str>, _id: &str) -> Result<Dataset> {
+        Err(StoreError::Unsupported("dataset lineage"))
+    }
+    /// Mine stored rows into `dataset_id` per `spec`, returning how many items were written.
+    ///
+    /// The four [`SamplingStrategy`]s live here rather than in a client loop because they are
+    /// queries: a stratified quota and a uniform draw over the matched population cannot be
+    /// expressed by fetching the newest page and filtering it — which is exactly why the only
+    /// sampler that ever existed was "newest N".
+    ///
+    /// Refuses a frozen target with [`StoreError::Conflict`]: appending to the corpus a finished run
+    /// was scored against is the same lie as unfreezing it.
+    fn import_dataset_items(
+        &self,
+        _project: Option<&str>,
+        _dataset_id: &str,
+        _spec: &ImportSpec,
+    ) -> Result<u32> {
+        Err(StoreError::Unsupported("dataset lineage"))
+    }
+    /// Every version of the dataset called `name`, newest version first — the lineage an operator
+    /// reads to find which corpus a past run was actually scored against.
+    fn list_dataset_versions(&self, _project: Option<&str>, _name: &str) -> Result<Vec<Dataset>> {
+        Err(StoreError::Unsupported("dataset lineage"))
     }
 }
 

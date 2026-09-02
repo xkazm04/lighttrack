@@ -29,6 +29,49 @@ Pipeline: `sample → anonymize → review → freeze`.
     never copied into the dataset; only the scrubbed version.
 - **Output:** a frozen, versioned dataset (immutable once `frozen=true`) so runs are comparable over time.
 
+### 1a. Lineage: the four strategies, and what a version means (M24)
+
+Until M24 this section described one product and shipped another. `Dataset.version` was written as
+`1` by `create_dataset` and updated by nothing, so "versioned" was a constant — which quietly
+hollowed out the two guards that read it: the paired-test refusal in `runner/history.rs` compared
+1 with 1, and a run's `dataset_pin` recorded 1 forever. And exactly one of the four sampling
+strategies existed, because sampling was a client loop over "the newest N events with an input".
+
+Both are now real, and the reason the strategies moved to the server is the reason they could not be
+written as a client loop: a stratified quota and a uniform draw are statements about the **matched
+population**, which a caller that has already fetched a page has thrown away.
+
+- `POST /v1/datasets/:id/items/import` mines rows into an **unfrozen** dataset by
+  `{from, filter, strategy, n, dedupe}` ([`ImportSpec`], `crates/core/src/dataset_lineage.rs`):
+  - `recent` — newest first (the historical behaviour, still the default);
+  - `random` — uniform over what the filter matched;
+  - `stratified` — a per-`(model, status)` quota, floored at one per group, so a model with three
+    calls all week is represented rather than drowned by the common one;
+  - `errors` — failures only (`status <> 'success'` from `events`, `pass = false` from `scores`).
+  - `from: scores` joins verdicts to events, which is what makes a **failure-mined** regression set
+    expressible at all: the `pass = false` lives on `scores` and the text lives on `events`.
+  - `dedupe` collapses a case whose *normalised* input (case-folded, whitespace-collapsed, hashed
+    **after** the scrub) already appears in the target set — so two calls differing only in the PII
+    the scrubber replaced are one case.
+  - Mined production text is scrubbed on the way in, by the same `lighttrack_anon` pass
+    `lt-runner dataset build` uses. A server-side import that skipped it would be a strictly easier
+    way to copy live PII into an eval corpus than the path it replaces.
+- `POST /v1/datasets/:id/fork` makes freezing a **checkpoint rather than a dead end**: the next
+  version of the same name, items and their M11 labels copied, `frozen` cleared, `parent_id` linked.
+  The parent keeps its freeze and its grades, so the run scored against it stays reproducible.
+  Importing into a frozen dataset is a `409`, and the answer to it is a fork.
+- `GET /v1/projects/:id/datasets/versions?name=…` walks the lineage, newest version first — the read
+  that resolves a run's `dataset_version` pin back to the corpus it names.
+- A benchmark may declare `regression_dataset` in its `target` object (a reserved key, like
+  `schedule_interval_secs`). `lt-runner score` then appends each failing verdict's event to the
+  current unfrozen version of that name, deduped and best-effort: mining is a side effect of scoring,
+  and a pass that died because a corpus was unreachable would trade the verdict for the sample.
+- CLI: `lt datasets versions|fork|import`, `lt-runner dataset build --strategy --from --below
+  --dedupe` and `lt-runner dataset import|versions|fork`. MCP: `fork_dataset` and
+  `import_dataset_items`, both write-gated behind `LIGHTTRACK_MCP_ALLOW_WRITES`.
+- Backends: SQLite and Postgres serve `Surface::DatasetLineage`; Firestore refuses it with a
+  documented 501 rather than an empty answer (`docs/PARITY.md`).
+
 ## 2. Multi-provider / multi-prompt comparison  (#2)
 A benchmark defines a **matrix** of targets = `{providers × models} × {prompt variants}`. For each
 DatasetItem × target, the framework **generates** an output, then **judges** it.

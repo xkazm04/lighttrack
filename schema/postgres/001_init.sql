@@ -619,3 +619,23 @@ CREATE TABLE IF NOT EXISTS calibrations (
 );
 CREATE INDEX IF NOT EXISTS idx_calibrations_key
   ON calibrations(project_id, judge, rubric_id, created_at);
+
+
+-- ===========================================================================================
+-- M24: eval corpus lineage. Self-contained block, appended.
+--
+-- `parent_id` is the link that makes `datasets.version` mean anything: without it a v2 is just
+-- another row that happens to share a name, and the runner's paired-test guard compares 1 with 1
+-- forever. `input_hash` is the normalised-input fingerprint near-duplicate collapse looks up
+-- instead of scanning every stored case's text. Both nullable and both ADD COLUMN IF NOT EXISTS,
+-- so an existing deployment reads back as exactly the v1-with-no-parent corpus it always was.
+-- ===========================================================================================
+
+ALTER TABLE datasets      ADD COLUMN IF NOT EXISTS parent_id  TEXT;
+ALTER TABLE dataset_items ADD COLUMN IF NOT EXISTS input_hash TEXT;
+
+-- The version walk (`GET /v1/projects/:id/datasets/:name/versions`) and the fork's "what is the
+-- highest version this name already carries" read.
+CREATE INDEX IF NOT EXISTS idx_datasets_name_version ON datasets(project_id, name, version);
+-- Dedupe's lookup: the fingerprints already in the target set.
+CREATE INDEX IF NOT EXISTS idx_dataset_items_hash ON dataset_items(dataset_id, input_hash);

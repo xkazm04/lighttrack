@@ -43,6 +43,11 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         action: RubricsCmd,
     },
+    /// Eval corpus lineage (M24) — a dataset name's versions, forking one, mining rows into one.
+    Datasets {
+        #[command(subcommand)]
+        action: DatasetsCmd,
+    },
     /// Human verdicts (M11) — the ground truth a judge is calibrated against.
     Labels {
         #[command(subcommand)]
@@ -474,6 +479,52 @@ pub(crate) enum JudgesCmd {
         project: Option<String>,
         #[arg(long, default_value_t = 50)]
         limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DatasetsCmd {
+    /// Every version of a dataset NAME, newest first — which corpus a past run was scored against.
+    Versions {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        name: String,
+    },
+    /// Fork a dataset into the next version of its name: items and their labels copied, unfrozen.
+    ///
+    /// The way a FROZEN golden set is extended. Writing to the frozen one would rewrite what a
+    /// finished run was scored against; a fork leaves that run reproducible and moves `version`, so
+    /// the paired-test guard can finally tell the two corpora apart.
+    Fork {
+        /// Dataset id to fork.
+        id: String,
+    },
+    /// Mine stored rows into an unfrozen dataset by a declared sampling strategy.
+    Import {
+        /// Dataset id to import into (409 if it is frozen — fork it first).
+        id: String,
+        /// Where the cases come from: `events` (default) | `scores`.
+        #[arg(long, default_value = "events")]
+        from: String,
+        /// How to choose them: `recent` | `random` | `stratified` | `errors`.
+        #[arg(long, default_value = "recent")]
+        strategy: String,
+        #[arg(long, default_value_t = 50)]
+        n: usize,
+        /// With `--from scores`: only verdicts whose normalised value (`value/max`) is below this.
+        /// Implies `--strategy errors` when no strategy was given.
+        #[arg(long)]
+        below: Option<f64>,
+        /// Only events from this model.
+        #[arg(long)]
+        model: Option<String>,
+        /// Only events with this outcome: `success` | `error` | `timeout`.
+        #[arg(long)]
+        status: Option<String>,
+        /// Skip cases whose normalised input is already in the set.
+        #[arg(long)]
+        dedupe: bool,
     },
 }
 

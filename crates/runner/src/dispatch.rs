@@ -180,6 +180,16 @@ fn dataset_sample(
     ctl: &RunControl,
 ) -> Result<Value> {
     ctl.note(&format!("sampling events from {}", p.project));
+    // A payload carrying an ImportSpec (M24) runs the versioned cycle: one accumulating name whose
+    // `dataset_version` actually moves, instead of a new watermark-named corpus per cycle that no
+    // version pin can relate to the last one. Absent ⇒ exactly the pre-M24 cycle.
+    if let Some(spec) = &p.import {
+        let built = schedule::run_versioned_cycle(cli, http, &p.project, &p.name_prefix, spec)?;
+        return Ok(json!({
+            "kind": "dataset_sample", "project": p.project,
+            "dataset": built, "strategy": spec.strategy.as_str(),
+        }));
+    }
     let built = schedule::run_cycle(
         cli,
         http,

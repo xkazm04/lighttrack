@@ -126,6 +126,18 @@ const ADDED_COLUMNS_LATE: &[&str] = &[
     // retroactively would block every existing deployment's gates on the day it upgraded, because
     // nothing has been calibrated yet.
     "ALTER TABLE projects ADD COLUMN require_trusted_judge INTEGER NOT NULL DEFAULT 0",
+    // M24 — eval corpus lineage. `parent_id` is the link that makes `version` mean something: a v2
+    // with no parent is just another row that shares a name. `input_hash` is the normalised-input
+    // fingerprint near-duplicate collapse looks up instead of scanning every stored case's text.
+    // Both nullable — a pre-M24 dataset is a v1 with no parent, and its items are simply not known
+    // to be duplicates of anything (which is why dedupe treats NULL as "no match", never as one).
+    "ALTER TABLE datasets ADD COLUMN parent_id TEXT",
+    "ALTER TABLE dataset_items ADD COLUMN input_hash TEXT",
+    // The version walk (`GET /v1/projects/:id/datasets/:name/versions`) and the fork's "what is the
+    // highest version this name already has" read.
+    "CREATE INDEX IF NOT EXISTS idx_datasets_name_version ON datasets(project_id, name, version)",
+    // Dedupe's lookup: the fingerprints already in the target set.
+    "CREATE INDEX IF NOT EXISTS idx_dataset_items_hash ON dataset_items(dataset_id, input_hash)",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.

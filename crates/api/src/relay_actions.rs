@@ -27,7 +27,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use lighttrack_core::{new_id, Dataset, DatasetItem, LlmEvent};
+use lighttrack_core::{input_fingerprint, new_id, Dataset, DatasetItem, LlmEvent};
 use lighttrack_store::EventFilter;
 
 use crate::error::ApiError;
@@ -255,6 +255,7 @@ pub(crate) async fn snapshot_dataset(
         // best — these cases cannot have leaked into a model's training set.
         source: Some(format!("relay:{action_type}")),
         created_at: Utc::now(),
+        parent_id: None,
     };
     let store = st.store.clone();
     let d2 = dataset.clone();
@@ -270,6 +271,9 @@ pub(crate) async fn snapshot_dataset(
         let item = DatasetItem {
             id: new_id(),
             dataset_id: dataset.id.clone(),
+            // The fingerprint every writer of a case stamps (M24), so a later `import --dedupe`
+            // into this set can see what is already here rather than re-mining it.
+            input_hash: Some(input_fingerprint(&input)),
             input,
             output: Some(output),
             expected: None,

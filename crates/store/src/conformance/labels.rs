@@ -145,6 +145,7 @@ fn dataset_join(store: &dyn Store, pid: &str) -> Result<()> {
         frozen: false,
         source: None,
         created_at: Utc::now(),
+        parent_id: None,
     };
     store.create_dataset(&ds)?;
     let item = DatasetItem {
@@ -157,6 +158,7 @@ fn dataset_join(store: &dyn Store, pid: &str) -> Result<()> {
         tags: Vec::new(),
         source_event_id: None,
         anonymization: serde_json::Value::Null,
+        input_hash: None,
     };
     store.create_dataset_item(&item)?;
     let l = sample_label(pid, LabelSubject::DatasetItem(item.id.clone()), 0.95);

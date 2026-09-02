@@ -134,6 +134,11 @@ fn consequence(s: Surface) -> &'static str {
              deployment cannot say whether the judge behind a green badge has ever been checked \
              against a human."
         }
+        Surface::DatasetLineage => {
+            "POST /v1/datasets/:id/fork, POST /v1/datasets/:id/items/import and the version walk \
+             are unavailable — a frozen dataset is terminal here, `version` stays 1 forever, and \
+             failing verdicts cannot be mined into a regression set."
+        }
         Surface::Pricing => {
             "GET /v1/costs/unpriced, PUT /v1/prices/…?fill_unpriced=1 and the price history are \
              unavailable — this deployment cannot say WHICH models it failed to price, and a rate \

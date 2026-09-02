@@ -30,6 +30,7 @@
 mod alerts;
 mod cli;
 mod collective;
+mod datasets;
 mod http;
 mod labels;
 mod limits;
@@ -54,6 +55,7 @@ fn main() -> Result<()> {
         Cmd::Limits { action } => limits::run(&cli, action),
         Cmd::Alerts { action } => alerts::run(&cli, action),
         Cmd::Rubrics { action } => rubrics::run(&cli, action),
+        Cmd::Datasets { action } => datasets::run(&cli, action),
         Cmd::Labels { action } => labels::run(&cli, action),
         Cmd::Judges { action } => labels::run_judges(&cli, action),
         Cmd::Costs { project } => usage::costs(&cli, project),
