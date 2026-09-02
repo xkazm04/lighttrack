@@ -523,10 +523,16 @@ class LightTrack:
         threading.Thread(target=run, name="lighttrack-limits", daemon=True).start()
 
     def flush(self, timeout: float = 5.0) -> None:
+        """Wait (up to `timeout`) until every queued event has been *sent*, not merely dequeued.
+
+        `Queue.empty()` turns true the moment the worker takes the last item, while its POST is still
+        in flight — so a caller that flushed and then exited could lose the final event. The
+        unfinished-task count only drops when the worker calls `task_done()` after the send.
+        """
         if not (self.enabled and self._async):
             return
         deadline = time.monotonic() + timeout
-        while not self._q.empty() and time.monotonic() < deadline:
+        while self._q.unfinished_tasks and time.monotonic() < deadline:
             time.sleep(0.01)
 
     def close(self) -> None:
