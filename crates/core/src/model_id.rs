@@ -69,9 +69,30 @@ impl ModelId {
         }
     }
 
+    /// The model as written after the derivable steps but *before* the date trim — `gpt-4o` becomes
+    /// `gpt-4o-2024-08-06` again. Aliases may be declared on either spelling.
+    fn dated(&self) -> String {
+        match &self.variant {
+            Some(v) => format!("{}-{}", self.family, v),
+            None => self.family.clone(),
+        }
+    }
+
     /// Apply a declared alias table to an already-canonicalized id (step 5).
+    ///
+    /// The dated spelling is tried first, so an operator can declare that one *specific* release
+    /// belongs elsewhere; only then the undated family. Without that order a table entry on a dated
+    /// name could never fire, because step 4 had already trimmed the date away.
     pub fn with_aliases(mut self, aliases: &AliasTable) -> Self {
-        if let Some(target) = aliases.resolve(self.provider.as_str(), &self.family) {
+        let provider = self.provider.as_str().to_string();
+        if self.variant.is_some() {
+            if let Some(target) = aliases.resolve(&provider, &self.dated()) {
+                self.family = target.to_string();
+                self.variant = None;
+                return self;
+            }
+        }
+        if let Some(target) = aliases.resolve(&provider, &self.family) {
             self.family = target.to_string();
         }
         self
@@ -296,6 +317,16 @@ mod tests {
         assert_eq!(
             canonicalize_with("google", "g-legacy", &t).family,
             "gemini-2.5-flash"
+        );
+        // An alias declared on the *dated* spelling still fires, though step 4 trimmed the date.
+        let dated = AliasTable::from_pairs([("gpt-4o-2024-08-06", "house-blend")]);
+        let id = canonicalize_with("openai", "gpt-4o-2024-08-06", &dated);
+        assert_eq!(id.family, "house-blend");
+        assert_eq!(id.variant, None, "the alias consumed the dated spelling");
+        assert_eq!(
+            canonicalize_with("openai", "gpt-4o-2024-05-13", &dated).family,
+            "gpt-4o",
+            "…and only for the release it names"
         );
         // Undeclared identities pass through untouched.
         assert_eq!(

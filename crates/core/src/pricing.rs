@@ -194,6 +194,14 @@ impl PriceBook {
         push(id.provider.as_str(), &id.family);
         let aliased = id.with_aliases(&self.aliases);
         push(aliased.provider.as_str(), &aliased.family);
+        // Last resort: a *classifiable* id falls back to its family's rows, so an OTel span from
+        // `az.ai.openai` or `gcp.gemini` is still priced from `openai/…` / `google/…` instead of
+        // silently costing nothing. Pricing only — the stored id, the limit scope and the rollup key
+        // all stay the raw vendor, which is the whole point of the open vocabulary.
+        let family = aliased.provider.family();
+        if family.is_known() {
+            push(family.as_str(), &aliased.family);
+        }
         out
     }
 
@@ -420,6 +428,11 @@ mod tests {
         assert_eq!(
             book.cost_usd("google-vertex", "gemini-2.5-pro", &u),
             Some(base)
+        );
+        // …a namespaced OTel vendor id, which prices from its family's rows while staying itself…
+        assert_eq!(
+            book.cost_usd("az.ai.openai", "gpt-4o-mini", &u),
+            book.cost_usd("openai", "gpt-4o-mini", &u)
         );
         // …and a dated point release, with no table entry for either date spelling.
         assert_eq!(
