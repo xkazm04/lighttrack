@@ -17,6 +17,7 @@
 //! the task elsewhere.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -94,15 +95,21 @@ fn run_one(
         return;
     };
 
-    let finished = AtomicBool::new(false);
     let lost = AtomicBool::new(false);
+    // The heartbeat waits on a channel, not a sleep: `thread::scope` joins the heartbeat before
+    // the run's report is returned, and a sleeping heartbeat held every settle back for up to a
+    // full renewal interval after the CLI had already exited — dead time on a serial loop, once
+    // per task. Dropping the sender wakes it instantly.
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let lost_ref = &lost;
     let report = std::thread::scope(|scope| {
-        scope.spawn(|| {
-            while !finished.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_secs(renew_secs));
-                if finished.load(Ordering::Relaxed) {
-                    break;
-                }
+        // `move` takes the receiver (not `Sync`) into the heartbeat; everything else it uses is a
+        // shared reference or `Copy`.
+        scope.spawn(move || {
+            // Anything but a timeout means the run finished (sender dropped): nothing to keep alive.
+            while let Err(RecvTimeoutError::Timeout) =
+                done_rx.recv_timeout(Duration::from_secs(renew_secs))
+            {
                 match client.renew(&task.id, fence) {
                     Ok(true) => {}
                     Ok(false) => {
@@ -114,7 +121,7 @@ fn run_one(
                              will NOT be reported or delivered.",
                             client.name, task.id
                         );
-                        lost.store(true, Ordering::Relaxed);
+                        lost_ref.store(true, Ordering::Relaxed);
                         break;
                     }
                     // A transient failure is not evidence of a lost lease, and treating it as one
@@ -127,7 +134,7 @@ fn run_one(
             }
         });
         let report = exec::execute(cfg, engine, task);
-        finished.store(true, Ordering::Relaxed);
+        drop(done_tx);
         report
     });
 
