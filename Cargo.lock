@@ -1270,6 +1270,7 @@ name = "lighttrack-anon"
 version = "0.0.1"
 dependencies = [
  "regex",
+ "serde_json",
 ]
 
 [[package]]
