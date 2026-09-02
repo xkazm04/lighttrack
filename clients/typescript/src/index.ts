@@ -238,21 +238,77 @@ export interface RelayTaskOptions {
   project?: string;
 }
 
+/**
+ * What the enqueue door decided about a task (M18): is there anything out there that could run it?
+ *
+ * Only `queued` is ever seen on a returned task — a refusal arrives as a thrown {@link RelayError}
+ * with `code === "relay_unroutable"`. `eligible_devices` is how much of the fleet advertises this
+ * action type; `0` means no devices are enrolled at all (the legacy single-device deployment), not
+ * that an enrolled fleet declined it.
+ */
+export interface RelayAdmission {
+  verdict: "queued" | "refused";
+  eligible_devices?: number;
+  reason?: string;
+}
+
 /** A relay task as returned by the API (see docs/RELAY.md). */
 export interface RelayTask {
   id: string;
   project_id: string;
   action_type: string;
-  status: "queued" | "leased" | "succeeded" | "dead";
+  status: "queued" | "leased" | "succeeded" | "dead" | "cancelling" | "cancelled";
   attempts: number;
   max_attempts: number;
   result?: unknown;
   error?: string;
+  /** Present on the response to `relayTask` (M18); absent on a task fetched later. */
+  admission?: RelayAdmission;
   [k: string]: unknown;
 }
 
-/** A relay call failed (network error or non-2xx). Relay calls are functional — they throw. */
-export class RelayError extends Error {}
+/**
+ * A relay call failed (network error or non-2xx). Relay calls are functional — they throw.
+ *
+ * `code` carries the API's own error code when the response had one, so a caller can act on the
+ * *kind* of failure instead of pattern-matching a message. The one worth branching on is
+ * `relay_unroutable` ({@link RelayError.isUnroutable}): no enrolled device advertises that action
+ * type, so unlike a timeout or a 503 the call will not succeed on a retry — the fix is the action's
+ * spelling, or a device's capabilities.
+ */
+export class RelayError extends Error {
+  /** The API error code (e.g. `relay_unroutable`), when the response carried one. */
+  readonly code?: string;
+  /** The HTTP status, when the failure was a response rather than a transport error. */
+  readonly status?: number;
+
+  constructor(message: string, opts: { code?: string; status?: number } = {}) {
+    super(message);
+    this.code = opts.code;
+    this.status = opts.status;
+  }
+
+  /** Whether this is the permanent refusal: nothing in the fleet can ever run that action type. */
+  get isUnroutable(): boolean {
+    return this.code === "relay_unroutable";
+  }
+}
+
+/**
+ * The API's error code out of an error body, or `undefined` when the body is not one.
+ *
+ * Deliberately total: an error response is exactly when a body is least likely to be well-formed
+ * (a proxy's HTML, a truncated stream), and a parse failure here must degrade to "no code" rather
+ * than replace the real failure with a JSON error nobody can act on.
+ */
+export function errorCode(body: string): string | undefined {
+  try {
+    const code = (JSON.parse(body) as { error?: { code?: unknown } })?.error?.code;
+    return typeof code === "string" ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export class LightTrack {
   private baseUrl: string;
@@ -485,7 +541,12 @@ export class LightTrack {
       throw new RelayError(`${method} ${path} failed: ${e}`);
     }
     const text = await resp.text();
-    if (!resp.ok) throw new RelayError(`${method} ${path} -> HTTP ${resp.status}: ${text}`);
+    if (!resp.ok) {
+      throw new RelayError(`${method} ${path} -> HTTP ${resp.status}: ${text}`, {
+        code: errorCode(text),
+        status: resp.status,
+      });
+    }
     try {
       return JSON.parse(text);
     } catch {
