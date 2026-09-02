@@ -33,7 +33,8 @@ pub use lighttrack_core::shed_ticket;
 pub use limits::{parse_limit_view, BindingScope, LimitView};
 pub use pii::{pii_kinds, PiiRule};
 
-use std::sync::mpsc::{self, Sender};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -47,6 +48,16 @@ use diagnostics::Diagnostics;
 
 const DEFAULT_URL: &str = "http://127.0.0.1:8787";
 
+/// Events queued but not yet sent, beyond which a new one is dropped (and said so) rather than
+/// buffered. The channel used to be unbounded: under an outage every call the app made stayed in
+/// memory for as long as the outage lasted, and `Drop` then tried to send all of it.
+pub const MAX_QUEUE: usize = 1000;
+
+/// How long `Drop` lets the worker keep draining before the rest is abandoned. Each send has a 2s
+/// timeout, so an unreachable server and a full queue would otherwise hold the host's exit for
+/// `MAX_QUEUE * 2s`.
+const DRAIN_GRACE: Duration = Duration::from_secs(5);
+
 /// A best-effort, non-blocking ingestion client. Cheap to construct; events are POSTed from a
 /// background thread. Configure via [`Client::from_env`] or [`Client::new`].
 pub struct Client {
@@ -57,8 +68,11 @@ pub struct Client {
     /// answer is needed here, to tell a first-run misconfiguration from a legitimately keyed client.
     has_key: bool,
     diag: Arc<Diagnostics>,
-    tx: Option<Sender<(&'static str, Value)>>,
+    tx: Option<SyncSender<(&'static str, Value)>>,
     worker: Option<JoinHandle<()>>,
+    /// Unix millis after which the worker stops draining; `0` while the client is open. Set by
+    /// `Drop`, read by the worker before every send.
+    drain_deadline: Arc<AtomicI64>,
     /// What the server last said about this project's caps. Written by the worker thread as
     /// responses land, read by [`Client::admit`] on the caller's thread.
     limits: Arc<Mutex<AdmissionCache>>,
@@ -94,7 +108,9 @@ impl Client {
         let base = base_url.into().trim_end_matches('/').to_string();
         let has_key = api_key.is_some();
         let diag = Arc::new(Diagnostics::from_env());
-        let (tx, rx) = mpsc::channel::<(&'static str, Value)>();
+        let (tx, rx) = mpsc::sync_channel::<(&'static str, Value)>(MAX_QUEUE);
+        let drain_deadline = Arc::new(AtomicI64::new(0));
+        let worker_deadline = Arc::clone(&drain_deadline);
         let worker_diag = Arc::clone(&diag);
         let worker_base = base.clone();
         let limits = Arc::new(Mutex::new(AdmissionCache::default()));
@@ -110,6 +126,19 @@ impl Client {
                 // Receives (path, body) until all senders drop; delivers queued items first, so Drop
                 // drains. `path` is /v1/events for calls and /v1/scores for guard verdicts.
                 while let Ok((path, body)) = rx.recv() {
+                    let deadline = worker_deadline.load(Ordering::Acquire);
+                    if deadline != 0 && chrono::Utc::now().timestamp_millis() > deadline {
+                        // Shutdown outlasted its grace: the rest is abandoned, and counted.
+                        let left = 1 + rx.try_iter().count();
+                        worker_diag.warn(
+                            "queue-full",
+                            &format!(
+                                "shutdown drain exceeded {}s; {left} queued event(s) were not sent",
+                                DRAIN_GRACE.as_secs()
+                            ),
+                        );
+                        break;
+                    }
                     let mut req = http.post(format!("{worker_base}{path}")).json(&body);
                     if let Some(k) = &api_key {
                         req = req.bearer_auth(k);
@@ -133,6 +162,7 @@ impl Client {
             diag,
             tx: Some(tx),
             worker,
+            drain_deadline,
             limits,
             enforce: std::env::var("LIGHTTRACK_ENFORCE")
                 .map(|v| Enforce::from_str_or_off(&v))
@@ -309,7 +339,16 @@ impl Client {
             );
         }
         if let Some(tx) = &self.tx {
-            let _ = tx.send((path, body));
+            // Drop rather than block the caller — but say so, or a saturated queue silently deletes
+            // telemetry and looks exactly like "the app made no LLM calls".
+            if let Err(TrySendError::Full(_)) = tx.try_send((path, body)) {
+                self.diag.warn(
+                    "queue-full",
+                    &format!(
+                        "queue is full ({MAX_QUEUE} pending) - dropping events. The LightTrack server is slow or unreachable."
+                    ),
+                );
+            }
         }
     }
 
@@ -506,7 +545,10 @@ fn report(
 
 impl Drop for Client {
     fn drop(&mut self) {
-        self.tx.take(); // close the channel → worker drains queued events, then exits
+        let by = chrono::Utc::now() + chrono::Duration::seconds(DRAIN_GRACE.as_secs() as i64);
+        self.drain_deadline
+            .store(by.timestamp_millis(), Ordering::Release);
+        self.tx.take(); // close the channel → worker drains queued events (within the grace), then exits
         if let Some(h) = self.worker.take() {
             let _ = h.join();
         }
