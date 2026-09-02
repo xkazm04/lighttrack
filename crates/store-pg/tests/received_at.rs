@@ -7,8 +7,8 @@
 
 use chrono::{Duration, Utc};
 use lighttrack_core::{
-    new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation, Provider,
-    Status, TokenUsage,
+    new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation, Status,
+    TokenUsage,
 };
 use lighttrack_store::Store;
 use lighttrack_store_pg::PgStore;
@@ -23,7 +23,7 @@ fn event(pid: &str) -> LlmEvent {
         parent_span_id: None,
         ts: now,
         received_at: now,
-        provider: Provider::Anthropic,
+        provider: "anthropic".into(),
         model: "claude-haiku-4-5".into(),
         name: None,
         operation: Operation::Chat,

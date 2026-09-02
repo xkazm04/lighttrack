@@ -13,8 +13,8 @@ use lighttrack_core::{
     compute_margin, new_id, ApiKey, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem,
     DimensionCheck, DimensionKind, Job, JobCancel, JobFinish, LimitAction, LimitMetric, LimitRule,
     LimitScope, LimitWindow, LlmEvent, MarginDimension, ModelPriceRow, Operation, Project,
-    Provider, Redaction, RelayOutcome, RelayTask, RevenueEvent, RevenueKind, Rubric,
-    RubricDimension, Score, ScoreDetail, ScoreDim, Status, TokenUsage,
+    Redaction, RelayOutcome, RelayTask, RevenueEvent, RevenueKind, Rubric, RubricDimension, Score,
+    ScoreDetail, ScoreDim, Status, TokenUsage,
 };
 
 use crate::{Admission, EventFilter, Result, Store, StoreError, TraceFilter};
@@ -24,6 +24,7 @@ use crate::{Admission, EventFilter, Result, Store, StoreError, TraceFilter};
 pub fn run(store: &dyn Store) -> Result<()> {
     let pid = new_id();
     events(store, &pid)?;
+    open_provider_identity(store)?;
     projects_keys_limits(store, &pid)?;
     scores(store, &pid)?;
     traces(store)?;
@@ -50,7 +51,7 @@ fn sample_event(pid: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEve
         parent_span_id: None,
         ts: Utc::now(),
         received_at: Utc::now(),
-        provider: Provider::Anthropic,
+        provider: "anthropic".into(),
         model: model.into(),
         name: None,
         operation: Operation::Chat,
@@ -168,6 +169,41 @@ fn events(store: &dyn Store, pid: &str) -> Result<()> {
     assert!(
         store.usage_by_scope(pid, since, "not-a-dimension").is_err(),
         "an unknown dimension is an error, not an empty (authoritative-looking) breakdown"
+    );
+    Ok(())
+}
+
+/// An **unmodeled** provider survives a round-trip verbatim, and its price row is reachable.
+///
+/// Before M8 the column stored the literal `unknown` for anything outside a closed enum, so a
+/// `mistral/*` price row could never be matched by a `mistral` event — on any backend. Runs in its
+/// own project so it cannot disturb the counts [`events`] asserts.
+fn open_provider_identity(store: &dyn Store) -> Result<()> {
+    let pid = new_id();
+    let mut ev = sample_event(&pid, "mistral-large", 1_000_000, 0, 0.0);
+    ev.provider = "mistral".into();
+    ev.cost_usd = None;
+    store.insert_event(&ev)?;
+
+    let mut back = store.get_event(&ev.id)?.expect("open-provider event");
+    assert_eq!(
+        back.provider.as_str(),
+        "mistral",
+        "an unmodeled provider is stored as itself, not as `unknown`"
+    );
+    let book = lighttrack_core::PriceBook::from_rows(&[ModelPriceRow {
+        provider: "mistral".into(),
+        model: "mistral-large".into(),
+        input_per_mtok: 2.0,
+        output_per_mtok: 6.0,
+        cached_input_per_mtok: None,
+        effective_date: Utc::now(),
+        source_url: None,
+    }]);
+    assert_eq!(
+        back.ensure_cost(&book),
+        Some(2.0),
+        "a mistral event prices from a mistral price row"
     );
     Ok(())
 }

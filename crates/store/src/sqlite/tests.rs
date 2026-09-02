@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use lighttrack_core::{
     new_id, ApiKey, Job, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation,
-    Project, Prompt, PromptVersion, Provider, Redaction, Status, TokenUsage,
+    Project, Prompt, PromptVersion, Redaction, Status, TokenUsage,
 };
 
 use super::SqliteStore;
@@ -20,7 +20,7 @@ fn ev(project: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEvent {
         parent_span_id: None,
         ts: Utc::now(),
         received_at: Utc::now(),
-        provider: Provider::Anthropic,
+        provider: "anthropic".into(),
         model: model.into(),
         name: None,
         operation: Operation::Chat,
@@ -206,12 +206,12 @@ fn filtered_listing_ands_all_predicates() {
     let s = SqliteStore::open_in_memory().unwrap();
     let mut a = ev("p1", "claude-haiku-4-5", 1, 1, 0.0);
     a.id = "a".into();
-    a.provider = Provider::Anthropic;
+    a.provider = "anthropic".into();
     a.name = Some("summarize".into());
     a.trace_id = Some("t-a".into());
     let mut b = ev("p1", "gpt-4o", 1, 1, 0.0);
     b.id = "b".into();
-    b.provider = Provider::OpenAi;
+    b.provider = "openai".into();
     b.name = Some("classify".into());
     b.trace_id = Some("t-b".into());
     s.insert_event(&a).unwrap();
@@ -984,7 +984,7 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
     let base = CU.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap();
     let models = ["m-a", "m-b", "m-c"];
     let names: [Option<&str>; 3] = [Some("x"), Some("y"), None];
-    let providers = [Provider::OpenAi, Provider::Anthropic];
+    let providers: [lighttrack_core::ProviderId; 2] = ["openai".into(), "anthropic".into()];
     let windows = [LimitWindow::Hour, LimitWindow::Day, LimitWindow::Month];
     let scopes: Vec<Option<LimitScope>> = vec![
         None,
@@ -1018,7 +1018,7 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
                 (rng() % 40) as f64 * 0.25,
             );
             e.id = format!("e-{id_counter}");
-            e.provider = providers[(rng() % 2) as usize];
+            e.provider = providers[(rng() % 2) as usize].clone();
             e.name = names[(rng() % 3) as usize].map(|s| s.to_string());
             e.ts = base + Duration::seconds(offset);
             // Cost provenance is part of the cached total now, so the randomized set has to contain
@@ -1248,9 +1248,9 @@ fn seed_query_corpus(s: &SqliteStore, n: u32) {
             CU.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap() + chrono::Duration::seconds(i as i64);
         e.received_at = e.ts;
         e.provider = if i % 2 == 0 {
-            Provider::OpenAi
+            "openai".into()
         } else {
-            Provider::Anthropic
+            "anthropic".into()
         };
         e.status = if i % 3 == 0 {
             Status::Error
@@ -1355,7 +1355,7 @@ fn extended_event_filters_answer_the_operator_questions() {
     assert!(anded
         .events
         .iter()
-        .all(|e| e.provider == Provider::OpenAi && e.status == Status::Error));
+        .all(|e| e.provider.as_str() == "openai" && e.status == Status::Error));
     assert_eq!(
         anded.events.len(),
         3,
@@ -1734,7 +1734,7 @@ fn scoped_cap_rejects_only_matching_dimension() {
 
     let gpt = |cost: f64| {
         let mut e = ev("p1", "gpt-4o", 1, 1, cost);
-        e.provider = Provider::OpenAi;
+        e.provider = "openai".into();
         e
     };
     // Two gpt-4o calls admit; the third (usage-with-event = 3 >=... no, threshold 2) — 2nd hits 2>=2.

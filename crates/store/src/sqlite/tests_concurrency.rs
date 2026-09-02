@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use rusqlite::Connection;
 
-use lighttrack_core::{new_id, LlmEvent, Operation, Provider, Status, TokenUsage};
+use lighttrack_core::{new_id, LlmEvent, Operation, Status, TokenUsage};
 
 use super::{events, schema, SqliteStore};
 use crate::Store;
@@ -26,7 +26,7 @@ pub(super) fn ev(project: &str) -> LlmEvent {
         parent_span_id: None,
         ts: Utc::now(),
         received_at: Utc::now(),
-        provider: Provider::Anthropic,
+        provider: "anthropic".into(),
         model: "claude-haiku-4-5".into(),
         name: None,
         operation: Operation::Chat,
