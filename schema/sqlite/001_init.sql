@@ -289,6 +289,9 @@ CREATE TABLE IF NOT EXISTS collective_entries (
   PRIMARY KEY (contributor_id, provider, model, task_type)
 );
 CREATE INDEX IF NOT EXISTS idx_collective_model ON collective_entries(provider, model, task_type);
+-- Retention-narrowed leaderboard reads (`received_at >= cutoff`). Timestamps are fixed-width
+-- RFC3339(Nanos,Z), so the string range is a correct chronological one.
+CREATE INDEX IF NOT EXISTS idx_collective_received ON collective_entries(received_at);
 
 -- Cloud→device relay queue (docs/RELAY.md): apps enqueue action_type + JSON params; the enrolled
 -- local device leases due tasks over outbound HTTPS, runs them against its local action library
