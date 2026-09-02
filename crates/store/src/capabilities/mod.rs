@@ -13,9 +13,13 @@
 //!
 //! [`StoreError::Unsupported`]: crate::StoreError::Unsupported
 
+mod render;
+
 use std::collections::BTreeSet;
 
 use serde::Serialize;
+
+pub use render::{parity_doc, GENERATED_BY};
 
 /// A coherent group of `Store` methods a backend either serves or refuses **as a whole**.
 ///
@@ -303,7 +307,7 @@ mod tests {
     /// Adding one to `lib.rs` must therefore fail here until it is filed under a surface.
     #[test]
     fn every_trait_method_maps_to_exactly_one_surface() {
-        let declared = declared_trait_methods(include_str!("lib.rs"));
+        let declared = declared_trait_methods(include_str!("../lib.rs"));
         assert!(
             declared.len() > 80,
             "parser found only {} trait methods — the `    fn ` shape it keys on must have \
