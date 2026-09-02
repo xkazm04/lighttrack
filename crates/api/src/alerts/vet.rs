@@ -101,6 +101,15 @@ fn refuse_ip(ip: IpAddr) -> Option<&'static str> {
             } else if v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]) {
                 // 100.64.0.0/10 — carrier-grade NAT, and what several mesh VPNs hand out.
                 Some("shared address space (CGNAT)")
+            } else if v4.octets()[0] == 0 {
+                // 0.0.0.0/8 — "this network"; several stacks route 0.x.y.z to the local host.
+                Some("this-network (0.0.0.0/8)")
+            } else if v4.octets()[0] == 192 && v4.octets()[1] == 0 && v4.octets()[2] == 0 {
+                // 192.0.0.0/24 — IETF protocol assignments (DS-Lite, PCP anycast, …).
+                Some("IETF protocol assignment (192.0.0.0/24)")
+            } else if v4.octets()[0] == 198 && (18..20).contains(&v4.octets()[1]) {
+                // 198.18.0.0/15 — device benchmarking; never a public host.
+                Some("benchmarking range (198.18.0.0/15)")
             } else {
                 None
             }
@@ -117,11 +126,28 @@ fn refuse_ip(ip: IpAddr) -> Option<&'static str> {
             } else if let Some(v4) = v6.to_ipv4_mapped() {
                 // An IPv4-mapped address is the same host by another spelling.
                 refuse_ip(IpAddr::V4(v4))
+            } else if let Some(v4) = nat64_embedded(&v6) {
+                // 64:ff9b::/96 (RFC 6052 well-known prefix) and 64:ff9b:1::/48 (RFC 8215
+                // local-use) carry an IPv4 address in the low 32 bits. On a NAT64 network the
+                // translator delivers the packet to that IPv4 host, so `64:ff9b::a00:1` *is*
+                // 10.0.0.1 — a private target the IPv4 checks above would refuse.
+                refuse_ip(IpAddr::V4(v4))
             } else {
                 None
             }
         }
     }
+}
+
+/// The IPv4 address a NAT64 translation prefix embeds, when `v6` sits under one.
+fn nat64_embedded(v6: &std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
+    let s = v6.segments();
+    let well_known = s[0] == 0x0064 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0];
+    let local_use = s[0] == 0x0064 && s[1] == 0xff9b && s[2] == 0x0001;
+    (well_known || local_use).then(|| {
+        let o = v6.octets();
+        std::net::Ipv4Addr::new(o[12], o[13], o[14], o[15])
+    })
 }
 
 /// The host portion of an `http(s)://` URL, without port, userinfo, path or `[]` brackets.
@@ -204,11 +230,29 @@ mod tests {
             "fe80::1",
             "fd00::1",
             "::ffff:10.0.0.1",
+            // NAT64: the low 32 bits are 10.0.0.1 / 169.254.169.254, delivered to that IPv4 host.
+            "64:ff9b::a00:1",
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b:1::a00:1",
+            // The IPv4 reserved ranges a public webhook can never legitimately live in.
+            "0.1.2.3",
+            "192.0.0.9",
+            "198.18.0.1",
+            "198.19.255.254",
         ] {
             let parsed: IpAddr = ip.parse().expect(ip);
             assert!(refuse_ip(parsed).is_some(), "{ip} must be refused");
         }
-        for ip in ["1.1.1.1", "93.184.216.34", "2606:4700:4700::1111"] {
+        for ip in [
+            "1.1.1.1",
+            "93.184.216.34",
+            "2606:4700:4700::1111",
+            // Adjacent to the refused ranges, and public.
+            "198.17.255.255",
+            "198.20.0.1",
+            "192.0.1.1",
+            "64:ff9b::0808:0808", // NAT64 to 8.8.8.8 — a public host, translated or not
+        ] {
             let parsed: IpAddr = ip.parse().expect(ip);
             assert!(refuse_ip(parsed).is_none(), "{ip} is public");
         }
