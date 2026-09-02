@@ -41,6 +41,20 @@ pub(crate) fn serve(
     recur_interval: u64,
 ) -> Result<()> {
     let renew = renew_every(stale_secs, lease_renew_secs);
+    // Ask once whether the local Claude CLI can actually run, before this worker starts claiming
+    // jobs that may need it. Unlike the responder, `serve` does NOT exit: most job types never
+    // touch the CLI (Gemini/OpenAI judging, deterministic rubrics), so a missing install disables a
+    // subset of the queue rather than justifying refusing all of it.
+    let probe = lighttrack_engine::probe(&engine.claude_bin);
+    if probe.installed {
+        println!("lt-runner serve: {}", probe.summary());
+    } else {
+        eprintln!(
+            "lt-runner serve: {} — jobs that need `claude -p` will fail; provider-API judging is \
+             unaffected",
+            probe.summary()
+        );
+    }
     println!(
         "lt-runner serve: polling {} (interval={interval}s, once={once}, \
          recur_interval={recur_interval}s, lease={stale_secs}s renewed every {}s)",
