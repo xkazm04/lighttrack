@@ -10,7 +10,7 @@ use lighttrack_core::new_id;
 use super::{
     admission, alerts, catalog, collective, contributions, devices, events, forecast, job_leases,
     jobs, labels, maintenance, margin, margin_policy, pricing, projects, prompts, refusals, relay,
-    revenue, rollup, schedules, score_summary, scores, traces,
+    revenue, rollup, schedules, score_summary, scores, tenancy, traces,
 };
 use crate::{Result, Store, Surface};
 
@@ -28,6 +28,10 @@ pub(super) fn run(store: &dyn Store) -> Result<()> {
             refusals::assert_all_refuse(store, surface)?;
         }
     }
+    // Tenancy cuts across surfaces rather than living in one, so it runs last, over whatever this
+    // backend declared: every project-bearing entity type gets the cross-project collision case
+    // that used to exist only for traces (M17).
+    tenancy::tenancy(store, &caps)?;
     Ok(())
 }
 
