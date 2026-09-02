@@ -40,7 +40,11 @@ _DEFAULT_URL = "http://127.0.0.1:8787"
 #: Tag on the zero-usage event a locally-blocked call leaves behind.
 BLOCKED_TAG = "lt_blocked_locally"
 
-# Map common provider names/aliases onto the API's enum (openai|anthropic|google; else "unknown").
+# Spelling aliases for the three first-party providers. Anything else passes through VERBATIM: the
+# provider is an open id the server keys prices, limit scopes and rollups on (M8), not a closed enum,
+# and an unknown vendor is recorded under its own name — never rewritten to "unknown". Note the
+# vendor collapses (`azure` → openai, `vertex` → google) predate M8 and lose the original id; the
+# Rust SDK does not collapse them. Changing that is a wire-semantics decision, recorded in the sweep.
 _PROVIDER_ALIASES = {
     "openai": "openai", "azure": "openai", "azure_openai": "openai", "oai": "openai",
     "anthropic": "anthropic", "claude": "anthropic",
