@@ -72,6 +72,7 @@ pub fn render(kind: &str, v: &Value) -> Option<String> {
         "get_margin_simulate" => margin::simulate(v),
         "get_collective_leaderboard" => collective::leaderboard(v),
         "get_collective_digest" => collective::digest(v),
+        "get_collective_contributions" => collective::contributions(v),
         _ => None,
     }
 }

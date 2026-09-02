@@ -12,7 +12,7 @@
 
 use serde_json::Value;
 
-use crate::md::{commafy, f, money, opt_f, opt_u, pct, s, u, Align, Table};
+use crate::md::{commafy, f, money, opt_f, opt_s, opt_u, pct, s, short_ts, u, Align, Table};
 
 /// Column flags: the leaderboard carries a `Sources` count and a merged 95% CI; the digest does not.
 struct Cols {
@@ -100,6 +100,80 @@ pub(crate) fn digest(v: &Value) -> Option<String> {
         entries.len(),
         t.render()
     ))
+}
+
+/// The contribution ledger: what THIS instance sent, to which hub, and what came back.
+///
+/// Input: `[ {id, hub_url_hash, contributor_id_as_acked?, schema_version, generated_at,
+/// entries_count, projects_included, projects_excluded, digest_sha256, ack?, status, created_at} ]`.
+///
+/// Two columns earn their place beside the outcome. **Scope** (`in/ex`) is the consent envelope that
+/// push actually carried — how many projects opted in, how many were withheld — which is the number
+/// an operator is answering for when someone asks what left the building. **Digest** is the first 8
+/// hex of the content hash: two rows sharing it were the same measurement re-sent, and two that
+/// differ were not, which is the whole basis of the skip.
+pub(crate) fn contributions(v: &Value) -> Option<String> {
+    let rows = v.as_array()?;
+    if rows.is_empty() {
+        return Some(
+            "_Nothing contributed yet._ Push with `lt collective contribute --hub <url>`, or set \
+             `LIGHTTRACK_COLLECTIVE_AUTO_CONTRIBUTE_SECS` to do it on a schedule."
+                .to_string(),
+        );
+    }
+    let mut t = Table::new(&[
+        ("When", Align::Left),
+        ("Hub", Align::Left),
+        ("Status", Align::Left),
+        ("Buckets", Align::Right),
+        ("Scope", Align::Right),
+        ("Digest", Align::Left),
+        ("Filed as", Align::Left),
+    ]);
+    let mut landed = 0usize;
+    for r in rows {
+        let status = s(r, "status");
+        if status == "sent" {
+            landed += 1;
+        }
+        t.row(vec![
+            short_ts(s(r, "created_at")),
+            s(r, "hub_url_hash").to_string(),
+            format!("{} {status}", contribution_glyph(status)),
+            commafy(u(r, "entries_count")),
+            format!(
+                "{}/{}",
+                u(r, "projects_included"),
+                u(r, "projects_excluded")
+            ),
+            // A plain 8-hex prefix, not a truncation glyph: this column is *compared between
+            // rows*, and an ellipsis eating one of the eight would make two different digests read
+            // as the same one.
+            s(r, "digest_sha256").chars().take(8).collect(),
+            match opt_s(r, "contributor_id_as_acked") {
+                Some(c) if !c.is_empty() => c.to_string(),
+                _ => "—".to_string(),
+            },
+        ]);
+    }
+    Some(format!(
+        "### Contribution ledger — {} attempt(s), {landed} landed\n\n{}\n\n\
+         _Scope is projects included/excluded by `collective_opt_in`. Digest is the first 8 hex of \
+         the content hash: an unchanged one is skipped rather than re-sent. The digest BODY is \
+         never stored — only this hash and the counts._",
+        rows.len(),
+        t.render()
+    ))
+}
+
+/// A refusal and a transport failure are different conditions with different fixes, so they get
+/// different glyphs rather than one shared "not ok".
+fn contribution_glyph(status: &str) -> &'static str {
+    match status {
+        "sent" => "✅",
+        "rejected" => "⛔",
+        _ => "❌",
+    }
 }
 
 fn model_table(cols: &Cols) -> Table {
@@ -245,6 +319,58 @@ fn judge_cell(r: &Value, cols: &Cols) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn contribution(status: &str, sha: &str, included: u64, excluded: u64) -> Value {
+        json!({
+            "id": "c1", "hub_url_hash": "h-abc123def456",
+            "contributor_id_as_acked": if status == "sent" { "c-hubside" } else { "" },
+            "schema_version": 3, "generated_at": "2026-09-01T10:00:00.000000000Z",
+            "entries_count": 12, "projects_included": included, "projects_excluded": excluded,
+            "digest_sha256": sha, "status": status,
+            "created_at": "2026-09-01T10:00:05.000000000Z"
+        })
+    }
+
+    /// The ledger's job is to make three things legible at a glance: whether it landed, what the
+    /// consent envelope was, and whether this was the same digest as last time.
+    #[test]
+    fn the_ledger_shows_outcome_scope_and_the_hash_the_skip_turns_on() {
+        let v = json!([
+            contribution("sent", "deadbeefcafebabe", 3, 1),
+            contribution("rejected", "0123456789abcdef", 3, 1),
+            contribution("failed", "0123456789abcdef", 3, 1),
+        ]);
+        let md = contributions(&v).unwrap();
+        assert!(md.contains("3 attempt(s), 1 landed"), "{md}");
+        assert!(
+            md.contains("h-abc123def456"),
+            "the hub is named by hash: {md}"
+        );
+        assert!(md.contains("3/1"), "the consent envelope is a column: {md}");
+        assert!(
+            md.contains("deadbeef"),
+            "the digest hash is shown short: {md}"
+        );
+        assert!(
+            !md.contains("deadbeefcafebabe"),
+            "…and only short — 8 hex is enough to compare two rows: {md}"
+        );
+        // A refusal and a transport failure are different conditions with different fixes.
+        assert!(
+            md.contains("⛔ rejected") && md.contains("❌ failed"),
+            "{md}"
+        );
+        assert!(md.contains("c-hubside"), "the hub's own id is shown: {md}");
+    }
+
+    /// An empty ledger must say how to contribute, not render a bare header that reads like a
+    /// broken page.
+    #[test]
+    fn an_empty_ledger_says_how_to_start() {
+        let md = contributions(&json!([])).unwrap();
+        assert!(md.contains("Nothing contributed yet"), "{md}");
+        assert!(md.contains("lt collective contribute"), "{md}");
+    }
 
     #[test]
     fn leaderboard_renders_ci_p95_and_low_confidence() {
