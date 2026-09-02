@@ -418,7 +418,9 @@ pub(crate) fn run_compare(
         let self_preference = same_family(&jp, &jm, &t.family_provider(), &t.model);
         if self_preference {
             eprintln!(
-                "  warning: SELF-PREFERENCE — judge {jp}/{jm} and target {}/{} are the same model                  family; this target's scores are biased upward. Judge on a different family (or                  use pairwise with a neutral judge) before publishing them.",
+                "  warning: SELF-PREFERENCE — judge {jp}/{jm} and target {}/{} are the same model \
+                 family; this target's scores are biased upward. Judge on a different family (or \
+                 use pairwise with a neutral judge) before publishing them.",
                 t.provider, t.model
             );
         }

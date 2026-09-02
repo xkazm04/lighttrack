@@ -98,7 +98,8 @@ pub(crate) fn run_pairwise_matrix(
         .collect();
     if !self_preference.is_empty() {
         eprintln!(
-            "  warning: SELF-PREFERENCE — judge {jp}/{jm} shares a model family with {}; their              win-rates are biased upward. Use a judge from a different family before publishing.",
+            "  warning: SELF-PREFERENCE — judge {jp}/{jm} shares a model family with {}; their \
+             win-rates are biased upward. Use a judge from a different family before publishing.",
             self_preference.join(", ")
         );
     }
@@ -247,8 +248,11 @@ pub(crate) fn run_pairwise_matrix(
                 if o.injection_suspected {
                     injected += 1;
                     eprintln!(
-                        "  injection attempt [case {}, {} vs {}]: an answer imitated a prompt                          boundary (neutralized)",
-                        ci + 1, labels[i], labels[j]
+                        "  injection attempt [case {}, {} vs {}]: an answer imitated a prompt \
+                         boundary (neutralized)",
+                        ci + 1,
+                        labels[i],
+                        labels[j]
                     );
                 }
                 if game_log.len() < MAX_LOGGED_GAMES {
