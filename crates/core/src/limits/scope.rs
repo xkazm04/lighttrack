@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::rollup::Dimension;
+
 /// The dimensions of one event that a [`LimitScope`] can be matched against. Passed as a struct
 /// rather than a widening tuple of `&str`s so adding a dimension (as `api_key` and `customer` were)
 /// doesn't silently re-order every call site's positional arguments.
@@ -60,15 +62,23 @@ pub enum LimitScope {
 }
 
 impl LimitScope {
-    /// The storage discriminant (`provider` | `model` | `name` | `api_key` | `customer`).
-    pub fn kind_str(&self) -> &'static str {
+    /// The rollup [`Dimension`] this scope selects on. Scopes are a *subset* of the rollup
+    /// vocabulary, not a parallel one: routing through it is what keeps a cap, a usage breakdown and
+    /// a margin query talking about the same column.
+    pub fn dimension(&self) -> Dimension {
         match self {
-            LimitScope::Provider(_) => "provider",
-            LimitScope::Model(_) => "model",
-            LimitScope::Name(_) => "name",
-            LimitScope::ApiKey(_) => "api_key",
-            LimitScope::Customer(_) => "customer",
+            LimitScope::Provider(_) => Dimension::Provider,
+            LimitScope::Model(_) => Dimension::Model,
+            LimitScope::Name(_) => Dimension::Name,
+            LimitScope::ApiKey(_) => Dimension::ApiKey,
+            LimitScope::Customer(_) => Dimension::Customer,
         }
+    }
+
+    /// The storage discriminant (`provider` | `model` | `name` | `api_key` | `customer`) — the
+    /// dimension's own name, so the two vocabularies cannot drift.
+    pub fn kind_str(&self) -> &'static str {
+        self.dimension().as_str()
     }
 
     /// The scoped value.
@@ -130,4 +140,33 @@ impl LimitScope {
 /// matches — identical to pre-scope behavior.
 pub fn scope_matches(scope: Option<&LimitScope>, dims: &ScopeDims<'_>) -> bool {
     scope.is_none_or(|s| s.matches(dims))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The scope vocabulary is the rollup vocabulary, restricted. A variant naming a dimension that
+    /// did not exist would group the breakdown behind it on `NULL` — a cap that never fires and a
+    /// "who is spending" page on which nobody is.
+    #[test]
+    fn every_scope_kind_is_a_rollup_dimension() {
+        for kind in LimitScope::KINDS {
+            assert!(
+                Dimension::parse(kind).is_some(),
+                "no dimension for '{kind}'"
+            );
+        }
+        for s in [
+            LimitScope::Provider("a".into()),
+            LimitScope::Model("a".into()),
+            LimitScope::Name("a".into()),
+            LimitScope::ApiKey("a".into()),
+            LimitScope::Customer("a".into()),
+        ] {
+            assert_eq!(s.kind_str(), s.dimension().as_str());
+            assert!(LimitScope::KINDS.contains(&s.kind_str()));
+            assert_eq!(LimitScope::from_parts(s.kind_str(), "a".into()), Some(s));
+        }
+    }
 }

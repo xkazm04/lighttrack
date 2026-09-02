@@ -99,7 +99,8 @@ pub(super) fn cost_by_dimension(
     };
     let sql = format!(
         "SELECT json_extract(metadata, '{path}') AS k, COUNT(*) AS calls, \
-         COALESCE(SUM(cost_usd),0.0) AS cost \
+         COALESCE(SUM(cost_usd),0.0) AS cost, \
+         COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),0) AS unpriced \
          FROM events \
          WHERE {proj} AND ts >= ?2 AND ts < ?3 \
          GROUP BY k",
@@ -114,6 +115,7 @@ pub(super) fn cost_by_dimension(
                     key: row.get::<_, Option<String>>(0)?,
                     calls: row.get(1)?,
                     cost_usd: row.get(2)?,
+                    unpriced_calls: row.get(3)?,
                 })
             },
         )?
