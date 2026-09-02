@@ -146,7 +146,7 @@ async fn device_key_leases_and_reports_project_keys_cannot() {
 }
 
 #[tokio::test]
-async fn terminal_settle_logs_one_flat_cost_event_deferred_none() {
+async fn terminal_settle_prices_the_run_and_says_where_the_price_came_from() {
     use lighttrack_store::Store;
 
     let (state, store) = setup(Redactor::off());
@@ -210,7 +210,10 @@ async fn terminal_settle_logs_one_flat_cost_event_deferred_none() {
     let events = store.list_events(Some("proj-a"), 10).unwrap();
     assert_eq!(events.len(), 1);
     let ev = &events[0];
+    // No envelope cost and a model the book does not carry: the flat rate is the LAST resort, not
+    // the default it used to be.
     assert_eq!(ev.cost_usd, Some(1.0));
+    assert_eq!(ev.metadata["cost_source"], "flat");
     assert_eq!(ev.trace_id.as_deref(), Some(id.as_str()));
     assert_eq!(ev.model, "claude-sonnet-5");
     assert_eq!(ev.usage.input, 1200);
@@ -752,4 +755,231 @@ async fn the_legacy_shared_key_still_leases_everything() {
     // …and the `device` an old agent asserts in the body is ignored rather than trusted.
     let stamped = leased["tasks"][0]["device"].as_str().unwrap();
     assert_eq!(stamped, "default");
+}
+
+#[tokio::test]
+async fn a_relay_run_is_priced_from_the_envelope_then_the_book_then_the_flat_rate() {
+    // D18. A headless `claude -p` run meters at API rates, so a flat $1 stamped over what the run
+    // actually cost made every relay margin number fiction. Three sources, in descending order of
+    // how much they are worth trusting, and the row says which one it used — a margin query has to
+    // be able to tell a measured cost from a placeholder.
+    let (state, store) = setup(Redactor::off());
+    let key_a = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    // The device's CLI envelope saw the actual bill: that is the price.
+    let envelope = run_one(
+        &app,
+        &store,
+        &key_a,
+        json!({ "status": "succeeded", "result": {},
+        "model": "claude-sonnet-5", "input_tokens": 1200, "output_tokens": 300,
+        "cost_usd": 0.0731 }),
+    )
+    .await;
+    assert_eq!(envelope.0, Some(0.0731));
+    assert_eq!(envelope.1, "envelope");
+
+    // No envelope, but a model the price book carries and tokens to price it by: our arithmetic,
+    // and labelled as ours.
+    let book = run_one(
+        &app,
+        &store,
+        &key_a,
+        json!({ "status": "succeeded", "result": {},
+        "model": "claude-haiku-4-5", "input_tokens": 1_000_000, "output_tokens": 0 }),
+    )
+    .await;
+    assert_eq!(book.0, Some(1.0), "1 Mtok in @ $1/Mtok");
+    assert_eq!(book.1, "book");
+
+    // Neither: the placeholder, and it says so.
+    let flat = run_one(
+        &app,
+        &store,
+        &key_a,
+        json!({ "status": "succeeded", "result": {},
+        "model": "some-unpriced-model" }),
+    )
+    .await;
+    assert_eq!(flat.0, Some(1.0));
+    assert_eq!(flat.1, "flat");
+
+    // A device is not a trusted pricing oracle: a NaN would poison every SUM downstream, so an
+    // unusable figure falls through to the next source rather than being stored.
+    let bad = run_one(
+        &app,
+        &store,
+        &key_a,
+        json!({ "status": "succeeded", "result": {},
+        "model": "some-unpriced-model", "cost_usd": -5.0 }),
+    )
+    .await;
+    assert_eq!(
+        bad.1, "flat",
+        "a negative envelope cost is refused, not billed"
+    );
+}
+
+/// Enqueue → lease → settle one relay run, returning `(cost_usd, cost_source)` of the event it
+/// logged. Each call runs against a fresh task, so the runs do not interfere.
+async fn run_one(
+    app: &Router,
+    store: &std::sync::Arc<lighttrack_store::SqliteStore>,
+    key: &str,
+    report: Value,
+) -> (Option<f64>, String) {
+    use lighttrack_store::Store;
+
+    let before = store.list_events(Some("proj-a"), 100).unwrap().len();
+    let (_, task) = call(
+        app,
+        "POST",
+        "/v1/relay/tasks",
+        key,
+        Some(json!({ "action_type": "xprice/summary" })),
+    )
+    .await;
+    let id = task["id"].as_str().unwrap().to_string();
+    call(
+        app,
+        "POST",
+        "/v1/relay/lease",
+        "device-secret",
+        Some(json!({ "device": "pc" })),
+    )
+    .await;
+    let mut body = report;
+    body["fence"] = fence_of(store, &id);
+    let (status, _) = call(
+        app,
+        "POST",
+        &format!("/v1/relay/tasks/{id}/result"),
+        "device-secret",
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let events = store.list_events(Some("proj-a"), 100).unwrap();
+    assert_eq!(
+        events.len(),
+        before + 1,
+        "exactly one event per settled run"
+    );
+    let ev = events
+        .iter()
+        .find(|e| e.trace_id.as_deref() == Some(id.as_str()))
+        .expect("the run's event");
+    (
+        ev.cost_usd,
+        ev.metadata["cost_source"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+    )
+}
+
+/// Put one ordinary recorded call into the project's rolling usage. Written straight to the store
+/// rather than through `POST /v1/events`, so the fixture can walk usage right up to the cap without
+/// the ingest door refusing the very write that would get it there. Any traffic counts toward the
+/// cap a relay enqueue is now checked against — that is the point of D18.
+fn record_one_call(store: &std::sync::Arc<lighttrack_store::SqliteStore>, project: &str) {
+    use lighttrack_store::Store;
+
+    let mut ev: lighttrack_core::LlmEvent = serde_json::from_value(json!({
+        "provider": "anthropic", "model": "claude-haiku-4-5",
+        "usage": { "input": 1, "output": 1 }, "cost_usd": 0.0
+    }))
+    .unwrap();
+    ev.project_id = project.to_string();
+    store.insert_event(&ev).unwrap();
+}
+
+#[tokio::test]
+async fn an_over_budget_project_cannot_enqueue_relay_work() {
+    // The gap D18 closes: enqueue did zero limit checks, so a project already over its cap could
+    // queue unlimited billable work. The settle-time event cannot refuse — by then the run has
+    // happened, and declining to RECORD spend does not un-spend it. Enqueue is the last moment a
+    // refusal is still free.
+    use lighttrack_core::{LimitAction, LimitMetric, LimitRule, LimitWindow, Threshold};
+    use lighttrack_store::Store;
+
+    let (state, store) = setup(Redactor::off());
+    let key_a = make_key(&store, "proj-a");
+    store
+        .create_limit_rule(&LimitRule {
+            id: "rule-relay".into(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::Calls,
+            window: LimitWindow::Hour,
+            threshold: Threshold::Fixed(2.0),
+            action: LimitAction::Block,
+            enabled: true,
+            warn_at: Some(0.4),
+            scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
+        })
+        .unwrap();
+    let app = crate::build_router(state);
+
+    // Clear: nothing recorded yet.
+    let (status, first) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "xprice/summary" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert!(
+        first.get("warning").is_none(),
+        "nothing recorded yet: {first}"
+    );
+
+    // One recorded call of a 2-call cap crosses warn_at: the task IS queued, with a heads-up.
+    record_one_call(&store, "proj-a");
+    let (status, warned) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "xprice/summary" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{warned}");
+    assert_eq!(
+        warned["status"], "queued",
+        "a warning does not refuse: {warned}"
+    );
+    assert!(
+        warned["warning"]
+            .as_str()
+            .unwrap_or("")
+            .contains("relay runs count"),
+        "the soft tier has to say what it is warning about: {warned}"
+    );
+
+    // At the cap, enqueue is a 429 with the same reason the ingest door would give, and a schedule.
+    record_one_call(&store, "proj-a");
+    let (status, refused) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "xprice/summary" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}");
+    assert_eq!(refused["error"]["code"], "rate_limited", "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("relay task refused"),
+        "{refused}"
+    );
 }

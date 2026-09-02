@@ -20,7 +20,9 @@ use lighttrack_core::{
 
 use crate::auth::Principal;
 use crate::error::ApiError;
+use crate::events_admission::breach_reason;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
+use crate::ingest_proximity::Proximity;
 use crate::state::{spawn_db, AppState};
 
 #[derive(Deserialize)]
@@ -51,6 +53,10 @@ pub(crate) struct EnqueueResp {
     /// Carried anyway because `eligible_devices: 1` and `eligible_devices: 6` are very different
     /// things to have just enqueued against.
     admission: RelayAdmission,
+    /// A soft-tier limit crossed its `warn_at` but nothing is enforcing yet. The task IS queued;
+    /// this is the heads-up that the next few might not be. Absent when the project is clear.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
 }
 
 /// Ask the fleet whether anything could run this action type.
@@ -73,6 +79,58 @@ async fn admit(st: &AppState, action_type: &str) -> RelayAdmission {
     }
 }
 
+/// Whether the project's usage limits allow one more relay run to be queued.
+///
+/// **Why here.** A relay run is metered traffic — a headless `claude -p` bills at API rates (D0,
+/// D18) — but nothing on this path checked a single cap. The settle-time event could not: by then
+/// the run has happened, and refusing to *record* spend does not un-spend it. Enqueue is the last
+/// moment a refusal is still free, so it is where admission belongs.
+///
+/// This is [`crate::limits::evaluate_project_limits`] in its read-only mode: the same evaluator, the
+/// same thresholds, the same `basis` explanation the status page shows — so a caller cannot be told
+/// two different stories about one cap. It costs one usage read per enqueue, which a queue measured
+/// in tasks-per-minute can afford and the ingest path (measured in events-per-second) could not.
+///
+/// Returns `Ok(None)` when clear, `Ok(Some(warning))` for the soft tier, and `Err(429)` for a hard
+/// breach. A limits backend that cannot answer admits: an unavailable evaluator is not evidence of
+/// an exceeded budget, and refusing work on it would make a degraded read path an outage.
+async fn budget_allows(st: &AppState, project: &str) -> Result<Option<String>, ApiError> {
+    let statuses = match crate::limits::evaluate_project_limits(st, project).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!(project_id = %project, error = %e, "relay enqueue: limits unavailable; admitting");
+            return Ok(None);
+        }
+    };
+    if statuses.iter().any(|s| s.rejects_ingest()) {
+        let retry = statuses
+            .iter()
+            .filter(|s| s.rejects_ingest())
+            .map(|s| s.retry_after_secs())
+            .max();
+        let mut prox = Proximity::of(&statuses);
+        prox.retry_after_secs = retry;
+        return Err(ApiError::rate_limited(format!(
+            "relay task refused: {}",
+            breach_reason(&statuses)
+        ))
+        .retry_after(retry)
+        .proximity(prox));
+    }
+    Ok(statuses.iter().find(|s| s.warning).map(|s| {
+        format!(
+            "project '{}' is at {:.0}% of its {:?}/{:?} limit ({:.4} of {:.4}); relay runs count \
+             toward it",
+            s.project_id,
+            s.ratio * 100.0,
+            s.metric,
+            s.window,
+            s.current,
+            s.threshold
+        )
+    }))
+}
+
 pub(crate) async fn enqueue_task(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -93,9 +151,12 @@ pub(crate) async fn enqueue_task(
             spawn_db(move || store.find_relay_task_by_key(&project2, &key)).await?
         {
             let admission = admit(&st, &existing.action_type).await;
+            // No budget check on this arm: the task already exists, so answering with it enqueues
+            // nothing. Refusing a replay would break idempotency exactly when a caller is retrying.
             return Ok(Json(EnqueueResp {
                 task: existing,
                 admission,
+                warning: None,
             }));
         }
     }
@@ -107,6 +168,10 @@ pub(crate) async fn enqueue_task(
     if let RelayAdmission::Refused { reason } = &admission {
         return Err(ApiError::relay_unroutable(reason.clone()));
     }
+    // Spend admission (M5), after routability: "nothing can run this" is a mistake in the request
+    // and "you are over budget" is a fact about the project, and a caller with both should hear
+    // about the typo it can fix.
+    let warning = budget_allows(&st, &project).await?;
     let now = Utc::now();
     let task = RelayTask {
         id: new_id(),
@@ -139,7 +204,11 @@ pub(crate) async fn enqueue_task(
     let store = st.store.clone();
     let t2 = task.clone();
     spawn_db(move || store.create_relay_task(&t2)).await?;
-    Ok(Json(EnqueueResp { task, admission }))
+    Ok(Json(EnqueueResp {
+        task,
+        admission,
+        warning,
+    }))
 }
 
 pub(crate) async fn get_task(

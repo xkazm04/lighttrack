@@ -42,10 +42,14 @@ pub(crate) struct ResultReq {
     output_tokens: Option<u64>,
     #[serde(default)]
     latency_ms: Option<u64>,
-    /// What the device's CLI envelope said the run cost. Recorded as **evidence**, in the event's
-    /// metadata — the relay's `cost_usd` stays the flat price (docs/RELAY.md, D5): switching to
-    /// token/envelope pricing is a separate decision, and silently doing it here would move every
-    /// margin number without anyone asking.
+    /// What the device's CLI envelope said the run cost. This is now the **price**, not merely
+    /// evidence beside one (D18): a headless `claude -p` run meters at API rates, and the envelope
+    /// is the only party that saw the actual bill. A flat $1 stamped over it made every relay
+    /// margin number fiction. Absent or unusable, the run is priced from the DB price book by its
+    /// tokens, and only then from `LIGHTTRACK_RELAY_FLAT_COST_USD`.
+    ///
+    /// Negative and non-finite values are refused rather than stored: a device is not a trusted
+    /// pricing oracle, and a NaN here would poison every SUM downstream of it.
     #[serde(default)]
     cost_usd: Option<f64>,
     /// The posture the run executed under (`generate` | `readonly-scan` | `edit`). The cloud names
@@ -105,9 +109,11 @@ pub(crate) async fn post_result(
         }
     };
 
-    // The report landed on a live lease, so it consumed a real Claude run: record it at the flat
-    // relay price (docs/RELAY.md). Always recorded — enforcing limits exist to cap metered spend,
-    // and this run already happened on the flat-rate subscription. Deferred ⇒ no run.
+    // The report landed on a live lease, so it consumed a real Claude run: record it at the price
+    // `price_run` resolves (envelope → book → flat, docs/RELAY.md). Always recorded, and never
+    // admission-checked: the run already happened, and refusing to record spend does not un-spend
+    // it. Admission for relay work happens at *enqueue*, which is the last moment a refusal is
+    // still free (D18). Deferred ⇒ no run.
     if req.status != "deferred" {
         // The fourth ingest door, and the one that cannot answer 403: the device has already run
         // the work, and refusing the report would leave the task leased until it expired and was
@@ -155,7 +161,7 @@ pub(crate) async fn post_result(
 /// attempts of the same task group into one trace.
 fn relay_run_event(st: &AppState, task: &RelayTask, req: &ResultReq) -> LlmEvent {
     let failed = req.status == "failed";
-    LlmEvent {
+    let mut ev = LlmEvent {
         id: new_id(),
         project_id: task.project_id.clone(),
         trace_id: Some(task.id.clone()),
@@ -176,7 +182,8 @@ fn relay_run_event(st: &AppState, task: &RelayTask, req: &ResultReq) -> LlmEvent
             cached_input: None,
             reasoning: None,
         },
-        cost_usd: Some(st.relay_flat_cost),
+        // Filled below by `price_run`, which needs the assembled usage to read the book.
+        cost_usd: None,
         latency_ms: req.latency_ms,
         status: if failed {
             Status::Error
@@ -192,9 +199,50 @@ fn relay_run_event(st: &AppState, task: &RelayTask, req: &ResultReq) -> LlmEvent
             "task_id": task.id,
             "action_type": task.action_type,
             "attempt": task.attempts,
-            // Reported by the device, not billed here — see `ResultReq::cost_usd`.
+            // What the device reported, kept beside the billed figure even when the two agree:
+            // "we billed the envelope" and "the envelope said X" are different claims, and only
+            // the second survives a later change of pricing policy.
             "device_cost_usd": req.cost_usd,
             "mode": req.mode,
         }),
+    };
+    price_run(st, &mut ev, req);
+    ev
+}
+
+/// Where a relay run's `cost_usd` comes from, in order of how much it is worth trusting.
+///
+/// Ordering is the whole decision (D18). The envelope is what the run actually cost — the device
+/// saw the bill. The price book is our own arithmetic over tokens the device did report, which is
+/// an estimate but a principled one. The flat rate is neither: it is a placeholder from before any
+/// of this was measurable, and every margin number computed from it was fiction. It stays only so
+/// that a run reporting neither cost nor tokens is still *some* number rather than a silent zero.
+fn price_run(st: &AppState, ev: &mut LlmEvent, req: &ResultReq) {
+    // A device is not a trusted pricing oracle: a negative or non-finite figure is refused here
+    // rather than stored, because one NaN poisons every SUM that ever reads this row.
+    let envelope = req.cost_usd.filter(|c| c.is_finite() && *c >= 0.0);
+    if let Some(c) = envelope {
+        set_cost(ev, c, "envelope");
+        return;
+    }
+    {
+        // Same lock discipline as the ingest door: the book is replaced wholesale, never mutated,
+        // so a poisoned lock still holds a complete snapshot.
+        let book = st.prices.read().unwrap_or_else(|p| p.into_inner());
+        if let Some(c) = ev.ensure_cost(&book) {
+            set_cost(ev, c, "book");
+            return;
+        }
+    }
+    set_cost(ev, st.relay_flat_cost, "flat");
+}
+
+/// Stamp the resolved cost and say where it came from, in the same `metadata.cost_source` field the
+/// native ingest door uses — so a margin query can qualify a relay row exactly as it qualifies any
+/// other, without knowing the relay exists.
+fn set_cost(ev: &mut LlmEvent, cost: f64, source: &str) {
+    ev.cost_usd = Some(cost);
+    if let Value::Object(m) = &mut ev.metadata {
+        m.insert("cost_source".to_string(), Value::String(source.to_string()));
     }
 }

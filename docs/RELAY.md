@@ -29,7 +29,7 @@ LightTrack ────┘                 relay_tasks: queued → leased → su
                                  │ actions/<type>/  ← gitignored: prompt.md + action.toml + connector
                                  │ claude.exe -p … --output-format json  (engine::invocation::run)
                                  │ connector (http | command) → pushes result into the app
-                                 └─ POST /v1/relay/tasks/:id/result (+ usage → cloud logs $1 event)
+                                 └─ POST /v1/relay/tasks/:id/result (+ usage/cost → cloud logs a priced event)
 ```
 
 ## Task lifecycle
@@ -178,28 +178,58 @@ device to lease, renew, report progress, lose its lease to a reclaim, and then s
 the late settle is `NotHeld` with the successor's task untouched. There is no way to observe that
 race from outside, which is exactly why it is pinned there.
 
-## Cost model: $1 flat per request
+## Cost model: priced from the envelope, then the book, then a flat rate
 
-Billing credits remain what they were designed for — the Gemini production engine. Relay runs
-are subscription-covered, so LightTrack tracks them at a **fixed $1.00 per executed request**.
-The **cloud logs the event itself on settle** (no project key needed on the device, one writer):
-a terminal `succeeded`/`failed` report on a live lease inserts an `LlmEvent` with
-`cost_usd = LIGHTTRACK_RELAY_FLAT_COST_USD` (default 1.0), `provider: "anthropic"`, the
-`source`/tokens/latency the device reported, `trace_id = task_id` (retries of one task group
-into one trace), and `metadata: { task_id, action_type, attempt, device_cost_usd, mode }`.
-`deferred` logs nothing — no run happened.
+A relay run is **metered traffic**. A headless `claude -p` bills at API rates (D0), so the flat
+$1.00 this used to stamp on every run was not a simplification — it was a wrong number, and every
+margin figure computed from relay traffic inherited it. D18 replaces it with three sources, tried in
+descending order of how much each is worth trusting:
 
-The device now reports what the CLI envelope said the run cost (`cost_usd`) and the posture it
-ran under (`mode`); both land in that metadata as **evidence, not a bill**. The stamped
-`cost_usd` stays the flat price — switching relay runs to envelope or token pricing is its own
-decision, and making it a side effect of reporting would move every margin number without anyone
-asking. Not precise, but a solid usage overview from day one; once the apps get
-traction, switch to token-priced costing from the DB price book — the tokens are already
-recorded, only the stamped `cost_usd` changes.
+1. **`envelope`** — `cost_usd` from the device's CLI envelope. The device saw the actual bill; this
+   is the price, not evidence beside one. A non-finite or negative figure is refused and falls
+   through: a device is not a trusted pricing oracle, and one `NaN` poisons every `SUM` that ever
+   reads the row.
+2. **`book`** — our own arithmetic: the DB price book (`model_prices`) applied to the tokens the
+   device did report. An estimate, but a principled one, and labelled as ours.
+3. **`flat`** — `LIGHTTRACK_RELAY_FLAT_COST_USD` (default 1.0). The last resort, for a run that
+   reported neither a cost nor priceable tokens. It exists so such a run is still *some* number
+   rather than a silent zero.
 
-Relay events are always recorded (plain insert, not admission-checked): enforcing limits exist
-to cap metered spend, and the run has already happened on the flat-rate subscription. They still
-show up in costs, usage and forecasts like any other traffic.
+Which one was used is stamped on the row as `metadata.cost_source`, the **same field the native
+ingest door uses** — so a margin query can qualify a relay row exactly as it qualifies any other,
+without knowing the relay exists. `metadata.device_cost_usd` still carries what the device reported,
+kept even when it equals the billed figure: "we billed the envelope" and "the envelope said X" are
+different claims, and only the second survives a later change of pricing policy.
+
+The **cloud logs the event itself on settle** (no project key needed on the device, one writer): a
+terminal `succeeded`/`failed` report on a live lease inserts an `LlmEvent` with `provider:
+"anthropic"`, the `source`/tokens/latency/`mode` the device reported, `trace_id = task_id` (retries
+of one task group into one trace), and `metadata: { task_id, action_type, attempt, cost_source,
+device_cost_usd, mode }`. `deferred` logs nothing — no run happened.
+
+## Admission: enqueue is the decision point
+
+The settle-time event is recorded unconditionally, and that is deliberate rather than an oversight:
+the run has already happened, and declining to *record* spend does not un-spend it. Refusing there
+would only corrupt the cost report.
+
+So the project's limits are checked at **enqueue** instead — the last moment a refusal is still free.
+`POST /v1/relay/tasks` runs the same evaluator the status page and the ingest 429 use
+(`evaluate_project_limits`), against the same thresholds and with the same `basis` explanation, so a
+caller cannot be told two different stories about one cap:
+
+- **Hard breach** (an enforcing rule at its threshold) → **429 `rate_limited`**, with `Retry-After`
+  and the breach reason. Nothing is queued.
+- **Soft tier** (past `warn_at`, not yet breached) → the task **is** queued, and the response carries
+  a `warning` naming the rule. A heads-up, not a refusal.
+- **Limits unavailable** (a backend that cannot answer) → admit. An unreachable evaluator is not
+  evidence of an exceeded budget, and refusing work on it would turn a degraded read path into an
+  outage.
+- **Idempotent replay** (a repeated `idempotency_key`) → no budget check. Answering with a task that
+  already exists enqueues nothing, and refusing a replay would break idempotency exactly when a
+  caller is retrying.
+
+Relay events still show up in costs, usage and forecasts like any other traffic.
 
 ## The device side (`crates/agent`, binary `lt-agent`)
 
@@ -262,8 +292,9 @@ the agent settles `deferred` so the attempt is handed back.
 
 Run it with `lt-agent --config agent.toml` (copy `agent.example.toml`); `--once` drains every
 source and exits — useful for testing and cron-style scheduling. Note that subscription-auth CLI
-calls carry Claude Code's own context overhead (~30k input tokens per run); irrelevant to cost
-on flat rate, but it consumes window capacity — prefer batching work into fewer, larger actions.
+calls carry Claude Code's own context overhead (~30k input tokens per run). It consumes window
+capacity, and now that runs are priced from the envelope it shows up in the cost too — prefer
+batching work into fewer, larger actions.
 
 ## Reuse across projects (xprice)
 
@@ -309,7 +340,7 @@ and **raise/throw** (`RelayError`) on failure. Prefer the connector push for del
   routes, device-key guard, lease/settle semantics, store + router tests.
 - **Phase 2 (shipped):** `lt-agent` — multi-source round-robin lease loop, action library with
   template rendering + schema output, `http`/`command` connectors, deferred-on-rate-limit,
-  cloud-side $1-flat event logging on settle (`LIGHTTRACK_RELAY_FLAT_COST_USD`), `actions/`
+  cloud-side event logging on settle (then $1 flat; priced from the envelope since D18), `actions/`
   scaffolding + `agent.example.toml`. Smoke-verified end to end against the real Claude CLI.
 - **Invocation seam (shipped):** every `claude -p` in the workspace runs through
   `lighttrack_engine::invocation` — one spawn site, one bin resolver, prompt over stdin, one
