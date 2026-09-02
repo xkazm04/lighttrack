@@ -9,27 +9,32 @@
 //! error *before* a child is spawned rather than a surprise afterwards.
 //!
 //! Layout:
-//! - `posture`   — [`Mode`] → argv shape, tool allowlist, cwd and auth policy (the enforcement).
+//! - `mode`      — [`Mode`]: what a run is for, and the wire word an `action.toml` writes.
+//! - `posture`   — [`Mode`] → argv shape, cwd and auth policy (the enforcement).
+//! - `tools`     — the per-mode allowlist and what counts as a read-only tool spec.
 //! - `run`       — spawn, prompt over **stdin**, bounded reaper, envelope parse.
 //! - `envelope`  — reading the `--output-format json` envelope (text / usage / model / effort).
 //! - `probe`     — is the CLI installed and plausibly authed, *before* we claim paid work.
 //! - `resolve`   — the single `claude` executable resolver (Windows npm/native shims).
 
 mod envelope;
+mod mode;
 mod posture;
 mod probe;
 mod resolve;
 mod run;
+mod tools;
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::Value;
 
-pub use posture::{Mode, READONLY_BASE_TOOLS};
+pub use mode::Mode;
 pub use probe::{probe, Probe};
 pub use resolve::resolve_claude_bin;
 pub use run::run;
+pub use tools::READONLY_BASE_TOOLS;
 
 /// Check an invocation's posture without spawning anything.
 ///
