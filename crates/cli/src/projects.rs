@@ -24,11 +24,59 @@ pub(crate) fn run(cli: &Cli, action: &ProjectsCmd) -> Result<()> {
 
 pub(crate) fn run_keys(cli: &Cli, action: &KeysCmd) -> Result<()> {
     match action {
-        KeysCmd::Create { project, name } => call(
+        // `scopes` and `expires_at` are sent only when the operator named them: an explicit `null`
+        // would read as "no scopes" to a stricter server, and the omitted-field default is the
+        // documented back-compat one.
+        KeysCmd::Create {
+            project,
+            name,
+            scopes,
+            expires,
+        } => {
+            let mut body = json!({ "name": name });
+            if !scopes.is_empty() {
+                body["scopes"] = json!(scopes);
+            }
+            if let Some(e) = expires {
+                body["expires_at"] = json!(e);
+            }
+            call(
+                cli,
+                Method::POST,
+                &format!("/v1/projects/{project}/keys"),
+                Some(body),
+                "",
+            )
+        }
+        KeysCmd::List { project } => call(
             cli,
-            Method::POST,
+            Method::GET,
             &format!("/v1/projects/{project}/keys"),
-            Some(json!({ "name": name })),
+            None,
+            "",
+        ),
+        KeysCmd::Rotate {
+            project,
+            id,
+            grace_secs,
+        } => {
+            let mut body = json!({});
+            if let Some(g) = grace_secs {
+                body["grace_secs"] = json!(g);
+            }
+            call(
+                cli,
+                Method::POST,
+                &format!("/v1/projects/{project}/keys/{id}/rotate"),
+                Some(body),
+                "",
+            )
+        }
+        KeysCmd::Revoke { project, id } => call(
+            cli,
+            Method::DELETE,
+            &format!("/v1/projects/{project}/keys/{id}"),
+            None,
             "",
         ),
     }

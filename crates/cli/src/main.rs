@@ -6,7 +6,8 @@
 //!
 //! Examples:
 //!   lt projects create --name billing-demo --id billing-demo
-//!   lt keys create --project <id> --name app-key
+//!   lt keys create --project <id> --name app-key --scope ingest --expires 2027-01-01T00:00:00Z
+//!   lt keys list --project <id>   |   lt keys rotate --project <id> <key-id> --grace-secs 3600
 //!   lt limits set --project <id> --metric cost_usd --window day --threshold 5 --action alert
 //!   lt limits status --project <id>
 //!   lt rubrics create --project <id> --file rubric.json
