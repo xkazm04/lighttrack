@@ -1,0 +1,99 @@
+{
+  "$schema": "../schema.json",
+  "note": "A dropped event is allowed to be silent about nothing. Each SDK writes one rate-limited line naming the likely cause and the fix; `kind` is the rate-limiting bucket (a hot loop of one failure costs one line) and `hint_contains` is the load-bearing part of the sentence. Messages must stay ASCII: they land in whatever console the host app has, and a cp1252 Windows terminal turns a stray em dash into mojibake.",
+  "diagnostics": [
+    {
+      "name": "network-unreachable",
+      "why": "No status at all: the request never reached a server. Blaming the payload here would send the user hunting for the wrong bug.",
+      "status": null,
+      "has_project": true,
+      "has_key": true,
+      "kind": "network",
+      "hint_contains": [
+        "Is a LightTrack server running and reachable at",
+        "Check LIGHTTRACK_URL",
+        "Events are dropped while it is unreachable."
+      ]
+    },
+    {
+      "name": "400-without-a-project",
+      "why": "The first-run trap reached the slow way: an ADMIN key passes the preflight check (a key is set) and the server does the rejecting, because an admin key pins no project.",
+      "status": 400,
+      "has_project": false,
+      "has_key": true,
+      "kind": "http-400",
+      "hint_contains": [
+        "The server has no project for this event.",
+        "LIGHTTRACK_PROJECT=<your-project-id>",
+        "an admin key does not imply a project."
+      ]
+    },
+    {
+      "name": "400-with-a-project",
+      "why": "Same status, different cause. With a project attached the payload is what is wrong.",
+      "status": 400,
+      "has_project": true,
+      "has_key": true,
+      "kind": "http-400",
+      "hint_contains": ["The event was rejected as invalid: check provider / model / usage."]
+    },
+    {
+      "name": "401-with-a-key",
+      "status": 401,
+      "has_project": true,
+      "has_key": true,
+      "kind": "http-401",
+      "hint_contains": ["The key was rejected.", "LIGHTTRACK_KEY"]
+    },
+    {
+      "name": "401-without-a-key",
+      "why": "No key at all is a different fix from a bad key, and the message has to say which.",
+      "status": 401,
+      "has_project": true,
+      "has_key": false,
+      "kind": "http-401",
+      "hint_contains": ["This server requires authentication. Set LIGHTTRACK_KEY to a project API key."]
+    },
+    {
+      "name": "403-behaves-like-401",
+      "status": 403,
+      "has_project": true,
+      "has_key": false,
+      "kind": "http-403",
+      "hint_contains": ["This server requires authentication. Set LIGHTTRACK_KEY to a project API key."]
+    },
+    {
+      "name": "404-wrong-url",
+      "why": "The Python SDK's 404 branch interpolated an undefined name, so composing this one message raised NameError inside the diagnostic - the reporter becoming the failure it reports. It also used an em dash where the other two use a hyphen.",
+      "status": 404,
+      "has_project": true,
+      "has_key": true,
+      "kind": "http-404",
+      "hint_contains": ["No such endpoint", "pointing at a LightTrack API?"]
+    },
+    {
+      "name": "429-over-a-limit",
+      "status": 429,
+      "has_project": true,
+      "has_key": true,
+      "kind": "http-429",
+      "hint_contains": ["The project is over a configured usage limit, so ingest is being refused."]
+    },
+    {
+      "name": "500-server-error",
+      "status": 500,
+      "has_project": true,
+      "has_key": true,
+      "kind": "http-500",
+      "hint_contains": ["The LightTrack server errored; events are dropped until it recovers."]
+    },
+    {
+      "name": "503-server-error",
+      "status": 503,
+      "has_project": true,
+      "has_key": true,
+      "kind": "http-503",
+      "hint_contains": ["The LightTrack server errored; events are dropped until it recovers."]
+    }
+  ]
+}

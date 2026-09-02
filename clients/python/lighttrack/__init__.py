@@ -22,7 +22,10 @@ Or auto-instrument the provider SDKs so every call is captured with no per-call 
         client.chat.completions.create(...)
 """
 
-from .client import GuardResult, LightTrack, RelayError, Span, guard
+from .client import GuardResult, LightTrack, RelayError, Span, guard, pii_kinds
+from .journal import unsettled
+from .limits import LimitView, parse_limit_view
+from .pii import PII_RULES
 from .instrument import (
     current_span_id,
     current_trace_id,
@@ -38,6 +41,11 @@ __all__ = [
     "Span",
     "guard",
     "GuardResult",
+    "pii_kinds",
+    "PII_RULES",
+    "unsettled",
+    "parse_limit_view",
+    "LimitView",
     "RelayError",
     "instrument",
     "wrap",

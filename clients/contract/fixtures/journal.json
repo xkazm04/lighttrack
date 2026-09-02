@@ -1,0 +1,44 @@
+{
+  "$schema": "../schema.json",
+  "note": "The crash-surviving span journal is an on-disk format, so two SDKs reading the same directory must agree about what it says. Rust declares journal=not_supported in its manifest and skips this file; the day it implements one, these are the cases it has to pass.",
+  "journal": [
+    {
+      "name": "opens-minus-closes",
+      "why": "The core rule: a file's unsettled set is its opens minus its closes, in file order.",
+      "body": "{\"p\":\"openai\",\"m\":\"gpt-4o\",\"n\":\"summarize\",\"op\":\"chat\",\"tr\":\"t1\",\"sp\":\"s1\",\"pj\":\"demo\",\"t\":1756700000000,\"o\":\"b\",\"k\":1}\n{\"p\":\"anthropic\",\"m\":\"claude-sonnet-4-5\",\"n\":\"judge\",\"tr\":\"t1\",\"sp\":\"s2\",\"ps\":\"s1\",\"t\":1756700001000,\"o\":\"b\",\"k\":2}\n{\"o\":\"e\",\"k\":1}\n{\"p\":\"google\",\"m\":\"gemini-2.5-flash\",\"t\":1756700002000,\"o\":\"b\",\"k\":3}\n",
+      "expect": [
+        { "p": "anthropic", "m": "claude-sonnet-4-5", "n": "judge", "tr": "t1", "sp": "s2", "ps": "s1", "t": 1756700001000, "o": "b", "k": 2 },
+        { "p": "google", "m": "gemini-2.5-flash", "t": 1756700002000, "o": "b", "k": 3 }
+      ]
+    },
+    {
+      "name": "everything-settled",
+      "why": "A process that exited cleanly leaves nothing to recover, even if its file was never deleted.",
+      "body": "{\"p\":\"openai\",\"m\":\"gpt-4o\",\"t\":1756700000000,\"o\":\"b\",\"k\":1}\n{\"o\":\"e\",\"k\":1}\n",
+      "expect": []
+    },
+    {
+      "name": "torn-final-record",
+      "why": "A SIGKILL mid-write leaves a partial last line. Dropping only the torn record - not the file - is the entire point of one JSON object per line.",
+      "body": "{\"p\":\"openai\",\"m\":\"gpt-4o\",\"t\":1756700000000,\"o\":\"b\",\"k\":1}\n{\"p\":\"openai\",\"m\":\"gpt-4",
+      "expect": [{ "p": "openai", "m": "gpt-4o", "t": 1756700000000, "o": "b", "k": 1 }]
+    },
+    {
+      "name": "junk-lines-are-skipped",
+      "why": "Blank lines, and JSON scalars that parse but are not records, must not become phantom spans.",
+      "body": "\n123\n\"hello\"\nnull\n{\"p\":\"anthropic\",\"m\":\"claude-haiku-4-5\",\"t\":1756700003000,\"o\":\"b\",\"k\":7}\n\n",
+      "expect": [{ "p": "anthropic", "m": "claude-haiku-4-5", "t": 1756700003000, "o": "b", "k": 7 }]
+    },
+    {
+      "name": "close-without-open",
+      "why": "A truncated head (the journal is truncated back to empty when nothing is in flight) can leave a close whose open is gone. It must be a no-op, not an error.",
+      "body": "{\"o\":\"e\",\"k\":99}\n{\"p\":\"openai\",\"m\":\"gpt-4o-mini\",\"t\":1756700004000,\"o\":\"b\",\"k\":100}\n",
+      "expect": [{ "p": "openai", "m": "gpt-4o-mini", "t": 1756700004000, "o": "b", "k": 100 }]
+    },
+    {
+      "name": "empty-file",
+      "body": "",
+      "expect": []
+    }
+  ]
+}

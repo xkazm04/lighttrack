@@ -100,6 +100,19 @@ export interface FailureContext {
   hasKey?: boolean;
 }
 
+/**
+ * The rate-limiting bucket a failure warns under. One line per kind per cooldown, so the bucketing
+ * *is* the noise policy: statuses stay separate (a 401 and a 500 are different problems), while a
+ * timeout is split out from a plain connection failure so it does not hide behind one.
+ *
+ * Exported and shared by every SDK, because a bucket name that differs by language makes the same
+ * outage look like different incidents to whoever is grepping the logs.
+ */
+export function diagnosticKind(status?: number, opts: { timedOut?: boolean } = {}): string {
+  if (status != null) return `http-${status}`;
+  return opts.timedOut ? "timeout" : "network";
+}
+
 export function sendFailureMessage(baseUrl: string, path: string, detail: string, ctx: FailureContext = {}): string {
   const hint = failureHint(baseUrl, ctx);
   return `event not sent to ${baseUrl}${path}: ${detail}.` + (hint ? ` ${hint}` : "");

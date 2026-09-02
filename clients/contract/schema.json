@@ -1,0 +1,153 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/xkazm04/lighttrack/clients/contract/schema.json",
+  "title": "LightTrack SDK contract fixtures",
+  "description": "One machine-readable description of the behaviour every LightTrack client SDK must share. Each file under fixtures/ is a case list; the per-language runners (clients/rust/tests/contract.rs, clients/typescript/src/contract.test.ts, clients/python/tests/test_contract.py) load ALL of them and assert. A behaviour that is not in a fixture is not part of the contract; a behaviour that is may not differ between languages.",
+
+  "definitions": {
+    "usage": {
+      "type": "object",
+      "description": "What every extractor must return from a native provider response.",
+      "required": ["model", "input_tokens", "output_tokens"],
+      "properties": {
+        "model": { "type": ["string", "null"] },
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "cached_input_tokens": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+
+    "extractorCase": {
+      "type": "object",
+      "required": ["name", "provider", "response", "expect"],
+      "properties": {
+        "name": { "type": "string" },
+        "provider": { "enum": ["openai", "anthropic", "gemini"] },
+        "why": { "type": "string", "description": "Why this shape is in the contract." },
+        "response": { "type": "object", "description": "A real captured provider response body." },
+        "expect": { "$ref": "#/definitions/usage" }
+      }
+    },
+
+    "guardRules": {
+      "type": "object",
+      "description": "Rules in neutral snake_case. Each runner maps them onto its own rules type (the TypeScript SDK's public field names stay camelCase; only the wire form here is normalised).",
+      "properties": {
+        "json": { "type": "boolean" },
+        "json_keys": { "type": "array", "items": { "type": "string" } },
+        "max_words": { "type": "integer" },
+        "min_words": { "type": "integer" },
+        "max_chars": { "type": "integer" },
+        "must_include": { "type": "array", "items": { "type": "string" } },
+        "must_match": { "type": "string" },
+        "must_not_match": { "type": "array", "items": { "type": "string" } },
+        "no_pii": { "type": "boolean" }
+      }
+    },
+
+    "guardCase": {
+      "type": "object",
+      "required": ["name", "output", "rules", "expect"],
+      "properties": {
+        "name": { "type": "string" },
+        "why": { "type": "string" },
+        "output": { "type": "string" },
+        "rules": { "$ref": "#/definitions/guardRules" },
+        "expect": {
+          "type": "object",
+          "required": ["ok", "violations"],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "violations": {
+              "type": "array",
+              "description": "The FAILED check keys, sorted. Keys are snake_case in every language: json, key:<k>, max_words, min_words, max_chars, include:<s>, must_match, not_match:<pattern>, no_pii, pii:<kind>. Violation MESSAGES are deliberately not part of the contract - they are prose and are allowed to read naturally per language.",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
+    "journalCase": {
+      "type": "object",
+      "required": ["name", "body", "expect"],
+      "properties": {
+        "name": { "type": "string" },
+        "why": { "type": "string" },
+        "body": { "type": "string", "description": "A journal file body, newline-delimited JSON. Records are {\"o\":\"b\",\"k\":<key>,...} on open and {\"o\":\"e\",\"k\":<key>} on settle." },
+        "expect": {
+          "type": "array",
+          "description": "The unsettled open records, in file order. Compared on the fields present here only, so a runner may carry extras.",
+          "items": { "type": "object" }
+        }
+      }
+    },
+
+    "limitCase": {
+      "type": "object",
+      "required": ["name", "status", "expect"],
+      "properties": {
+        "name": { "type": "string" },
+        "why": { "type": "string" },
+        "status": { "type": "integer", "description": "HTTP status of the ingest response." },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "body": { "type": ["object", "null"], "description": "Parsed response body, or null when there was none." },
+        "expect": {
+          "type": "object",
+          "description": "The parsed limit view (parse only; acting on it is M5's pre-spend admission).",
+          "required": ["accepted", "rate_limited"],
+          "properties": {
+            "accepted": { "type": "boolean", "description": "2xx." },
+            "rate_limited": { "type": "boolean", "description": "429." },
+            "usage_ratio": { "type": ["number", "null"] },
+            "shed_fraction": { "type": ["number", "null"] },
+            "retry_after_secs": { "type": ["number", "null"] },
+            "error_code": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+
+    "diagnosticCase": {
+      "type": "object",
+      "required": ["name", "kind", "hint_contains"],
+      "properties": {
+        "name": { "type": "string" },
+        "why": { "type": "string" },
+        "status": { "type": ["integer", "null"], "description": "null means the request never reached the server (network error / timeout)." },
+        "has_project": { "type": "boolean" },
+        "has_key": { "type": "boolean" },
+        "kind": { "type": "string", "description": "Rate-limiting bucket the SDK warns under." },
+        "hint_contains": {
+          "type": "array",
+          "description": "Substrings the composed failure message must contain in EVERY language. The full sentence is prose; these are the load-bearing parts (what went wrong, what to set).",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "piiRule": {
+      "type": "object",
+      "required": ["kind", "pattern", "placeholder"],
+      "properties": {
+        "kind": { "enum": ["credit_card", "email", "iban", "ip", "phone", "secret", "ssn"] },
+        "pattern": { "type": "string", "description": "Restricted to the RE2 / JavaScript / Python / Rust common subset: no lookaround, no backreferences." },
+        "placeholder": { "type": "string" }
+      }
+    }
+  },
+
+  "properties": {
+    "extractors": { "type": "array", "items": { "$ref": "#/definitions/extractorCase" } },
+    "guard": { "type": "array", "items": { "$ref": "#/definitions/guardCase" } },
+    "journal": { "type": "array", "items": { "$ref": "#/definitions/journalCase" } },
+    "limits": { "type": "array", "items": { "$ref": "#/definitions/limitCase" } },
+    "diagnostics": { "type": "array", "items": { "$ref": "#/definitions/diagnosticCase" } },
+    "pii": {
+      "type": "object",
+      "description": "GENERATED by crates/anon/src/export.rs. Do not hand-edit.",
+      "required": ["rules"],
+      "properties": { "rules": { "type": "array", "items": { "$ref": "#/definitions/piiRule" } } }
+    }
+  }
+}

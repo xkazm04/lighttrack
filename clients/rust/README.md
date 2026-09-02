@@ -7,6 +7,16 @@ Sends go to a background worker thread and never block or panic the caller.
 This crate is **detached from the main workspace** (its own `[workspace]`), so it builds and versions
 independently and is not pulled into the server build.
 
+**This client is narrower than its siblings, and the difference is a gap rather than a design.** It
+has no timed span type, no provider-SDK wrapping, no relay client, and — the one that costs
+something — no crash-surviving journal: a Rust process killed mid-call leaves *no record* of a call
+that definitely happened and definitely cost money, where the Python and TypeScript clients would
+recover one on the next start. The generated capability matrix in
+[`clients/README.md`](../README.md#what-each-sdk-can-do) states each gap in full; it is rendered from
+[`lighttrack.manifest.json`](lighttrack.manifest.json), so it cannot quietly go stale. What this
+client *does* share with the other two is pinned by [`clients/contract/`](../contract/) and asserted
+by `tests/contract.rs`.
+
 ## Add the dependency
 
 ```toml

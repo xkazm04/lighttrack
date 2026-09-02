@@ -113,7 +113,7 @@ impl Diagnostics {
 ///
 /// Messages stay ASCII-only: they land in whatever console the host app has, and a cp1252 Windows
 /// terminal turns a stray em dash into mojibake.
-pub(crate) fn no_project_message(base_url: &str) -> String {
+pub fn no_project_message(base_url: &str) -> String {
     format!(
         "no project is configured, so these events are not attributed: a dev-mode server files them \
          under the 'default' project, and a server with authentication enabled rejects them. To \
@@ -125,13 +125,13 @@ pub(crate) fn no_project_message(base_url: &str) -> String {
 
 /// Context that decides which hint a failure gets.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct FailureContext {
+pub struct FailureContext {
     pub status: Option<u16>,
     pub has_project: bool,
     pub has_key: bool,
 }
 
-pub(crate) fn send_failure_message(
+pub fn send_failure_message(
     base_url: &str,
     path: &str,
     detail: &str,
@@ -140,6 +140,20 @@ pub(crate) fn send_failure_message(
     let hint = failure_hint(base_url, ctx);
     let sep = if hint.is_empty() { "" } else { " " };
     format!("event not sent to {base_url}{path}: {detail}.{sep}{hint}")
+}
+
+/// The rate-limiting bucket a failure warns under.
+///
+/// One line per kind per cooldown, so the bucketing *is* the noise policy: statuses stay separate (a
+/// 401 and a 500 are different problems), while a timeout is split out from a plain connection
+/// failure so it does not hide behind one. Shared by every SDK, because a bucket name that differs
+/// by language makes the same outage look like different incidents to whoever is grepping the logs.
+pub fn diagnostic_kind(status: Option<u16>, timed_out: bool) -> String {
+    match status {
+        Some(s) => format!("http-{s}"),
+        None if timed_out => "timeout".to_string(),
+        None => "network".to_string(),
+    }
 }
 
 fn failure_hint(base_url: &str, ctx: FailureContext) -> String {

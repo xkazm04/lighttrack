@@ -1,0 +1,20 @@
+{
+  "$comment": "What this SDK actually does. `supported` means the contract suite exercises it; `not_supported` is a real gap stated in the SDK's own voice; `planned` is accepted work not yet landed. scripts/gen-sdk-matrix.mjs renders clients/README.md's capability table from these three files and CI diff-checks the result, so a README can no longer promise a feature one language does not have.",
+  "sdk": "typescript",
+  "package": "lighttrack-client",
+  "dir": "clients/typescript",
+  "capabilities": {
+    "track": "supported",
+    "span": "supported",
+    "journal": "supported",
+    "instrument": "supported",
+    "guard": "supported",
+    "relay": "supported",
+    "admit": "planned",
+    "batch": "not_supported"
+  },
+  "notes": {
+    "admit": "Pre-spend admission (act on the limit view before the call). parseLimitView reads the signals today; deciding on them is M5.",
+    "batch": "No client-side batching: sends are individual un-awaited POSTs. /v1/events/batch exists server-side."
+  }
+}

@@ -48,8 +48,10 @@
     {
       "path": "clients/rust/README.md",
       "flagged_on": "2026-08-24",
+      "drained_on": "2026-09-02",
       "what": "clients/rust has no span type at all — its builder still emits only on `send()` — so it cannot offer the crash-surviving breadcrumb the Python and TypeScript clients gained in wave 2. The README documents a narrower story than its siblings, and a user comparing the three has no way to see that the difference is a gap rather than a design.",
-      "drained_when": "the Rust client gains a span type, or its README states the asymmetry in the user's own terms"
+      "drained_when": "the Rust client gains a span type, or its README states the asymmetry in the user's own terms",
+      "how_drained": "The second branch, and structurally rather than as a sentence someone has to remember. M30 gave every SDK a `lighttrack.manifest.json`; the Rust one marks span/journal/instrument/relay `not_supported` with a note each, `scripts/gen-sdk-matrix.mjs` renders them into clients/README.md's capability table, and CI's `sdk-contract` job fails when that table goes stale. clients/rust/README.md now names the journal gap in the user's own terms (a Rust process killed mid-call leaves no record of a call that cost money) and points at the generated matrix. The gap itself is still open — the Rust client remains span-less, which is why the manifest, not this marker, is now where it is tracked."
     },
     {
       "path": "clients/python/README.md",
