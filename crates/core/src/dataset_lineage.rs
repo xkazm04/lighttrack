@@ -105,6 +105,15 @@ pub struct ImportFilter {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since: Option<DateTime<Utc>>,
+    /// Only meaningful with [`ImportSource::Scores`]: mine verdicts whose **normalised** value
+    /// (`value / max`) is strictly below this.
+    ///
+    /// Normalised rather than raw, because `max` is per-rubric: a 0.6 out of 1 and a 6 out of 10 are
+    /// the same verdict, and a raw cutoff would silently mine everything from one rubric and nothing
+    /// from the other. Distinct from `pass` on purpose — `pass` is the rubric's own threshold as the
+    /// judge applied it, this is a caller asking a stricter question after the fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub below: Option<f64>,
 }
 
 /// One import request: where the cases come from, which ones, how many, and whether near-duplicates

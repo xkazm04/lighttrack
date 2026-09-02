@@ -104,6 +104,17 @@ fn build_where(ds: &Dataset, spec: &ImportSpec) -> Where {
             sql.push_str(&format!(" AND s.pass = ?{}", args.len()));
         }
     }
+    // Normalised, because `max` is per-rubric: a raw cutoff would mine everything from a 0..1 rubric
+    // and nothing from a 0..10 one.
+    if let Some(b) = spec.filter.below {
+        if spec.from == ImportSource::Scores {
+            args.push(SqlValue::from(b));
+            sql.push_str(&format!(
+                " AND (s.value / NULLIF(s.max, 0)) < ?{}",
+                args.len()
+            ));
+        }
+    }
     // `errors` is a strategy, not a filter, but it means exactly one predicate on each source — and
     // stating it here rather than in four ORDER BY branches keeps the two readings identical.
     if is_errors_only(spec.strategy) {

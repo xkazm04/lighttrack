@@ -352,6 +352,60 @@ pub(crate) enum DatasetCmd {
         /// Add an LLM (claude -p) anonymization pass for names/free-text PII the regex misses.
         #[arg(long)]
         llm_scrub: bool,
+        /// How to choose the cases: `recent` (default) | `random` | `stratified` | `errors`.
+        ///
+        /// Anything but `recent` runs the sampling on the SERVER (M24) — a stratified quota and a
+        /// uniform draw are statements about the matched population, which a client that has
+        /// already fetched a page cannot make. `--llm-scrub` keeps the client-side path, because
+        /// the LLM anonymization pass is a paid model call the server does not make.
+        #[arg(long, default_value = "recent")]
+        strategy: String,
+        /// Where the cases come from: `events` (default) | `scores`.
+        #[arg(long, default_value = "events")]
+        from: String,
+        /// With `--from scores`: only mine verdicts scoring below this (0..1) — the failure-mining
+        /// question. Implies `--strategy errors` when no strategy was given.
+        #[arg(long)]
+        below: Option<f64>,
+        /// Collapse cases whose normalised input is already in the set.
+        #[arg(long)]
+        dedupe: bool,
+    },
+    /// Mine stored rows into a dataset by name, forking its newest version if that one is frozen.
+    ///
+    /// The recurring half of `build`: `build` makes a corpus, `import` grows one across versions.
+    Import {
+        #[arg(long)]
+        project: String,
+        /// The dataset NAME (not id) — the key a version history is walked by.
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value_t = 50)]
+        n: usize,
+        #[arg(long, default_value = "recent")]
+        strategy: String,
+        #[arg(long, default_value = "events")]
+        from: String,
+        #[arg(long)]
+        below: Option<f64>,
+        #[arg(long)]
+        dedupe: bool,
+        /// Freeze the version after importing, making it a comparable pin for a benchmark run.
+        #[arg(long)]
+        freeze: bool,
+    },
+    /// List every version of a dataset name, newest first.
+    Versions {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        name: String,
+    },
+    /// Fork a dataset into the next version of its name: items and their labels copied, unfrozen.
+    Fork {
+        /// The dataset ID to fork (the frozen version you want to extend).
+        #[arg(long)]
+        id: String,
     },
 }
 

@@ -24,6 +24,7 @@ mod calibration_post;
 mod cli;
 mod compare;
 mod dataset;
+mod dataset_import;
 mod dispatch;
 mod enqueue;
 mod gate;
@@ -33,6 +34,7 @@ mod judge_spec;
 mod labels;
 mod pairwise;
 mod provenance;
+mod regression;
 mod rubric;
 mod runctl;
 mod schedule;
@@ -216,7 +218,38 @@ fn main() -> Result<()> {
                 name,
                 n,
                 llm_scrub,
-            } => dataset::build_dataset(&cli, &http, &engine, project, name, *n, *llm_scrub),
+                strategy,
+                from,
+                below,
+                dedupe,
+            } => {
+                let spec = dataset::spec_from_flags(strategy, from, *below, *dedupe, *n)?;
+                // The client-side path stays the default for a plain `recent` build and is the ONLY
+                // path that can add the LLM scrub, which is a paid model call the server does not
+                // make. Anything else is a query the server has to run (M24).
+                if *llm_scrub || dataset::is_plain_recent(&spec) {
+                    dataset::build_dataset(&cli, &http, &engine, project, name, *n, *llm_scrub)
+                } else {
+                    dataset_import::run_import(&cli, &http, project, name, &spec, true).map(|_| ())
+                }
+            }
+            DatasetCmd::Import {
+                project,
+                name,
+                n,
+                strategy,
+                from,
+                below,
+                dedupe,
+                freeze,
+            } => {
+                let spec = dataset::spec_from_flags(strategy, from, *below, *dedupe, *n)?;
+                dataset_import::run_import(&cli, &http, project, name, &spec, *freeze).map(|_| ())
+            }
+            DatasetCmd::Versions { project, name } => {
+                dataset::print_versions(&cli, &http, project, name)
+            }
+            DatasetCmd::Fork { id } => dataset::fork(&cli, &http, id),
         },
         Cmd::Billing { action } => match action {
             BillingCmd::Sync {

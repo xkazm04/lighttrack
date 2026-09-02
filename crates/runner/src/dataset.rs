@@ -5,7 +5,9 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use lighttrack_anon::scrub;
-use lighttrack_core::LlmEvent;
+use lighttrack_core::{
+    Dataset, ImportFilter, ImportSource, ImportSpec, LlmEvent, SamplingStrategy,
+};
 use lighttrack_engine::{run_text, EngineConfig};
 
 use crate::cli::Cli;
@@ -105,6 +107,99 @@ pub(crate) fn build_from_events(
         "built dataset {dsid} '{name}': {built} items, {total_redactions} total redactions, frozen"
     );
     Ok(built)
+}
+
+/// Turn the `dataset build|import` flags into an [`ImportSpec`], refusing an unknown spelling
+/// rather than falling back.
+///
+/// A silent fallback is the failure worth avoiding here: an operator who typed `--strategy
+/// startified` and got `recent` would read the resulting corpus as stratified and draw conclusions
+/// from a sample that never was one.
+pub(crate) fn spec_from_flags(
+    strategy: &str,
+    from: &str,
+    below: Option<f64>,
+    dedupe: bool,
+    n: usize,
+) -> Result<ImportSpec> {
+    let from = ImportSource::parse(from)
+        .ok_or_else(|| anyhow::anyhow!("unknown --from {from:?}: expected `events` or `scores`"))?;
+    let mut strategy = SamplingStrategy::parse(strategy).ok_or_else(|| {
+        anyhow::anyhow!("unknown --strategy: expected `recent`, `random`, `stratified` or `errors`")
+    })?;
+    // `--below` is a failure question by construction; asking it while sampling `recent` would mine
+    // the newest cases that happen to be bad rather than the bad ones.
+    if below.is_some() && strategy == SamplingStrategy::Recent {
+        strategy = SamplingStrategy::Errors;
+    }
+    Ok(ImportSpec {
+        from,
+        filter: ImportFilter {
+            below,
+            ..Default::default()
+        },
+        strategy,
+        n,
+        dedupe,
+        event_ids: Vec::new(),
+    })
+}
+
+/// `true` when the spec asks for nothing the pre-M24 client builder could not already do.
+pub(crate) fn is_plain_recent(spec: &ImportSpec) -> bool {
+    spec.from == ImportSource::Events
+        && spec.strategy == SamplingStrategy::Recent
+        && !spec.dedupe
+        && spec.filter == ImportFilter::default()
+}
+
+/// `dataset versions`: the lineage of one name, newest first.
+pub(crate) fn print_versions(
+    cli: &Cli,
+    http: &reqwest::blocking::Client,
+    project: &str,
+    name: &str,
+) -> Result<()> {
+    let versions: Vec<Dataset> = get(
+        cli,
+        http,
+        &format!(
+            "/v1/projects/{project}/datasets/versions?name={}",
+            crate::dataset_import::enc(name)
+        ),
+    )?;
+    if versions.is_empty() {
+        println!("no dataset named '{name}' in project '{project}'");
+        return Ok(());
+    }
+    for d in &versions {
+        println!(
+            "  v{:<3} {}  {}  parent={}",
+            d.version,
+            short(&d.id),
+            if d.frozen { "frozen" } else { "open  " },
+            d.parent_id.as_deref().map(short).unwrap_or("-")
+        );
+    }
+    Ok(())
+}
+
+/// `dataset fork`: the next version of a dataset's name, items and labels copied.
+pub(crate) fn fork(cli: &Cli, http: &reqwest::blocking::Client, id: &str) -> Result<()> {
+    let forked: Dataset = serde_json::from_value(post(
+        cli,
+        http,
+        &format!("/v1/datasets/{id}/fork"),
+        &json!({}),
+    )?)?;
+    println!(
+        "forked {} -> {} '{}' v{} (unfrozen)",
+        short(id),
+        short(&forked.id),
+        forked.name,
+        forked.version
+    );
+    Ok(())
 }
 
 /// Regex scrub (always) + optional LLM scrub pass. Returns (clean_text, redaction_count).

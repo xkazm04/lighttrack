@@ -207,6 +207,15 @@ fn build_where(ds: &Dataset, spec: &ImportSpec) -> Where {
             " AND s.pass IS NOT TRUE"
         });
     }
+    // Normalised, because `max` is per-rubric: a raw cutoff would mine everything from a 0..1 rubric
+    // and nothing from a 0..10 one. Interpolated rather than bound because the shared arg vector is
+    // `String`-typed — and guarded on `is_finite`, because a `NaN`/`inf` would render as a token
+    // Postgres cannot parse and turn a filter into a syntax error.
+    if let (Some(b), ImportSource::Scores) = (spec.filter.below, spec.from) {
+        if b.is_finite() {
+            sql.push_str(&format!(" AND (s.value / NULLIF(s.max, 0)) < {b}"));
+        }
+    }
     if is_errors_only(spec.strategy) {
         match spec.from {
             ImportSource::Events => sql.push_str(" AND e.status <> 'success'"),

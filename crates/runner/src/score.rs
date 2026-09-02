@@ -19,6 +19,7 @@ use lighttrack_engine::EngineConfig;
 use crate::cli::Cli;
 use crate::http::{get, post};
 use crate::judge_spec::{Judge, Verdict};
+use crate::regression;
 use crate::util::{parallel_map, short, value_to_text};
 
 /// Online scoring: judge recent unscored events (with input+output) for a project. With
@@ -101,7 +102,25 @@ fn score_once(
         judge.judge(engine, input, output)
     });
 
+    // The regression policy, resolved once per pass rather than per verdict: it is a listing of the
+    // project's benchmarks, and a failing case is common enough that per-verdict resolution would
+    // put a request on the hot path of every bad call. Resolved only for a project-scoped pass —
+    // "which project's benchmarks" has no answer otherwise.
+    let policy = match project {
+        Some(p) => match regression::Policy::resolve(cli, http, p, judge.rubric_id()) {
+            Ok(pol) => Some(pol).filter(|pol| !pol.is_empty()),
+            // Never fatal: a scoring pass that died because a corpus was unreachable would trade the
+            // verdict — the thing that was paid for — for the sample.
+            Err(e) => {
+                eprintln!("regression policy unavailable (continuing unmined): {e}");
+                None
+            }
+        },
+        None => None,
+    };
+
     let mut scored = 0usize;
+    let mut mined = 0u32;
     for (i, verdict) in judged.into_iter().enumerate() {
         let (ev, _, _) = &eligible[i];
         let mut v = verdict?;
@@ -112,6 +131,20 @@ fn score_once(
         let score = build_score(&ev.project_id, Some(&ev.id), judge, &v);
         post(cli, http, "/v1/scores", &score)?;
         scored += 1;
+        // A failing verdict is the one artefact worth keeping from a bad call, and it used to be
+        // discarded the moment the number was posted (M24). The import dedupes, so a repeat failure
+        // of the same prompt appends nothing and a noisy regression cannot inflate the corpus.
+        if !v.pass {
+            if let Some(pol) = &policy {
+                match pol.mine(cli, http, &ev.id) {
+                    Ok(n) => mined += n,
+                    Err(e) => eprintln!(
+                        "  ! could not mine {} into a regression set: {e}",
+                        short(&ev.id)
+                    ),
+                }
+            }
+        }
         println!(
             "  - {} ({}) score={:.2}/{:.0} pass={} cost={} :: {}",
             short(&ev.id),
@@ -128,6 +161,9 @@ fn score_once(
     println!(
         "scored {scored}, skipped {skipped} (already-scored or no content) of {total} fetched"
     );
+    if mined > 0 {
+        println!("mined {mined} failing case(s) into the project's regression set(s)");
+    }
     Ok(scored)
 }
 
