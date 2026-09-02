@@ -4,19 +4,20 @@ use std::collections::BTreeMap;
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
-use lighttrack_core::{Prompt, PromptVersion};
+use lighttrack_core::{CanaryPolicy, LabelChange, Prompt, PromptVersion};
 
 use crate::codec::{fmt_ts, json_or_null, parse_ts, val_or_null};
 use crate::Result;
 
-const PROMPT_COLS: &str = "id, project_id, name, benchmark_id, labels, created_at, updated_at";
+const PROMPT_COLS: &str =
+    "id, project_id, name, benchmark_id, labels, created_at, updated_at, canary, label_history";
 const VERSION_COLS: &str = "id, prompt_id, version, content, config, note, created_at";
 
 pub(super) fn create(conn: &Connection, p: &Prompt) -> Result<()> {
     let labels = serde_json::to_string(&p.labels)?;
     conn.execute(
-        "INSERT INTO prompts (id, project_id, name, benchmark_id, labels, created_at, updated_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO prompts (id, project_id, name, benchmark_id, labels, created_at, updated_at, \
+          canary, label_history) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![
             p.id,
             p.project_id,
@@ -25,6 +26,8 @@ pub(super) fn create(conn: &Connection, p: &Prompt) -> Result<()> {
             labels,
             fmt_ts(p.created_at),
             fmt_ts(p.updated_at),
+            canary_json(p)?,
+            history_json(p)?,
         ],
     )?;
     Ok(())
@@ -33,8 +36,16 @@ pub(super) fn create(conn: &Connection, p: &Prompt) -> Result<()> {
 pub(super) fn update(conn: &Connection, p: &Prompt) -> Result<()> {
     let labels = serde_json::to_string(&p.labels)?;
     conn.execute(
-        "UPDATE prompts SET benchmark_id = ?2, labels = ?3, updated_at = ?4 WHERE id = ?1",
-        params![p.id, p.benchmark_id, labels, fmt_ts(p.updated_at)],
+        "UPDATE prompts SET benchmark_id = ?2, labels = ?3, updated_at = ?4, canary = ?5, \
+          label_history = ?6 WHERE id = ?1",
+        params![
+            p.id,
+            p.benchmark_id,
+            labels,
+            fmt_ts(p.updated_at),
+            canary_json(p)?,
+            history_json(p)?,
+        ],
     )?;
     Ok(())
 }
@@ -108,6 +119,24 @@ pub(super) fn list_versions(conn: &Connection, prompt_id: &str) -> Result<Vec<Pr
     raws.into_iter().map(version_from_raw).collect()
 }
 
+/// The canary policy as stored: `NULL` for a prompt with none, so an existing row is not given a
+/// policy it never had (which would make the sweep act on it).
+fn canary_json(p: &Prompt) -> Result<Option<String>> {
+    match &p.canary {
+        Some(c) => Ok(Some(serde_json::to_string(c)?)),
+        None => Ok(None),
+    }
+}
+
+/// The label ledger as stored: `NULL` for an empty one, so "no moves recorded" and "[]" are the
+/// same fact in one spelling.
+fn history_json(p: &Prompt) -> Result<Option<String>> {
+    match p.label_history.is_empty() {
+        true => Ok(None),
+        false => Ok(Some(serde_json::to_string(&p.label_history)?)),
+    }
+}
+
 type PromptRaw = (
     String,
     String,
@@ -116,6 +145,8 @@ type PromptRaw = (
     String,
     String,
     String,
+    Option<String>,
+    Option<String>,
 );
 
 fn map_prompt(row: &Row) -> rusqlite::Result<PromptRaw> {
@@ -127,17 +158,26 @@ fn map_prompt(row: &Row) -> rusqlite::Result<PromptRaw> {
         row.get(4)?,
         row.get(5)?,
         row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
     ))
 }
 
 fn prompt_from_raw(r: PromptRaw) -> Result<Prompt> {
     let labels: BTreeMap<String, u32> = serde_json::from_str(&r.4)?;
+    let canary: Option<CanaryPolicy> = r.7.as_deref().map(serde_json::from_str).transpose()?;
+    let label_history: Vec<LabelChange> = match r.8.as_deref() {
+        Some(s) => serde_json::from_str(s)?,
+        None => Vec::new(),
+    };
     Ok(Prompt {
         id: r.0,
         project_id: r.1,
         name: r.2,
         benchmark_id: r.3,
         labels,
+        canary,
+        label_history,
         created_at: parse_ts(&r.5)?,
         updated_at: parse_ts(&r.6)?,
     })

@@ -535,3 +535,23 @@ CREATE TABLE IF NOT EXISTS alert_channels (
   created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_alert_channels_project ON alert_channels(project_id);
+
+-- ===========================================================================================
+-- M23: the served-version quality loop. Self-contained block, appended.
+--
+-- Two additive columns on the prompt row the registry has had since M10. Both nullable, so an
+-- existing row reads back as exactly the prompt it always was: NULL canary means the registry
+-- still stops observing a version at promotion (the pre-M23 behaviour), and NULL label_history
+-- means no label move was recorded here — which is why an auto-revert with no recorded
+-- predecessor does nothing instead of guessing at a version to fall back to.
+--
+-- ADD COLUMN IF NOT EXISTS, so re-applying the file is a no-op and a fresh database that just
+-- ran the CREATE TABLE above simply gets the columns added to an empty table.
+-- ===========================================================================================
+
+ALTER TABLE prompts ADD COLUMN IF NOT EXISTS canary        TEXT;  -- JSON CanaryPolicy, NULL = none
+ALTER TABLE prompts ADD COLUMN IF NOT EXISTS label_history TEXT;  -- JSON [LabelChange], NULL = empty
+
+-- The quality read joins scores to events on event_id and windows on the VERDICT's created_at;
+-- without this the join degrades to a scan of the scores table for every window asked about.
+CREATE INDEX IF NOT EXISTS idx_scores_created ON scores(created_at);

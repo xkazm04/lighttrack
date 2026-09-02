@@ -113,6 +113,15 @@ const ADDED_COLUMNS_LATE: &[&str] = &[
     "ALTER TABLE relay_tasks ADD COLUMN stale_reclaims INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE relay_tasks ADD COLUMN lease_fence TEXT",
     "ALTER TABLE relay_tasks ADD COLUMN progress TEXT",
+    // M23 — the served-version quality loop on the prompt row: the canary policy (JSON, NULL = the
+    // registry still stops observing a version at promotion) and the append-only label ledger
+    // (JSON array, NULL = a prompt whose labels have not moved since the column existed). Both
+    // nullable, so an existing registry row reads back as exactly the prompt it always was.
+    "ALTER TABLE prompts ADD COLUMN canary TEXT",
+    "ALTER TABLE prompts ADD COLUMN label_history TEXT",
+    // The quality read joins scores to events by event_id and windows on the VERDICT's created_at;
+    // without this the join degrades to a scan of the scores table per window.
+    "CREATE INDEX IF NOT EXISTS idx_scores_created ON scores(created_at)",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.

@@ -110,6 +110,17 @@ pub enum Surface {
     /// there (it is what admits a legacy shared-key deployment's traffic), so it must never be
     /// something a missing table says by accident.
     Devices,
+    /// Judge verdicts summarized per value of one event [`Dimension`] — the served-version quality
+    /// ledger behind `GET /v1/quality/prompts` and the prompt canary (M23).
+    ///
+    /// Its own surface rather than a member of [`Surface::ScoreFilters`]: that one narrows verdicts
+    /// by their own typed identity, while this joins them to `events` and groups on a value inside
+    /// the event's `metadata`. A backend can serve every score filter and be unable to express that
+    /// join, and an operator shown an empty quality table would conclude the version is unjudged
+    /// rather than unmeasurable here.
+    ///
+    /// [`Dimension`]: lighttrack_core::Dimension
+    ScoreSummaries,
 }
 
 impl Surface {
@@ -139,6 +150,7 @@ impl Surface {
         Surface::Metrics,
         Surface::Pricing,
         Surface::Devices,
+        Surface::ScoreSummaries,
     ];
 
     /// Stable wire/doc name (`snake_case`, matching the `Serialize` impl).
@@ -168,6 +180,7 @@ impl Surface {
             Surface::Metrics => "metrics",
             Surface::Pricing => "pricing",
             Surface::Devices => "devices",
+            Surface::ScoreSummaries => "score_summaries",
         }
     }
 
@@ -422,6 +435,7 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
             "count_eligible_devices",
         ],
     ),
+    (Surface::ScoreSummaries, &["score_summary_by_dimension"]),
 ];
 
 /// Method names declared inside `pub trait Store` in `lib.rs`, in source order.

@@ -1174,14 +1174,40 @@ pub trait Store: Send + Sync {
     /// reads scores only for the page's ids, unlike the old client-side top-1000 anti-join that
     /// silently re-judged once a project passed 1000 scores). SQL backends may override with a single
     /// `LEFT JOIN scores ... WHERE s.id IS NULL` for one round-trip.
-    fn list_unscored_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
-        let events = self.list_events(project, limit)?;
+    ///
+    /// `prompt` narrows the work list to events carrying that `metadata.prompt` tag (M23), which is
+    /// what lets the online scorer put its paid judge calls on **canary** traffic first: a fresh
+    /// version has minutes of traffic against production's days, so an unprioritized scorer spends
+    /// its budget re-judging the version nobody is asking a question about. `None` is the unchanged
+    /// whole-project work list.
+    fn list_unscored_events(
+        &self,
+        project: Option<&str>,
+        prompt: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<LlmEvent>> {
+        // The default over-fetches when narrowing, because the page is filtered after it is read:
+        // asking for `limit` tagged events out of a mixed stream otherwise returns almost none.
+        let fetch = if prompt.is_some() {
+            limit.saturating_mul(10).min(2000).max(limit)
+        } else {
+            limit
+        };
+        let events = self.list_events(project, fetch)?;
+        let events: Vec<LlmEvent> = match prompt {
+            None => events,
+            Some(tag) => events
+                .into_iter()
+                .filter(|e| e.metadata.get("prompt").and_then(Value::as_str) == Some(tag))
+                .collect(),
+        };
         let ids: Vec<String> = events.iter().map(|e| e.id.clone()).collect();
         let scored: std::collections::HashSet<String> =
             self.scored_event_ids(&ids)?.into_iter().collect();
         Ok(events
             .into_iter()
             .filter(|e| !scored.contains(&e.id))
+            .take(limit)
             .collect())
     }
 
@@ -1845,6 +1871,111 @@ pub trait Store: Send + Sync {
             out.extend(self.list_alert_channels(Some(p))?);
         }
         Ok(out)
+    }
+
+    // --- M23: verdicts grouped by an EVENT dimension (the served-version quality ledger) ---
+
+    /// Judge verdicts summarized per value of one event [`Dimension`] — today `Prompt`, i.e.
+    /// `metadata.prompt`, the `"<name>@v<version>"` tag every event produced with a registry prompt
+    /// carries.
+    ///
+    /// The gap it closes: `cost_by_dimension` groups **cost** by that tag, so "did v4 cost less than
+    /// v3" has an answer, while "is v4 any *good*" has none — no store method and no endpoint joined
+    /// `scores` to `events` at all. A promoted version that regressed in production was visible only
+    /// to someone eyeballing `/v1/scores`.
+    ///
+    /// Semantics every backend must match:
+    /// * the join is `scores.event_id = events.id`; a verdict with no event cannot be attributed to
+    ///   a dimension and is excluded rather than folded into a `NULL` bucket,
+    /// * the window bounds the **verdict's** `created_at`, not the event's `ts`: the question is
+    ///   what has been judged lately about the version now serving,
+    /// * `value` is normalized by `max` before it is averaged, so two rubrics on different scales do
+    ///   not silently weight one of them higher,
+    /// * `key` is `None` for events carrying no value on that dimension — an untagged bucket, kept
+    ///   rather than dropped so the parts sum to the whole,
+    /// * `rubric_id` narrows to one rubric, which is what makes a canary comparison *paired*: the
+    ///   same rubric scored both sides.
+    ///
+    /// [`StoreError::Unsupported`] by default (→ 501). An empty summary would read as "nothing has
+    /// been judged", which is indistinguishable from "this backend never looked" — and the second is
+    /// the reading that gets a bad version left in production.
+    fn score_summary_by_dimension(
+        &self,
+        _project: Option<&str>,
+        _dim: lighttrack_core::Dimension,
+        _since: DateTime<Utc>,
+        _until: Option<DateTime<Utc>>,
+        _rubric_id: Option<&str>,
+    ) -> Result<Vec<ScoreSummaryRow>> {
+        Err(StoreError::Unsupported(
+            "score summaries grouped by an event dimension",
+        ))
+    }
+}
+
+/// One bucket of [`Store::score_summary_by_dimension`]: every verdict attributed to one value of the
+/// grouped dimension, summarized.
+///
+/// The interval is carried, not just the mean. A canary comparison that fires on two bare means is a
+/// coin toss dressed as a gate — the whole point of `n` and `ci95_*` is that "worse" has to mean
+/// *measurably* worse before a label is moved back.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ScoreSummaryRow {
+    /// The dimension's value, or `None` for verdicts on events carrying none.
+    pub key: Option<String>,
+    /// Verdicts in this bucket.
+    pub n: u64,
+    /// Mean of `value / max`, so rubrics on different scales are comparable.
+    pub mean: f64,
+    /// Fraction of verdicts whose `pass` is `true`. Verdicts with no `pass` at all count in `n` and
+    /// not in the numerator — a rubric that never sets it reads as 0.0, which is why `n` is beside
+    /// it rather than implied.
+    pub pass_rate: f64,
+    /// Lower bound of the ~95% CI on `mean` (mean ± 1.96·stderr). Equal to `mean` when `n < 2`,
+    /// where there is no spread to estimate — read `n` before reading the interval.
+    pub ci95_low: f64,
+    pub ci95_high: f64,
+    /// What the judged **events** in this bucket cost — the spend the quality number is about.
+    pub cost_usd: f64,
+}
+
+impl ScoreSummaryRow {
+    /// z for a ~95% two-sided normal interval, matching the runner's `stats::Z_95` so a summary and
+    /// a benchmark verdict do not disagree about what 95% means.
+    pub const Z_95: f64 = 1.959_963_984_540_054;
+
+    /// Fold a bucket's normalized values into a row. The client-side path (Firestore-shaped
+    /// backends, and the unit tests) uses this so the interval arithmetic exists once.
+    pub fn of(key: Option<String>, values: &[f64], passes: u64, cost_usd: f64) -> Self {
+        let n = values.len();
+        if n == 0 {
+            return ScoreSummaryRow {
+                key,
+                n: 0,
+                mean: 0.0,
+                pass_rate: 0.0,
+                ci95_low: 0.0,
+                ci95_high: 0.0,
+                cost_usd,
+            };
+        }
+        let mean = values.iter().sum::<f64>() / n as f64;
+        let stderr = if n < 2 {
+            0.0
+        } else {
+            let var = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0);
+            var.sqrt() / (n as f64).sqrt()
+        };
+        let half = Self::Z_95 * stderr;
+        ScoreSummaryRow {
+            key,
+            n: n as u64,
+            mean,
+            pass_rate: passes as f64 / n as f64,
+            ci95_low: mean - half,
+            ci95_high: mean + half,
+            cost_usd,
+        }
     }
 }
 

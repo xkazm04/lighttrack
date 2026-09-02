@@ -39,6 +39,7 @@ mod relay_lease;
 mod revenue;
 mod rollup;
 mod schedules;
+mod score_summary;
 mod scores;
 mod traces;
 

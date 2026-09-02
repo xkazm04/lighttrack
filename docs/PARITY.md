@@ -34,6 +34,7 @@ conformance suite asserts that refusal, so a gap can never quietly become an emp
 | `metrics` | full | refused | refused |
 | `pricing` | full | full | full |
 | `devices` | full | full | refused |
+| `score_summaries` | full | full | refused |
 
 ## Atomic admission
 
@@ -73,3 +74,4 @@ cap that reads as enforced is the failure this row exists to name.
 - **`metrics`** — `db_metrics`
 - **`pricing`** — `list_unpriced`, `fill_unpriced_cost`, `list_price_history`
 - **`devices`** — `create_device`, `get_device`, `list_devices`, `find_device_by_key_prefix`, `touch_device`, `revoke_device`, `count_eligible_devices`
+- **`score_summaries`** — `score_summary_by_dimension`
