@@ -619,4 +619,47 @@ mod tests {
             .unwrap();
         assert!((flex - 12.5).abs() < 1e-9, "got {flex}");
     }
+
+    /// A lane written into the model name (`gpt-4o@batch`) is a lane, not a model - honoured when
+    /// the caller asked for nothing else, and never overriding an explicit mode.
+    #[test]
+    fn a_lane_in_the_model_name_selects_that_lane_unless_a_mode_is_given() {
+        let b = variant_book();
+        let u = usage(1_000_000, 1_000_000);
+        let batch_row = b.cost_usd_mode("openai", "gpt-4o", &u, PricingMode::Batch);
+        assert_eq!(b.cost_usd("openai", "gpt-4o@batch", &u), batch_row);
+        // The raw pair is always the first candidate, so a name that IS a stored variant row
+        // (`gpt-4o@batch`) resolves to that row whatever mode is passed - a hand-written row wins
+        // over anything derived, which is the rule `candidates` documents.
+        assert_eq!(
+            b.cost_usd_mode("openai", "gpt-4o@batch", &u, PricingMode::Flex),
+            batch_row
+        );
+    }
+
+    /// `metadata.pricing_mode` wins over tags; `priority` is the flex lane; nothing → standard.
+    #[test]
+    fn pricing_mode_hints_have_a_fixed_precedence() {
+        let tags = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let meta = serde_json::json!({ "pricing_mode": "flex" });
+        assert_eq!(
+            PricingMode::from_hints(&meta, &tags(&["batch"])),
+            PricingMode::Flex
+        );
+        let none = serde_json::Value::Null;
+        assert_eq!(
+            PricingMode::from_hints(&none, &tags(&["batch"])),
+            PricingMode::Batch
+        );
+        assert_eq!(
+            PricingMode::from_hints(&none, &tags(&["priority"])),
+            PricingMode::Flex
+        );
+        assert_eq!(
+            PricingMode::from_hints(&none, &tags(&["prod"])),
+            PricingMode::Standard
+        );
+        assert_eq!(PricingMode::parse(" BATCH "), PricingMode::Batch);
+        assert_eq!(PricingMode::parse("turbo"), PricingMode::Standard);
+    }
 }
