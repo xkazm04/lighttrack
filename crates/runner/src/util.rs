@@ -416,8 +416,10 @@ mod tests {
                     input_per_mtok: *i,
                     output_per_mtok: *o,
                     cached_input_per_mtok: None,
-                    effective_date: Utc::now(),
+                    effective_from: Utc::now(),
                     source_url: None,
+                    verified_at: None,
+                    note: None,
                 })
                 .collect()
         };
