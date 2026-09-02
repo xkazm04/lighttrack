@@ -4,7 +4,7 @@
 //! [`Redaction`] setting — `none` (store as sent), `hash` (store only a sha256 of each payload:
 //! presence/diff without content), `drop` (never persist payloads). This is the policy the projects
 //! API accepts and the operator table displays; it is resolved per event from the policy cache in
-//! `AppState` (see `state::redaction_policy_for`) and enforced here on the ingest path.
+//! `AppState` (see `state::project_policy_for`) and enforced here on the ingest path.
 //!
 //! **2. PII scrub** ([`Redactor::redact_event`]): scrubs structured PII (emails, cards, SSNs,
 //! secrets, IPs, phones — the `lighttrack_anon` regex pass) from **every client-supplied surface**

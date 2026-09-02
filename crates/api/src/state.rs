@@ -132,6 +132,12 @@ impl ProjectPolicyCache {
     /// Build a cache pre-warmed with the policies read at startup, with the TTL resolved from env.
     pub(crate) fn new(warm: HashMap<String, ProjectPolicy>) -> Self {
         let ttl = Duration::from_secs(env_parsed(ENV_POLICY_TTL, DEFAULT_POLICY_TTL.as_secs()));
+        Self::with_ttl(warm, ttl)
+    }
+
+    /// [`ProjectPolicyCache::new`] with the TTL given rather than read from env — the seam the
+    /// freshness contract is tested through without mutating process-global state.
+    pub(crate) fn with_ttl(warm: HashMap<String, ProjectPolicy>, ttl: Duration) -> Self {
         let now = Instant::now();
         let entries = warm.into_iter().map(|(k, v)| (k, (v, now))).collect();
         Self {
@@ -218,4 +224,51 @@ where
         .await
         .map_err(|e| ApiError::internal(format!("task join error: {e}")))?
         .map_err(ApiError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn policy(redaction: Redaction) -> ProjectPolicy {
+        ProjectPolicy {
+            redaction,
+            enabled: true,
+        }
+    }
+
+    /// The two freshness guarantees the doc comment promises, pinned: an explicit invalidation is
+    /// immediate, and the TTL bounds how stale an entry this instance did not write can get. A
+    /// redaction policy is a compliance control, so "until restart" is the failure this guards.
+    #[test]
+    fn an_entry_is_served_until_it_is_invalidated_or_its_ttl_runs_out() {
+        let warm = HashMap::from([("p".to_string(), policy(Redaction::None))]);
+        let cache = ProjectPolicyCache::with_ttl(warm, Duration::from_millis(40));
+        assert_eq!(cache.get_fresh("p"), Some(policy(Redaction::None)));
+        assert_eq!(cache.get_fresh("absent"), None);
+
+        cache.invalidate("p");
+        assert_eq!(
+            cache.get_fresh("p"),
+            None,
+            "a tightening takes effect on the next event"
+        );
+
+        cache.put("p", policy(Redaction::Drop));
+        assert_eq!(cache.get_fresh("p"), Some(policy(Redaction::Drop)));
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(
+            cache.get_fresh("p"),
+            None,
+            "past the TTL the entry is re-read, bounding staleness for another replica's write"
+        );
+    }
+
+    /// `0` means "never cache": every read misses, even one written a moment ago.
+    #[test]
+    fn a_zero_ttl_disables_the_cache_entirely() {
+        let cache = ProjectPolicyCache::with_ttl(HashMap::new(), Duration::ZERO);
+        cache.put("p", policy(Redaction::Hash));
+        assert_eq!(cache.get_fresh("p"), None);
+    }
 }
