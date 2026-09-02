@@ -136,6 +136,13 @@ pub struct Project {
     /// `lt collective contribute` must never ship a project nobody opted in.
     #[serde(default)]
     pub collective_opt_in: bool,
+    /// Refuse to promote — a prompt label, a benchmark gate — on a judge that is not `trusted` for
+    /// the rubric being gated on (M11). Default **off**: turning it on retroactively would block
+    /// every existing deployment's gates on the day it upgraded, because nothing has been
+    /// calibrated yet. Once on, both `untrusted` and `unknown` block, because a gate that promotes
+    /// on a judge nobody has measured is precisely the failure this flag exists to close.
+    #[serde(default)]
+    pub require_trusted_judge: bool,
     pub created_at: DateTime<Utc>,
     /// When the project was archived. `DELETE /v1/projects/:id` **archives** — it sets this and
     /// `enabled = false` — because a project's events, scores and benchmark runs are the record a

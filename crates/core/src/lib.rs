@@ -10,6 +10,7 @@ pub mod alert_sign;
 pub mod alias_table;
 pub mod bench_target;
 pub mod calibration;
+pub mod calibration_record;
 pub mod collective;
 pub mod customer;
 pub mod dataset;
@@ -20,6 +21,7 @@ pub mod forecast;
 pub mod forecast_gate;
 pub mod job;
 pub mod job_kinds;
+pub mod label;
 pub mod lease;
 pub mod limits;
 pub mod margin;
@@ -53,6 +55,7 @@ pub use bench_target::{
     url_host, BenchTarget, PromptRef, TargetKind, INPUT_PLACEHOLDER, RESOLVED_PROMPT_VERSION,
 };
 pub use calibration::{agreement, Agreement, CalibrationItem};
+pub use calibration_record::{CalibrationRecord, JudgeTrust, JudgeTrustVerdict};
 pub use collective::{
     bucket_cost, build_digest, canon_determinism, merge_leaderboard, task_type_from,
     CollectiveDigest, CollectiveEntry, Coverage, LeaderboardRow, ModelAliases, ModelDigestEntry,
@@ -74,6 +77,7 @@ pub use job_kinds::{
     validate_payload, BenchRunPayload, CalibratePayload, DatasetSamplePayload, JudgeSpec,
     ScoreEventsPayload, ScoreTracesPayload,
 };
+pub use label::{Label, LabelFilter, LabelSubject, MAX_LABEL_DIMENSIONS, MAX_LABEL_TEXT};
 pub use lease::{LeaseFence, LeaseHeld};
 pub use limits::{
     scope_matches, CostEvidence, Escalation, LimitAction, LimitMetric, LimitRule, LimitScope,
