@@ -134,7 +134,6 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             args: &["project", "since"],
             ..McpTool::DEFAULT
         }),
-        cli: Some(&["usecases"]),
         render_kind: Some("get_usecases"),
         doc: "Usage and cost grouped by use-case name, provider and model.",
         ..Endpoint::DEFAULT
@@ -257,7 +256,6 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
                 "source_url",
             ],
         }),
-        cli: Some(&["prices", "set"]),
         doc: "Upsert one model's rate, hot-swapping the live book and optionally pricing its history.",
         ..Endpoint::DEFAULT
     },
