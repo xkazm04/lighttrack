@@ -37,7 +37,11 @@
       "path": "CONTRIBUTING.md",
       "note": "edited this pass (the soak lane's non-gate note). Its gate table is derived from .github/workflows/ci.yml by crates/core/tests/gate_table_guard.rs, so the load-bearing half cannot drift unnoticed."
     },
-    { "path": ".ai/catchup-marker.json", "note": "this file" }
+    { "path": ".ai/catchup-marker.json", "note": "this file" },
+    {
+      "path": "README.md",
+      "note": "M15 (typed API contract registry) rewrote the MCP tool counts in 'Use from Claude Code (MCP)'. They said 28 read + 15 write against an actual 43 + 21, which is the argument the section now makes: the catalog and its counts are generated from crates/contract into docs/API.md, a test fails when that file is stale, and the prose points at it instead of restating it. That one section is what this covers - the rest of the front page (the feature list the skip entry warned about) was still not read against the code, and the next pass still owes it."
+    }
   ],
 
   "skipped": [
@@ -45,11 +49,6 @@
       "path": "CLAUDE.md",
       "kind": "not-in-this-pass",
       "reason": "the working agreement was followed but not re-read against the tree"
-    },
-    {
-      "path": "README.md",
-      "kind": "not-in-this-pass",
-      "reason": "the front page was not read against the code in this pass; it is the surface most likely to carry an outdated feature list, and the next pass owes it"
     },
     {
       "path": "SECURITY.md",

@@ -6,6 +6,9 @@
 //!
 //! Routes:
 //!   GET  /health                         liveness + the store backend's declared surfaces
+//!   GET  /openapi.json                   this deployment's OpenAPI 3.1 description, generated from
+//!                                        `lighttrack-contract` (unauthenticated: it describes the
+//!                                        API's shape, never anyone's data)
 //!   GET  /v1/capabilities                what this deployment's store backend serves, and what
 //!                                        it answers 501 for (any authenticated principal)
 //!   POST /v1/events                      ingest one event (cost computed; limits evaluated)
@@ -205,6 +208,7 @@ mod limits_usage;
 mod logging;
 mod margin_guardrails;
 mod margin_policies;
+mod openapi;
 mod otlp;
 mod prices;
 mod prices_fill;
@@ -231,6 +235,7 @@ mod rubrics;
 mod schedule_migrate;
 mod schedule_sweep;
 mod schedules;
+mod schema_registry;
 mod scores;
 mod scores_review;
 mod shed;
@@ -517,6 +522,8 @@ pub(crate) fn build_router(state: AppState) -> Router {
     let shed_ingest = axum::middleware::from_fn_with_state(state.clone(), shed::ingest_admission);
     Router::new()
         .route("/health", get(capabilities::health))
+        // Unauthenticated like /health: it describes the API's shape, never anyone's data.
+        .route("/openapi.json", get(openapi::get_openapi))
         .route("/v1/capabilities", get(capabilities::get_capabilities))
         .route(
             "/v1/events",

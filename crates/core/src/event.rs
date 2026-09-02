@@ -13,7 +13,9 @@ use crate::provider::ProviderId;
 pub type Provider = ProviderId;
 
 /// The kind of operation. `Other` catches anything unmodeled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Operation {
     #[default]
@@ -36,7 +38,9 @@ impl Operation {
 }
 
 /// Call outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
     #[default]
@@ -65,7 +69,7 @@ impl Status {
 }
 
 /// Token accounting for a single call. `cached_input`/`reasoning` are optional and provider-dependent.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TokenUsage {
     #[serde(default)]
     pub input: u64,
@@ -84,7 +88,7 @@ impl TokenUsage {
 }
 
 /// One normalized LLM call — the canonical record everything else is derived from.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LlmEvent {
     #[serde(default = "crate::new_id")]
     pub id: String,

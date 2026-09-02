@@ -9,7 +9,7 @@ use serde_json::Value;
 /// interchangeable: a rise can be the target or judge having *seen* the cases rather than having
 /// improved. Cases sampled from this project's own traffic (`source: events:recent`) cannot be
 /// exposed that way, which is the strongest reason to prefer them over an import.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Dataset {
     #[serde(default = "crate::new_id")]
     pub id: String,
@@ -39,7 +39,7 @@ fn default_version() -> u32 {
 }
 
 /// One case in a dataset. `output` is a captured/candidate response; `expected` is a golden reference.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DatasetItem {
     #[serde(default = "crate::new_id")]
     pub id: String,

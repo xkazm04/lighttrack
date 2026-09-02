@@ -25,7 +25,7 @@ pub const UNKNOWN_PROVIDER: &str = "unknown";
 /// id is preserved verbatim once canonicalized (`mistral` stays `mistral`, `az.ai.openai` stays
 /// `az.ai.openai`). Synonym folding is a separate, declared step in
 /// [`crate::model_id::canonicalize`].
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct ProviderId(String);
 

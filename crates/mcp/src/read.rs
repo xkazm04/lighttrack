@@ -1,180 +1,11 @@
-//! Read-only tools — data gathering. Every tool here is side-effect-free and annotated
-//! `readOnlyHint: true`, so a developer (or agent) can explore the whole system with no risk of
-//! mutating state or affecting the running server.
+//! Read-only tools — **dispatch only**. Every tool routed here is side-effect-free, and the
+//! catalog that says so (names, descriptions, input schemas, `readOnlyHint`) is generated from
+//! `lighttrack-contract`, so a tool cannot exist in the list and not here, or here and not in the
+//! list. What stays is the part that is genuinely I/O: which URL each tool's arguments become.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::client::Client;
-
-/// Tool definitions surfaced in `tools/list`.
-pub(crate) fn tools() -> Vec<Value> {
-    vec![
-        tool("get_capabilities", "What this LightTrack deployment's store backend actually serves: the backend name, the surfaces it implements, the surfaces it REFUSES (whose routes answer HTTP 501 `unsupported` rather than an empty result), and whether usage caps are enforced atomically or are merely advisory. Read this before concluding a surface returned no data — a 501 here means 'not ported on this backend', never 'you have none'.",
-            json!({"type":"object","properties":{}})),
-        tool("list_projects", "List all projects (admin key required in enforced mode).",
-            json!({"type":"object","properties":{}})),
-        tool("get_cost_summary", "Cost/usage rollup grouped by project + provider + model. Optionally filter by project.",
-            json!({"type":"object","properties":{"project":{"type":"string"}}})),
-        tool("get_margin", "Profit rollup: revenue − LLM cost grouped by customer or product over a window (default last 30 days). Most-unprofitable first.",
-            json!({"type":"object","properties":{
-                "by":{"type":"string","enum":["customer","product"],"description":"group dimension (default customer)"},
-                "project":{"type":"string"},
-                "since":{"type":"string","description":"RFC3339 window start (default 30d ago)"},
-                "until":{"type":"string","description":"RFC3339 window end (default now)"}
-            }})),
-        tool("get_forecast", "Predictive cost/margin forecast for a project: projected spend, per-budget breach ETAs (\"will breach in ~N days\"), per-customer/product margin-erosion crossovers (\"turns unprofitable next week\"), and the pre-emptive alerts derived from them. Fits an EWMA/linear trend over the recent daily counters. The forecast REFUSES rather than guesses: a projection built on too little history is withheld (its ETA is null) and named in `refused[]` with the reason (\"4 observed days needed, 2 seen\"), so an empty `alerts` with a non-empty `refused` means 'not enough evidence', not 'all is well'. `confidence` is the fit's r², withheld under the same floor.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "by":{"type":"string","enum":["customer","product"],"description":"margin dimension (default customer)"},
-                "horizon":{"type":"integer","description":"days to project ahead (default 14, 1..=90)"},
-                "lookback":{"type":"integer","description":"trailing days of history to fit (default 14, clamped to 4..=90 — below the evidence floor a trend cannot be presented)"}
-            },"required":["project"]})),
-        tool("query_events", "Recent LLM call events (newest first). Filter by project/time window/provider/model/trace/use-case name; page with `cursor` (from a prior call's next_cursor).",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "limit":{"type":"integer","description":"max events (default 20, max 1000)"},
-                "since":{"type":"string","description":"RFC3339 lower bound on event time (inclusive)"},
-                "until":{"type":"string","description":"RFC3339 upper bound on event time (exclusive)"},
-                "provider":{"type":"string","description":"exact provider match (anthropic, openai, …)"},
-                "model":{"type":"string","description":"exact model match"},
-                "trace_id":{"type":"string","description":"only events in this trace"},
-                "name":{"type":"string","description":"use-case name filter (a call's `name`)"},
-                "cursor":{"type":"string","description":"keyset cursor from a prior call's next_cursor"}
-            }})),
-        tool("get_event", "Fetch a single LLM call event by id.",
-            json!({"type":"object","properties":{"event":{"type":"string","description":"event id"}},"required":["event"]})),
-        tool("list_traces", "Recent agent traces (events grouped by trace_id), newest first — end-to-end cost, latency, tokens, and span count per request. Filter by project/time window/status/min cost; page with `cursor`.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "limit":{"type":"integer","description":"max traces (default 20, max 1000)"},
-                "since":{"type":"string","description":"RFC3339 lower bound on the trace's end time (inclusive)"},
-                "until":{"type":"string","description":"RFC3339 upper bound on the trace's end time (exclusive)"},
-                "status":{"type":"string","enum":["success","error"],"description":"keep only traces of this status"},
-                "min_cost":{"type":"number","description":"minimum whole-trace cost (USD)"},
-                "cursor":{"type":"string","description":"keyset cursor from a prior call's next_cursor"}
-            }})),
-        tool("get_trace", "Fetch one trace by id: rolled-up totals, the span tree, and any scores recorded within it.",
-            json!({"type":"object","properties":{"trace":{"type":"string","description":"trace id"}},"required":["trace"]})),
-        tool("list_scores", "Recent LLM-as-judge scores (newest first). Optionally narrowed to one project, one rubric (`rubric_id`), or one kind of verdict (`kind`) - a benchmark case is not the same measurement as an ad-hoc score, and averaging them together is the mistake this filter exists to prevent.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "rubric_id":{"type":"string","description":"only verdicts judged against this stored rubric; survives a rubric rename, unlike the free-text `rubric` label"},
-                "kind":{"type":"string","enum":["freeform","rubric","bench_case","compare_cell","pairwise_game","calibration","trace"],"description":"only verdicts of this kind"},
-                "limit":{"type":"integer","description":"max scores (default 20)"}
-            }})),
-        tool("get_limit_status", "Evaluate a project's limit rules now; per-rule status + overall throttle flag.",
-            json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
-        tool("list_limits", "List a project's configured limit rules.",
-            json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
-        tool("list_alerts", "The fired-alert ledger: what LightTrack has actually alerted on (limit breaches, spend forecasts, error spikes, quality regressions, dead relay tasks, finished benchmark runs, rejected ingest), whether each delivery LANDED, who acknowledged it, and what came of it. This is the durable record — an alert that fired while nobody was watching is here, and `delivered: []` means the alert reached no channel at all.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "kind":{"type":"string","enum":["limit_breach","limit_warning","forecast_alert","relay_task_dead","error_spike","score_drop","bench_run","ingest_rejected"],"description":"only alerts of this kind"},
-                "since":{"type":"string","description":"window start: an RFC3339 instant, or a relative 30m / 24h / 7d"},
-                "acked":{"type":"boolean","description":"true = only acknowledged, false = only open (the on-call view); omit for both"},
-                "limit":{"type":"integer","description":"max alerts (default 20)"},
-                "cursor":{"type":"string","description":"keyset cursor from a prior call's next_cursor"}
-            }})),
-        tool("list_margin_policies", "List a project's standing margin guardrails: the policies that turn a loss-making or eroding customer into a limit rule automatically. Read-only — the rules they create show up in `list_limits` carrying an `origin`.",
-            json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
-        tool("list_prices", "List the DB-backed model price book (the rate currently in force per model). Rows carry `effective_from` and `verified_at`: the book is a dated timeline, not one row per model.",
-            json!({"type":"object","properties":{}})),
-        tool("list_price_history", "Every stored rate for one model, newest first — the price timeline. Use it to answer what a call in a PAST window actually cost, which the current book cannot tell you.",
-            json!({"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"}},"required":["provider","model"]})),
-        tool("list_unpriced_models", "Which (provider, model) pairs carried traffic the price book could NOT cost, ranked by call count. Those calls are stored with no cost at all — never a zero — so while this list is non-empty EVERY cost, margin, forecast and limit number over the window is a floor, not a total. Check it before reporting a spend figure. Closing a row is `PUT /v1/prices/{provider}/{model}?fill_unpriced=1` (admin, not exposed here). The response also carries `price_book.stale`: rates nobody has re-verified recently are their own reason to distrust a cost number.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "since":{"type":"string","description":"RFC3339 window start (default: 30 days ago)"}
-            }})),
-        tool("list_benchmarks", "List a project's benchmark definitions (with inline datasets).",
-            json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
-        tool("get_benchmark", "Fetch one benchmark definition by id.",
-            json!({"type":"object","properties":{"benchmark":{"type":"string"}},"required":["benchmark"]})),
-        tool("get_benchmark_runs", "Run history (scorecards: mean score, pass rate, cost, status) for a benchmark.",
-            json!({"type":"object","properties":{"benchmark":{"type":"string"}},"required":["benchmark"]})),
-        tool("check_benchmark_gate", "CI-gate verdict for a benchmark from its latest finished run: pass | regressed | no_baseline | no_runs, with the supporting run id, mean, baseline, and case count. Use in a pipeline step to block a regression.",
-            json!({"type":"object","properties":{"benchmark":{"type":"string","description":"benchmark id"}},"required":["benchmark"]})),
-        tool("query_rollup", "THE grouped cost/usage question: totals over a window, grouped by 1-3 of project/provider/model/name/api_key/customer/product/prompt/day, with optional equality filters. Every fixed cost surface (costs, usecases, margin, forecast) is one grouping of this — use it for anything they do not already answer, e.g. \"cost per customer per day\" or \"which model drives this product's spend\". Rows carry `unpriced_calls`: when it is non-zero the cost is a FLOOR, not a total, because those calls had no price in the book.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "by":{"type":"string","description":"comma-separated dimensions, 1..=3 (default provider,model): project|provider|model|name|api_key|customer|product|prompt|day"},
-                "since":{"type":"string","description":"RFC3339 window start (default 30d ago)"},
-                "until":{"type":"string","description":"RFC3339 window end (exclusive)"},
-                "time":{"type":"string","enum":["ts","received_at"],"description":"which timestamp the window and `day` bucket read (default ts; accounting reads use received_at)"},
-                "filter":{"type":"string","description":"comma-separated `dimension:value` equality predicates, e.g. customer:acme,model:gpt-5.4"}
-            }})),
-        tool("get_usecases", "Use-case cost rollup: usage + cost grouped by (name, provider, model) for a project, optionally windowed from `since`. A call's use-case is its `name`, or its model when unnamed.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "since":{"type":"string","description":"RFC3339 window start (inclusive); omit for full history"}
-            },"required":["project"]})),
-        tool("list_datasets", "List a project's datasets.",
-            json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
-        tool("get_dataset", "Fetch one dataset by id.",
-            json!({"type":"object","properties":{"dataset":{"type":"string"}},"required":["dataset"]})),
-        tool("list_dataset_items", "List the cases in a dataset.",
-            json!({"type":"object","properties":{"dataset":{"type":"string"}},"required":["dataset"]})),
-        tool("list_rubrics", "List a project's structured rubrics.",
-            json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
-        tool("get_rubric", "Fetch one rubric by id.",
-            json!({"type":"object","properties":{"rubric":{"type":"string"}},"required":["rubric"]})),
-        tool("list_labels", "Human verdicts (M11): what a person said about an event, a golden-set item, or a judge's own verdict — the ground truth a judge is calibrated against. Narrow with `subject` (`event:<id>` / `dataset_item:<id>` / `score:<id>`) or `rubric_id`.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "subject":{"type":"string","description":"'<kind>:<id>' with kind one of event, dataset_item, score"},
-                "rubric_id":{"type":"string"},
-                "limit":{"type":"integer"},
-                "cursor":{"type":"string","description":"opaque keyset cursor from a previous page"}
-            }})),
-        tool("get_judge_trust", "Whether a judge may be believed for a rubric: `trusted` | `untrusted` | `unknown`, with the calibration record that decided it. `unknown` is NOT `untrusted` — a judge nobody has measured has taken no check, not failed one. Ask this before reading a benchmark gate's green badge as evidence.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "judge":{"type":"string","description":"the judge model, e.g. anthropic/claude-haiku-4-5"},
-                "rubric_id":{"type":"string","description":"omit for the freeform (rubric-less) judge; a rubric never inherits that trust"}
-            },"required":["judge"]})),
-        tool("list_calibrations", "A project's judge-human calibration history, newest first — the series a drift check reads.",
-            json!({"type":"object","properties":{"project":{"type":"string"},"limit":{"type":"integer"},"cursor":{"type":"string"}}})),
-        tool("list_jobs", "List background jobs (benchmark runs). Optionally filter by status.",
-            json!({"type":"object","properties":{"status":{"type":"string","description":"queued|running|done|error"},"limit":{"type":"integer"}}})),
-        tool("get_job", "Fetch one job by id — poll a benchmark run's status / progress / result.",
-            json!({"type":"object","properties":{"job":{"type":"string"}},"required":["job"]})),
-        tool("list_schedules", "List recurring workloads: every stored schedule (a job kind + payload on an interval), for one project or the whole deployment. This is the answer to \"what runs on a schedule here\" — including recurring compare benchmarks, which cannot express recurrence any other way.",
-            json!({"type":"object","properties":{"project":{"type":"string","description":"one project's schedules; omit for every project's"}}})),
-        tool("get_collective_leaderboard", "The collective real-world model leaderboard: quality × cost × latency per (provider, model, task type), merged across contributing LightTrack instances. Optionally filter by task_type or provider.",
-            json!({"type":"object","properties":{
-                "task_type":{"type":"string","description":"filter to one task bucket (qa, summarization, coding, …)"},
-                "provider":{"type":"string","description":"filter to one provider (anthropic, openai, …)"},
-                "determinism":{"type":"string","description":"rigor filter: keep only rows where EVERY source ran at this determinism level (exact|best-effort|sampled)"},
-                "frozen_dataset":{"type":"string","description":"rigor filter: 'true' keeps only rows whose every source ran against a frozen, single-version dataset"},
-                "significance_tested":{"type":"string","description":"rigor filter: 'true' keeps only rows whose every source's verdict was significance-tested"}
-            }})),
-        tool("get_collective_digest", "This instance's privacy-safe, k-anonymized model digest — the aggregate scorecards it would contribute to a collective hub (admin key required). Never reads raw events.",
-            json!({"type":"object","properties":{
-                "min_cases":{"type":"integer","description":"k-anonymity floor: only (model, task) buckets with ≥ this many cases are published (default from server)"}
-            }})),
-        tool("get_collective_contributions", "The contribution ledger (admin key required): every digest this instance has PUSHED to a collective hub — when, to which hub (an opaque hash, never the URL), how many buckets, how many projects consented vs were withheld, the digest's content hash, and the hub's verbatim ack. `status` is sent | rejected | failed: a rejection is a hub that answered and declined (its own min_interval, a bad credential), a failure is a push that never got an answer. Two rows sharing a `digest_sha256` were the same measurement re-sent. The digest BODY is never stored here — only the hash and the counts.",
-            json!({"type":"object","properties":{
-                "limit":{"type":"integer","description":"max rows, newest first (default from server)"},
-                "cursor":{"type":"string","description":"keyset cursor from a prior call's next_cursor"}
-            }})),
-    ]
-}
-
-fn tool(name: &str, desc: &str, schema: Value) -> Value {
-    let mut t = json!({
-        "name": name,
-        "description": desc,
-        "inputSchema": schema,
-        "annotations": { "readOnlyHint": true, "openWorldHint": true }
-    });
-    // Tools that return rendered data also advertise the shape of their `structuredContent`.
-    if let Some(out) = crate::schemas::output_schema(name) {
-        if let Some(obj) = t.as_object_mut() {
-            obj.insert("outputSchema".to_string(), out);
-        }
-    }
-    t
-}
 
 /// Route a read tool. Returns `None` if `name` is not a read tool (so the caller can try writes).
 pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Value, String>> {
@@ -518,9 +349,12 @@ mod tests {
     /// output shape an agent branches on (`unsupported`).
     #[test]
     fn get_capabilities_is_a_listed_read_only_tool() {
-        let t = tools()
-            .into_iter()
+        let t = crate::tools::list(false)["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
             .find(|t| t["name"] == "get_capabilities")
+            .cloned()
             .expect("get_capabilities is listed");
         assert_eq!(t["annotations"]["readOnlyHint"], true);
         assert_eq!(
@@ -534,9 +368,12 @@ mod tests {
     /// a window to get an answer.
     #[test]
     fn the_unpriced_ledger_is_a_read_only_tool_with_no_required_arguments() {
-        let t = tools()
-            .into_iter()
+        let t = crate::tools::list(false)["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
             .find(|t| t["name"] == "list_unpriced_models")
+            .cloned()
             .expect("list_unpriced_models is listed");
         assert_eq!(t["annotations"]["readOnlyHint"], true);
         assert!(
@@ -694,7 +531,9 @@ mod tests {
 
     #[test]
     fn new_read_tools_are_registered_with_schemas() {
-        let names: Vec<String> = tools()
+        let names: Vec<String> = crate::tools::list(false)["tools"]
+            .as_array()
+            .expect("tools array")
             .iter()
             .map(|t| t["name"].as_str().unwrap().to_string())
             .collect();

@@ -1,0 +1,702 @@
+{
+  "ack_alert": {
+    "properties": {
+      "by": "string",
+      "id": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "id"
+    ]
+  },
+  "add_dataset_item": {
+    "properties": {
+      "context": "string",
+      "dataset": "string",
+      "expected": "string",
+      "input": "string",
+      "output": "string",
+      "tags": "array"
+    },
+    "readOnly": false,
+    "required": [
+      "dataset",
+      "input"
+    ]
+  },
+  "check_benchmark_gate": {
+    "properties": {
+      "benchmark": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "benchmark"
+    ]
+  },
+  "create_benchmark": {
+    "properties": {
+      "baseline_score": "number",
+      "dataset": "array",
+      "dataset_ref": "string",
+      "judge_model": "string",
+      "name": "string",
+      "project": "string",
+      "rubric": "string",
+      "rubric_id": "string",
+      "targets": "array"
+    },
+    "readOnly": false,
+    "required": [
+      "name",
+      "project"
+    ]
+  },
+  "create_dataset": {
+    "properties": {
+      "name": "string",
+      "project": "string",
+      "source": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "name",
+      "project"
+    ]
+  },
+  "create_limit": {
+    "properties": {
+      "action": "string",
+      "metric": "string",
+      "project": "string",
+      "threshold": "number",
+      "window": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "metric",
+      "project",
+      "threshold",
+      "window"
+    ]
+  },
+  "create_project": {
+    "properties": {
+      "name": "string",
+      "redaction": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "name"
+    ]
+  },
+  "create_prompt_version": {
+    "properties": {
+      "benchmark_id": "string",
+      "config": "object",
+      "content": "string",
+      "name": "string",
+      "note": "string",
+      "project": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "content",
+      "name",
+      "project"
+    ]
+  },
+  "create_rubric": {
+    "properties": {
+      "dimensions": "array",
+      "name": "string",
+      "project": "string",
+      "threshold": "number"
+    },
+    "readOnly": false,
+    "required": [
+      "dimensions",
+      "name",
+      "project"
+    ]
+  },
+  "create_schedule": {
+    "properties": {
+      "enabled": "boolean",
+      "interval_secs": "integer",
+      "payload": "object",
+      "project": "string",
+      "start_in_secs": "integer",
+      "type": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "interval_secs",
+      "project",
+      "type"
+    ]
+  },
+  "delete_limit": {
+    "properties": {
+      "id": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "id"
+    ]
+  },
+  "enqueue_benchmark": {
+    "properties": {
+      "benchmark": "string",
+      "heal": "boolean",
+      "samples": "integer"
+    },
+    "readOnly": false,
+    "required": [
+      "benchmark"
+    ]
+  },
+  "enqueue_job": {
+    "properties": {
+      "payload": "object",
+      "type": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "type"
+    ]
+  },
+  "fork_dataset": {
+    "properties": {
+      "dataset": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "dataset"
+    ]
+  },
+  "freeze_dataset": {
+    "properties": {
+      "dataset": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "dataset"
+    ]
+  },
+  "get_benchmark": {
+    "properties": {
+      "benchmark": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "benchmark"
+    ]
+  },
+  "get_benchmark_runs": {
+    "properties": {
+      "benchmark": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "benchmark"
+    ]
+  },
+  "get_capabilities": {
+    "properties": {},
+    "readOnly": true,
+    "required": []
+  },
+  "get_collective_contributions": {
+    "properties": {
+      "cursor": "string",
+      "limit": "integer"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "get_collective_digest": {
+    "properties": {
+      "min_cases": "integer"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "get_collective_leaderboard": {
+    "properties": {
+      "determinism": "string",
+      "frozen_dataset": "string",
+      "provider": "string",
+      "significance_tested": "string",
+      "task_type": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "get_cost_summary": {
+    "properties": {
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "get_dataset": {
+    "properties": {
+      "dataset": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "dataset"
+    ]
+  },
+  "get_event": {
+    "properties": {
+      "event": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "event"
+    ]
+  },
+  "get_forecast": {
+    "properties": {
+      "by": "string",
+      "horizon": "integer",
+      "lookback": "integer",
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
+    ]
+  },
+  "get_job": {
+    "properties": {
+      "job": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "job"
+    ]
+  },
+  "get_judge_trust": {
+    "properties": {
+      "judge": "string",
+      "project": "string",
+      "rubric_id": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "judge"
+    ]
+  },
+  "get_limit_status": {
+    "properties": {
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
+    ]
+  },
+  "get_margin": {
+    "properties": {
+      "by": "string",
+      "project": "string",
+      "since": "string",
+      "until": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "get_prompt": {
+    "properties": {
+      "label": "string",
+      "name": "string",
+      "project": "string",
+      "version": "integer"
+    },
+    "readOnly": true,
+    "required": [
+      "name",
+      "project"
+    ]
+  },
+  "get_prompt_quality": {
+    "properties": {
+      "project": "string",
+      "rubric_id": "string",
+      "since": "string",
+      "until": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
+    ]
+  },
+  "get_relay_task": {
+    "properties": {
+      "task": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "task"
+    ]
+  },
+  "get_rubric": {
+    "properties": {
+      "rubric": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "rubric"
+    ]
+  },
+  "get_trace": {
+    "properties": {
+      "trace": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "trace"
+    ]
+  },
+  "get_usecases": {
+    "properties": {
+      "project": "string",
+      "since": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
+    ]
+  },
+  "import_dataset_items": {
+    "properties": {
+      "below": "number",
+      "dataset": "string",
+      "dedupe": "boolean",
+      "event_ids": "array",
+      "from": "string",
+      "model": "string",
+      "n": "integer",
+      "since": "string",
+      "status": "string",
+      "strategy": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "dataset"
+    ]
+  },
+  "list_alerts": {
+    "properties": {
+      "acked": "boolean",
+      "cursor": "string",
+      "kind": "string",
+      "limit": "integer",
+      "project": "string",
+      "since": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "list_benchmarks": {
+    "properties": {
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
+    ]
+  },
+  "list_calibrations": {
+    "properties": {
+      "cursor": "string",
+      "limit": "integer",
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "list_dataset_items": {
+    "properties": {
+      "dataset": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "dataset"
+    ]
+  },
+  "list_datasets": {
+    "properties": {
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
+    ]
+  },
+  "list_jobs": {
+    "properties": {
+      "limit": "integer",
+      "status": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "list_labels": {
+    "properties": {
+      "cursor": "string",
+      "limit": "integer",
+      "project": "string",
+      "rubric_id": "string",
+      "subject": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "list_limits": {
+    "properties": {
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
+    ]
+  },
+  "list_margin_policies": {
+    "properties": {
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
+    ]
+  },
+  "list_price_history": {
+    "properties": {
+      "model": "string",
+      "provider": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "model",
+      "provider"
+    ]
+  },
+  "list_prices": {
+    "properties": {},
+    "readOnly": true,
+    "required": []
+  },
+  "list_projects": {
+    "properties": {},
+    "readOnly": true,
+    "required": []
+  },
+  "list_prompts": {
+    "properties": {
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
+    ]
+  },
+  "list_relay_devices": {
+    "properties": {
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "list_relay_tasks": {
+    "properties": {
+      "limit": "integer",
+      "project": "string",
+      "status": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "list_rubrics": {
+    "properties": {
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
+    ]
+  },
+  "list_schedules": {
+    "properties": {
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "list_scores": {
+    "properties": {
+      "kind": "string",
+      "limit": "integer",
+      "project": "string",
+      "rubric_id": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "list_traces": {
+    "properties": {
+      "cursor": "string",
+      "limit": "integer",
+      "min_cost": "number",
+      "project": "string",
+      "since": "string",
+      "status": "string",
+      "until": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "list_unpriced_models": {
+    "properties": {
+      "project": "string",
+      "since": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "promote_prompt": {
+    "properties": {
+      "force": "boolean",
+      "label": "string",
+      "name": "string",
+      "project": "string",
+      "version": "integer"
+    },
+    "readOnly": false,
+    "required": [
+      "label",
+      "name",
+      "project",
+      "version"
+    ]
+  },
+  "put_price": {
+    "properties": {
+      "cached_input_per_mtok": "number",
+      "input_per_mtok": "number",
+      "model": "string",
+      "output_per_mtok": "number",
+      "provider": "string",
+      "source_url": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "input_per_mtok",
+      "model",
+      "output_per_mtok",
+      "provider"
+    ]
+  },
+  "query_events": {
+    "properties": {
+      "cursor": "string",
+      "limit": "integer",
+      "model": "string",
+      "name": "string",
+      "project": "string",
+      "provider": "string",
+      "since": "string",
+      "trace_id": "string",
+      "until": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "query_rollup": {
+    "properties": {
+      "by": "string",
+      "filter": "string",
+      "project": "string",
+      "since": "string",
+      "time": "string",
+      "until": "string"
+    },
+    "readOnly": true,
+    "required": []
+  },
+  "record_label": {
+    "properties": {
+      "labeler": "string",
+      "note": "string",
+      "pass": "boolean",
+      "project_id": "string",
+      "rubric_id": "string",
+      "subject": "string",
+      "value": "number"
+    },
+    "readOnly": false,
+    "required": [
+      "labeler",
+      "subject",
+      "value"
+    ]
+  },
+  "record_score": {
+    "properties": {
+      "cost_usd": "number",
+      "event": "string",
+      "max": "number",
+      "pass": "boolean",
+      "project": "string",
+      "reasoning": "string",
+      "rubric": "string",
+      "scored_by": "string",
+      "value": "number"
+    },
+    "readOnly": false,
+    "required": [
+      "rubric",
+      "value"
+    ]
+  },
+  "score_trace": {
+    "properties": {
+      "cost_usd": "number",
+      "event": "string",
+      "max": "number",
+      "pass": "boolean",
+      "reasoning": "string",
+      "rubric": "string",
+      "scored_by": "string",
+      "trace": "string",
+      "value": "number"
+    },
+    "readOnly": false,
+    "required": [
+      "rubric",
+      "trace",
+      "value"
+    ]
+  },
+  "update_limit": {
+    "properties": {
+      "action": "string",
+      "enabled": "boolean",
+      "id": "string",
+      "metric": "string",
+      "scope": "object",
+      "threshold": "number",
+      "warn_at": "number",
+      "window": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "id",
+      "metric",
+      "threshold",
+      "window"
+    ]
+  }
+}

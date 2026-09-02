@@ -32,6 +32,7 @@ pub(crate) fn run(cli: &Cli, action: &AlertsCmd) -> Result<()> {
             acked,
             open,
             limit,
+            cursor,
         } => {
             if let Some(k) = kind {
                 check_kind(k)?;
@@ -42,6 +43,7 @@ pub(crate) fn run(cli: &Cli, action: &AlertsCmd) -> Result<()> {
                 since.as_deref(),
                 acked_filter(*acked, *open),
                 *limit,
+                cursor.as_deref(),
             );
             call(cli, Method::GET, &path, None, "list_alerts")
         }
@@ -57,6 +59,7 @@ pub(crate) fn run(cli: &Cli, action: &AlertsCmd) -> Result<()> {
             }),
             "",
         ),
+        AlertsCmd::Channels { action } => crate::alert_channels::run(cli, action),
     }
 }
 
@@ -75,6 +78,7 @@ fn list_path(
     since: Option<&str>,
     acked: Option<bool>,
     limit: usize,
+    cursor: Option<&str>,
 ) -> String {
     let mut q = format!("/v1/alerts?limit={limit}");
     if let Some(p) = project {
@@ -88,6 +92,11 @@ fn list_path(
     }
     if let Some(a) = acked {
         q.push_str(&format!("&acked={a}"));
+    }
+    // The cursor comes back in the body as `next_cursor`; without sending it back, `list` can only
+    // ever show page one — which reads as "that is all the alerts there were".
+    if let Some(c) = cursor.filter(|s| !s.is_empty()) {
+        q.push_str(&format!("&cursor={}", crate::query::encode(c)));
     }
     q
 }
@@ -108,7 +117,10 @@ mod tests {
 
     #[test]
     fn a_bare_list_asks_only_for_a_page_size() {
-        assert_eq!(list_path(None, None, None, None, 20), "/v1/alerts?limit=20");
+        assert_eq!(
+            list_path(None, None, None, None, 20, None),
+            "/v1/alerts?limit=20"
+        );
     }
 
     #[test]
@@ -119,12 +131,25 @@ mod tests {
             Some("7d"),
             Some(false),
             5,
+            Some("cur+1"),
         );
         assert!(q.starts_with("/v1/alerts?limit=5"));
         assert!(q.contains("&project=proj-a"), "{q}");
         assert!(q.contains("&kind=score_drop"), "{q}");
         assert!(q.contains("&since=7d"), "{q}");
         assert!(q.contains("&acked=false"), "{q}");
+        assert!(
+            q.contains("&cursor=cur%2B1"),
+            "an opaque cursor is encoded: {q}"
+        );
+    }
+
+    /// No `--cursor` must send no `cursor=` at all: an empty one is a position the API cannot
+    /// resolve, and the honest first page is what a bare `list` means.
+    #[test]
+    fn an_absent_cursor_asks_for_the_first_page() {
+        assert!(!list_path(None, None, None, None, 20, None).contains("cursor"));
+        assert!(!list_path(None, None, None, None, 20, Some("")).contains("cursor"));
     }
 
     /// The tri-state is the point: without either flag the API must see no `acked=` at all, so both
@@ -134,7 +159,7 @@ mod tests {
         assert_eq!(acked_filter(false, false), None);
         assert_eq!(acked_filter(true, false), Some(true));
         assert_eq!(acked_filter(false, true), Some(false));
-        assert!(!list_path(None, None, None, None, 20).contains("acked"));
+        assert!(!list_path(None, None, None, None, 20, None).contains("acked"));
     }
 
     #[test]

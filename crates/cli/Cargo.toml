@@ -12,6 +12,9 @@ path = "src/main.rs"
 [dependencies]
 serde_json.workspace = true
 lighttrack-render.workspace = true
+# The endpoint contract: the verb tree is held to it by test, and the paged endpoints are where
+# `--cursor` has to exist.
+lighttrack-contract.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
 # http-only (no TLS) blocking client — fine for talking to the local API / Cloud Run over a proxy.
 reqwest = { version = "0.13", default-features = false, features = ["json", "blocking"] }

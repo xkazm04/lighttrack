@@ -29,7 +29,7 @@ use super::types::CollectiveDigest;
 /// How a contribution attempt ended. Three outcomes, because the operator's next move differs for
 /// each: `Sent` is done, `Rejected` means the hub understood and declined (fix the digest or the
 /// credential), `Failed` means the push never landed (retry).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ContributionStatus {
     /// The hub accepted it (2xx).
@@ -70,7 +70,7 @@ impl ContributionStatus {
 }
 
 /// One recorded contribution attempt.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ContributionRecord {
     #[serde(default = "crate::new_id")]
     pub id: String,

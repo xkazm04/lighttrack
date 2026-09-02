@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// How prompt/output payloads are persisted for a project.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Redaction {
     /// Store payloads as sent.
@@ -52,7 +54,7 @@ pub struct RedactionStamp {
 /// What a key is allowed to do. Three capabilities on a key, deliberately **not** RBAC: no roles,
 /// no inheritance, no per-resource grants — just the three doors an API key can be handed
 /// (`docs/ARCHITECTURE.md` §9).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     /// Write monitored traffic: the event / batch / OTLP doors and the relay settle report.
@@ -123,7 +125,7 @@ pub fn decode_scopes(raw: Option<&str>) -> Vec<Scope> {
 }
 
 /// A monitored application / tenant.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Project {
     pub id: String,
     pub name: String,
@@ -156,7 +158,7 @@ fn default_true() -> bool {
 }
 
 /// An ingest API key. Only `key_hash` is persisted; the raw secret is shown once at creation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ApiKey {
     pub id: String,
     pub project_id: String,

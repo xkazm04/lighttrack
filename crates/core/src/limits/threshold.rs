@@ -22,7 +22,9 @@ use super::LimitAction;
 /// The billing dimension a [`Threshold::RevenueShare`] reads revenue over. One variant today — the
 /// customer — because that is the only dimension `list_revenue_events` can attribute without
 /// guessing; it is an enum so adding `Product` later is additive rather than a wire break.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ThresholdDimension {
     #[default]
@@ -43,7 +45,7 @@ impl ThresholdDimension {
 /// `Fixed(5.0)`, and `{"pct": 80, "dimension": "customer"}` reads as `RevenueShare`. Order matters —
 /// an object can never match `Fixed`, and a number can never match `RevenueShare`, so the two arms
 /// are unambiguous.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Threshold {
     Fixed(f64),
@@ -134,7 +136,9 @@ impl Threshold {
 }
 
 /// How a [`LimitStatus`](super::LimitStatus)' threshold was arrived at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ThresholdKind {
     #[default]
@@ -160,7 +164,7 @@ impl ThresholdKind {
 /// A fixed cap carries nothing but its kind. A revenue-share cap carries the revenue figure and the
 /// percentage it was multiplied by, so `/v1/limits/status` and the 429 message can say
 /// "threshold = 80% of $412.00 recognized revenue" instead of showing a number with no story.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ThresholdBasis {
     pub kind: ThresholdKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -211,7 +215,7 @@ impl ThresholdBasis {
 /// Reversal is what makes it safe: the configured [`LimitRule::action`](super::LimitRule::action) is
 /// never overwritten, only shadowed until [`LimitRule::escalated_until`](super::LimitRule) passes, so
 /// de-escalation is a field clear rather than a remembered undo.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Escalation {
     /// Escalate once the forecast ETA to breach is at or under this many days.
     pub on_eta_days: f64,

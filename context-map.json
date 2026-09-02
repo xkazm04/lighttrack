@@ -125,7 +125,10 @@
         "crates/api/src/guards.rs",
         "crates/api/src/error.rs",
         "crates/api/src/idempotency.rs",
-        "crates/api/src/redact.rs"
+        "crates/api/src/redact.rs",
+        "crates/api/src/auth_scopes.rs",
+        "crates/api/src/openapi.rs",
+        "crates/api/src/schema_registry.rs"
       ],
       "group": "Platform Infrastructure",
       "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
@@ -271,7 +274,11 @@
         "crates/cli/src/main.rs"
       ],
       "file_paths": [
-        "crates/cli/src/main.rs"
+        "crates/cli/src/main.rs",
+        "crates/cli/src/cli/mod.rs",
+        "crates/cli/src/contract.rs",
+        "crates/cli/src/http.rs",
+        "crates/cli/src/query.rs"
       ],
       "group": "Platform Infrastructure",
       "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
@@ -818,12 +825,13 @@
         "crates/mcp/src/tools.rs",
         "crates/mcp/src/read.rs",
         "crates/mcp/src/write.rs",
-        "crates/mcp/src/write_schemas.rs",
         "crates/mcp/src/schemas.rs",
         "crates/mcp/src/resources.rs",
         "crates/mcp/src/prompts.rs",
         "crates/mcp/src/prompts_tools.rs",
-        "crates/mcp/src/errors.rs"
+        "crates/mcp/src/errors.rs",
+        "crates/mcp/src/relay_tools.rs",
+        "crates/mcp/src/tool_contract.rs"
       ],
       "group": "Platform Infrastructure",
       "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
@@ -1150,7 +1158,8 @@
         "crates/render/src/collective.rs",
         "crates/render/src/prompts.rs",
         "crates/render/src/margin.rs",
-        "crates/render/tests/render.rs"
+        "crates/render/tests/render.rs",
+        "crates/render/src/margin_policies.rs"
       ],
       "group": "Platform Infrastructure",
       "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
@@ -1199,7 +1208,8 @@
         "crates/render/src/projects.rs",
         "crates/render/src/jobs.rs",
         "crates/render/src/limits.rs",
-        "crates/render/src/costs.rs"
+        "crates/render/src/costs.rs",
+        "crates/render/src/capabilities.rs"
       ],
       "group": "Platform Infrastructure",
       "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",

@@ -94,7 +94,7 @@ impl RelayStatus {
 /// One queued unit of device work. Status: `queued` | `leased` | `succeeded` | `dead`.
 /// A failed attempt goes back to `queued` (with `error` recorded and `next_attempt_at` pushed
 /// out) until `max_attempts` is exhausted, which flips it to `dead`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RelayTask {
     #[serde(default = "crate::new_id")]
     pub id: String,

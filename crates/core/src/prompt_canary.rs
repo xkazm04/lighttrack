@@ -34,7 +34,7 @@ pub const REASON_CANARY_REGRESSED: &str = "canary_regressed";
 ///
 /// `reason` is free text with the two reserved spellings above, so a reader can separate "someone
 /// decided this" from "the canary decided this" without parsing prose.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LabelChange {
     pub label: String,
     pub version: u32,
@@ -51,7 +51,7 @@ pub struct LabelChange {
 /// canary does is tell you rather than act; `min_n` is an evidence floor, because a version judged
 /// three times has said nothing about whether it is worse; and `max_drop` is a **relative** band, so
 /// it means the same thing whatever scale the rubric scores on.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CanaryPolicy {
     /// The label carrying the version under test.
     #[serde(default = "default_canary_label")]

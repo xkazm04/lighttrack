@@ -8,37 +8,11 @@
 //! and the reason device enrolment is HTTP-only however the write gate is set. The device listing
 //! here carries no key and no digest, because the API strips both before they leave the database.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::client::Client;
 
 /// Tool definitions added to the read catalog.
-pub(crate) fn read_tools() -> Vec<Value> {
-    vec![
-        tool("list_relay_tasks", "Cloud→device relay tasks (newest first): work handed to an enrolled local device to run through Claude Code. Filter by project and status (queued | leased | succeeded | dead | cancelling | cancelled). Use this to answer \"did my relay task run\" — a task sitting `queued` with a low `attempts` is waiting for a device, not failing.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "status":{"type":"string","enum":["queued","leased","succeeded","dead","cancelling","cancelled"],"description":"only tasks in this state"},
-                "limit":{"type":"integer","description":"max tasks (default 20, max 1000)"}
-            }})),
-        tool("get_relay_task", "One relay task by id: its status, result or error, attempt/failure counters, the device holding it, and its liveness `progress`. `failures` is the retry budget (runs that actually failed); `stale_reclaims` counts devices that died mid-run — they are different problems and the two counters exist to tell them apart.",
-            json!({"type":"object","properties":{"task":{"type":"string","description":"relay task id"}},"required":["task"]})),
-        tool("list_relay_devices", "The enrolled relay device fleet: each device's advertised capabilities (the action types it can run, exactly or as `ns/*`), when it was last seen, its agent version, and whether it is revoked. Keys are never included. Read this when relay tasks are not being picked up: a queued task whose action type nothing here advertises will never run, whatever its status says. Admin key required.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string","description":"one project's devices (operator-wide devices are always included); omit for the whole fleet"}
-            }})),
-    ]
-}
-
-fn tool(name: &str, desc: &str, schema: Value) -> Value {
-    json!({
-        "name": name,
-        "description": desc,
-        "inputSchema": schema,
-        "annotations": { "readOnlyHint": true, "openWorldHint": true }
-    })
-}
-
 /// Route a relay read tool. `None` when `name` is not one, so the caller falls through.
 pub(crate) fn read_dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Value, String>> {
     let r = match name {
@@ -74,37 +48,9 @@ pub(crate) fn read_dispatch(c: &Client, name: &str, args: &Value) -> Option<Resu
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
-
-    #[test]
-    fn every_relay_tool_is_annotated_read_only() {
-        // The annotation is the contract an agent host reads before deciding what it may call
-        // unattended. A relay tool that mutated anything while carrying it would be worse than
-        // having no annotation at all.
-        for t in read_tools() {
-            assert_eq!(
-                t["annotations"]["readOnlyHint"], true,
-                "{} must be read-only",
-                t["name"]
-            );
-        }
-    }
-
-    #[test]
-    fn no_relay_tool_can_mint_or_reveal_a_device_key() {
-        // The rule this file exists to keep: device enrolment stays HTTP-only, whatever the write
-        // gate says, because a minted secret in a tool result is a secret in a transcript.
-        let names: Vec<String> = read_tools()
-            .iter()
-            .map(|t| t["name"].as_str().unwrap_or_default().to_string())
-            .collect();
-        assert!(!names
-            .iter()
-            .any(|n| n.contains("create") || n.contains("enrol")));
-        // …and the one device tool routes to the listing, never to the minting door.
-        let paths: Vec<&str> = vec!["/v1/relay/devices"];
-        assert!(paths.iter().all(|p| !p.contains("keys")));
-    }
 
     #[test]
     fn unknown_tools_fall_through_so_the_caller_can_try_the_other_catalogs() {

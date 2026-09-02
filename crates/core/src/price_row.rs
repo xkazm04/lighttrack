@@ -17,7 +17,7 @@ use crate::pricing::PriceBook;
 /// the timeline. `verified_at` is when a human last checked the rate against the vendor's page —
 /// the seed's `_meta.last_verified` used to be invisible at runtime, which is how a two-year-old
 /// price book looks exactly like a freshly-checked one.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelPriceRow {
     pub provider: String,
     pub model: String,

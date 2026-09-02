@@ -20,9 +20,9 @@ mod relay_tools;
 mod resources;
 mod rpc;
 mod schemas;
+mod tool_contract;
 mod tools;
 mod write;
-mod write_schemas;
 
 use std::io::{self, BufRead};
 

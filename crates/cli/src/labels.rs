@@ -5,12 +5,15 @@
 //! `trusted` / `untrusted` / `unknown` for one `(rubric, judge)` pair, and `unknown` is a real
 //! answer — a judge nobody has measured has taken no check, not failed one.
 
-use anyhow::{bail, Result};
+use std::fs;
+
+use anyhow::{bail, Context, Result};
 use reqwest::Method;
 use serde_json::{json, Value};
 
 use crate::cli::{Cli, JudgesCmd, LabelsCmd};
 use crate::http::call;
+use crate::query::encode as urlencode;
 
 pub(crate) fn run(cli: &Cli, action: &LabelsCmd) -> Result<()> {
     match action {
@@ -19,11 +22,13 @@ pub(crate) fn run(cli: &Cli, action: &LabelsCmd) -> Result<()> {
             subject,
             rubric_id,
             limit,
+            cursor,
         } => {
             let mut path = format!("/v1/labels?limit={limit}");
             push(&mut path, "project", project.as_deref());
             push(&mut path, "subject", subject.as_deref());
             push(&mut path, "rubric_id", rubric_id.as_deref());
+            push(&mut path, "cursor", cursor.as_deref());
             call(cli, Method::GET, &path, None, "list_labels")
         }
         LabelsCmd::Add {
@@ -64,12 +69,47 @@ pub(crate) fn run_judges(cli: &Cli, action: &JudgesCmd) -> Result<()> {
             push(&mut path, "rubric_id", rubric_id.as_deref());
             call(cli, Method::GET, &path, None, "get_judge_trust")
         }
-        JudgesCmd::History { project, limit } => {
+        JudgesCmd::History {
+            project,
+            limit,
+            cursor,
+        } => {
             let mut path = format!("/v1/calibrations?limit={limit}");
             push(&mut path, "project", project.as_deref());
+            push(&mut path, "cursor", cursor.as_deref());
             call(cli, Method::GET, &path, None, "list_calibrations")
         }
+        // The record is structured data (κ, Pearson, MAE, RMSE, n, the bar it was judged against),
+        // so it comes from the file the measurement produced rather than from a wall of flags.
+        JudgesCmd::Calibrate { file, project } => {
+            let text = fs::read_to_string(file).with_context(|| format!("reading {file}"))?;
+            let record: Value =
+                serde_json::from_str(&text).with_context(|| format!("{file}: invalid JSON"))?;
+            let body = calibration_body(record, project.as_deref(), file)?;
+            call(
+                cli,
+                Method::POST,
+                "/v1/calibrations",
+                Some(body),
+                "list_calibrations",
+            )
+        }
     }
+}
+
+/// `--project` supplies the field an admin key cannot derive, and never overrides one the file
+/// already carries — the record's own attribution is the auditable one.
+fn calibration_body(record: Value, project: Option<&str>, file: &str) -> Result<Value> {
+    let Value::Object(mut o) = record else {
+        bail!("{file}: a calibration record is a JSON object");
+    };
+    if let Some(p) = project {
+        o.entry("project_id").or_insert_with(|| json!(p));
+    }
+    if !o.contains_key("judge") {
+        bail!("{file}: a calibration record must name the `judge` it measured");
+    }
+    Ok(Value::Object(o))
 }
 
 /// Pure so the "omitted flags send nothing" rule is testable — a `null` in the body would be a
@@ -103,19 +143,6 @@ fn push(path: &mut String, key: &str, value: Option<&str>) {
     if let Some(v) = value.filter(|s| !s.is_empty()) {
         path.push_str(&format!("&{key}={}", urlencode(v)));
     }
-}
-
-/// A judge is `provider/model` and a subject is `kind:id`, so neither can be pasted into a query
-/// string raw.
-fn urlencode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            other => format!("%{other:02X}"),
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -159,5 +186,24 @@ mod tests {
         assert!(p.ends_with("&subject=event%3Ae1"), "{p}");
         assert!(!p.contains("project"), "an empty flag sends nothing: {p}");
         assert_eq!(urlencode("anthropic/haiku"), "anthropic%2Fhaiku");
+    }
+
+    /// A record with no judge names no half of the pair a trust verdict is about, and one whose
+    /// file already says which project it belongs to must keep saying so.
+    #[test]
+    fn a_calibration_record_must_name_its_judge_and_keeps_its_own_project() {
+        assert!(calibration_body(json!({ "kappa": 0.8 }), Some("p1"), "f").is_err());
+        assert!(calibration_body(json!([]), None, "f").is_err());
+
+        let b =
+            calibration_body(json!({ "judge": "anthropic/haiku" }), Some("p1"), "f").expect("body");
+        assert_eq!(b["project_id"], "p1");
+        let b = calibration_body(
+            json!({ "judge": "anthropic/haiku", "project_id": "from-file" }),
+            Some("p1"),
+            "f",
+        )
+        .expect("body");
+        assert_eq!(b["project_id"], "from-file");
     }
 }

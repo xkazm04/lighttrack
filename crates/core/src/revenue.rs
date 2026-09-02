@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 /// How a revenue record is recognized. `amount_usd` is always a non-negative magnitude; `Refund`
 /// flips its sign at recognition time, so refunds/credits reduce recognized revenue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RevenueKind {
     /// Recurring subscription; amortized across `[period_start, period_end]`.
@@ -40,7 +42,7 @@ impl RevenueKind {
 /// One normalized revenue record — the revenue analog of [`crate::LlmEvent`]'s cost. Synced from a
 /// billing provider (Stripe/Polar) or posted by hand; `external_id` is the provider's own id, used for
 /// idempotent upserts. Attributed to a customer and/or product so it can be netted against LLM cost.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RevenueEvent {
     #[serde(default = "crate::new_id")]
     pub id: String,

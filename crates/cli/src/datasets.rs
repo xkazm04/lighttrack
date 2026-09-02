@@ -59,6 +59,20 @@ pub(crate) fn run(cli: &Cli, action: &DatasetsCmd) -> Result<()> {
                 "list_dataset_items",
             )
         }
+        DatasetsCmd::Promote { id, label_id } => call(
+            cli,
+            Method::POST,
+            &format!("/v1/datasets/{id}/items/from-label"),
+            Some(json!({ "label_id": label_id })),
+            "",
+        ),
+        DatasetsCmd::Labels { id } => call(
+            cli,
+            Method::GET,
+            &format!("/v1/datasets/{id}/labels"),
+            None,
+            "list_labels",
+        ),
     }
 }
 

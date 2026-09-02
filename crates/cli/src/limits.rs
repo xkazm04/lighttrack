@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 
 use crate::cli::{Cli, LimitsCmd};
 use crate::http::call;
+use crate::query::Query;
 
 /// Build the optional dimension-scope object for a limit rule from the CLI's mutually-exclusive
 /// `--scope-*` flags (clap enforces at most one). `null` (unscoped) when none is set.
@@ -116,7 +117,31 @@ pub(crate) fn run(cli: &Cli, action: &LimitsCmd) -> Result<()> {
             None,
             "get_limit_status",
         ),
+        LimitsCmd::Usage {
+            project,
+            by,
+            window,
+            limit,
+        } => call(
+            cli,
+            Method::GET,
+            &usage_path(project, by, window, *limit),
+            None,
+            "",
+        ),
     }
+}
+
+/// `/v1/limits/usage`. `by`, `window` and `limit` are clap-defaulted so they are always sent; only
+/// `project` is conditional, because a project key already names one and passing an empty value
+/// would scope the read to a project that does not exist.
+pub(crate) fn usage_path(project: &Option<String>, by: &str, window: &str, limit: usize) -> String {
+    let mut q = Query::new("/v1/limits/usage");
+    q.push("by", Some(by));
+    q.push("window", Some(window));
+    q.push_raw("limit", Some(limit));
+    q.push("project", project.as_deref());
+    q.finish()
 }
 
 #[cfg(test)]
@@ -125,6 +150,21 @@ mod tests {
 
     fn s(v: &str) -> Option<String> {
         Some(v.to_string())
+    }
+
+    /// The grouping is always sent and always first; `project` joins with `&` and is dropped when
+    /// the calling key already names one.
+    #[test]
+    fn usage_path_sends_the_grouping_and_only_a_named_project() {
+        assert_eq!(
+            usage_path(&None, "api_key", "day", 20),
+            "/v1/limits/usage?by=api_key&window=day&limit=20"
+        );
+        assert_eq!(
+            usage_path(&s("p1"), "customer", "month", 5),
+            "/v1/limits/usage?by=customer&window=month&limit=5&project=p1"
+        );
+        assert!(!usage_path(&s(""), "api_key", "day", 20).contains("project"));
     }
 
     #[test]

@@ -99,7 +99,7 @@ impl TraceShape {
 /// - it survives the [`Trace::spans_truncated`] cap — the detail read keeps the *oldest* spans, so
 ///   the root is always present and a clipped trace fingerprints identically to the whole one. A
 ///   truncated trace must never be mistaken for a changed one.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TraceCoverage {
     /// The trace's true span count when judged — `spans_total`, so a clipped read still records the
     /// real number.
