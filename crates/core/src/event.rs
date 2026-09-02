@@ -3,50 +3,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::pricing::{PriceBook, PricingMode};
+use crate::provider::ProviderId;
 
-/// LLM provider. `Unknown` captures anything we don't model yet (its pricing lookups miss → `None`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Provider {
-    OpenAi,
-    Anthropic,
-    Google,
-    #[serde(other)]
-    #[default]
-    Unknown,
-}
-
-impl Provider {
-    /// Parse a wire/DB provider literal. Anything outside the vocabulary becomes [`Provider::Unknown`]
-    /// — the explicit quarantine variant, not a silent coercion into a real provider.
-    ///
-    /// Exists so callers that hold a provider as a `&str` (a judge spec, a price-book row) reach the
-    /// same enum every other path uses, instead of comparing strings and quietly building a second
-    /// pricing or attribution vocabulary beside the first.
-    pub fn from_wire(s: &str) -> Provider {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "openai" => Provider::OpenAi,
-            "anthropic" => Provider::Anthropic,
-            "google" => Provider::Google,
-            _ => Provider::Unknown,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Provider::OpenAi => "openai",
-            Provider::Anthropic => "anthropic",
-            Provider::Google => "google",
-            Provider::Unknown => "unknown",
-        }
-    }
-}
-
-impl std::fmt::Display for Provider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+/// The provider a call went to.
+///
+/// A **type alias**, not an enum: provider identity is open (see [`crate::provider::ProviderId`]).
+/// The closed `{OpenAi, Anthropic, Google, Unknown}` enum this replaces stored every unmodeled
+/// vendor as the literal `"unknown"`, which is why a `mistral/*` price row could never be reached.
+pub type Provider = ProviderId;
 
 /// The kind of operation. `Other` catches anything unmodeled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -150,7 +114,8 @@ pub struct LlmEvent {
     /// (the migration's backfill).
     #[serde(skip_deserializing, default = "Utc::now")]
     pub received_at: DateTime<Utc>,
-    pub provider: Provider,
+    #[serde(default)]
+    pub provider: ProviderId,
     pub model: String,
     /// Optional use-case / call-site name (e.g. "summarize-email"). The unit the
     /// Personas "LLM Overview" rollup groups by; falls back to provider+model when
@@ -194,7 +159,8 @@ impl LlmEvent {
     pub fn ensure_cost(&mut self, prices: &PriceBook) -> Option<f64> {
         if self.cost_usd.is_none() {
             let mode = self.pricing_mode();
-            self.cost_usd = prices.cost_usd_mode(self.provider, &self.model, &self.usage, mode);
+            self.cost_usd =
+                prices.cost_usd_mode(self.provider.as_str(), &self.model, &self.usage, mode);
         }
         self.cost_usd
     }

@@ -16,9 +16,11 @@ pub mod limits;
 pub mod margin;
 pub mod margin_sim;
 pub mod margin_trend;
+pub mod model_id;
 pub mod pricing;
 pub mod project;
 pub mod prompt;
+pub mod provider;
 pub mod relay;
 pub mod revenue;
 pub mod rubric;
@@ -49,9 +51,11 @@ pub use margin_sim::{compute_margin_simulation, SimAssumptions, SimRow, TokensBy
 pub use margin_trend::{
     compute_margin_trend, DailyKeyCost, MarginTrend, MarginTrendPoint, MarginTrendSeries,
 };
+pub use model_id::{canonicalize, canonicalize_with, judge_family, AliasTable, ModelId};
 pub use pricing::{ModelPrice, ModelPriceRow, PriceBook, PricingMode};
 pub use project::{ApiKey, Project, Redaction};
 pub use prompt::{Prompt, PromptVersion};
+pub use provider::{family_of, ProviderFamily, ProviderId, UNKNOWN_PROVIDER};
 pub use relay::{
     RelayOutcome, RelayStatus, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS,
     RELAY_DEFAULT_RETRY_INTERVAL_SECS,
