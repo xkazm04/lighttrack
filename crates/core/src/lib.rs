@@ -13,6 +13,8 @@ pub mod error;
 pub mod event;
 pub mod forecast;
 pub mod job;
+pub mod job_kinds;
+pub mod lease;
 pub mod limits;
 pub mod margin;
 pub mod margin_sim;
@@ -25,6 +27,7 @@ pub mod provider;
 pub mod relay;
 pub mod revenue;
 pub mod rubric;
+pub mod schedule;
 pub mod score;
 pub mod trace;
 
@@ -42,8 +45,14 @@ pub use error::LtError;
 pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
 pub use job::{
-    job_is_terminal, Job, JobCancel, JobFinish, JOB_ERROR_PREFIX_FAILURE, JOB_ERROR_WORKER_LOST,
+    job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_PREFIX_FAILURE,
+    JOB_ERROR_WORKER_LOST,
 };
+pub use job_kinds::{
+    validate_payload, BenchRunPayload, CalibratePayload, DatasetSamplePayload, JudgeSpec,
+    ScoreEventsPayload, ScoreTracesPayload,
+};
+pub use lease::{LeaseFence, LeaseHeld};
 pub use limits::{
     scope_matches, CostEvidence, LimitAction, LimitMetric, LimitRule, LimitScope, LimitStatus,
     LimitWindow, ScopeDims, DEFAULT_THROTTLE_START,
@@ -61,11 +70,12 @@ pub use project::{
 pub use prompt::{Prompt, PromptVersion};
 pub use provider::{family_of, ProviderFamily, ProviderId, UNKNOWN_PROVIDER};
 pub use relay::{
-    RelayOutcome, RelayStatus, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS,
-    RELAY_DEFAULT_RETRY_INTERVAL_SECS,
+    RelayCancel, RelayOutcome, RelaySettle, RelayStatus, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS,
+    RELAY_DEFAULT_RETRY_INTERVAL_SECS, RELAY_ERROR_DEVICE_LOST, RELAY_MAX_STALE_RECLAIMS,
 };
 pub use revenue::{RevenueEvent, RevenueKind};
 pub use rubric::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
+pub use schedule::{Schedule, MIN_INTERVAL_SECS as SCHEDULE_MIN_INTERVAL_SECS};
 pub use score::{
     judge_verdict_schema, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, JudgeVerdict, Score,
     ScoreDetail, ScoreDim, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM, MAX_REASONING_CHARS,
