@@ -36,6 +36,7 @@ use lighttrack_core::{
     RevenueEvent, Rubric, Score, TraceSummary,
 };
 use lighttrack_store::{
+    capabilities::{Capabilities, Surface},
     Admission, CostRow, EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, TraceEvents,
     TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
@@ -72,7 +73,38 @@ impl PgStore {
     }
 }
 
+impl PgStore {
+    /// What this backend implements today, read off the `impl Store` block below.
+    ///
+    /// The absent surfaces are honest gaps, not oversights: `Forecast` and `MarginBreakdowns` need
+    /// the daily/dimension rollups, `Prompts` the registry tables, `Collective` the digest table,
+    /// and `Maintenance`/`Metrics` are SQLite-file concerns a managed Postgres owns itself. Each
+    /// refuses with `Unsupported` (HTTP 501) and the conformance suite asserts that refusal.
+    pub const SURFACES: &'static [Surface] = &[
+        Surface::EventsCore,
+        Surface::EventFilters,
+        Surface::Traces,
+        Surface::ProjectAdmin,
+        Surface::KeyAdmin,
+        Surface::LimitLifecycle,
+        Surface::JobLeases,
+        Surface::Relay,
+    ];
+
+    /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
+    /// test renders the matrix from it without a live database.
+    pub fn manifest() -> Capabilities {
+        // Check-and-insert is one transaction, serialized per project by a transaction-scoped
+        // advisory lock — across every API process sharing the database. See `admission`.
+        Capabilities::new("postgres", Self::SURFACES, true)
+    }
+}
+
 impl Store for PgStore {
+    fn capabilities(&self) -> Capabilities {
+        Self::manifest()
+    }
+
     fn init_schema(&self) -> Result<()> {
         self.rt
             .block_on(async { sqlx::raw_sql(SCHEMA).execute(&self.pool).await })
@@ -83,11 +115,6 @@ impl Store for PgStore {
     // --- events ---
     fn insert_event(&self, ev: &LlmEvent) -> Result<()> {
         self.rt.block_on(events::insert(&self.pool, ev))
-    }
-    fn admission_is_atomic(&self) -> bool {
-        // Check-and-insert is one transaction, serialized per project by a transaction-scoped
-        // advisory lock — across every API process sharing the database. See `admission`.
-        true
     }
     fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
         self.rt
@@ -161,9 +188,6 @@ impl Store for PgStore {
     // Implemented, not inherited: the trait defaults refuse with `Unsupported` (HTTP 501), which on
     // the backend most deployments actually run meant the whole trace surface was missing. Semantics
     // are ported from the SQLite reference — see `traces`.
-    fn serves_traces(&self) -> bool {
-        true
-    }
     fn list_traces(&self, project: Option<&str>, limit: usize) -> Result<Vec<TraceSummary>> {
         self.rt
             .block_on(traces::list_summaries(&self.pool, project, limit))
@@ -196,6 +220,9 @@ impl Store for PgStore {
     // --- projects / api keys / limits ---
     fn create_project(&self, p: &Project) -> Result<()> {
         self.rt.block_on(projects::create(&self.pool, p))
+    }
+    fn update_project(&self, p: &Project) -> Result<bool> {
+        self.rt.block_on(projects::update(&self.pool, p))
     }
     fn get_project(&self, id: &str) -> Result<Option<Project>> {
         self.rt.block_on(projects::get(&self.pool, id))

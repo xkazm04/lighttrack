@@ -7,6 +7,7 @@
 //!
 //! Methods are synchronous (SQLite is blocking). Async callers wrap them in `spawn_blocking`.
 
+pub mod capabilities;
 pub mod codec;
 pub mod conformance;
 pub mod sqlite;
@@ -25,6 +26,7 @@ use lighttrack_core::{
     RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension, Trace, TraceSummary,
 };
 
+pub use capabilities::{Capabilities, Surface};
 pub use sqlite::SqliteStore;
 
 #[derive(Debug, Error)]
@@ -669,6 +671,16 @@ pub struct DbMetricsReport {
 
 /// Backend-agnostic persistence interface.
 pub trait Store: Send + Sync {
+    /// What this backend actually implements — see [`crate::capabilities`].
+    ///
+    /// **Required, deliberately without a default.** A default here would be a claim a new backend
+    /// inherits without deciding, which is the exact failure the manifest exists to end: the
+    /// surfaces below carry ~45 methods that refuse by default, and until this existed the only
+    /// record of which ones a backend had ported was its `impl` block. Adding a backend now forces
+    /// an explicit answer, and the conformance suite holds it to it (full semantics for a declared
+    /// surface, an asserted `Unsupported` refusal for an undeclared one).
+    fn capabilities(&self) -> Capabilities;
+
     /// Create tables if they don't exist.
     fn init_schema(&self) -> Result<()>;
 
@@ -697,12 +709,14 @@ pub trait Store: Send + Sync {
     /// persist in **one atomic step** on this backend, i.e. whether a configured cap is genuinely
     /// enforced under concurrent ingest rather than enforced-on-average.
     ///
-    /// Defaults to `false`: a backend is advisory until it proves otherwise, so a newly-added
-    /// backend can never inherit a claim it doesn't honor. The conformance suite reads this to
-    /// decide whether to *require* that a concurrent burst stayed under the cap or merely to report
-    /// the leak, and the API/startup surfaces it to the operator.
+    /// Declared in the backend's [`Capabilities`] manifest, never inherited: a newly-added backend
+    /// has to answer the question rather than pick up a claim it doesn't honor. The conformance
+    /// suite reads this to decide whether to *require* that a concurrent burst stayed under the cap
+    /// or merely to report the leak, and the API/startup surfaces it to the operator.
+    /// Reads the manifest ([`Capabilities::atomic_admission`]) so the flag and the declaration can
+    /// never disagree; a backend states it once, in `capabilities()`.
     fn admission_is_atomic(&self) -> bool {
-        false
+        self.capabilities().atomic_admission
     }
 
     /// Admission-controlled **batch** ingest: evaluate + insert each event in `evs`, in order,
@@ -962,13 +976,15 @@ pub trait Store: Send + Sync {
     // events gets a correct rollup for free, from the pure `Trace::from_events`).
     /// Whether this backend actually serves the trace surface (listing, detail, trace scores).
     ///
-    /// A capability flag rather than a probe, on the same terms as [`Store::admission_is_atomic`]:
-    /// the conformance suite runs the full trace semantics against a backend that declares `true`
+    /// A declared capability rather than a probe, on the same terms as
+    /// [`Store::admission_is_atomic`] — it is [`Surface::Traces`] in the backend's manifest. The
+    /// conformance suite runs the full trace semantics against a backend that declares it
     /// and, against one that declares `false`, asserts every trace method *refuses* with
     /// [`StoreError::Unsupported`] — so "not implemented" can never quietly become an empty page.
     /// The API surfaces the refusal as HTTP 501 `unsupported`.
+    /// Reads the manifest ([`Surface::Traces`]) so the flag and the declaration can never disagree.
     fn serves_traces(&self) -> bool {
-        false
+        self.capabilities().has(Surface::Traces)
     }
     /// Compact summaries of the most recent traces (grouped by `trace_id`), newest activity first.
     fn list_traces(&self, _project: Option<&str>, _limit: usize) -> Result<Vec<TraceSummary>> {

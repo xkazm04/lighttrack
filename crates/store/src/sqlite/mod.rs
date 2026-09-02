@@ -55,6 +55,7 @@ use lighttrack_core::{
 };
 
 use crate::{
+    capabilities::{Capabilities, Surface},
     Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, DbMetricsReport, EventFilter,
     EventPage, MaintenancePass, MaintenanceRequest, Result, ScopeUsage, StorageReport, Store,
     StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
@@ -268,7 +269,27 @@ impl SqliteStore {
     }
 }
 
+impl SqliteStore {
+    /// The reference backend: it implements every surface, which is why the conformance suite run
+    /// against it is the definition of correct behaviour the other backends are held to.
+    ///
+    /// A const + a pure constructor (rather than only the trait method) so `tests/parity_doc.rs`
+    /// can render the parity matrix without opening a database.
+    pub const SURFACES: &'static [Surface] = Surface::ALL;
+
+    /// This backend's manifest, independent of any live connection.
+    pub fn manifest() -> Capabilities {
+        // One locked write connection (+ the usage-cache lock) spans check-count-insert, within a
+        // single process. The multi-process caveat is documented in docs/ARCHITECTURE.md.
+        Capabilities::new("sqlite", Self::SURFACES, true)
+    }
+}
+
 impl Store for SqliteStore {
+    fn capabilities(&self) -> Capabilities {
+        Self::manifest()
+    }
+
     fn init_schema(&self) -> Result<()> {
         self.with(schema::apply)
     }
@@ -276,11 +297,6 @@ impl Store for SqliteStore {
     // --- events ---
     fn insert_event(&self, ev: &LlmEvent) -> Result<()> {
         self.with_op(DbOp::EventsWrite, |c| events::insert(c, ev))
-    }
-    fn admission_is_atomic(&self) -> bool {
-        // One locked write connection (+ the usage-cache lock) spans check-count-insert, within a
-        // single process. The multi-process caveat is documented in docs/ARCHITECTURE.md.
-        true
     }
     fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
         // Lock the usage cache *before* the connection (consistent order in both admission methods,
@@ -436,9 +452,6 @@ impl Store for SqliteStore {
     }
 
     // --- traces ---
-    fn serves_traces(&self) -> bool {
-        true
-    }
     fn list_traces(&self, project: Option<&str>, limit: usize) -> Result<Vec<TraceSummary>> {
         self.read_op(DbOp::TracesRead, |c| {
             events::list_trace_summaries(c, project, limit)

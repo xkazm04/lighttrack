@@ -19,3 +19,9 @@ tracing = "0.1"
 [dev-dependencies]
 # File-backed scratch databases: the read pool and WAL only exist off `:memory:`.
 tempfile = "3"
+# A dev-only dependency cycle (cargo permits one): `tests/parity_doc.rs` renders docs/PARITY.md from
+# all three backends' manifests, and a manifest belongs beside the `impl Store` it describes rather
+# than copied in here, where it would drift from the code it claims to document. Each is a pure
+# associated function, so the doc test needs no live database.
+lighttrack-store-pg = { path = "../store-pg" }
+lighttrack-store-firestore = { path = "../store-firestore" }

@@ -1400,6 +1400,8 @@ version = "0.0.1"
 dependencies = [
  "chrono",
  "lighttrack-core",
+ "lighttrack-store-firestore",
+ "lighttrack-store-pg",
  "rusqlite",
  "serde",
  "serde_json",

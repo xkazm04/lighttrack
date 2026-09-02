@@ -5,7 +5,9 @@
 //! `jobs`, `projects`, `limits`); shared plumbing in `state`, `error`, `guards`, `auth`.
 //!
 //! Routes:
-//!   GET  /health
+//!   GET  /health                         liveness + the store backend's declared surfaces
+//!   GET  /v1/capabilities                what this deployment's store backend serves, and what
+//!                                        it answers 501 for (any authenticated principal)
 //!   POST /v1/events                      ingest one event (cost computed; limits evaluated)
 //!   GET  /v1/ingest/status               load-shedding view: in-flight depth + shed/timeout counts
 //!   GET  /v1/storage/status              (admin) disk accounting per table + index, the store's own
@@ -128,6 +130,7 @@ mod auth_scopes;
 mod auth_throttle;
 mod benchmarks;
 mod billing;
+mod capabilities;
 mod collective;
 mod datasets;
 mod error;
@@ -163,6 +166,8 @@ mod traces;
 
 #[cfg(test)]
 mod tests_auth_throttle;
+#[cfg(test)]
+mod tests_capabilities;
 #[cfg(test)]
 mod tests_collective;
 #[cfg(test)]
@@ -340,6 +345,9 @@ async fn main() -> anyhow::Result<()> {
     // Redaction is a *storage* posture: what an operator believes is in the DB has to match what is
     // actually in it, and the default changed (D14). Its own line, at a level that matches the risk.
     state.redact.log_posture();
+    // What this backend can and cannot serve, named once at boot. Until the manifest existed the
+    // only record of a gap was a 501 someone hit in production.
+    capabilities::log_posture(&state.store.capabilities());
     // `auth=Dev` in the banner above is one field among many; an unauthenticated server deserves a
     // block you cannot skim past, so that one stays a raw multi-line stderr shout rather than
     // becoming a JSON string with `\n`s in it.
@@ -376,7 +384,8 @@ pub(crate) fn build_router(state: AppState) -> Router {
     // `/v1/ingest/status`, the surface that says whether we ARE shedding) stay answerable.
     let shed_ingest = axum::middleware::from_fn_with_state(state.clone(), shed::ingest_admission);
     Router::new()
-        .route("/health", get(health))
+        .route("/health", get(capabilities::health))
+        .route("/v1/capabilities", get(capabilities::get_capabilities))
         .route(
             "/v1/events",
             post(events::post_event)
@@ -537,8 +546,4 @@ pub(crate) fn build_router(state: AppState) -> Router {
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
-}
-
-async fn health() -> &'static str {
-    "ok"
 }

@@ -30,6 +30,7 @@ use lighttrack_core::{
     RevenueEvent, Rubric, Score, TraceSummary,
 };
 use lighttrack_store::{
+    capabilities::{Capabilities, Surface},
     insert_event_checked_nonatomic, insert_events_checked_nonatomic, Admission, CostRow,
     EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, TraceEvents, Usage,
     UseCaseCostRow,
@@ -65,28 +66,43 @@ impl FirestoreStore {
             ),
         };
         let base = format!("{host}/v1/projects/{project}/databases/(default)/documents");
-        // Say it out loud, once, where an operator configuring caps will see it. Firestore has no
-        // server-side aggregate this backend can evaluate and write inside one transaction (usage is
-        // summed client-side from a document scan), so admission here is check-then-act. An advisory
-        // cap that reads as enforced is the failure mode we refuse; an honest warning is not.
-        eprintln!(
-            "lighttrack-store-firestore: usage caps are ADVISORY on this backend — admission is not \
-             atomic, so a concurrent burst can exceed a cap before it takes effect. Postgres \
-             (LIGHTTRACK_DATABASE_URL=postgres://…) enforces caps atomically."
-        );
-        // Same rule for the trace surface: this backend has no server-side grouping by `trace_id`,
-        // so `/v1/traces` refuses with 501 `unsupported` rather than serving an empty page that
-        // reads like "you have no traces". SQLite and Postgres implement it.
-        eprintln!(
-            "lighttrack-store-firestore: the TRACE surface is NOT served on this backend —              /v1/traces, /v1/traces/:id and whole-trace scoring answer HTTP 501 `unsupported`.              Use SQLite or Postgres (LIGHTTRACK_DATABASE_URL=postgres://…) for traces."
-        );
         Ok(Self {
             rest: Rest::new(base, token),
         })
     }
 }
 
+impl FirestoreStore {
+    /// What this backend implements today, read off the `impl Store` block below.
+    ///
+    /// Two absences are properties of the data plane rather than unfinished work: `Traces` needs a
+    /// server-side grouping by `trace_id` that the REST API has no equivalent for, and admission is
+    /// therefore check-then-act (`atomic_admission: false` — usage is summed client-side from a
+    /// document scan, so a concurrent burst can exceed a cap before it takes effect; caps here are
+    /// ADVISORY, and Postgres is the backend that enforces them atomically). `Relay`, `Forecast`,
+    /// `MarginBreakdowns`, `Collective` and `ProjectAdmin` are simply not ported. All of them refuse
+    /// with `Unsupported` (HTTP 501) and the conformance suite asserts that refusal.
+    pub const SURFACES: &'static [Surface] = &[
+        Surface::EventsCore,
+        Surface::EventFilters,
+        Surface::Prompts,
+        Surface::KeyAdmin,
+        Surface::LimitLifecycle,
+        Surface::JobLeases,
+    ];
+
+    /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
+    /// test renders the matrix from it without a live Firestore.
+    pub fn manifest() -> Capabilities {
+        Capabilities::new("firestore", Self::SURFACES, false)
+    }
+}
+
 impl Store for FirestoreStore {
+    fn capabilities(&self) -> Capabilities {
+        Self::manifest()
+    }
+
     // Firestore is schemaless — collections are created on first write.
     fn init_schema(&self) -> Result<()> {
         Ok(())
@@ -94,11 +110,6 @@ impl Store for FirestoreStore {
 
     fn insert_event(&self, ev: &LlmEvent) -> Result<()> {
         events::insert_event(&self.rest, ev)
-    }
-    /// Left `false` deliberately (see the warning in [`FirestoreStore::connect`]): admission here is
-    /// check-then-act, so the conformance suite reports the leak instead of pretending it enforces.
-    fn admission_is_atomic(&self) -> bool {
-        false
     }
     /// Spelled out rather than inherited, so the non-atomic path is a visible choice in this backend
     /// rather than a trait default nobody remembered was there.
@@ -111,15 +122,9 @@ impl Store for FirestoreStore {
     fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
         events::list_events(&self.rest, project, limit)
     }
-    /// Left `false` deliberately (see the warning in [`FirestoreStore::connect`]): rolling events up
-    /// by `trace_id` needs a server-side grouping this REST data plane doesn't have. Declaring it
-    /// makes the refusal a tested property — the conformance suite asserts every trace method
-    /// answers [`StoreError::Unsupported`], so this can never decay into a silent empty page.
-    fn serves_traces(&self) -> bool {
-        false
-    }
     /// Spelled out rather than inherited, so the refusal is a visible choice in this backend rather
-    /// than a trait default nobody remembered was there.
+    /// than a trait default nobody remembered was there. `Surface::Traces` is absent from
+    /// [`FirestoreStore::SURFACES`], which is what makes the refusal a *tested* property.
     fn list_traces(&self, _project: Option<&str>, _limit: usize) -> Result<Vec<TraceSummary>> {
         Err(StoreError::Unsupported("traces"))
     }

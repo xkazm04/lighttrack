@@ -57,6 +57,7 @@ mod table {
     /// Every `/v1/*` route and the capability a project key needs for it. Kept in the same order as
     /// `build_router` so the two read as one list.
     pub(crate) const ROUTE_SCOPES: &[RouteScope] = &[
+        r("/v1/capabilities", READ, NoMethod),
         r("/v1/events", READ, INGEST),
         r("/v1/events/batch", NoMethod, INGEST),
         r("/v1/ingest/status", Admin, NoMethod),
