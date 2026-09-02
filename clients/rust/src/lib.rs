@@ -18,6 +18,14 @@
 //! ```
 
 mod diagnostics;
+mod extract;
+mod limits;
+mod pii;
+
+pub use diagnostics::{diagnostic_kind, no_project_message, send_failure_message, FailureContext};
+pub use extract::{extract_anthropic, extract_gemini, extract_openai, Extracted};
+pub use limits::{parse_limit_view, LimitView};
+pub use pii::{pii_kinds, PiiRule};
 
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
@@ -29,7 +37,7 @@ use serde_json::Value;
 pub use lighttrack_core::{Operation, Provider, Status};
 use lighttrack_core::{LlmEvent, TokenUsage};
 
-use diagnostics::{Diagnostics, FailureContext};
+use diagnostics::Diagnostics;
 
 const DEFAULT_URL: &str = "http://127.0.0.1:8787";
 
@@ -162,32 +170,26 @@ impl Client {
 
     /// Track from an OpenAI chat/responses JSON value (extracts model + token usage).
     pub fn track_openai_json(&self, resp: &Value, model: Option<&str>) {
-        let u = &resp["usage"];
-        let input = u["prompt_tokens"].as_u64().or_else(|| u["input_tokens"].as_u64()).unwrap_or(0);
-        let output = u["completion_tokens"].as_u64().or_else(|| u["output_tokens"].as_u64()).unwrap_or(0);
-        let cached = u["prompt_tokens_details"]["cached_tokens"].as_u64();
-        let m = model.or_else(|| resp["model"].as_str()).unwrap_or("unknown");
-        self.event(Provider::OpenAi, m).usage(input, output, cached).send();
+        self.track_extracted(Provider::OpenAi, extract::extract_openai(resp), model);
     }
 
     /// Track from an Anthropic messages JSON value.
     pub fn track_anthropic_json(&self, resp: &Value, model: Option<&str>) {
-        let u = &resp["usage"];
-        let input = u["input_tokens"].as_u64().unwrap_or(0);
-        let output = u["output_tokens"].as_u64().unwrap_or(0);
-        let cached = u["cache_read_input_tokens"].as_u64();
-        let m = model.or_else(|| resp["model"].as_str()).unwrap_or("unknown");
-        self.event(Provider::Anthropic, m).usage(input, output, cached).send();
+        self.track_extracted(Provider::Anthropic, extract::extract_anthropic(resp), model);
     }
 
     /// Track from a Gemini generateContent JSON value (model is usually passed in).
     pub fn track_gemini_json(&self, resp: &Value, model: Option<&str>) {
-        let u = &resp["usageMetadata"];
-        let input = u["promptTokenCount"].as_u64().unwrap_or(0);
-        let output = u["candidatesTokenCount"].as_u64().unwrap_or(0);
-        let cached = u["cachedContentTokenCount"].as_u64();
-        let m = model.or_else(|| resp["modelVersion"].as_str()).unwrap_or("unknown");
-        self.event(Provider::Google, m).usage(input, output, cached).send();
+        self.track_extracted(Provider::Google, extract::extract_gemini(resp), model);
+    }
+
+    /// Send what an extractor read. An explicit `model` wins over the response's own — the caller
+    /// knows which deployment it actually called; the response only knows what answered.
+    fn track_extracted(&self, provider: Provider, e: extract::Extracted, model: Option<&str>) {
+        let m = model.map(str::to_string).or(e.model).unwrap_or_else(|| "unknown".into());
+        self.event(provider, &m)
+            .usage(e.input_tokens, e.output_tokens, e.cached_input_tokens)
+            .send();
     }
 
     /// Drain and stop the background worker (call before exit). Dropping the client does the same.
@@ -227,12 +229,12 @@ fn report(
                 &format!("HTTP {status} {detail}"),
                 ctx,
             );
-            diag.warn(&format!("http-{status}"), &msg);
+            diag.warn(&diagnostics::diagnostic_kind(Some(status), false), &msg);
         }
         Err(e) => {
-            let kind = if e.is_timeout() { "timeout" } else { "network" };
+            let kind = diagnostics::diagnostic_kind(None, e.is_timeout());
             let msg = diagnostics::send_failure_message(base_url, path, &e.to_string(), ctx);
-            diag.warn(kind, &msg);
+            diag.warn(&kind, &msg);
         }
     }
 }
@@ -391,7 +393,10 @@ pub struct GuardRules {
     pub must_match: Option<String>,
     /// Regex patterns the output must NOT match (banned content / patterns).
     pub must_not_match: Vec<String>,
-    /// Reject common PII (email, phone, credit-card-like, SSN).
+    /// Reject PII. The rules are the *server's* — generated from `lighttrack_anon`'s scrubber into
+    /// `clients/contract/fixtures/pii.json` and embedded at compile time (see `pii.rs`), so this
+    /// guard cannot contradict what the ingest path would redact. Kinds: `email`, `iban`, `ssn`,
+    /// `secret`, `phone`, `credit_card`, `ip`.
     pub no_pii: bool,
 }
 
@@ -402,13 +407,6 @@ pub struct GuardResult {
     pub violations: Vec<String>,
     pub checks: Vec<(String, bool)>,
 }
-
-const PII_PATTERNS: [(&str, &str); 4] = [
-    ("email", r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
-    ("phone", r"(?:\+?\d[\s().-]?){10,}"),
-    ("credit_card", r"\b(?:\d[ -]?){13,16}\b"),
-    ("ssn", r"\b\d{3}-\d{2}-\d{4}\b"),
-];
 
 /// Deterministic, network-free output validation — runs inline in the request path. Pure: returns a
 /// verdict; the caller decides what to do (retry / fallback / block). Mirrors the TS/Python `guard`.
@@ -471,16 +469,11 @@ pub fn guard(output: &str, rules: &GuardRules) -> GuardResult {
         }
     }
     if rules.no_pii {
-        let mut clean = true;
-        for (name, pat) in PII_PATTERNS {
-            if let Ok(re) = regex::Regex::new(pat) {
-                if re.is_match(output) {
-                    clean = false;
-                    record(format!("pii:{name}"), false, format!("contains {name}-like PII"));
-                }
-            }
+        let kinds = pii::pii_kinds(output);
+        for kind in &kinds {
+            record(format!("pii:{kind}"), false, format!("contains {kind}-like PII"));
         }
-        if clean {
+        if kinds.is_empty() {
             record("no_pii".into(), true, String::new());
         }
     }
