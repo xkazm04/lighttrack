@@ -35,6 +35,13 @@ pub(crate) fn present(text: &str, kind: &str, table: bool) -> Result<String> {
     }
 }
 
+/// The request URL for `path` under `base`. `LIGHTTRACK_URL=https://host/` is how a URL is usually
+/// pasted, and the naive concatenation produced `https://host//v1/...`, which the router answers
+/// with a 404 that reads as "no such endpoint" — for every verb, on an otherwise correct setup.
+pub(crate) fn url(base: &str, path: &str) -> String {
+    format!("{}{path}", base.trim_end_matches('/'))
+}
+
 /// Issue one request and print the response, then exit non-zero on HTTP error.
 pub(crate) fn call(
     cli: &Cli,
@@ -43,7 +50,7 @@ pub(crate) fn call(
     body: Option<Value>,
     kind: &str,
 ) -> Result<()> {
-    let mut req = client().request(method, format!("{}{}", cli.base, path));
+    let mut req = client().request(method, url(&cli.base, path));
     if let Some(k) = &cli.key {
         req = req.bearer_auth(k);
     }
@@ -70,6 +77,14 @@ pub(crate) fn call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pasted base URL usually ends in `/`; the route must not start with `//`.
+    #[test]
+    fn a_trailing_slash_on_the_base_does_not_double_the_path_separator() {
+        assert_eq!(url("http://h:1/", "/v1/events"), "http://h:1/v1/events");
+        assert_eq!(url("http://h:1", "/v1/events"), "http://h:1/v1/events");
+        assert_eq!(url("https://h/lt//", "/health"), "https://h/lt/health");
+    }
 
     #[test]
     fn table_only_on_an_interactive_success() {
