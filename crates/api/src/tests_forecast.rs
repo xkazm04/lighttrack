@@ -153,6 +153,16 @@ async fn forecast_projects_budget_breach_and_margin_erosion() {
         "expected a crossover ETA: {acme}"
     );
 
+    // Ten observed days spanning ten: nothing is withheld, and the fit publishes its confidence.
+    assert!(
+        f["refused"].as_array().unwrap().is_empty(),
+        "an established series refuses nothing: {f}"
+    );
+    let conf = f["spend"]["confidence"]
+        .as_f64()
+        .expect("a presentable fit publishes r²");
+    assert!(conf > 0.9, "a clean linear ramp fits well: {conf}");
+
     // The two headline pre-emptive alerts are present.
     let alerts = f["alerts"].as_array().unwrap();
     assert!(
@@ -164,6 +174,115 @@ async fn forecast_projects_budget_breach_and_margin_erosion() {
             .iter()
             .any(|a| a["kind"] == "margin_erosion" && a["subject"] == "acme"),
         "missing margin_erosion alert for acme: {f}"
+    );
+    // The message carries the confidence it was allowed to publish.
+    let budget_alert = alerts
+        .iter()
+        .find(|a| a["kind"] == "budget_breach")
+        .unwrap();
+    assert!(
+        budget_alert["message"].as_str().unwrap().contains("r²="),
+        "a gated alert states its confidence: {budget_alert}"
+    );
+}
+
+/// The defect this gate exists for: two days of steeply rising spend inside a fourteen-day window
+/// used to be fitted over twelve zero-filled days and paged as "on track to breach". It must now
+/// come back as a **named refusal** — not as an alert, and not as silence either, which an operator
+/// would read as "all is well".
+#[tokio::test]
+async fn a_project_with_two_days_of_history_refuses_instead_of_forecasting() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+
+    let rule_id = new_id();
+    store
+        .create_limit_rule(&LimitRule {
+            id: rule_id.clone(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::CostUsd,
+            window: LimitWindow::Day,
+            threshold: Threshold::Fixed(50.0),
+            action: LimitAction::Alert,
+            enabled: true,
+            warn_at: None,
+            scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
+        })
+        .unwrap();
+
+    let app = crate::build_router(state);
+
+    // $2 yesterday, $20 today — a 10× ramp, and exactly the kind of two-point line that fits itself
+    // perfectly and means nothing.
+    let now = Utc::now();
+    for (days_ago, cost) in [(1i64, 2.0f64), (0, 20.0)] {
+        let day = now - Duration::days(days_ago);
+        let mut e: lighttrack_core::LlmEvent = serde_json::from_value(json!({
+            "id": new_id(),
+            "project_id": "proj-a",
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 },
+            "cost_usd": cost,
+            "ts": day.to_rfc3339(),
+            "metadata": { "customer_id": "acme" }
+        }))
+        .unwrap();
+        e.received_at = day;
+        store.insert_event(&e).unwrap();
+    }
+
+    let (status, f) = get(
+        &app,
+        &key,
+        "/v1/forecast?project=proj-a&lookback=14&horizon=14",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{f}");
+
+    let budget = f["budgets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["rule_id"] == rule_id.as_str())
+        .expect("the rule is still forecast, just not presented");
+    assert!(
+        budget["eta_days"].is_null(),
+        "an ETA under the evidence floor is withheld, not published: {budget}"
+    );
+    assert!(
+        budget["trend"]["r2"].is_null() && f["spend"]["confidence"].is_null(),
+        "no confidence is attached to a refused fit: {f}"
+    );
+    assert!(
+        f["alerts"].as_array().unwrap().is_empty(),
+        "nobody is paged on two days of history: {f}"
+    );
+
+    let refused = f["refused"].as_array().unwrap();
+    assert!(
+        refused.iter().any(|r| r["subject"] == rule_id.as_str()),
+        "the withheld budget names itself in refused[]: {f}"
+    );
+    let spend = refused
+        .iter()
+        .find(|r| r["subject"] == "spend")
+        .expect("the spend projection is refused too");
+    assert_eq!(
+        spend["reason"], "4 observed days needed, 2 seen",
+        "the reason is written for an operator to read: {spend}"
+    );
+
+    // And the clamp: asking for a two-day lookback cannot buy a forecast the floor would refuse.
+    let (status, f) = get(&app, &key, "/v1/forecast?project=proj-a&lookback=2").await;
+    assert_eq!(status, StatusCode::OK, "{f}");
+    assert_eq!(
+        f["lookback_days"], 4,
+        "lookback is clamped to the floor: {f}"
     );
 }
 
