@@ -346,3 +346,44 @@ fn rejects_ingest_requires_breach_and_enforcing_action() {
     r.action = LimitAction::Block;
     assert!(!r.evaluate(9.99).rejects_ingest());
 }
+
+/// Escalation shadows the configured action only while it is live, and expiry makes a rule inert
+/// without deleting it — the two clocks the sweep relies on to be reversible.
+#[test]
+fn escalation_and_expiry_are_read_off_the_clock_not_written_into_the_rule() {
+    let now = chrono::Utc::now();
+    let mut r = rule();
+    assert_eq!(r.effective_action_at(now), LimitAction::Alert);
+    r.escalation = Some(Escalation {
+        on_eta_days: 3.0,
+        to: LimitAction::Block,
+        for_hours: 24,
+    });
+    assert_eq!(
+        r.effective_action_at(now),
+        LimitAction::Alert,
+        "an escalation the sweep has not stamped does nothing"
+    );
+    r.escalated_until = Some(now + chrono::Duration::hours(1));
+    assert_eq!(r.effective_action_at(now), LimitAction::Block);
+    assert_eq!(
+        r.effective_action_at(now + chrono::Duration::hours(2)),
+        LimitAction::Alert,
+        "a lapsed escalation reverts by itself"
+    );
+    assert_eq!(
+        r.action,
+        LimitAction::Alert,
+        "the configured action was never overwritten"
+    );
+
+    assert!(r.is_active_at(now));
+    r.expires_at = Some(now + chrono::Duration::minutes(5));
+    assert!(r.is_active_at(now));
+    assert!(
+        !r.is_active_at(now + chrono::Duration::minutes(6)),
+        "past expiry the rule is inert"
+    );
+    r.enabled = false;
+    assert!(!r.is_active_at(now));
+}
