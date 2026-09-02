@@ -8,6 +8,7 @@
 //! - `parse`      — JSON extraction + the one-shot repair re-ask around a single judge sample.
 //! - `fence`      — per-call nonce delimiters around untrusted content (judge-prompt injection defense).
 //! - `anthropic_api` — the bare Messages API judge path (used when `ANTHROPIC_API_KEY` is set).
+//! - [`http_target`] — generation from an operator-owned HTTP endpoint (a RAG pipeline, an agent).
 //! - `family`     — coarse model families, for the self-preference bias control.
 //! - `retry`      — bounded exponential backoff for transient (429/5xx/timeout) provider failures.
 //! - `scorers`   — deterministic (non-LLM) rubric dimensions: exact/regex/numeric/json_valid/contains.
@@ -16,6 +17,7 @@
 mod anthropic_api;
 mod family;
 mod fence;
+pub mod http_target;
 pub mod invocation;
 mod judge;
 mod pairwise;
@@ -30,6 +32,7 @@ use lighttrack_core::JudgeVerdict;
 use thiserror::Error;
 
 pub use family::{model_family, same_family};
+pub use http_target::{generate_http, HttpTargetRequest, HttpTargetResponse, HttpTargetUsage};
 pub use invocation::{
     probe, resolve_claude_bin, run as run_claude, ClaudeBin, Invocation, Mode, Probe, RawOutcome,
     READONLY_BASE_TOOLS,
