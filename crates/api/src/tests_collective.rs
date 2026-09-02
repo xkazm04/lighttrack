@@ -120,6 +120,7 @@ fn mint_key(store: &SqliteStore, name: &str, opt_in: bool) -> String {
             enabled: true,
             redaction: Redaction::None,
             collective_opt_in: opt_in,
+            require_trusted_judge: false,
             archived_at: None,
             created_at: Utc::now(),
         })
@@ -408,6 +409,7 @@ async fn digest_includes_only_consenting_projects() {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: opt_in,
+        require_trusted_judge: false,
         archived_at: None,
         created_at: Utc::now(),
     };

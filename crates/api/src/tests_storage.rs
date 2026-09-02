@@ -73,6 +73,7 @@ async fn the_growth_an_operator_must_live_with_is_visible_where_they_look() {
                 enabled: true,
                 redaction: lighttrack_core::Redaction::None,
                 collective_opt_in: false,
+                require_trusted_judge: false,
                 archived_at: None,
                 created_at: chrono::Utc::now(),
             })

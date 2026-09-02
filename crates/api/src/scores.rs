@@ -15,12 +15,15 @@ use axum::{
 };
 use serde::Deserialize;
 
-use lighttrack_core::{Score, ScoreKind};
+use std::collections::HashMap;
+
+use lighttrack_core::{Label, LabelFilter, Score, ScoreKind};
 
 use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
 use lighttrack_store::ScoreFilter;
 
+use crate::scores_review::review_reasons;
 use crate::state::{spawn_db, AppState};
 
 pub(crate) async fn post_score(
@@ -61,6 +64,25 @@ pub(crate) struct ScoresParams {
     /// Only verdicts of this kind (`freeform` | `rubric` | `bench_case` | `compare_cell` |
     /// `pairwise_game` | `calibration` | `trace`).
     kind: Option<String>,
+    /// Only verdicts a human should look at: the judge disagreed with itself or with the person who
+    /// graded the same subject, flagged an injection, hit a dimension floor, or landed within a
+    /// hair of the pass threshold (M11). Accepts `1`/`true`.
+    needs_review: Option<String>,
+    /// The pass threshold `needs_review` measures "near" against. Defaults to 0.7, the same default
+    /// a rubric takes.
+    threshold: Option<f64>,
+}
+
+/// `needs_review=1` / `=true`. A value we do not recognise is a 400 rather than a silent "no":
+/// a triage question answered "nothing to review" because of a typo is the worst possible answer.
+fn parse_flag(v: &str) -> Result<bool, ApiError> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" | "" => Ok(false),
+        other => Err(ApiError::bad_request(format!(
+            "invalid 'needs_review' {other:?}: expected 1 | 0 | true | false"
+        ))),
+    }
 }
 
 pub(crate) async fn get_scores(
@@ -70,6 +92,7 @@ pub(crate) async fn get_scores(
 ) -> Result<Json<Vec<Score>>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
+    let project_for_labels = project.clone();
     let store = st.store.clone();
     // A run's cases are one dataset pass, so the run-scoped read allows a bigger page than the
     // "latest N scores" firehose — a 500-case benchmark should come back in one request.
@@ -111,5 +134,59 @@ pub(crate) async fn get_scores(
             }
         }
     };
-    Ok(Json(scores))
+    let needs_review = match q.needs_review.as_deref() {
+        Some(v) => parse_flag(v)?,
+        None => false,
+    };
+    if !needs_review {
+        return Ok(Json(scores));
+    }
+    Ok(Json(
+        triage(&st, project_for_labels, scores, q.threshold).await?,
+    ))
 }
+
+/// Narrow a page of verdicts to the ones worth a person's time.
+///
+/// The labels are fetched **once** for the whole page and joined in memory, rather than one lookup
+/// per score: a 500-case run would otherwise be 500 round trips to answer one triage question. The
+/// join is on both the score's own id and the event it judged, because a human may have graded
+/// either — and a grade on the event is as much a contradiction of the verdict as a grade on the
+/// verdict itself.
+///
+/// A store that cannot serve labels errors (501) rather than quietly answering with the
+/// detail-only half: "the judge disagreed with a human" is half of what this question means, and a
+/// page missing it would read as a complete answer.
+async fn triage(
+    st: &AppState,
+    project: Option<String>,
+    scores: Vec<Score>,
+    threshold: Option<f64>,
+) -> Result<Vec<Score>, ApiError> {
+    let filter = LabelFilter {
+        project,
+        limit: LabelFilter::MAX_LIMIT,
+        ..Default::default()
+    };
+    let store = st.store.clone();
+    let labels = spawn_db(move || store.list_labels(&filter)).await?;
+    let mut by_subject: HashMap<&str, &Label> = HashMap::new();
+    for l in &labels {
+        // Newest-first from the store, so the first label seen for a subject is the current one.
+        by_subject.entry(l.subject.id()).or_insert(l);
+    }
+    let threshold = threshold.unwrap_or(DEFAULT_THRESHOLD);
+    Ok(scores
+        .into_iter()
+        .filter(|s| {
+            let label = by_subject
+                .get(s.id.as_str())
+                .or_else(|| s.event_id.as_deref().and_then(|e| by_subject.get(e)))
+                .copied();
+            !review_reasons(s, threshold, label).is_empty()
+        })
+        .collect())
+}
+
+/// The same default `POST /v1/projects/:id/rubrics` gives a rubric with no threshold of its own.
+const DEFAULT_THRESHOLD: f64 = 0.7;

@@ -13,8 +13,8 @@ use crate::Result;
 pub(super) fn create(conn: &Connection, p: &Project) -> Result<()> {
     conn.execute(
         "INSERT INTO projects \
-         (id, name, enabled, redaction, collective_opt_in, created_at, archived_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+         (id, name, enabled, redaction, collective_opt_in, created_at, archived_at, require_trusted_judge) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
             p.id,
             p.name,
@@ -23,6 +23,7 @@ pub(super) fn create(conn: &Connection, p: &Project) -> Result<()> {
             p.collective_opt_in as i64,
             fmt_ts(p.created_at),
             p.archived_at.map(fmt_ts),
+            p.require_trusted_judge as i64,
         ],
     )?;
     Ok(())
@@ -33,7 +34,7 @@ pub(super) fn create(conn: &Connection, p: &Project) -> Result<()> {
 pub(super) fn update(conn: &Connection, p: &Project) -> Result<bool> {
     let n = conn.execute(
         "UPDATE projects SET name = ?2, enabled = ?3, redaction = ?4, collective_opt_in = ?5, \
-         archived_at = ?6 WHERE id = ?1",
+         archived_at = ?6, require_trusted_judge = ?7 WHERE id = ?1",
         params![
             p.id,
             p.name,
@@ -41,6 +42,7 @@ pub(super) fn update(conn: &Connection, p: &Project) -> Result<bool> {
             enum_to_str(&p.redaction)?,
             p.collective_opt_in as i64,
             p.archived_at.map(fmt_ts),
+            p.require_trusted_judge as i64,
         ],
     )?;
     Ok(n > 0)
@@ -48,7 +50,7 @@ pub(super) fn update(conn: &Connection, p: &Project) -> Result<bool> {
 
 pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Project>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at \
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at, require_trusted_judge \
          FROM projects WHERE id = ?1",
     )?;
     let raw = stmt.query_row(params![id], map_project).optional()?;
@@ -57,7 +59,7 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Project>> {
 
 pub(super) fn list(conn: &Connection) -> Result<Vec<Project>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at \
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at, require_trusted_judge \
          FROM projects ORDER BY created_at DESC",
     )?;
     let raws = stmt
@@ -66,7 +68,16 @@ pub(super) fn list(conn: &Connection) -> Result<Vec<Project>> {
     raws.into_iter().map(project_from_raw).collect()
 }
 
-type ProjectRaw = (String, String, i64, String, i64, String, Option<String>);
+type ProjectRaw = (
+    String,
+    String,
+    i64,
+    String,
+    i64,
+    String,
+    Option<String>,
+    i64,
+);
 
 fn map_project(row: &Row) -> rusqlite::Result<ProjectRaw> {
     Ok((
@@ -77,6 +88,7 @@ fn map_project(row: &Row) -> rusqlite::Result<ProjectRaw> {
         row.get(4)?,
         row.get(5)?,
         row.get(6)?,
+        row.get(7)?,
     ))
 }
 
@@ -89,6 +101,7 @@ fn project_from_raw(r: ProjectRaw) -> Result<Project> {
         collective_opt_in: r.4 != 0,
         created_at: parse_ts(&r.5)?,
         archived_at: r.6.as_deref().map(parse_ts).transpose()?,
+        require_trusted_judge: r.7 != 0,
     })
 }
 

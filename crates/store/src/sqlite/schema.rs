@@ -122,6 +122,10 @@ const ADDED_COLUMNS_LATE: &[&str] = &[
     // The quality read joins scores to events by event_id and windows on the VERDICT's created_at;
     // without this the join degrades to a scan of the scores table per window.
     "CREATE INDEX IF NOT EXISTS idx_scores_created ON scores(created_at)",
+    // M11 — the per-project judge-trust policy. Nullable-with-a-default and OFF: turning it on
+    // retroactively would block every existing deployment's gates on the day it upgraded, because
+    // nothing has been calibrated yet.
+    "ALTER TABLE projects ADD COLUMN require_trusted_judge INTEGER NOT NULL DEFAULT 0",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.

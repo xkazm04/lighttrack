@@ -278,7 +278,7 @@ The id is then the judging contract for:
 | `lt-runner score` — online, over stored events | `--rubric-id <id>` |
 | `lt-runner score-text` — an ad-hoc input/output pair | `--rubric-id <id>` |
 | `lt-runner score-traces` — whole traces (§ trace scoring) | `--rubric-id <id>` |
-| `lt-runner calibrate` — judge↔human agreement | `--rubric-id <id>` |
+| `lt-runner calibrate` — judge↔human agreement | `--rubric-id <id>` (set from `--dataset <id>` or `--file`) |
 | a stored benchmark (`POST …/benchmarks`) | `"rubric_id": "<id>"` |
 
 Each of those also takes freeform criteria text instead (`--rubric "<criteria>"`, or the benchmark's
@@ -308,10 +308,60 @@ score" is a reportable fact, not an invisible one.
   flag the item as ambiguous rather than trusting one score.
 - A **golden/calibration set** of human-labeled items measures judge↔human agreement (Cohen's κ /
   correlation); a rubric isn't "trusted" until agreement clears a bar. ✅ shipped: `lt-runner
-  calibrate --file <jsonl> --rubric "<criteria>" | --rubric-id <id>` re-judges each labeled
-  `{input, output, human_score}`, then reports Cohen's κ + Pearson + MAE/RMSE + judge-vs-human bias
-  and a TRUSTED/NOT-TRUSTED verdict against `--kappa-bar` (default 0.6). Judge-only (no generation),
-  self-contained (no Store/schema changes). Agreement math lives in `core::calibration` (unit-tested).
+  calibrate --dataset <id> | --file <jsonl>` with `--rubric "<criteria>" | --rubric-id <id>`
+  re-judges each labeled `{input, output, human_score}`, then reports Cohen's κ + Pearson + MAE/RMSE
+  + judge-vs-human bias and a TRUSTED/NOT-TRUSTED verdict against `--kappa-bar` (default 0.6).
+  Judge-only (no generation). Agreement math lives in `core::calibration` (unit-tested).
+
+**Human verdicts are data, and trust is a queryable state (M11).** The three sentences above used to
+describe something that existed only on somebody's terminal. A calibration set was a JSONL file on
+the runner's disk; the κ history was a metrics blob packed into a `Score.reasoning` under a reserved
+rubric name; and `Agreement.trusted` reached stdout and exit code 5. Nothing a gate could ask.
+
+- **`Label`** — one person's verdict about an `event`, a `dataset_item`, or a `score` (the last being
+  a human *reviewing the judge*). Stored beside the machine verdicts it exists to check, and
+  deliberately not a `Score`: a score is judge output — budgeted, costed, alerted on — while a label
+  is ground truth and is none of those. `labeler` is required; an unattributable verdict is a number
+  nobody can defend. Written with `manage`, never `ingest`: a key that could move ground truth would
+  let the thing being measured edit the measurement.
+- **`CalibrationRecord`** — one completed measurement, keyed `(project, rubric_id, judge)`,
+  append-only. Carries `n` (so trust on 12 cases reads as trust on 12 cases) and the `kappa_bar` it
+  was judged against (so raising the bar later cannot silently re-verdict history).
+- **`JudgeTrust`** — `trusted` | `untrusted` | **`unknown`**, from `GET /v1/judges/trust`. Three
+  values on purpose: a judge nobody has measured has taken no check, not failed one, and a policy
+  that wants to block on that must say so rather than have absence of evidence read as either
+  verdict.
+
+The lookup is **exact on the rubric, `NULL` included**. A rubric never inherits the freeform judge's
+κ nor a sibling rubric's: "good" means a different thing under different criteria. That same rule is
+what makes a new **rubric version** (§3's versioning mints a new id) start at `unknown` —
+`GET /v1/rubrics/:id` reports `active: false` and lists `calibrated_judges: []` until something is
+measured against that version specifically, so swapping a measured instrument for an unmeasured one
+is visible instead of silent.
+
+**Both gates consult it.** `GET /v1/benchmarks/:id/gate` and the prompt-label promotion look up the
+`(rubric_id, judge_model)` their benchmark names and report `judge_trust` **even when nothing
+blocks** — a green badge from an unverified instrument should say so on the way through. A project
+carrying `require_trusted_judge` is refused with **409** when trust is `untrusted` or `unknown`; the
+flag is off by default (turning it on retroactively would block every deployment's gates on upgrade
+day), and a promotion's `force` does not clear it — `force` is a flag on the promoting request while
+the policy is an admin's decision about the project, and letting the former beat the latter would
+make the policy decorative.
+
+**Triage: `GET /v1/scores?needs_review=1`.** The verdicts a person should look at first, most
+decisive reason first — a human graded the same subject and disagreed (or agreed on the number and
+not the pass/fail), an injection was flagged, the judge split across its own samples, a dimension
+floor was hit, position bias showed, samples failed to parse, or the verdict landed within a hair of
+the threshold. Every one of those signals already lived on the row; none was reachable as a question.
+
+**Closing the loop.** `POST /v1/datasets/:id/items/from-label` promotes a graded production event
+into an unfrozen golden set, **copying the human's grade onto the new case**. Without that copy the
+promoted case is an input with no ground truth — the state that makes a "golden set"
+un-calibratable, and the reason golden sets rot. Store surfaces: `Labels` and `Calibrations`, served
+by all three backends (see `docs/PARITY.md`); a backend that cannot host them returns
+`Unsupported` (501), never `[]` — an empty label listing would read as "nobody has graded anything
+here", which is what lets a calibration measure a judge against nothing and report the resulting
+κ = 0 as a regression.
 
 **Verdict provenance (D11).** Every posted score carries a nullable `detail`: per-dimension
 `{value, weight, floor, floor_hit, reasoning[]}` with **one reasoning per sample that parsed** (all k
@@ -428,7 +478,7 @@ not to. That is largely a weak-judge artifact: it disappears on Sonnet and Opus,
 at all. The effect is dose-dependent (haiku at batch=2: +0.113, 2 flips).
 
 Rules that keep it honest:
-- **Measure before trusting**: `lt-runner calibrate --file golden.jsonl --rubric-id <id>
+- **Measure before trusting**: `lt-runner calibrate --dataset <id> --rubric-id <id>
   --compare-batch 4` judges the same items both ways and reports the paired difference (§CALIBRATION).
 - **Never compare a batched run to an unbatched baseline** — the difference is method, not quality.
   Batching is deterministic for a fixed dataset, so the path to the throughput is to re-baseline once
@@ -868,6 +918,22 @@ dataset_items(id, dataset_id, input, expected?, context?, tags, source_event_id?
 -- live in the prompt registry (prompts / prompt_versions).
 benchmark_runs(... + p50_latency_ms, p95_latency_ms, total_tokens, cost_usd, report)
 -- Case results are NOT a separate table: a case result IS a score row, run-scoped.
+-- M11: the human verdict ledger and the calibration history. The ground truth a judge is measured
+-- against, and the fact both gates read.
+labels(id, project_id, subject_kind, subject_id, rubric_id?, value, pass?, dimensions?, labeler,
+       note?, created_at)
+       -- subject_kind = event | dataset_item | score. TWO columns, not one "kind:id" string, for
+       --   the reason M9 split scores.rubric: a column carrying several encodings cannot be
+       --   indexed or joined, and the dataset read IS a join.
+       -- Indexed by (subject_kind, subject_id) and (project_id, created_at).
+calibrations(id, project_id, judge, rubric_id?, dataset_id?, dataset_version?,
+             kappa, pearson, mae, rmse, n, kappa_bar, trusted, created_at)
+       -- Append-only: a re-measurement is a new row, because the history is what a drift check
+       --   reads. kappa_bar is stored beside kappa so raising the bar cannot re-verdict history.
+       -- Indexed by (project_id, judge, rubric_id, created_at) - the lookup every gate makes,
+       --   matched with `rubric_id IS NULL` for the freeform judge (never `= NULL`, which is never
+       --   true in SQL and would make a freeform calibration unfindable).
+projects(... + require_trusted_judge)   -- the per-project gate policy; default OFF
 scores(id, project_id, event_id?, rubric, value, max, pass?, reasoning?, detail?,
        run_id?, case_index?, scored_by, cost_usd?, created_at)
        -- detail    = core::ScoreDetail as JSON: per-dimension {value, weight, floor, floor_hit,

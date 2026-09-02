@@ -131,6 +131,22 @@ pub enum Surface {
     ///
     /// [`Dimension`]: lighttrack_core::Dimension
     ScoreSummaries,
+    /// The human verdict ledger (M11): what a person said about an event, a golden-set item, or a
+    /// judge's own verdict.
+    ///
+    /// Its own surface rather than part of [`Surface::EventsCore`] because it is the *input* to the
+    /// trust argument rather than a product record, and a backend can serve every score and dataset
+    /// method without having a `labels` table. An empty listing here would read as "nobody has
+    /// graded anything", which is what lets a calibration run on nothing at all.
+    Labels,
+    /// The stored calibration results, and the `(rubric, judge)` trust lookup every gate makes
+    /// (M11).
+    ///
+    /// Separate from [`Surface::Labels`] because the split is real: a deployment can import its
+    /// labels from files forever and still want the kappa history stored, and — more importantly —
+    /// a missing calibration is a *load-bearing* answer (it is what makes trust `unknown` rather
+    /// than `untrusted`), so it must never be something a missing table says by accident.
+    Calibrations,
 }
 
 impl Surface {
@@ -162,6 +178,8 @@ impl Surface {
         Surface::Devices,
         Surface::Contributions,
         Surface::ScoreSummaries,
+        Surface::Labels,
+        Surface::Calibrations,
     ];
 
     /// Stable wire/doc name (`snake_case`, matching the `Serialize` impl).
@@ -193,6 +211,8 @@ impl Surface {
             Surface::Devices => "devices",
             Surface::Contributions => "contributions",
             Surface::ScoreSummaries => "score_summaries",
+            Surface::Labels => "labels",
+            Surface::Calibrations => "calibrations",
         }
     }
 
@@ -457,6 +477,18 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
         ],
     ),
     (Surface::ScoreSummaries, &["score_summary_by_dimension"]),
+    (
+        Surface::Labels,
+        &["insert_label", "list_labels", "labels_for_dataset"],
+    ),
+    (
+        Surface::Calibrations,
+        &[
+            "insert_calibration",
+            "latest_calibration",
+            "list_calibrations",
+        ],
+    ),
 ];
 
 /// Method names declared inside `pub trait Store` in `lib.rs`, in source order.

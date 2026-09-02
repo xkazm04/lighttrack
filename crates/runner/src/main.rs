@@ -20,6 +20,7 @@ mod budget;
 mod calibrate;
 mod calibrate_batch;
 mod calibrate_watch;
+mod calibration_post;
 mod cli;
 mod compare;
 mod dataset;
@@ -29,6 +30,7 @@ mod gate;
 mod history;
 mod http;
 mod judge_spec;
+mod labels;
 mod pairwise;
 mod provenance;
 mod rubric;
@@ -201,6 +203,13 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Labels { action } => match action {
+            cli::LabelsCmd::Import {
+                file,
+                project,
+                labeler,
+            } => labels::import(&cli, &http, file, project.as_deref(), labeler.as_deref()),
+        },
         Cmd::Dataset { action } => match action {
             DatasetCmd::Build {
                 project,
@@ -281,6 +290,7 @@ fn main() -> Result<()> {
         }
         Cmd::Calibrate {
             file,
+            dataset,
             rubric,
             rubric_id,
             threshold,
@@ -298,7 +308,12 @@ fn main() -> Result<()> {
             if *via_queue {
                 let mut p = Map::new();
                 enqueue::judge_fields(&mut p, rubric.as_deref(), rubric_id.as_deref())?;
-                p.insert("file".into(), json!(file));
+                if let Some(f) = file {
+                    p.insert("file".into(), json!(f));
+                }
+                if let Some(d) = dataset {
+                    p.insert("dataset_id".into(), json!(d));
+                }
                 p.insert("threshold".into(), json!(threshold));
                 p.insert("kappa_bar".into(), json!(kappa_bar));
                 p.insert("drift_threshold".into(), json!(drift_threshold));
@@ -314,9 +329,10 @@ fn main() -> Result<()> {
                     Value::Object(p),
                 );
             }
+            let set = calibrate::load_set(&cli, &http, file.as_deref(), dataset.as_deref())?;
             if *watch || *once {
                 let params = calibrate_watch::WatchParams {
-                    file,
+                    set: &set,
                     rubric_text: rubric.as_deref(),
                     rubric_id: rubric_id.as_deref(),
                     project: project.as_deref(),
@@ -339,7 +355,7 @@ fn main() -> Result<()> {
                 })?;
                 let rubric = calibrate::resolve_rubric(&cli, &http, Some(rid))?
                     .ok_or_else(|| anyhow::anyhow!("rubric {rid} not found"))?;
-                let items = calibrate::load_items(file)?;
+                let items = set.items.clone();
                 let prices: Vec<lighttrack_core::ModelPriceRow> =
                     http::get(&cli, &http, "/v1/prices").unwrap_or_default();
                 let (jp, jm) = lighttrack_engine::parse_judge_spec(&cli.model);
@@ -353,7 +369,7 @@ fn main() -> Result<()> {
                     &cli,
                     &http,
                     &engine,
-                    file,
+                    &set,
                     rubric.as_deref(),
                     rubric_id.as_deref(),
                     *threshold,

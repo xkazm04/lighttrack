@@ -58,7 +58,7 @@ pub(crate) async fn list_datasets(
     Ok(Json(v))
 }
 
-async fn load_dataset_authorized(
+pub(crate) async fn load_dataset_authorized(
     st: &AppState,
     p: &Principal,
     id: &str,

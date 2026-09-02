@@ -209,6 +209,7 @@ pub(crate) async fn ensure_dev_default_project(st: &AppState) {
         enabled: true,
         redaction: lighttrack_core::Redaction::None,
         collective_opt_in: false,
+        require_trusted_judge: false,
         archived_at: None,
         created_at: Utc::now(),
     };

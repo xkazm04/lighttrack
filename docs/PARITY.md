@@ -36,6 +36,8 @@ conformance suite asserts that refusal, so a gap can never quietly become an emp
 | `devices` | full | full | refused |
 | `contributions` | full | full | full |
 | `score_summaries` | full | full | refused |
+| `labels` | full | full | full |
+| `calibrations` | full | full | full |
 
 ## Atomic admission
 
@@ -77,3 +79,5 @@ cap that reads as enforced is the failure this row exists to name.
 - **`devices`** — `create_device`, `get_device`, `list_devices`, `find_device_by_key_prefix`, `touch_device`, `revoke_device`, `count_eligible_devices`
 - **`contributions`** — `insert_contribution`, `list_contributions`, `latest_contribution`
 - **`score_summaries`** — `score_summary_by_dimension`
+- **`labels`** — `insert_label`, `list_labels`, `labels_for_dataset`
+- **`calibrations`** — `insert_calibration`, `latest_calibration`, `list_calibrations`

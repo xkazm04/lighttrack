@@ -91,6 +91,14 @@ mod table {
         r("/v1/datasets/:id", READ, NoMethod),
         r("/v1/datasets/:id/items", READ, Admin),
         r("/v1/datasets/:id/freeze", NoMethod, Admin),
+        // M11 — the human verdict ledger. Writing a label is MANAGE, not INGEST: a label is a
+        // configuration of what "good" means, and an ingest key that could move ground truth would
+        // let the thing being measured edit the measurement.
+        r("/v1/datasets/:id/items/from-label", NoMethod, Admin),
+        r("/v1/datasets/:id/labels", READ, NoMethod),
+        r("/v1/labels", READ, MANAGE),
+        r("/v1/calibrations", READ, MANAGE),
+        r("/v1/judges/trust", READ, NoMethod),
         r("/v1/projects/:id/rubrics", READ, Admin),
         r("/v1/rubrics/:id", READ, NoMethod),
         // Minting a rubric generation changes what every future verdict means; admin, like every

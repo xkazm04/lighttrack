@@ -465,3 +465,56 @@ CREATE TABLE IF NOT EXISTS collective_contributions (
 -- every push.
 CREATE INDEX IF NOT EXISTS idx_contributions_created ON collective_contributions(created_at);
 CREATE INDEX IF NOT EXISTS idx_contributions_hub ON collective_contributions(hub_url_hash, created_at);
+
+-- ===========================================================================================
+-- M11: the human verdict ledger + the calibration history. Self-contained block, appended.
+-- ===========================================================================================
+
+-- What a person said about one subject. Before this table a human judgement lived in a JSONL file
+-- on whoever ran the runner's disk: it could not be listed, re-used by a second calibration, or
+-- audited -- and it is the one input the entire judge-trust argument rests on. The subject is TWO
+-- columns rather than one "kind:id" string, for the reason M9 split `scores.rubric`: a column
+-- carrying several encodings is a column nothing can index or join on, and the dataset read below
+-- is exactly a join.
+CREATE TABLE IF NOT EXISTS labels (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL,
+  subject_kind TEXT NOT NULL,                   -- event | dataset_item | score
+  subject_id   TEXT NOT NULL,
+  rubric_id    TEXT,                            -- NULL = a general quality opinion
+  value        REAL NOT NULL,                   -- 0..1, comparable with scores.value/max
+  pass         INTEGER,                         -- an explicit human call; NULL = derive from value
+  dimensions   TEXT,                            -- JSON array of ScoreDim; read whole, never filtered
+  labeler      TEXT NOT NULL,                   -- who said so: what makes a result auditable
+  note         TEXT,
+  created_at   TEXT NOT NULL                    -- fixed-width RFC3339: range filters are correct
+);
+-- The subject lookup (`GET /v1/labels?subject=`) and the disagreement join behind needs_review.
+CREATE INDEX IF NOT EXISTS idx_labels_subject ON labels(subject_kind, subject_id);
+-- The listing's keyset order, project-narrowed, and the rubric-narrowed variant.
+CREATE INDEX IF NOT EXISTS idx_labels_project ON labels(project_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_labels_rubric ON labels(rubric_id, created_at);
+
+-- One completed judge<->human calibration. Append-only: a re-measurement is a new row, because the
+-- history IS the product -- the drift check that used to scan the newest 500 scores for a reserved
+-- rubric name is now the newest row and the one before it. `kappa_bar` is stored beside `kappa` so
+-- raising the bar later cannot silently re-verdict what was already measured.
+CREATE TABLE IF NOT EXISTS calibrations (
+  id              TEXT PRIMARY KEY,
+  project_id      TEXT NOT NULL,
+  judge           TEXT NOT NULL,                -- canonical [provider/]model
+  rubric_id       TEXT,                         -- NULL = the freeform calibration; matched IS NULL
+  dataset_id      TEXT,
+  dataset_version INTEGER,
+  kappa           REAL NOT NULL,
+  pearson         REAL NOT NULL,
+  mae             REAL NOT NULL,
+  rmse            REAL NOT NULL,
+  n               INTEGER NOT NULL,             -- so trust on 12 cases reads as trust on 12 cases
+  kappa_bar       REAL NOT NULL,
+  trusted         INTEGER NOT NULL,
+  created_at      TEXT NOT NULL
+);
+-- The lookup every gate makes: exactly one (project, judge, rubric) pair, newest first.
+CREATE INDEX IF NOT EXISTS idx_calibrations_key
+  ON calibrations(project_id, judge, rubric_id, created_at);

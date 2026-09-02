@@ -96,9 +96,15 @@ pub struct DatasetSamplePayload {
 /// Re-measure judge/human agreement against a golden set — one cycle of `lt-runner calibrate --watch`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalibratePayload {
-    /// Path to the golden set, **on the worker's filesystem**: calibration items are the operator's
-    /// own labelled data and deliberately never transit the API.
-    pub file: String,
+    /// Path to the golden set, **on the worker's filesystem**: a file import, kept for the
+    /// deployments whose labelled data has always lived there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// The stored dataset whose items + [`crate::Label`]s are the golden set (M11). The preferred
+    /// source: a labelled set on the worker's disk cannot be listed, re-used by a second
+    /// calibration, or audited, and it is the one input the whole judge-trust argument rests on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dataset_id: Option<String>,
     #[serde(flatten)]
     pub judge: JudgeSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,6 +154,20 @@ impl ContributePayload {
     }
 }
 
+impl CalibratePayload {
+    /// Exactly one golden-set source. Said here, at enqueue time, rather than by the worker after
+    /// it has claimed the job: "neither" is a job that can only ever fail, and "both" is two
+    /// different answers to *what was measured* on a record that claims to describe one set.
+    pub fn validate_source(&self) -> Result<(), String> {
+        match (self.file.as_deref(), self.dataset_id.as_deref()) {
+            (Some(f), None) if !f.trim().is_empty() => Ok(()),
+            (None, Some(d)) if !d.trim().is_empty() => Ok(()),
+            (Some(_), Some(_)) => Err("give either `file` or `dataset_id`, not both".into()),
+            _ => Err("one of `file` or `dataset_id` is required".into()),
+        }
+    }
+}
+
 /// The `--rubric` / `--rubric-id` contract, shared by every judging kind. Exactly one is required;
 /// [`JudgeSpec::validate`] says so at enqueue time rather than at the first paid call.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -187,7 +207,8 @@ pub fn validate_payload(kind: JobKind, payload: &Value) -> Result<(), String> {
             parse::<ScoreTracesPayload>(payload).and_then(|p| p.judge.validate())
         }
         JobKind::DatasetSample => parse::<DatasetSamplePayload>(payload).map(|_| ()),
-        JobKind::Calibrate => parse::<CalibratePayload>(payload).and_then(|p| p.judge.validate()),
+        JobKind::Calibrate => parse::<CalibratePayload>(payload)
+            .and_then(|p| p.judge.validate().and_then(|()| p.validate_source())),
         JobKind::Contribute => parse::<ContributePayload>(payload).and_then(|p| p.validate()),
     }
     .map_err(|e| format!("invalid payload for job kind '{}': {e}", kind.as_str()))

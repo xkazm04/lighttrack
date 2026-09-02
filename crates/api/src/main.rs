@@ -31,6 +31,11 @@
 //!   GET  /v1/costs?project=&since=&until=
 //!   GET  /v1/usecases?project=&since=   use-case rollup: usage+cost by name×provider×model, windowed
 //!   POST /v1/scores  GET /v1/scores?project=&limit=[&run=]   (`run` = one benchmark run's cases)
+//!   GET  /v1/scores?needs_review=1                          verdicts a human should look at (M11)
+//!   POST /v1/labels  GET /v1/labels?project=&subject=&rubric_id=&cursor=   human verdict ledger
+//!   GET  /v1/datasets/:id/labels                            a golden set's grades, joined
+//!   POST /v1/calibrations  GET /v1/calibrations?project=     judge-human agreement history
+//!   GET  /v1/judges/trust?project=&rubric_id=&judge=         trusted | untrusted | unknown
 //!   GET  /v1/prices  PUT /v1/prices/:provider/:model
 //!   .../datasets .../rubrics .../benchmarks .../jobs            (see modules)
 //!   GET  /v1/benchmarks/:id/gate         CI-gate verdict from the latest finished run
@@ -191,6 +196,9 @@ mod idempotency;
 mod ingest_proximity;
 mod jobs;
 mod jobs_enqueue;
+mod judges;
+mod labels;
+mod labels_promote;
 mod limits;
 mod limits_usage;
 mod logging;
@@ -223,6 +231,7 @@ mod schedule_migrate;
 mod schedule_sweep;
 mod schedules;
 mod scores;
+mod scores_review;
 mod shed;
 mod state;
 mod storage;
@@ -562,6 +571,25 @@ pub(crate) fn build_router(state: AppState) -> Router {
             post(datasets::add_dataset_item).get(datasets::list_dataset_items),
         )
         .route("/v1/datasets/:id/freeze", post(datasets::freeze_dataset))
+        // "Promote to golden set": a labelled production event becomes a permanent eval case with
+        // its human verdict copied across, instead of the grade evaporating in a spreadsheet.
+        .route(
+            "/v1/datasets/:id/items/from-label",
+            post(labels_promote::item_from_label),
+        )
+        .route(
+            "/v1/datasets/:id/labels",
+            get(labels_promote::dataset_labels),
+        )
+        .route(
+            "/v1/labels",
+            post(labels::create_label).get(labels::list_labels),
+        )
+        .route(
+            "/v1/calibrations",
+            post(labels::create_calibration).get(labels::list_calibrations),
+        )
+        .route("/v1/judges/trust", get(judges::judge_trust))
         .route(
             "/v1/projects/:id/rubrics",
             post(rubrics::create_rubric).get(rubrics::list_rubrics),

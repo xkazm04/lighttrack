@@ -17,8 +17,8 @@ use crate::util::{enum_to_str, fmt_ts, parse_enum, parse_ts, pgerr};
 pub(crate) async fn create(pool: &PgPool, p: &Project) -> Result<()> {
     sqlx::query(
         "INSERT INTO projects \
-         (id, name, enabled, redaction, collective_opt_in, created_at, archived_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7)",
+         (id, name, enabled, redaction, collective_opt_in, created_at, archived_at, require_trusted_judge) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
     )
     .bind(p.id.clone())
     .bind(p.name.clone())
@@ -27,6 +27,7 @@ pub(crate) async fn create(pool: &PgPool, p: &Project) -> Result<()> {
     .bind(p.collective_opt_in as i64)
     .bind(fmt_ts(p.created_at))
     .bind(p.archived_at.map(fmt_ts))
+    .bind(p.require_trusted_judge as i64)
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -41,13 +42,15 @@ pub(crate) async fn create(pool: &PgPool, p: &Project) -> Result<()> {
 /// inheriting the default meant production could not tighten what it stores. See `Surface::ProjectAdmin`.
 pub(crate) async fn update(pool: &PgPool, p: &Project) -> Result<bool> {
     let res = sqlx::query(
-        "UPDATE projects SET name = $2, enabled = $3, redaction = $4, collective_opt_in = $5          WHERE id = $1",
+        "UPDATE projects SET name = $2, enabled = $3, redaction = $4, collective_opt_in = $5, \
+         require_trusted_judge = $6 WHERE id = $1",
     )
     .bind(p.id.clone())
     .bind(p.name.clone())
     .bind(p.enabled as i64)
     .bind(enum_to_str(&p.redaction)?)
     .bind(p.collective_opt_in as i64)
+    .bind(p.require_trusted_judge as i64)
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -56,7 +59,7 @@ pub(crate) async fn update(pool: &PgPool, p: &Project) -> Result<bool> {
 
 pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Project>> {
     let row = sqlx::query(
-        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at \
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at, require_trusted_judge \
          FROM projects WHERE id = $1",
     )
     .bind(id.to_string())
@@ -68,7 +71,7 @@ pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Project>> {
 
 pub(crate) async fn list(pool: &PgPool) -> Result<Vec<Project>> {
     let rows = sqlx::query(
-        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at \
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at, require_trusted_judge \
          FROM projects ORDER BY created_at DESC",
     )
     .fetch_all(pool)
@@ -306,6 +309,13 @@ fn project_from_row(row: &PgRow) -> Result<Project> {
         collective_opt_in: row.try_get::<i64, _>(4).map_err(pgerr)? != 0,
         created_at: parse_ts(&created_at)?,
         archived_at: archived_at.as_deref().map(parse_ts).transpose()?,
+        // A row written before the policy column existed carries no opinion, which reads as OFF —
+        // an upgrade must not start blocking gates that were passing yesterday.
+        require_trusted_judge: row
+            .try_get::<Option<i64>, _>(7)
+            .map_err(pgerr)?
+            .unwrap_or(0)
+            != 0,
     })
 }
 

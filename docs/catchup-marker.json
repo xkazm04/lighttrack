@@ -75,7 +75,7 @@
       "kind": "frozen-archive",
       "reason": "Dated structural observations from the same campaign. Its facts are stamped 2026-07-16 and read as history, not as a current description."
     },
-    { "path": "docs/CALIBRATION.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
+    { "path": "docs/CALIBRATION.md", "kind": "not-in-this-pass", "reason": "the persistence half was rewritten 2026-09-02 by the M11 build against the code it describes: the durable fact is now a CalibrationRecord keyed (project, rubric, judge) and the reserved-rubric score is derived from it, plus --dataset calibration, `lt labels`/`lt judges trust`, and the 409 require_trusted_judge blocks with. The one-shot/watch/batch sections around it are unchanged and still unread by a catch-up pass, so the file stays out-of-pass" },
     { "path": "docs/CI_GATE.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/CURRENCY.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/DATA_MODEL.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },

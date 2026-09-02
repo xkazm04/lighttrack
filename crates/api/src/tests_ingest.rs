@@ -97,6 +97,7 @@ pub(crate) fn make_key_with_redaction(
             enabled: true,
             redaction,
             collective_opt_in: false,
+            require_trusted_judge: false,
             archived_at: None,
             created_at: now,
         })
@@ -642,6 +643,7 @@ async fn project_key_cannot_ingest_into_another_project() {
             enabled: true,
             redaction: Redaction::None,
             collective_opt_in: false,
+            require_trusted_judge: false,
             archived_at: None,
             created_at: Utc::now(),
         })

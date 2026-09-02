@@ -91,6 +91,7 @@ fn setup_contributor() -> (AppState, Arc<SqliteStore>) {
         redaction: Redaction::None,
         collective_opt_in: true,
         archived_at: None,
+        require_trusted_judge: false,
         created_at: Utc::now(),
     };
     store.create_project(&project).unwrap();

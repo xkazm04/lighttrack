@@ -19,6 +19,10 @@ pub(crate) fn create_project(rest: &Rest, p: &Project) -> Result<()> {
         "collective_opt_in".into(),
         json!(p.collective_opt_in as i64),
     );
+    m.insert(
+        "require_trusted_judge".into(),
+        json!(p.require_trusted_judge as i64),
+    );
     m.insert("created_at".into(), json!(fmt_ts(p.created_at)));
     m.insert("archived_at".into(), json!(p.archived_at.map(fmt_ts)));
     rest.put_doc("projects", &p.id, &m)
@@ -105,6 +109,9 @@ fn project_from(m: &Fields) -> Result<Project> {
         redaction: parse_enum::<Redaction>("redaction", &fstr(m, "redaction").unwrap_or_default())?,
         // Docs written before the consent field existed read as opted OUT — the safe default.
         collective_opt_in: fbool(m, "collective_opt_in"),
+        // Docs written before the judge-trust policy existed read as OFF — an upgrade must not
+        // start blocking gates that were passing yesterday.
+        require_trusted_judge: fbool(m, "require_trusted_judge"),
         created_at: parse_ts(&freq(m, "created_at")?)?,
         archived_at: match fstr(m, "archived_at") {
             Some(s) => Some(parse_ts(&s)?),

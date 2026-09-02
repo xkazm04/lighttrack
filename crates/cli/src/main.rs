@@ -12,6 +12,8 @@
 //!   lt limits status --project <id>
 //!   lt alerts list --open --since 7d   |   lt alerts ack <alert-id> --by oncall
 //!   lt rubrics create --project <id> --file rubric.json
+//!   lt labels add --subject event:<id> --value 0.9 --labeler me   |   lt labels list
+//!   lt judges trust anthropic/claude-haiku-4-5 --project <id> --rubric-id <id>
 //!   lt schedules create --project <id> --type bench_run --every 6h --payload '{"benchmark_id":"b1"}'
 //!   lt schedules list   |   lt schedules set <id> --disabled   |   lt jobs list --status running
 //!   lt relay devices add --name studio-laptop --capability 'xprice/*'   (key shown ONCE)
@@ -29,6 +31,7 @@ mod alerts;
 mod cli;
 mod collective;
 mod http;
+mod labels;
 mod limits;
 mod prices;
 mod projects;
@@ -51,6 +54,8 @@ fn main() -> Result<()> {
         Cmd::Limits { action } => limits::run(&cli, action),
         Cmd::Alerts { action } => alerts::run(&cli, action),
         Cmd::Rubrics { action } => rubrics::run(&cli, action),
+        Cmd::Labels { action } => labels::run(&cli, action),
+        Cmd::Judges { action } => labels::run_judges(&cli, action),
         Cmd::Costs { project } => usage::costs(&cli, project),
         Cmd::Prices { action } => prices::run(&cli, action),
         Cmd::Prompts { action } => prompts::run(&cli, action),

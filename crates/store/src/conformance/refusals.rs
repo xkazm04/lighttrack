@@ -13,7 +13,7 @@
 use chrono::Utc;
 use serde_json::json;
 
-use lighttrack_core::{new_id, AlertKind, Delivery, RelayOutcome};
+use lighttrack_core::{new_id, AlertKind, Delivery, LabelFilter, LabelSubject, RelayOutcome};
 
 use super::fixtures::{
     sample_alert, sample_alert_channel, sample_entry, sample_policy, sample_project, sample_rule,
@@ -69,6 +69,8 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
         Surface::Devices => devices(store),
         Surface::Contributions => contributions(store),
         Surface::ScoreSummaries => score_summaries(store),
+        Surface::Labels => labels(store),
+        Surface::Calibrations => calibrations(store),
     };
 
     let uncovered: Vec<&str> = surface
@@ -83,6 +85,45 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
          refusal: {uncovered:?} — an unchecked method is exactly where a silent empty page hides"
     );
     Ok(())
+}
+
+/// A backend that cannot store human labels must say so. An empty listing here would read as
+/// "nobody has graded anything in this project" — which is what lets a calibration run measure a
+/// judge against nothing and report the resulting κ = 0 as a judge regression.
+fn labels(store: &dyn Store) -> Vec<&'static str> {
+    let l = super::labels::sample_label(&new_id(), LabelSubject::Event(new_id()), 0.5);
+    refused("insert_label", store.insert_label(&l));
+    refused(
+        "list_labels",
+        store.list_labels(&LabelFilter {
+            project: Some(new_id()),
+            ..Default::default()
+        }),
+    );
+    refused("labels_for_dataset", store.labels_for_dataset(&new_id()));
+    vec!["insert_label", "list_labels", "labels_for_dataset"]
+}
+
+/// A backend that cannot store calibrations must refuse rather than answer `None`: `None` is the
+/// load-bearing "nobody has measured this" that makes trust `unknown`, and a backend that says it
+/// for a reason other than the truth turns a capability gap into a permanent policy verdict.
+fn calibrations(store: &dyn Store) -> Vec<&'static str> {
+    let pid = new_id();
+    let c = super::labels::sample_calibration(&pid, "probe/judge");
+    refused("insert_calibration", store.insert_calibration(&c));
+    refused(
+        "latest_calibration",
+        store.latest_calibration(&pid, Some("rb"), "probe/judge"),
+    );
+    refused(
+        "list_calibrations",
+        store.list_calibrations(Some(&pid), 10, None),
+    );
+    vec![
+        "insert_calibration",
+        "latest_calibration",
+        "list_calibrations",
+    ]
 }
 
 /// Assert one call refused, naming the method in the failure.

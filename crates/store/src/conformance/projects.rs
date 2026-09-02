@@ -19,6 +19,7 @@ pub(super) fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
         // Non-default on purpose: pins that the consent flag round-trips on every backend (a backend
         // that drops it silently opts a project out of — or worse, into — collective contribution).
         collective_opt_in: true,
+        require_trusted_judge: false,
         archived_at: None,
         created_at: Utc::now(),
     };
@@ -41,6 +42,7 @@ pub(super) fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
         enabled: false,
         redaction: Redaction::None,
         collective_opt_in: false,
+        require_trusted_judge: false,
         archived_at: Some(archived_at),
         created_at: Utc::now(),
     })?;
@@ -124,6 +126,7 @@ pub(super) fn project_admin(store: &dyn Store) -> Result<()> {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: false,
+        require_trusted_judge: false,
         archived_at: None,
         created_at: Utc::now(),
     };

@@ -15,12 +15,14 @@ mod admission;
 mod alert_channels;
 mod alerts;
 mod benchmarks;
+mod calibrations;
 mod collective;
 mod contributions;
 mod datasets;
 mod devices;
 mod events;
 mod jobs;
+mod labels;
 mod margin_policies;
 mod price_fill;
 mod prices;
@@ -44,11 +46,12 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use tokio::runtime::Runtime;
 
 use lighttrack_core::{
-    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, ContributionRecord,
-    CostByDimension, Dataset, DatasetItem, Delivery, Device, DeviceEligibility, Dimension, Job,
-    JobCancel, JobFinish, LeaseHeld, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project,
-    Prompt, PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
-    RollupQuery, RollupRow, Rubric, Schedule, Score, TraceSummary,
+    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CalibrationRecord, CollectiveEntry,
+    ContributionRecord, CostByDimension, Dataset, DatasetItem, Delivery, Device, DeviceEligibility,
+    Dimension, Job, JobCancel, JobFinish, Label, LabelFilter, LeaseHeld, LimitRule, LimitScope,
+    LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayCancel, RelayOutcome,
+    RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score,
+    TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
@@ -138,6 +141,11 @@ impl PgStore {
         // here; without this the loop stops at promotion on the one deployment that has production
         // traffic to measure.
         Surface::ScoreSummaries,
+        // The human verdict ledger and its calibration history. Declared here because this is the
+        // backend a real deployment gates promotions on: a 501 (or worse, an empty label listing)
+        // would leave `require_trusted_judge` unenforceable exactly where it matters.
+        Surface::Labels,
+        Surface::Calibrations,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -791,5 +799,38 @@ impl Store for PgStore {
     }
     fn delete_alert_channel(&self, id: &str) -> Result<bool> {
         self.rt.block_on(alert_channels::delete(&self.pool, id))
+    }
+
+    // --- the human verdict ledger + calibration history (M11) ---
+    fn insert_label(&self, l: &Label) -> Result<()> {
+        self.rt.block_on(labels::insert(&self.pool, l))
+    }
+    fn list_labels(&self, f: &LabelFilter) -> Result<Vec<Label>> {
+        self.rt.block_on(labels::list(&self.pool, f))
+    }
+    fn labels_for_dataset(&self, dataset_id: &str) -> Result<Vec<Label>> {
+        self.rt
+            .block_on(labels::for_dataset(&self.pool, dataset_id))
+    }
+    fn insert_calibration(&self, c: &CalibrationRecord) -> Result<()> {
+        self.rt.block_on(calibrations::insert(&self.pool, c))
+    }
+    fn latest_calibration(
+        &self,
+        project: &str,
+        rubric_id: Option<&str>,
+        judge: &str,
+    ) -> Result<Option<CalibrationRecord>> {
+        self.rt
+            .block_on(calibrations::latest(&self.pool, project, rubric_id, judge))
+    }
+    fn list_calibrations(
+        &self,
+        project: Option<&str>,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Vec<CalibrationRecord>> {
+        self.rt
+            .block_on(calibrations::list(&self.pool, project, limit, cursor))
     }
 }

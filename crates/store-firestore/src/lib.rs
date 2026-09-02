@@ -16,6 +16,7 @@ mod contributions;
 mod datasets;
 mod events;
 mod jobs;
+mod labels;
 mod limits;
 mod margin_policies;
 mod price_fill;
@@ -32,10 +33,10 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use lighttrack_core::{
-    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, ContributionRecord,
-    CostByDimension, Dataset, DatasetItem, Delivery, Job, JobCancel, JobFinish, LimitRule,
-    LimitScope, LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RevenueEvent, RollupQuery,
-    RollupRow, Rubric, Score, TraceSummary,
+    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CalibrationRecord, CollectiveEntry,
+    ContributionRecord, CostByDimension, Dataset, DatasetItem, Delivery, Job, JobCancel, JobFinish,
+    Label, LabelFilter, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
+    PromptVersion, RevenueEvent, RollupQuery, RollupRow, Rubric, Score, TraceSummary,
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
@@ -121,6 +122,12 @@ impl FirestoreStore {
         // are ordered client-side, so that a fresh project needs no hand-declared composite index
         // (see [`contributions`]).
         Surface::Contributions,
+        // The human verdict ledger and its calibration history. Declared rather than inherited as
+        // `Unsupported` for the reason the whole manifest exists: an empty `GET /v1/labels` here
+        // would tell an operator nobody has ever graded anything in this project — and a
+        // calibration built on that measures a judge against nothing and calls it a regression.
+        Surface::Labels,
+        Surface::Calibrations,
     ];
 
     /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
@@ -524,6 +531,36 @@ impl Store for FirestoreStore {
     }
     fn delete_alert_channel(&self, id: &str) -> Result<bool> {
         alert_channels::delete_alert_channel(&self.rest, id)
+    }
+
+    // --- the human verdict ledger + calibration history (M11) ---
+    fn insert_label(&self, l: &Label) -> Result<()> {
+        labels::insert_label(&self.rest, l)
+    }
+    fn list_labels(&self, f: &LabelFilter) -> Result<Vec<Label>> {
+        labels::list_labels(&self.rest, f)
+    }
+    fn labels_for_dataset(&self, dataset_id: &str) -> Result<Vec<Label>> {
+        labels::labels_for_dataset(&self.rest, dataset_id)
+    }
+    fn insert_calibration(&self, c: &CalibrationRecord) -> Result<()> {
+        labels::insert_calibration(&self.rest, c)
+    }
+    fn latest_calibration(
+        &self,
+        project: &str,
+        rubric_id: Option<&str>,
+        judge: &str,
+    ) -> Result<Option<CalibrationRecord>> {
+        labels::latest_calibration(&self.rest, project, rubric_id, judge)
+    }
+    fn list_calibrations(
+        &self,
+        project: Option<&str>,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Vec<CalibrationRecord>> {
+        labels::list_calibrations(&self.rest, project, limit, cursor)
     }
 }
 

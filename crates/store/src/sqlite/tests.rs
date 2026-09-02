@@ -74,6 +74,7 @@ fn batch_admission_counts_prior_items_no_cap_bypass() {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: false,
+        require_trusted_judge: false,
         archived_at: None,
         created_at: Utc::now(),
     })
@@ -911,6 +912,7 @@ fn projects_keys_limits_usage() {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: false,
+        require_trusted_judge: false,
         archived_at: None,
         created_at: now,
     };
@@ -2662,6 +2664,7 @@ fn cost_capped_store(threshold: f64) -> SqliteStore {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: false,
+        require_trusted_judge: false,
         archived_at: None,
     })
     .unwrap();
