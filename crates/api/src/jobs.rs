@@ -86,13 +86,26 @@ fn default_stale_secs() -> i64 {
     120
 }
 
+/// The shortest stale window a claim may ask for. A worker renews every `stale / 3` seconds, so
+/// below this a live holder cannot heartbeat fast enough to keep its own job — and `0`, which the
+/// request shape allowed, reclaimed EVERY running job on the instance at once, so a misconfigured
+/// second runner re-ran (and re-paid for) work its colleague was mid-way through.
+const MIN_STALE_SECS: i64 = 10;
+
 pub(crate) async fn claim_job(
     State(st): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<ClaimReq>,
 ) -> Result<Json<Option<Job>>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
-    let stale_before = Utc::now() - chrono::Duration::seconds(req.stale_secs.max(0));
+    if req.stale_secs < MIN_STALE_SECS {
+        tracing::warn!(
+            requested = req.stale_secs,
+            floor = MIN_STALE_SECS,
+            "worker asked for a stale window below the floor; clamped"
+        );
+    }
+    let stale_before = Utc::now() - chrono::Duration::seconds(req.stale_secs.max(MIN_STALE_SECS));
     // Refuse an unknown kind rather than silently dropping it from the filter: a typo'd declaration
     // would otherwise narrow the worker to the kinds it spelled correctly, and it would look like
     // an empty queue.
