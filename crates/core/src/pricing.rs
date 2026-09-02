@@ -84,8 +84,31 @@ impl PricingMode {
 #[derive(Debug, Clone, Default)]
 pub struct PriceBook {
     entries: HashMap<String, ModelPrice>,
+    /// `<provider>/<model>` → its `@in>N` tier keys, highest threshold first. Built once per book:
+    /// the tier lookup used to scan every entry for a prefix on every cost computation — on the
+    /// ingest path, per event, per candidate — so a 200-row book cost ~800 string compares a call.
+    tiers: HashMap<String, Vec<(u64, String)>>,
     aliases: AliasTable,
     verified_at: Option<DateTime<Utc>>,
+}
+
+/// Index the `@in>N` variant rows by their base key, highest threshold first.
+fn index_tiers(entries: &HashMap<String, ModelPrice>) -> HashMap<String, Vec<(u64, String)>> {
+    let mut tiers: HashMap<String, Vec<(u64, String)>> = HashMap::new();
+    for key in entries.keys() {
+        if let Some((base, n)) = key.rsplit_once("@in>") {
+            if let Ok(n) = n.parse::<u64>() {
+                tiers
+                    .entry(base.to_string())
+                    .or_default()
+                    .push((n, key.clone()));
+            }
+        }
+    }
+    for v in tiers.values_mut() {
+        v.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
+    }
+    tiers
 }
 
 /// Shape of `config/pricing.json`.
@@ -117,6 +140,7 @@ impl PriceBook {
                 .map(move |a| (a.clone(), canonical.clone()))
         }));
         Self {
+            tiers: index_tiers(&entries),
             entries,
             aliases,
             verified_at: None,
@@ -211,6 +235,7 @@ impl PriceBook {
         // Rows carry no alias column (M8 changes no schema), so a book built from the store has only
         // the derivable canonicalization until [`PriceBook::with_aliases`] re-attaches the seed's.
         Self {
+            tiers: index_tiers(&entries),
             entries,
             aliases: AliasTable::default(),
             verified_at: rows.iter().filter_map(|r| r.verified_at).min(),
@@ -345,21 +370,19 @@ impl PriceBook {
                 return Some(p);
             }
         }
-        // Prompt-length tier: the highest `@in>N` whose threshold is exceeded by the input.
-        let prefix = format!("{provider}/{model}@in>");
-        let mut best: Option<(u64, &ModelPrice)> = None;
-        for (k, v) in &self.entries {
-            if let Some(n) = k.strip_prefix(&prefix).and_then(|s| s.parse::<u64>().ok()) {
-                if input_tokens > n && best.is_none_or(|(b, _)| n > b) {
-                    best = Some((n, v));
-                }
-            }
-        }
-        if let Some((_, p)) = best {
+        // Prompt-length tier: the highest `@in>N` whose threshold is exceeded by the input. The
+        // index is sorted highest-first, so the first exceeded threshold is the one that applies.
+        let base = Self::key(provider, model);
+        if let Some(p) = self
+            .tiers
+            .get(&base)
+            .and_then(|tiers| tiers.iter().find(|(n, _)| input_tokens > *n))
+            .and_then(|(_, key)| self.entries.get(key))
+        {
             return Some(p);
         }
         // Base rate.
-        self.entries.get(&Self::key(provider, model))
+        self.entries.get(&base)
     }
 
     pub fn len(&self) -> usize {
