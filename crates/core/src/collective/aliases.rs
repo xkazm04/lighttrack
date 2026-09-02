@@ -16,7 +16,8 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::model_id::{canonicalize_with, AliasTable};
+use crate::alias_table::AliasTable;
+use crate::model_id::canonicalize_with;
 
 /// The declared identity table, loaded from `config/pricing.json` (or any file of that shape).
 #[derive(Debug, Clone, Default)]

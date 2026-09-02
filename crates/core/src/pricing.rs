@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::alias_table::AliasTable;
 use crate::error::{LtError, Result};
 use crate::event::TokenUsage;
-use crate::model_id::{canonicalize_with, AliasTable, ModelId};
+use crate::model_id::{canonicalize_with, ModelId};
 
 /// A persisted price-book row (the DB-backed source of truth; `pricing.json` is just the seed).
 #[derive(Debug, Clone, Serialize, Deserialize)]

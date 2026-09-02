@@ -4,6 +4,7 @@
 //! the normalized [`event::LlmEvent`] model, the [`pricing::PriceBook`] and cost
 //! calculation, per-project [`limits`] evaluation, and the [`score`] /benchmark types.
 
+pub mod alias_table;
 pub mod calibration;
 pub mod collective;
 pub mod customer;
@@ -27,6 +28,7 @@ pub mod rubric;
 pub mod score;
 pub mod trace;
 
+pub use alias_table::AliasTable;
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use collective::{
     bucket_cost, build_digest, canon_determinism, merge_leaderboard, task_type_from,
@@ -51,7 +53,7 @@ pub use margin_sim::{compute_margin_simulation, SimAssumptions, SimRow, TokensBy
 pub use margin_trend::{
     compute_margin_trend, DailyKeyCost, MarginTrend, MarginTrendPoint, MarginTrendSeries,
 };
-pub use model_id::{canonicalize, canonicalize_with, judge_family, AliasTable, ModelId};
+pub use model_id::{canonicalize, canonicalize_with, judge_family, ModelId};
 pub use pricing::{ModelPrice, ModelPriceRow, PriceBook, PricingMode};
 pub use project::{ApiKey, Project, Redaction};
 pub use prompt::{Prompt, PromptVersion};

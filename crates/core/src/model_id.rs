@@ -19,8 +19,7 @@
 //!
 //! Steps 1–4 are total and pure; step 5 needs the table and lives in [`canonicalize_with`].
 
-use std::collections::HashMap;
-
+use crate::alias_table::AliasTable;
 use crate::provider::{family_of, ProviderFamily, ProviderId};
 
 /// Declared provider synonyms. Exact, case-folded matches only — see the module note on why this is
@@ -194,59 +193,6 @@ fn split_date_suffix(model: &str) -> (String, Option<String>) {
         }
     }
     (model.to_string(), None)
-}
-
-/// Declared model aliases: `alias → canonical family`. Keys may be bare (`gemini-2.5-pro-002`) or
-/// provider-qualified (`google/gemini-2.5-pro-002`); a qualified key wins when both exist.
-///
-/// Deliberately a *declaration*, never a heuristic: an identity absent from the table passes through
-/// unchanged, so a model released tomorrow is never silently merged into an older one.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AliasTable {
-    entries: HashMap<String, String>,
-}
-
-impl AliasTable {
-    /// Build from `(alias, canonical)` pairs; keys are canonicalized the same way a lookup is.
-    pub fn from_pairs<I, A, B>(pairs: I) -> Self
-    where
-        I: IntoIterator<Item = (A, B)>,
-        A: AsRef<str>,
-        B: AsRef<str>,
-    {
-        let entries = pairs
-            .into_iter()
-            .map(|(a, c)| {
-                (
-                    a.as_ref().trim().to_ascii_lowercase(),
-                    c.as_ref().trim().to_ascii_lowercase(),
-                )
-            })
-            .filter(|(a, c)| !a.is_empty() && !c.is_empty() && a != c)
-            .collect();
-        Self { entries }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Every declared canonical target, for the "an alias must point at something we price" test.
-    pub fn targets(&self) -> impl Iterator<Item = &str> {
-        self.entries.values().map(String::as_str)
-    }
-
-    /// Resolve `model` (already canonical-cased) for `provider`, or `None` when undeclared.
-    pub fn resolve(&self, provider: &str, model: &str) -> Option<&str> {
-        self.entries
-            .get(&format!("{provider}/{model}"))
-            .or_else(|| self.entries.get(model))
-            .map(String::as_str)
-    }
 }
 
 #[cfg(test)]
