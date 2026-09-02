@@ -639,3 +639,47 @@ async fn a_non_w3c_trace_id_is_not_case_folded() {
         "distinct opaque ids stay distinct"
     );
 }
+
+#[tokio::test]
+async fn an_export_carries_the_proximity_signal_the_otlp_envelope_cannot_hold() {
+    // The OTLP response shape belongs to the exporter spec, so the project's position against its
+    // caps has nowhere to live in the body. It rides in the headers every ingest door shares —
+    // otherwise an OTel-instrumented service is the one client that can never see a cap coming.
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    store
+        .create_limit_rule(&LimitRule {
+            id: new_id(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::Calls,
+            window: LimitWindow::Hour,
+            threshold: Threshold::Fixed(4.0),
+            action: LimitAction::Block,
+            enabled: true,
+            warn_at: None,
+            scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
+        })
+        .unwrap();
+    let app = crate::build_router(state);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/traces")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {key}"))
+        .body(Body::from(fixture().to_string()))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    // The fixture maps two spans; 2 of 4 calls.
+    assert_eq!(
+        resp.headers()
+            .get("x-lighttrack-usage-ratio")
+            .and_then(|v| v.to_str().ok()),
+        Some("0.500000"),
+    );
+}

@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 use lighttrack_client::{
     diagnostic_kind, extract_anthropic, extract_gemini, extract_openai, guard, parse_limit_view,
+    shed_ticket, AdmissionCache,
     send_failure_message, Extracted, FailureContext, GuardRules,
 };
 use serde_json::Value;
@@ -186,6 +187,82 @@ fn ingest_limit_signals() {
             e["error_code"].as_str(),
             "{name}: error_code — {}",
             why(&case)
+        );
+        let scope = v
+            .binding_scope
+            .as_ref()
+            .map(|b| serde_json::json!({ "kind": b.kind, "value": b.value }))
+            .unwrap_or(serde_json::Value::Null);
+        assert_eq!(scope, e["binding_scope"], "{name}: binding_scope");
+        assert_eq!(
+            v.binding_rule.as_deref(),
+            e["binding_rule"].as_str(),
+            "{name}: binding_rule — {}",
+            why(&case)
+        );
+    }
+}
+
+// ---- pre-spend admission ----------------------------------------------------
+
+#[test]
+fn the_shed_lottery_fixture_is_the_servers_own_function() {
+    // This SDK does not port the hash, it calls `lighttrack_core::shed_ticket` — so this test is
+    // what proves the FIXTURE matches the server, and therefore what holds the TypeScript and
+    // Python ports (which have no such luxury) to the real thing.
+    for case in cases("limits", "shed_lottery") {
+        let rule = case["rule_id"].as_str().unwrap_or("");
+        let event = case["event_id"].as_str().unwrap_or("");
+        let want = case["ticket"].as_f64().expect("ticket");
+        let got = shed_ticket(rule, event);
+        assert!(
+            (got - want).abs() < 1e-12,
+            "shed_ticket({rule:?}, {event:?}) = {got}, want {want}"
+        );
+    }
+}
+
+#[test]
+fn pre_spend_admission_verdicts() {
+    for case in cases("limits", "admission") {
+        let name = case["name"].as_str().unwrap_or("?");
+        let ttl = case["ttl_ms"].as_i64().unwrap_or(30_000);
+        let mut cache = AdmissionCache::new(ttl);
+        for o in case["observe"].as_array().into_iter().flatten() {
+            let headers: Vec<(String, String)> = o["headers"]
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let body = o.get("body").filter(|b| !b.is_null());
+            let view = parse_limit_view(o["status"].as_u64().unwrap() as u16, &headers, body);
+            cache.observe(&view, o["at_ms"].as_i64().unwrap());
+        }
+        let q = &case["admit"];
+        let v = cache.admit(
+            q["name"].as_str(),
+            q["event_id"].as_str(),
+            q["at_ms"].as_i64().unwrap(),
+        );
+        let e = &case["expect"];
+        assert_eq!(v.ok, e["ok"].as_bool().unwrap(), "{name}: ok — {}", why(&case));
+        assert_eq!(
+            v.reason.map(|r| r.as_str()),
+            e["reason"].as_str(),
+            "{name}: reason"
+        );
+        assert_eq!(
+            v.retry_after_secs,
+            e["retry_after_secs"].as_u64(),
+            "{name}: retry_after_secs"
+        );
+        assert_eq!(
+            v.stale,
+            e["stale"].as_bool().unwrap_or(false),
+            "{name}: stale"
         );
     }
 }

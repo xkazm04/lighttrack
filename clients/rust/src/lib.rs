@@ -17,18 +17,24 @@
 //! lt.flush(); // drain the background worker before exit
 //! ```
 
+mod admission;
 mod diagnostics;
 mod extract;
 mod limits;
 mod pii;
 
+pub use admission::{
+    view_from_statuses, Admit, AdmissionCache, AdmitReason, BudgetExceeded, Enforce,
+    DEFAULT_ADMISSION_TTL_MS,
+};
 pub use diagnostics::{diagnostic_kind, no_project_message, send_failure_message, FailureContext};
 pub use extract::{extract_anthropic, extract_gemini, extract_openai, Extracted};
-pub use limits::{parse_limit_view, LimitView};
+pub use limits::{parse_limit_view, BindingScope, LimitView};
+pub use lighttrack_core::shed_ticket;
 pub use pii::{pii_kinds, PiiRule};
 
 use std::sync::mpsc::{self, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -53,6 +59,15 @@ pub struct Client {
     diag: Arc<Diagnostics>,
     tx: Option<Sender<(&'static str, Value)>>,
     worker: Option<JoinHandle<()>>,
+    /// What the server last said about this project's caps. Written by the worker thread as
+    /// responses land, read by [`Client::admit`] on the caller's thread.
+    limits: Arc<Mutex<AdmissionCache>>,
+    enforce: Enforce,
+    record_blocked: bool,
+    /// A second handle on the key, for the one call this side of the channel makes:
+    /// [`Client::refresh_limits`] reads `GET /v1/limits/status`, which the worker (a write-only
+    /// pipe) cannot issue. `has_key` above stays the cheap question the send path asks.
+    api_key: Option<String>,
 }
 
 impl Client {
@@ -82,6 +97,9 @@ impl Client {
         let (tx, rx) = mpsc::channel::<(&'static str, Value)>();
         let worker_diag = Arc::clone(&diag);
         let worker_base = base.clone();
+        let limits = Arc::new(Mutex::new(AdmissionCache::default()));
+        let worker_limits = Arc::clone(&limits);
+        let key_for_reads = api_key.clone();
         let worker = std::thread::Builder::new()
             .name("lighttrack".into())
             .spawn(move || {
@@ -96,9 +114,14 @@ impl Client {
                     if let Some(k) = &api_key {
                         req = req.bearer_auth(k);
                     }
+                    let outcome = SendOutcome::of(req.send());
+                    // Every ingest response, accepted or refused, is evidence about the project's
+                    // position. Folding it in here is what makes `admit()` answer from the wall the
+                    // app is actually near, rather than from a poll it never makes.
+                    outcome.observe_into(&worker_limits);
                     // Best-effort: the outcome never propagates to the caller, but it is no longer
                     // discarded either — a rejection or an outage is reported, once per kind.
-                    report(&worker_diag, &worker_base, path, &body, has_key, req.send());
+                    report(&worker_diag, &worker_base, path, &body, has_key, outcome);
                 }
             })
             .ok();
@@ -110,6 +133,12 @@ impl Client {
             diag,
             tx: Some(tx),
             worker,
+            limits,
+            enforce: std::env::var("LIGHTTRACK_ENFORCE")
+                .map(|v| Enforce::from_str_or_off(&v))
+                .unwrap_or_default(),
+            record_blocked: false,
+            api_key: key_for_reads,
         }
     }
 
@@ -124,6 +153,126 @@ impl Client {
     pub fn quiet(self, quiet: bool) -> Self {
         self.diag.set_quiet(quiet);
         self
+    }
+
+    /// Turn on pre-spend admission (see [`crate::admission`]).
+    ///
+    /// [`Enforce::Block`] makes [`Client::gate`] refuse a call the project's caps would turn away;
+    /// [`Enforce::Warn`] reports it and admits; [`Enforce::Off`] (the default, also read from
+    /// `LIGHTTRACK_ENFORCE`) only observes. Off by default deliberately: adding an observability
+    /// SDK must not change what an app does.
+    pub fn enforce(mut self, mode: Enforce) -> Self {
+        self.enforce = mode;
+        self
+    }
+
+    /// Record a locally-blocked call as a zero-usage event tagged `lt_blocked_locally`.
+    ///
+    /// A blocked call is *not* spend and is never recorded as spend — but it is traffic the app
+    /// attempted, and a rollup that cannot see it reads as a quiet week rather than a throttled one.
+    pub fn record_blocked(mut self, on: bool) -> Self {
+        self.record_blocked = on;
+        self
+    }
+
+    /// Would a call be admitted right now? Pure and instant — decided from the last ingest response
+    /// this client saw, with no round trip.
+    pub fn admit(&self, name: Option<&str>, event_id: Option<&str>) -> Admit {
+        let now = chrono::Utc::now().timestamp_millis();
+        match self.limits.lock() {
+            Ok(c) => c.admit(name, event_id, now),
+            // A poisoned lock means a panic mid-update, not a breached budget. Fail open.
+            Err(p) => p.into_inner().admit(name, event_id, now),
+        }
+    }
+
+    /// The enforcement gate: call it immediately before the provider call.
+    ///
+    /// `Err(BudgetExceeded)` under [`Enforce::Block`]; under [`Enforce::Warn`] it reports and
+    /// returns `Ok(())`; under [`Enforce::Off`] it is a no-op. There is no instrumentation wrapper
+    /// in this SDK to hide the call inside (Rust provider clients are third-party and
+    /// un-monkey-patchable), so the caller invokes it directly:
+    ///
+    /// ```no_run
+    /// # use lighttrack_client::{Client, Enforce};
+    /// let lt = Client::from_env().enforce(Enforce::Block);
+    /// lt.gate(Some("summarize"))?;   // returns before a token is bought
+    /// # Ok::<(), lighttrack_client::BudgetExceeded>(())
+    /// ```
+    pub fn gate(&self, name: Option<&str>) -> Result<(), BudgetExceeded> {
+        if self.enforce == Enforce::Off {
+            return Ok(());
+        }
+        // The server mints the event id, so the client cannot know it in advance: this is a fresh
+        // ticket per call. The shed *rate* therefore matches the server's; the shed *set* does not.
+        let ticket = lighttrack_core::new_id();
+        let verdict = self.admit(name, Some(&ticket));
+        if verdict.ok {
+            return Ok(());
+        }
+        let reason = verdict.reason.map(|r| r.as_str()).unwrap_or("unknown");
+        if self.record_blocked {
+            self.record_blocked_call(name, reason, verdict.retry_after_secs);
+        }
+        let msg = format!(
+            "LightTrack: {} refused before it was made ({reason})",
+            name.unwrap_or("this call")
+        );
+        if self.enforce == Enforce::Warn {
+            self.diag
+                .warn("budget", &format!("{msg}. enforce=warn, so the call is proceeding anyway."));
+            return Ok(());
+        }
+        Err(BudgetExceeded {
+            reason: verdict.reason,
+            retry_after_secs: verdict.retry_after_secs,
+        })
+    }
+
+    /// Record a call this client refused: real traffic, zero usage, and explicitly not spend.
+    fn record_blocked_call(&self, name: Option<&str>, reason: &str, retry: Option<u64>) {
+        let mut b = self
+            .event("lighttrack", "blocked")
+            .status(Status::Error)
+            .error(format!("blocked locally by pre-spend admission ({reason})"))
+            .tag(BLOCKED_TAG)
+            .metadata(serde_json::json!({
+                "lt_admit_reason": reason,
+                "lt_retry_after_secs": retry,
+            }));
+        if let Some(n) = name {
+            b = b.name(n);
+        }
+        b.send();
+    }
+
+    /// Refresh the limit view from `GET /v1/limits/status`. Blocking and best-effort: a failure
+    /// leaves the old view in place (fail open). Call it from a background thread, not a hot path.
+    pub fn refresh_limits(&self) {
+        let url = match &self.project {
+            Some(p) => format!("{}/v1/limits/status?project={p}", self.base_url),
+            None => format!("{}/v1/limits/status", self.base_url),
+        };
+        let http = match reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let mut req = http.get(url);
+        if let Some(k) = &self.api_key {
+            req = req.bearer_auth(k);
+        }
+        let Ok(resp) = req.send() else { return };
+        let Ok(body) = resp.json::<Value>() else {
+            return;
+        };
+        if let Some(view) = admission::view_from_statuses(&body["statuses"]) {
+            if let Ok(mut c) = self.limits.lock() {
+                c.observe(&view, chrono::Utc::now().timestamp_millis());
+            }
+        }
     }
 
     /// Start building an event for one LLM call.
@@ -249,6 +398,65 @@ fn body_has_project(body: &Value) -> bool {
         .is_some_and(|s| !s.trim().is_empty())
 }
 
+/// Tag on the zero-usage event a locally-blocked call leaves behind.
+pub const BLOCKED_TAG: &str = "lt_blocked_locally";
+
+/// One send, decomposed off the `Response` so the same outcome can be both *read* (for the
+/// admission cache) and *reported* (on stderr). A `Response` can only be consumed once, and the
+/// limit signals were being thrown away with it.
+enum SendOutcome {
+    Answered {
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: String,
+    },
+    Failed(reqwest::Error),
+}
+
+impl SendOutcome {
+    fn of(outcome: reqwest::Result<reqwest::blocking::Response>) -> SendOutcome {
+        match outcome {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let headers = resp
+                    .headers()
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        v.to_str().ok().map(|s| (k.as_str().to_string(), s.to_string()))
+                    })
+                    .collect();
+                let body = resp.text().unwrap_or_default();
+                SendOutcome::Answered {
+                    status,
+                    headers,
+                    body,
+                }
+            }
+            Err(e) => SendOutcome::Failed(e),
+        }
+    }
+
+    /// Fold this response into the admission cache. Never panics: a poisoned lock is recovered
+    /// rather than propagated, because a panic on the worker thread would stop every later send.
+    fn observe_into(&self, limits: &Mutex<AdmissionCache>) {
+        let SendOutcome::Answered {
+            status,
+            headers,
+            body,
+        } = self
+        else {
+            return;
+        };
+        let parsed: Option<Value> = serde_json::from_str(body).ok();
+        let view = limits::parse_limit_view(*status, headers, parsed.as_ref());
+        let now = chrono::Utc::now().timestamp_millis();
+        match limits.lock() {
+            Ok(mut c) => c.observe(&view, now),
+            Err(p) => p.into_inner().observe(&view, now),
+        }
+    }
+}
+
 /// Turn one send outcome into at most one stderr line. Runs on the worker thread, so it must never
 /// panic: every failure path here is a `match`, not an `unwrap`.
 fn report(
@@ -257,7 +465,7 @@ fn report(
     path: &str,
     body: &Value,
     has_key: bool,
-    outcome: reqwest::Result<reqwest::blocking::Response>,
+    outcome: SendOutcome,
 ) {
     let ctx = FailureContext {
         status: None,
@@ -265,14 +473,10 @@ fn report(
         has_key,
     };
     match outcome {
-        Ok(resp) if resp.status().is_success() => {}
-        Ok(resp) => {
-            let status = resp.status().as_u16();
+        SendOutcome::Answered { status, .. } if (200..300).contains(&status) => {}
+        SendOutcome::Answered { status, body, .. } => {
             // The server's explanation of a rejection is the whole point of the diagnostic.
-            let detail = resp
-                .text()
-                .map(|b| diagnostics::truncate(&b, 200))
-                .unwrap_or_default();
+            let detail = diagnostics::truncate(&body, 200);
             let ctx = FailureContext {
                 status: Some(status),
                 ..ctx
@@ -285,7 +489,7 @@ fn report(
             );
             diag.warn(&diagnostics::diagnostic_kind(Some(status), false), &msg);
         }
-        Err(e) => {
+        SendOutcome::Failed(e) => {
             let kind = diagnostics::diagnostic_kind(None, e.is_timeout());
             let msg = diagnostics::send_failure_message(base_url, path, &e.to_string(), ctx);
             diag.warn(&kind, &msg);

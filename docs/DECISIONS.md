@@ -392,6 +392,39 @@ the CLI is missing — it exists only to run Claude, so accepting webhooks it ca
 burn investigation slots. `lt-runner serve` probes and **keeps polling**: most job types judge
 through a provider API, so a missing CLI disables a subset of the queue rather than justifying
 refusing all of it. The device reports `cost_usd` and `mode` on settle and both land in the run
-event's metadata as evidence. Relay pricing is untouched — the stamped `cost_usd` stays the flat
-rate (D5/M5), because making a pricing change a side effect of better reporting would move every
-margin number without anyone asking.
+event's metadata as evidence. Relay pricing was left untouched here — the stamped `cost_usd` stayed
+the flat rate — because making a pricing change a side effect of better reporting would move every
+margin number without anyone asking. **D18 is that decision, asked and answered.**
+
+
+## D18 — Relay runs are metered traffic; enqueue is the admission point (2026-09-02)
+
+**Decision.** A relay run is priced from what it actually cost, and a relay task's admission against
+the project's budget happens when it is **enqueued**, not when it settles.
+
+**Pricing.** `cost_usd` on a relay run event resolves in order: the device's CLI envelope
+(`cost_source: "envelope"`), else the DB price book applied to the tokens the device reported
+(`"book"`), else `LIGHTTRACK_RELAY_FLAT_COST_USD` (`"flat"`). This supersedes the flat-$1 premise
+this file carried since the relay shipped. That premise was not a simplification, it was a wrong
+number: a headless `claude -p` bills at API rates (D0), the device has reported `cost_usd` since M6,
+and the cloud was overwriting it with a placeholder. Every margin, forecast and cost report that
+included relay traffic inherited the error. A non-finite or negative envelope figure is refused and
+falls through — a device is not a trusted pricing oracle, and one `NaN` poisons every `SUM` that ever
+reads the row. The flat rate survives only as a last resort, so a run reporting neither cost nor
+priceable tokens is still *some* number rather than a silent zero.
+
+**Admission.** `POST /v1/relay/tasks` now evaluates the project's limits before queueing: an
+enforcing breach is a **429** with the breach reason and a `Retry-After`; the soft tier queues the
+task and returns a `warning`. It uses `evaluate_project_limits` — the same evaluator, thresholds and
+`basis` explanation the status page and the ingest 429 use — so a caller cannot be told two different
+stories about one cap. A limits backend that cannot answer admits: an unavailable evaluator is not
+evidence of an exceeded budget. An idempotent replay is not re-checked; answering with a task that
+already exists enqueues nothing.
+
+The settle-time event stays **un-admitted**. By then the run has happened, and declining to *record*
+spend does not un-spend it — it only corrupts the cost report. Enqueue is the last moment a refusal
+is still free, which is exactly why it is the admission point.
+
+**Scope.** This does not touch **D4**. The judge and the scoring engine remain unbudgeted; relay
+traffic is monitored ingest, which is what limits have always applied to. It supersedes the "$1 flat
+per request" cost model in `docs/RELAY.md` and the closing paragraph of D17.

@@ -10,12 +10,12 @@
     "instrument": "supported",
     "guard": "supported",
     "relay": "supported",
-    "admit": "planned",
+    "admit": "supported",
     "batch": "not_supported"
   },
   "notes": {
     "instrument": "Also patches every installed provider SDK globally via `import lighttrack.auto` - the only language that offers the zero-code form.",
-    "admit": "Pre-spend admission (act on the limit view before the call). parse_limit_view reads the signals today; deciding on them is M5.",
+    "admit": "Pre-spend admission: `enforce=\"block\" | \"warn\" | \"off\"` (default off) on LightTrack(), gated inside instrument()/wrap()/lighttrack.auto; `lt.admit()` for the raw verdict. The client does not choose the event id (the server mints it), so local shedding matches the server's RATE but not its exact set; hard caps and the advertised 429 wait are exact.",
     "batch": "No client-side batching: events go one per POST from the background thread. /v1/events/batch exists server-side."
   }
 }

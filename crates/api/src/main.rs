@@ -183,6 +183,7 @@ mod forecast_sweep;
 mod guards;
 mod http;
 mod idempotency;
+mod ingest_proximity;
 mod jobs;
 mod jobs_enqueue;
 mod limits;

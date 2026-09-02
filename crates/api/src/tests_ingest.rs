@@ -2217,3 +2217,150 @@ async fn a_shed_is_ledgered_and_is_never_confusable_with_server_overload() {
         "{body}"
     );
 }
+
+// ---- the proximity signal, on every ingest door -------------------------------------------
+
+/// POST one body to an ingest door and return `(status, all response headers, body)`.
+async fn ingest_capturing_headers(
+    app: &Router,
+    token: &str,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, HashMap<String, String>, Value) {
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let headers: HashMap<String, String> = resp
+        .headers()
+        .iter()
+        .filter_map(|(k, v)| {
+            v.to_str()
+                .ok()
+                .map(|s| (k.as_str().to_string(), s.to_string()))
+        })
+        .collect();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let v: Value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, headers, v)
+}
+
+#[tokio::test]
+async fn every_ingest_door_reports_the_project_position_in_headers() {
+    // The gap this closes: the proximity signal was a body field on ONE of the three ingest doors.
+    // A client that batches, or exports OTLP, or is being refused outright could not see the wall
+    // coming at all. Headers are the channel all three share.
+    let (app, key, _store) = app_with_calls_rule(LimitAction::Block, 4.0, None);
+
+    let (s, h, body) = ingest_capturing_headers(&app, &key, "/v1/events", one_call()).await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    assert_eq!(
+        h.get("x-lighttrack-usage-ratio").map(String::as_str),
+        Some("0.250000")
+    );
+    assert!(
+        !h.contains_key("x-lighttrack-shed-fraction"),
+        "Block sheds nothing: {h:?}"
+    );
+    // Header and body are one number, not two computations.
+    assert!(
+        (body["usage_ratio"].as_f64().unwrap() - 0.25).abs() < 1e-9,
+        "{body}"
+    );
+
+    // The batch door, whose multi-status body has nowhere to put a project-level fact.
+    let (s, h, body) = ingest_capturing_headers(
+        &app,
+        &key,
+        "/v1/events/batch",
+        json!([one_call(), one_call()]),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    assert_eq!(body["accepted"], 2, "{body}");
+    // Folded across the request: 3 of 4 calls after the batch's second item.
+    assert_eq!(
+        h.get("x-lighttrack-usage-ratio").map(String::as_str),
+        Some("0.750000")
+    );
+
+    // The 429 — the response that needs the signal most and carries no IngestResponse body.
+    let (s, h, body) = ingest_capturing_headers(&app, &key, "/v1/events", one_call()).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(
+        h.get("x-lighttrack-usage-ratio").map(String::as_str),
+        Some("1.000000")
+    );
+    // Mirrors Retry-After, which proxies and browser fetch stacks are free to strip.
+    assert_eq!(
+        h.get("x-lighttrack-retry-after"),
+        h.get("retry-after"),
+        "the mirrored back-off must equal the standard one: {h:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_project_with_no_limits_sends_no_ratio_at_all() {
+    // The null-vs-zero trap on the header channel: absent means unknown. A client that read a
+    // missing ratio as 0.0 would believe it had infinite headroom.
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    let (s, h, body) = ingest_capturing_headers(&app, &key, "/v1/events", one_call()).await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    assert!(!h.contains_key("x-lighttrack-usage-ratio"), "{h:?}");
+    assert!(body.get("usage_ratio").is_none(), "{body}");
+    assert!(body.get("binding_scope").is_none(), "{body}");
+}
+
+#[tokio::test]
+async fn binding_scope_names_the_rule_that_is_actually_binding() {
+    // `usage_ratio: 0.5` is only actionable with the scope attached: a project-wide cap means stop
+    // everything, a model-scoped one means route the next call elsewhere and keep working.
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    for (id, threshold, scope) in [
+        ("rule-wide", 100.0, None),
+        (
+            "rule-model",
+            2.0,
+            Some(lighttrack_core::LimitScope::Model(
+                "claude-haiku-4-5".into(),
+            )),
+        ),
+    ] {
+        store
+            .create_limit_rule(&LimitRule {
+                id: id.to_string(),
+                project_id: "proj-a".into(),
+                metric: LimitMetric::Calls,
+                window: LimitWindow::Hour,
+                threshold: Threshold::Fixed(threshold),
+                action: LimitAction::Block,
+                enabled: true,
+                warn_at: None,
+                scope,
+                escalation: None,
+                escalated_until: None,
+                origin: None,
+                expires_at: None,
+            })
+            .unwrap();
+    }
+    let app = crate::build_router(state);
+    let (s, _h, body) = ingest_capturing_headers(&app, &key, "/v1/events", one_call()).await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    // 1/2 on the model rule beats 1/100 on the project-wide one.
+    assert_eq!(body["binding_scope"]["kind"], "model", "{body}");
+    assert_eq!(body["binding_scope"]["value"], "claude-haiku-4-5", "{body}");
+    assert_eq!(body["binding_rule"], "rule-model", "{body}");
+}

@@ -77,8 +77,8 @@ pub use job_kinds::{
 };
 pub use lease::{LeaseFence, LeaseHeld};
 pub use limits::{
-    scope_matches, CostEvidence, Escalation, LimitAction, LimitMetric, LimitRule, LimitScope,
-    LimitStatus, LimitWindow, ScopeDims, Threshold, ThresholdBasis, ThresholdDimension,
+    scope_matches, shed_ticket, CostEvidence, Escalation, LimitAction, LimitMetric, LimitRule,
+    LimitScope, LimitStatus, LimitWindow, ScopeDims, Threshold, ThresholdBasis, ThresholdDimension,
     ThresholdKind, DEFAULT_THROTTLE_START,
 };
 pub use margin::{compute_margin, CostByDimension, MarginDimension, MarginRow};

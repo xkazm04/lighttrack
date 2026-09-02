@@ -213,6 +213,7 @@ def _wrap(lt: LightTrack, fn: Callable, provider: str, extract: Extract, operati
 
     if is_async:
         async def awrapper(*args: Any, **kwargs: Any) -> Any:
+            lt.gate(kwargs.get("name"))  # pre-spend admission — see the sync branch below
             t0 = time.perf_counter()
             flight = _begin(lt, provider, operation, fallback(args, kwargs))
             try:
@@ -228,6 +229,11 @@ def _wrap(lt: LightTrack, fn: Callable, provider: str, extract: Extract, operati
         wrapper: Callable = awrapper
     else:
         def wrapper(*args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
+            # Pre-spend admission, before a single token is bought. A no-op unless the client was
+            # constructed with `enforce`; it raises BudgetExceeded rather than returning a fake
+            # response, because a wrapper that swallowed the call and answered None would corrupt
+            # the host app's control flow far worse than a refusal it can catch.
+            lt.gate(kwargs.get("name"))
             t0 = time.perf_counter()
             flight = _begin(lt, provider, operation, fallback(args, kwargs))
             try:

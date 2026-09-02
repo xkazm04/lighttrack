@@ -17,7 +17,7 @@
   "covered": [
     {
       "path": "docs/ARCHITECTURE.md",
-      "note": "§12 written this pass (disk accounting, the dated unbounded-retention decision, the quiet-window maintenance ladder); §5 and §11 re-read against the code while writing it."
+      "note": "§12 written this pass (disk accounting, the dated unbounded-retention decision, the quiet-window maintenance ladder); §5 and §11 re-read against the code while writing it. 2026-09-02, M5 (pre-spend admission) extended §7c against crates/api/src/ingest_proximity.rs: the X-LightTrack-Usage-Ratio / -Shed-Fraction / -Retry-After headers now on all three ingest doors and on the 429, the binding_scope/binding_rule fields on IngestResponse, and the SDK-side admission loop the headers exist to feed. The rest of §7c was re-read against the code while writing it; the §5 flag below is untouched and still stands."
     },
     {
       "path": "docs/harness/soak-lane.md",
@@ -32,6 +32,14 @@
       "note": "written by M27 (forecast honesty gates): the evidence floor, the flat band, the burn-rate corroboration, the zero-fill definition seam, and what refused[] means. docs/ALERTS.md ~94 referenced this file before it existed; that reference now resolves."
       },
       {
+      "path": "docs/RELAY.md",
+      "note": "\"Cost model\" rewritten and an \"Admission\" section added by M5/D18, against crates/api/src/relay_result.rs and relay.rs. The flat $1 premise is gone: a run is priced envelope -> price book -> flat, and metadata.cost_source says which. Enqueue now evaluates the project's limits (429 on an enforcing breach, `warning` on the soft tier) while the settle-time event stays un-admitted. The stale $1 references elsewhere in the file (the diagram, the window-capacity note, the phase-2 changelog line) were repaired in the same pass; the rest of the document was read but not otherwise re-verified against the code."
+    },
+    {
+      "path": "docs/DECISIONS.md",
+      "note": "D18 appended by M5 (relay runs are metered traffic; enqueue is the admission point), and D17's closing paragraph amended to point at it rather than assert the flat rate it deferred. No other decision was re-read against the code in this pass."
+    },
+    {
       "path": "docs/ALERTS.md",
       "note": "rewritten against crates/api/src/alerts/* for M3 (the persisted alert ledger). The two claims it used to make that the code no longer supports are gone: dedup is durable (Store::insert_alert_dedup, one atomic step per backend) rather than an in-memory map that resets on restart and lets each replica alert independently, and per-project routing exists rather than being deferred. Adds the eight alert kinds, the GET /v1/alerts surface, the X-LightTrack-Signature contract (including the sha256(secret) derived-key rule a receiver must implement), and the destination rules."
     },
@@ -71,13 +79,11 @@
     { "path": "docs/CI_GATE.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/CURRENCY.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/DATA_MODEL.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
-    { "path": "docs/DECISIONS.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/FIRESTORE.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/MARGIN.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/OTLP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/PACKAGING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/PRICING.md", "kind": "not-in-this-pass", "reason": "authored 2026-09-02 by the M26 build (unpriced ledger, forward fill, dated price book) against the code it describes; still not read by a docs catch-up pass, so it stays out-of-pass rather than claimed as covered here" },
-    { "path": "docs/RELAY.md", "kind": "not-in-this-pass", "reason": "the 'Quality model' section was written 2026-09-02 by the M19 build (relay runs become judgeable events; actions become fingerprinted prompts) against the code it describes — the settle event's prompt_sha256/action_version/input/output, the report_io privacy default, the prompt_sha256 redaction exemption, and the two /v1/relay/actions routes — and the settle row of the API table and the metadata list were corrected to match. Like docs/PRICING.md it stays out-of-pass rather than claimed as covered: the rest of the file (lifecycle, fencing, enrolment, posture, cost model) was NOT re-read against the code here." },
     { "path": "docs/ROADMAP.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" },
     { "path": "docs/SCHEDULING.md", "kind": "not-in-this-pass", "reason": "not read against the code in this pass" }
   ],

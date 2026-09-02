@@ -23,6 +23,7 @@ import { test } from "node:test";
 import { diagnosticKind, sendFailureMessage } from "./diagnostics.ts";
 import { extractAnthropic, extractGemini, extractOpenAI, guard, type GuardRules } from "./index.ts";
 import { parseLimitView } from "./limits.ts";
+import { AdmissionCache, shedTicket } from "./admission.ts";
 import { unsettled } from "./journal.ts";
 import { PII_RULES, type PiiRule } from "./pii.ts";
 
@@ -170,7 +171,36 @@ test("contract: ingest limit signals", () => {
         shed_fraction: v.shedFraction,
         retry_after_secs: v.retryAfterSecs,
         error_code: v.errorCode,
+        binding_scope: v.bindingScope,
+        binding_rule: v.bindingRule,
       },
+      c.expect,
+      `${c.name}: ${c.why ?? ""}`,
+    );
+  }
+});
+
+// ---- pre-spend admission ----------------------------------------------------
+
+test("contract: the shed lottery is the server's own function", () => {
+  for (const c of fixture("limits").shed_lottery) {
+    const got = shedTicket(c.rule_id, c.event_id);
+    assert.ok(
+      Math.abs(got - c.ticket) < 1e-12,
+      `shed_ticket(${JSON.stringify(c.rule_id)}, ${JSON.stringify(c.event_id)}) = ${got}, want ${c.ticket}`,
+    );
+  }
+});
+
+test("contract: pre-spend admission verdicts", { skip: !supports("admit") }, () => {
+  for (const c of fixture("limits").admission) {
+    const cache = new AdmissionCache({ ttlMs: c.ttl_ms });
+    for (const o of c.observe) {
+      cache.observe(parseLimitView(o.status, o.headers, o.body), o.at_ms);
+    }
+    const v = cache.admit({ name: c.admit.name, eventId: c.admit.event_id, nowMs: c.admit.at_ms });
+    assert.deepEqual(
+      { ok: v.ok, reason: v.reason, retry_after_secs: v.retryAfterSecs, stale: v.stale },
       c.expect,
       `${c.name}: ${c.why ?? ""}`,
     );

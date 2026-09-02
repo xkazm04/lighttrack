@@ -94,7 +94,7 @@
         "body": { "type": ["object", "null"], "description": "Parsed response body, or null when there was none." },
         "expect": {
           "type": "object",
-          "description": "The parsed limit view (parse only; acting on it is M5's pre-spend admission).",
+          "description": "The parsed limit view. Parse only - acting on it is the `admission` list.",
           "required": ["accepted", "rate_limited"],
           "properties": {
             "accepted": { "type": "boolean", "description": "2xx." },
@@ -102,9 +102,81 @@
             "usage_ratio": { "type": ["number", "null"] },
             "shed_fraction": { "type": ["number", "null"] },
             "retry_after_secs": { "type": ["number", "null"] },
-            "error_code": { "type": ["string", "null"] }
+            "error_code": { "type": ["string", "null"] },
+            "binding_scope": {
+              "type": ["object", "null"],
+              "description": "The dimension the worst rule applies to. `null` means project-wide.",
+              "required": ["kind", "value"],
+              "properties": {
+                "kind": { "enum": ["provider", "model", "name", "api_key", "customer"] },
+                "value": { "type": "string" }
+              }
+            },
+            "binding_rule": {
+              "type": ["string", "null"],
+              "description": "Id of the worst rule - the key the shed lottery hashes against."
+            }
           }
         }
+      }
+    },
+
+    "admissionCase": {
+      "type": "object",
+      "description": "One pre-spend admission decision. The runner builds a fresh admission cache with `ttl_ms`, replays every `observe` entry through the SDK's limit-view parser at its `at_ms`, then asks `admit` at its own `at_ms` and compares the verdict. Time is supplied, never read from a clock, so the case is a pure function in all three languages.",
+      "required": ["name", "observe", "admit", "expect"],
+      "properties": {
+        "name": { "type": "string" },
+        "why": { "type": "string" },
+        "ttl_ms": { "type": "integer", "description": "How long a view stays evidence. Default 30000." },
+        "observe": {
+          "type": "array",
+          "description": "Ingest responses the SDK has already seen, in order.",
+          "items": {
+            "type": "object",
+            "required": ["at_ms", "status"],
+            "properties": {
+              "at_ms": { "type": "integer" },
+              "status": { "type": "integer" },
+              "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+              "body": { "type": ["object", "null"] }
+            }
+          }
+        },
+        "admit": {
+          "type": "object",
+          "required": ["at_ms"],
+          "properties": {
+            "at_ms": { "type": "integer" },
+            "name": { "type": ["string", "null"], "description": "Use-case of the call about to be made, matched against a `name`-scoped view." },
+            "event_id": { "type": ["string", "null"], "description": "Id the call would be recorded under. Required for the shed lottery; without it shedding cannot be decided and never refuses." }
+          }
+        },
+        "expect": {
+          "type": "object",
+          "required": ["ok"],
+          "properties": {
+            "ok": { "type": "boolean", "description": "Whether the provider call should be made." },
+            "reason": {
+              "type": ["string", "null"],
+              "description": "`null` when ok. `retry_after` = a 429's advertised wait has not elapsed; `at_cap` = usage_ratio >= 1.0; `shed` = the deterministic shed lottery picked this event.",
+              "enum": [null, "retry_after", "at_cap", "shed"]
+            },
+            "retry_after_secs": { "type": ["number", "null"], "description": "Only set for `retry_after`: a client must not invent a back-off the server never promised." },
+            "stale": { "type": "boolean", "description": "The view is older than `ttl_ms`, so the verdict was taken without current evidence (and therefore admits). The caller's cue to refresh from GET /v1/limits/status." }
+          }
+        }
+      }
+    },
+
+    "shedLotteryCase": {
+      "type": "object",
+      "description": "One point of the shed lottery (ARCHITECTURE §7c): FNV-1a over rule_id + 0x1f + event_id, SplitMix64 avalanche, top 53 bits over 2^53. Pinned because a client running a different hash still sheds proportionally and still looks right in aggregate, while disagreeing with the server on every individual event.",
+      "required": ["rule_id", "event_id", "ticket"],
+      "properties": {
+        "rule_id": { "type": "string" },
+        "event_id": { "type": "string" },
+        "ticket": { "type": "number", "description": "The point in [0, 1). The event is shed iff this is below the rule's shed_fraction." }
       }
     },
 
@@ -142,6 +214,8 @@
     "guard": { "type": "array", "items": { "$ref": "#/definitions/guardCase" } },
     "journal": { "type": "array", "items": { "$ref": "#/definitions/journalCase" } },
     "limits": { "type": "array", "items": { "$ref": "#/definitions/limitCase" } },
+    "admission": { "type": "array", "items": { "$ref": "#/definitions/admissionCase" } },
+    "shed_lottery": { "type": "array", "items": { "$ref": "#/definitions/shedLotteryCase" } },
     "diagnostics": { "type": "array", "items": { "$ref": "#/definitions/diagnosticCase" } },
     "pii": {
       "type": "object",

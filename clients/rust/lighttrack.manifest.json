@@ -10,7 +10,7 @@
     "instrument": "not_supported",
     "guard": "supported",
     "relay": "not_supported",
-    "admit": "planned",
+    "admit": "supported",
     "batch": "not_supported"
   },
   "notes": {
@@ -18,6 +18,6 @@
     "journal": "No crash-surviving breadcrumb. A Rust process killed mid-call leaves no record of it, where the Python and TypeScript clients would recover one. This is a gap, not a design choice - clients/catchup-marker.json has carried it as a flagged debt since 2026-08-24.",
     "instrument": "No provider-SDK wrapping. Rust provider clients are third-party and un-monkey-patchable; instrumentation would need per-crate adapters.",
     "relay": "No relay client. Enqueue tasks over plain HTTP against /v1/relay/tasks (docs/RELAY.md).",
-    "admit": "Pre-spend admission (act on the limit view before the call). parse_limit_view reads the signals today; deciding on them is M5."
+    "admit": "Pre-spend admission: `Client::admit()` / `Client::gate()` with `Client::enforce(\"block\" | \"warn\" | \"off\")`, default off. There is no instrument wrapper to gate here (see above), so the caller invokes the gate itself. The shed lottery calls straight through to lighttrack_core::shed_ticket - the server's own function."
   }
 }
