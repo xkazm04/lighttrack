@@ -29,6 +29,7 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "get_forecast" => forecast_resp(),
         "list_jobs" => list_of(job()),
         "get_job" => job(),
+        "list_schedules" => list_of(schedule()),
         "list_datasets" => list_of(dataset()),
         "get_dataset" => dataset(),
         "list_dataset_items" => list_of(dataset_item()),
@@ -298,6 +299,15 @@ fn job() -> Value {
         "attempts": {"type":"integer"}, "max_attempts": {"type":"integer"},
         "progress": {"type":["string","null"]}, "error": {"type":["string","null"]},
         "result": {}, "created_at": {"type":"string"}, "updated_at": {"type":"string"}
+    }))
+}
+
+fn schedule() -> Value {
+    obj(json!({
+        "id": {"type":"string"}, "project_id": {"type":"string"}, "kind": {"type":"string"},
+        "payload": {}, "interval_secs": {"type":"integer"}, "next_due": {"type":"string"},
+        "last_job_id": {"type":["string","null"]}, "enabled": {"type":"boolean"},
+        "created_at": {"type":"string"}
     }))
 }
 

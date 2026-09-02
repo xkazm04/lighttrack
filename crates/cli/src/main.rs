@@ -11,11 +11,14 @@
 //!   lt limits set --project <id> --metric cost_usd --window day --threshold 5 --action alert
 //!   lt limits status --project <id>
 //!   lt rubrics create --project <id> --file rubric.json
+//!   lt schedules create --project <id> --type bench_run --every 6h --payload '{"benchmark_id":"b1"}'
+//!   lt schedules list   |   lt schedules set <id> --disabled   |   lt jobs list --status running
 //!   lt costs --project <id>
 //!   lt events --project <id> --limit 20
 //!
 //! Layout: `cli` (args), `http` (API client + output), then one module per domain — `projects`
-//! (projects + keys), `limits`, `rubrics`, `usage` (costs / events / traces / margin), `collective`.
+//! (projects + keys), `limits`, `rubrics`, `schedules` (recurring work + the job queue), `usage`
+//! (costs / events / traces / margin), `collective`.
 
 mod cli;
 mod collective;
@@ -23,6 +26,7 @@ mod http;
 mod limits;
 mod projects;
 mod rubrics;
+mod schedules;
 mod usage;
 
 use anyhow::Result;
@@ -47,6 +51,8 @@ fn main() -> Result<()> {
             since,
             until,
         } => usage::margin(&cli, by, project, since, until),
+        Cmd::Schedules { action } => schedules::run(&cli, action),
+        Cmd::Jobs { action } => schedules::run_jobs(&cli, action),
         Cmd::Collective { action } => collective::run(&cli, action),
     }
 }

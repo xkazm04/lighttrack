@@ -12,6 +12,8 @@ use crate::client::Client;
 
 const NAMES: &[&str] = &[
     "enqueue_benchmark",
+    "enqueue_job",
+    "create_schedule",
     "create_project",
     "create_dataset",
     "add_dataset_item",
@@ -38,6 +40,24 @@ pub(crate) fn tools() -> Vec<Value> {
                 "samples":{"type":"integer","description":"runs per case (default 1)"},
                 "heal":{"type":"boolean","description":"attempt prompt healing on low scores (default false)"}
             },"required":["benchmark"]}),
+            false),
+        wtool("enqueue_job",
+            "Queue one unit of background work of any kind (bench_run | score_events | score_traces | dataset_sample | calibrate). Non-blocking; a worker executes it — poll with get_job. The payload is validated against the kind, so a malformed one is refused here rather than dead-lettering three attempts later.",
+            json!({"type":"object","properties":{
+                "type":{"type":"string","enum":["bench_run","score_events","score_traces","dataset_sample","calibrate"],"description":"the job kind"},
+                "payload":{"type":"object","description":"kind-specific fields, e.g. {\"benchmark_id\":\"…\"} for bench_run, or {\"project\":\"…\",\"rubric_id\":\"…\"} for score_traces"}
+            },"required":["type"]}),
+            false),
+        wtool("create_schedule",
+            "Make a workload RECUR: store a schedule (a job kind + payload on an interval) the server sweeps. This is how a compare benchmark recurs — its matrix target cannot carry a recurrence field — and how scoring/sampling/calibration recur without a daemon process being kept alive.",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "type":{"type":"string","enum":["bench_run","score_events","score_traces","dataset_sample","calibrate"]},
+                "payload":{"type":"object","description":"the job payload enqueued each time it fires"},
+                "interval_secs":{"type":"integer","description":"how often it fires (floor 60)"},
+                "start_in_secs":{"type":"integer","description":"seconds until the first firing (default 0 = at once)"},
+                "enabled":{"type":"boolean","description":"default true; false stores it paused"}
+            },"required":["project","type","interval_secs"]}),
             false),
         wtool("create_project",
             "Create a project.",
@@ -154,6 +174,26 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
             Ok(b) => c.post(
                 &format!("/v1/benchmarks/{b}/enqueue"),
                 &pick(args, &["samples", "heal"]),
+            ),
+            Err(e) => Err(e),
+        },
+        "enqueue_job" => match need(args, "type") {
+            Ok(_) => c.post("/v1/jobs", &pick(args, &["type", "payload"])),
+            Err(e) => Err(e),
+        },
+        "create_schedule" => match need(args, "project") {
+            Ok(p) => post_with(
+                c,
+                args,
+                &["type", "interval_secs"],
+                &[
+                    "type",
+                    "payload",
+                    "interval_secs",
+                    "start_in_secs",
+                    "enabled",
+                ],
+                format!("/v1/projects/{p}/schedules"),
             ),
             Err(e) => Err(e),
         },
