@@ -50,7 +50,10 @@ pub(crate) fn schedule(
 
 /// One sampling cycle. Returns the new dataset name, or `None` if skipped (nothing new to sample, or
 /// this window was already captured).
-fn run_cycle(
+///
+/// `pub(crate)` because it is also what a `dataset_sample` job runs: the queue executes one cycle
+/// of the same thing this daemon loops over, rather than a second implementation of it.
+pub(crate) fn run_cycle(
     cli: &Cli,
     http: &reqwest::blocking::Client,
     engine: &EngineConfig,

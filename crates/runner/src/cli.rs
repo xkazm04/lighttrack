@@ -64,6 +64,13 @@ pub(crate) enum Cmd {
         /// Run continuously, scoring newly-arrived (unscored) events every N seconds. 0 = one-shot.
         #[arg(long, default_value_t = 0)]
         interval: u64,
+        /// Enqueue this work as a job and let a worker run it, instead of running it here.
+        ///
+        /// The same cycle either way — the queue adds a lease, a heartbeat, cancellation, retry
+        /// accounting and a record that it ran. Recurrence belongs in a stored schedule
+        /// (`POST /v1/projects/:id/schedules`); this is the one-shot equivalent.
+        #[arg(long)]
+        via_queue: bool,
     },
     /// Score an ad-hoc input/output pair (not tied to a stored event).
     ScoreText {
@@ -116,6 +123,13 @@ pub(crate) enum Cmd {
         /// Run a single cycle and exit (for an external scheduler). Overrides --interval.
         #[arg(long)]
         once: bool,
+        /// Enqueue this work as a job and let a worker run it, instead of running it here.
+        ///
+        /// The same cycle either way — the queue adds a lease, a heartbeat, cancellation, retry
+        /// accounting and a record that it ran. Recurrence belongs in a stored schedule
+        /// (`POST /v1/projects/:id/schedules`); this is the one-shot equivalent.
+        #[arg(long)]
+        via_queue: bool,
     },
     /// Run a stored benchmark: judge each case, aggregate a scorecard, record a run.
     Bench {
@@ -209,6 +223,13 @@ pub(crate) enum Cmd {
         /// the API key). Also scopes the history read used for drift detection.
         #[arg(long)]
         project: Option<String>,
+        /// Enqueue this work as a job and let a worker run it, instead of running it here.
+        ///
+        /// The same cycle either way — the queue adds a lease, a heartbeat, cancellation, retry
+        /// accounting and a record that it ran. Recurrence belongs in a stored schedule
+        /// (`POST /v1/projects/:id/schedules`); this is the one-shot equivalent.
+        #[arg(long)]
+        via_queue: bool,
     },
     /// Periodically sample live events into frozen datasets (online sampling). Daemon by default;
     /// `--once` runs a single cycle (for OS cron / Cloud Scheduler / a systemd timer).
@@ -230,8 +251,15 @@ pub(crate) enum Cmd {
         /// Add an LLM (claude -p) anonymization pass for names/free-text PII the regex misses.
         #[arg(long)]
         llm_scrub: bool,
+        /// Enqueue this work as a job and let a worker run it, instead of running it here.
+        ///
+        /// The same cycle either way — the queue adds a lease, a heartbeat, cancellation, retry
+        /// accounting and a record that it ran. Recurrence belongs in a stored schedule
+        /// (`POST /v1/projects/:id/schedules`); this is the one-shot equivalent.
+        #[arg(long)]
+        via_queue: bool,
     },
-    /// Run as a worker: poll the job queue and execute jobs (e.g. bench_run).
+    /// Run as a worker: poll the job queue and execute jobs of every declared kind.
     Serve {
         /// Process at most one cycle (claim+run one job, or exit if none) and stop.
         #[arg(long)]
@@ -253,11 +281,19 @@ pub(crate) enum Cmd {
         /// spurious takeover.
         #[arg(long, default_value_t = 0)]
         lease_renew_secs: u64,
-        /// Seconds between benchmark-recurrence sweeps. Each sweep enqueues a `bench_run` for any
-        /// benchmark whose opt-in `schedule_interval_secs` is due (continuous quality monitoring).
-        /// `0` disables recurrence. With `--once`, one sweep always runs (so OS cron can drive it).
-        #[arg(long, default_value_t = 60)]
-        recur_interval: u64,
+        /// Job kinds this worker will claim, comma-separated
+        /// (`bench_run,score_events,score_traces,dataset_sample,calibrate`). Default: all.
+        ///
+        /// A capability declaration, not a filter for convenience: the API applies it INSIDE the
+        /// atomic claim, so a worker without a Claude install (or without a provider key) stops
+        /// taking jobs it would only fail — which used to strand them off the queue under a lease
+        /// while a capable worker idled beside them.
+        #[arg(long, value_delimiter = ',')]
+        kinds: Vec<String>,
+        /// Model providers this worker holds credentials for. Default: derived from the API keys
+        /// present in the environment.
+        #[arg(long, value_delimiter = ',')]
+        providers: Vec<String>,
     },
 }
 
