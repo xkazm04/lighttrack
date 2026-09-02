@@ -38,6 +38,12 @@ pub enum Surface {
     /// reads through. A backend that serves it serves the nine legacy grouped methods too, via
     /// their default impls — which is why it is its own surface rather than a member of another.
     Rollup,
+    /// What the ingest boundary did to the stored rows, grouped by stamp (M9).
+    RedactionPosture,
+    /// Re-converting stored revenue at a corrected FX rate (M9).
+    RevenueReprice,
+    /// Narrowing verdicts by their typed identity: rubric id and score kind (M9).
+    ScoreFilters,
     /// Events rolled up by `trace_id`: listing, detail, whole-trace scores.
     Traces,
     /// Daily (UTC) usage/cost series — the input `GET /v1/forecast` fits a trend to.
@@ -83,6 +89,9 @@ impl Surface {
         Surface::EventsCore,
         Surface::EventFilters,
         Surface::Rollup,
+        Surface::RedactionPosture,
+        Surface::RevenueReprice,
+        Surface::ScoreFilters,
         Surface::Traces,
         Surface::Forecast,
         Surface::MarginBreakdowns,
@@ -105,6 +114,9 @@ impl Surface {
             Surface::EventsCore => "events_core",
             Surface::EventFilters => "event_filters",
             Surface::Rollup => "rollup",
+            Surface::RedactionPosture => "redaction_posture",
+            Surface::RevenueReprice => "revenue_reprice",
+            Surface::ScoreFilters => "score_filters",
             Surface::Traces => "traces",
             Surface::Forecast => "forecast",
             Surface::MarginBreakdowns => "margin_breakdowns",
@@ -235,6 +247,9 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
         ],
     ),
     (Surface::Rollup, &["rollup"]),
+    (Surface::RedactionPosture, &["redaction_posture"]),
+    (Surface::RevenueReprice, &["reprice_revenue"]),
+    (Surface::ScoreFilters, &["list_scores_filtered"]),
     (
         Surface::Traces,
         &[

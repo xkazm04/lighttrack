@@ -10,21 +10,46 @@ use rusqlite::{params, Connection, Row};
 use lighttrack_core::{CostByDimension, RevenueEvent, RevenueKind, TokensByDimension};
 
 use crate::codec::{fmt_ts, parse_ts};
-use crate::{CustomerCostRow, Result};
+use crate::{CustomerCostRow, RepriceReport, Result};
+
+/// When a redelivery is allowed to **restate** the money on an existing row.
+///
+/// A webhook redelivery re-runs `normalize_invoice` against *today's* FX table, so an unconditional
+/// `amount_usd=excluded.amount_usd` silently restated historical revenue every time a provider
+/// retried — with no record that it had happened, and margin numbers moving underneath a report
+/// nobody re-ran. The provider's own minor-unit figure is the invariant: if it is unchanged, this is
+/// the same charge and the stored conversion stands. A rate correction is then a deliberate act
+/// ([`super::Store::reprice_revenue`]), not a side effect of a retry.
+///
+/// Either side being NULL falls back to the old behaviour: a manual post or a pre-M9 row carries no
+/// minor-unit figure to compare, so there is nothing to be confident about and the newer value wins.
+const RESTATE_MONEY: &str = "excluded.amount_minor IS NULL OR revenue_events.amount_minor IS NULL \
+     OR excluded.amount_minor <> revenue_events.amount_minor";
 
 pub(super) fn insert(conn: &Connection, ev: &RevenueEvent) -> Result<()> {
     // Upsert on the (deterministic, for synced records) id so webhook redelivery is idempotent —
     // Stripe retries any non-2xx, so a re-sent event must not duplicate or error.
-    conn.execute(
+    let keep = |col: &str| {
+        format!("{col}=CASE WHEN {RESTATE_MONEY} THEN excluded.{col} ELSE revenue_events.{col} END")
+    };
+    let sql = format!(
         "INSERT INTO revenue_events \
          (id, project_id, source, external_id, customer_id, product_id, amount_usd, currency, \
-          kind, period_start, period_end, ts) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) \
+          kind, period_start, period_end, ts, amount_minor, fx_rate, fx_book_version, converted) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16) \
          ON CONFLICT(id) DO UPDATE SET \
            project_id=excluded.project_id, source=excluded.source, external_id=excluded.external_id, \
            customer_id=excluded.customer_id, product_id=excluded.product_id, \
-           amount_usd=excluded.amount_usd, currency=excluded.currency, kind=excluded.kind, \
-           period_start=excluded.period_start, period_end=excluded.period_end, ts=excluded.ts",
+           currency=excluded.currency, kind=excluded.kind, \
+           period_start=excluded.period_start, period_end=excluded.period_end, ts=excluded.ts, \
+           amount_minor=excluded.amount_minor, {}, {}, {}, {}",
+        keep("amount_usd"),
+        keep("fx_rate"),
+        keep("fx_book_version"),
+        keep("converted"),
+    );
+    conn.execute(
+        &sql,
         params![
             ev.id,
             ev.project_id,
@@ -38,9 +63,88 @@ pub(super) fn insert(conn: &Connection, ev: &RevenueEvent) -> Result<()> {
             ev.period_start.map(fmt_ts),
             ev.period_end.map(fmt_ts),
             fmt_ts(ev.ts),
+            ev.amount_minor,
+            ev.fx_rate,
+            ev.fx_book_version,
+            ev.converted.map(|b| b as i64),
         ],
     )?;
     Ok(())
+}
+
+/// Re-convert stored rows of one currency at a corrected rate — the alternative to "re-ingest from
+/// the provider", which was the only remedy `docs/CURRENCY.md` could offer.
+///
+/// Only rows that took the 1:1 fallback (`converted = 0`) are touched. A row that already converted
+/// genuinely is somebody's recognized revenue at a rate that was correct when it was taken, and
+/// silently re-basing it would restate history — the exact failure the upsert guard above closes.
+/// `dry_run` counts without writing, so the answer to "how many rows would this move" is available
+/// before the move.
+pub(super) fn reprice(
+    conn: &Connection,
+    project: Option<&str>,
+    currency: &str,
+    rate: f64,
+    version: &str,
+    dry_run: bool,
+) -> Result<RepriceReport> {
+    let cur = currency.to_uppercase();
+    let pred = format!(
+        "{proj} AND UPPER(currency) = ?2 AND converted = 0",
+        proj = super::project_pred(project)
+    );
+    let matched: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM revenue_events WHERE {pred}"),
+        params![project, cur],
+        |r| r.get(0),
+    )?;
+    // …of those, the ones that can actually be repriced: without the provider's minor-unit figure
+    // there is nothing to multiply, and inventing one from `amount_usd` would bake the bad 1:1
+    // fallback into the "corrected" number.
+    let changed = if matched == 0 {
+        0
+    } else if dry_run {
+        conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM revenue_events WHERE {pred} AND amount_minor IS NOT NULL"
+            ),
+            params![project, cur],
+            |r| r.get::<_, i64>(0),
+        )?
+    } else {
+        conn.execute(
+            &format!(
+                "UPDATE revenue_events SET \
+                   amount_usd = amount_minor / ?3 * ?4, fx_rate = ?4, fx_book_version = ?5, \
+                   converted = 1 \
+                 WHERE {pred} AND amount_minor IS NOT NULL"
+            ),
+            params![project, cur, minor_divisor(&cur), rate, version],
+        )? as i64
+    };
+    Ok(RepriceReport {
+        currency: cur,
+        rate,
+        book_version: version.to_string(),
+        matched: matched.max(0) as u64,
+        changed: changed.max(0) as u64,
+        dry_run,
+    })
+}
+
+/// Minor units per major unit for `currency`, mirroring `lighttrack_billing::fx`'s ISO-4217 table.
+///
+/// Duplicated rather than imported: `lighttrack-store` does not depend on `lighttrack-billing` (the
+/// dependency runs the other way), and a store that had to link the billing crate to divide by 100
+/// would be a worse trade than a 20-code table with a test. The divisor is returned as `f64` so the
+/// SQL divides in floating point, exactly as `FxTable::to_usd` does.
+fn minor_divisor(currency: &str) -> f64 {
+    match currency {
+        "BIF" | "CLP" | "DJF" | "GNF" | "ISK" | "JPY" | "KMF" | "KRW" | "PYG" | "RWF" | "UGX"
+        | "VND" | "VUV" | "XAF" | "XOF" | "XPF" => 1.0,
+        "BHD" | "IQD" | "JOD" | "KWD" | "LYD" | "OMR" | "TND" => 1000.0,
+        _ => 100.0,
+    }
 }
 
 /// Persist a batch of revenue records atomically: one transaction wraps the per-record upserts, so a
@@ -67,7 +171,8 @@ pub(super) fn list(
 ) -> Result<Vec<RevenueEvent>> {
     let sql = format!(
         "SELECT id, project_id, source, external_id, customer_id, product_id, amount_usd, \
-         currency, kind, period_start, period_end, ts \
+         currency, kind, period_start, period_end, ts, amount_minor, fx_rate, fx_book_version, \
+         converted \
          FROM revenue_events \
          WHERE {proj} AND ( \
              (period_start IS NOT NULL AND period_end IS NOT NULL \
@@ -241,6 +346,10 @@ struct RawRevenue {
     period_start: Option<String>,
     period_end: Option<String>,
     ts: String,
+    amount_minor: Option<i64>,
+    fx_rate: Option<f64>,
+    fx_book_version: Option<String>,
+    converted: Option<i64>,
 }
 
 fn map_raw(row: &Row) -> rusqlite::Result<RawRevenue> {
@@ -257,6 +366,10 @@ fn map_raw(row: &Row) -> rusqlite::Result<RawRevenue> {
         period_start: row.get(9)?,
         period_end: row.get(10)?,
         ts: row.get(11)?,
+        amount_minor: row.get(12)?,
+        fx_rate: row.get(13)?,
+        fx_book_version: row.get(14)?,
+        converted: row.get(15)?,
     })
 }
 
@@ -274,6 +387,13 @@ fn from_raw(r: RawRevenue) -> Result<RevenueEvent> {
         period_start: r.period_start.as_deref().map(parse_ts).transpose()?,
         period_end: r.period_end.as_deref().map(parse_ts).transpose()?,
         ts: parse_ts(&r.ts)?,
+        amount_minor: r.amount_minor,
+        fx_rate: r.fx_rate,
+        fx_book_version: r.fx_book_version,
+        // NULL stays NULL. `RevenueEvent::is_converted` infers a reading for a pre-M9 row; writing
+        // `false` here would turn "we do not know" into "definitely a 1:1 fallback" at the codec,
+        // where nobody would ever see the assumption being made.
+        converted: r.converted.map(|v| v != 0),
     })
 }
 
@@ -285,8 +405,10 @@ mod tests {
 
     fn conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
-        c.execute_batch(include_str!("../../../../schema/sqlite/001_init.sql"))
-            .unwrap();
+        // Through `schema::apply`, not the raw batch: the additive columns this module reads live
+        // in `ADDED_COLUMNS`, and a test that only ran the CREATE would be testing a schema no
+        // running instance has.
+        super::super::schema::apply(&c).unwrap();
         c
     }
 
@@ -368,6 +490,10 @@ mod tests {
                 amount_usd: 20.0,
                 currency: "USD".into(),
                 kind: RevenueKind::OneTime,
+                amount_minor: None,
+                fx_rate: None,
+                fx_book_version: None,
+                converted: None,
                 period_start: None,
                 period_end: None,
                 ts: parse_ts("2026-06-10T00:00:00Z").unwrap(),
@@ -382,6 +508,10 @@ mod tests {
                 amount_usd: 99.0,
                 currency: "USD".into(),
                 kind: RevenueKind::OneTime,
+                amount_minor: None,
+                fx_rate: None,
+                fx_book_version: None,
+                converted: None,
                 period_start: None,
                 period_end: None,
                 ts: parse_ts("2026-06-12T00:00:00Z").unwrap(),
@@ -416,6 +546,10 @@ mod tests {
             amount_usd: amount,
             currency: "USD".into(),
             kind: RevenueKind::OneTime,
+            amount_minor: None,
+            fx_rate: None,
+            fx_book_version: None,
+            converted: None,
             period_start: None,
             period_end: None,
             ts: parse_ts("2026-06-10T00:00:00Z").unwrap(),

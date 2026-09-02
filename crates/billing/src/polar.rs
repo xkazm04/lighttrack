@@ -162,6 +162,9 @@ pub fn normalize_order(obj: &Value, customer_meta_key: &str, fx: &FxTable) -> Op
             )
         })
         .unwrap_or((None, None));
+    // The whole conversion, so the row can carry its own provenance rather than having the caveat
+    // re-derived from whatever the live table happens to say later.
+    let usd = fx.to_usd(amount, &currency(obj));
     Some(RevenueEvent {
         id: format!("polar:{id}"),
         project_id: String::new(),
@@ -169,8 +172,12 @@ pub fn normalize_order(obj: &Value, customer_meta_key: &str, fx: &FxTable) -> Op
         external_id: Some(id.to_string()),
         customer_id: customer_id(obj, customer_meta_key),
         product_id: product_id(obj),
-        amount_usd: fx.to_usd(amount, &currency(obj)).amount_usd,
+        amount_usd: usd.amount_usd,
         currency: currency(obj),
+        amount_minor: Some(amount),
+        fx_rate: usd.rate,
+        fx_book_version: Some(fx.version().to_string()),
+        converted: Some(usd.converted),
         kind: if subscription.is_some() {
             RevenueKind::Subscription
         } else {
@@ -234,6 +241,7 @@ fn refund_event(
     customer_meta_key: &str,
     fx: &FxTable,
 ) -> RevenueEvent {
+    let usd = fx.to_usd(amount_minor, &currency(obj));
     RevenueEvent {
         id: format!("polar:refund:{order_id}"),
         project_id: String::new(),
@@ -241,8 +249,12 @@ fn refund_event(
         external_id: Some(format!("refund:{order_id}")),
         customer_id: customer_id(obj, customer_meta_key),
         product_id: None,
-        amount_usd: fx.to_usd(amount_minor, &currency(obj)).amount_usd,
+        amount_usd: usd.amount_usd,
         currency: currency(obj),
+        amount_minor: Some(amount_minor),
+        fx_rate: usd.rate,
+        fx_book_version: Some(fx.version().to_string()),
+        converted: Some(usd.converted),
         kind: RevenueKind::Refund,
         period_start: None,
         period_end: None,

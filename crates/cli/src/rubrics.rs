@@ -48,7 +48,53 @@ pub(crate) fn run(cli: &Cli, action: &RubricsCmd) -> Result<()> {
             None,
             "get_rubric",
         ),
+        RubricsCmd::Version {
+            id,
+            file,
+            threshold,
+        } => {
+            let body = version_body(file.as_deref(), *threshold)?;
+            call(
+                cli,
+                Method::POST,
+                &format!("/v1/rubrics/{id}/versions"),
+                Some(body),
+                "get_rubric",
+            )
+        }
     }
+}
+
+/// Build the new-version body. Both halves are optional and an omitted one is **absent**, not a
+/// guessed default: the server carries the superseded rubric's value forward, which is the only
+/// place that knows it. A version that changes nothing at all is refused here rather than minting a
+/// duplicate row nobody asked for.
+fn version_body(file: Option<&str>, threshold: Option<f64>) -> Result<Value> {
+    let mut body = json!({});
+    if let Some(f) = file {
+        let text = fs::read_to_string(f).with_context(|| format!("reading {f}"))?;
+        let src: Value =
+            serde_json::from_str(&text).with_context(|| format!("{f}: invalid JSON"))?;
+        let dims = match src {
+            Value::Array(dims) => dims,
+            Value::Object(mut o) => match o.remove("dimensions") {
+                Some(Value::Array(dims)) => dims,
+                _ => bail!("{f}: object form needs a \"dimensions\" array"),
+            },
+            _ => bail!("{f}: expected a dimensions array or an object carrying one"),
+        };
+        if dims.is_empty() {
+            bail!("{f}: a rubric version needs at least one dimension");
+        }
+        body["dimensions"] = Value::Array(dims);
+    }
+    if let Some(t) = threshold {
+        body["threshold"] = json!(t);
+    }
+    if body.as_object().is_none_or(|o| o.is_empty()) {
+        bail!("nothing to change: pass --file, --threshold, or both");
+    }
+    Ok(body)
 }
 
 /// Build the create-rubric body from the file plus flag overrides.
@@ -94,6 +140,22 @@ fn build_body(src: Value, name: Option<&str>, threshold: Option<f64>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A version must carry only what actually changed: an omitted half is absent so the server
+    /// carries it forward, and a version that changes nothing is refused before the request.
+    #[test]
+    fn a_version_body_carries_only_what_changed() {
+        let body = version_body(None, Some(0.85)).expect("threshold-only version");
+        assert_eq!(body["threshold"], 0.85);
+        assert!(
+            body.get("dimensions").is_none(),
+            "dimensions are carried forward by the server, not restated here: {body}"
+        );
+        assert!(
+            version_body(None, None).is_err(),
+            "a no-op version would mint a duplicate row nobody asked for"
+        );
+    }
 
     fn dims() -> Value {
         json!([{ "key": "correctness", "description": "right?", "weight": 3.0, "floor": 0.5 }])

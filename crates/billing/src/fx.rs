@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 /// The result of normalizing a provider minor-unit amount into USD.
 #[derive(Debug, Clone, Copy)]
@@ -28,6 +29,13 @@ pub struct UsdAmount {
     /// Whether a real conversion happened: the currency is the base (USD) or had a rate. `false` means
     /// the 1:1 fallback was used and the figure is approximate — the caller should surface that.
     pub converted: bool,
+    /// USD per one major unit of the source currency: `1.0` for the base, the book's rate for a
+    /// convertible currency, and `None` on the 1:1 fallback.
+    ///
+    /// `None` rather than `Some(1.0)` for the fallback on purpose: "one unit really is worth a
+    /// dollar" and "we had no rate and stored the number anyway" are different facts, and a stored
+    /// `1.0` would make the second indistinguishable from the first forever after.
+    pub rate: Option<f64>,
 }
 
 /// A static FX book: the reporting base (USD) plus per-currency rates expressed as the **USD value of
@@ -37,6 +45,8 @@ pub struct FxTable {
     base: String,
     /// Uppercase currency code → USD per one unit of that currency.
     rates: HashMap<String, f64>,
+    /// A stable name for *this* book, stamped on every row it converts. See [`FxTable::version`].
+    version: String,
 }
 
 impl Default for FxTable {
@@ -44,21 +54,63 @@ impl Default for FxTable {
         Self {
             base: "USD".to_string(),
             rates: HashMap::new(),
+            version: "usd-only".to_string(),
         }
     }
 }
 
-/// On-disk shape of `config/fx_rates.json`. `_meta` (provenance) is ignored by serde.
+/// On-disk shape of `config/fx_rates.json`.
 #[derive(Debug, Deserialize)]
 struct FxFile {
     #[serde(default = "default_base")]
     base: String,
     #[serde(default)]
     rates: HashMap<String, f64>,
+    /// Provenance block. Only `last_verified` is read: it is the operator's own statement of when
+    /// the rates were checked, which is a better book version than anything we could invent.
+    #[serde(default, rename = "_meta")]
+    meta: FxMeta,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FxMeta {
+    #[serde(default)]
+    last_verified: Option<String>,
 }
 
 fn default_base() -> String {
     "USD".to_string()
+}
+
+/// Name a book: the operator's own `_meta.last_verified` when the file carries one, else a content
+/// hash of the base and the sorted rates.
+///
+/// `last_verified` is preferred because it is the statement a human made about these numbers, and
+/// that is what someone auditing a repriced row wants to read. The hash is the fallback rather than
+/// the primary so two files verified on different days with identical rates stay distinguishable —
+/// re-verification is itself information.
+fn book_version(last_verified: Option<&str>, base: &str, rates: &HashMap<String, f64>) -> String {
+    if let Some(v) = last_verified.map(str::trim).filter(|s| !s.is_empty()) {
+        return v.to_string();
+    }
+    if rates.is_empty() {
+        return format!("{}-only", base.to_lowercase());
+    }
+    let mut pairs: Vec<(&String, &f64)> = rates.iter().collect();
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    let mut h = Sha256::new();
+    h.update(base.as_bytes());
+    for (code, rate) in pairs {
+        h.update([0u8]);
+        h.update(code.as_bytes());
+        h.update(b"=");
+        // Fixed-width decimal, not `{rate}`: a float's shortest round-trip rendering is stable
+        // within a Rust version but is not a format anyone should pin a stored version string to.
+        h.update(format!("{rate:.10}").as_bytes());
+    }
+    let digest = h.finalize();
+    let hex: String = digest.iter().take(6).map(|b| format!("{b:02x}")).collect();
+    format!("sha256:{hex}")
 }
 
 impl FxTable {
@@ -67,13 +119,18 @@ impl FxTable {
     pub fn from_json_str(s: &str) -> Result<Self, serde_json::Error> {
         let parsed: FxFile = serde_json::from_str(s)?;
         let base = parsed.base.to_uppercase();
-        let rates = parsed
+        let rates: HashMap<String, f64> = parsed
             .rates
             .into_iter()
             .map(|(k, v)| (k.to_uppercase(), v))
             .filter(|(k, v)| *k != base && *v > 0.0)
             .collect();
-        Ok(Self { base, rates })
+        let version = book_version(parsed.meta.last_verified.as_deref(), &base, &rates);
+        Ok(Self {
+            base,
+            rates,
+            version,
+        })
     }
 
     /// Load from `LIGHTTRACK_FX_RATES` (or `config/fx_rates.json`). A missing or unparseable file
@@ -104,12 +161,27 @@ impl FxTable {
     /// Build directly from a base + rate map (tests, and any programmatic seeding).
     pub fn new(base: impl Into<String>, rates: HashMap<String, f64>) -> Self {
         let base = base.into().to_uppercase();
-        let rates = rates
+        let rates: HashMap<String, f64> = rates
             .into_iter()
             .map(|(k, v)| (k.to_uppercase(), v))
             .filter(|(k, v)| *k != base && *v > 0.0)
             .collect();
-        Self { base, rates }
+        let version = book_version(None, &base, &rates);
+        Self {
+            base,
+            rates,
+            version,
+        }
+    }
+
+    /// A stable name for this book, stamped on every row it converts.
+    ///
+    /// Rows had no way to say *which* rates produced them, so "we fixed the EUR rate" and "these
+    /// rows already carry the fixed rate" were the same sentence, and the only remedy on offer was
+    /// re-ingesting from the provider. With a version on the row, `reprice_revenue` can find exactly
+    /// the rows a book change should touch and leave the rest alone.
+    pub fn version(&self) -> &str {
+        &self.version
     }
 
     /// Normalize `minor_units` of `currency` into USD, honoring the currency's decimal places and its
@@ -122,18 +194,32 @@ impl FxTable {
             return UsdAmount {
                 amount_usd: major,
                 converted: true,
+                rate: Some(1.0),
             };
         }
         match self.rates.get(&cur) {
             Some(rate) => UsdAmount {
                 amount_usd: major * rate,
                 converted: true,
+                rate: Some(*rate),
             },
             None => UsdAmount {
                 amount_usd: major,
                 converted: false,
+                rate: None,
             },
         }
+    }
+
+    /// The USD value of one major unit of `currency`: `1.0` for the base, the book's entry for a
+    /// convertible currency, `None` when the book has no rate. What a reprice reads to find out
+    /// whether the rate an operator has just added is actually loaded.
+    pub fn rate_for(&self, currency: &str) -> Option<f64> {
+        let cur = currency.to_uppercase();
+        if cur == self.base {
+            return Some(1.0);
+        }
+        self.rates.get(&cur).copied()
     }
 
     /// Whether `currency` converts to USD without a 1:1 fallback (it is the base, or has a rate).

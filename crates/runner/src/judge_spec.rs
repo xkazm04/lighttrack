@@ -9,7 +9,7 @@
 
 use anyhow::{bail, Context, Result};
 
-use lighttrack_core::{Rubric, ScoreDetail};
+use lighttrack_core::{Rubric, ScoreDetail, ScoreKind};
 use lighttrack_engine::{
     build_judge_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig,
 };
@@ -65,6 +65,26 @@ impl Judge {
         match self {
             Judge::Freeform(text) => text,
             Judge::Structured(r) => &r.name,
+        }
+    }
+
+    /// The stored rubric this contract judges against, when there is one.
+    ///
+    /// Stamped onto every verdict beside the label. The label is what a human reads; this is what a
+    /// query joins on — it survives a rename and separates two rubrics that share a name, neither of
+    /// which the label can do.
+    pub(crate) fn rubric_id(&self) -> Option<&str> {
+        match self {
+            Judge::Freeform(_) => None,
+            Judge::Structured(r) => Some(&r.id),
+        }
+    }
+
+    /// What sort of verdict this contract produces.
+    pub(crate) fn kind(&self) -> ScoreKind {
+        match self {
+            Judge::Freeform(_) => ScoreKind::Freeform,
+            Judge::Structured(_) => ScoreKind::Rubric,
         }
     }
 
@@ -133,6 +153,8 @@ mod tests {
                 check: Default::default(),
             }],
             threshold: 0.7,
+            version: 1,
+            supersedes: None,
             created_at: chrono::Utc::now(),
         }
     }

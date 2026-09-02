@@ -99,13 +99,21 @@ pub(crate) struct GuardedMarginRow {
     guardrail: Option<String>,
 }
 
-/// Distinct non-convertible currencies present in `revenue` (per the shared FX table): non-USD codes
-/// with no rate, whose `amount_usd` was a 1:1 fallback. Sorted, deduped, for a stable health note.
+/// Distinct currencies whose stored `amount_usd` is a **1:1 fallback** — read from the rows
+/// themselves, not recomputed against the live FX table.
+///
+/// The old form asked `!fx.is_convertible(&r.currency)` of today's book, which made the caveat a
+/// property of the configuration rather than of the data: adding a missing EUR rate silently
+/// retired the warning while every row stored at 1:1 stayed exactly as wrong as before. The rows
+/// carry `converted` now, so the caveat says what happened to *these* rows and only stops appearing
+/// when they are actually repriced (`POST /v1/revenue/reprice`).
+///
+/// A row written before FX provenance existed reads through
+/// [`RevenueEvent::is_converted`], which infers from the currency rather than guessing `false`.
 fn unconverted_currencies(revenue: &[RevenueEvent]) -> Vec<String> {
-    let fx = lighttrack_billing::shared_fx();
     let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for r in revenue {
-        if !fx.is_convertible(&r.currency) {
+        if !r.is_converted() {
             set.insert(r.currency.to_uppercase());
         }
     }
@@ -175,7 +183,8 @@ pub(crate) async fn get_margin(
     let currency_note = (!unconverted.is_empty()).then(|| {
         format!(
             "unconverted currencies present (stored 1:1, USD figures approximate): {}. \
-             Add rates to config/fx_rates.json.",
+             Add rates to config/fx_rates.json, then restate the stored rows with \
+             POST /v1/revenue/reprice - adding a rate alone fixes future syncs, not these rows.",
             unconverted.join(", ")
         )
     });
@@ -278,7 +287,8 @@ pub(crate) async fn get_margin_simulate(
     let currency_note = (!unconverted.is_empty()).then(|| {
         format!(
             "unconverted currencies present (stored 1:1, USD figures approximate): {}. \
-             Add rates to config/fx_rates.json.",
+             Add rates to config/fx_rates.json, then restate the stored rows with \
+             POST /v1/revenue/reprice - adding a rate alone fixes future syncs, not these rows.",
             unconverted.join(", ")
         )
     });

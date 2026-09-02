@@ -84,6 +84,9 @@ mod table {
         r("/v1/datasets/:id/freeze", NoMethod, Admin),
         r("/v1/projects/:id/rubrics", READ, Admin),
         r("/v1/rubrics/:id", READ, NoMethod),
+        // Minting a rubric generation changes what every future verdict means; admin, like every
+        // other rubric write.
+        r("/v1/rubrics/:id/versions", NoMethod, Admin),
         r("/v1/projects/:id/benchmarks", READ, Admin),
         r("/v1/benchmarks/:id", READ, NoMethod),
         r("/v1/benchmarks/:id/runs", READ, NoMethod),
@@ -110,6 +113,10 @@ mod table {
         r("/v1/schedules/:id/runs", Admin, NoMethod),
         r("/v1/projects", Admin, Admin),
         r("/v1/projects/:id", NoMethod, Admin),
+        // The posture report names counts and a rule fingerprint, never payload text — so the
+        // project's own read key may ask it. An operator who cannot check whether their own data
+        // was scrubbed has a compliance answer they must take on faith.
+        r("/v1/projects/:id/redaction", READ, NoMethod),
         r("/v1/projects/:id/keys", Admin, Admin),
         r("/v1/projects/:id/keys/:kid", NoMethod, Admin),
         r("/v1/projects/:id/keys/:kid/rotate", NoMethod, Admin),
@@ -134,6 +141,8 @@ mod table {
         // handler checks ownership), which is why it is not Admin-only like the device doors.
         r("/v1/relay/tasks/:id/cancel", NoMethod, MANAGE),
         r("/v1/revenue", NoMethod, Admin),
+        // Admin-only, and never over MCP: this restates stored money in bulk.
+        r("/v1/revenue/reprice", NoMethod, Admin),
         r("/v1/margin", Admin, NoMethod),
         r("/v1/margin/trend", Admin, NoMethod),
         r("/v1/margin/customer/:id", Admin, NoMethod),

@@ -174,6 +174,9 @@ impl Client {
             rubric: name
                 .map(|n| format!("guard:{n}"))
                 .unwrap_or_else(|| "guard".into()),
+            // A guard is not a stored rubric: it is an inline, freeform verdict with no id to cite.
+            rubric_id: None,
+            kind: lighttrack_core::ScoreKind::Freeform,
             value: if result.ok { 1.0 } else { 0.0 },
             max: 1.0,
             pass: Some(result.ok),

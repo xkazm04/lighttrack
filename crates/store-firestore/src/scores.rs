@@ -2,7 +2,7 @@
 
 use serde_json::{json, Value};
 
-use lighttrack_core::{Score, ScoreDetail};
+use lighttrack_core::{Score, ScoreDetail, ScoreKind};
 use lighttrack_store::Result;
 
 use crate::codec::*;
@@ -32,6 +32,10 @@ pub(crate) fn insert_score(rest: &Rest, s: &Score) -> Result<()> {
     m.insert("scored_by".into(), json!(s.scored_by));
     m.insert("cost_usd".into(), json!(s.cost_usd));
     m.insert("created_at".into(), json!(fmt_ts(s.created_at)));
+    // The typed identity (M9-C). Written as its own fields, not folded into `rubric`, so the
+    // six encodings that string carries stop being the only way to tell verdicts apart.
+    m.insert("rubric_id".into(), json!(s.rubric_id));
+    m.insert("kind".into(), json!(s.kind.as_str()));
     rest.put_doc("scores", &s.id, &m)
 }
 
@@ -110,5 +114,12 @@ fn score_from(m: &Fields) -> Result<Score> {
         scored_by: freq(m, "scored_by")?,
         cost_usd: ff64(m, "cost_usd"),
         created_at: parse_ts(&freq(m, "created_at")?)?,
+        rubric_id: fstr(m, "rubric_id"),
+        // A kind this binary does not know reads as `Other`; an absent one as `Freeform`, the
+        // pre-typing default. Neither errors the listing.
+        kind: match fstr(m, "kind") {
+            None => ScoreKind::Freeform,
+            Some(k) => ScoreKind::parse(&k).unwrap_or(ScoreKind::Other),
+        },
     })
 }

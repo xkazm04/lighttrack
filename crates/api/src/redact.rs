@@ -34,7 +34,7 @@ use std::collections::HashSet;
 
 use serde_json::{json, Value};
 
-use lighttrack_core::{LlmEvent, Redaction};
+use lighttrack_core::{LlmEvent, Redaction, RedactionStamp, REDACTION_KEY};
 
 pub(crate) const ENV_REDACT: &str = "LIGHTTRACK_REDACT_INGEST";
 
@@ -152,6 +152,17 @@ impl Redactor {
                 )
             }
         }
+        // Which rule set is doing it. The posture line said *that* text is rewritten but never *by
+        // what*, and the rules have already changed shape once — so an operator comparing two
+        // instances, or a database written across an upgrade, had no version to compare. This is the
+        // same fingerprint stamped on every scrubbed row, so a log line and a row can be joined.
+        if !matches!(self.mode, Mode::Off) {
+            tracing::info!(
+                rules = %lighttrack_anon::rules_fingerprint(),
+                "PII scrub rule set in force; the same fingerprint is stamped on every scrubbed row \
+                 (metadata.redaction.rules) and grouped by GET /v1/projects/:id/redaction",
+            );
+        }
     }
 
     /// Scrub structured PII in place from every client-supplied free-text surface of the event —
@@ -169,7 +180,16 @@ impl Redactor {
     /// only bit operators who opted into both; now it would be the default pairing, so it is closed.
     /// `error` and `tags` are scrubbed either way — no persistence policy covers them.
     pub(crate) fn redact_event(&self, ev: &mut LlmEvent, persistence: Redaction) -> usize {
+        // Server-owned, exactly like `api_key_id`: whatever a caller sent under the reserved key is
+        // removed *before* anything else, so a client can never claim to have been scrubbed. Done
+        // here rather than at the call sites because every door that scrubs must also stamp — a
+        // stamp a door could forget is a stamp an operator cannot trust the absence of.
+        strip_client_stamp(ev);
         if !self.enabled_for(&ev.project_id) {
+            // A row nobody scrubbed still gets a stamp. `scrub: false` is a *decision recorded*;
+            // no stamp at all is a row nobody can account for, and the whole point of M9 is that
+            // the two stop looking alike.
+            write_stamp(ev, persistence, false, 0);
             return 0;
         }
         // The scrubber's own failure is not consent to send. If anything in the walk panics — a
@@ -181,13 +201,24 @@ impl Redactor {
         let outcome =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scrub_all(ev, persistence)));
         match outcome {
-            Ok(n) => n,
+            Ok(n) => {
+                // AFTER the walk, never before: the scrub rewrites `metadata`, and a stamp written
+                // first would be scrubbed by the rules it is describing (a 12-hex fingerprint is
+                // not far off the "32+ hex is a secret" rule's shape, and the policy string is
+                // client-looking text).
+                write_stamp(ev, persistence, true, n as u32);
+                n
+            }
             Err(_) => {
                 ev.input = Some(json!("<REDACTION FAILED: payload discarded>"));
                 ev.output = Some(json!("<REDACTION FAILED: payload discarded>"));
                 ev.error = Some("<REDACTION FAILED>".to_string());
                 ev.tags.clear();
                 ev.metadata = Value::Null;
+                // The stamp survives the discard: a row whose scrub panicked is a row the boundary
+                // acted on, and the posture report must show it as scrubbed-with-nothing-left
+                // rather than as one of the unaccounted-for rows.
+                write_stamp(ev, persistence, true, 0);
                 tracing::error!(
                     project_id = %ev.project_id,
                     event_id = %ev.id,
@@ -195,6 +226,48 @@ impl Redactor {
                 );
                 0
             }
+        }
+    }
+}
+
+/// Remove any client-sent value under the reserved [`REDACTION_KEY`]. Same discipline as
+/// `api_key_id`: the field is server-owned, so a body carrying it is scrubbed of it, not trusted.
+fn strip_client_stamp(ev: &mut LlmEvent) {
+    if let Value::Object(map) = &mut ev.metadata {
+        map.remove(REDACTION_KEY);
+    }
+}
+
+/// Write this row's [`RedactionStamp`] into `metadata`, creating the object if the event had none.
+///
+/// A non-object `metadata` (a bare string or array, which the API accepts) is *not* clobbered — it
+/// is moved under `value` so the stamp has somewhere to live without destroying client data. That
+/// shape is vanishingly rare; silently dropping a payload to make room for provenance would be a
+/// worse trade than a slightly odd envelope.
+fn write_stamp(ev: &mut LlmEvent, policy: Redaction, scrub: bool, spans: u32) {
+    let stamp = RedactionStamp {
+        policy,
+        scrub,
+        spans,
+        rules: if scrub {
+            lighttrack_anon::rules_fingerprint().to_string()
+        } else {
+            String::new()
+        },
+    };
+    let Ok(value) = serde_json::to_value(&stamp) else {
+        return;
+    };
+    match &mut ev.metadata {
+        Value::Object(map) => {
+            map.insert(REDACTION_KEY.to_string(), value);
+        }
+        Value::Null => {
+            ev.metadata = json!({ REDACTION_KEY: value });
+        }
+        other => {
+            let kept = std::mem::replace(other, Value::Null);
+            ev.metadata = json!({ "value": kept, REDACTION_KEY: value });
         }
     }
 }
@@ -212,12 +285,16 @@ impl Redactor {
 /// * `product_id` — same, for per-product attribution.
 /// * `cost_source` — a closed vocabulary (`client` | `book`) the server stamps.
 /// * `pricing_mode` — a closed vocabulary the price book resolves against.
-const METADATA_PASSTHROUGH: [&str; 5] = [
+/// * `redaction` — the server's own [`RedactionStamp`] (M9). Written after the walk, so the scrub
+///   never sees it in practice; listed here so a re-scrub of an already-stamped row cannot collapse
+///   its rule fingerprint into `<SECRET>` and destroy the only record of what happened to the row.
+const METADATA_PASSTHROUGH: [&str; 6] = [
     "api_key_id",
     "customer_id",
     "product_id",
     "cost_source",
     "pricing_mode",
+    REDACTION_KEY,
 ];
 
 /// Every client-supplied surface, scrubbed. Split out of [`Redactor::redact_event`] so the whole

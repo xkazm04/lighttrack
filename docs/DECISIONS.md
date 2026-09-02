@@ -240,6 +240,21 @@ is a separator only inside the tight 3-3-4 grouping, which drops dot-separated E
 bare separator-less digit runs. A redaction we miss is legible to whoever reads the row; a sentence
 we rewrote is not, and it silently becomes the evidence every downstream score is computed from.
 
+*Addendum (M9, 2026-09-02) — the scrub records itself.* Under-matching narrows the defect; it does
+not make it observable, and the paragraph above ends by conceding that no score, alert or dashboard
+will ever surface it. The missing piece was that the boundary recorded nothing: `redact_event`
+returned a span count that ingest logged at `debug` and dropped, so a database was an
+indistinguishable mix of raw and scrubbed rows and the question "was *this* row rewritten, and by
+which rules" had no answer at all. Every ingested row now carries a server-owned
+`metadata.redaction` stamp — `{policy, scrub, spans, rules}`, where `rules` is the fingerprint of the
+scrubber's ordered rule set — written after the walk and stripped from whatever the client sent, so
+it is provenance rather than a claim. Three states stay distinct on purpose: no stamp (we do not
+know), `scrub: false` (we looked and stored it verbatim), and a stamp with a span count.
+`GET /v1/projects/:id/redaction` groups the stored rows by it, `GET /v1/events` filters on
+`redaction_rules` / `min_redacted_spans`, and a judged verdict copies the count onto
+`ScoreDetail.evidence_redacted_spans` — so the class of defect this decision called unobservable is
+now a query.
+
 ## D15 — The default judge is `opus@xhigh` (2026-08-06)
 The judge was Claude Haiku (D12's default, cheapest of the aliases). Judging is the one call in this
 product whose quality *is* the product, and D4 already declares it **unbudgeted** — so "cheapest" was

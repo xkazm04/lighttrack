@@ -135,6 +135,9 @@ pub fn normalize_invoice(obj: &Value, fx: &FxTable) -> Option<RevenueEvent> {
     } else {
         RevenueKind::OneTime
     };
+    // The whole conversion, not just its result: `converted` used to be computed here and thrown
+    // away, which is why the margin surface had to guess the caveat back out of the live table.
+    let usd = fx.to_usd(amount_cents, currency);
     Some(RevenueEvent {
         id: format!("stripe:{id}"),
         project_id: String::new(),
@@ -148,8 +151,12 @@ pub fn normalize_invoice(obj: &Value, fx: &FxTable) -> Option<RevenueEvent> {
             .and_then(|l| l.pointer("/price/product"))
             .and_then(Value::as_str)
             .map(str::to_string),
-        amount_usd: fx.to_usd(amount_cents, currency).amount_usd,
+        amount_usd: usd.amount_usd,
         currency: currency.to_uppercase(),
+        amount_minor: Some(amount_cents),
+        fx_rate: usd.rate,
+        fx_book_version: Some(fx.version().to_string()),
+        converted: Some(usd.converted),
         kind,
         period_start,
         period_end,
@@ -165,6 +172,7 @@ pub fn normalize_refund(obj: &Value, fx: &FxTable) -> Option<RevenueEvent> {
         return None;
     }
     let currency = obj.get("currency").and_then(Value::as_str).unwrap_or("usd");
+    let usd = fx.to_usd(refunded, currency);
     Some(RevenueEvent {
         id: format!("stripe:refund:{id}"),
         project_id: String::new(),
@@ -175,8 +183,12 @@ pub fn normalize_refund(obj: &Value, fx: &FxTable) -> Option<RevenueEvent> {
             .and_then(Value::as_str)
             .map(str::to_string),
         product_id: None,
-        amount_usd: fx.to_usd(refunded, currency).amount_usd,
+        amount_usd: usd.amount_usd,
         currency: currency.to_uppercase(),
+        amount_minor: Some(refunded),
+        fx_rate: usd.rate,
+        fx_book_version: Some(fx.version().to_string()),
+        converted: Some(usd.converted),
         kind: RevenueKind::Refund,
         period_start: None,
         period_end: None,

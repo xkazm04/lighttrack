@@ -14,6 +14,41 @@ pub enum Redaction {
     Drop,
 }
 
+/// Reserved `metadata` key carrying the [`RedactionStamp`]. Server-owned: the ingest path strips
+/// whatever a client sent under it before stamping its own, exactly as it does for `api_key_id`.
+/// Defined here so the writer (the api crate's redactor) and the reader
+/// ([`crate::LlmEvent::redaction`]) cannot drift onto two spellings.
+pub const REDACTION_KEY: &str = "redaction";
+
+/// What the ingest boundary did to one row.
+///
+/// D14 names the one class of defect this product cannot observe: a scrub that rewrote the evidence
+/// a judge later read. It could not be observed because nothing was recorded — the redactor returned
+/// a span count that ingest logged at debug and dropped, so a database was an indistinguishable mix
+/// of raw and scrubbed rows. This is that count, plus the two things that make it mean something:
+/// the persistence policy in force, and *which* rule set produced the spans (the rule list has
+/// already changed shape once, so a bare count is not comparable across versions).
+///
+/// `dataset_items.anonymization` has stored `{method, redactions}` since datasets shipped — the
+/// shape is accepted; only the fact table lacked it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedactionStamp {
+    /// The per-project persistence policy applied to the payloads (`none` | `hash` | `drop`).
+    #[serde(default)]
+    pub policy: Redaction,
+    /// Whether the PII scrub ran at all for this project. `false` with `spans: 0` is a row stored
+    /// verbatim; `true` with `spans: 0` is a row the scrubber read and found nothing in. Collapsing
+    /// those two into "0" is exactly the ambiguity this stamp exists to end.
+    #[serde(default)]
+    pub scrub: bool,
+    /// How many spans the scrub replaced across every client-supplied surface of the event.
+    #[serde(default)]
+    pub spans: u32,
+    /// `lighttrack_anon::rules_fingerprint()` — which rule set did it. Empty when `scrub` is false.
+    #[serde(default)]
+    pub rules: String,
+}
+
 /// What a key is allowed to do. Three capabilities on a key, deliberately **not** RBAC: no roles,
 /// no inheritance, no per-resource grants — just the three doors an API key can be handed
 /// (`docs/ARCHITECTURE.md` §9).

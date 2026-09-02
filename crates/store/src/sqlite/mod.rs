@@ -22,6 +22,7 @@ mod pool;
 mod prices;
 mod projects;
 mod prompts;
+mod redaction;
 mod relay;
 mod relay_lease;
 mod revenue;
@@ -63,9 +64,9 @@ use lighttrack_core::{
 use crate::{
     capabilities::{Capabilities, Surface},
     Admission, CollectiveFilter, CostRow, CustomerCostRow, DailyDimCost, DailyUsage,
-    DbMetricsReport, EventFilter, EventPage, MaintenancePass, MaintenanceRequest, ReplaceAck,
-    Result, ScopeUsage, StorageReport, Store, StoreError, TraceEvents, TraceFilter, TracePage,
-    Usage, UseCaseCostRow,
+    DbMetricsReport, EventFilter, EventPage, MaintenancePass, MaintenanceRequest,
+    RedactionPostureRow, ReplaceAck, RepriceReport, Result, ScopeUsage, ScoreFilter, StorageReport,
+    Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
 use metrics::DbOp;
@@ -436,6 +437,13 @@ impl Store for SqliteStore {
             events::usage_by_scope(c, project, since, kind)
         })
     }
+    fn redaction_posture(
+        &self,
+        project: Option<&str>,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<RedactionPostureRow>> {
+        self.read_op(DbOp::EventsRead, |c| redaction::posture(c, project, since))
+    }
     fn daily_usage(
         &self,
         project: &str,
@@ -499,6 +507,16 @@ impl Store for SqliteStore {
     }
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
         self.read_op(DbOp::ScoresRead, |c| scores::list(c, project, limit))
+    }
+    fn list_scores_filtered(
+        &self,
+        project: Option<&str>,
+        filter: &ScoreFilter,
+        limit: usize,
+    ) -> Result<Vec<Score>> {
+        self.read_op(DbOp::ScoresRead, |c| {
+            scores::list_filtered(c, project, filter, limit)
+        })
     }
     fn list_run_scores(
         &self,
@@ -729,6 +747,19 @@ impl Store for SqliteStore {
         until: DateTime<Utc>,
     ) -> Result<Vec<RevenueEvent>> {
         self.read(|c| revenue::list(c, project, since, until))
+    }
+    fn reprice_revenue(
+        &self,
+        project: Option<&str>,
+        currency: &str,
+        rate: f64,
+        version: &str,
+        dry_run: bool,
+    ) -> Result<RepriceReport> {
+        // Through the write connection even for a dry run: the two counts it reports must come from
+        // one consistent view, and a dry run whose numbers a concurrent sync moved under it is a
+        // preview of something that never happens.
+        self.with(|c| revenue::reprice(c, project, currency, rate, version, dry_run))
     }
     fn cost_by_dimension(
         &self,

@@ -97,12 +97,60 @@ pub(crate) fn margin(
     )
 }
 
+/// The query for `lt reprice`. `dry_run` is inverted from `--apply` on purpose: the destructive
+/// form is the one you have to type, matching the route's own default.
+pub(crate) fn reprice_path(
+    currency: &str,
+    project: &Option<String>,
+    rate: &Option<f64>,
+    apply: bool,
+) -> String {
+    let mut p = format!("/v1/revenue/reprice?currency={currency}&dry_run={}", !apply);
+    if let Some(proj) = project {
+        p.push_str(&format!("&project={proj}"));
+    }
+    if let Some(r) = rate {
+        p.push_str(&format!("&rate={r}"));
+    }
+    p
+}
+
+pub(crate) fn reprice(
+    cli: &Cli,
+    currency: &str,
+    project: &Option<String>,
+    rate: &Option<f64>,
+    apply: bool,
+) -> Result<()> {
+    call(
+        cli,
+        Method::POST,
+        &reprice_path(currency, project, rate, apply),
+        None,
+        "reprice_revenue",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn s(v: &str) -> Option<String> {
         Some(v.to_string())
+    }
+
+    /// The safe default has to survive the CLI layer too: no `--apply` must reach the server as a
+    /// dry run, and `--apply` as a real one.
+    #[test]
+    fn reprice_previews_unless_apply_is_given() {
+        assert_eq!(
+            reprice_path("GBP", &None, &None, false),
+            "/v1/revenue/reprice?currency=GBP&dry_run=true"
+        );
+        assert_eq!(
+            reprice_path("GBP", &s("p1"), &Some(1.27), true),
+            "/v1/revenue/reprice?currency=GBP&dry_run=false&project=p1&rate=1.27"
+        );
     }
 
     #[test]

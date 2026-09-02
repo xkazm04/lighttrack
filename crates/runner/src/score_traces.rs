@@ -160,6 +160,9 @@ fn run_cycle(
         let body = json!({
             "rubric": label, "value": v.value, "max": v.max, "pass": v.pass,
             "reasoning": v.reasoning, "scored_by": v.scored_by, "cost_usd": v.cost_usd,
+            // The trace door stamps `kind: trace` itself (it knows whether the verdict anchors to
+            // the root), but the rubric this ran under is only known here.
+            "rubric_id": judge.rubric_id(),
         });
         post(
             cli,

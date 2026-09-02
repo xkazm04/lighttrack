@@ -14,9 +14,14 @@ use crate::Result;
 
 pub(super) const SCHEMA: &str = include_str!("../../../../schema/sqlite/001_init.sql");
 
-/// Columns added after the original schema shipped. Each is `ALTER`ed into a *pre-existing* table;
-/// on a fresh database the table doesn't exist yet and the `CREATE TABLE` in [`SCHEMA`] defines the
-/// column directly, so "no such table" is as much a success here as "duplicate column name".
+/// Additive statements applied after the original schema shipped — `ADD COLUMN`, plus the
+/// `CREATE INDEX IF NOT EXISTS` that covers a column added here (an index cannot live in [`SCHEMA`]
+/// if its column does not, and it cannot precede its own `ALTER`).
+///
+/// Each runs against a table that may or may not exist yet, so "no such table" is as much a success
+/// here as "duplicate column name" — and [`apply`] runs the whole list on **both sides** of the
+/// `CREATE` batch, which is what lets a column live here alone instead of also being written into
+/// `001_init.sql`.
 const ADDED_COLUMNS: &[&str] = &[
     // DBs created before `events.name` existed.
     "ALTER TABLE events ADD COLUMN name TEXT",
@@ -56,6 +61,28 @@ const ADDED_COLUMNS: &[&str] = &[
     "ALTER TABLE api_keys ADD COLUMN scopes TEXT",
     "ALTER TABLE api_keys ADD COLUMN expires_at TEXT",
     "ALTER TABLE projects ADD COLUMN archived_at TEXT",
+    // FX provenance on a revenue row (M9-B). `amount_usd` is derived and a wrong rate makes it
+    // wrong; the provider's minor-unit figure never needs restating, so keeping it — with the rate,
+    // the book version that produced it, and whether a real conversion happened — is what makes a
+    // rate correction a reprice instead of a re-ingest. All nullable: a pre-M9 row carries no
+    // opinion, and `RevenueEvent::is_converted` reads that as "base currency converted, others
+    // unknown" rather than flagging every historical USD invoice as approximate.
+    "ALTER TABLE revenue_events ADD COLUMN amount_minor INTEGER",
+    "ALTER TABLE revenue_events ADD COLUMN fx_rate REAL",
+    "ALTER TABLE revenue_events ADD COLUMN fx_book_version TEXT",
+    "ALTER TABLE revenue_events ADD COLUMN converted INTEGER",
+    // C. Typed verdict identity (M9-C). `scores.rubric` is one free-text column carrying six
+    // encodings, so nothing downstream could tell a benchmark case from a calibration probe without
+    // parsing a string — and the alerting window keyed on that string, which made every compare cell
+    // a unique key that never accumulated. The legacy label stays verbatim beside these.
+    "ALTER TABLE scores ADD COLUMN rubric_id TEXT",
+    "ALTER TABLE scores ADD COLUMN kind TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_scores_rubric_id ON scores(rubric_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_scores_kind ON scores(kind, created_at)",
+    // A rubric edit changes what a score *means*, and nothing recorded that one had happened.
+    // A new version is a new row linked to the old one, never a mutation of it.
+    "ALTER TABLE rubrics ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE rubrics ADD COLUMN supersedes TEXT",
 ];
 
 /// Columns added **after** the [`SCHEMA`] batch instead of before it.
@@ -119,9 +146,16 @@ pub(super) fn apply(c: &Connection) -> Result<()> {
     // carried).
     let backfill = add_column(c, ADD_RECEIVED_AT)?;
     c.execute_batch(SCHEMA)?;
-    // After the batch: columns on tables the batch may itself have just created (see
+    // …and the columns AGAIN, after the batch. On a *fresh* database the first pass skipped every
+    // statement ("no such table" — nothing exists yet), so a column added here but not also written
+    // into [`SCHEMA`]'s `CREATE TABLE` would be missing for the whole life of the process that
+    // created the file, and appear only on the next open. That is a genuinely nasty shape: the bug
+    // reproduces once, on a new install, and never again on the developer's machine. Running the
+    // list on both sides makes [`ADDED_COLUMNS`] self-sufficient, and the second pass costs a
+    // handful of "duplicate column name" errors on every open.
+    // ...together with the columns that may only be added after the batch (see
     // [`ADDED_COLUMNS_LATE`]).
-    for stmt in ADDED_COLUMNS_LATE {
+    for stmt in ADDED_COLUMNS.iter().chain(ADDED_COLUMNS_LATE) {
         add_column(c, stmt)?;
     }
     if backfill {

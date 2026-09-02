@@ -40,6 +40,13 @@ pub(super) fn revenue(store: &dyn Store) -> Result<()> {
             product_id: None,
             amount_usd: amount,
             currency: "USD".into(),
+            // The provider's own figure in minor units, as the adapters now record it. Present here
+            // because the redelivery guard below turns on it: without it there is nothing to
+            // compare and every retry may restate the row.
+            amount_minor: Some((amount * 100.0).round() as i64),
+            fx_rate: Some(1.0),
+            fx_book_version: Some("conformance-book".into()),
+            converted: Some(true),
             kind: RevenueKind::OneTime,
             period_start: None,
             period_end: None,
@@ -97,6 +104,47 @@ pub(super) fn revenue(store: &dyn Store) -> Result<()> {
         "acme stays a single row after replay — no double-count",
     );
 
+    // FX provenance survives storage: `amount_usd` is derived, so a backend that dropped the
+    // original minor-unit figure and the rate behind it would leave a wrong conversion permanently
+    // un-correctable — the row could never be repriced, only re-ingested.
+    assert_eq!(
+        got_acme.amount_minor,
+        Some(2000),
+        "the provider's own minor-unit figure round-trips"
+    );
+    assert_eq!(got_acme.fx_rate, Some(1.0), "fx rate round-trip");
+    assert_eq!(
+        got_acme.fx_book_version.as_deref(),
+        Some("conformance-book"),
+        "which book produced the rate round-trips"
+    );
+    assert_eq!(got_acme.converted, Some(true), "converted round-trip");
+    assert!(got_acme.is_converted());
+
+    // A redelivery whose minor-unit figure is unchanged must NOT restate the money. The same
+    // webhook arriving a month later re-runs the conversion against a *different* FX table, and
+    // before this guard that silently moved historical revenue with nothing recording it.
+    let mut restated = mk_rev("acme", 20.0);
+    restated.amount_usd = 999.0;
+    restated.fx_rate = Some(49.95);
+    restated.fx_book_version = Some("a-later-book".into());
+    store.insert_revenue_event(&restated)?;
+    let after_replay = store.list_revenue_events(Some(&pid), since, until)?;
+    let acme_now = after_replay
+        .iter()
+        .find(|r| r.customer_id.as_deref() == Some("acme"))
+        .expect("acme still present");
+    assert!(
+        (acme_now.amount_usd - 20.0).abs() < 1e-9,
+        "an unchanged charge keeps its stored conversion; got {}",
+        acme_now.amount_usd
+    );
+    assert_eq!(
+        acme_now.fx_book_version.as_deref(),
+        Some("conformance-book"),
+        "and keeps the book version that actually produced it"
+    );
+
     // Cost grouped by the billing dimension, read from event metadata.
     let costs = store.cost_by_dimension(Some(&pid), "customer", since, until)?;
     let acme_cost = costs
@@ -132,5 +180,110 @@ pub(super) fn revenue(store: &dyn Store) -> Result<()> {
         (acme_row.gross_margin_usd - 19.13).abs() < 1e-9,
         "revenue − attributed cost"
     );
+    Ok(())
+}
+
+/// `Surface::RevenueReprice`: correcting a missing FX rate after the fact.
+///
+/// The bar is that a reprice is **surgical**. It must move the rows that took the 1:1 fallback and
+/// nothing else — a pass that also re-based genuinely-converted rows would restate recognized
+/// revenue, which is the failure the redelivery guard above exists to prevent, and this door must
+/// not be a way around it. A dry run must report exactly what the real run will do, or nobody can
+/// use it to decide.
+pub(super) fn reprice(store: &dyn Store) -> Result<()> {
+    let pid = new_id();
+    let now = Utc::now();
+    let mk = |id: &str, currency: &str, minor: Option<i64>, usd: f64, converted: Option<bool>| {
+        RevenueEvent {
+            id: format!("{pid}:{id}"),
+            project_id: pid.clone(),
+            source: "stripe".into(),
+            external_id: Some(id.into()),
+            customer_id: Some("acme".into()),
+            product_id: None,
+            amount_usd: usd,
+            currency: currency.into(),
+            amount_minor: minor,
+            fx_rate: converted.and_then(|c| c.then_some(1.0)),
+            fx_book_version: Some("usd-only".into()),
+            converted,
+            kind: RevenueKind::OneTime,
+            period_start: None,
+            period_end: None,
+            ts: now,
+        }
+    };
+    // Two GBP invoices stored at the 1:1 fallback (£100 read as $100), one already-converted USD
+    // row, one GBP row from before FX provenance existed (no minor-unit figure to re-multiply).
+    store.insert_revenue_events(&[
+        mk("gbp-1", "GBP", Some(10_000), 100.0, Some(false)),
+        mk("gbp-2", "GBP", Some(5_000), 50.0, Some(false)),
+        mk("usd-1", "USD", Some(2_000), 20.0, Some(true)),
+        mk("gbp-legacy", "GBP", None, 70.0, Some(false)),
+    ])?;
+
+    let dry = store.reprice_revenue(Some(&pid), "GBP", 1.27, "2026-09-02", true)?;
+    assert!(dry.dry_run);
+    assert_eq!(dry.matched, 3, "every unconverted GBP row matches");
+    assert_eq!(
+        dry.changed, 2,
+        "…but the row with no minor-unit figure cannot be repriced, and says so"
+    );
+
+    let since = now - chrono::Duration::hours(1);
+    let until = now + chrono::Duration::hours(1);
+    let before = store.list_revenue_events(Some(&pid), since, until)?;
+    assert!(
+        before
+            .iter()
+            .all(|r| r.fx_book_version.as_deref() == Some("usd-only")),
+        "a dry run writes nothing"
+    );
+
+    let run = store.reprice_revenue(Some(&pid), "gbp", 1.27, "2026-09-02", false)?;
+    assert!(!run.dry_run);
+    assert_eq!(
+        (run.matched, run.changed),
+        (dry.matched, dry.changed),
+        "the dry run predicted the real one exactly"
+    );
+
+    let rows = store.list_revenue_events(Some(&pid), since, until)?;
+    let by = |suffix: &str| {
+        rows.iter()
+            .find(|r| r.id.ends_with(suffix))
+            .unwrap_or_else(|| panic!("row {suffix} present"))
+    };
+    let gbp1 = by("gbp-1");
+    assert!(
+        (gbp1.amount_usd - 127.0).abs() < 1e-6,
+        "£100 at 1.27 = $127, got {}",
+        gbp1.amount_usd
+    );
+    assert_eq!(gbp1.fx_rate, Some(1.27));
+    assert_eq!(gbp1.fx_book_version.as_deref(), Some("2026-09-02"));
+    assert_eq!(gbp1.converted, Some(true), "no longer a 1:1 fallback");
+
+    let usd = by("usd-1");
+    assert!(
+        (usd.amount_usd - 20.0).abs() < 1e-9,
+        "an already-converted row is recognized revenue and is left alone"
+    );
+    assert_eq!(usd.fx_book_version.as_deref(), Some("usd-only"));
+
+    let legacy = by("gbp-legacy");
+    assert!(
+        (legacy.amount_usd - 70.0).abs() < 1e-9,
+        "no original figure to re-multiply -> untouched rather than guessed at"
+    );
+    assert_eq!(
+        legacy.converted,
+        Some(false),
+        "and still flagged approximate"
+    );
+
+    // A currency nobody stored is not an error and not a silent success: zero matched, zero changed.
+    let none = store.reprice_revenue(Some(&pid), "JPY", 0.0068, "2026-09-02", false)?;
+    assert_eq!((none.matched, none.changed), (0, 0));
     Ok(())
 }

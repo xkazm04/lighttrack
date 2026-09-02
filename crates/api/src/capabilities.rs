@@ -112,6 +112,18 @@ fn consequence(s: Surface) -> &'static str {
             "/v1/rollup is unavailable, and with it the forecast and margin surfaces that read \
              through the same primitive."
         }
+        Surface::RedactionPosture => {
+            "GET /v1/projects/:id/redaction is unavailable — this deployment cannot say whether \
+             its stored rows were scrubbed, or by which rule set."
+        }
+        Surface::RevenueReprice => {
+            "POST /v1/revenue/reprice is unavailable — revenue stored at the 1:1 FX fallback cannot \
+             be restated here, only re-ingested from the provider."
+        }
+        Surface::ScoreFilters => {
+            "GET /v1/scores?rubric_id=&kind= is unavailable — verdicts here can only be listed \
+             newest-first, not narrowed to one rubric or one kind of verdict."
+        }
         Surface::Traces => "/v1/traces, /v1/traces/:id and whole-trace scoring are unavailable.",
         Surface::Forecast => "/v1/forecast and the pre-emptive breach alerts are unavailable.",
         Surface::MarginBreakdowns => {

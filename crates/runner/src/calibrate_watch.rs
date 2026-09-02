@@ -17,7 +17,7 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 use serde_json::json;
 
-use lighttrack_core::{Agreement, ModelPriceRow, Rubric, Score};
+use lighttrack_core::{Agreement, ModelPriceRow, Rubric, Score, ScoreKind};
 use lighttrack_engine::{parse_judge_spec, EngineConfig};
 
 use crate::calibrate::{judge_set, load_items, resolve_rubric};
@@ -234,6 +234,9 @@ fn post_calibration(
     });
     let mut body = json!({
         "rubric": reserved,
+        // A calibration probe measures the *judge*, not the product. Typing it keeps it out of
+        // every quality rollup that would otherwise average it in with real verdicts.
+        "kind": ScoreKind::Calibration.as_str(),
         "value": a.cohen_kappa,
         "max": 1.0,
         "pass": a.trusted,

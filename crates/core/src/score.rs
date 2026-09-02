@@ -115,6 +115,15 @@ pub struct ScoreDetail {
     /// instead of aging silently. `None` on every non-trace score.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<crate::trace::TraceCoverage>,
+    /// How many PII spans the ingest scrub had already replaced in the evidence this verdict was
+    /// computed from ([`crate::LlmEvent::redaction`]'s `spans`, copied at judge time).
+    ///
+    /// The judge reads the *stored* text, so a scrub that mangled a payload silently changes what
+    /// was judged — D14's un-observable defect, now observable at the verdict rather than only at
+    /// the row. `Some(0)` is a scrubbed-and-untouched payload; `None` is a verdict whose event
+    /// carried no stamp at all, which is a weaker statement and kept distinct from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_redacted_spans: Option<u32>,
 }
 
 /// Truncate on a char boundary, marking that it happened.
@@ -151,6 +160,89 @@ impl ScoreDetail {
     }
 }
 
+/// What kind of verdict a [`Score`] is.
+///
+/// `Score.rubric` is one free-text column carrying six different encodings — a bare rubric name,
+/// `bench:{name}`, `{name}:{label}#case{i}`, a pairwise label, `lt:calibration:…`, a trace rubric —
+/// so every consumer had to parse a string to find out what it was reading, and the alerting path
+/// keyed its window on that string. A compare cell therefore minted a **unique key per case**, and a
+/// window that never sees the same key twice never accumulates: `score_drop` could not fire on a
+/// benchmark's case stream at all.
+///
+/// Typed here, defaulted to [`ScoreKind::Freeform`], and the legacy `rubric` string is kept verbatim
+/// beside it — this classifies existing verdicts rather than replacing their identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoreKind {
+    /// An ad-hoc verdict with no rubric behind it (the online scorer's default judge).
+    #[default]
+    Freeform,
+    /// Judged against a stored [`crate::Rubric`]; `rubric_id` names it.
+    Rubric,
+    /// One case of a benchmark run.
+    BenchCase,
+    /// One (target × case) cell of a comparison matrix.
+    CompareCell,
+    /// One game of a pairwise comparison.
+    PairwiseGame,
+    /// A judge-calibration probe (`lt:calibration:…`), not a product verdict.
+    Calibration,
+    /// A whole-trace verdict, anchored to the trace's root span.
+    Trace,
+    /// A kind this binary does not know — a newer writer's verdict read by an older reader. Kept as
+    /// a variant rather than silently folded into `Freeform`, which would misfile it.
+    #[serde(other)]
+    Other,
+}
+
+impl ScoreKind {
+    /// The stable wire string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScoreKind::Freeform => "freeform",
+            ScoreKind::Rubric => "rubric",
+            ScoreKind::BenchCase => "bench_case",
+            ScoreKind::CompareCell => "compare_cell",
+            ScoreKind::PairwiseGame => "pairwise_game",
+            ScoreKind::Calibration => "calibration",
+            ScoreKind::Trace => "trace",
+            ScoreKind::Other => "other",
+        }
+    }
+
+    /// Parse a wire string; `None` for anything outside the vocabulary, so a filter can 400 on a
+    /// typo instead of answering with an empty page.
+    pub fn parse(s: &str) -> Option<Self> {
+        ScoreKind::ALL
+            .into_iter()
+            .find(|k| k.as_str() == s.trim().to_ascii_lowercase())
+    }
+
+    /// Every kind, so a filter validator derives its accepted set from the enum.
+    pub const ALL: [ScoreKind; 8] = [
+        ScoreKind::Freeform,
+        ScoreKind::Rubric,
+        ScoreKind::BenchCase,
+        ScoreKind::CompareCell,
+        ScoreKind::PairwiseGame,
+        ScoreKind::Calibration,
+        ScoreKind::Trace,
+        ScoreKind::Other,
+    ];
+
+    /// Whether this kind is **per-case** work inside a larger run.
+    ///
+    /// These are the kinds whose legacy `rubric` string embeds a case index, which is what made
+    /// every one of them a unique alert key. An alert window rolls them up under the run's benchmark
+    /// instead, so a benchmark's case stream is one accumulating series again.
+    pub fn is_run_case(self) -> bool {
+        matches!(
+            self,
+            ScoreKind::BenchCase | ScoreKind::CompareCell | ScoreKind::PairwiseGame
+        )
+    }
+}
+
 /// A stored judge result, optionally tied to the event it scored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Score {
@@ -161,7 +253,23 @@ pub struct Score {
     pub project_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_id: Option<String>,
+    /// The verdict's **human-readable label**, kept verbatim for every existing consumer: a bare
+    /// rubric name, `bench:{name}`, `{name}:{label}#case{i}`, `lt:calibration:…`. Six encodings in
+    /// one column, which is why it is no longer the identity — [`Score::rubric_id`] and
+    /// [`Score::kind`] are.
     pub rubric: String,
+    /// The [`crate::Rubric`] this verdict was judged against, when there was one. `None` for a
+    /// freeform verdict, and for a verdict written before the column existed.
+    ///
+    /// This is the join the label could never be: a rubric renamed between two runs used to make
+    /// them two unrelated series, and two rubrics that happened to share a name used to look like
+    /// one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rubric_id: Option<String>,
+    /// What sort of verdict this is. Defaults to [`ScoreKind::Freeform`] so every stored score
+    /// deserializes; the runner stamps the real kind at every producer.
+    #[serde(default)]
+    pub kind: ScoreKind,
     pub value: f64,
     #[serde(default = "one")]
     pub max: f64,
@@ -191,6 +299,37 @@ pub struct Score {
     pub cost_usd: Option<f64>,
     #[serde(default = "Utc::now")]
     pub created_at: DateTime<Utc>,
+}
+
+impl Score {
+    /// The **series key** an alert window accumulates this verdict under.
+    ///
+    /// Two failures it fixes, both from keying on the free-text label:
+    ///
+    /// 1. A rubric renamed between runs split one series into two, and two rubrics sharing a name
+    ///    merged into one. `rubric_id` is stable across a rename and unique across a collision, so
+    ///    it wins whenever the row carries it.
+    /// 2. A per-case label (`{name}:{label}#case7`, `bench:x#case7`) is unique per case, so the
+    ///    window never saw the same key twice and `score_drop` could not fire on a benchmark's case
+    ///    stream at all. Run cases therefore roll up under the run's benchmark — the label with the
+    ///    `#case…` suffix removed, which is exactly the benchmark-scoped prefix the producers build.
+    ///
+    /// Falls back to the label for a pre-typing row, so an existing alert window keeps its history
+    /// rather than resetting on upgrade.
+    pub fn alert_key(&self) -> String {
+        if self.kind.is_run_case() {
+            if let Some(id) = &self.rubric_id {
+                return id.clone();
+            }
+            if let Some((prefix, _)) = self.rubric.split_once("#case") {
+                return prefix.to_string();
+            }
+            return self.rubric.clone();
+        }
+        self.rubric_id
+            .clone()
+            .unwrap_or_else(|| self.rubric.clone())
+    }
 }
 
 /// One target in a comparison matrix: a provider+model, optionally with a named system-prompt variant.
@@ -294,4 +433,117 @@ pub struct BenchmarkRun {
 
 fn default_run_status() -> String {
     "completed".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn score(kind: ScoreKind, rubric: &str, rubric_id: Option<&str>) -> Score {
+        Score {
+            id: "s".into(),
+            project_id: "p".into(),
+            event_id: None,
+            rubric: rubric.into(),
+            rubric_id: rubric_id.map(str::to_string),
+            kind,
+            value: 0.5,
+            max: 1.0,
+            pass: None,
+            reasoning: None,
+            detail: None,
+            run_id: None,
+            case_index: None,
+            scored_by: "judge".into(),
+            cost_usd: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn every_kind_round_trips_through_its_wire_string() {
+        for k in ScoreKind::ALL {
+            assert_eq!(ScoreKind::parse(k.as_str()), Some(k), "{k:?}");
+        }
+        assert_eq!(ScoreKind::parse("BENCH_CASE"), Some(ScoreKind::BenchCase));
+        assert_eq!(ScoreKind::parse("nonsense"), None, "a typo is not a kind");
+    }
+
+    /// A verdict written before typing existed must read as a freeform score with no rubric id,
+    /// not fail to deserialize.
+    #[test]
+    fn a_pre_typing_score_reads_as_freeform() {
+        let legacy: Score = serde_json::from_value(json!({
+            "id": "s1", "project_id": "p1", "rubric": "quality",
+            "value": 0.8, "max": 1.0, "scored_by": "judge",
+            "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .expect("legacy score");
+        assert_eq!(legacy.kind, ScoreKind::Freeform);
+        assert!(legacy.rubric_id.is_none());
+        // …and its alert key is the label it always had, so an existing window keeps its history.
+        assert_eq!(legacy.alert_key(), "quality");
+    }
+
+    /// A kind a newer writer introduced must not be silently misfiled as `freeform`.
+    #[test]
+    fn an_unknown_kind_reads_as_other_not_as_freeform() {
+        let s: Score = serde_json::from_value(json!({
+            "id": "s1", "project_id": "p1", "rubric": "x", "kind": "some_future_kind",
+            "value": 0.8, "max": 1.0, "scored_by": "j", "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .expect("forward-compatible");
+        assert_eq!(s.kind, ScoreKind::Other);
+    }
+
+    /// The defect this closes: a per-case label is unique per case, so a window keyed on it never
+    /// sees the same key twice, and a drop alert can never accumulate over a benchmark's cases.
+    #[test]
+    fn run_cases_roll_up_under_their_benchmark_instead_of_one_key_per_case() {
+        let keys: Vec<String> = (1..=3)
+            .map(|i| {
+                score(
+                    ScoreKind::CompareCell,
+                    &format!("quality:gpt-5.4#case{i}"),
+                    None,
+                )
+                .alert_key()
+            })
+            .collect();
+        assert_eq!(
+            keys,
+            vec!["quality:gpt-5.4"; 3],
+            "three cases, one accumulating series"
+        );
+        assert_eq!(
+            score(ScoreKind::BenchCase, "bench:quality#case9", None).alert_key(),
+            "bench:quality"
+        );
+    }
+
+    /// `rubric_id` takes precedence where the row carries one: a rubric renamed between two runs
+    /// used to split one series into two, and two rubrics sharing a name used to merge into one.
+    #[test]
+    fn the_rubric_id_is_the_key_when_the_row_carries_one() {
+        assert_eq!(
+            score(ScoreKind::Rubric, "renamed-since", Some("rub-1")).alert_key(),
+            "rub-1"
+        );
+        assert_eq!(
+            score(ScoreKind::BenchCase, "bench:x#case4", Some("rub-1")).alert_key(),
+            "rub-1"
+        );
+    }
+
+    #[test]
+    fn only_the_per_case_kinds_are_run_cases() {
+        for k in ScoreKind::ALL {
+            let expect = matches!(
+                k,
+                ScoreKind::BenchCase | ScoreKind::CompareCell | ScoreKind::PairwiseGame
+            );
+            assert_eq!(k.is_run_case(), expect, "{k:?}");
+        }
+    }
 }

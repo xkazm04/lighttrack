@@ -20,6 +20,7 @@ mod jobs;
 mod margin_policies;
 mod prices;
 mod projects;
+mod redaction;
 mod relay;
 mod relay_lease;
 mod revenue;
@@ -43,8 +44,9 @@ use lighttrack_core::{
 };
 use lighttrack_store::{
     capabilities::{Capabilities, Surface},
-    Admission, CollectiveFilter, CostRow, EventFilter, EventPage, ReplaceAck, Result, ScopeUsage,
-    Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    Admission, CollectiveFilter, CostRow, EventFilter, EventPage, RedactionPostureRow, ReplaceAck,
+    RepriceReport, Result, ScopeUsage, ScoreFilter, Store, StoreError, TraceEvents, TraceFilter,
+    TracePage, Usage, UseCaseCostRow,
 };
 
 use util::pgerr;
@@ -95,6 +97,9 @@ impl PgStore {
         Surface::Rollup,
         Surface::Forecast,
         Surface::MarginBreakdowns,
+        Surface::RedactionPosture,
+        Surface::RevenueReprice,
+        Surface::ScoreFilters,
         Surface::Traces,
         Surface::ProjectAdmin,
         Surface::KeyAdmin,
@@ -201,6 +206,14 @@ impl Store for PgStore {
     ) -> Result<Vec<ScopeUsage>> {
         self.rt
             .block_on(events::usage_by_scope(&self.pool, project, since, kind))
+    }
+    fn redaction_posture(
+        &self,
+        project: Option<&str>,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<RedactionPostureRow>> {
+        self.rt
+            .block_on(redaction::posture(&self.pool, project, since))
     }
     fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
         self.rt.block_on(events::get(&self.pool, id))
@@ -315,6 +328,15 @@ impl Store for PgStore {
     }
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
         self.rt.block_on(scores::list(&self.pool, project, limit))
+    }
+    fn list_scores_filtered(
+        &self,
+        project: Option<&str>,
+        filter: &ScoreFilter,
+        limit: usize,
+    ) -> Result<Vec<Score>> {
+        self.rt
+            .block_on(scores::list_filtered(&self.pool, project, filter, limit))
     }
     fn list_run_scores(
         &self,
@@ -521,6 +543,18 @@ impl Store for PgStore {
     ) -> Result<Vec<RevenueEvent>> {
         self.rt
             .block_on(revenue::list(&self.pool, project, since, until))
+    }
+    fn reprice_revenue(
+        &self,
+        project: Option<&str>,
+        currency: &str,
+        rate: f64,
+        version: &str,
+        dry_run: bool,
+    ) -> Result<RepriceReport> {
+        self.rt.block_on(revenue::reprice(
+            &self.pool, project, currency, rate, version, dry_run,
+        ))
     }
     fn cost_by_dimension(
         &self,

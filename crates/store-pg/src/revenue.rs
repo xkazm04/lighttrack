@@ -9,23 +9,36 @@ use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
 use lighttrack_core::{CostByDimension, RevenueEvent, RevenueKind};
-use lighttrack_store::Result;
+use lighttrack_store::{RepriceReport, Result};
+
+/// When a redelivery may restate the money on an existing row — the Postgres twin of
+/// `sqlite/revenue.rs::RESTATE_MONEY`, and it must stay identical: a webhook retried against a
+/// different FX table silently moving historical revenue on one backend and not the other would be
+/// a parity gap in the numbers a business runs on.
+const RESTATE_MONEY: &str = "excluded.amount_minor IS NULL OR revenue_events.amount_minor IS NULL      OR excluded.amount_minor <> revenue_events.amount_minor";
 
 use crate::util::{fmt_ts, parse_ts, pgerr};
 
 pub(crate) async fn insert(pool: &PgPool, ev: &RevenueEvent) -> Result<()> {
     // Upsert on the (deterministic, for synced records) id so webhook redelivery is idempotent.
-    sqlx::query(
+    sqlx::query(&format!(
         "INSERT INTO revenue_events \
          (id, project_id, source, external_id, customer_id, product_id, amount_usd, currency, \
-          kind, period_start, period_end, ts) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
+          kind, period_start, period_end, ts, amount_minor, fx_rate, fx_book_version, converted) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) \
          ON CONFLICT (id) DO UPDATE SET \
            project_id=excluded.project_id, source=excluded.source, external_id=excluded.external_id, \
            customer_id=excluded.customer_id, product_id=excluded.product_id, \
-           amount_usd=excluded.amount_usd, currency=excluded.currency, kind=excluded.kind, \
-           period_start=excluded.period_start, period_end=excluded.period_end, ts=excluded.ts",
-    )
+           currency=excluded.currency, kind=excluded.kind, \
+           period_start=excluded.period_start, period_end=excluded.period_end, ts=excluded.ts, \
+           amount_minor=excluded.amount_minor, \
+           amount_usd=CASE WHEN {RESTATE} THEN excluded.amount_usd ELSE revenue_events.amount_usd END, \
+           fx_rate=CASE WHEN {RESTATE} THEN excluded.fx_rate ELSE revenue_events.fx_rate END, \
+           fx_book_version=CASE WHEN {RESTATE} THEN excluded.fx_book_version \
+                                ELSE revenue_events.fx_book_version END, \
+           converted=CASE WHEN {RESTATE} THEN excluded.converted ELSE revenue_events.converted END",
+        RESTATE = RESTATE_MONEY
+    ))
     .bind(ev.id.clone())
     .bind(ev.project_id.clone())
     .bind(ev.source.clone())
@@ -37,7 +50,10 @@ pub(crate) async fn insert(pool: &PgPool, ev: &RevenueEvent) -> Result<()> {
     .bind(ev.kind.as_str())
     .bind(ev.period_start.map(fmt_ts))
     .bind(ev.period_end.map(fmt_ts))
-    .bind(fmt_ts(ev.ts))
+    .bind(ev.amount_minor)
+    .bind(ev.fx_rate)
+    .bind(ev.fx_book_version.clone())
+    .bind(ev.converted)
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -49,7 +65,8 @@ pub(crate) async fn insert(pool: &PgPool, ev: &RevenueEvent) -> Result<()> {
 /// `/v1/margin` rollup can never be reading different sets of rows.
 const LIST_SQL: &str =
     "SELECT id, project_id, source, external_id, customer_id, product_id, amount_usd, currency, \
-     kind, period_start, period_end, ts FROM revenue_events \
+     kind, period_start, period_end, ts, amount_minor, fx_rate, fx_book_version, converted \
+     FROM revenue_events \
      WHERE ($1::text IS NULL OR project_id = $1) AND ( \
          (period_start IS NOT NULL AND period_end IS NOT NULL \
           AND period_start < $3 AND period_end > $2) \
@@ -146,11 +163,86 @@ pub(crate) async fn cost_by_dimension(
         .collect()
 }
 
+/// Re-convert stored rows of one currency at a corrected rate — the Postgres port of
+/// `sqlite/revenue.rs::reprice`, held to the same semantics by the shared conformance suite.
+///
+/// Only 1:1-fallback rows are touched, and only those carrying the provider's own minor-unit
+/// figure: without it there is nothing to re-multiply, and deriving one from the bad `amount_usd`
+/// would launder the error into a confident number. `matched` counts the first set, `changed` the
+/// second, so the rows a correction cannot reach are visible rather than absent.
+pub(crate) async fn reprice(
+    pool: &PgPool,
+    project: Option<&str>,
+    currency: &str,
+    rate: f64,
+    version: &str,
+    dry_run: bool,
+) -> Result<RepriceReport> {
+    let cur = currency.to_uppercase();
+    let pred =
+        "($1::text IS NULL OR project_id = $1) AND UPPER(currency) = $2 AND converted = false";
+    let matched: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*)::bigint FROM revenue_events WHERE {pred}"
+    ))
+    .bind(project.map(|s| s.to_string()))
+    .bind(cur.clone())
+    .fetch_one(pool)
+    .await
+    .map_err(pgerr)?;
+
+    let changed: i64 = if dry_run {
+        sqlx::query_scalar(&format!(
+            "SELECT COUNT(*)::bigint FROM revenue_events WHERE {pred} AND amount_minor IS NOT NULL"
+        ))
+        .bind(project.map(|s| s.to_string()))
+        .bind(cur.clone())
+        .fetch_one(pool)
+        .await
+        .map_err(pgerr)?
+    } else {
+        sqlx::query(&format!(
+            "UPDATE revenue_events SET amount_usd = amount_minor / $3 * $4, fx_rate = $4, \
+             fx_book_version = $5, converted = true \
+             WHERE {pred} AND amount_minor IS NOT NULL"
+        ))
+        .bind(project.map(|s| s.to_string()))
+        .bind(cur.clone())
+        .bind(minor_divisor(&cur))
+        .bind(rate)
+        .bind(version.to_string())
+        .execute(pool)
+        .await
+        .map_err(pgerr)?
+        .rows_affected() as i64
+    };
+    Ok(RepriceReport {
+        currency: cur,
+        rate,
+        book_version: version.to_string(),
+        matched: matched.max(0) as u64,
+        changed: changed.max(0) as u64,
+        dry_run,
+    })
+}
+
+/// Minor units per major unit, mirroring `lighttrack_billing::fx` and the SQLite backend's copy.
+/// The three tables must agree; the conformance suite converts a GBP row, which pins the common
+/// 2-decimal case, and the zero/three-decimal lists are short enough to read against each other.
+fn minor_divisor(currency: &str) -> f64 {
+    match currency {
+        "BIF" | "CLP" | "DJF" | "GNF" | "ISK" | "JPY" | "KMF" | "KRW" | "PYG" | "RWF" | "UGX"
+        | "VND" | "VUV" | "XAF" | "XOF" | "XPF" => 1.0,
+        "BHD" | "IQD" | "JOD" | "KWD" | "LYD" | "OMR" | "TND" => 1000.0,
+        _ => 100.0,
+    }
+}
+
 fn from_row(row: &PgRow) -> Result<RevenueEvent> {
     let kind: String = row.try_get(8).map_err(pgerr)?;
     let period_start: Option<String> = row.try_get(9).map_err(pgerr)?;
     let period_end: Option<String> = row.try_get(10).map_err(pgerr)?;
     let ts: String = row.try_get(11).map_err(pgerr)?;
+    let converted: Option<bool> = row.try_get(15).map_err(pgerr)?;
     Ok(RevenueEvent {
         id: row.try_get(0).map_err(pgerr)?,
         project_id: row.try_get(1).map_err(pgerr)?,
@@ -169,6 +261,13 @@ fn from_row(row: &PgRow) -> Result<RevenueEvent> {
             Some(s) => Some(parse_ts(&s)?),
             None => None,
         },
+        amount_minor: row.try_get(12).map_err(pgerr)?,
+        fx_rate: row.try_get(13).map_err(pgerr)?,
+        fx_book_version: row.try_get(14).map_err(pgerr)?,
+        // NULL stays NULL: `RevenueEvent::is_converted` makes the inference for a pre-M9 row, where
+        // a reader can see it being made. Defaulting to `false` at the codec would silently declare
+        // every historical row approximate.
+        converted,
         ts: parse_ts(&ts)?,
     })
 }

@@ -215,6 +215,18 @@ fn build_predicates(project: Option<&str>, filter: &EventFilter) -> Predicates {
             .push("EXISTS (SELECT 1 FROM json_each(events.tags) WHERE json_each.value = ?)".into());
         args.push(Box::new(t.clone()));
     }
+    // The redaction stamp is a server-owned object inside `metadata` (see `core::RedactionStamp`),
+    // so both predicates read fixed JSON paths — no client-supplied key to bind.
+    if let Some(r) = &filter.redaction_rules {
+        conds.push("json_extract(metadata, '$.redaction.rules') = ?".into());
+        args.push(Box::new(r.clone()));
+    }
+    if let Some(n) = filter.min_redacted_spans {
+        // COALESCE, not `>= ?` on a possibly-absent path: an unstamped row must compare as zero
+        // spans rather than drop out on NULL, so `min_redacted_spans: 0` still means "everything".
+        conds.push("COALESCE(json_extract(metadata, '$.redaction.spans'), 0) >= ?".into());
+        args.push(Box::new(n as i64));
+    }
     if let Some(k) = &filter.metadata_key {
         // The path is a *bound parameter*, so an arbitrary key can't escape into the SQL text.
         let path = format!("$.\"{}\"", k.replace('"', "\"\""));

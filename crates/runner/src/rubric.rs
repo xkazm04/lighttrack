@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde_json::{json, Value};
 
-use lighttrack_core::{Benchmark, BenchmarkCase, ModelPriceRow, Rubric};
+use lighttrack_core::{Benchmark, BenchmarkCase, ModelPriceRow, Rubric, ScoreKind};
 use lighttrack_engine::{
     parse_judge_spec, run_rubric_judge, run_text, Determinism, EngineConfig, RubricOutcome,
 };
@@ -226,6 +226,8 @@ pub(crate) fn run_rubric_benchmark(
         let score = json!({
             "project_id": bench.project_id,
             "rubric": format!("bench:{}", bench.name),
+            "kind": ScoreKind::BenchCase.as_str(),
+            "rubric_id": bench.rubric_id,
             "run_id": run_id, "case_index": i as u32 + 1,
             "value": o.overall, "max": 1.0, "pass": o.pass,
             "reasoning": weakest_reasoning(&detail),

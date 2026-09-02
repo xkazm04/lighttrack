@@ -10,6 +10,7 @@ use serde_json::{json, Map, Value};
 
 use lighttrack_core::{
     BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, ModelPriceRow, Rubric, ScoreDetail,
+    ScoreKind,
 };
 use lighttrack_engine::{
     generate, generate_deterministic, parse_judge_spec, same_family, Determinism, EngineConfig,
@@ -531,6 +532,11 @@ pub(crate) fn run_compare(
             let score = json!({
                 "project_id": bench.project_id,
                 "rubric": format!("{}:{label}#case{}", bench.name, i + 1),
+                // This label embeds the case index, so it is unique per case — which is what
+                // made every compare cell its own alert window and stopped any of them ever
+                // accumulating. The kind is what lets the alert path roll them back up.
+                "kind": ScoreKind::CompareCell.as_str(),
+                "rubric_id": bench.rubric_id,
                 "run_id": run_id, "case_index": i as u32 + 1,
                 "value": r3(case_score), "max": 1.0, "pass": case_pass,
                 "reasoning": weakest_reasoning(&detail),

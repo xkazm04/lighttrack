@@ -13,7 +13,14 @@ use lighttrack_core::{task_type_from, Benchmark, BenchmarkRun, RunStat};
 
 /// Reduce one `(Benchmark, run)` to a [`RunStat`], or `None` when it can't contribute (no known
 /// provider/model, no quality, or no cases).
-pub(super) fn run_stat(bench: &Benchmark, run: &BenchmarkRun) -> Option<RunStat> {
+///
+/// `rubric_version` is the generation of the benchmark's stored rubric, when the caller could
+/// resolve one. See [`rubric_fingerprint_of`] for why it is part of the fingerprint.
+pub(super) fn run_stat(
+    bench: &Benchmark,
+    run: &BenchmarkRun,
+    rubric_version: Option<u32>,
+) -> Option<RunStat> {
     let (provider, model) = provider_model(bench, run)?;
     let quality = run.mean_score?;
     if run.n_cases == 0 {
@@ -31,7 +38,7 @@ pub(super) fn run_stat(bench: &Benchmark, run: &BenchmarkRun) -> Option<RunStat>
         p50_latency_ms: run.p50_latency_ms,
         p95_latency_ms: run.p95_latency_ms,
         judge_provider: judge_provider_of(&bench.judge_model),
-        rubric_fingerprint: rubric_fingerprint_of(bench),
+        rubric_fingerprint: rubric_fingerprint_of(bench, rubric_version),
         determinism: run
             .report
             .get("determinism")
@@ -79,10 +86,19 @@ fn judge_provider_of(judge_model: &str) -> Option<String> {
 }
 
 /// A short, one-way fingerprint of a benchmark's rubric shape — 8 hex of SHA-256 over the
-/// whitespace-normalized rubric definition (or its id, if the text is empty). Lets two instances tell
-/// whether they scored under the same rubric without either revealing the rubric text. `None` when the
-/// benchmark carries no rubric at all.
-fn rubric_fingerprint_of(bench: &Benchmark) -> Option<String> {
+/// whitespace-normalized rubric definition, or over `(rubric_id, version)` when the benchmark cites
+/// a stored rubric. Lets two instances tell whether they scored under the same rubric without either
+/// revealing the rubric text. `None` when the benchmark carries no rubric at all.
+///
+/// The **version** is in the basis on purpose. A stored rubric can be superseded, and a superseding
+/// version is a different measurement — comparing quality across an edit is comparing two different
+/// instruments. Before rubrics carried a generation, two runs judged under materially different
+/// criteria produced the *same* fingerprint and merged into one leaderboard bucket, which is a
+/// silent apples-to-oranges merge in exactly the surface that exists to compare like with like.
+///
+/// The inline rubric text keeps precedence where present: it is the actual criteria the run used,
+/// which is a stronger statement than an id.
+fn rubric_fingerprint_of(bench: &Benchmark, version: Option<u32>) -> Option<String> {
     let basis = if !bench.rubric.trim().is_empty() {
         bench
             .rubric
@@ -90,12 +106,17 @@ fn rubric_fingerprint_of(bench: &Benchmark) -> Option<String> {
             .collect::<Vec<_>>()
             .join(" ")
     } else {
-        bench
+        let id = bench
             .rubric_id
             .as_deref()
             .map(str::trim)
-            .filter(|s| !s.is_empty())?
-            .to_string()
+            .filter(|s| !s.is_empty())?;
+        // `v?` rather than a bare id, so a pre-versioning run (`None`) is distinguishable from a
+        // known generation 1 rather than being asserted to be one.
+        match version {
+            Some(v) => format!("{id}@v{v}"),
+            None => format!("{id}@v?"),
+        }
     };
     let mut h = Sha256::new();
     h.update(basis.as_bytes());
@@ -171,7 +192,7 @@ mod tests {
             20,
             0.4,
         );
-        let s = run_stat(&b, &r).unwrap();
+        let s = run_stat(&b, &r, None).unwrap();
         assert_eq!(
             (s.provider.as_str(), s.model.as_str()),
             ("anthropic", "haiku")
@@ -185,14 +206,19 @@ mod tests {
         // No report identity, but the benchmark's single target carries it.
         let b = bench("Summaries", json!({"provider":"openai","model":"gpt-x"}));
         let r = run(Value::Null, Some(0.7), 10, 0.1);
-        let s = run_stat(&b, &r).unwrap();
+        let s = run_stat(&b, &r, None).unwrap();
         assert_eq!(s.model, "gpt-x");
         assert_eq!(s.task_type, "summarization");
         // No identity anywhere → skipped.
         let b2 = bench("x", Value::Null);
-        assert!(run_stat(&b2, &run(Value::Null, Some(0.7), 10, 0.1)).is_none());
+        assert!(run_stat(&b2, &run(Value::Null, Some(0.7), 10, 0.1), None).is_none());
         // No quality → skipped.
-        assert!(run_stat(&b, &run(json!({"provider":"a","model":"m"}), None, 10, 0.1)).is_none());
+        assert!(run_stat(
+            &b,
+            &run(json!({"provider":"a","model":"m"}), None, 10, 0.1),
+            None
+        )
+        .is_none());
     }
 
     #[test]
@@ -203,14 +229,14 @@ mod tests {
             "determinism": "exact", "dataset_frozen": true, "dataset_version": 3,
             "n": 20, "ci95": [0.78, 0.86],
         });
-        let s = run_stat(&b, &run(report, Some(0.82), 20, 0.4)).unwrap();
+        let s = run_stat(&b, &run(report, Some(0.82), 20, 0.4), None).unwrap();
         assert_eq!(s.determinism.as_deref(), Some("exact"));
         assert_eq!(s.dataset_frozen, Some(true));
         assert_eq!(s.dataset_version, Some(3));
         assert_eq!(s.significance_tested, Some(true));
         // A run that predates the significance annotation is *unknown*, never libelled as untested.
         let bare = json!({ "provider": "anthropic", "model": "haiku" });
-        let s = run_stat(&b, &run(bare, Some(0.82), 20, 0.4)).unwrap();
+        let s = run_stat(&b, &run(bare, Some(0.82), 20, 0.4), None).unwrap();
         assert!(s.determinism.is_none());
         assert!(s.dataset_frozen.is_none());
         assert!(s.significance_tested.is_none());

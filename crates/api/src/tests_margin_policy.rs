@@ -32,6 +32,10 @@ fn revenue(project: &str, customer: &str, amount: f64) -> RevenueEvent {
         period_start: None,
         period_end: None,
         ts: Utc::now() - Duration::days(2),
+        amount_minor: None,
+        fx_rate: None,
+        fx_book_version: None,
+        converted: None,
     }
 }
 

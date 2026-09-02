@@ -7,7 +7,8 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use lighttrack_core::{
-    BenchTarget, Benchmark, BenchmarkCase, Dataset, DatasetItem, ModelPriceRow, Rubric, ScoreDetail,
+    BenchTarget, Benchmark, BenchmarkCase, Dataset, DatasetItem, ModelPriceRow, Rubric,
+    ScoreDetail, ScoreKind,
 };
 use lighttrack_engine::{
     build_eval_prompt, parse_judge_spec, run_judge, run_rubric_judge, Determinism, EngineConfig,
@@ -331,6 +332,11 @@ fn run_simple(
         let score = json!({
             "project_id": bench.project_id,
             "rubric": format!("bench:{}", bench.name),
+            // The typed identity beside the legacy label: what sort of verdict this is, and
+            // which rubric it cites. Without them the label is the only handle, and a label
+            // is neither stable across a rename nor unique across two rubrics.
+            "kind": ScoreKind::BenchCase.as_str(),
+            "rubric_id": bench.rubric_id,
             "run_id": run_id, "case_index": i as u32 + 1,
             "value": outcome.verdict.score, "max": outcome.verdict.max, "pass": outcome.verdict.pass,
             "reasoning": outcome.verdict.reasoning, "scored_by": outcome.model, "cost_usd": outcome.cost_usd,

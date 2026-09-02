@@ -55,8 +55,13 @@ pub(crate) fn tools() -> Vec<Value> {
             }})),
         tool("get_trace", "Fetch one trace by id: rolled-up totals, the span tree, and any scores recorded within it.",
             json!({"type":"object","properties":{"trace":{"type":"string","description":"trace id"}},"required":["trace"]})),
-        tool("list_scores", "Recent LLM-as-judge scores (newest first). Optionally filter by project.",
-            json!({"type":"object","properties":{"project":{"type":"string"},"limit":{"type":"integer","description":"max scores (default 20)"}}})),
+        tool("list_scores", "Recent LLM-as-judge scores (newest first). Optionally narrowed to one project, one rubric (`rubric_id`), or one kind of verdict (`kind`) - a benchmark case is not the same measurement as an ad-hoc score, and averaging them together is the mistake this filter exists to prevent.",
+            json!({"type":"object","properties":{
+                "project":{"type":"string"},
+                "rubric_id":{"type":"string","description":"only verdicts judged against this stored rubric; survives a rubric rename, unlike the free-text `rubric` label"},
+                "kind":{"type":"string","enum":["freeform","rubric","bench_case","compare_cell","pairwise_game","calibration","trace"],"description":"only verdicts of this kind"},
+                "limit":{"type":"integer","description":"max scores (default 20)"}
+            }})),
         tool("get_limit_status", "Evaluate a project's limit rules now; per-rule status + overall throttle flag.",
             json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
         tool("list_limits", "List a project's configured limit rules.",
@@ -144,7 +149,11 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "get_forecast" => c.get(&forecast_path(args)),
         "get_event" => bind(args, "event", |id| c.get(&format!("/v1/events/{id}"))),
         "get_trace" => bind(args, "trace", |id| c.get(&format!("/v1/traces/{id}"))),
-        "list_scores" => c.get(&list_path("/v1/scores", args)),
+        "list_scores" => {
+            let mut p = list_path("/v1/scores", args);
+            push_str_params(&mut p, args, &["rubric_id", "kind"]);
+            c.get(&p)
+        }
         "get_limit_status" => bind(args, "project", |p| {
             c.get(&format!("/v1/limits/status?project={p}"))
         }),

@@ -39,6 +39,14 @@ pub(crate) struct EventsParams {
     meta: Option<String>,
     /// Minimum resolved `cost_usd`, inclusive.
     min_cost: Option<f64>,
+    /// Match rows the ingest scrub stamped with this rule-set fingerprint
+    /// (`metadata.redaction.rules`; see `GET /v1/projects/:id/redaction` for the fingerprints
+    /// present). The query that separates a cohort scrubbed by the current rules from one scrubbed
+    /// by a previous generation of them.
+    redaction_rules: Option<String>,
+    /// Minimum spans the scrub replaced, inclusive. `1` is "everything the scrubber rewrote" — the
+    /// candidate set for "did we mangle the evidence a judge read".
+    min_redacted_spans: Option<u32>,
     /// When `1`/`true`, also return the total number of matching events in `X-Total-Count`. Opt-in:
     /// it costs a second aggregate query. Taken as a string because a query string carries `1`/`0`
     /// as often as `true`/`false`, and a strict bool parse would 400 on the common form.
@@ -123,6 +131,8 @@ pub(crate) async fn get_events(
         metadata_key,
         metadata_value,
         min_cost: q.min_cost,
+        redaction_rules: q.redaction_rules.clone(),
+        min_redacted_spans: q.min_redacted_spans,
         with_total: is_truthy(q.count.as_deref()),
         cursor: q.cursor.clone(),
     };

@@ -73,7 +73,8 @@ pub use margin_trend::{
 pub use model_id::{canonicalize, canonicalize_with, judge_family, ModelId};
 pub use pricing::{ModelPrice, ModelPriceRow, PriceBook, PricingMode};
 pub use project::{
-    decode_scopes, default_scopes, encode_scopes, ApiKey, Project, Redaction, Scope,
+    decode_scopes, default_scopes, encode_scopes, ApiKey, Project, Redaction, RedactionStamp,
+    Scope, REDACTION_KEY,
 };
 pub use prompt::{Prompt, PromptVersion};
 pub use provider::{family_of, ProviderFamily, ProviderId, UNKNOWN_PROVIDER};
@@ -88,8 +89,8 @@ pub use rubric::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
 pub use schedule::{Schedule, MIN_INTERVAL_SECS as SCHEDULE_MIN_INTERVAL_SECS};
 pub use score::{
     judge_verdict_schema, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, JudgeVerdict, Score,
-    ScoreDetail, ScoreDim, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM, MAX_REASONING_CHARS,
-    RECURRENCE_KEY,
+    ScoreDetail, ScoreDim, ScoreKind, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM,
+    MAX_REASONING_CHARS, RECURRENCE_KEY,
 };
 pub use trace::{
     normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,

@@ -82,6 +82,23 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         action: JobsCmd,
     },
+    /// Restate revenue stored at the 1:1 FX fallback, once a missing rate has been added.
+    ///
+    /// Previews by default. Adding a rate to config/fx_rates.json fixes future syncs only; the rows
+    /// already stored at 1:1 stay wrong until this runs.
+    Reprice {
+        /// ISO-4217 code to restate, e.g. GBP.
+        #[arg(long)]
+        currency: String,
+        #[arg(long)]
+        project: Option<String>,
+        /// USD per one major unit. Defaults to the server's current FX book.
+        #[arg(long)]
+        rate: Option<f64>,
+        /// Actually write. Without it this reports what would change and touches nothing.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Collective Model Intelligence: the shared real-world model leaderboard (network effect).
     Collective {
         #[command(subcommand)]
@@ -249,6 +266,21 @@ pub(crate) enum RubricsCmd {
     },
     /// Show one rubric by id: its dimensions, weights and gating floors.
     Show { id: String },
+    /// Mint the next generation of a rubric: a copy-with-changes under a NEW id, linked to the old.
+    ///
+    /// Not an edit. Verdicts already stored cite the old rubric's id, and rewriting that row would
+    /// silently change what those verdicts claim to have measured. Omit `--file` to carry the
+    /// dimensions forward unchanged (e.g. to move only the threshold).
+    Version {
+        /// The rubric to supersede.
+        id: String,
+        /// Path to the new dimensions JSON (whole body or a bare array). Omitted ⇒ unchanged.
+        #[arg(long)]
+        file: Option<String>,
+        /// New pass threshold 0–1. Omitted ⇒ carried forward from the superseded rubric.
+        #[arg(long)]
+        threshold: Option<f64>,
+    },
 }
 
 #[derive(Subcommand)]

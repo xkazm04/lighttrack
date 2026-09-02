@@ -132,6 +132,10 @@ mod tests {
             period_start: None,
             period_end: None,
             ts,
+            amount_minor: None,
+            fx_rate: None,
+            fx_book_version: None,
+            converted: None,
         }
     }
 

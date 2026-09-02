@@ -214,16 +214,44 @@ pub(crate) async fn score_trace(
     // judged: the trace has no end marker, and without this receipt a span landing a second later
     // silently widens the trace while the verdict stays put. A verdict pinned to a specific inner
     // call is a per-call score — whole-trace coverage would misdescribe it, so it gets none.
-    let detail =
-        (event_id.is_some() && event_id.as_deref() == trace.root_event_id()).then(|| ScoreDetail {
-            coverage: Some(trace.coverage()),
-            ..Default::default()
-        });
+    // How mangled the judged evidence was. The judge reads the *stored* text, so a scrub that
+    // rewrote a payload changed what was judged — a per-call verdict reports its own event's spans,
+    // a whole-trace verdict the sum across the spans it covers. `None` (rather than 0) when no
+    // covered event carried a stamp: "we do not know" is a weaker claim than "nothing was rewritten"
+    // and must not be dressed up as it.
+    let judged: Vec<&lighttrack_core::LlmEvent> = match event_id.as_deref() {
+        Some(anchor) if Some(anchor) != trace.root_event_id() => trace
+            .spans
+            .iter()
+            .map(|s| &s.event)
+            .filter(|e| e.id == anchor)
+            .collect(),
+        _ => trace.spans.iter().map(|s| &s.event).collect(),
+    };
+    let evidence_redacted_spans = judged
+        .iter()
+        .filter_map(|e| e.redaction())
+        .map(|r| r.spans)
+        .reduce(|a, b| a.saturating_add(b));
+    let whole_trace = event_id.is_some() && event_id.as_deref() == trace.root_event_id();
+    let detail = (whole_trace || evidence_redacted_spans.is_some()).then(|| ScoreDetail {
+        coverage: whole_trace.then(|| trace.coverage()),
+        evidence_redacted_spans,
+        ..Default::default()
+    });
     let score = Score {
         id: new_id(),
         project_id: trace.project_id.clone(),
         event_id,
         rubric: body.rubric,
+        // A verdict on a whole trace is a trace verdict; one pinned to an inner call is a
+        // per-call score against whatever rubric the caller names, which is freeform here.
+        rubric_id: None,
+        kind: if whole_trace {
+            lighttrack_core::ScoreKind::Trace
+        } else {
+            lighttrack_core::ScoreKind::Freeform
+        },
         value: body.value,
         max: body.max,
         pass: body.pass,

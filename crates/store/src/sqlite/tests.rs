@@ -370,7 +370,7 @@ fn usecase_costs_groups_by_name_with_fallback_and_window() {
 
 #[test]
 fn trace_rollup_groups_events_and_scores() {
-    use lighttrack_core::Score;
+    use lighttrack_core::{Score, ScoreKind};
 
     let s = SqliteStore::open_in_memory().unwrap();
 
@@ -425,6 +425,8 @@ fn trace_rollup_groups_events_and_scores() {
         project_id: "p1".into(),
         event_id: Some(event_id.into()),
         rubric: rubric.into(),
+        rubric_id: None,
+        kind: ScoreKind::Trace,
         value: 0.8,
         max: 1.0,
         pass: Some(true),
@@ -533,7 +535,7 @@ fn a_runaway_trace_is_clipped_and_says_so() {
 
 #[test]
 fn colliding_trace_id_across_projects_stays_separate() {
-    use lighttrack_core::Score;
+    use lighttrack_core::{Score, ScoreKind};
 
     let s = SqliteStore::open_in_memory().unwrap();
     // The ACCIDENTAL case: two tenants both use the natural upstream request id "req-1". p2's event
@@ -599,6 +601,8 @@ fn colliding_trace_id_across_projects_stays_separate() {
         project_id: "p2".into(),
         event_id: Some("e-theirs".into()),
         rubric: "their-rubric".into(),
+        rubric_id: None,
+        kind: ScoreKind::Freeform,
         value: 1.0,
         max: 1.0,
         pass: Some(true),
@@ -2367,7 +2371,7 @@ fn relay_idempotency_key_is_unique_per_project() {
 /// and the reliability counters — otherwise a stored score is an unauditable scalar again.
 #[test]
 fn score_detail_round_trips_multi_dimension_multi_sample() {
-    use lighttrack_core::{Score, ScoreDetail, ScoreDim};
+    use lighttrack_core::{Score, ScoreDetail, ScoreDim, ScoreKind};
 
     let s = SqliteStore::open_in_memory().unwrap();
     s.init_schema().unwrap();
@@ -2407,12 +2411,16 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
         notes: vec!["candidate spoofed a section marker".into()],
         // Whole-trace coverage: not a trace verdict, so none.
         coverage: None,
+        // The judged evidence carried an ingest scrub stamp of 2 spans.
+        evidence_redacted_spans: Some(2),
     };
     let score = Score {
         id: new_id(),
         project_id: "p1".into(),
         event_id: None,
         rubric: "bench:x".into(),
+        rubric_id: Some("rub-x".into()),
+        kind: ScoreKind::BenchCase,
         value: 0.575,
         max: 1.0,
         pass: Some(false),

@@ -42,6 +42,7 @@
 //!   POST /v1/projects  GET /v1/projects   POST /v1/projects/:id/keys
 //!   PUT  /v1/projects/:id                update name/enabled/redaction/collective_opt_in (admin);
 //!                                        a redaction change is enforced on the NEXT ingested event
+//!   GET  /v1/projects/:id/redaction     what the ingest boundary did to the stored rows (M9)
 //!   POST /v1/projects/:id/limits  GET /v1/projects/:id/limits
 //!   PUT  /v1/limits/:id  DELETE /v1/limits/:id   update (incl. enable/disable) or remove a rule
 //!   POST /v1/projects/:id/margin-policies  GET  /v1/projects/:id/margin-policies
@@ -74,6 +75,7 @@
 //!   POST /v1/relay/tasks/:id/cancel      stop a queued/leased task (own project key or admin)
 //!   POST /v1/relay/tasks/:id/result      device: report succeeded | failed | deferred, fenced
 //!   POST /v1/revenue                     record revenue (manual / billing sync) for profit tracking
+//!   POST /v1/revenue/reprice?currency=&rate=&dry_run=  restate 1:1-fallback rows at a real rate
 //!   GET  /v1/margin?by=customer|product&since=&until=&below=<pct>   revenue − LLM cost rollup
 //!   GET  /v1/margin/trend?by=&days=&top=   per-day revenue/cost/margin series per customer/product
 //!   GET  /v1/margin/customer/:id?since=&until=   one customer's revenue+cost by model & use-case
@@ -172,11 +174,13 @@ mod projects;
 mod projects_keys;
 mod prompts;
 mod redact;
+mod redaction;
 mod rejections;
 mod relay;
 mod relay_lease;
 mod relay_result;
 mod revenue;
+mod revenue_reprice;
 mod rollup;
 mod rubrics;
 mod schedule_migrate;
@@ -205,6 +209,8 @@ mod tests_limit_scope;
 #[cfg(test)]
 mod tests_margin_policy;
 #[cfg(test)]
+mod tests_redaction;
+#[cfg(test)]
 mod tests_relay;
 #[cfg(test)]
 mod tests_rollup;
@@ -216,6 +222,8 @@ mod tests_storage;
 mod tests_tenancy;
 #[cfg(test)]
 mod tests_traces;
+#[cfg(test)]
+mod tests_verdict_identity;
 
 use std::sync::{Arc, RwLock};
 
@@ -481,6 +489,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/rubrics/:id", get(rubrics::get_rubric))
         .route(
+            "/v1/rubrics/:id/versions",
+            post(rubrics::create_rubric_version),
+        )
+        .route(
             "/v1/projects/:id/benchmarks",
             post(benchmarks::create_benchmark).get(benchmarks::list_benchmarks),
         )
@@ -537,6 +549,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
             put(projects::update_project).delete(projects::archive_project),
         )
         .route(
+            "/v1/projects/:id/redaction",
+            get(redaction::get_redaction_posture),
+        )
+        .route(
             "/v1/projects/:id/keys",
             post(projects_keys::create_key).get(projects_keys::list_keys),
         )
@@ -583,6 +599,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/relay/tasks/:id/cancel", post(relay_lease::cancel_task))
         .route("/v1/relay/lease", post(relay_lease::lease_tasks))
         .route("/v1/revenue", post(revenue::post_revenue))
+        .route("/v1/revenue/reprice", post(revenue_reprice::post_reprice))
         .route("/v1/margin", get(revenue::get_margin))
         .route("/v1/margin/trend", get(revenue::get_margin_trend))
         .route("/v1/margin/customer/:id", get(revenue::get_customer_margin))

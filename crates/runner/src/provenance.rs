@@ -40,6 +40,9 @@ pub(crate) fn rubric_detail(o: &RubricOutcome) -> ScoreDetail {
         notes: Vec::new(),
         // Whole-trace coverage is stamped by the API on the trace-scoring door, not here.
         coverage: None,
+        // Filled by [`stamp_evidence`] once the caller knows which event was judged; a benchmark
+        // case judges dataset text that never went through ingest, so it legitimately stays `None`.
+        evidence_redacted_spans: None,
     }
     .capped()
 }
@@ -84,6 +87,29 @@ pub(crate) fn pairwise_detail(o: &lighttrack_engine::PairwiseOutcome) -> ScoreDe
         ..Default::default()
     }
     .capped()
+}
+
+/// Record what the ingest boundary had already done to the text this verdict was computed from.
+///
+/// The judge reads the **stored** payload, so a scrub that mangled it silently changed the evidence
+/// — D14's un-observable defect. Copying the event's stamp onto the verdict makes it observable at
+/// the verdict too, and a non-zero count earns a note so a reader of the report does not have to
+/// know to look for the field.
+///
+/// `None` (not `Some(0)`) for an event carrying no stamp: "we do not know what happened to this
+/// text" is a weaker statement than "nothing was rewritten", and collapsing them would make every
+/// pre-M9 row look verified.
+pub(crate) fn stamp_evidence(detail: &mut ScoreDetail, ev: &lighttrack_core::LlmEvent) {
+    let Some(stamp) = ev.redaction() else {
+        return;
+    };
+    detail.evidence_redacted_spans = Some(stamp.spans);
+    if stamp.spans > 0 {
+        detail.notes.push(format!(
+            "judged text had {} PII span(s) replaced on ingest (rules {})",
+            stamp.spans, stamp.rules
+        ));
+    }
 }
 
 /// A one-line human summary drawn from the judge's *own words*: the weakest dimension's first

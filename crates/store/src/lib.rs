@@ -26,8 +26,9 @@ use lighttrack_core::{
     scope_matches, ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, CostEvidence,
     Dataset, DatasetItem, Job, JobCancel, JobFinish, LeaseHeld, LimitMetric, LimitRule, LimitScope,
     LimitStatus, LimitWindow, LlmEvent, MarginPolicy, ModelPriceRow, Project, Prompt,
-    PromptVersion, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery,
-    RollupRow, Rubric, Schedule, Score, ThresholdBasis, TokensByDimension, Trace, TraceSummary,
+    PromptVersion, RedactionStamp, RelayCancel, RelayOutcome, RelaySettle, RelayTask, RevenueEvent,
+    RollupQuery, RollupRow, Rubric, Schedule, Score, ThresholdBasis, TokensByDimension, Trace,
+    TraceSummary,
 };
 
 pub use capabilities::{Capabilities, Surface};
@@ -104,6 +105,14 @@ pub struct EventFilter {
     /// Minimum resolved `cost_usd` (inclusive). Trace listing already had this; the flat event list
     /// did not, so "which individual calls are expensive" had no answer.
     pub min_cost: Option<f64>,
+    /// Match events stamped by this scrubber rule set (`metadata.redaction.rules`) — the query that
+    /// separates rows scrubbed by the current rules from rows scrubbed by a previous generation,
+    /// which is the first thing anyone needs after a rule change.
+    pub redaction_rules: Option<String>,
+    /// Match events whose scrub replaced at least this many spans (inclusive). `Some(1)` is
+    /// "everything the scrubber actually rewrote" — the candidate set for "did we mangle the
+    /// evidence a judge read".
+    pub min_redacted_spans: Option<u32>,
     /// Also compute the total number of matching events (ignoring the cursor and page limit), so a
     /// client can render "n of N" without paging the whole result set to count it. Opt-in: it costs a
     /// second aggregate query, which a plain "give me the latest 50" should not pay for.
@@ -132,11 +141,73 @@ impl EventFilter {
         if self.min_cost.is_some() {
             return Some("the `min_cost` event filter");
         }
+        if self.redaction_rules.is_some() {
+            return Some("the `redaction_rules` event filter");
+        }
+        if self.min_redacted_spans.is_some() {
+            return Some("the `min_redacted_spans` event filter");
+        }
         if self.with_total {
             return Some("the event total count");
         }
         None
     }
+}
+
+/// One redaction posture: a distinct stamp (or its absence) and how many events carry it.
+///
+/// A tuple would have served the store, but this report is also the body of
+/// `GET /v1/projects/:id/redaction`, and an operator reading `[[null, 4210], [{...}, 17]]` cannot
+/// tell which half is which. Named fields make the payload self-describing where it is read.
+#[derive(Debug, Clone, Serialize)]
+pub struct RedactionPostureRow {
+    /// `None` for rows carrying no stamp at all — "we do not know what happened to these", never
+    /// folded in with rows that recorded a deliberate no-scrub.
+    pub stamp: Option<RedactionStamp>,
+    pub events: u64,
+}
+
+/// Predicates over a verdict's **typed identity** (M9-C).
+///
+/// `kind` is carried as the wire string rather than a [`ScoreKind`] so a filter can name a kind this
+/// binary does not know — a verdict written by a newer producer must be findable by an older reader
+/// instead of being invisible to it. The API validates the spelling against `ScoreKind::ALL` before
+/// it gets here, so a typo is a 400 rather than an empty page.
+#[derive(Debug, Clone, Default)]
+pub struct ScoreFilter {
+    /// The rubric a verdict was judged against — the join the free-text label could never be.
+    pub rubric_id: Option<String>,
+    pub kind: Option<String>,
+}
+
+impl ScoreFilter {
+    /// Whether this filter asks for anything at all. A backend can answer an empty filter with its
+    /// plain listing, which is why the unfiltered path stays on `list_scores`.
+    pub fn is_empty(&self) -> bool {
+        self.rubric_id.is_none() && self.kind.is_none()
+    }
+}
+
+/// What one [`Store::reprice_revenue`] pass did, or would do.
+///
+/// `matched` and `changed` are reported separately because they differ for a reason the caller must
+/// see: a row that took the 1:1 fallback but carries no `amount_minor` (a manual post, a row written
+/// before FX provenance existed) **matches** the correction and cannot **take** it — there is no
+/// original figure to re-multiply, and deriving one from the bad `amount_usd` would launder the
+/// error into a confident-looking number. A single count would hide those rows entirely.
+#[derive(Debug, Clone, Serialize)]
+pub struct RepriceReport {
+    pub currency: String,
+    pub rate: f64,
+    /// The FX book version stamped onto the rows this pass changed.
+    pub book_version: String,
+    /// Unconverted rows in this currency.
+    pub matched: u64,
+    /// …of which this many were (or would be) actually restated.
+    pub changed: u64,
+    /// True when nothing was written. A dry run's `changed` is the count of rows a real run would
+    /// move, so the two runs are directly comparable.
+    pub dry_run: bool,
 }
 
 /// One page of events plus the cursor to fetch the next page (newest-first). `next_cursor` is `Some`
@@ -902,6 +973,26 @@ pub trait Store: Send + Sync {
         rollup_compat::usage_by_scope(self, project, since, kind)
     }
 
+    // --- redaction posture (M9): what the ingest boundary did, grouped ---
+    /// Events since `since`, grouped by the [`RedactionStamp`] they carry — the answer to "is this
+    /// database raw, scrubbed, or a mix, and by which rule set".
+    ///
+    /// Unstamped rows (written before the stamp existed, or by a path that does not scrub) group
+    /// under `stamp: None`, which is a *different* finding from a stamped row that recorded no
+    /// scrub, and the two must never be folded together: one says "we do not know", the other says
+    /// "we looked and stored it verbatim".
+    ///
+    /// [`StoreError::Unsupported`] by default rather than an empty list: an empty posture report
+    /// would read as "no events", which is the most reassuring possible lie about this exact
+    /// question.
+    fn redaction_posture(
+        &self,
+        _project: Option<&str>,
+        _since: DateTime<Utc>,
+    ) -> Result<Vec<RedactionPostureRow>> {
+        Err(StoreError::Unsupported("the redaction posture report"))
+    }
+
     // --- daily time-series for predictive cost/margin forecasting ---
     // Both default over `rollup` (grouping by `Dimension::Day` on the `received_at` key), so a
     // backend that implements the primitive serves the forecast surface without porting anything.
@@ -1033,6 +1124,23 @@ pub trait Store: Send + Sync {
     /// silently degraded record rather than an obviously missing one.
     fn insert_score(&self, s: &Score) -> Result<()>;
     fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>>;
+    /// Scores narrowed by the typed identity: which rubric, and what sort of verdict.
+    ///
+    /// A separate method rather than widening [`Store::list_scores`], for the same reason
+    /// `list_events_filtered` is separate: the unfiltered listing is on the hot path of every
+    /// dashboard, and it must not grow a filter argument every consumer has to pass `None` for.
+    ///
+    /// [`StoreError::Unsupported`] by default — never a silently unfiltered listing. Answering a
+    /// `kind=bench_case` query with every score in the project would look authoritative and be
+    /// wrong, which is the failure this whole trait's default policy exists to refuse.
+    fn list_scores_filtered(
+        &self,
+        _project: Option<&str>,
+        _filter: &ScoreFilter,
+        _limit: usize,
+    ) -> Result<Vec<Score>> {
+        Err(StoreError::Unsupported("the typed score filters"))
+    }
     /// Every case result recorded for one benchmark run, in case order (`case_index`, then
     /// `created_at`; cases without an index sort last). This is the answer to "why did run 47 fail?"
     /// — the per-case verdicts, with the provenance that produced each one.
@@ -1323,6 +1431,25 @@ pub trait Store: Send + Sync {
         _until: DateTime<Utc>,
     ) -> Result<Vec<RevenueEvent>> {
         Err(StoreError::Unsupported("revenue tracking"))
+    }
+    /// Re-convert stored revenue rows of one currency at a corrected `rate`, stamping `version`.
+    ///
+    /// Only rows that took the **1:1 fallback** are touched. A row that converted genuinely is
+    /// recognized revenue at a rate that was correct when it was taken; re-basing it would restate
+    /// history, which is what the redelivery guard on the upsert exists to prevent — this door must
+    /// not be a way around it. `dry_run` counts without writing.
+    ///
+    /// This is the remedy `docs/CURRENCY.md` used to spell "re-ingest from the provider", which is
+    /// not a remedy for a webhook nobody can replay.
+    fn reprice_revenue(
+        &self,
+        _project: Option<&str>,
+        _currency: &str,
+        _rate: f64,
+        _version: &str,
+        _dry_run: bool,
+    ) -> Result<RepriceReport> {
+        Err(StoreError::Unsupported("revenue repricing"))
     }
     /// LLM cost grouped by a billing dimension (`customer` | `product`, from event metadata) over
     /// `[since, until)`. Defaults over [`Store::rollup`].

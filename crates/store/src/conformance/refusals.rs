@@ -43,6 +43,9 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
             surface
         ),
         Surface::Rollup => rollup(store),
+        Surface::RedactionPosture => redaction_posture(store),
+        Surface::RevenueReprice => revenue_reprice(store),
+        Surface::ScoreFilters => score_filters(store),
         Surface::Traces => traces(store),
         Surface::Forecast => forecast(store),
         Surface::MarginBreakdowns => margin(store),
@@ -82,6 +85,43 @@ fn refused<T: std::fmt::Debug>(what: &str, r: Result<T>) {
              got {got:?}"
         ),
     }
+}
+
+/// A backend that cannot report its redaction posture must say so. An empty report here would read
+/// as "no events", which is the most reassuring possible lie about "is this database scrubbed".
+fn redaction_posture(store: &dyn Store) -> Vec<&'static str> {
+    refused(
+        "redaction_posture",
+        store.redaction_posture(Some(&new_id()), Utc::now() - chrono::Duration::hours(1)),
+    );
+    vec!["redaction_posture"]
+}
+
+/// A backend that cannot reprice must say so rather than reporting `matched: 0` — which would read
+/// as "there is nothing wrong with your stored revenue".
+fn revenue_reprice(store: &dyn Store) -> Vec<&'static str> {
+    refused(
+        "reprice_revenue",
+        store.reprice_revenue(Some(&new_id()), "GBP", 1.27, "test", true),
+    );
+    vec!["reprice_revenue"]
+}
+
+/// A backend that cannot narrow verdicts must refuse, rather than answer a narrowed question with
+/// an unnarrowed page.
+fn score_filters(store: &dyn Store) -> Vec<&'static str> {
+    refused(
+        "list_scores_filtered",
+        store.list_scores_filtered(
+            Some(&new_id()),
+            &crate::ScoreFilter {
+                rubric_id: Some(new_id()),
+                kind: None,
+            },
+            10,
+        ),
+    );
+    vec!["list_scores_filtered"]
 }
 
 fn traces(store: &dyn Store) -> Vec<&'static str> {
