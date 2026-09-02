@@ -1291,11 +1291,13 @@ dependencies = [
  "chrono",
  "lighttrack-anon",
  "lighttrack-billing",
+ "lighttrack-contract",
  "lighttrack-core",
  "lighttrack-store",
  "lighttrack-store-firestore",
  "lighttrack-store-pg",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1381,6 +1383,7 @@ dependencies = [
 name = "lighttrack-render"
 version = "0.0.1"
 dependencies = [
+ "lighttrack-contract",
  "serde_json",
 ]
 

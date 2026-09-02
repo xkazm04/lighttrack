@@ -296,6 +296,83 @@ mod tests {
         }
     }
 
+    /// The handover test. `ROUTE_SCOPES` is about to be deleted and `lighttrack-contract` is about
+    /// to become the one declaration of who may call what — so before it goes, prove that the two
+    /// say the same thing about every route, row by row and column by column.
+    ///
+    /// One row is deliberately not equal: `POST /v1/billing/:provider/webhook` is declared `Admin`
+    /// here because a two-column table of LightTrack principals had no way to say "the caller's own
+    /// HMAC signature is the credential". The contract says `Unauthenticated`, which is what the
+    /// handler actually does. That is the table being *corrected*, not the contract being wrong, so
+    /// it is named here rather than fudged into equality.
+    #[test]
+    fn the_contract_declares_the_same_access_as_this_table() {
+        use lighttrack_contract::{Access as C, KeyScope};
+
+        fn same(declared: Access, contract: Option<C>) -> bool {
+            matches!(
+                (declared, contract),
+                (Access::None, None)
+                    | (Access::Admin, Some(C::Admin))
+                    | (Access::Key(Scope::Ingest), Some(C::Key(KeyScope::Ingest)))
+                    | (Access::Key(Scope::Read), Some(C::Key(KeyScope::Read)))
+                    | (Access::Key(Scope::Manage), Some(C::Key(KeyScope::Manage)))
+            )
+        }
+
+        const CORRECTED: &[&str] = &["/v1/billing/:provider/webhook"];
+
+        for r in ROUTE_SCOPES {
+            if CORRECTED.contains(&r.path) {
+                continue;
+            }
+            let (read, write) = lighttrack_contract::access_for(r.path);
+            assert!(
+                same(r.read, read),
+                "{}: this table says read={:?}, the contract says {:?}",
+                r.path,
+                r.read,
+                read
+            );
+            assert!(
+                same(r.write, write),
+                "{}: this table says write={:?}, the contract says {:?}",
+                r.path,
+                r.write,
+                write
+            );
+        }
+        for path in CORRECTED {
+            let (_, write) = lighttrack_contract::access_for(path);
+            assert_eq!(
+                write,
+                Some(C::Unauthenticated),
+                "{path} is listed as a correction, so the contract must be the thing that changed"
+            );
+        }
+    }
+
+    /// The contract's `/v1` route set and the router's must be the same set — the property this
+    /// file's own test established for `ROUTE_SCOPES`, restated against its successor so the
+    /// guarantee survives the handover rather than lapsing during it.
+    #[test]
+    fn the_contract_declares_exactly_the_routes_the_router_serves() {
+        let routed = router_routes();
+        let declared = lighttrack_contract::route_paths();
+        for path in &routed {
+            assert!(
+                declared.contains(&path.as_str()),
+                "route {path} has no endpoint in the contract — add a row to crates/contract"
+            );
+        }
+        for path in &declared {
+            assert!(
+                routed.iter().any(|p| p == path),
+                "the contract declares {path}, which build_router no longer serves"
+            );
+        }
+    }
+
     fn key(scopes: &[Scope]) -> Principal {
         Principal::Project {
             project_id: "p".into(),
