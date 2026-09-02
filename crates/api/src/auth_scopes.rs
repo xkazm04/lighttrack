@@ -167,6 +167,12 @@ mod table {
         r("/v1/collective/ingest", NoMethod, INGEST),
         r("/v1/collective/leaderboard", READ, NoMethod),
         r("/v1/collective/contribution", NoMethod, INGEST),
+        // The contributor side is operator business, not a tenant's: a push spans every consenting
+        // project's benchmark results and spends this deployment's own hub credential, and the
+        // ledger's `projects_included`/`projects_excluded` are instance-wide counts. A project key
+        // that could read it would be reading across tenants.
+        r("/v1/collective/contribute", NoMethod, Admin),
+        r("/v1/collective/contributions", Admin, NoMethod),
         // The ledger is an observability read like the events it is about, so a project key with
         // `read` sees its OWN project's alerts (`resolve_read_project` narrows it). Acknowledging
         // is a state change on shared operational record, so it needs `manage`.

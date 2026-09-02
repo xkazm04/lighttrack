@@ -37,13 +37,25 @@ pub(crate) async fn get_digest(
     Query(q): Query<DigestParams>,
 ) -> Result<Json<CollectiveDigest>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
-    let min_cases = q.min_cases.unwrap_or(DEFAULT_MIN_CASES).max(1);
+    Ok(Json(build_instance_digest(&st, q.min_cases).await?))
+}
 
+/// Build this instance's digest — the body `GET /digest` previews and `POST /contribute` sends.
+///
+/// Shared rather than duplicated because the two must be the *same* digest: the contribution
+/// ledger's hash gate compares what was pushed against what was pushed last time, and a preview
+/// that differed from the push in any stored field would make the gate compare two things that were
+/// never the same object.
+pub(crate) async fn build_instance_digest(
+    st: &AppState,
+    min_cases: Option<u32>,
+) -> Result<CollectiveDigest, ApiError> {
+    let min_cases = min_cases.unwrap_or(DEFAULT_MIN_CASES).max(1);
     let store = st.store.clone();
     let (stats, projects_included, projects_excluded) =
         spawn_db(move || gather_run_stats(store.as_ref())).await?;
     let entries = build_digest(&stats, min_cases);
-    Ok(Json(CollectiveDigest {
+    Ok(CollectiveDigest {
         schema_version: DIGEST_SCHEMA_VERSION,
         contributor_id: st.collective.contributor_id.clone(),
         generated_at: Utc::now(),
@@ -51,7 +63,7 @@ pub(crate) async fn get_digest(
         projects_included,
         projects_excluded,
         entries,
-    }))
+    })
 }
 
 /// Walk the **consenting** projects' benchmarks and reduce each run scorecard to a [`RunStat`].

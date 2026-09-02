@@ -81,6 +81,27 @@ fn setup_k(
     (state, store)
 }
 
+/// The contributor-side fixture (M22): a plain instance in dev mode with a real `contributor_id`,
+/// which is what a ledger row and a digest preview both carry. Shared with `tests_contribute`
+/// rather than duplicated, so the two test modules cannot drift about what an instance looks like.
+pub(crate) fn setup_for_contribution() -> (AppState, Arc<SqliteStore>) {
+    let (mut state, store) = setup(false, false, 5);
+    let collective = Collective {
+        contributor_id: "c-testinstance".to_string(),
+        accept: false,
+        allow_anon: false,
+        min_cases: 5,
+        display_floor: 30,
+        min_contributors: 1,
+        min_interval_hours: 0,
+        max_age_days: 90,
+        aliases: ModelAliases::default(),
+        alias_source: "test fixture".to_string(),
+    };
+    state.collective = Arc::new(collective);
+    (state, store)
+}
+
 /// Mint a real hub-issued **contributor** credential: a project carrying `collective_opt_in` plus an
 /// API key on it. Returns the full key string. This is the only kind of token a hub accepts a
 /// contribution from — an arbitrary bearer string is not an identity (see `resolve_contributor`).

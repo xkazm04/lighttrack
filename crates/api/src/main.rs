@@ -92,6 +92,9 @@
 //!   POST /v1/collective/ingest                hub: accept a contributor's digest (gated; off default)
 //!   GET  /v1/collective/leaderboard?task_type=&provider=&judge=   merged real-world model leaderboard
 //!   DEL  /v1/collective/contribution        withdraw this source's contributed entries
+//!                                           (?all=1: withdraw OURS from every ledgered hub, admin)
+//!   POST /v1/collective/contribute            push our digest to a hub + record the ack (admin)
+//!   GET  /v1/collective/contributions         the contribution ledger: what we sent, and what came back (admin)
 //!
 //! Env: LIGHTTRACK_BIND, LIGHTTRACK_DB, LIGHTTRACK_DATABASE_URL, LIGHTTRACK_PRICING,
 //!      LIGHTTRACK_MAX_TS_SKEW_SECS (symmetric client-`ts` skew bound in seconds; 0 = disable the
@@ -158,6 +161,7 @@ mod benchmarks_target;
 mod billing;
 mod capabilities;
 mod collective;
+mod collective_auto;
 mod costs_unpriced;
 mod datasets;
 mod error;
@@ -170,6 +174,7 @@ mod forecast;
 mod forecast_alerts;
 mod forecast_sweep;
 mod guards;
+mod http;
 mod idempotency;
 mod jobs;
 mod jobs_enqueue;
@@ -212,6 +217,8 @@ mod tests_auth_throttle;
 mod tests_capabilities;
 #[cfg(test)]
 mod tests_collective;
+#[cfg(test)]
+mod tests_contribute;
 #[cfg(test)]
 mod tests_dev_mode;
 #[cfg(test)]
@@ -390,6 +397,8 @@ async fn main() -> anyhow::Result<()> {
     let sweep_desc = forecast_sweep::describe(sweep);
     let sched_sweep = schedule_sweep::SweepConfig::from_env();
     let sched_sweep_desc = schedule_sweep::describe(sched_sweep);
+    let auto_contribute_desc =
+        collective_auto::AutoContribute::describe(&collective_auto::AutoContribute::from_env());
     // The whole runtime configuration as one indexed event: "why did prod behave differently" is a
     // field comparison across two boots, not a diff of two prose lines. The human-critical part (are
     // we up, and on what address) stays in the message so it reads at a glance in either format.
@@ -409,6 +418,7 @@ async fn main() -> anyhow::Result<()> {
         redact = %redact_desc,
         billing = %billing_desc,
         collective = %collective_desc,
+        collective_auto_contribute = %auto_contribute_desc,
         "lighttrack-api v{} listening on http://{bind}",
         env!("CARGO_PKG_VERSION"),
     );
@@ -668,6 +678,16 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route(
             "/v1/collective/contribution",
             delete(collective::delete_contribution),
+        )
+        // The contributor side: push our digest to a hub and record what it said, then read the
+        // record back.
+        .route(
+            "/v1/collective/contribute",
+            post(collective::post_contribute),
+        )
+        .route(
+            "/v1/collective/contributions",
+            get(collective::get_contributions),
         )
         // The alert ledger: what fired, who was told, who acknowledged it, and what came of it.
         .route("/v1/alerts", get(alerts::read::list_alerts))

@@ -69,6 +69,12 @@ pub(crate) fn spawn(st: AppState, cfg: Option<SweepConfig>) {
                              // Before the first real sweep: give every benchmark that opted into the OLD recurrence key
                              // a schedule, so upgrading to this build never silently stops work an operator configured.
         crate::schedule_migrate::migrate_benchmark_recurrence(&st).await;
+        // …and, when the operator opted in, make sure the auto-contribute schedule exists. Here
+        // rather than in `main`: it needs the same "before the first sweep, after the store is
+        // live" moment the recurrence migration does, and both are idempotent by construction.
+        if let Some(cfg) = crate::collective_auto::AutoContribute::from_env() {
+            crate::collective_auto::ensure_schedule(&st, &cfg).await;
+        }
         loop {
             ticker.tick().await;
             sweep_once(&st).await;
