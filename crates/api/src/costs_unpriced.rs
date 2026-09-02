@@ -60,7 +60,7 @@ pub(crate) async fn get_unpriced(
 
     let store = st.store.clone();
     let (rows, prices) = spawn_db(move || {
-        let rows = store.list_unpriced(project.as_deref(), since)?;
+        let rows = store.list_unpriced(project.as_deref().into(), since)?;
         // Same call, same snapshot: the freshness reported beside the ledger is the freshness of
         // the book the ledger was measured against.
         let prices = store.list_prices()?;

@@ -8,6 +8,7 @@ use lighttrack_core::{
     Redaction, Threshold,
 };
 
+use crate::Scope;
 use crate::{Result, Store};
 
 pub(super) fn projects_keys_limits(store: &dyn Store, pid: &str) -> Result<()> {
@@ -270,7 +271,7 @@ pub(super) fn limit_lifecycle(store: &dyn Store, pid: &str) -> Result<()> {
     };
     store.create_limit_rule(&scoped)?;
     let got = store
-        .get_limit_rule(&scoped.id)?
+        .get_limit_rule(Scope::Operator, &scoped.id)?
         .expect("get_limit_rule finds the rule");
     assert_eq!(got.warn_at, Some(0.8), "warn_at round-trips");
     assert_eq!(
@@ -281,9 +282,12 @@ pub(super) fn limit_lifecycle(store: &dyn Store, pid: &str) -> Result<()> {
     let mut updated = got.clone();
     updated.threshold = Threshold::Fixed(75.0);
     updated.scope = Some(LimitScope::Provider("conf-prov".into()));
-    assert!(store.update_limit_rule(&updated)?, "update matches the row");
+    assert!(
+        store.update_limit_rule(Scope::Operator, &updated)?,
+        "update matches the row"
+    );
     let after = store
-        .get_limit_rule(&scoped.id)?
+        .get_limit_rule(Scope::Operator, &scoped.id)?
         .expect("rule still present after update");
     assert_eq!(
         after.threshold,
@@ -303,24 +307,26 @@ pub(super) fn limit_lifecycle(store: &dyn Store, pid: &str) -> Result<()> {
     ] {
         let mut r = after.clone();
         r.scope = Some(s.clone());
-        assert!(store.update_limit_rule(&r)?);
+        assert!(store.update_limit_rule(Scope::Operator, &r)?);
         assert_eq!(
-            store.get_limit_rule(&scoped.id)?.and_then(|g| g.scope),
+            store
+                .get_limit_rule(Scope::Operator, &scoped.id)?
+                .and_then(|g| g.scope),
             Some(s.clone()),
             "{} scope round-trips",
             s.kind_str()
         );
     }
     assert!(
-        store.delete_limit_rule(&scoped.id)?,
+        store.delete_limit_rule(Scope::Operator, &scoped.id)?,
         "delete removes the rule"
     );
     assert!(
-        store.get_limit_rule(&scoped.id)?.is_none(),
+        store.get_limit_rule(Scope::Operator, &scoped.id)?.is_none(),
         "deleted rule is gone"
     );
     assert!(
-        !store.delete_limit_rule(&new_id())?,
+        !store.delete_limit_rule(Scope::Operator, &new_id())?,
         "deleting an unknown id returns false"
     );
     Ok(())

@@ -99,16 +99,21 @@ pub(super) fn list(conn: &Connection, f: &LabelFilter) -> Result<Vec<Label>> {
 /// One statement with a subquery rather than a per-item lookup: a 500-case golden set is otherwise
 /// 500 round trips, which is what makes "calibrate against the stored dataset" too slow to use and
 /// keeps everyone on files.
-pub(super) fn for_dataset(conn: &Connection, dataset_id: &str) -> Result<Vec<Label>> {
+pub(super) fn for_dataset(
+    conn: &Connection,
+    project: Option<&str>,
+    dataset_id: &str,
+) -> Result<Vec<Label>> {
     let sql = format!(
         "SELECT {COLS} FROM labels \
          WHERE subject_kind = 'dataset_item' \
-           AND subject_id IN (SELECT id FROM dataset_items WHERE dataset_id = ?1) \
-         ORDER BY created_at ASC, id ASC"
+           AND subject_id IN (SELECT id FROM dataset_items WHERE dataset_id = ?1){} \
+         ORDER BY created_at ASC, id ASC",
+        super::scope_and(2)
     );
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
-        .query_map(params![dataset_id], map_raw)?
+        .query_map(params![dataset_id, project], map_raw)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().filter_map(transpose_row).collect()
 }

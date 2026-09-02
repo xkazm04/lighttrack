@@ -204,21 +204,21 @@ pub(crate) async fn cancel_task(
     Path(id): Path<String>,
 ) -> Result<Json<RelayCancel>, ApiError> {
     let p = authenticate(&st, &headers).await?;
-    let store = st.store.clone();
-    let id2 = id.clone();
-    let task = spawn_db(move || store.get_relay_task(&id2))
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("relay task '{id}' not found")))?;
-    if let Principal::Project { project_id, .. } = &p {
-        if *project_id != task.project_id {
-            return Err(ApiError::forbidden("key not authorized for that project"));
-        }
-    } else {
+    if !matches!(p, Principal::Project { .. }) {
         ensure_can_admin(&p)?;
     }
     let store = st.store.clone();
     let id2 = id.clone();
-    let outcome = spawn_db(move || store.cancel_relay_task(&id2))
+    // The scope IS the authorization (M17): a task outside it is not found, not refused. The read
+    // stays because the handler still needs the row's status for its response.
+    let sc = p.scope_owned();
+    let _task = spawn_db(move || store.get_relay_task(sc.as_deref().into(), &id2))
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("relay task '{id}' not found")))?;
+    let store = st.store.clone();
+    let id2 = id.clone();
+    let sc = p.scope_owned();
+    let outcome = spawn_db(move || store.cancel_relay_task(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("relay task '{id}' not found")))?;
     if let RelayCancel::AlreadyFinished { status } = &outcome {

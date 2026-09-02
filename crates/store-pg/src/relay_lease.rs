@@ -72,16 +72,22 @@ pub(crate) async fn update_progress(
 
 /// Ask a task to stop, in ONE conditional statement so it cannot race a concurrent lease: `queued`
 /// → `cancelled`, `leased` → `cancelling` (not leasable), terminal → untouched.
-pub(crate) async fn cancel(pool: &PgPool, id: &str) -> Result<Option<RelayCancel>> {
+pub(crate) async fn cancel(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<RelayCancel>> {
     let new_status: Option<String> = sqlx::query_scalar(
         "UPDATE relay_tasks \
          SET status = CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END, \
              updated_at = $2 \
          WHERE id = $1 AND status IN ('queued','leased') \
+           AND ($3::text IS NULL OR project_id = $3) \
          RETURNING status",
     )
     .bind(id.to_string())
     .bind(fmt_ts(Utc::now()))
+    .bind(project.map(str::to_string))
     .fetch_optional(pool)
     .await
     .map_err(pgerr)?;
@@ -90,12 +96,14 @@ pub(crate) async fn cancel(pool: &PgPool, id: &str) -> Result<Option<RelayCancel
         Some(_) => return Ok(Some(RelayCancel::Cancelling)),
         None => {}
     }
-    let existing: Option<String> =
-        sqlx::query_scalar("SELECT status FROM relay_tasks WHERE id = $1")
-            .bind(id.to_string())
-            .fetch_optional(pool)
-            .await
-            .map_err(pgerr)?;
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM relay_tasks WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)",
+    )
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     Ok(existing.map(|status| RelayCancel::AlreadyFinished { status }))
 }
 

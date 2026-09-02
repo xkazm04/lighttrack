@@ -17,6 +17,7 @@ use chrono::Utc;
 
 use crate::alerts_relay::UnroutableActions;
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 const ENV_SECS: &str = "LIGHTTRACK_RELAY_UNROUTABLE_SECS";
 
@@ -48,14 +49,17 @@ fn grace_secs() -> Option<i64> {
 pub(crate) async fn sweep_once(st: &AppState) {
     let Some(grace) = grace_secs() else { return };
     let store = st.store.clone();
-    let queued =
-        match spawn_db(move || store.list_relay_tasks(None, Some("queued"), SCAN_LIMIT)).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::debug!(error = %e, "relay unroutable sweep: queued tasks unavailable");
-                return;
-            }
-        };
+    let queued = match spawn_db(move || {
+        store.list_relay_tasks(TenantScope::Operator, Some("queued"), SCAN_LIMIT)
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::debug!(error = %e, "relay unroutable sweep: queued tasks unavailable");
+            return;
+        }
+    };
     let now = Utc::now();
     // Group first, ask the fleet once per action type. A backlog is usually one action type
     // repeated, and a per-task eligibility read would turn a stuck queue into a table scan storm.

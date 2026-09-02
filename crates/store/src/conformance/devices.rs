@@ -11,6 +11,7 @@ use chrono::Utc;
 use lighttrack_core::{new_id, Device};
 
 use super::relay::sample_task;
+use crate::Scope;
 use crate::{Result, Store};
 
 /// A device advertising `capabilities`, enrolled operator-wide. `key_hash` is a stand-in digest:
@@ -37,7 +38,9 @@ pub(super) fn devices(store: &dyn Store) -> Result<()> {
     store.create_device(&d)?;
 
     // Round-trip, including the capability list and the prefix the key lookup keys on.
-    let got = store.get_device(&d.id)?.expect("get_device Some");
+    let got = store
+        .get_device(Scope::Operator, &d.id)?
+        .expect("get_device Some");
     assert_eq!(got.name, d.name);
     assert_eq!(got.capabilities, d.capabilities, "capability round-trip");
     assert!(!got.revoked);
@@ -54,7 +57,10 @@ pub(super) fn devices(store: &dyn Store) -> Result<()> {
     );
     assert!(store.find_device_by_key_prefix(&new_id())?.is_none());
     assert!(
-        store.list_devices(None)?.iter().any(|x| x.id == d.id),
+        store
+            .list_devices(Scope::Operator)?
+            .iter()
+            .any(|x| x.id == d.id),
         "an enrolled device must appear in the fleet listing"
     );
 
@@ -63,7 +69,9 @@ pub(super) fn devices(store: &dyn Store) -> Result<()> {
     // adds an action folder, and a stale list is the routing failure this surface exists to end.
     let widened = vec![format!("{ns}/*"), format!("{ns}-extra/one")];
     store.touch_device(&d.id, &widened, Some("0.9.9"))?;
-    let got = store.get_device(&d.id)?.expect("get after touch");
+    let got = store
+        .get_device(Scope::Operator, &d.id)?
+        .expect("get after touch");
     assert!(
         got.last_seen_at.is_some(),
         "touch_device is the only liveness signal a device behind NAT can give"
@@ -74,7 +82,9 @@ pub(super) fn devices(store: &dyn Store) -> Result<()> {
     // …but an EMPTY report never blanks the row. A pre-M18 agent advertises nothing, and letting
     // that widen the device to "everything" would silently undo the operator's narrowing.
     store.touch_device(&d.id, &[], None)?;
-    let got = store.get_device(&d.id)?.expect("get after empty touch");
+    let got = store
+        .get_device(Scope::Operator, &d.id)?
+        .expect("get after empty touch");
     assert_eq!(
         got.capabilities, widened,
         "an empty report is not an erasure"
@@ -134,7 +144,9 @@ fn capability_routed_lease(store: &dyn Store, d: &Device, ns: &str) -> Result<()
         "a task OUTSIDE the advertised set must never be handed to this device"
     );
 
-    let untouched = store.get_relay_task(&theirs.id)?.expect("get unroutable");
+    let untouched = store
+        .get_relay_task(Scope::Operator, &theirs.id)?
+        .expect("get unroutable");
     assert_eq!(untouched.status, "queued", "…and must stay queued");
     assert_eq!(
         untouched.attempts, 0,
@@ -167,13 +179,16 @@ fn capability_routed_lease(store: &dyn Store, d: &Device, ns: &str) -> Result<()
 /// Revocation is a flag, not a delete: the device still resolves (so a task naming it still reads),
 /// and it is eligible for nothing.
 fn revocation(store: &dyn Store, d: &Device, ns: &str) -> Result<()> {
-    assert!(store.revoke_device(&d.id)?, "revoking a real device");
     assert!(
-        !store.revoke_device(&new_id())?,
+        store.revoke_device(Scope::Operator, &d.id)?,
+        "revoking a real device"
+    );
+    assert!(
+        !store.revoke_device(Scope::Operator, &new_id())?,
         "revoking a device that does not exist must say so rather than report success"
     );
     let got = store
-        .get_device(&d.id)?
+        .get_device(Scope::Operator, &d.id)?
         .expect("a revoked device still resolves");
     assert!(got.revoked);
     assert!(

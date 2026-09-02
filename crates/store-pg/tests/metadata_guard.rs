@@ -9,6 +9,7 @@
 
 use chrono::{Duration, Utc};
 use lighttrack_core::{new_id, LlmEvent, Operation, Status, TokenUsage};
+use lighttrack_store::Scope;
 use lighttrack_store::Store;
 use lighttrack_store_pg::PgStore;
 
@@ -87,7 +88,7 @@ fn an_empty_metadata_string_does_not_break_the_margin_read() {
 
     let rows = store
         .cost_by_dimension(
-            Some(&pid),
+            Scope::Project(&pid),
             "customer",
             now - Duration::hours(1),
             now + Duration::hours(1),

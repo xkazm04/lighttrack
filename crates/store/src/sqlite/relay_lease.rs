@@ -69,27 +69,35 @@ pub(super) fn update_progress(
 /// inconsistent state: `queued` → `cancelled` outright, `leased` → `cancelling` (which is outside
 /// the leasable set, so the reclaim path can never hand it to a second device), terminal →
 /// untouched and reported as already finished.
-pub(super) fn cancel(conn: &Connection, id: &str) -> Result<Option<RelayCancel>> {
+pub(super) fn cancel(
+    conn: &Connection,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<RelayCancel>> {
     let now = fmt_ts(Utc::now());
-    let mut stmt = conn.prepare(
+    let scope = super::scope_and(3);
+    let sql = format!(
         "UPDATE relay_tasks \
          SET status = CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END, \
              updated_at = ?2 \
-         WHERE id = ?1 AND status IN ('queued','leased') \
-         RETURNING status",
-    )?;
-    let new_status: Option<String> = stmt.query_row(params![id, now], |r| r.get(0)).optional()?;
+         WHERE id = ?1 AND status IN ('queued','leased'){scope} \
+         RETURNING status"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let new_status: Option<String> = stmt
+        .query_row(params![id, now, project], |r| r.get(0))
+        .optional()?;
     match new_status.as_deref() {
         Some("cancelled") => return Ok(Some(RelayCancel::Cancelled)),
         Some(_) => return Ok(Some(RelayCancel::Cancelling)),
         None => {}
     }
+    let existing_sql = format!(
+        "SELECT status FROM relay_tasks WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let existing: Option<String> = conn
-        .query_row(
-            "SELECT status FROM relay_tasks WHERE id = ?1",
-            params![id],
-            |r| r.get(0),
-        )
+        .query_row(&existing_sql, params![id, project], |r| r.get(0))
         .optional()?;
     Ok(existing.map(|status| RelayCancel::AlreadyFinished { status }))
 }
@@ -106,7 +114,7 @@ pub(super) fn settle(
     fence: Option<DateTime<Utc>>,
     outcome: &RelayOutcome,
 ) -> Result<RelaySettle> {
-    let Some(task) = get(conn, id)? else {
+    let Some(task) = get(conn, None, id)? else {
         return Ok(RelaySettle::NoSuchTask);
     };
     let holds = is_live_lease(&task.status) && fence.is_none_or(|f| task.lease_fence == Some(f));
@@ -177,7 +185,7 @@ pub(super) fn settle(
             )?;
         }
     }
-    Ok(match get(conn, id)? {
+    Ok(match get(conn, None, id)? {
         Some(t) => RelaySettle::Settled(Box::new(t)),
         None => RelaySettle::NoSuchTask,
     })
@@ -185,7 +193,7 @@ pub(super) fn settle(
 
 /// Say what the record actually holds now, so a refused holder can name what beat it.
 fn not_held(conn: &Connection, id: &str) -> Result<LeaseHeld> {
-    Ok(match get(conn, id)? {
+    Ok(match get(conn, None, id)? {
         Some(t) => LeaseHeld::NotHeld {
             status: t.status,
             fence: t.lease_fence.map(Into::into),

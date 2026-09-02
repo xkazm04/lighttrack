@@ -52,6 +52,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 use lighttrack_core::{new_id, LlmEvent, Operation, Status, TokenUsage};
+use lighttrack_store::Scope;
 use lighttrack_store::{MaintenanceRequest, SqliteStore, Store};
 
 /// The criteria are read from the committed file, not restated here. `include_str!` so a missing or
@@ -147,8 +148,8 @@ fn run_lane(secs: u64, payload_bytes: usize, readers: usize, mode: Mode) -> Meas
             let (s, stop, n) = (store.clone(), stop.clone(), read_count.clone());
             thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
-                    let _ = s.cost_summary(Some("soak"));
-                    let _ = s.list_events(Some("soak"), 200);
+                    let _ = s.cost_summary(Scope::Project("soak"));
+                    let _ = s.list_events(Scope::Project("soak"), 200);
                     n.fetch_add(2, Ordering::Relaxed);
                 }
             })

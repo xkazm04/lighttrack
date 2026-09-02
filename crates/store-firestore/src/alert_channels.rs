@@ -36,11 +36,19 @@ pub(crate) fn create_alert_channel(rest: &Rest, c: &AlertChannel) -> Result<()> 
     rest.put_doc(COLL, &c.id, &channel_fields(c)?)
 }
 
-pub(crate) fn get_alert_channel(rest: &Rest, id: &str) -> Result<Option<AlertChannel>> {
-    rest.get_doc(COLL, id)?
+/// One channel by id, in `project`'s scope. An operator scope (`None`) reads the project-less
+/// channels it owns, mirroring the listing — the two reads must agree on what a scope can see.
+pub(crate) fn get_alert_channel(
+    rest: &Rest,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<AlertChannel>> {
+    let c = rest
+        .get_doc(COLL, id)?
         .as_ref()
         .map(channel_from)
-        .transpose()
+        .transpose()?;
+    Ok(c.filter(|c| c.project_id.as_deref() == project))
 }
 
 pub(crate) fn list_alert_channels(rest: &Rest, project: Option<&str>) -> Result<Vec<AlertChannel>> {
@@ -52,7 +60,10 @@ pub(crate) fn list_alert_channels(rest: &Rest, project: Option<&str>) -> Result<
     docs.iter().map(channel_from).collect()
 }
 
-pub(crate) fn delete_alert_channel(rest: &Rest, id: &str) -> Result<bool> {
+pub(crate) fn delete_alert_channel(rest: &Rest, project: Option<&str>, id: &str) -> Result<bool> {
+    if get_alert_channel(rest, project, id)?.is_none() {
+        return Ok(false);
+    }
     rest.delete_doc(COLL, id)
 }
 

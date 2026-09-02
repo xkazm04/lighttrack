@@ -8,23 +8,25 @@ use lighttrack_core::{new_id, Dataset, DatasetItem};
 use super::datasets::{self, dataset_from_raw, map_dataset, DATASET_COLS};
 use crate::{Result, StoreError};
 
-/// Load a dataset, refusing one outside `project` as *absent* rather than as forbidden — the store
+/// Load a dataset, refusing one outside the scope as *absent* rather than as forbidden — the store
 /// has no notion of a principal, and the API has already decided who may see what.
+///
+/// The scope is a predicate in the query (M17), not a post-hoc comparison: a row that is not this
+/// tenant's is never read at all, so there is no branch left that could leak its existence.
 pub(super) fn load_scoped(
     conn: &Connection,
     project: Option<&str>,
     id: &str,
 ) -> Result<Option<Dataset>> {
-    let sql = format!("SELECT {DATASET_COLS} FROM datasets WHERE id = ?1");
+    let sql = format!(
+        "SELECT {DATASET_COLS} FROM datasets WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![id], map_dataset).optional()?;
-    let Some(d) = raw.map(dataset_from_raw).transpose()? else {
-        return Ok(None);
-    };
-    match project {
-        Some(p) if d.project_id != p => Ok(None),
-        _ => Ok(Some(d)),
-    }
+    let raw = stmt
+        .query_row(params![id, project], map_dataset)
+        .optional()?;
+    raw.map(dataset_from_raw).transpose()
 }
 
 pub(super) fn fork(conn: &Connection, project: Option<&str>, id: &str) -> Result<Dataset> {
@@ -57,7 +59,7 @@ pub(super) fn fork(conn: &Connection, project: Option<&str>, id: &str) -> Result
     // complete and compares as if it were.
     let tx = conn.unchecked_transaction()?;
     datasets::create(conn, &forked)?;
-    for item in datasets::list_items(conn, &src.id)? {
+    for item in datasets::list_items(conn, project, &src.id)? {
         let copy = DatasetItem {
             id: new_id(),
             dataset_id: forked.id.clone(),
@@ -96,15 +98,17 @@ fn copy_labels(conn: &Connection, from_item: &str, to_item: &str) -> Result<()> 
     Ok(())
 }
 
-/// Every version of `name`, newest version first. `project = None` is an unscoped/admin read.
+/// Every version of `name`, newest version first. An operator scope (`project = None`) reads
+/// across every tenant; a project scope sees only its own.
 pub(super) fn versions(
     conn: &Connection,
     project: Option<&str>,
     name: &str,
 ) -> Result<Vec<Dataset>> {
     let sql = format!(
-        "SELECT {DATASET_COLS} FROM datasets WHERE (?1 IS NULL OR project_id = ?1) AND name = ?2 \
-         ORDER BY version DESC, created_at DESC"
+        "SELECT {DATASET_COLS} FROM datasets WHERE name = ?2{} \
+         ORDER BY version DESC, created_at DESC",
+        super::scope_and(1)
     );
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt

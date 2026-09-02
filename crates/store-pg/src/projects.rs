@@ -244,10 +244,15 @@ pub(crate) async fn list_limits(
     rows.iter().map(limit_rule_from_row).collect()
 }
 
-pub(crate) async fn get_limit(pool: &PgPool, id: &str) -> Result<Option<LimitRule>> {
-    let sql = format!("SELECT {LIMIT_COLS} FROM limit_rules WHERE id = $1");
+pub(crate) async fn get_limit(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<LimitRule>> {
+    let sql = format!("SELECT {LIMIT_COLS} FROM limit_rules WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)");
     let row = sqlx::query(&sql)
         .bind(id.to_string())
+        .bind(project.map(str::to_string))
         .fetch_optional(pool)
         .await
         .map_err(pgerr)?;
@@ -256,7 +261,11 @@ pub(crate) async fn get_limit(pool: &PgPool, id: &str) -> Result<Option<LimitRul
 
 /// Update a rule's mutable columns in place (matched by id); `project_id` is left untouched.
 /// Returns whether a row matched.
-pub(crate) async fn update_limit(pool: &PgPool, r: &LimitRule) -> Result<bool> {
+pub(crate) async fn update_limit(
+    pool: &PgPool,
+    project: Option<&str>,
+    r: &LimitRule,
+) -> Result<bool> {
     let (scope_kind, scope_value) = scope_parts(&r.scope);
     let (threshold, threshold_json) = threshold_parts(&r.threshold)?;
     let res = sqlx::query(
@@ -264,7 +273,7 @@ pub(crate) async fn update_limit(pool: &PgPool, r: &LimitRule) -> Result<bool> {
          SET metric = $2, \"window\" = $3, threshold = $4, action = $5, enabled = $6, \
              warn_at = $7, scope_kind = $8, scope_value = $9, threshold_json = $10, \
              escalation_json = $11, escalated_until = $12, origin = $13, expires_at = $14 \
-         WHERE id = $1",
+         WHERE id = $1 AND ($15::text IS NULL OR project_id = $15)",
     )
     .bind(r.id.clone())
     .bind(enum_to_str(&r.metric)?)
@@ -280,18 +289,22 @@ pub(crate) async fn update_limit(pool: &PgPool, r: &LimitRule) -> Result<bool> {
     .bind(r.escalated_until.map(fmt_ts))
     .bind(r.origin.clone())
     .bind(r.expires_at.map(fmt_ts))
+    .bind(project.map(str::to_string))
     .execute(pool)
     .await
     .map_err(pgerr)?;
     Ok(res.rows_affected() > 0)
 }
 
-pub(crate) async fn delete_limit(pool: &PgPool, id: &str) -> Result<bool> {
-    let res = sqlx::query("DELETE FROM limit_rules WHERE id = $1")
-        .bind(id.to_string())
-        .execute(pool)
-        .await
-        .map_err(pgerr)?;
+pub(crate) async fn delete_limit(pool: &PgPool, project: Option<&str>, id: &str) -> Result<bool> {
+    let res = sqlx::query(
+        "DELETE FROM limit_rules WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)",
+    )
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .execute(pool)
+    .await
+    .map_err(pgerr)?;
     Ok(res.rows_affected() > 0)
 }
 

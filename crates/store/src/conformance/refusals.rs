@@ -20,6 +20,7 @@ use lighttrack_core::{
 use super::fixtures::{
     sample_alert, sample_alert_channel, sample_entry, sample_policy, sample_project, sample_rule,
 };
+use crate::Scope;
 use crate::{
     AlertFilter, CollectiveFilter, MaintenanceRequest, Result, Store, StoreError, Surface,
     TraceFilter,
@@ -103,7 +104,10 @@ fn labels(store: &dyn Store) -> Vec<&'static str> {
             ..Default::default()
         }),
     );
-    refused("labels_for_dataset", store.labels_for_dataset(&new_id()));
+    refused(
+        "labels_for_dataset",
+        store.labels_for_dataset(Scope::Operator, &new_id()),
+    );
     vec!["insert_label", "list_labels", "labels_for_dataset"]
 }
 
@@ -120,7 +124,7 @@ fn calibrations(store: &dyn Store) -> Vec<&'static str> {
     );
     refused(
         "list_calibrations",
-        store.list_calibrations(Some(&pid), 10, None),
+        store.list_calibrations(Scope::Project(&pid), 10, None),
     );
     vec![
         "insert_calibration",
@@ -135,14 +139,14 @@ fn calibrations(store: &dyn Store) -> Vec<&'static str> {
 /// comparable — the precise bug this surface exists to end.
 fn dataset_lineage(store: &dyn Store) -> Vec<&'static str> {
     let id = new_id();
-    refused("fork_dataset", store.fork_dataset(None, &id));
+    refused("fork_dataset", store.fork_dataset(Scope::Operator, &id));
     refused(
         "import_dataset_items",
-        store.import_dataset_items(None, &id, &ImportSpec::default()),
+        store.import_dataset_items(Scope::Operator, &id, &ImportSpec::default()),
     );
     refused(
         "list_dataset_versions",
-        store.list_dataset_versions(None, "any"),
+        store.list_dataset_versions(Scope::Operator, "any"),
     );
     vec![
         "fork_dataset",
@@ -167,7 +171,10 @@ fn refused<T: std::fmt::Debug>(what: &str, r: Result<T>) {
 fn redaction_posture(store: &dyn Store) -> Vec<&'static str> {
     refused(
         "redaction_posture",
-        store.redaction_posture(Some(&new_id()), Utc::now() - chrono::Duration::hours(1)),
+        store.redaction_posture(
+            Scope::Project(&new_id()),
+            Utc::now() - chrono::Duration::hours(1),
+        ),
     );
     vec!["redaction_posture"]
 }
@@ -177,7 +184,7 @@ fn redaction_posture(store: &dyn Store) -> Vec<&'static str> {
 fn revenue_reprice(store: &dyn Store) -> Vec<&'static str> {
     refused(
         "reprice_revenue",
-        store.reprice_revenue(Some(&new_id()), "GBP", 1.27, "test", true),
+        store.reprice_revenue(Scope::Project(&new_id()), "GBP", 1.27, "test", true),
     );
     vec!["reprice_revenue"]
 }
@@ -189,7 +196,7 @@ fn score_summaries(store: &dyn Store) -> Vec<&'static str> {
     refused(
         "score_summary_by_dimension",
         store.score_summary_by_dimension(
-            Some(&new_id()),
+            Scope::Project(&new_id()),
             lighttrack_core::Dimension::Prompt,
             Utc::now() - chrono::Duration::hours(1),
             None,
@@ -205,7 +212,7 @@ fn score_filters(store: &dyn Store) -> Vec<&'static str> {
     refused(
         "list_scores_filtered",
         store.list_scores_filtered(
-            Some(&new_id()),
+            Scope::Project(&new_id()),
             &crate::ScoreFilter {
                 rubric_id: Some(new_id()),
                 kind: None,
@@ -222,17 +229,20 @@ fn traces(store: &dyn Store) -> Vec<&'static str> {
         !store.serves_traces(),
         "serves_traces must follow the manifest: the surface is undeclared"
     );
-    refused("list_traces", store.list_traces(Some(&p), 10));
+    refused("list_traces", store.list_traces(Scope::Project(&p), 10));
     refused(
         "list_traces_filtered",
-        store.list_traces_filtered(Some(&p), &TraceFilter::default(), 10),
+        store.list_traces_filtered(Scope::Project(&p), &TraceFilter::default(), 10),
     );
     refused(
         "list_trace_events",
-        store.list_trace_events(Some(&p), &t, 10),
+        store.list_trace_events(Scope::Project(&p), &t, 10),
     );
-    refused("list_trace_scores", store.list_trace_scores(Some(&p), &t));
-    refused("get_trace", store.get_trace(Some(&p), &t, 10));
+    refused(
+        "list_trace_scores",
+        store.list_trace_scores(Scope::Project(&p), &t),
+    );
+    refused("get_trace", store.get_trace(Scope::Project(&p), &t, 10));
     vec![
         "list_traces",
         "list_traces_filtered",
@@ -258,7 +268,7 @@ fn forecast(store: &dyn Store) -> Vec<&'static str> {
     refused("daily_usage", store.daily_usage(&p, since, now));
     refused(
         "daily_cost_by_dimension",
-        store.daily_cost_by_dimension(Some(&p), "customer", since, now),
+        store.daily_cost_by_dimension(Scope::Project(&p), "customer", since, now),
     );
     vec!["daily_usage", "daily_cost_by_dimension"]
 }
@@ -268,15 +278,15 @@ fn margin(store: &dyn Store) -> Vec<&'static str> {
     let since = now - chrono::Duration::days(7);
     refused(
         "tokens_by_dimension",
-        store.tokens_by_dimension(Some(&p), "customer", since, now),
+        store.tokens_by_dimension(Scope::Project(&p), "customer", since, now),
     );
     refused(
         "customer_cost_by_model",
-        store.customer_cost_by_model(Some(&p), "cus-1", since, now),
+        store.customer_cost_by_model(Scope::Project(&p), "cus-1", since, now),
     );
     refused(
         "customer_cost_by_name",
-        store.customer_cost_by_name(Some(&p), "cus-1", since, now),
+        store.customer_cost_by_name(Scope::Project(&p), "cus-1", since, now),
     );
     vec![
         "tokens_by_dimension",
@@ -291,11 +301,20 @@ fn prompts(store: &dyn Store) -> Vec<&'static str> {
     refused("create_prompt", store.create_prompt(&p));
     refused("update_prompt", store.update_prompt(&p));
     refused("get_prompt", store.get_prompt(&p.project_id, &p.name));
-    refused("get_prompt_by_id", store.get_prompt_by_id(&p.id));
+    refused(
+        "get_prompt_by_id",
+        store.get_prompt_by_id(Scope::Operator, &p.id),
+    );
     refused("list_prompts", store.list_prompts(&p.project_id));
     refused("create_prompt_version", store.create_prompt_version(&v));
-    refused("get_prompt_version", store.get_prompt_version(&p.id, 1));
-    refused("list_prompt_versions", store.list_prompt_versions(&p.id));
+    refused(
+        "get_prompt_version",
+        store.get_prompt_version(Scope::Operator, &p.id, 1),
+    );
+    refused(
+        "list_prompt_versions",
+        store.list_prompt_versions(Scope::Operator, &p.id),
+    );
     vec![
         "create_prompt",
         "update_prompt",
@@ -312,18 +331,21 @@ fn relay(store: &dyn Store) -> Vec<&'static str> {
     let pid = new_id();
     let t = super::relay::sample_task(&pid, 3);
     refused("create_relay_task", store.create_relay_task(&t));
-    refused("get_relay_task", store.get_relay_task(&t.id));
+    refused(
+        "get_relay_task",
+        store.get_relay_task(Scope::Operator, &t.id),
+    );
     refused(
         "find_relay_task_by_key",
         store.find_relay_task_by_key(&pid, "k"),
     );
     refused(
         "list_relay_tasks",
-        store.list_relay_tasks(Some(&pid), None, 10),
+        store.list_relay_tasks(Scope::Project(&pid), None, 10),
     );
     refused(
         "list_relay_tasks_by_action",
-        store.list_relay_tasks_by_action(Some(&pid), "ns/act", None, 10),
+        store.list_relay_tasks_by_action(Scope::Project(&pid), "ns/act", None, 10),
     );
     refused(
         "lease_relay_tasks",
@@ -342,7 +364,10 @@ fn relay(store: &dyn Store) -> Vec<&'static str> {
         "update_relay_progress",
         store.update_relay_progress(&t.id, Utc::now(), "x"),
     );
-    refused("cancel_relay_task", store.cancel_relay_task(&t.id));
+    refused(
+        "cancel_relay_task",
+        store.cancel_relay_task(Scope::Operator, &t.id),
+    );
     vec![
         "create_relay_task",
         "get_relay_task",
@@ -361,10 +386,16 @@ fn relay(store: &dyn Store) -> Vec<&'static str> {
 fn schedules(store: &dyn Store) -> Vec<&'static str> {
     let s = super::schedules::sample_schedule(&new_id());
     refused("create_schedule", store.create_schedule(&s));
-    refused("get_schedule", store.get_schedule(&s.id));
+    refused("get_schedule", store.get_schedule(Scope::Operator, &s.id));
     refused("list_schedules", store.list_schedules(&s.project_id));
-    refused("update_schedule", store.update_schedule(&s));
-    refused("delete_schedule", store.delete_schedule(&s.id));
+    refused(
+        "update_schedule",
+        store.update_schedule(Scope::Operator, &s),
+    );
+    refused(
+        "delete_schedule",
+        store.delete_schedule(Scope::Operator, &s.id),
+    );
     refused("due_schedules", store.due_schedules(Utc::now()));
     vec![
         "create_schedule",
@@ -429,9 +460,18 @@ fn key_admin(store: &dyn Store) -> Vec<&'static str> {
 
 fn limit_lifecycle(store: &dyn Store) -> Vec<&'static str> {
     let r = sample_rule();
-    refused("get_limit_rule", store.get_limit_rule(&r.id));
-    refused("update_limit_rule", store.update_limit_rule(&r));
-    refused("delete_limit_rule", store.delete_limit_rule(&r.id));
+    refused(
+        "get_limit_rule",
+        store.get_limit_rule(Scope::Operator, &r.id),
+    );
+    refused(
+        "update_limit_rule",
+        store.update_limit_rule(Scope::Operator, &r),
+    );
+    refused(
+        "delete_limit_rule",
+        store.delete_limit_rule(Scope::Operator, &r.id),
+    );
     vec!["get_limit_rule", "update_limit_rule", "delete_limit_rule"]
 }
 
@@ -442,8 +482,14 @@ fn margin_policies(store: &dyn Store) -> Vec<&'static str> {
         "list_margin_policies",
         store.list_margin_policies(&p.project_id, true),
     );
-    refused("get_margin_policy", store.get_margin_policy(&p.id));
-    refused("delete_margin_policy", store.delete_margin_policy(&p.id));
+    refused(
+        "get_margin_policy",
+        store.get_margin_policy(Scope::Operator, &p.id),
+    );
+    refused(
+        "delete_margin_policy",
+        store.delete_margin_policy(Scope::Operator, &p.id),
+    );
     vec![
         "create_margin_policy",
         "list_margin_policies",
@@ -454,7 +500,7 @@ fn margin_policies(store: &dyn Store) -> Vec<&'static str> {
 
 fn job_leases(store: &dyn Store) -> Vec<&'static str> {
     let id = new_id();
-    refused("cancel_job", store.cancel_job(&id));
+    refused("cancel_job", store.cancel_job(Scope::Operator, &id));
     refused("renew_job_lease", store.renew_job_lease(&id, Utc::now()));
     vec!["cancel_job", "renew_job_lease"]
 }
@@ -480,7 +526,10 @@ fn pricing(store: &dyn Store) -> Vec<&'static str> {
     // `list_unpriced` defaults *through* `Store::rollup`, so a backend that serves the rollup and
     // declines this surface must still refuse here — asserted rather than reasoned about, because
     // the alternative is an empty ledger that reads as "nothing is unpriced".
-    refused("list_unpriced", store.list_unpriced(None, Utc::now()));
+    refused(
+        "list_unpriced",
+        store.list_unpriced(Scope::Operator, Utc::now()),
+    );
     let book = lighttrack_core::PriceBook::default();
     refused(
         "fill_unpriced_cost",
@@ -503,8 +552,11 @@ fn pricing(store: &dyn Store) -> Vec<&'static str> {
 fn devices(store: &dyn Store) -> Vec<&'static str> {
     let d = super::devices::sample_device("refusal-probe", &["probe/*"]);
     refused("create_device", store.create_device(&d));
-    refused("get_device", store.get_device(&d.id));
-    refused("list_devices", store.list_devices(Some(&new_id())));
+    refused("get_device", store.get_device(Scope::Operator, &d.id));
+    refused(
+        "list_devices",
+        store.list_devices(Scope::Project(&new_id())),
+    );
     refused(
         "find_device_by_key_prefix",
         store.find_device_by_key_prefix(&d.key_prefix),
@@ -513,7 +565,7 @@ fn devices(store: &dyn Store) -> Vec<&'static str> {
         "touch_device",
         store.touch_device(&d.id, &d.capabilities, Some("0.0.0")),
     );
-    refused("revoke_device", store.revoke_device(&d.id));
+    refused("revoke_device", store.revoke_device(Scope::Operator, &d.id));
     refused(
         "count_eligible_devices",
         store.count_eligible_devices("probe/thing"),
@@ -571,11 +623,14 @@ fn alerts(store: &dyn Store) -> Vec<&'static str> {
         ),
     );
     refused("list_alerts", store.list_alerts(&AlertFilter::default()));
-    refused("get_alert", store.get_alert(&a.id));
-    refused("ack_alert", store.ack_alert(&a.id, "ops", Utc::now()));
+    refused("get_alert", store.get_alert(Scope::Operator, &a.id));
+    refused(
+        "ack_alert",
+        store.ack_alert(Scope::Operator, &a.id, "ops", Utc::now()),
+    );
     refused(
         "attach_alert_resolution",
-        store.attach_alert_resolution(&a.id, &json!({ "ok": true })),
+        store.attach_alert_resolution(Scope::Operator, &a.id, &json!({ "ok": true })),
     );
     vec![
         "insert_alert_dedup",
@@ -592,10 +647,22 @@ fn alerts(store: &dyn Store) -> Vec<&'static str> {
 fn alert_routing(store: &dyn Store) -> Vec<&'static str> {
     let c = sample_alert_channel(None);
     refused("create_alert_channel", store.create_alert_channel(&c));
-    refused("get_alert_channel", store.get_alert_channel(&c.id));
-    refused("list_alert_channels", store.list_alert_channels(None));
-    refused("delete_alert_channel", store.delete_alert_channel(&c.id));
-    refused("channels_for", store.channels_for(Some(&new_id())));
+    refused(
+        "get_alert_channel",
+        store.get_alert_channel(Scope::Operator, &c.id),
+    );
+    refused(
+        "list_alert_channels",
+        store.list_alert_channels(Scope::Operator),
+    );
+    refused(
+        "delete_alert_channel",
+        store.delete_alert_channel(Scope::Operator, &c.id),
+    );
+    refused(
+        "channels_for",
+        store.channels_for(Scope::Project(&new_id())),
+    );
     vec![
         "create_alert_channel",
         "get_alert_channel",

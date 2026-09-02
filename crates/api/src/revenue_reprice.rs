@@ -91,9 +91,10 @@ pub(crate) async fn post_reprice(
     let project = q.project.clone();
     let cur = currency.clone();
     let ver = version.clone();
-    let report =
-        spawn_db(move || store.reprice_revenue(project.as_deref(), &cur, rate, &ver, dry_run))
-            .await?;
+    let report = spawn_db(move || {
+        store.reprice_revenue(project.as_deref().into(), &cur, rate, &ver, dry_run)
+    })
+    .await?;
 
     if !report.dry_run && report.changed > 0 {
         // A bulk restatement of recognized revenue is not a debug-level event.

@@ -144,13 +144,14 @@ pub(crate) async fn get_margin(
     let store = st.store.clone();
     let proj = project.clone();
     let revenue =
-        spawn_db(move || store.list_revenue_events(proj.as_deref(), since, until)).await?;
+        spawn_db(move || store.list_revenue_events(proj.as_deref().into(), since, until)).await?;
 
     let store = st.store.clone();
     let proj = project.clone();
     let dim_s = dim.as_str().to_string();
     let costs =
-        spawn_db(move || store.cost_by_dimension(proj.as_deref(), &dim_s, since, until)).await?;
+        spawn_db(move || store.cost_by_dimension(proj.as_deref().into(), &dim_s, since, until))
+            .await?;
 
     let unconverted = unconverted_currencies(&revenue);
 
@@ -273,9 +274,9 @@ pub(crate) async fn get_margin_simulate(
         Vec<CostByDimension>,
         Vec<TokensByDimension>,
     ) = spawn_db(move || {
-        let revenue = store.list_revenue_events(proj.as_deref(), since, until)?;
-        let costs = store.cost_by_dimension(proj.as_deref(), &dim_s, since, until)?;
-        let tokens = store.tokens_by_dimension(proj.as_deref(), &dim_s, since, until)?;
+        let revenue = store.list_revenue_events(proj.as_deref().into(), since, until)?;
+        let costs = store.cost_by_dimension(proj.as_deref().into(), &dim_s, since, until)?;
+        let tokens = store.tokens_by_dimension(proj.as_deref().into(), &dim_s, since, until)?;
         Ok::<_, StoreError>((revenue, costs, tokens))
     })
     .await?;
@@ -365,8 +366,8 @@ pub(crate) async fn get_margin_trend(
     let proj = project.clone();
     let dim_s = dim.as_str().to_string();
     let (revenue, daily): (Vec<RevenueEvent>, Vec<DailyDimCost>) = spawn_db(move || {
-        let revenue = store.list_revenue_events(proj.as_deref(), since, until)?;
-        let daily = store.daily_cost_by_dimension(proj.as_deref(), &dim_s, since, until)?;
+        let revenue = store.list_revenue_events(proj.as_deref().into(), since, until)?;
+        let daily = store.daily_cost_by_dimension(proj.as_deref().into(), &dim_s, since, until)?;
         Ok::<_, lighttrack_store::StoreError>((revenue, daily))
     })
     .await?;
@@ -454,9 +455,9 @@ pub(crate) async fn get_customer_margin(
     let proj = project.clone();
     let cust = customer_id.clone();
     let (revenue, by_model, by_name) = spawn_db(move || {
-        let revenue = store.list_revenue_events(proj.as_deref(), since, until)?;
-        let by_model = store.customer_cost_by_model(proj.as_deref(), &cust, since, until)?;
-        let by_name = store.customer_cost_by_name(proj.as_deref(), &cust, since, until)?;
+        let revenue = store.list_revenue_events(proj.as_deref().into(), since, until)?;
+        let by_model = store.customer_cost_by_model(proj.as_deref().into(), &cust, since, until)?;
+        let by_name = store.customer_cost_by_name(proj.as_deref().into(), &cust, since, until)?;
         Ok::<_, StoreError>((revenue, by_model, by_name))
     })
     .await?;

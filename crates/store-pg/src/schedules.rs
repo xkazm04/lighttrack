@@ -34,12 +34,19 @@ pub(crate) async fn create(pool: &PgPool, s: &Schedule) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Schedule>> {
-    let row = sqlx::query(&format!("SELECT {COLS} FROM schedules WHERE id = $1"))
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+pub(crate) async fn get(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<Schedule>> {
+    let row = sqlx::query(&format!(
+        "SELECT {COLS} FROM schedules WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)"
+    ))
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     row.as_ref().map(from_row).transpose()
 }
 
@@ -57,10 +64,10 @@ pub(crate) async fn list(pool: &PgPool, project: &str) -> Result<Vec<Schedule>> 
 /// Full replace of the mutable fields. The id and `project_id` are identity, not state — a schedule
 /// that could move between projects would be a way around project scoping — so they are the
 /// predicate, never the payload.
-pub(crate) async fn update(pool: &PgPool, s: &Schedule) -> Result<bool> {
+pub(crate) async fn update(pool: &PgPool, project: Option<&str>, s: &Schedule) -> Result<bool> {
     let n = sqlx::query(
         "UPDATE schedules SET kind=$2, payload=$3, interval_secs=$4, next_due=$5, \
-             last_job_id=$6, enabled=$7 WHERE id=$1",
+             last_job_id=$6, enabled=$7 WHERE id=$1 AND ($8::text IS NULL OR project_id = $8)",
     )
     .bind(s.id.clone())
     .bind(s.kind.clone())
@@ -69,6 +76,7 @@ pub(crate) async fn update(pool: &PgPool, s: &Schedule) -> Result<bool> {
     .bind(fmt_ts(s.next_due))
     .bind(s.last_job_id.clone())
     .bind(s.enabled)
+    .bind(project.map(str::to_string))
     .execute(pool)
     .await
     .map_err(pgerr)?
@@ -76,13 +84,16 @@ pub(crate) async fn update(pool: &PgPool, s: &Schedule) -> Result<bool> {
     Ok(n > 0)
 }
 
-pub(crate) async fn delete(pool: &PgPool, id: &str) -> Result<bool> {
-    let n = sqlx::query("DELETE FROM schedules WHERE id = $1")
-        .bind(id.to_string())
-        .execute(pool)
-        .await
-        .map_err(pgerr)?
-        .rows_affected();
+pub(crate) async fn delete(pool: &PgPool, project: Option<&str>, id: &str) -> Result<bool> {
+    let n = sqlx::query(
+        "DELETE FROM schedules WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)",
+    )
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .execute(pool)
+    .await
+    .map_err(pgerr)?
+    .rows_affected();
     Ok(n > 0)
 }
 

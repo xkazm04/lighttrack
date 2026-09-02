@@ -8,6 +8,7 @@ use lighttrack_core::{
     DimensionKind, ModelPriceRow, Rubric, RubricDimension,
 };
 
+use crate::Scope;
 use crate::{Result, Store};
 
 pub(super) fn prices(store: &dyn Store) -> Result<()> {
@@ -68,7 +69,9 @@ pub(super) fn benchmarks(store: &dyn Store, pid: &str) -> Result<()> {
         created_at: Utc::now(),
     };
     store.create_benchmark(&b)?;
-    let got = store.get_benchmark(&b.id)?.expect("get_benchmark Some");
+    let got = store
+        .get_benchmark(Scope::Operator, &b.id)?
+        .expect("get_benchmark Some");
     assert_eq!(got.name, "bench");
     assert_eq!(got.dataset.len(), 1);
     assert_eq!(got.target, target, "benchmark target round-trip");
@@ -90,7 +93,7 @@ pub(super) fn benchmarks(store: &dyn Store, pid: &str) -> Result<()> {
         report: json!({ "note": "ok" }),
     };
     store.create_benchmark_run(&run)?;
-    let runs = store.list_benchmark_runs(&b.id)?;
+    let runs = store.list_benchmark_runs(Scope::Operator, &b.id)?;
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].n_cases, 1);
     assert_eq!(runs[0].total_tokens, Some(123));
@@ -114,8 +117,11 @@ pub(super) fn datasets(store: &dyn Store, pid: &str) -> Result<()> {
         parent_id: None,
     };
     store.create_dataset(&d)?;
-    assert!(store.get_dataset(&d.id)?.is_some());
-    assert!(store.list_datasets(pid)?.iter().any(|x| x.id == d.id));
+    assert!(store.get_dataset(Scope::Operator, &d.id)?.is_some());
+    assert!(store
+        .list_datasets(pid.into())?
+        .iter()
+        .any(|x| x.id == d.id));
 
     let item = DatasetItem {
         id: new_id(),
@@ -130,7 +136,7 @@ pub(super) fn datasets(store: &dyn Store, pid: &str) -> Result<()> {
         input_hash: None,
     };
     store.create_dataset_item(&item)?;
-    let items = store.list_dataset_items(&d.id)?;
+    let items = store.list_dataset_items(Scope::Operator, &d.id)?;
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].expected, Some("4".to_string()));
     assert_eq!(
@@ -138,9 +144,12 @@ pub(super) fn datasets(store: &dyn Store, pid: &str) -> Result<()> {
         json!({ "method": "regex", "redactions": 0 })
     );
 
-    store.set_dataset_frozen(&d.id, true)?;
+    store.set_dataset_frozen(Scope::Operator, &d.id, true)?;
     assert!(
-        store.get_dataset(&d.id)?.expect("dataset").frozen,
+        store
+            .get_dataset(Scope::Operator, &d.id)?
+            .expect("dataset")
+            .frozen,
         "frozen after set"
     );
     Ok(())
@@ -183,7 +192,9 @@ pub(super) fn rubrics(store: &dyn Store, pid: &str) -> Result<()> {
         created_at: Utc::now(),
     };
     store.create_rubric(&r)?;
-    let got = store.get_rubric(&r.id)?.expect("get_rubric Some");
+    let got = store
+        .get_rubric(Scope::Operator, &r.id)?
+        .expect("get_rubric Some");
     assert_eq!(got.dimensions.len(), 2);
     assert_eq!(got.dimensions[0].key, "correct");
     assert_eq!(got.dimensions[0].floor, Some(0.5));

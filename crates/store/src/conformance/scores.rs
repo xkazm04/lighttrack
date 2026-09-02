@@ -5,6 +5,7 @@ use chrono::Utc;
 use lighttrack_core::{new_id, Score, ScoreDetail, ScoreDim, ScoreKind};
 
 use super::fixtures::sample_event;
+use crate::Scope;
 use crate::{Result, ScoreFilter, Store};
 
 pub(super) fn scores(store: &dyn Store, pid: &str) -> Result<()> {
@@ -27,7 +28,7 @@ pub(super) fn scores(store: &dyn Store, pid: &str) -> Result<()> {
         created_at: Utc::now(),
     };
     store.insert_score(&s)?;
-    let listed = store.list_scores(Some(pid), 10)?;
+    let listed = store.list_scores(Scope::Project(pid), 10)?;
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].scored_by, "judge");
     assert_eq!(listed[0].pass, Some(true));
@@ -44,18 +45,21 @@ pub(super) fn scores(store: &dyn Store, pid: &str) -> Result<()> {
     sc.event_id = Some(scored_ev.id.clone());
     store.insert_score(&sc)?;
 
-    let scored_set = store.scored_event_ids(&[scored_ev.id.clone(), unscored_ev.id.clone()])?;
+    let scored_set = store.scored_event_ids(
+        Scope::Operator,
+        &[scored_ev.id.clone(), unscored_ev.id.clone()],
+    )?;
     assert_eq!(
         scored_set,
         vec![scored_ev.id.clone()],
         "only the scored event id comes back"
     );
     assert!(
-        store.scored_event_ids(&[])?.is_empty(),
+        store.scored_event_ids(Scope::Operator, &[])?.is_empty(),
         "empty input -> empty output"
     );
 
-    let unscored = store.list_unscored_events(Some(pid), None, 50)?;
+    let unscored = store.list_unscored_events(Scope::Project(pid), None, 50)?;
     assert!(
         unscored.iter().any(|e| e.id == unscored_ev.id),
         "unscored event is in the work list"
@@ -121,7 +125,7 @@ fn run_scoped_cases(store: &dyn Store, pid: &str) -> Result<()> {
     store.insert_score(&case(&run_id, Some(1), 0.9))?;
     store.insert_score(&case(&other_run, Some(1), 0.1))?;
 
-    let cases = store.list_run_scores(&run_id, Some(pid), 100)?;
+    let cases = store.list_run_scores(&run_id, Scope::Project(pid), 100)?;
     assert_eq!(
         cases.len(),
         3,
@@ -154,16 +158,18 @@ fn run_scoped_cases(store: &dyn Store, pid: &str) -> Result<()> {
     // Authorization scope is applied in the query, not by the caller.
     assert!(
         store
-            .list_run_scores(&run_id, Some(&new_id()), 100)?
+            .list_run_scores(&run_id, Scope::Project(&new_id()), 100)?
             .is_empty(),
         "another project's key sees none of this run's cases"
     );
     assert!(
-        store.list_run_scores(&new_id(), None, 100)?.is_empty(),
+        store
+            .list_run_scores(&new_id(), Scope::Operator, 100)?
+            .is_empty(),
         "unknown run -> no cases"
     );
     assert_eq!(
-        store.list_run_scores(&run_id, None, 2)?.len(),
+        store.list_run_scores(&run_id, Scope::Operator, 2)?.len(),
         2,
         "limit is honored"
     );
@@ -201,7 +207,7 @@ pub(super) fn score_filters(store: &dyn Store) -> Result<()> {
     store.insert_score(&mk("adhoc", None, ScoreKind::Freeform))?;
     store.insert_score(&mk("other", Some("rub-b"), ScoreKind::Rubric))?;
 
-    let by = |f: ScoreFilter| store.list_scores_filtered(Some(&scope), &f, 100);
+    let by = |f: ScoreFilter| store.list_scores_filtered(Scope::Project(&scope), &f, 100);
 
     let rub_a = by(ScoreFilter {
         rubric_id: Some("rub-a".into()),
@@ -232,7 +238,7 @@ pub(super) fn score_filters(store: &dyn Store) -> Result<()> {
 
     // Project scoping still applies to a filtered read - a filter must never widen a query.
     let elsewhere = store.list_scores_filtered(
-        Some(&new_id()),
+        Scope::Project(&new_id()),
         &ScoreFilter {
             rubric_id: Some("rub-a".into()),
             kind: None,

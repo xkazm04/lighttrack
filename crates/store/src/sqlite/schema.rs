@@ -138,6 +138,11 @@ const ADDED_COLUMNS_LATE: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_datasets_name_version ON datasets(project_id, name, version)",
     // Dedupe's lookup: the fingerprints already in the target set.
     "CREATE INDEX IF NOT EXISTS idx_dataset_items_hash ON dataset_items(dataset_id, input_hash)",
+    // M17 — the job queue's missing tenant. Without it a project key reading `GET /v1/jobs` saw
+    // every project's payloads. Nullable: NULL is an operator/legacy job (a sweep, or anything
+    // enqueued before this column existed), which `Scope::Operator` sees and no project scope does.
+    "ALTER TABLE jobs ADD COLUMN project_id TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_project_created ON jobs(project_id, created_at DESC)",
 ];
 
 /// Server-stamped arrival time, kept apart from [`ADDED_COLUMNS`] because it needs a backfill.

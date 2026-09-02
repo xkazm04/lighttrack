@@ -639,3 +639,13 @@ ALTER TABLE dataset_items ADD COLUMN IF NOT EXISTS input_hash TEXT;
 CREATE INDEX IF NOT EXISTS idx_datasets_name_version ON datasets(project_id, name, version);
 -- Dedupe's lookup: the fingerprints already in the target set.
 CREATE INDEX IF NOT EXISTS idx_dataset_items_hash ON dataset_items(dataset_id, input_hash);
+
+-- --------------------------------------------------------------------------------------------
+-- M17 - tenant scope on every read. Self-contained tail block: append-only, idempotent, and safe
+-- to re-run against a database created by any earlier revision of this file.
+--
+-- The job queue carried no tenant at all, so a project key reading GET /v1/jobs saw every
+-- project's payloads. Nullable on purpose: NULL is an operator/legacy job (a sweep, or anything
+-- enqueued before this column existed) - the operator scope reads those and no project scope does.
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS project_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_jobs_project_created ON jobs(project_id, created_at DESC);

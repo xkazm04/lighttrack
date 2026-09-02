@@ -18,6 +18,7 @@ use lighttrack_store::RedactionPostureRow;
 use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_read_project};
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct PostureParams {
@@ -63,7 +64,8 @@ pub(crate) async fn get_redaction_posture(
 
     let store = st.store.clone();
     let target = pid.clone();
-    let groups = spawn_db(move || store.redaction_posture(Some(&target), since)).await?;
+    let groups =
+        spawn_db(move || store.redaction_posture(TenantScope::Project(&target), since)).await?;
 
     let total_events = groups.iter().map(|g| g.events).sum();
     let unaccounted_events = groups

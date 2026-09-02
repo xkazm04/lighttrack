@@ -52,14 +52,25 @@ pub(crate) fn list_margin_policies(
     docs.iter().map(policy_from).collect()
 }
 
-pub(crate) fn get_margin_policy(rest: &Rest, id: &str) -> Result<Option<MarginPolicy>> {
-    rest.get_doc(COLL, id)?
+pub(crate) fn get_margin_policy(
+    rest: &Rest,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<MarginPolicy>> {
+    let p = rest
+        .get_doc(COLL, id)?
         .as_ref()
         .map(policy_from)
-        .transpose()
+        .transpose()?;
+    Ok(crate::scope::keep(project, p, |p| {
+        Some(p.project_id.as_str())
+    }))
 }
 
-pub(crate) fn delete_margin_policy(rest: &Rest, id: &str) -> Result<bool> {
+pub(crate) fn delete_margin_policy(rest: &Rest, project: Option<&str>, id: &str) -> Result<bool> {
+    if get_margin_policy(rest, project, id)?.is_none() {
+        return Ok(false);
+    }
     rest.delete_doc(COLL, id)
 }
 

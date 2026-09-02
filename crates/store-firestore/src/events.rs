@@ -21,11 +21,15 @@ pub(crate) fn insert_event(rest: &Rest, ev: &LlmEvent) -> Result<()> {
     rest.create_doc(COLL, &ev.id, &to_fields(ev)?)
 }
 
-pub(crate) fn get_event(rest: &Rest, id: &str) -> Result<Option<LlmEvent>> {
-    rest.get_doc(COLL, id)?
+pub(crate) fn get_event(rest: &Rest, project: Option<&str>, id: &str) -> Result<Option<LlmEvent>> {
+    let ev = rest
+        .get_doc(COLL, id)?
         .as_ref()
         .map(from_fields)
-        .transpose()
+        .transpose()?;
+    Ok(crate::scope::keep(project, ev, |e| {
+        Some(e.project_id.as_str())
+    }))
 }
 
 pub(crate) fn list_events(

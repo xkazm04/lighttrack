@@ -54,22 +54,30 @@ pub(crate) async fn list(
     rows.iter().map(from_row).collect()
 }
 
-pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<MarginPolicy>> {
-    let sql = format!("SELECT {COLS} FROM margin_policies WHERE id = $1");
+pub(crate) async fn get(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<MarginPolicy>> {
+    let sql = format!("SELECT {COLS} FROM margin_policies WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)");
     let row = sqlx::query(&sql)
         .bind(id.to_string())
+        .bind(project.map(str::to_string))
         .fetch_optional(pool)
         .await
         .map_err(pgerr)?;
     row.as_ref().map(from_row).transpose()
 }
 
-pub(crate) async fn delete(pool: &PgPool, id: &str) -> Result<bool> {
-    let res = sqlx::query("DELETE FROM margin_policies WHERE id = $1")
-        .bind(id.to_string())
-        .execute(pool)
-        .await
-        .map_err(pgerr)?;
+pub(crate) async fn delete(pool: &PgPool, project: Option<&str>, id: &str) -> Result<bool> {
+    let res = sqlx::query(
+        "DELETE FROM margin_policies WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)",
+    )
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .execute(pool)
+    .await
+    .map_err(pgerr)?;
     Ok(res.rows_affected() > 0)
 }
 

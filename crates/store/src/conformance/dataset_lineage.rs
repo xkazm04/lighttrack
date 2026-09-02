@@ -22,13 +22,13 @@ use lighttrack_core::{
 };
 
 use super::labels::sample_label;
-use crate::{Result, Store, StoreError};
+use crate::{Result, Scope, Store, StoreError};
 
 pub(super) fn dataset_lineage(store: &dyn Store, pid: &str) -> Result<()> {
     let name = format!("lineage-{}", new_id());
     let v1 = seed_v1(store, pid, &name)?;
 
-    let v2 = store.fork_dataset(Some(pid), &v1.id)?;
+    let v2 = store.fork_dataset(Scope::Project(pid), &v1.id)?;
     assert_eq!(
         v2.version, 2,
         "a fork is the NEXT version, not a copy of v1"
@@ -42,7 +42,10 @@ pub(super) fn dataset_lineage(store: &dyn Store, pid: &str) -> Result<()> {
     assert!(!v2.frozen, "a fork exists to be extended");
     assert_ne!(v2.id, v1.id);
     assert!(
-        store.get_dataset(&v1.id)?.expect("v1 survives").frozen,
+        store
+            .get_dataset(Scope::Project(pid), &v1.id)?
+            .expect("v1 survives")
+            .frozen,
         "forking must not unfreeze the parent — a finished run was scored against it"
     );
 
@@ -53,18 +56,20 @@ pub(super) fn dataset_lineage(store: &dyn Store, pid: &str) -> Result<()> {
 
     // Fork again: the second fork must land past the highest version the NAME carries, not past its
     // own source's — two v2s a version pin cannot tell apart is the failure this rules out.
-    let v3 = store.fork_dataset(Some(pid), &v1.id)?;
+    let v3 = store.fork_dataset(Scope::Project(pid), &v1.id)?;
     assert_eq!(
         v3.version, 3,
         "a second fork of v1 is v3: versions are unique per name, or a pin means nothing"
     );
 
     assert!(
-        store.fork_dataset(Some(pid), &new_id()).is_err(),
+        store.fork_dataset(Scope::Project(pid), &new_id()).is_err(),
         "forking a dataset that does not exist is an error, never an empty new version"
     );
     assert!(
-        store.fork_dataset(Some(&new_id()), &v1.id).is_err(),
+        store
+            .fork_dataset(Scope::Project(&new_id()), &v1.id)
+            .is_err(),
         "another project's dataset is not forkable from this scope"
     );
     Ok(())
@@ -100,13 +105,14 @@ fn seed_v1(store: &dyn Store, pid: &str, name: &str) -> Result<Dataset> {
     let mut l = sample_label(pid, LabelSubject::DatasetItem(item.id.clone()), 0.9);
     l.labeler = "conformance-lineage".to_string();
     store.insert_label(&l)?;
-    store.set_dataset_frozen(&ds.id, true)?;
+    store.set_dataset_frozen(Scope::Project(pid), &ds.id, true)?;
     Ok(Dataset { frozen: true, ..ds })
 }
 
 fn copied_items_and_labels(store: &dyn Store, v1: &Dataset, v2: &Dataset) -> Result<()> {
-    let src = store.list_dataset_items(&v1.id)?;
-    let copied = store.list_dataset_items(&v2.id)?;
+    let scope = Scope::Project(&v1.project_id);
+    let src = store.list_dataset_items(scope, &v1.id)?;
+    let copied = store.list_dataset_items(scope, &v2.id)?;
     assert_eq!(copied.len(), src.len(), "a fork copies every case");
     assert_eq!(copied[0].input, src[0].input);
     assert_eq!(
@@ -119,7 +125,7 @@ fn copied_items_and_labels(store: &dyn Store, v1: &Dataset, v2: &Dataset) -> Res
     );
     assert_eq!(copied[0].dataset_id, v2.id);
 
-    let carried = store.labels_for_dataset(&v2.id)?;
+    let carried = store.labels_for_dataset(scope, &v2.id)?;
     assert!(
         carried.iter().any(|l| l.labeler == "conformance-lineage"),
         "the human verdict must survive the fork — a golden case whose label did not is an \
@@ -127,7 +133,7 @@ fn copied_items_and_labels(store: &dyn Store, v1: &Dataset, v2: &Dataset) -> Res
     );
     assert!(
         store
-            .labels_for_dataset(&v1.id)?
+            .labels_for_dataset(scope, &v1.id)?
             .iter()
             .any(|l| l.labeler == "conformance-lineage"),
         "…and it is copied, not moved: the frozen parent keeps its own grades"
@@ -142,19 +148,19 @@ fn versions_list(
     v1: &Dataset,
     v2: &Dataset,
 ) -> Result<()> {
-    let vs = store.list_dataset_versions(Some(pid), name)?;
+    let vs = store.list_dataset_versions(Scope::Project(pid), name)?;
     assert_eq!(vs.len(), 2, "both versions of the name are listed");
     assert_eq!(vs[0].id, v2.id, "newest version first");
     assert_eq!(vs[1].id, v1.id);
     assert!(
         store
-            .list_dataset_versions(Some(pid), &format!("no-such-{}", new_id()))?
+            .list_dataset_versions(Scope::Project(pid), &format!("no-such-{}", new_id()))?
             .is_empty(),
         "a name nobody has used has no versions"
     );
     assert!(
         store
-            .list_dataset_versions(Some(&new_id()), name)?
+            .list_dataset_versions(Scope::Project(&new_id()), name)?
             .is_empty(),
         "the version history is scoped to its project"
     );
@@ -162,7 +168,7 @@ fn versions_list(
 }
 
 fn frozen_refuses_import(store: &dyn Store, pid: &str, frozen: &Dataset) -> Result<()> {
-    match store.import_dataset_items(Some(pid), &frozen.id, &ImportSpec::default()) {
+    match store.import_dataset_items(Scope::Project(pid), &frozen.id, &ImportSpec::default()) {
         Err(StoreError::Conflict(_)) => Ok(()),
         got => panic!(
             "importing into a frozen dataset must conflict, not silently append or report zero \
@@ -178,9 +184,11 @@ fn imports(store: &dyn Store, pid: &str, target: &Dataset) -> Result<()> {
     store.insert_event(&ok)?;
     store.insert_event(&bad)?;
 
-    let before = store.list_dataset_items(&target.id)?.len();
+    let before = store
+        .list_dataset_items(Scope::Project(pid), &target.id)?
+        .len();
     let n = store.import_dataset_items(
-        Some(pid),
+        Scope::Project(pid),
         &target.id,
         &ImportSpec {
             n: 10,
@@ -189,7 +197,7 @@ fn imports(store: &dyn Store, pid: &str, target: &Dataset) -> Result<()> {
         },
     )?;
     assert_eq!(n, 1, "an explicit id list imports exactly those rows");
-    let items = store.list_dataset_items(&target.id)?;
+    let items = store.list_dataset_items(Scope::Project(pid), &target.id)?;
     assert_eq!(items.len(), before + 1);
     let mined = items
         .iter()
@@ -207,7 +215,7 @@ fn imports(store: &dyn Store, pid: &str, target: &Dataset) -> Result<()> {
     // The second event's input differs from the first only in spacing and case: with dedupe on it
     // is the same case, and the whole point of the fingerprint is that this is not a re-import.
     let dup = store.import_dataset_items(
-        Some(pid),
+        Scope::Project(pid),
         &target.id,
         &ImportSpec {
             n: 10,
@@ -223,7 +231,7 @@ fn imports(store: &dyn Store, pid: &str, target: &Dataset) -> Result<()> {
 
     // …and errors-only over the project's own traffic finds the failed call.
     let errs = store.import_dataset_items(
-        Some(pid),
+        Scope::Project(pid),
         &target.id,
         &ImportSpec {
             from: ImportSource::Events,
@@ -236,7 +244,7 @@ fn imports(store: &dyn Store, pid: &str, target: &Dataset) -> Result<()> {
         errs >= 1,
         "errors-only must find the error event this section inserted; got {errs}"
     );
-    let after = store.list_dataset_items(&target.id)?;
+    let after = store.list_dataset_items(Scope::Project(pid), &target.id)?;
     assert!(
         after
             .iter()
@@ -246,7 +254,11 @@ fn imports(store: &dyn Store, pid: &str, target: &Dataset) -> Result<()> {
 
     assert!(
         store
-            .import_dataset_items(Some(&new_id()), &target.id, &ImportSpec::default())
+            .import_dataset_items(
+                Scope::Project(&new_id()),
+                &target.id,
+                &ImportSpec::default()
+            )
             .is_err(),
         "another project's scope cannot import into this dataset"
     );

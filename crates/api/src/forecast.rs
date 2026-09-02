@@ -29,6 +29,7 @@ use crate::error::ApiError;
 use crate::forecast_alerts::{build_alerts, ForecastAlert};
 use crate::guards::{authenticate, resolve_read_project};
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 /// At most this many customers/products are forecast (the worst-margin ones first), to bound the
 /// response and the per-key trend work.
@@ -301,9 +302,10 @@ async fn gather(
                 e.insert(store.usage_since(&proj, r.window.since(until))?);
             }
         }
-        let revenue = store.list_revenue_events(Some(&proj), since, until)?;
-        let costs = store.cost_by_dimension(Some(&proj), &dim_s, since, until)?;
-        let daily_dim = store.daily_cost_by_dimension(Some(&proj), &dim_s, since, until)?;
+        let revenue = store.list_revenue_events(TenantScope::Project(&proj), since, until)?;
+        let costs = store.cost_by_dimension(TenantScope::Project(&proj), &dim_s, since, until)?;
+        let daily_dim =
+            store.daily_cost_by_dimension(TenantScope::Project(&proj), &dim_s, since, until)?;
         Ok::<_, StoreError>(RawForecast {
             project,
             daily,

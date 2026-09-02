@@ -44,6 +44,7 @@ mod rollup;
 mod schedules;
 mod score_summary;
 mod scores;
+mod tenancy;
 mod traces;
 
 use crate::{Result, Store};

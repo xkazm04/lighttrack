@@ -6,6 +6,7 @@ use chrono::Utc;
 use lighttrack_core::{new_id, Score, ScoreKind, Status};
 
 use super::fixtures::sample_event;
+use crate::Scope;
 use crate::{Result, Store, TraceFilter};
 
 /// The trace surface: the listing rollup, the bounded detail read, and the verdicts attached to a
@@ -52,7 +53,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
     store.insert_event(&intruder)?;
 
     // --- listing ---
-    let listed = store.list_traces(Some(&pid), 50)?;
+    let listed = store.list_traces(Scope::Project(&pid), 50)?;
     assert_eq!(
         listed.len(),
         2,
@@ -88,7 +89,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
 
     // --- filters + keyset paging ---
     let errs = store.list_traces_filtered(
-        Some(&pid),
+        Scope::Project(&pid),
         &TraceFilter {
             status: Some("error".into()),
             ..Default::default()
@@ -102,7 +103,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
     );
     assert_eq!(errs.traces[0].trace_id, tid);
     let ok = store.list_traces_filtered(
-        Some(&pid),
+        Scope::Project(&pid),
         &TraceFilter {
             status: Some("success".into()),
             ..Default::default()
@@ -116,7 +117,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
     );
     assert_eq!(ok.traces[0].trace_id, tid2);
     let dear = store.list_traces_filtered(
-        Some(&pid),
+        Scope::Project(&pid),
         &TraceFilter {
             min_cost: Some(0.5),
             ..Default::default()
@@ -130,7 +131,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
     );
     assert_eq!(dear.traces[0].trace_id, tid);
     let windowed = store.list_traces_filtered(
-        Some(&pid),
+        Scope::Project(&pid),
         &TraceFilter {
             since: Some(t0 - chrono::Duration::seconds(5)),
             ..Default::default()
@@ -143,14 +144,14 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
         "`since` excludes the trace that ended before it"
     );
 
-    let page1 = store.list_traces_filtered(Some(&pid), &TraceFilter::default(), 1)?;
+    let page1 = store.list_traces_filtered(Scope::Project(&pid), &TraceFilter::default(), 1)?;
     assert_eq!(page1.traces.len(), 1, "the page fills to the limit");
     let cursor = page1
         .next_cursor
         .clone()
         .expect("more traces remain -> next_cursor is minted");
     let page2 = store.list_traces_filtered(
-        Some(&pid),
+        Scope::Project(&pid),
         &TraceFilter {
             cursor: Some(cursor),
             ..Default::default()
@@ -172,7 +173,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
     );
 
     // --- detail ---
-    let evs = store.list_trace_events(Some(&pid), &tid, 50)?;
+    let evs = store.list_trace_events(Scope::Project(&pid), &tid, 50)?;
     assert_eq!(evs.total, 3);
     assert_eq!(evs.events.len(), 3);
     assert!(
@@ -184,7 +185,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
         "oldest first"
     );
     // The cap keeps the trace's head and reports the true span count, so a clipped read says so.
-    let clipped = store.list_trace_events(Some(&pid), &tid, 2)?;
+    let clipped = store.list_trace_events(Scope::Project(&pid), &tid, 2)?;
     assert_eq!(
         clipped.events.len(),
         2,
@@ -200,7 +201,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
     );
 
     let trace = store
-        .get_trace(Some(&pid), &tid, 50)?
+        .get_trace(Scope::Project(&pid), &tid, 50)?
         .expect("get_trace Some");
     assert_eq!(trace.trace_id, tid);
     assert_eq!(trace.project_id, pid);
@@ -213,7 +214,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
     assert_eq!(trace.status, a.status, "…and the one status rule");
     assert_eq!(trace.models, a.models, "…and the same model ordering");
     let short = store
-        .get_trace(Some(&pid), &tid, 2)?
+        .get_trace(Scope::Project(&pid), &tid, 2)?
         .expect("clipped get_trace Some");
     assert!(short.spans_truncated, "a clipped trace must say so");
     assert_eq!((short.spans_total, short.spans_logged), (3, 2));
@@ -221,7 +222,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
     // Tenancy: the other project's rollup of the same id sees only its own span, and a project that
     // has no span under this id gets None (404-shaped: invisible, not forbidden).
     let theirs = store
-        .get_trace(Some(&other), &tid, 50)?
+        .get_trace(Scope::Project(&other), &tid, 50)?
         .expect("the colliding trace exists there");
     assert_eq!(
         theirs.totals.spans, 1,
@@ -229,11 +230,15 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
     );
     assert!((theirs.totals.cost_usd - 100.0).abs() < 1e-9);
     assert!(
-        store.get_trace(Some(&new_id()), &tid, 50)?.is_none(),
+        store
+            .get_trace(Scope::Project(&new_id()), &tid, 50)?
+            .is_none(),
         "invisible to a third project"
     );
     assert!(
-        store.get_trace(Some(&pid), &new_id(), 50)?.is_none(),
+        store
+            .get_trace(Scope::Project(&pid), &new_id(), 50)?
+            .is_none(),
         "unknown trace id -> None"
     );
 
@@ -259,7 +264,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
     };
     store.insert_score(&verdict(&pid, &root, "whole-trace"))?;
     store.insert_score(&verdict(&other, &intruder.id, "not-yours"))?;
-    let got = store.list_trace_scores(Some(&pid), &tid)?;
+    let got = store.list_trace_scores(Scope::Project(&pid), &tid)?;
     assert_eq!(
         got.len(),
         1,
@@ -271,7 +276,7 @@ pub(super) fn traces(store: &dyn Store) -> Result<()> {
         "a verdict on the colliding trace in another project never surfaces here"
     );
     assert_eq!(
-        store.list_trace_scores(Some(&other), &tid)?.len(),
+        store.list_trace_scores(Scope::Project(&other), &tid)?.len(),
         1,
         "…and that project sees exactly its own"
     );

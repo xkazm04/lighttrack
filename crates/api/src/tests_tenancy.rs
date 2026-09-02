@@ -21,6 +21,7 @@ use crate::auth;
 use crate::redact::Redactor;
 use crate::state::AppState;
 use crate::tests_ingest::{ingest, make_key, setup};
+use lighttrack_store::Scope as TenantScope;
 
 const ADMIN: &str = "admin-secret";
 
@@ -133,7 +134,10 @@ async fn a_disabled_project_is_refused_at_every_ingest_door() {
     assert_eq!(s, StatusCode::OK);
     let (s, _) = send(&app, "POST", "/v1/traces", &key, otlp_export()).await;
     assert_eq!(s, StatusCode::OK);
-    let live = store.list_events(Some("proj-a"), 10).unwrap().len();
+    let live = store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap()
+        .len();
     assert_eq!(live, 3, "one event per door");
 
     disable(&state, &store, "proj-a");
@@ -148,7 +152,10 @@ async fn a_disabled_project_is_refused_at_every_ingest_door() {
         assert_eq!(v["error"]["code"], "project_disabled", "{uri}: {v}");
     }
     assert_eq!(
-        store.list_events(Some("proj-a"), 10).unwrap().len(),
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
         live,
         "a disabled project stores nothing on any door"
     );
@@ -179,7 +186,13 @@ async fn an_ingest_only_key_cannot_read_and_a_read_only_key_cannot_write() {
     assert_eq!(s, StatusCode::OK, "{v}");
     let (s, v) = ingest(&app, &read_only, event()).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 /// An expired key is a *correct* secret that ran out of time, so it gets its own 401 code — and
@@ -289,7 +302,10 @@ async fn deleting_a_project_archives_it_and_keeps_the_rows() {
     let archived_at = v["archived_at"].as_str().expect("archived_at is stamped");
 
     assert_eq!(
-        store.list_events(Some("proj-a"), 10).unwrap().len(),
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
         1,
         "archiving keeps the record the cost reports were built from"
     );

@@ -7,6 +7,7 @@ use lighttrack_core::{new_id, Job};
 
 use super::job_leases::{job_cancellation, job_leases};
 
+use crate::Scope;
 use crate::{Result, Store};
 
 pub(super) fn new_job() -> Job {
@@ -16,6 +17,7 @@ pub(super) fn new_job() -> Job {
         job_type: "conf".into(),
         payload: json!({ "k": "v" }),
         status: "queued".into(),
+        project_id: None,
         attempts: 0,
         max_attempts: 3,
         failures: 0,
@@ -34,7 +36,10 @@ pub(super) fn jobs(store: &dyn Store) -> Result<()> {
     let j = new_job();
     store.create_job(&j)?;
     assert_eq!(
-        store.get_job(&j.id)?.expect("get_job Some").status,
+        store
+            .get_job(Scope::Operator, &j.id)?
+            .expect("get_job Some")
+            .status,
         "queued"
     );
 
@@ -47,11 +52,13 @@ pub(super) fn jobs(store: &dyn Store) -> Result<()> {
     // Our specific job's lifecycle by id (independent of which job claim() returned).
     store.update_job_progress(&j.id, "50%")?;
     store.finish_job(&j.id, "done", &json!({ "ok": true }), None, None)?;
-    let done = store.get_job(&j.id)?.expect("get_job after finish");
+    let done = store
+        .get_job(Scope::Operator, &j.id)?
+        .expect("get_job after finish");
     assert_eq!(done.status, "done");
     assert_eq!(done.result, json!({ "ok": true }), "job result round-trip");
     assert!(store
-        .list_jobs(Some("done"), 100)?
+        .list_jobs(Scope::Operator, Some("done"), 100)?
         .iter()
         .any(|x| x.id == j.id));
     job_cancellation(store)?;
@@ -158,7 +165,7 @@ fn job_failure_accounting(store: &dyn Store) -> Result<()> {
         Some("benchmark failure: judge failed"),
         second.claimed_at,
     )?;
-    let after = store.get_job(&j.id)?.expect("get");
+    let after = store.get_job(Scope::Operator, &j.id)?.expect("get");
     assert_eq!(
         after.failures, 1,
         "a reported error consumes the retry budget"
@@ -176,6 +183,12 @@ fn job_failure_accounting(store: &dyn Store) -> Result<()> {
     // A clean finish never consumes the budget. (Unfenced: the job went back to `queued` above, so
     // nobody holds it — this is the operator-shaped finish.)
     store.finish_job(&j.id, "done", &json!({ "ok": true }), None, None)?;
-    assert_eq!(store.get_job(&j.id)?.expect("get").failures, 1);
+    assert_eq!(
+        store
+            .get_job(Scope::Operator, &j.id)?
+            .expect("get")
+            .failures,
+        1
+    );
     Ok(())
 }

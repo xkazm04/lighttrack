@@ -336,6 +336,25 @@ request will succeed shortly.
 - **`DELETE /v1/projects/:id` archives, it does not delete.** It sets `enabled = false` and stamps
   `archived_at`; the events, scores and benchmark runs stay, because they are what every cost report and
   gate decision was computed from. Archiving is idempotent, and effective — the tenant stops accepting work.
+- **Tenant scope is a typed parameter on every store read (M17).** A `Store` read that names a
+  project-bearing row takes a `Scope` — `Scope::Project(id)` for a project key, `Scope::Operator` for
+  admin/dev and for the background sweeps — and the backend puts that filter *in the query*. The
+  handler no longer reads a row and then compares its `project_id`, because that comparison could
+  only produce a **403 that confirms the id exists**. D13 established this for traces; it now holds
+  for events, scores, benchmarks and their runs, datasets and their items, rubrics, jobs, limit
+  rules, margin policies, schedules, prompts and their versions, relay tasks, devices, alerts,
+  alert channels and labels.
+  - *Behavior change:* reading, updating or deleting another project's row is **404, not 403**, on
+    every one of those endpoints. `GET /v1/benchmarks/:id`, `/v1/datasets/:id`, `/v1/rubrics/:id`,
+    `/v1/relay/tasks/:id` and `/v1/relay/tasks/:id/cancel` previously answered 403 and now answer
+    404 with the same `not_found` envelope. Clients that branched on 403 to mean "exists, not
+    yours" were reading an oracle, not an API.
+  - The one exception is the price book (`list_prices` / `upsert_price` / `list_price_history`):
+    one rate card belongs to the instance, not to a tenant, and a per-project book would fragment
+    every cost number computed from it.
+  - `jobs` carries a nullable `project_id`, stamped at enqueue from the benchmark or schedule the
+    work belongs to. `NULL` is an operator job (a sweep, or a row written before the column
+    existed): the operator scope reads those and a project scope never does.
 - **Local dev:** bind to `127.0.0.1`; auth can run in a relaxed `dev` mode.
 - **e2-micro:** API keys enforced; TLS via Cloud Run (managed) or Caddy in front of the VM. Secrets live in
   **Secret Manager** (cloud) / a git-ignored `.env`/`*.local.toml` (local), never committed.

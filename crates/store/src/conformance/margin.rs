@@ -11,6 +11,7 @@ use chrono::{Duration, Utc};
 use lighttrack_core::new_id;
 
 use super::fixtures::tagged_event;
+use crate::Scope;
 use crate::{Result, Store};
 
 pub(super) fn margin(store: &dyn Store) -> Result<()> {
@@ -32,7 +33,7 @@ pub(super) fn margin(store: &dyn Store) -> Result<()> {
     mk("cus-m-b", "m-1", "summarize", 4.0)?;
 
     // --- tokens by dimension ---
-    let tokens = store.tokens_by_dimension(Some(&pid), "customer", since, until)?;
+    let tokens = store.tokens_by_dimension(Scope::Project(&pid), "customer", since, until)?;
     let a = tokens
         .iter()
         .find(|r| r.key.as_deref() == Some("cus-m-a"))
@@ -52,7 +53,7 @@ pub(super) fn margin(store: &dyn Store) -> Result<()> {
     );
 
     // --- one customer's cost by model ---
-    let by_model = store.customer_cost_by_model(Some(&pid), "cus-m-a", since, until)?;
+    let by_model = store.customer_cost_by_model(Scope::Project(&pid), "cus-m-a", since, until)?;
     let total: f64 = by_model.iter().map(|r| r.cost_usd).sum();
     assert!(
         (total - 3.0).abs() < 1e-9,
@@ -72,7 +73,7 @@ pub(super) fn margin(store: &dyn Store) -> Result<()> {
     );
 
     // --- the same cost, split by use-case name ---
-    let by_name = store.customer_cost_by_name(Some(&pid), "cus-m-a", since, until)?;
+    let by_name = store.customer_cost_by_name(Scope::Project(&pid), "cus-m-a", since, until)?;
     let named: f64 = by_name.iter().map(|r| r.cost_usd).sum();
     assert!(
         (named - total).abs() < 1e-9,
@@ -86,7 +87,7 @@ pub(super) fn margin(store: &dyn Store) -> Result<()> {
     // A customer with no traffic is an empty breakdown, not someone else's.
     assert!(
         store
-            .customer_cost_by_model(Some(&pid), "cus-nobody", since, until)?
+            .customer_cost_by_model(Scope::Project(&pid), "cus-nobody", since, until)?
             .is_empty(),
         "an unknown customer's breakdown is empty — never the project-wide total"
     );

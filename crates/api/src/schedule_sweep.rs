@@ -25,6 +25,7 @@ use lighttrack_core::{JobKind, Schedule};
 use crate::jobs_enqueue::enqueue;
 use crate::schedules::SCHEDULE_ID_KEY;
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 const ENV_SECS: &str = "LIGHTTRACK_SCHEDULE_SWEEP_SECS";
 
@@ -155,7 +156,7 @@ async fn fire(st: &AppState, s: &Schedule) -> Result<bool, crate::error::ApiErro
     if let Some(o) = payload.as_object_mut() {
         o.insert(SCHEDULE_ID_KEY.into(), serde_json::json!(s.id));
     }
-    let job = enqueue(st, kind, payload).await?;
+    let job = enqueue(st, Some(&s.project_id), kind, payload).await?;
     updated.last_job_id = Some(job.id);
     save(st, &updated).await?;
     Ok(true)
@@ -171,7 +172,7 @@ async fn in_flight(
     let id = s.id.clone();
     let found = spawn_db(move || {
         for status in ["queued", "running"] {
-            for j in store.list_jobs(Some(status), 1000)? {
+            for j in store.list_jobs(TenantScope::Operator, Some(status), 1000)? {
                 let same_schedule = j
                     .payload
                     .get(SCHEDULE_ID_KEY)
@@ -191,7 +192,8 @@ async fn in_flight(
 async fn save(st: &AppState, s: &Schedule) -> Result<(), crate::error::ApiError> {
     let store = st.store.clone();
     let s2 = s.clone();
-    spawn_db(move || store.update_schedule(&s2)).await?;
+    // The sweep is the operator: it owns every project's schedules by construction.
+    spawn_db(move || store.update_schedule(TenantScope::Operator, &s2)).await?;
     Ok(())
 }
 

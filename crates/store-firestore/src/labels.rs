@@ -88,7 +88,14 @@ pub(crate) fn list_labels(rest: &Rest, f: &LabelFilter) -> Result<Vec<Label>> {
 }
 
 /// Every label on any item of `dataset_id`, oldest-first.
-pub(crate) fn labels_for_dataset(rest: &Rest, dataset_id: &str) -> Result<Vec<Label>> {
+pub(crate) fn labels_for_dataset(
+    rest: &Rest,
+    project: Option<&str>,
+    dataset_id: &str,
+) -> Result<Vec<Label>> {
+    if crate::datasets::get_dataset(rest, project, dataset_id)?.is_none() {
+        return Ok(Vec::new());
+    }
     let items = rest.query(
         "dataset_items",
         &[("dataset_id", "EQUAL", json!(dataset_id))],

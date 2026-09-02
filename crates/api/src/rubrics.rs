@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use lighttrack_core::{new_id, CalibrationRecord, Rubric, RubricDimension};
 
-use crate::auth::Principal;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 #[derive(Deserialize)]
 pub(crate) struct CreateRubricReq {
@@ -89,20 +89,15 @@ pub(crate) async fn get_rubric(
     let p = authenticate(&st, &headers).await?;
     let store = st.store.clone();
     let id2 = id.clone();
-    let r = spawn_db(move || store.get_rubric(&id2))
+    // The scope IS the authorization (M17): another project's rubric is not found, not refused.
+    let sc = p.scope_owned();
+    let r = spawn_db(move || store.get_rubric(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("rubric '{id}' not found")))?;
-    if let Principal::Project {
-        project_id: pid, ..
-    } = &p
-    {
-        if &r.project_id != pid {
-            return Err(ApiError::forbidden("key not authorized for that rubric"));
-        }
-    }
     let store = st.store.clone();
     let project = r.project_id.clone();
-    let history = spawn_db(move || store.list_calibrations(Some(&project), 0, None)).await?;
+    let history =
+        spawn_db(move || store.list_calibrations(TenantScope::Project(&project), 0, None)).await?;
     let calibrated_judges = judges_for(&history, &r.id);
     Ok(Json(RubricView {
         active: !calibrated_judges.is_empty(),
@@ -195,10 +190,12 @@ pub(crate) async fn create_rubric_version(
     Path(id): Path<String>,
     Json(req): Json<NewVersionReq>,
 ) -> Result<Json<Rubric>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
-    let prev = spawn_db(move || store.get_rubric(&id2))
+    let sc = p.scope_owned();
+    let prev = spawn_db(move || store.get_rubric(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("rubric '{id}' not found")))?;
 

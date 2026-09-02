@@ -14,6 +14,7 @@ pub mod conformance;
 pub mod dataset_import;
 pub mod pricing;
 mod rollup_compat;
+pub mod scope;
 pub mod sqlite;
 pub mod threshold;
 
@@ -36,6 +37,7 @@ use lighttrack_core::{
 
 pub use capabilities::{Capabilities, Surface};
 pub use collective::{replace_collective_contribution_nonatomic, CollectiveFilter, ReplaceAck};
+pub use scope::Scope;
 pub use sqlite::SqliteStore;
 pub use threshold::{
     needs_revenue, resolve_all as resolve_thresholds, resolve_from_windows, resolver,
@@ -587,7 +589,7 @@ pub fn insert_event_checked_nonatomic<S: Store + ?Sized>(
     // (`Unsupported`) leaves them unresolved, which is the inert `+inf` case — an unmeasurable
     // guardrail must not become a surprise block.
     let resolved = threshold::resolve_all(&rules, now, |since, until| {
-        match store.list_revenue_events(Some(&ev.project_id), since, until) {
+        match store.list_revenue_events(Scope::Project(&ev.project_id), since, until) {
             Err(StoreError::Unsupported(_)) => Ok(Vec::new()),
             other => other,
         }
@@ -862,7 +864,7 @@ pub trait Store: Send + Sync {
     }
 
     /// Most recent events, newest first, optionally filtered by project.
-    fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>>;
+    fn list_events(&self, project: Scope<'_>, limit: usize) -> Result<Vec<LlmEvent>>;
 
     /// Filtered, keyset-paginated event listing (newest first). Applies the [`EventFilter`] and pages
     /// on `(ts, id)` descending, returning up to `limit` events plus a `next_cursor` when more remain.
@@ -873,7 +875,7 @@ pub trait Store: Send + Sync {
     /// `RFC3339(Nanos, Z)` timestamp invariant (see [`codec::fmt_ts`]).
     fn list_events_filtered(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         filter: &EventFilter,
         limit: usize,
     ) -> Result<EventPage> {
@@ -888,7 +890,7 @@ pub trait Store: Send + Sync {
     }
 
     /// Cost/usage rollup grouped by project + provider + model, optionally filtered by project.
-    fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>>;
+    fn cost_summary(&self, project: Scope<'_>) -> Result<Vec<CostRow>>;
 
     // --- the grouped-rollup primitive ---
     /// **The** grouped rollup: usage and cost over a window, grouped by one to three
@@ -915,11 +917,11 @@ pub trait Store: Send + Sync {
     /// Defaults over [`Store::rollup`]; a backend with neither falls back to full history.
     fn cost_summary_windowed(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: Option<DateTime<Utc>>,
         until: Option<DateTime<Utc>>,
     ) -> Result<Vec<CostRow>> {
-        match rollup_compat::cost_summary_windowed(self, project, since, until) {
+        match rollup_compat::cost_summary_windowed(self, project.project(), since, until) {
             // No rollup *and* no windowed query: the pre-existing lenient fallback, which returns
             // more than asked rather than nothing. Kept so this can only widen, never blank, a page.
             Err(StoreError::Unsupported(_)) => self.cost_summary(project),
@@ -931,10 +933,10 @@ pub trait Store: Send + Sync {
     /// events at/after `since`. Defaults over [`Store::rollup`].
     fn usecase_costs(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<UseCaseCostRow>> {
-        rollup_compat::usecase_costs(self, project, since)
+        rollup_compat::usecase_costs(self, project.project(), since)
     }
 
     /// Aggregate usage for one project since `since` (inclusive). Used by limit evaluation.
@@ -990,7 +992,7 @@ pub trait Store: Send + Sync {
     /// question.
     fn redaction_posture(
         &self,
-        _project: Option<&str>,
+        _project: Scope<'_>,
         _since: DateTime<Utc>,
     ) -> Result<Vec<RedactionPostureRow>> {
         Err(StoreError::Unsupported("the redaction posture report"))
@@ -1013,12 +1015,12 @@ pub trait Store: Send + Sync {
     /// metadata) over `[since, until)`, for per-customer/product margin-trend forecasting.
     fn daily_cost_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<DailyDimCost>> {
-        rollup_compat::daily_cost_by_dimension(self, project, dim, since, until)
+        rollup_compat::daily_cost_by_dimension(self, project.project(), dim, since, until)
     }
 
     // --- projects ---
@@ -1072,7 +1074,7 @@ pub trait Store: Send + Sync {
     fn list_limit_rules(&self, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>>;
     /// Fetch one rule by id (across projects — the caller is admin-gated). Default `None` so
     /// backends that haven't ported the lifecycle read compile unchanged.
-    fn get_limit_rule(&self, _id: &str) -> Result<Option<LimitRule>> {
+    fn get_limit_rule(&self, _scope: Scope<'_>, _id: &str) -> Result<Option<LimitRule>> {
         Err(StoreError::Unsupported("limit-rule lookup"))
     }
     /// Replace a rule's mutable fields (metric/window/threshold/action/enabled — and, once ported,
@@ -1080,12 +1082,12 @@ pub trait Store: Send + Sync {
     /// was updated, `false` when the id is unknown (the API maps that to 404). The default is a clear
     /// unimplemented error rather than a silent no-op, so an operator on an unported backend learns
     /// the rule was *not* changed instead of believing a cap was tightened.
-    fn update_limit_rule(&self, _r: &LimitRule) -> Result<bool> {
+    fn update_limit_rule(&self, _scope: Scope<'_>, _r: &LimitRule) -> Result<bool> {
         Err(StoreError::Unsupported("updating limit rules"))
     }
     /// Delete a rule by id. Returns `true` when a row was removed, `false` when the id is unknown
     /// (the API maps that to 404). Default is a clear unimplemented error (see `update_limit_rule`).
-    fn delete_limit_rule(&self, _id: &str) -> Result<bool> {
+    fn delete_limit_rule(&self, _scope: Scope<'_>, _id: &str) -> Result<bool> {
         Err(StoreError::Unsupported("deleting limit rules"))
     }
 
@@ -1108,25 +1110,25 @@ pub trait Store: Send + Sync {
         Err(StoreError::Unsupported("margin policies"))
     }
     /// One policy by id, or `None` when it does not exist.
-    fn get_margin_policy(&self, _id: &str) -> Result<Option<MarginPolicy>> {
+    fn get_margin_policy(&self, _scope: Scope<'_>, _id: &str) -> Result<Option<MarginPolicy>> {
         Err(StoreError::Unsupported("margin policies"))
     }
     /// Remove a policy; `false` when no row matched (the API maps that to 404). Rules the policy
     /// created are NOT deleted here — the sweep's reverse pass reaps them, so removal goes through
     /// exactly one code path.
-    fn delete_margin_policy(&self, _id: &str) -> Result<bool> {
+    fn delete_margin_policy(&self, _scope: Scope<'_>, _id: &str) -> Result<bool> {
         Err(StoreError::Unsupported("margin policies"))
     }
 
     // --- single event lookup + scores (Phase 3) ---
-    fn get_event(&self, id: &str) -> Result<Option<LlmEvent>>;
+    fn get_event(&self, scope: Scope<'_>, id: &str) -> Result<Option<LlmEvent>>;
     /// Persist a judge verdict, including its structured provenance (`Score::detail`: per-dimension
     /// breakdown, agreement, sample accounting, bias/injection flags) and its benchmark-run scoping
     /// (`Score::run_id` / `Score::case_index`). Every shipped backend persists all three — a verdict
     /// that reads back without its provenance, or a case that can't say which run produced it, is a
     /// silently degraded record rather than an obviously missing one.
     fn insert_score(&self, s: &Score) -> Result<()>;
-    fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>>;
+    fn list_scores(&self, project: Scope<'_>, limit: usize) -> Result<Vec<Score>>;
     /// Scores narrowed by the typed identity: which rubric, and what sort of verdict.
     ///
     /// A separate method rather than widening [`Store::list_scores`], for the same reason
@@ -1138,7 +1140,7 @@ pub trait Store: Send + Sync {
     /// wrong, which is the failure this whole trait's default policy exists to refuse.
     fn list_scores_filtered(
         &self,
-        _project: Option<&str>,
+        _project: Scope<'_>,
         _filter: &ScoreFilter,
         _limit: usize,
     ) -> Result<Vec<Score>> {
@@ -1158,7 +1160,7 @@ pub trait Store: Send + Sync {
     fn list_run_scores(
         &self,
         _run_id: &str,
-        _project: Option<&str>,
+        _project: Scope<'_>,
         _limit: usize,
     ) -> Result<Vec<Score>> {
         Err(StoreError::Unsupported("run-scoped case results"))
@@ -1168,7 +1170,7 @@ pub trait Store: Send + Sync {
     /// stays correct however large the scores table grows. Required (no default): a wrong answer here
     /// re-judges events (burning paid judge calls) or skips new ones, so every backend implements it
     /// and the conformance suite pins it. Backed by `idx_scores_event`.
-    fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>>;
+    fn scored_event_ids(&self, scope: Scope<'_>, event_ids: &[String]) -> Result<Vec<String>>;
     /// Recent events (newest first, optionally project-scoped) that do **not** yet have a score — the
     /// online scorer's work list. The default fetches a page via [`Store::list_events`] and removes the
     /// scored ones via [`Store::scored_event_ids`], which is correct and bounded on every backend (it
@@ -1183,7 +1185,7 @@ pub trait Store: Send + Sync {
     /// whole-project work list.
     fn list_unscored_events(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         prompt: Option<&str>,
         limit: usize,
     ) -> Result<Vec<LlmEvent>> {
@@ -1203,8 +1205,10 @@ pub trait Store: Send + Sync {
                 .collect(),
         };
         let ids: Vec<String> = events.iter().map(|e| e.id.clone()).collect();
-        let scored: std::collections::HashSet<String> =
-            self.scored_event_ids(&ids)?.into_iter().collect();
+        let scored: std::collections::HashSet<String> = self
+            .scored_event_ids(Scope::Operator, &ids)?
+            .into_iter()
+            .collect();
         Ok(events
             .into_iter()
             .filter(|e| !scored.contains(&e.id))
@@ -1229,7 +1233,7 @@ pub trait Store: Send + Sync {
         self.capabilities().has(Surface::Traces)
     }
     /// Compact summaries of the most recent traces (grouped by `trace_id`), newest activity first.
-    fn list_traces(&self, _project: Option<&str>, _limit: usize) -> Result<Vec<TraceSummary>> {
+    fn list_traces(&self, _project: Scope<'_>, _limit: usize) -> Result<Vec<TraceSummary>> {
         Err(StoreError::Unsupported("traces"))
     }
     /// Filtered, keyset-paginated trace listing (newest `ended` first). Applies the [`TraceFilter`]
@@ -1242,7 +1246,7 @@ pub trait Store: Send + Sync {
     /// form. Correct string-keyset paging relies on the fixed-width `RFC3339(Nanos, Z)` invariant.
     fn list_traces_filtered(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         _filter: &TraceFilter,
         limit: usize,
     ) -> Result<TracePage> {
@@ -1265,7 +1269,7 @@ pub trait Store: Send + Sync {
     /// unbounded, which is how one runaway loop slows every read of that trace.
     fn list_trace_events(
         &self,
-        _project: Option<&str>,
+        _project: Scope<'_>,
         _trace_id: &str,
         _max_spans: usize,
     ) -> Result<TraceEvents> {
@@ -1273,7 +1277,7 @@ pub trait Store: Send + Sync {
     }
     /// Scores attached to any event within a trace (i.e. `scores.event_id` ∈ the trace's events),
     /// scoped by `project` on the same terms as [`Store::list_trace_events`].
-    fn list_trace_scores(&self, _project: Option<&str>, _trace_id: &str) -> Result<Vec<Score>> {
+    fn list_trace_scores(&self, _project: Scope<'_>, _trace_id: &str) -> Result<Vec<Score>> {
         Err(StoreError::Unsupported("traces"))
     }
     /// Full rollup (totals + span tree) for one trace within `project`, or `None` if it has no events
@@ -1281,7 +1285,7 @@ pub trait Store: Send + Sync {
     /// the fan-out is capped; a clipped trace carries `spans_truncated`.
     fn get_trace(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         trace_id: &str,
         max_spans: usize,
     ) -> Result<Option<Trace>> {
@@ -1291,10 +1295,14 @@ pub trait Store: Send + Sync {
 
     // --- benchmarks (Phase 3.5) ---
     fn create_benchmark(&self, b: &Benchmark) -> Result<()>;
-    fn get_benchmark(&self, id: &str) -> Result<Option<Benchmark>>;
+    fn get_benchmark(&self, scope: Scope<'_>, id: &str) -> Result<Option<Benchmark>>;
     fn list_benchmarks(&self, project: &str) -> Result<Vec<Benchmark>>;
     fn create_benchmark_run(&self, r: &BenchmarkRun) -> Result<()>;
-    fn list_benchmark_runs(&self, benchmark_id: &str) -> Result<Vec<BenchmarkRun>>;
+    fn list_benchmark_runs(
+        &self,
+        scope: Scope<'_>,
+        benchmark_id: &str,
+    ) -> Result<Vec<BenchmarkRun>>;
 
     // --- model prices (Phase 3.6a) ---
     fn upsert_price(&self, p: &ModelPriceRow) -> Result<()>;
@@ -1302,15 +1310,15 @@ pub trait Store: Send + Sync {
 
     // --- datasets (Phase 3.6b) ---
     fn create_dataset(&self, d: &Dataset) -> Result<()>;
-    fn get_dataset(&self, id: &str) -> Result<Option<Dataset>>;
-    fn list_datasets(&self, project: &str) -> Result<Vec<Dataset>>;
-    fn set_dataset_frozen(&self, id: &str, frozen: bool) -> Result<()>;
+    fn get_dataset(&self, scope: Scope<'_>, id: &str) -> Result<Option<Dataset>>;
+    fn list_datasets(&self, project: Scope<'_>) -> Result<Vec<Dataset>>;
+    fn set_dataset_frozen(&self, scope: Scope<'_>, id: &str, frozen: bool) -> Result<()>;
     fn create_dataset_item(&self, item: &DatasetItem) -> Result<()>;
-    fn list_dataset_items(&self, dataset_id: &str) -> Result<Vec<DatasetItem>>;
+    fn list_dataset_items(&self, scope: Scope<'_>, dataset_id: &str) -> Result<Vec<DatasetItem>>;
 
     // --- rubrics (Phase 3.6c) ---
     fn create_rubric(&self, r: &Rubric) -> Result<()>;
-    fn get_rubric(&self, id: &str) -> Result<Option<Rubric>>;
+    fn get_rubric(&self, scope: Scope<'_>, id: &str) -> Result<Option<Rubric>>;
     fn list_rubrics(&self, project: &str) -> Result<Vec<Rubric>>;
 
     // --- job queue (Phase 3.6d) ---
@@ -1332,7 +1340,7 @@ pub trait Store: Send + Sync {
     /// Backends that cannot do this atomically must return [`StoreError::Unsupported`] (→ 501)
     /// rather than a quiet default: a cancel that silently did nothing is worse than a 501, because
     /// the operator walks away believing the spend stopped.
-    fn cancel_job(&self, _id: &str) -> Result<Option<JobCancel>> {
+    fn cancel_job(&self, _scope: Scope<'_>, _id: &str) -> Result<Option<JobCancel>> {
         Err(StoreError::Unsupported("cancelling a job"))
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()>;
@@ -1370,8 +1378,8 @@ pub trait Store: Send + Sync {
         error: Option<&str>,
         fence: Option<DateTime<Utc>>,
     ) -> Result<JobFinish>;
-    fn get_job(&self, id: &str) -> Result<Option<Job>>;
-    fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>>;
+    fn get_job(&self, scope: Scope<'_>, id: &str) -> Result<Option<Job>>;
+    fn list_jobs(&self, scope: Scope<'_>, status: Option<&str>, limit: usize) -> Result<Vec<Job>>;
 
     // --- stored schedules (M7): recurrence as a row, swept by the API ---
     // Default impls so a backend that has not ported the table compiles unchanged — but they refuse
@@ -1380,7 +1388,7 @@ pub trait Store: Send + Sync {
     fn create_schedule(&self, _s: &Schedule) -> Result<()> {
         Err(StoreError::Unsupported("stored schedules"))
     }
-    fn get_schedule(&self, _id: &str) -> Result<Option<Schedule>> {
+    fn get_schedule(&self, _scope: Scope<'_>, _id: &str) -> Result<Option<Schedule>> {
         Err(StoreError::Unsupported("stored schedules"))
     }
     fn list_schedules(&self, _project: &str) -> Result<Vec<Schedule>> {
@@ -1389,10 +1397,10 @@ pub trait Store: Send + Sync {
     /// Replace a schedule's mutable fields; `Ok(false)` = no such id. The id and `project_id` are
     /// identity and are never written — a schedule that could change project would be a way around
     /// project scoping.
-    fn update_schedule(&self, _s: &Schedule) -> Result<bool> {
+    fn update_schedule(&self, _scope: Scope<'_>, _s: &Schedule) -> Result<bool> {
         Err(StoreError::Unsupported("stored schedules"))
     }
-    fn delete_schedule(&self, _id: &str) -> Result<bool> {
+    fn delete_schedule(&self, _scope: Scope<'_>, _id: &str) -> Result<bool> {
         Err(StoreError::Unsupported("stored schedules"))
     }
     /// Enabled schedules whose `next_due` has passed — the sweep's one read per tick.
@@ -1415,7 +1423,7 @@ pub trait Store: Send + Sync {
     fn get_prompt(&self, _project: &str, _name: &str) -> Result<Option<Prompt>> {
         Err(StoreError::Unsupported("the prompt registry"))
     }
-    fn get_prompt_by_id(&self, _id: &str) -> Result<Option<Prompt>> {
+    fn get_prompt_by_id(&self, _scope: Scope<'_>, _id: &str) -> Result<Option<Prompt>> {
         Err(StoreError::Unsupported("the prompt registry"))
     }
     fn list_prompts(&self, _project: &str) -> Result<Vec<Prompt>> {
@@ -1425,11 +1433,20 @@ pub trait Store: Send + Sync {
     fn create_prompt_version(&self, _v: &PromptVersion) -> Result<()> {
         Err(StoreError::Unsupported("the prompt registry"))
     }
-    fn get_prompt_version(&self, _prompt_id: &str, _version: u32) -> Result<Option<PromptVersion>> {
+    fn get_prompt_version(
+        &self,
+        _scope: Scope<'_>,
+        _prompt_id: &str,
+        _version: u32,
+    ) -> Result<Option<PromptVersion>> {
         Err(StoreError::Unsupported("the prompt registry"))
     }
     /// All versions of a prompt, newest version first.
-    fn list_prompt_versions(&self, _prompt_id: &str) -> Result<Vec<PromptVersion>> {
+    fn list_prompt_versions(
+        &self,
+        _scope: Scope<'_>,
+        _prompt_id: &str,
+    ) -> Result<Vec<PromptVersion>> {
         Err(StoreError::Unsupported("the prompt registry"))
     }
 
@@ -1455,7 +1472,7 @@ pub trait Store: Send + Sync {
     /// Revenue records that may be recognized within `[since, until)`, optionally scoped to a project.
     fn list_revenue_events(
         &self,
-        _project: Option<&str>,
+        _project: Scope<'_>,
         _since: DateTime<Utc>,
         _until: DateTime<Utc>,
     ) -> Result<Vec<RevenueEvent>> {
@@ -1472,7 +1489,7 @@ pub trait Store: Send + Sync {
     /// not a remedy for a webhook nobody can replay.
     fn reprice_revenue(
         &self,
-        _project: Option<&str>,
+        _project: Scope<'_>,
         _currency: &str,
         _rate: f64,
         _version: &str,
@@ -1484,47 +1501,47 @@ pub trait Store: Send + Sync {
     /// `[since, until)`. Defaults over [`Store::rollup`].
     fn cost_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
-        rollup_compat::cost_by_dimension(self, project, dim, since, until)
+        rollup_compat::cost_by_dimension(self, project.project(), dim, since, until)
     }
     /// Prompt+completion tokens grouped by a billing dimension (`customer` | `product`, from event
     /// metadata) over `[since, until)` — the usage side of the pricing what-if simulator. Defaults
     /// over [`Store::rollup`].
     fn tokens_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<TokensByDimension>> {
-        rollup_compat::tokens_by_dimension(self, project, dim, since, until)
+        rollup_compat::tokens_by_dimension(self, project.project(), dim, since, until)
     }
     /// One customer's LLM cost broken down **by model** (`provider/model`) over `[since, until)`,
     /// scoped by `metadata.customer_id = customer`. Defaults over [`Store::rollup`], where the
     /// customer is a *filter* rather than a grouping — a row for anyone else here is a tenant leak.
     fn customer_cost_by_model(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         customer: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
-        rollup_compat::customer_cost_by_model(self, project, customer, since, until)
+        rollup_compat::customer_cost_by_model(self, project.project(), customer, since, until)
     }
     /// One customer's LLM cost broken down **by use-case `name`** over `[since, until)`, scoped by the
     /// same `metadata.customer_id` (see [`Store::customer_cost_by_model`]).
     fn customer_cost_by_name(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         customer: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
-        rollup_compat::customer_cost_by_name(self, project, customer, since, until)
+        rollup_compat::customer_cost_by_name(self, project.project(), customer, since, until)
     }
 
     // --- cloud→device relay queue (docs/RELAY.md) ---
@@ -1534,7 +1551,7 @@ pub trait Store: Send + Sync {
     fn create_relay_task(&self, _t: &RelayTask) -> Result<()> {
         Err(StoreError::Unsupported("the relay queue"))
     }
-    fn get_relay_task(&self, _id: &str) -> Result<Option<RelayTask>> {
+    fn get_relay_task(&self, _scope: Scope<'_>, _id: &str) -> Result<Option<RelayTask>> {
         Err(StoreError::Unsupported("the relay queue"))
     }
     /// Dedupe lookup for idempotent enqueue: the task holding `key` within `project`, if any.
@@ -1543,7 +1560,7 @@ pub trait Store: Send + Sync {
     }
     fn list_relay_tasks(
         &self,
-        _project: Option<&str>,
+        _project: Scope<'_>,
         _status: Option<&str>,
         _limit: usize,
     ) -> Result<Vec<RelayTask>> {
@@ -1560,7 +1577,7 @@ pub trait Store: Send + Sync {
     /// short and gets trusted anyway.
     fn list_relay_tasks_by_action(
         &self,
-        _project: Option<&str>,
+        _project: Scope<'_>,
         _action_type: &str,
         _status: Option<&str>,
         _limit: usize,
@@ -1638,7 +1655,7 @@ pub trait Store: Send + Sync {
     /// set, so it is never handed to a second device), terminal → untouched. `Ok(None)` = no such
     /// task. A backend that cannot do this atomically must refuse rather than default quietly: a
     /// cancel that silently did nothing leaves the operator believing the run stopped.
-    fn cancel_relay_task(&self, _id: &str) -> Result<Option<RelayCancel>> {
+    fn cancel_relay_task(&self, _scope: Scope<'_>, _id: &str) -> Result<Option<RelayCancel>> {
         Err(StoreError::Unsupported("the relay queue"))
     }
 
@@ -1738,13 +1755,9 @@ pub trait Store: Send + Sync {
     ///
     /// The default folds [`Store::rollup`]; a backend without the rollup refuses through it, which
     /// is the honest answer — an empty ledger reads as "everything is priced".
-    fn list_unpriced(
-        &self,
-        project: Option<&str>,
-        since: DateTime<Utc>,
-    ) -> Result<Vec<UnpricedRow>> {
+    fn list_unpriced(&self, project: Scope<'_>, since: DateTime<Utc>) -> Result<Vec<UnpricedRow>> {
         rollup_compat::refusal(
-            pricing::list_unpriced_via_rollup(self, project, since),
+            pricing::list_unpriced_via_rollup(self, project.project(), since),
             "the unpriced-traffic ledger",
         )
     }
@@ -1784,12 +1797,12 @@ pub trait Store: Send + Sync {
     }
     /// One device by id, revoked ones included — an operator listing a fleet has to see what they
     /// revoked, and a task that named a device must keep resolving after the revocation.
-    fn get_device(&self, _id: &str) -> Result<Option<Device>> {
+    fn get_device(&self, _scope: Scope<'_>, _id: &str) -> Result<Option<Device>> {
         Err(StoreError::Unsupported("the relay device fleet"))
     }
     /// The fleet, newest first: one project's devices, or (with `None`) every device on the
     /// instance — including the operator-wide ones, which belong to no project.
-    fn list_devices(&self, _project: Option<&str>) -> Result<Vec<Device>> {
+    fn list_devices(&self, _project: Scope<'_>) -> Result<Vec<Device>> {
         Err(StoreError::Unsupported("the relay device fleet"))
     }
     /// Resolve a presented `ltd_<prefix>_<secret>` by its non-secret prefix, so the caller can
@@ -1814,7 +1827,7 @@ pub trait Store: Send + Sync {
     /// Revoke a device: it authenticates nothing and is eligible for nothing. A flag, not a delete,
     /// so the tasks it already ran keep naming a device that still resolves. `Ok(false)` = no such
     /// device.
-    fn revoke_device(&self, _id: &str) -> Result<bool> {
+    fn revoke_device(&self, _scope: Scope<'_>, _id: &str) -> Result<bool> {
         Err(StoreError::Unsupported("the relay device fleet"))
     }
     /// How much of the fleet could run `action_type` — both figures, because one count cannot tell
@@ -1852,15 +1865,26 @@ pub trait Store: Send + Sync {
     fn list_alerts(&self, _f: &AlertFilter) -> Result<Vec<Alert>> {
         Err(StoreError::Unsupported("the alert ledger"))
     }
-    fn get_alert(&self, _id: &str) -> Result<Option<Alert>> {
+    fn get_alert(&self, _scope: Scope<'_>, _id: &str) -> Result<Option<Alert>> {
         Err(StoreError::Unsupported("the alert ledger"))
     }
     /// Acknowledge an alert. Idempotent in effect but honest in its answer: `Ok(false)` = no such id.
-    fn ack_alert(&self, _id: &str, _by: &str, _at: DateTime<Utc>) -> Result<bool> {
+    fn ack_alert(
+        &self,
+        _scope: Scope<'_>,
+        _id: &str,
+        _by: &str,
+        _at: DateTime<Utc>,
+    ) -> Result<bool> {
         Err(StoreError::Unsupported("the alert ledger"))
     }
     /// Attach what came of an alert — the responder's diagnosis, or an operator's note.
-    fn attach_alert_resolution(&self, _id: &str, _resolution: &Value) -> Result<bool> {
+    fn attach_alert_resolution(
+        &self,
+        _scope: Scope<'_>,
+        _id: &str,
+        _resolution: &Value,
+    ) -> Result<bool> {
         Err(StoreError::Unsupported("the alert ledger"))
     }
 
@@ -1868,15 +1892,15 @@ pub trait Store: Send + Sync {
     fn create_alert_channel(&self, _c: &AlertChannel) -> Result<()> {
         Err(StoreError::Unsupported("alert routing"))
     }
-    fn get_alert_channel(&self, _id: &str) -> Result<Option<AlertChannel>> {
+    fn get_alert_channel(&self, _scope: Scope<'_>, _id: &str) -> Result<Option<AlertChannel>> {
         Err(StoreError::Unsupported("alert routing"))
     }
     /// Channels owned by `project`, or — with `None` — the global ones. Exactly one of the two sets,
     /// never both: [`Store::channels_for`] is the method that unions them.
-    fn list_alert_channels(&self, _project: Option<&str>) -> Result<Vec<AlertChannel>> {
+    fn list_alert_channels(&self, _project: Scope<'_>) -> Result<Vec<AlertChannel>> {
         Err(StoreError::Unsupported("alert routing"))
     }
-    fn delete_alert_channel(&self, _id: &str) -> Result<bool> {
+    fn delete_alert_channel(&self, _scope: Scope<'_>, _id: &str) -> Result<bool> {
         Err(StoreError::Unsupported("alert routing"))
     }
     /// Where an alert for `project` goes: its own channels **∪** the global ones. A deployment that
@@ -1884,10 +1908,10 @@ pub trait Store: Send + Sync {
     ///
     /// The default composes the two `list_alert_channels` reads, so a backend that serves those
     /// serves this — and one that serves neither refuses here too, through the first call.
-    fn channels_for(&self, project: Option<&str>) -> Result<Vec<AlertChannel>> {
-        let mut out = self.list_alert_channels(None)?;
-        if let Some(p) = project {
-            out.extend(self.list_alert_channels(Some(p))?);
+    fn channels_for(&self, project: Scope<'_>) -> Result<Vec<AlertChannel>> {
+        let mut out = self.list_alert_channels(Scope::Operator)?;
+        if let Scope::Project(p) = project {
+            out.extend(self.list_alert_channels(Scope::Project(p))?);
         }
         Ok(out)
     }
@@ -1951,7 +1975,7 @@ pub trait Store: Send + Sync {
     /// the reading that gets a bad version left in production.
     fn score_summary_by_dimension(
         &self,
-        _project: Option<&str>,
+        _project: Scope<'_>,
         _dim: lighttrack_core::Dimension,
         _since: DateTime<Utc>,
         _until: Option<DateTime<Utc>>,
@@ -1983,7 +2007,7 @@ pub trait Store: Send + Sync {
     /// Its own method rather than a `list_labels` filter because it is a *join*: the labels are
     /// keyed by dataset-item id and the caller has a dataset id, so composing it from the filter
     /// would mean one query per item — which is how a 500-case set becomes 500 round trips.
-    fn labels_for_dataset(&self, _dataset_id: &str) -> Result<Vec<Label>> {
+    fn labels_for_dataset(&self, _scope: Scope<'_>, _dataset_id: &str) -> Result<Vec<Label>> {
         Err(StoreError::Unsupported("the label ledger"))
     }
 
@@ -2012,7 +2036,7 @@ pub trait Store: Send + Sync {
     /// A project's calibration history, newest-first, keyset-paged on `(created_at, id)`.
     fn list_calibrations(
         &self,
-        _project: Option<&str>,
+        _project: Scope<'_>,
         _limit: usize,
         _cursor: Option<&str>,
     ) -> Result<Vec<CalibrationRecord>> {
@@ -2033,8 +2057,9 @@ pub trait Store: Send + Sync {
     /// dataset. The labels on the copied items come with them (M11): a golden case whose human
     /// verdict did not survive the fork is no longer golden.
     ///
-    /// `project` scopes the lookup — `None` is an admin/unscoped call.
-    fn fork_dataset(&self, _project: Option<&str>, _id: &str) -> Result<Dataset> {
+    /// `scope` confines the lookup: a dataset outside it is simply not found (D13), so a fork
+    /// request for a foreign id answers 404 rather than confirming the id exists.
+    fn fork_dataset(&self, _scope: Scope<'_>, _id: &str) -> Result<Dataset> {
         Err(StoreError::Unsupported("dataset lineage"))
     }
     /// Mine stored rows into `dataset_id` per `spec`, returning how many items were written.
@@ -2048,7 +2073,7 @@ pub trait Store: Send + Sync {
     /// was scored against is the same lie as unfreezing it.
     fn import_dataset_items(
         &self,
-        _project: Option<&str>,
+        _scope: Scope<'_>,
         _dataset_id: &str,
         _spec: &ImportSpec,
     ) -> Result<u32> {
@@ -2056,7 +2081,7 @@ pub trait Store: Send + Sync {
     }
     /// Every version of the dataset called `name`, newest version first — the lineage an operator
     /// reads to find which corpus a past run was actually scored against.
-    fn list_dataset_versions(&self, _project: Option<&str>, _name: &str) -> Result<Vec<Dataset>> {
+    fn list_dataset_versions(&self, _scope: Scope<'_>, _name: &str) -> Result<Vec<Dataset>> {
         Err(StoreError::Unsupported("dataset lineage"))
     }
 }

@@ -2,13 +2,15 @@
 //! history of a name.
 //!
 //! Split from [`crate::datasets`] rather than added to it, because these three are about *lineage*
-//! rather than CRUD — and because the CRUD module is the one M17 is rewriting to carry a scope on
-//! every read. The three handlers here already pass their scope explicitly.
+//! rather than CRUD. Like every other read here they carry the principal's [`Scope`] (M17), so a
+//! foreign dataset id is not found rather than refused.
 //!
 //! The reason this surface exists at all: `Dataset::version` was written once as `1` and never
 //! updated, so freezing was terminal. The only way to extend a golden set was to build a *different*
 //! one, which is the exact case the runner's paired-test guard exists to refuse — and could not see,
 //! because both sides said `1`.
+//!
+//! [`Scope`]: lighttrack_store::Scope
 
 use axum::{
     extract::{Path, Query, State},
@@ -38,9 +40,9 @@ pub(crate) async fn fork_dataset(
     // Authorize against the dataset the caller named before touching the store's own scope, so a
     // project key gets the same 403/404 shape it gets from every other dataset route.
     let ds = load_dataset_authorized(&st, &p, &id).await?;
-    let scope = Some(ds.project_id.clone());
+    let sc = p.scope_owned();
     let store = st.store.clone();
-    let forked = spawn_db(move || store.fork_dataset(scope.as_deref(), &ds.id)).await?;
+    let forked = spawn_db(move || store.fork_dataset(sc.as_deref().into(), &ds.id)).await?;
     Ok(Json(forked))
 }
 
@@ -74,11 +76,11 @@ pub(crate) async fn import_dataset_items(
             "dataset is frozen; fork it to add cases",
         ));
     }
-    let scope = Some(ds.project_id.clone());
+    let sc = p.scope_owned();
     let dsid = ds.id.clone();
     let store = st.store.clone();
     let imported =
-        spawn_db(move || store.import_dataset_items(scope.as_deref(), &dsid, &spec)).await?;
+        spawn_db(move || store.import_dataset_items(sc.as_deref().into(), &dsid, &spec)).await?;
     Ok(Json(ImportOutcome {
         dataset_id: ds.id,
         imported,
@@ -111,7 +113,7 @@ pub(crate) async fn list_dataset_versions(
         return Err(ApiError::bad_request("'name' is required"));
     }
     let store = st.store.clone();
-    let v = spawn_db(move || store.list_dataset_versions(scope.as_deref(), &name)).await?;
+    let v = spawn_db(move || store.list_dataset_versions(scope.as_deref().into(), &name)).await?;
     Ok(Json(v))
 }
 

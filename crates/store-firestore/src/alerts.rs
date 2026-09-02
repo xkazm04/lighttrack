@@ -113,12 +113,23 @@ pub(crate) fn mark_delivery(rest: &Rest, alert_id: &str, d: &Delivery) -> Result
     Ok(true)
 }
 
-pub(crate) fn get_alert(rest: &Rest, id: &str) -> Result<Option<Alert>> {
-    rest.get_doc(COLL, id)?.as_ref().map(alert_from).transpose()
+pub(crate) fn get_alert(rest: &Rest, project: Option<&str>, id: &str) -> Result<Option<Alert>> {
+    let a = rest
+        .get_doc(COLL, id)?
+        .as_ref()
+        .map(alert_from)
+        .transpose()?;
+    Ok(crate::scope::keep(project, a, |a| a.project_id.as_deref()))
 }
 
-pub(crate) fn ack_alert(rest: &Rest, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
-    if rest.get_doc(COLL, id)?.is_none() {
+pub(crate) fn ack_alert(
+    rest: &Rest,
+    project: Option<&str>,
+    id: &str,
+    by: &str,
+    at: DateTime<Utc>,
+) -> Result<bool> {
+    if get_alert(rest, project, id)?.is_none() {
         return Ok(false);
     }
     let mut f = Fields::new();
@@ -131,8 +142,13 @@ pub(crate) fn ack_alert(rest: &Rest, id: &str, by: &str, at: DateTime<Utc>) -> R
     Ok(true)
 }
 
-pub(crate) fn attach_alert_resolution(rest: &Rest, id: &str, resolution: &Value) -> Result<bool> {
-    if rest.get_doc(COLL, id)?.is_none() {
+pub(crate) fn attach_alert_resolution(
+    rest: &Rest,
+    project: Option<&str>,
+    id: &str,
+    resolution: &Value,
+) -> Result<bool> {
+    if get_alert(rest, project, id)?.is_none() {
         return Ok(false);
     }
     let mut f = Fields::new();

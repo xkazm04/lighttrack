@@ -14,6 +14,7 @@ use lighttrack_store::Store;
 
 use crate::redact::Redactor;
 use crate::tests_ingest::{make_key, setup};
+use lighttrack_store::Scope as TenantScope;
 
 /// The admin bearer `tests_ingest::setup` configures (its state is auth-ENFORCED, not dev mode).
 const ADMIN: &str = "admin-secret";
@@ -104,7 +105,9 @@ async fn a_compare_benchmark_recurs_and_the_sweep_never_stacks_two_of_it() {
 
     // One sweep enqueues one job, stamped with the schedule that produced it.
     crate::schedule_sweep::sweep_once(&state).await;
-    let jobs = store.list_jobs(Some("queued"), 100).unwrap();
+    let jobs = store
+        .list_jobs(TenantScope::Operator, Some("queued"), 100)
+        .unwrap();
     assert_eq!(jobs.len(), 1, "one due schedule, one job");
     assert_eq!(jobs[0].job_type, "bench_run");
     assert_eq!(jobs[0].payload["benchmark_id"], bid.as_str());
@@ -114,7 +117,13 @@ async fn a_compare_benchmark_recurs_and_the_sweep_never_stacks_two_of_it() {
     // A second sweep must NOT stack another: the first job is still in flight. This is the
     // idempotency rule that keeps a benchmark slower than its own interval from piling up runs.
     crate::schedule_sweep::sweep_once(&state).await;
-    assert_eq!(store.list_jobs(Some("queued"), 100).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_jobs(TenantScope::Operator, Some("queued"), 100)
+            .unwrap()
+            .len(),
+        1
+    );
 
     // …and the schedule now points at the run it produced.
     let (_, runs) = call(
@@ -217,7 +226,10 @@ async fn a_disabled_schedule_stays_visible_and_stops_firing() {
 
     crate::schedule_sweep::sweep_once(&state).await;
     assert!(
-        store.list_jobs(Some("queued"), 100).unwrap().is_empty(),
+        store
+            .list_jobs(TenantScope::Operator, Some("queued"), 100)
+            .unwrap()
+            .is_empty(),
         "a disabled schedule must not fire"
     );
     // Paused is not deleted: an operator has to be able to see the thing they paused.
@@ -261,12 +273,23 @@ async fn the_sweep_reaps_dead_relay_leases_with_no_device_polling() {
         store.lease_relay_tasks("pc", &[], 0, 5).unwrap();
     }
     assert_eq!(
-        store.get_relay_task(&id).unwrap().unwrap().status,
+        store
+            .get_relay_task(TenantScope::Operator, &id)
+            .unwrap()
+            .unwrap()
+            .status,
         "leased",
         "still leased by a device that will never come back"
     );
 
     // No device polls; the sweep alone reaps it.
     crate::schedule_sweep::sweep_once(&state).await;
-    assert_eq!(store.get_relay_task(&id).unwrap().unwrap().status, "dead");
+    assert_eq!(
+        store
+            .get_relay_task(TenantScope::Operator, &id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "dead"
+    );
 }

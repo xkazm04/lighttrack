@@ -22,6 +22,7 @@ use crate::guards::{authenticate, ensure_can_admin};
 use crate::state::{spawn_db, AppState};
 
 use super::scorecard::run_stat;
+use lighttrack_store::Scope as TenantScope;
 
 #[derive(Deserialize)]
 pub(crate) struct DigestParams {
@@ -85,10 +86,12 @@ fn gather_run_stats(store: &dyn Store) -> Result<(Vec<RunStat>, u32, u32), Store
             // these runs is part of what makes two contributors' numbers comparable, and a
             // superseded rubric is a different measurement (see `rubric_fingerprint_of`).
             let rubric_version = match b.rubric_id.as_deref() {
-                Some(id) => store.get_rubric(id)?.map(|r| r.version),
+                Some(id) => store
+                    .get_rubric(TenantScope::Project(&p.id), id)?
+                    .map(|r| r.version),
                 None => None,
             };
-            for run in store.list_benchmark_runs(&b.id)? {
+            for run in store.list_benchmark_runs(TenantScope::Project(&p.id), &b.id)? {
                 if let Some(s) = run_stat(&b, &run, rubric_version) {
                     stats.push(s);
                 }

@@ -11,15 +11,16 @@ use lighttrack_store::Result;
 use crate::util::{fmt_ts, json_or_null, parse_ts, pgerr, val_or_null};
 
 const COLS: &str = "id, type, payload, status, attempts, max_attempts, progress, error, \
-    result, claimed_at, created_at, updated_at, failures, stale_reclaims";
+    result, claimed_at, created_at, updated_at, failures, stale_reclaims, project_id";
 
 pub(crate) async fn create(pool: &PgPool, j: &Job) -> Result<()> {
     let payload = json_or_null(&j.payload)?;
     let result = json_or_null(&j.result)?;
     sqlx::query(
         "INSERT INTO jobs (id, type, payload, status, attempts, max_attempts, progress, \
-         error, result, claimed_at, created_at, updated_at, failures, stale_reclaims) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+         error, result, claimed_at, created_at, updated_at, failures, stale_reclaims, \
+         project_id) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
     )
     .bind(j.id.clone())
     .bind(j.job_type.clone())
@@ -35,6 +36,7 @@ pub(crate) async fn create(pool: &PgPool, j: &Job) -> Result<()> {
     .bind(fmt_ts(j.updated_at))
     .bind(j.failures as i64)
     .bind(j.stale_reclaims as i64)
+    .bind(j.project_id.clone())
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -85,15 +87,21 @@ pub(crate) async fn claim(
 
 /// Ask a job to stop, in ONE conditional statement so it cannot race a concurrent claim: `queued` →
 /// `cancelled`, `running` → `cancelling` (which is not claimable), terminal → untouched.
-pub(crate) async fn cancel(pool: &PgPool, id: &str) -> Result<Option<JobCancel>> {
+pub(crate) async fn cancel(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<JobCancel>> {
     let new_status: Option<String> = sqlx::query_scalar(
         "UPDATE jobs SET status = CASE WHEN status='queued' THEN 'cancelled' ELSE 'cancelling' END, \
          updated_at = $2 \
          WHERE id = $1 AND status IN ('queued','running') \
+           AND ($3::text IS NULL OR project_id = $3) \
          RETURNING status",
     )
     .bind(id.to_string())
     .bind(fmt_ts(Utc::now()))
+    .bind(project.map(str::to_string))
     .fetch_optional(pool)
     .await
     .map_err(pgerr)?;
@@ -102,11 +110,14 @@ pub(crate) async fn cancel(pool: &PgPool, id: &str) -> Result<Option<JobCancel>>
         Some(_) => return Ok(Some(JobCancel::Cancelling)),
         None => {}
     }
-    let existing: Option<String> = sqlx::query_scalar("SELECT status FROM jobs WHERE id = $1")
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM jobs WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)",
+    )
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     Ok(existing.map(|status| JobCancel::AlreadyFinished { status }))
 }
 
@@ -187,7 +198,7 @@ pub(crate) async fn finish(
     }
     // Refused: report what the record actually holds now, so the loser can name what beat it
     // instead of reporting a bare failure.
-    Ok(match get(pool, id).await? {
+    Ok(match get(pool, None, id).await? {
         Some(j) => JobFinish::NotHeld {
             status: j.status,
             claimed_at: j.claimed_at,
@@ -196,31 +207,48 @@ pub(crate) async fn finish(
     })
 }
 
-pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Job>> {
-    let row = sqlx::query(&format!("SELECT {COLS} FROM jobs WHERE id = $1"))
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+pub(crate) async fn get(pool: &PgPool, project: Option<&str>, id: &str) -> Result<Option<Job>> {
+    let row = sqlx::query(&format!(
+        "SELECT {COLS} FROM jobs WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)"
+    ))
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     row.as_ref().map(from_row).transpose()
 }
 
-pub(crate) async fn list(pool: &PgPool, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
+/// The queue as one scope sees it. A project reads only the work stamped with its own id; the
+/// operator additionally reads the project-less rows (sweeps, and anything enqueued before the
+/// column existed).
+pub(crate) async fn list(
+    pool: &PgPool,
+    project: Option<&str>,
+    status: Option<&str>,
+    limit: usize,
+) -> Result<Vec<Job>> {
     let rows = match status {
         Some(s) => {
             sqlx::query(&format!(
-                "SELECT {COLS} FROM jobs WHERE status = $1 ORDER BY created_at DESC LIMIT $2"
+                "SELECT {COLS} FROM jobs \
+                 WHERE status = $1 AND ($3::text IS NULL OR project_id = $3) \
+                 ORDER BY created_at DESC LIMIT $2"
             ))
             .bind(s.to_string())
             .bind(limit as i64)
+            .bind(project.map(str::to_string))
             .fetch_all(pool)
             .await
         }
         None => {
             sqlx::query(&format!(
-                "SELECT {COLS} FROM jobs ORDER BY created_at DESC LIMIT $1"
+                "SELECT {COLS} FROM jobs \
+                 WHERE ($2::text IS NULL OR project_id = $2) \
+                 ORDER BY created_at DESC LIMIT $1"
             ))
             .bind(limit as i64)
+            .bind(project.map(str::to_string))
             .fetch_all(pool)
             .await
         }
@@ -253,5 +281,6 @@ fn from_row(row: &PgRow) -> Result<Job> {
         updated_at: parse_ts(&updated_at)?,
         failures: row.try_get::<i64, _>(12).map_err(pgerr)? as u32,
         stale_reclaims: row.try_get::<i64, _>(13).map_err(pgerr)? as u32,
+        project_id: row.try_get(14).map_err(pgerr)?,
     })
 }

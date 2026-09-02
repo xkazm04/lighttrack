@@ -20,6 +20,13 @@ pub struct Job {
     /// so the stale-claim reclaim path can never restart a run someone cancelled.
     #[serde(default = "default_status")]
     pub status: String,
+    /// The tenant this work belongs to, stamped at enqueue from the benchmark/schedule it runs.
+    ///
+    /// `None` is an operator/legacy job — a sweep the deployment itself enqueued, or a row written
+    /// before the column existed. Only an operator scope reads those; a project key never does
+    /// (M17), which is what stops `GET /v1/jobs` from being a cross-tenant payload dump.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     /// How many times a worker has CLAIMED this job. Bumped inside the atomic claim, so it counts
     /// crashes too — which is why it is no longer what decides a retry (see `failures`).
     #[serde(default)]

@@ -29,7 +29,12 @@ fn guidance(code: u16) -> Option<&'static str> {
         401 | 403 => {
             Some("authentication failed — set LIGHTTRACK_KEY (and an admin key for write tools).")
         }
-        404 => Some("not found — check the id (list it first with the matching list_* tool)."),
+        // A 404 also covers "belongs to another project": every read carries the key's tenant
+        // scope, so a foreign id is not found rather than refused (M17). The agent should not read
+        // one as evidence that the id exists somewhere else.
+        404 => Some(
+            "not found — check the id (list it first with the matching list_* tool). An id that              belongs to another project reads the same way: this key cannot see it.",
+        ),
         429 => None, // the breach body names the limit that was hit
         c if c >= 500 => {
             Some("LightTrack API error — is the server healthy? (try the /health endpoint).")

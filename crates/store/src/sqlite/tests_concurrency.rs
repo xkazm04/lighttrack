@@ -15,6 +15,7 @@ use rusqlite::Connection;
 use lighttrack_core::{new_id, LlmEvent, Operation, Status, TokenUsage};
 
 use super::{events, schema, SqliteStore};
+use crate::Scope;
 use crate::Store;
 
 pub(super) fn ev(project: &str) -> LlmEvent {
@@ -124,7 +125,7 @@ fn reads_see_a_consistent_snapshot_while_a_write_transaction_is_open() {
 
     gate.wait();
     let t0 = Instant::now();
-    let seen = s.list_events(None, 1_000).unwrap().len();
+    let seen = s.list_events(Scope::Operator, 1_000).unwrap().len();
     let waited = t0.elapsed();
 
     // Isolation: the five uncommitted rows are invisible — no half-applied batch can be read.
@@ -140,7 +141,7 @@ fn reads_see_a_consistent_snapshot_while_a_write_transaction_is_open() {
     );
 
     writer.join().unwrap();
-    assert_eq!(s.list_events(None, 1_000).unwrap().len(), 6);
+    assert_eq!(s.list_events(Scope::Operator, 1_000).unwrap().len(), 6);
 }
 
 #[test]
@@ -167,7 +168,7 @@ fn readers_never_observe_a_half_applied_batch_admission() {
         thread::spawn(move || {
             let mut polls = 0usize;
             while !stop.load(Ordering::Relaxed) {
-                let n = s.list_events(None, 100_000).unwrap().len();
+                let n = s.list_events(Scope::Operator, 100_000).unwrap().len();
                 assert_eq!(
                     n % BATCH,
                     0,
@@ -199,7 +200,10 @@ fn readers_never_observe_a_half_applied_batch_admission() {
     let polls = reader.join().unwrap();
 
     assert!(polls > 0, "the reader never ran — the test proved nothing");
-    assert_eq!(s.list_events(None, 100_000).unwrap().len(), BATCH * ROUNDS);
+    assert_eq!(
+        s.list_events(Scope::Operator, 100_000).unwrap().len(),
+        BATCH * ROUNDS
+    );
 }
 
 #[test]
@@ -245,13 +249,16 @@ fn a_pre_wal_database_upgrades_cleanly_on_open() {
 
     // The legacy row survived and was backfilled (arrival time = event time), and it is readable
     // through the pool.
-    let got = s.get_event("legacy-1").unwrap().expect("legacy row");
+    let got = s
+        .get_event(Scope::Operator, "legacy-1")
+        .unwrap()
+        .expect("legacy row");
     assert_eq!(got.received_at, got.ts);
     assert_eq!(got.project_id, "p1");
 
     // And the upgraded database still takes writes.
     s.insert_event(&ev("p1")).unwrap();
-    assert_eq!(s.list_events(None, 10).unwrap().len(), 2);
+    assert_eq!(s.list_events(Scope::Operator, 10).unwrap().len(), 2);
 }
 
 #[test]
@@ -269,5 +276,5 @@ fn a_disabled_pool_still_serves_reads_through_the_write_connection() {
     assert_ne!(s.with(journal_mode), "wal");
 
     s.insert_event(&ev("p1")).unwrap();
-    assert_eq!(s.list_events(None, 10).unwrap().len(), 1);
+    assert_eq!(s.list_events(Scope::Operator, 10).unwrap().len(), 1);
 }

@@ -15,6 +15,7 @@ use crate::events_validate::{policy, Rejection};
 use crate::guards::{authenticate, resolve_ingest_project_ensuring};
 use crate::ingest_proximity::{BindingScope, Proximity, WithProximity};
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 /// Scope one event to its project, validate it, enforce the project's payload-persistence policy,
 /// scrub PII, and fill/mark its cost — everything the single- and batch-ingest paths share up to the
@@ -225,7 +226,9 @@ pub(crate) async fn post_event(
         Err(StoreError::Conflict(_)) => {
             let store = st.store.clone();
             let id = ev.id.clone();
-            let stored = spawn_db(move || store.get_event(&id)).await?;
+            let owner = ev.project_id.clone();
+            let stored =
+                spawn_db(move || store.get_event(TenantScope::Project(&owner), &id)).await?;
             return match stored {
                 Some(s) if same_logical_event(&s, &ev) => Ok(WithProximity::new(
                     IngestResponse {

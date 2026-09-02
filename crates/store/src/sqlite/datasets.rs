@@ -33,16 +33,22 @@ pub(super) fn create(conn: &Connection, d: &Dataset) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Dataset>> {
-    let sql = format!("SELECT {DATASET_COLS} FROM datasets WHERE id = ?1");
+pub(super) fn get(conn: &Connection, project: Option<&str>, id: &str) -> Result<Option<Dataset>> {
+    let sql = format!(
+        "SELECT {DATASET_COLS} FROM datasets WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![id], map_dataset).optional()?;
+    let raw = stmt
+        .query_row(params![id, project], map_dataset)
+        .optional()?;
     raw.map(dataset_from_raw).transpose()
 }
 
-pub(super) fn list(conn: &Connection, project: &str) -> Result<Vec<Dataset>> {
+pub(super) fn list(conn: &Connection, project: Option<&str>) -> Result<Vec<Dataset>> {
     let sql = format!(
-        "SELECT {DATASET_COLS} FROM datasets WHERE project_id = ?1 ORDER BY created_at DESC"
+        "SELECT {DATASET_COLS} FROM datasets WHERE 1 = 1{} ORDER BY created_at DESC",
+        super::scope_and(1)
     );
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
@@ -51,11 +57,17 @@ pub(super) fn list(conn: &Connection, project: &str) -> Result<Vec<Dataset>> {
     raws.into_iter().map(dataset_from_raw).collect()
 }
 
-pub(super) fn set_frozen(conn: &Connection, id: &str, frozen: bool) -> Result<()> {
-    conn.execute(
-        "UPDATE datasets SET frozen = ?2 WHERE id = ?1",
-        params![id, frozen as i64],
-    )?;
+pub(super) fn set_frozen(
+    conn: &Connection,
+    project: Option<&str>,
+    id: &str,
+    frozen: bool,
+) -> Result<()> {
+    let sql = format!(
+        "UPDATE datasets SET frozen = ?2 WHERE id = ?1{}",
+        super::scope_and(3)
+    );
+    conn.execute(&sql, params![id, frozen as i64, project])?;
     Ok(())
 }
 
@@ -87,11 +99,21 @@ pub(super) fn create_item(conn: &Connection, item: &DatasetItem) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn list_items(conn: &Connection, dataset_id: &str) -> Result<Vec<DatasetItem>> {
-    let sql = format!("SELECT {ITEM_COLS} FROM dataset_items WHERE dataset_id = ?1");
+/// `dataset_items` carries no `project_id` of its own, so the tenant filter rides the parent
+/// dataset: a foreign dataset id yields an empty list, never someone else's cases.
+pub(super) fn list_items(
+    conn: &Connection,
+    project: Option<&str>,
+    dataset_id: &str,
+) -> Result<Vec<DatasetItem>> {
+    let sql = format!(
+        "SELECT {ITEM_COLS} FROM dataset_items WHERE dataset_id = ?1 \
+           AND (?2 IS NULL OR EXISTS \
+                (SELECT 1 FROM datasets d WHERE d.id = dataset_id AND d.project_id = ?2))"
+    );
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
-        .query_map(params![dataset_id], map_item)?
+        .query_map(params![dataset_id, project], map_item)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(item_from_raw).collect()
 }

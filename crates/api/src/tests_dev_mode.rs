@@ -21,6 +21,7 @@ use crate::auth::AuthMode;
 use crate::guards::DEV_DEFAULT_PROJECT;
 use crate::redact::Redactor;
 use crate::tests_ingest::setup;
+use lighttrack_store::Scope as TenantScope;
 
 /// POST a body to `uri`, optionally with a bearer token. The `None` case is the one that matters
 /// here: the quickstart sends no `Authorization` header at all.
@@ -70,7 +71,9 @@ async fn dev_mode_attributes_a_projectless_event_to_the_default_project() {
 
     // Attributed for real: the row is queryable under that project, priced from the book like any
     // other event (1M-scale usage is not needed — this just proves the normal pipeline ran).
-    let rows = store.list_events(Some(DEV_DEFAULT_PROJECT), 10).unwrap();
+    let rows = store
+        .list_events(TenantScope::Project(DEV_DEFAULT_PROJECT), 10)
+        .unwrap();
     assert_eq!(
         rows.len(),
         1,
@@ -100,7 +103,7 @@ async fn dev_mode_attributes_a_projectless_event_to_the_default_project() {
     assert_eq!(s2, StatusCode::OK, "{b2}");
     assert_eq!(
         store
-            .list_events(Some(DEV_DEFAULT_PROJECT), 10)
+            .list_events(TenantScope::Project(DEV_DEFAULT_PROJECT), 10)
             .unwrap()
             .len(),
         2
@@ -139,7 +142,7 @@ async fn dev_mode_default_applies_to_the_batch_door_too() {
     );
     assert_eq!(
         store
-            .list_events(Some(DEV_DEFAULT_PROJECT), 10)
+            .list_events(TenantScope::Project(DEV_DEFAULT_PROJECT), 10)
             .unwrap()
             .len(),
         2
@@ -170,7 +173,7 @@ async fn enforced_mode_still_refuses_an_unattributable_event() {
 
     // Nothing was written, and no default project was conjured up.
     assert!(store
-        .list_events(Some(DEV_DEFAULT_PROJECT), 10)
+        .list_events(TenantScope::Project(DEV_DEFAULT_PROJECT), 10)
         .unwrap()
         .is_empty());
     assert!(

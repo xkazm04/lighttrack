@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use lighttrack_core::{new_id, JobCancel, JobFinish};
 
 use super::jobs::{drain_jobs, new_job};
+use crate::Scope;
 use crate::{Result, Store};
 
 /// Cancellation, and the property that matters most about it: a cancelled run is **never restarted
@@ -15,7 +16,7 @@ use crate::{Result, Store};
 pub(super) fn job_cancellation(store: &dyn Store) -> Result<()> {
     let queued = new_job();
     store.create_job(&queued)?;
-    match store.cancel_job(&queued.id) {
+    match store.cancel_job(Scope::Operator, &queued.id) {
         Err(e) => return Err(e),
         Ok(outcome) => assert_eq!(
             outcome,
@@ -23,13 +24,19 @@ pub(super) fn job_cancellation(store: &dyn Store) -> Result<()> {
             "a queued job is cancelled outright — nothing ran"
         ),
     }
-    assert_eq!(store.get_job(&queued.id)?.expect("get").status, "cancelled");
+    assert_eq!(
+        store
+            .get_job(Scope::Operator, &queued.id)?
+            .expect("get")
+            .status,
+        "cancelled"
+    );
     // Cancelling an unknown job is None (→ 404), not a fabricated success.
-    assert_eq!(store.cancel_job(&new_id())?, None);
+    assert_eq!(store.cancel_job(Scope::Operator, &new_id())?, None);
     // Cancelling something terminal reports that nothing was stopped.
     assert!(
         matches!(
-            store.cancel_job(&queued.id)?,
+            store.cancel_job(Scope::Operator, &queued.id)?,
             Some(JobCancel::AlreadyFinished { .. })
         ),
         "re-cancelling a cancelled job must not claim to have stopped it"
@@ -47,9 +54,15 @@ pub(super) fn job_cancellation(store: &dyn Store) -> Result<()> {
         claimed.id, running.id,
         "the drained queue's only job is ours"
     );
-    assert_eq!(store.cancel_job(&running.id)?, Some(JobCancel::Cancelling));
     assert_eq!(
-        store.get_job(&running.id)?.expect("get").status,
+        store.cancel_job(Scope::Operator, &running.id)?,
+        Some(JobCancel::Cancelling)
+    );
+    assert_eq!(
+        store
+            .get_job(Scope::Operator, &running.id)?
+            .expect("get")
+            .status,
         "cancelling"
     );
     // `Utc::now()` as the staleness cutoff makes every claim in existence stale. The cancelled job
@@ -61,7 +74,10 @@ pub(super) fn job_cancellation(store: &dyn Store) -> Result<()> {
         );
     }
     assert_eq!(
-        store.get_job(&running.id)?.expect("get").status,
+        store
+            .get_job(Scope::Operator, &running.id)?
+            .expect("get")
+            .status,
         "cancelling",
         "reclaim must not have touched the cancelled job"
     );
@@ -97,7 +113,7 @@ pub(super) fn job_leases(store: &dyn Store) -> Result<()> {
         renewed >= fence,
         "renewal moves the lease forward, never back: {renewed} < {fence}"
     );
-    let after = store.get_job(&j.id)?.expect("get");
+    let after = store.get_job(Scope::Operator, &j.id)?.expect("get");
     assert_eq!(
         after.claimed_at,
         Some(renewed),
@@ -128,7 +144,7 @@ pub(super) fn job_leases(store: &dyn Store) -> Result<()> {
         },
         "a worker that no longer holds the job must be REFUSED, and told what holds it now"
     );
-    let untouched = store.get_job(&j.id)?.expect("get");
+    let untouched = store.get_job(Scope::Operator, &j.id)?.expect("get");
     assert_eq!(
         untouched.status, "running",
         "the refused write changed nothing"
@@ -140,7 +156,10 @@ pub(super) fn job_leases(store: &dyn Store) -> Result<()> {
         store.finish_job(&j.id, "done", &json!({ "ok": true }), None, Some(renewed))?,
         JobFinish::Finished
     );
-    assert_eq!(store.get_job(&j.id)?.expect("get").status, "done");
+    assert_eq!(
+        store.get_job(Scope::Operator, &j.id)?.expect("get").status,
+        "done"
+    );
 
     // ---- a verdict is final ----
     // This is the clobber the whole mechanism exists to stop, in its purest form: the replaced
@@ -158,7 +177,7 @@ pub(super) fn job_leases(store: &dyn Store) -> Result<()> {
         ),
         "a terminal verdict must never be rewritten, not even by the worker that wrote it"
     );
-    let final_job = store.get_job(&j.id)?.expect("get");
+    let final_job = store.get_job(Scope::Operator, &j.id)?.expect("get");
     assert_eq!(final_job.status, "done", "the verdict stands");
     assert_eq!(final_job.result, json!({ "ok": true }));
     assert_eq!(
@@ -172,7 +191,10 @@ pub(super) fn job_leases(store: &dyn Store) -> Result<()> {
         store.finish_job(&j.id, "cancelled", &Value::Null, None, None)?,
         JobFinish::NotHeld { .. }
     ));
-    assert_eq!(store.get_job(&j.id)?.expect("get").status, "done");
+    assert_eq!(
+        store.get_job(Scope::Operator, &j.id)?.expect("get").status,
+        "done"
+    );
 
     // A dead lease cannot be renewed back to life.
     assert_eq!(

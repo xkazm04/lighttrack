@@ -27,6 +27,7 @@ use lighttrack_store::{SqliteStore, Store};
 use crate::auth::{self, AuthMode};
 use crate::redact::Redactor;
 use crate::state::AppState;
+use lighttrack_store::Scope as TenantScope;
 
 /// Build app state over a fresh in-memory store with the given redactor and a one-model price book
 /// (`anthropic/claude-haiku-4-5` @ $1/Mtok in, $5/Mtok out). Returns the wired state plus the
@@ -181,7 +182,9 @@ async fn project_persistence_policy_is_enforced_on_ingest() {
     // `drop`: the event is recorded, its payloads are not.
     let (status, _) = ingest(&app, &key_drop, payload.clone()).await;
     assert_eq!(status, StatusCode::OK);
-    let rows = store.list_events(Some("proj-drop"), 10).unwrap();
+    let rows = store
+        .list_events(TenantScope::Project("proj-drop"), 10)
+        .unwrap();
     assert_eq!(rows.len(), 1);
     assert!(
         rows[0].input.is_none() && rows[0].output.is_none(),
@@ -192,7 +195,9 @@ async fn project_persistence_policy_is_enforced_on_ingest() {
     // `hash`: presence/diff survive as sha256 digests; no plaintext lands in the store.
     let (status, _) = ingest(&app, &key_hash, payload).await;
     assert_eq!(status, StatusCode::OK);
-    let rows = store.list_events(Some("proj-hash"), 10).unwrap();
+    let rows = store
+        .list_events(TenantScope::Project("proj-hash"), 10)
+        .unwrap();
     assert_eq!(rows.len(), 1);
     let stored = serde_json::to_string(&rows[0]).unwrap();
     assert!(
@@ -264,7 +269,10 @@ async fn a_price_put_for_an_unmodeled_provider_prices_the_next_event() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let ev = store.get_event("mistral-1").unwrap().unwrap();
+    let ev = store
+        .get_event(TenantScope::Operator, "mistral-1")
+        .unwrap()
+        .unwrap();
     assert_eq!(ev.provider.as_str(), "mistral");
     assert_eq!(ev.cost_usd, Some(8.0), "2.0 in + 6.0 out per Mtok");
     assert_eq!(
@@ -337,7 +345,13 @@ async fn saturated_ingest_sheds_with_503_and_retry_after_never_a_budget_429() {
 
     // Nothing over-cap was written, and the operator can see the saturation while it is happening —
     // reads stay answerable precisely because only the write path is gated.
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
+        1
+    );
     let (s, st) = get_json(&app, &key, "/v1/ingest/status").await;
     assert_eq!(s, StatusCode::OK, "{st}");
     assert_eq!(st["max_in_flight"], 1, "{st}");
@@ -352,7 +366,13 @@ async fn saturated_ingest_sheds_with_503_and_retry_after_never_a_budget_429() {
     drop(held);
     let (after, _) = ingest(&app, &key, body).await;
     assert_eq!(after, StatusCode::OK);
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
+    assert_eq!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 /// An ingest that outlives its deadline is cut with 504 `timeout`, counted as a timeout and not as a
@@ -414,7 +434,10 @@ fn ingest_past_its_deadline_is_cut_with_504_not_left_hanging() {
         occupier.await.expect("occupier joins");
         // The 504 is honest about what it means ("the write may or may not have landed") — here it
         // definitively did not, because the handler never reached an insert.
-        assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty());
+        assert!(store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .is_empty());
 
         // A timeout is a distinct condition from shedding, and counted as one.
         let (_, st) = get_json(&app, &key, "/v1/ingest/status").await;
@@ -533,7 +556,10 @@ async fn tightening_redaction_takes_effect_on_the_next_event_without_a_restart()
     // Before: `none` → the payload is persisted verbatim, and the policy is now cached.
     let (s1, _) = ingest(&app, &key, payload("before")).await;
     assert_eq!(s1, StatusCode::OK);
-    let before = store.get_event("before").unwrap().unwrap();
+    let before = store
+        .get_event(TenantScope::Operator, "before")
+        .unwrap()
+        .unwrap();
     assert!(
         before.input.is_some(),
         "baseline: `none` persists the payload"
@@ -557,7 +583,10 @@ async fn tightening_redaction_takes_effect_on_the_next_event_without_a_restart()
     // After: the very NEXT event obeys the new policy — no restart, no TTL wait.
     let (s2, _) = ingest(&app, &key, payload("after")).await;
     assert_eq!(s2, StatusCode::OK);
-    let after = store.get_event("after").unwrap().unwrap();
+    let after = store
+        .get_event(TenantScope::Operator, "after")
+        .unwrap()
+        .unwrap();
     assert!(
         after.input.is_none(),
         "a tightened policy must bind the next event, not the next boot"
@@ -602,7 +631,10 @@ async fn client_ts_skew_is_rejected_with_distinct_codes_and_cannot_move_a_window
     assert_eq!(s_new, StatusCode::BAD_REQUEST, "{b_new}");
     assert_eq!(b_new["error"]["code"], "ts_too_new", "{b_new}");
     assert!(
-        store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .is_empty(),
         "neither was stored"
     );
 
@@ -624,7 +656,10 @@ async fn client_ts_skew_is_rejected_with_distinct_codes_and_cannot_move_a_window
     );
     assert_eq!(usage.cost_usd, 1.0);
     // Its client-supplied `ts` is preserved and returned unchanged — we reject skew, we don't rewrite it.
-    let stored = store.get_event("backdated").unwrap().unwrap();
+    let stored = store
+        .get_event(TenantScope::Operator, "backdated")
+        .unwrap()
+        .unwrap();
     assert!(
         stored.ts < stored.received_at,
         "client ts preserved, arrival stamped separately"
@@ -670,10 +705,15 @@ async fn project_key_cannot_ingest_into_another_project() {
 
     // Nothing crossed the tenant boundary: proj-b is empty, the event is under proj-a.
     assert!(
-        store.list_events(Some("proj-b"), 10).unwrap().is_empty(),
+        store
+            .list_events(TenantScope::Project("proj-b"), 10)
+            .unwrap()
+            .is_empty(),
         "a project key must not be able to write into another project"
     );
-    let a = store.list_events(Some("proj-a"), 10).unwrap();
+    let a = store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap();
     assert_eq!(a.len(), 1);
     assert_eq!(a[0].project_id, "proj-a");
 }
@@ -704,7 +744,7 @@ async fn uncosted_event_is_priced_from_the_book() {
 
     // The priced cost is persisted, not merely returned.
     let ev = store
-        .list_events(Some("proj-a"), 10)
+        .list_events(TenantScope::Project("proj-a"), 10)
         .unwrap()
         .pop()
         .unwrap();
@@ -737,7 +777,7 @@ async fn pii_is_redacted_before_the_row_is_stored() {
 
     // The stored row must carry scrubbed content — raw PII never lands in the DB.
     let ev = store
-        .list_events(Some("proj-a"), 10)
+        .list_events(TenantScope::Project("proj-a"), 10)
         .unwrap()
         .pop()
         .unwrap();
@@ -789,7 +829,9 @@ async fn an_unconfigured_instance_scrubs_pii_on_every_ingest_door() {
         StatusCode::OK
     );
 
-    let rows = store.list_events(Some("proj-a"), 10).unwrap();
+    let rows = store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap();
     assert_eq!(rows.len(), 2, "both doors stored an event");
     for ev in &rows {
         let stored = serde_json::to_string(ev).unwrap();
@@ -827,7 +869,7 @@ async fn an_unconfigured_instance_scrubs_pii_on_every_ingest_door() {
     let (status, _) = ingest(&app, &hash_key, pii).await;
     assert_eq!(status, StatusCode::OK);
     let ev = store
-        .list_events(Some("proj-hash"), 10)
+        .list_events(TenantScope::Project("proj-hash"), 10)
         .unwrap()
         .pop()
         .unwrap();
@@ -895,7 +937,10 @@ async fn enforcing_actions_reject_ingest_and_do_not_store() {
         );
         assert_eq!(body["error"]["code"], "rate_limited", "{action:?}: {body}");
         assert!(
-            store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+            store
+                .list_events(TenantScope::Project("proj-a"), 10)
+                .unwrap()
+                .is_empty(),
             "{action:?}: a rejected event must not be persisted"
         );
     }
@@ -956,12 +1001,15 @@ async fn rejected_events_are_ledgered_but_never_touch_usage_math() {
 
     // Usage math is provably untouched: no event row, no cost rows, zero usage.
     assert!(
-        store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .is_empty(),
         "rejected event was stored"
     );
     assert!(
         store
-            .cost_summary_windowed(Some("proj-a"), None, None)
+            .cost_summary_windowed(TenantScope::Project("proj-a"), None, None)
             .unwrap()
             .is_empty(),
         "rejected event leaked into the cost summary"
@@ -1039,7 +1087,13 @@ async fn alert_limit_flags_but_admits_and_stores() {
     assert_eq!(breached[0]["action"], "alert");
     assert!(breached[0]["breached"].as_bool().unwrap());
     // The event is recorded despite the breach.
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 /// POST a batch array through the router; returns (status, parsed JSON body).
@@ -1124,7 +1178,13 @@ async fn batch_returns_per_item_accept_reject_invalid() {
     assert_eq!(body["rejected"], 1);
 
     // Cap-bypass regression: exactly the two admitted events were stored, nothing more.
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
+    assert_eq!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -1427,7 +1487,13 @@ async fn duplicate_event_id_returns_409() {
     assert_eq!(s2, StatusCode::CONFLICT, "{b2}");
     assert_eq!(b2["error"]["code"], "conflict", "{b2}");
     // The row was not duplicated.
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -1453,7 +1519,13 @@ async fn blank_event_id_is_minted_not_stored_as_empty_pk() {
         "ids were minted: {b1} {b2}"
     );
     assert_ne!(id1, id2, "each blank id got its own");
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
+    assert_eq!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -1520,7 +1592,13 @@ async fn disabled_project_refuses_ingest_on_both_doors_until_re_enabled() {
     assert_eq!(v["invalid"], 1, "{v}");
     assert_eq!(v["results"][0]["status"], "invalid", "{v}");
     assert_eq!(v["results"][0]["code"], "project_disabled", "{v}");
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
+        1
+    );
 
     // Reads by that project's own keys stop too: "disabled" is a tenant kill switch, not an ingest
     // filter — an operator who disabled a project did not mean "keep serving its stored prompts".
@@ -1530,7 +1608,13 @@ async fn disabled_project_refuses_ingest_on_both_doors_until_re_enabled() {
     flip(true);
     let (s, b) = ingest(&app, &key, body).await;
     assert_eq!(s, StatusCode::OK, "re-enabled: {b}");
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
+    assert_eq!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -1703,7 +1787,10 @@ async fn replayed_ingest_is_acknowledged_not_conflicted() {
     assert_eq!(b2["duplicate"], true, "{b2}");
     assert_eq!(b2["cost_usd"], 0.25, "the ORIGINAL outcome is returned");
     assert_eq!(
-        store.list_events(Some("proj-a"), 10).unwrap().len(),
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
         1,
         "nothing double-counted"
     );
@@ -1758,7 +1845,10 @@ async fn replayed_batch_is_acknowledged_per_item() {
         assert_eq!(item["index"], i, "positional correlation is explicit");
     }
     assert_eq!(
-        store.list_events(Some("proj-a"), 10).unwrap().len(),
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
         2,
         "no double-count"
     );
@@ -1779,7 +1869,10 @@ async fn empty_model_is_rejected_400() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], "bad_request", "{body}");
     // Nothing was stored.
-    assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty());
+    assert!(store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
@@ -1814,7 +1907,7 @@ async fn cost_source_is_marked_client_vs_book() {
 
     let by_id = |id: &str| {
         store
-            .list_events(Some("proj-a"), 10)
+            .list_events(TenantScope::Project("proj-a"), 10)
             .unwrap()
             .into_iter()
             .find(|e| e.id == id)
@@ -1865,7 +1958,10 @@ async fn an_unpriced_model_cannot_spend_freely_under_a_cost_cap() {
         msg.contains("price book"),
         "the reason must name the actual problem: {msg}"
     );
-    assert!(store.list_events(Some("proj-a"), 10).unwrap().is_empty());
+    assert!(store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap()
+        .is_empty());
 
     // Once there is priced traffic to learn from, unpriced calls are charged the window's mean
     // priced cost rather than $0.00 — so they fill the cap instead of walking past it.
@@ -2089,13 +2185,22 @@ async fn throttle_sheds_gradually_where_block_is_a_cliff() {
         block_shed, 0,
         "Block must not shed anything before its threshold"
     );
-    assert_eq!(b_store.list_events(Some("proj-a"), 100).unwrap().len(), 19);
+    assert_eq!(
+        b_store
+            .list_events(TenantScope::Project("proj-a"), 100)
+            .unwrap()
+            .len(),
+        19
+    );
     // Throttle is a ramp: real back-pressure builds on the approach, but traffic still flows.
     assert!(
         throttle_shed > 0,
         "Throttle must actually throttle before the wall"
     );
-    let stored = t_store.list_events(Some("proj-a"), 100).unwrap().len();
+    let stored = t_store
+        .list_events(TenantScope::Project("proj-a"), 100)
+        .unwrap()
+        .len();
     assert!(
         stored > 0 && stored < 19,
         "graduated, not all-or-nothing (stored {stored}/19)"

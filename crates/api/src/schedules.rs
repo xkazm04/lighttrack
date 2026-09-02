@@ -21,6 +21,7 @@ use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
 use crate::jobs_enqueue::parse_kind;
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 #[derive(Deserialize)]
 pub(crate) struct CreateReq {
@@ -145,7 +146,7 @@ pub(crate) async fn update_schedule(
     validate_payload(kind, &s.payload).map_err(ApiError::bad_request)?;
     let store = st.store.clone();
     let s2 = s.clone();
-    if !spawn_db(move || store.update_schedule(&s2)).await? {
+    if !spawn_db(move || store.update_schedule(TenantScope::Operator, &s2)).await? {
         return Err(ApiError::not_found(format!("schedule '{id}' not found")));
     }
     Ok(Json(s))
@@ -156,10 +157,12 @@ pub(crate) async fn delete_schedule(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
-    if !spawn_db(move || store.delete_schedule(&id2)).await? {
+    let sc = p.scope_owned();
+    if !spawn_db(move || store.delete_schedule(sc.as_deref().into(), &id2)).await? {
         return Err(ApiError::not_found(format!("schedule '{id}' not found")));
     }
     Ok(Json(serde_json::json!({ "deleted": id })))
@@ -175,10 +178,12 @@ pub(crate) async fn schedule_runs(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<Job>>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
-    let jobs = spawn_db(move || store.list_jobs(None, 1000)).await?;
+    let sc = p.scope_owned();
+    let jobs = spawn_db(move || store.list_jobs(sc.as_deref().into(), None, 1000)).await?;
     Ok(Json(
         jobs.into_iter()
             .filter(|j| j.payload.get(SCHEDULE_ID_KEY).and_then(Value::as_str) == Some(&id2))
@@ -192,7 +197,7 @@ pub(crate) const SCHEDULE_ID_KEY: &str = "schedule_id";
 async fn load(st: &AppState, id: &str) -> Result<Schedule, ApiError> {
     let store = st.store.clone();
     let id2 = id.to_string();
-    spawn_db(move || store.get_schedule(&id2))
+    spawn_db(move || store.get_schedule(TenantScope::Operator, &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("schedule '{id}' not found")))
 }

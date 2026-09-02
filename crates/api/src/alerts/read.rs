@@ -100,7 +100,8 @@ pub(crate) async fn ack_alert(
     let store = st.store.clone();
     let id2 = id.clone();
     let at = Utc::now();
-    if !spawn_db(move || store.ack_alert(&id2, &by, at)).await? {
+    let sc = principal.scope_owned();
+    if !spawn_db(move || store.ack_alert(sc.as_deref().into(), &id2, &by, at)).await? {
         return Err(ApiError::not_found(format!("alert '{id}' not found")));
     }
     Ok(Json(json!({ "acked": id, "acked_at": at })))
@@ -114,11 +115,13 @@ pub(crate) async fn attach_resolution(
     Path(id): Path<String>,
     Json(resolution): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
     let r = resolution.clone();
-    if !spawn_db(move || store.attach_alert_resolution(&id2, &r)).await? {
+    let sc = p.scope_owned();
+    if !spawn_db(move || store.attach_alert_resolution(sc.as_deref().into(), &id2, &r)).await? {
         return Err(ApiError::not_found(format!("alert '{id}' not found")));
     }
     Ok(Json(json!({ "resolved": id })))

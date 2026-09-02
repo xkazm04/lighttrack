@@ -24,6 +24,7 @@ use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin};
 use crate::prices::refresh_book;
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 #[derive(Deserialize)]
 pub(crate) struct PutPriceReq {
@@ -155,7 +156,7 @@ fn fill_and_recount(
 ) -> lighttrack_store::Result<(u64, u64)> {
     let filled = store.fill_unpriced_cost(&PriceFill::new(provider, model, book))?;
     let remaining = store
-        .list_unpriced(None, since)?
+        .list_unpriced(TenantScope::Operator, since)?
         .into_iter()
         .filter(|r| r.provider == provider && r.model == model)
         .map(|r| r.calls)

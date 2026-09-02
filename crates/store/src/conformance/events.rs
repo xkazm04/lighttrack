@@ -8,13 +8,14 @@ use serde_json::json;
 use lighttrack_core::{new_id, LimitScope};
 
 use super::fixtures::sample_event;
+use crate::Scope;
 use crate::{EventFilter, Result, Store};
 
 pub(super) fn events(store: &dyn Store, pid: &str) -> Result<()> {
     store.insert_event(&sample_event(pid, "claude-haiku-4-5", 100, 50, 0.001))?;
     store.insert_event(&sample_event(pid, "claude-haiku-4-5", 200, 80, 0.002))?;
 
-    let listed = store.list_events(Some(pid), 10)?;
+    let listed = store.list_events(Scope::Project(pid), 10)?;
     assert_eq!(listed.len(), 2, "list_events scoped to project");
     assert_eq!(listed[0].project_id, pid);
     assert_eq!(listed[0].tags, vec!["conf".to_string()]);
@@ -28,10 +29,12 @@ pub(super) fn events(store: &dyn Store, pid: &str) -> Result<()> {
         "payload round-trip"
     );
 
-    let one = store.get_event(&listed[0].id)?.expect("get_event Some");
+    let one = store
+        .get_event(Scope::Operator, &listed[0].id)?
+        .expect("get_event Some");
     assert_eq!(one.id, listed[0].id);
     assert!(
-        store.get_event(&new_id())?.is_none(),
+        store.get_event(Scope::Operator, &new_id())?.is_none(),
         "get_event None for unknown id"
     );
 
@@ -43,12 +46,12 @@ pub(super) fn events(store: &dyn Store, pid: &str) -> Result<()> {
         other => panic!("duplicate insert_event must be Err(Conflict), got {other:?}"),
     }
     assert_eq!(
-        store.list_events(Some(pid), 10)?.len(),
+        store.list_events(Scope::Project(pid), 10)?.len(),
         2,
         "duplicate insert persisted nothing"
     );
 
-    let costs = store.cost_summary(Some(pid))?;
+    let costs = store.cost_summary(Scope::Project(pid))?;
     assert_eq!(costs.len(), 1, "one (provider,model) group");
     assert_eq!(costs[0].calls, 2);
     assert_eq!(costs[0].input_tokens, 300);
@@ -133,7 +136,9 @@ pub(super) fn open_provider_identity(store: &dyn Store) -> Result<()> {
     ev.cost_usd = None;
     store.insert_event(&ev)?;
 
-    let mut back = store.get_event(&ev.id)?.expect("open-provider event");
+    let mut back = store
+        .get_event(Scope::Operator, &ev.id)?
+        .expect("open-provider event");
     assert_eq!(
         back.provider.as_str(),
         "mistral",
@@ -182,7 +187,7 @@ pub(super) fn redaction_posture(store: &dyn Store) -> Result<()> {
     store.insert_event(&stamp(scrubbed))?;
 
     // The stamp must survive storage as a readable object, not as text nobody can parse back.
-    let stored = store.list_events(Some(&pid), 10)?;
+    let stored = store.list_events(Scope::Project(&pid), 10)?;
     assert_eq!(stored.len(), 4);
     let any = stored
         .iter()
@@ -193,7 +198,7 @@ pub(super) fn redaction_posture(store: &dyn Store) -> Result<()> {
     assert_eq!(any.rules, "feedfacecafe", "rule fingerprint round-trip");
 
     let since = Utc::now() - chrono::Duration::hours(1);
-    let rows = store.redaction_posture(Some(&pid), since)?;
+    let rows = store.redaction_posture(Scope::Project(&pid), since)?;
     let total: u64 = rows.iter().map(|r| r.events).sum();
     assert_eq!(total, 4, "every event lands in exactly one posture group");
     assert_eq!(
@@ -238,7 +243,7 @@ pub(super) fn parity_gap_methods(store: &dyn Store) -> Result<()> {
         model: Some("m-b".into()),
         ..Default::default()
     };
-    let page = store.list_events_filtered(Some(&pid), &filter, 50)?;
+    let page = store.list_events_filtered(Scope::Project(&pid), &filter, 50)?;
     assert_eq!(
         page.events.len(),
         1,
@@ -248,7 +253,7 @@ pub(super) fn parity_gap_methods(store: &dyn Store) -> Result<()> {
 
     // cost_summary_windowed: a 1h window excludes the 48h-old event (the default returns all-time).
     let since = now - chrono::Duration::hours(1);
-    let windowed = store.cost_summary_windowed(Some(&pid), Some(since), None)?;
+    let windowed = store.cost_summary_windowed(Scope::Project(&pid), Some(since), None)?;
     let total: f64 = windowed.iter().map(|c| c.cost_usd).sum();
     assert!(
         (total - 3.0).abs() < 1e-9,
@@ -264,7 +269,7 @@ pub(super) fn parity_gap_methods(store: &dyn Store) -> Result<()> {
     assert!((scoped.cost_usd - 2.0).abs() < 1e-9);
 
     // usecase_costs: groups by (name, provider, model) within the window (the default returns empty).
-    let uc = store.usecase_costs(Some(&pid), Some(since))?;
+    let uc = store.usecase_costs(Scope::Project(&pid), Some(since))?;
     let summarize = uc
         .iter()
         .find(|r| r.name.as_deref() == Some("summarize"))
@@ -274,14 +279,14 @@ pub(super) fn parity_gap_methods(store: &dyn Store) -> Result<()> {
 
     // Keyset paging: 3 events, page size 2 → one continuation page, then exhaustion. No event may
     // be duplicated or skipped across the page boundary (the default mints no cursor at all).
-    let page1 = store.list_events_filtered(Some(&pid), &EventFilter::default(), 2)?;
+    let page1 = store.list_events_filtered(Scope::Project(&pid), &EventFilter::default(), 2)?;
     assert_eq!(page1.events.len(), 2, "first page fills to the limit");
     let cursor = page1
         .next_cursor
         .clone()
         .expect("more rows exist -> next_cursor is minted");
     let page2 = store.list_events_filtered(
-        Some(&pid),
+        Scope::Project(&pid),
         &EventFilter {
             cursor: Some(cursor),
             ..Default::default()
@@ -318,7 +323,7 @@ pub(super) fn parity_gap_methods(store: &dyn Store) -> Result<()> {
         since: Some(since),
         ..Default::default()
     };
-    let anded = store.list_events_filtered(Some(&pid), &filter, 50)?;
+    let anded = store.list_events_filtered(Scope::Project(&pid), &filter, 50)?;
     assert_eq!(
         anded.events.len(),
         1,

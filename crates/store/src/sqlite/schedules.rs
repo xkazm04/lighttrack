@@ -29,10 +29,13 @@ pub(super) fn create(conn: &Connection, s: &Schedule) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Schedule>> {
-    let sql = format!("SELECT {COLS} FROM schedules WHERE id = ?1");
+pub(super) fn get(conn: &Connection, project: Option<&str>, id: &str) -> Result<Option<Schedule>> {
+    let sql = format!(
+        "SELECT {COLS} FROM schedules WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![id], map_raw).optional()?;
+    let raw = stmt.query_row(params![id, project], map_raw).optional()?;
     raw.map(from_raw).transpose()
 }
 
@@ -48,10 +51,14 @@ pub(super) fn list(conn: &Connection, project: &str) -> Result<Vec<Schedule>> {
 /// Full replace of the mutable fields. The id and `project_id` are identity, not state — a schedule
 /// that could move between projects would be a way around project scoping — so they are the
 /// predicate, never the payload.
-pub(super) fn update(conn: &Connection, s: &Schedule) -> Result<bool> {
-    let n = conn.execute(
+pub(super) fn update(conn: &Connection, project: Option<&str>, s: &Schedule) -> Result<bool> {
+    let sql = format!(
         "UPDATE schedules SET kind=?2, payload=?3, interval_secs=?4, next_due=?5, \
-             last_job_id=?6, enabled=?7 WHERE id=?1",
+             last_job_id=?6, enabled=?7 WHERE id=?1{}",
+        super::scope_and(8)
+    );
+    let n = conn.execute(
+        &sql,
         params![
             s.id,
             s.kind,
@@ -60,13 +67,15 @@ pub(super) fn update(conn: &Connection, s: &Schedule) -> Result<bool> {
             fmt_ts(s.next_due),
             s.last_job_id,
             s.enabled as i64,
+            project,
         ],
     )?;
     Ok(n > 0)
 }
 
-pub(super) fn delete(conn: &Connection, id: &str) -> Result<bool> {
-    let n = conn.execute("DELETE FROM schedules WHERE id = ?1", params![id])?;
+pub(super) fn delete(conn: &Connection, project: Option<&str>, id: &str) -> Result<bool> {
+    let sql = format!("DELETE FROM schedules WHERE id = ?1{}", super::scope_and(2));
+    let n = conn.execute(&sql, params![id, project])?;
     Ok(n > 0)
 }
 

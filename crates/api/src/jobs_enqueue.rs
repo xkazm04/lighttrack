@@ -44,6 +44,7 @@ pub(crate) async fn enqueue_benchmark(
     let bench = load_benchmark_authorized(&st, &p, &id).await?;
     let job = enqueue_bench_run(
         &st,
+        Some(&bench.project_id),
         &bench.id,
         serde_json::json!({ "samples": req.samples, "heal": req.heal }),
     )
@@ -56,6 +57,7 @@ pub(crate) async fn enqueue_benchmark(
 /// registry's auto-enqueue on a new version.
 pub(crate) async fn enqueue_bench_run(
     st: &AppState,
+    project: Option<&str>,
     benchmark_id: &str,
     extra: serde_json::Value,
 ) -> Result<Job, ApiError> {
@@ -65,7 +67,7 @@ pub(crate) async fn enqueue_bench_run(
             into.insert(k.clone(), v.clone());
         }
     }
-    enqueue(st, JobKind::BenchRun, payload).await
+    enqueue(st, project, JobKind::BenchRun, payload).await
 }
 
 /// Enqueue one job of `kind`, **payload-validated first**.
@@ -74,8 +76,13 @@ pub(crate) async fn enqueue_bench_run(
 /// discovered by the worker that claimed it, which then failed, retried, failed and dead-lettered —
 /// three claims and a dead job to report a typo. The one shared constructor also means every
 /// producer (the benchmark route, `POST /v1/jobs`, the schedule sweep) mints the same row.
+///
+/// `project` is the tenant the work belongs to, stamped onto the row so `GET /v1/jobs` can be read
+/// under a scope at all (M17). `None` is an operator job — one this deployment enqueued for itself
+/// rather than for a tenant — and only an operator scope reads those back.
 pub(crate) async fn enqueue(
     st: &AppState,
+    project: Option<&str>,
     kind: JobKind,
     payload: serde_json::Value,
 ) -> Result<Job, ApiError> {
@@ -85,6 +92,7 @@ pub(crate) async fn enqueue(
         job_type: kind.as_str().to_string(),
         payload,
         status: "queued".to_string(),
+        project_id: project.map(str::to_string),
         attempts: 0,
         max_attempts: 3,
         failures: 0,
@@ -120,9 +128,13 @@ pub(crate) async fn enqueue_job(
     headers: HeaderMap,
     Json(req): Json<EnqueueJobReq>,
 ) -> Result<Json<Job>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let kind = parse_kind(&req.job_type)?;
-    Ok(Json(enqueue(&st, kind, req.payload).await?))
+    // An admin-enqueued job with no project of its own is an operator job.
+    Ok(Json(
+        enqueue(&st, p.scope().project(), kind, req.payload).await?,
+    ))
 }
 
 /// Parse a job-kind literal, or a 400 that names every kind this build knows.

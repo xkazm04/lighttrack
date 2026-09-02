@@ -8,6 +8,7 @@ use lighttrack_core::{new_id, RelayOutcome, RelaySettle, RelayTask};
 use crate::{Result, Store};
 
 use super::relay_lease::{relay_cancellation, relay_fencing};
+use crate::Scope;
 
 /// A queued task with an immediate retry interval, so a failed attempt becomes due again at once.
 /// Shared with the refusal probe so both describe the same shape.
@@ -65,7 +66,9 @@ pub(super) fn relay(store: &dyn Store, pid: &str) -> Result<()> {
     store.create_relay_task(&t)?;
 
     // Round-trip + idempotency lookup.
-    let got = store.get_relay_task(&t.id)?.expect("get_relay_task Some");
+    let got = store
+        .get_relay_task(Scope::Operator, &t.id)?
+        .expect("get_relay_task Some");
     assert_eq!(got.payload, json!({ "k": "v" }), "relay payload round-trip");
     let key = t.idempotency_key.clone().unwrap();
     assert_eq!(
@@ -149,24 +152,27 @@ pub(super) fn relay(store: &dyn Store, pid: &str) -> Result<()> {
         "a duplicate report must not re-open or overwrite a settled task"
     );
     assert_eq!(
-        store.get_relay_task(&t.id)?.expect("get").status,
+        store
+            .get_relay_task(Scope::Operator, &t.id)?
+            .expect("get")
+            .status,
         "succeeded",
         "…and must leave the terminal verdict exactly as it was"
     );
     assert!(store
-        .list_relay_tasks(Some(pid), Some("succeeded"), 100)?
+        .list_relay_tasks(Scope::Project(pid), Some("succeeded"), 100)?
         .iter()
         .any(|x| x.id == t.id));
     // Narrowed to one action (M19): the snapshot behind `POST /v1/relay/actions/:t/dataset` must
     // return this action's runs and nobody else's. A filter that quietly ignored `action_type`
     // would build a dataset out of a neighbouring action's traffic and look perfectly healthy.
     assert!(store
-        .list_relay_tasks_by_action(Some(pid), &t.action_type, Some("succeeded"), 100)?
+        .list_relay_tasks_by_action(Scope::Project(pid), &t.action_type, Some("succeeded"), 100)?
         .iter()
         .any(|x| x.id == t.id));
     assert!(
         store
-            .list_relay_tasks_by_action(Some(pid), "conf/not-an-action", None, 100)?
+            .list_relay_tasks_by_action(Scope::Project(pid), "conf/not-an-action", None, 100)?
             .is_empty(),
         "an action_type nothing was enqueued under must return nothing, not everything"
     );
@@ -231,7 +237,9 @@ fn relay_dead_sweep(store: &dyn Store, pid: &str) -> Result<()> {
     for _ in 0..=lighttrack_core::RELAY_MAX_STALE_RECLAIMS {
         leased_ours(store, &cursed.id, 0)?; // zero-second lease: expires at once
     }
-    let held = store.get_relay_task(&cursed.id)?.expect("get cursed");
+    let held = store
+        .get_relay_task(Scope::Operator, &cursed.id)?
+        .expect("get cursed");
     assert_eq!(held.status, "leased");
     assert_eq!(
         held.stale_reclaims,

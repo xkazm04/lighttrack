@@ -9,6 +9,7 @@ use chrono::{Duration, Utc};
 use lighttrack_core::new_id;
 
 use super::fixtures::{sample_event, tagged_event};
+use crate::Scope;
 use crate::{Result, Store};
 
 pub(super) fn forecast(store: &dyn Store) -> Result<()> {
@@ -67,7 +68,7 @@ pub(super) fn forecast(store: &dyn Store) -> Result<()> {
     store.insert_event(&a)?;
     store.insert_event(&b)?;
 
-    let dim = store.daily_cost_by_dimension(Some(&cpid), "customer", since, until)?;
+    let dim = store.daily_cost_by_dimension(Scope::Project(&cpid), "customer", since, until)?;
     let for_a: f64 = dim
         .iter()
         .filter(|r| r.key.as_deref() == Some("cus-fc-a"))

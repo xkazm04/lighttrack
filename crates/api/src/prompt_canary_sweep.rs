@@ -37,6 +37,7 @@ use lighttrack_store::ScoreSummaryRow;
 use crate::alerts_canary::CanaryRegression;
 use crate::error::ApiError;
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 /// Cadence in seconds; unset or `0` disables the sweep entirely.
 const ENV_SECS: &str = "LIGHTTRACK_PROMPT_CANARY_SWEEP_SECS";
@@ -202,7 +203,7 @@ async fn one_prompt(
     let rubric = rubric_id.clone();
     let rows = spawn_db(move || {
         store.score_summary_by_dimension(
-            Some(&pid),
+            TenantScope::Project(&pid),
             Dimension::Prompt,
             since,
             None,
@@ -298,7 +299,8 @@ async fn revert(st: &AppState, mut prompt: Prompt, policy: &CanaryPolicy) -> Opt
 async fn benchmark_rubric(st: &AppState, prompt: &Prompt) -> Option<String> {
     let bid = prompt.benchmark_id.clone()?;
     let store = st.store.clone();
-    spawn_db(move || store.get_benchmark(&bid))
+    let owner = prompt.project_id.clone();
+    spawn_db(move || store.get_benchmark(TenantScope::Project(&owner), &bid))
         .await
         .ok()
         .flatten()

@@ -9,6 +9,7 @@ use lighttrack_core::{new_id, LeaseHeld, RelayCancel, RelayOutcome, RelaySettle}
 use serde_json::json;
 
 use super::relay::{leased_ours, sample_task, settled};
+use crate::Scope;
 use crate::{Result, Store};
 
 /// Renewal, progress, and the late settle a fence exists to refuse.
@@ -25,7 +26,9 @@ pub(super) fn relay_fencing(store: &dyn Store, pid: &str) -> Result<()> {
         LeaseHeld::Held { deadline } => deadline.expect("a renewal returns the new deadline"),
         other => panic!("a live holder's renewal must land, got {other:?}"),
     };
-    let after = store.get_relay_task(&t.id)?.expect("get after renew");
+    let after = store
+        .get_relay_task(Scope::Operator, &t.id)?
+        .expect("get after renew");
     assert_eq!(
         after.lease_fence,
         Some(stale_fence),
@@ -42,7 +45,7 @@ pub(super) fn relay_fencing(store: &dyn Store, pid: &str) -> Result<()> {
         .is_held());
     assert_eq!(
         store
-            .get_relay_task(&t.id)?
+            .get_relay_task(Scope::Operator, &t.id)?
             .expect("get after progress")
             .progress
             .as_deref(),
@@ -76,7 +79,7 @@ pub(super) fn relay_fencing(store: &dyn Store, pid: &str) -> Result<()> {
         other => panic!("a reclaimed device's late settle must be refused, got {other:?}"),
     }
     let untouched = store
-        .get_relay_task(&t.id)?
+        .get_relay_task(Scope::Operator, &t.id)?
         .expect("get after the late settle");
     assert_eq!(untouched.status, "leased");
     assert_eq!(untouched.result, serde_json::Value::Null);
@@ -111,12 +114,15 @@ pub(super) fn relay_cancellation(store: &dyn Store, pid: &str) -> Result<()> {
     let queued = sample_task(pid, 3);
     store.create_relay_task(&queued)?;
     assert_eq!(
-        store.cancel_relay_task(&queued.id)?,
+        store.cancel_relay_task(Scope::Operator, &queued.id)?,
         Some(RelayCancel::Cancelled),
         "a queued task is cancelled outright — nothing ran"
     );
     assert_eq!(
-        store.get_relay_task(&queued.id)?.expect("get").status,
+        store
+            .get_relay_task(Scope::Operator, &queued.id)?
+            .expect("get")
+            .status,
         "cancelled"
     );
     assert!(
@@ -125,11 +131,11 @@ pub(super) fn relay_cancellation(store: &dyn Store, pid: &str) -> Result<()> {
     );
     // Re-cancelling something terminal must not claim to have stopped it.
     assert!(matches!(
-        store.cancel_relay_task(&queued.id)?,
+        store.cancel_relay_task(Scope::Operator, &queued.id)?,
         Some(RelayCancel::AlreadyFinished { .. })
     ));
     // An unknown id is None (→ 404), not a fabricated success.
-    assert_eq!(store.cancel_relay_task(&new_id())?, None);
+    assert_eq!(store.cancel_relay_task(Scope::Operator, &new_id())?, None);
 
     // A LEASED task: cancel marks it `cancelling` — still live, so the device can renew and report
     // honestly, but outside the leasable set, so the reclaim path cannot start a second copy.
@@ -138,11 +144,14 @@ pub(super) fn relay_cancellation(store: &dyn Store, pid: &str) -> Result<()> {
     let held = leased_ours(store, &running.id, 0)?.expect("running leased");
     let fence = held.lease_fence.expect("fence");
     assert_eq!(
-        store.cancel_relay_task(&running.id)?,
+        store.cancel_relay_task(Scope::Operator, &running.id)?,
         Some(RelayCancel::Cancelling)
     );
     assert_eq!(
-        store.get_relay_task(&running.id)?.expect("get").status,
+        store
+            .get_relay_task(Scope::Operator, &running.id)?
+            .expect("get")
+            .status,
         "cancelling"
     );
     assert!(

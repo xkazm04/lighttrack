@@ -5,6 +5,7 @@ use serde_json::json;
 
 use lighttrack_core::{new_id, Schedule};
 
+use crate::Scope;
 use crate::{Result, Store};
 
 pub(super) fn sample_schedule(pid: &str) -> Schedule {
@@ -25,7 +26,9 @@ pub(super) fn schedules(store: &dyn Store, pid: &str) -> Result<()> {
     let s = sample_schedule(pid);
     store.create_schedule(&s)?;
 
-    let got = store.get_schedule(&s.id)?.expect("get_schedule Some");
+    let got = store
+        .get_schedule(Scope::Operator, &s.id)?
+        .expect("get_schedule Some");
     assert_eq!(got.kind, "bench_run");
     assert_eq!(
         got.payload,
@@ -56,8 +59,13 @@ pub(super) fn schedules(store: &dyn Store, pid: &str) -> Result<()> {
     let mut fired = got;
     fired.last_job_id = Some("job-conf".into());
     fired.next_due = fired.advance_from(Utc::now());
-    assert!(store.update_schedule(&fired)?, "update finds the row");
-    let after = store.get_schedule(&s.id)?.expect("get after update");
+    assert!(
+        store.update_schedule(Scope::Operator, &fired)?,
+        "update finds the row"
+    );
+    let after = store
+        .get_schedule(Scope::Operator, &s.id)?
+        .expect("get after update");
     assert_eq!(after.last_job_id.as_deref(), Some("job-conf"));
     assert!(
         !store
@@ -72,7 +80,7 @@ pub(super) fn schedules(store: &dyn Store, pid: &str) -> Result<()> {
     let mut off = after;
     off.enabled = false;
     off.next_due = Utc::now() - Duration::days(1);
-    store.update_schedule(&off)?;
+    store.update_schedule(Scope::Operator, &off)?;
     assert!(
         !store
             .due_schedules(Utc::now())?
@@ -80,17 +88,17 @@ pub(super) fn schedules(store: &dyn Store, pid: &str) -> Result<()> {
             .any(|x| x.id == s.id),
         "a disabled schedule is never due, however long overdue it looks"
     );
-    assert!(store.get_schedule(&s.id)?.is_some());
+    assert!(store.get_schedule(Scope::Operator, &s.id)?.is_some());
 
     // Updating something that is not there says so rather than silently creating it.
     let mut ghost = sample_schedule(pid);
     ghost.id = new_id();
-    assert!(!store.update_schedule(&ghost)?);
+    assert!(!store.update_schedule(Scope::Operator, &ghost)?);
 
-    assert!(store.delete_schedule(&s.id)?);
-    assert!(store.get_schedule(&s.id)?.is_none());
+    assert!(store.delete_schedule(Scope::Operator, &s.id)?);
+    assert!(store.get_schedule(Scope::Operator, &s.id)?.is_none());
     assert!(
-        !store.delete_schedule(&s.id)?,
+        !store.delete_schedule(Scope::Operator, &s.id)?,
         "a second delete finds nothing"
     );
     Ok(())

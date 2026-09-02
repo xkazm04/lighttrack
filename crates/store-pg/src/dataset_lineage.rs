@@ -19,23 +19,20 @@ use lighttrack_store::{Result, StoreError};
 use crate::datasets::{self, dataset_from_row, DATASET_COLS};
 use crate::util::{fmt_ts, pgerr};
 
+/// A dataset outside the caller's scope is *absent*, not forbidden: the store has no notion of a
+/// principal, and the API has already decided who may see what. The scope rides in the query (M17)
+/// rather than in a comparison afterwards, so there is no branch left that could leak existence.
 async fn load_scoped(pool: &PgPool, project: Option<&str>, id: &str) -> Result<Option<Dataset>> {
     let row = sqlx::query(&format!(
-        "SELECT {DATASET_COLS} FROM datasets WHERE id = $1"
+        "SELECT {DATASET_COLS} FROM datasets \
+         WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)"
     ))
     .bind(id.to_string())
+    .bind(project.map(str::to_string))
     .fetch_optional(pool)
     .await
     .map_err(pgerr)?;
-    let Some(d) = row.as_ref().map(dataset_from_row).transpose()? else {
-        return Ok(None);
-    };
-    // A dataset outside the caller's project is *absent*, not forbidden: the store has no notion of
-    // a principal, and the API has already decided who may see what.
-    match project {
-        Some(p) if d.project_id != p => Ok(None),
-        _ => Ok(Some(d)),
-    }
+    row.as_ref().map(dataset_from_row).transpose()
 }
 
 pub(crate) async fn fork(pool: &PgPool, project: Option<&str>, id: &str) -> Result<Dataset> {
@@ -65,7 +62,7 @@ pub(crate) async fn fork(pool: &PgPool, project: Option<&str>, id: &str) -> Resu
         parent_id: Some(src.id.clone()),
     };
     datasets::create(pool, &forked).await?;
-    for item in datasets::list_items(pool, &src.id).await? {
+    for item in datasets::list_items(pool, project, &src.id).await? {
         let copy = DatasetItem {
             id: new_id(),
             dataset_id: forked.id.clone(),

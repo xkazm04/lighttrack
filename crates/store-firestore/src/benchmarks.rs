@@ -24,11 +24,19 @@ pub(crate) fn create_benchmark(rest: &Rest, b: &Benchmark) -> Result<()> {
     rest.put_doc("benchmarks", &b.id, &m)
 }
 
-pub(crate) fn get_benchmark(rest: &Rest, id: &str) -> Result<Option<Benchmark>> {
-    rest.get_doc("benchmarks", id)?
+pub(crate) fn get_benchmark(
+    rest: &Rest,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<Benchmark>> {
+    let b = rest
+        .get_doc("benchmarks", id)?
         .as_ref()
         .map(bench_from)
-        .transpose()
+        .transpose()?;
+    Ok(crate::scope::keep(project, b, |b| {
+        Some(b.project_id.as_str())
+    }))
 }
 
 pub(crate) fn list_benchmarks(rest: &Rest, project: &str) -> Result<Vec<Benchmark>> {
@@ -64,7 +72,16 @@ pub(crate) fn create_benchmark_run(rest: &Rest, r: &BenchmarkRun) -> Result<()> 
     rest.put_doc("benchmark_runs", &r.id, &m)
 }
 
-pub(crate) fn list_benchmark_runs(rest: &Rest, benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
+/// `benchmark_runs` documents carry no `project_id`, so the tenant filter rides the parent
+/// benchmark: a foreign benchmark id yields an empty list, never someone else's runs.
+pub(crate) fn list_benchmark_runs(
+    rest: &Rest,
+    project: Option<&str>,
+    benchmark_id: &str,
+) -> Result<Vec<BenchmarkRun>> {
+    if get_benchmark(rest, project, benchmark_id)?.is_none() {
+        return Ok(Vec::new());
+    }
     let filters: Vec<(&str, &str, Value)> = vec![("benchmark_id", "EQUAL", json!(benchmark_id))];
     let docs = rest.query("benchmark_runs", &filters, Some(("started_at", true)), None)?;
     docs.iter().map(run_from).collect()

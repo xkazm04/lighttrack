@@ -15,6 +15,7 @@ use lighttrack_store::Store;
 
 use crate::redact::Redactor;
 use crate::tests_ingest::{make_key, setup};
+use lighttrack_store::Scope as TenantScope;
 
 /// A fixture span's `startTimeUnixNano`, as an OTel SDK would emit it **now**.
 ///
@@ -138,7 +139,9 @@ async fn canonical_export_round_trips_to_events() {
     // OTLP partial success: the non-GenAI span is reported as rejected, in the standard field.
     assert_eq!(body["partialSuccess"]["rejectedSpans"], 1, "{body}");
 
-    let rows = store.list_events(Some("proj-a"), 10).unwrap();
+    let rows = store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap();
     assert_eq!(rows.len(), 2, "only the GenAI spans became events");
 
     let root = rows
@@ -238,7 +241,10 @@ async fn non_genai_and_modelless_spans_are_rejected_with_codes() {
     );
     assert_eq!(body["partialSuccess"]["rejectedSpans"], 2, "{body}");
     assert!(
-        store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .is_empty(),
         "nothing was stored"
     );
 }
@@ -281,7 +287,10 @@ async fn otlp_ingest_respects_limits_and_redaction() {
         "the batch taxonomy's code is surfaced per span: {body}"
     );
     assert!(
-        store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .is_empty(),
         "nothing stored over cap"
     );
 
@@ -291,7 +300,12 @@ async fn otlp_ingest_respects_limits_and_redaction() {
     let app2 = crate::build_router(state2);
     let (s2, b2) = export(&app2, &key2, fixture()).await;
     assert_eq!(s2, StatusCode::OK, "{b2}");
-    let stored = serde_json::to_string(&store2.list_events(Some("proj-a"), 10).unwrap()).unwrap();
+    let stored = serde_json::to_string(
+        &store2
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap(),
+    )
+    .unwrap();
     assert!(
         !stored.contains("jane@example.com"),
         "raw PII persisted from an OTLP span: {stored}"
@@ -319,7 +333,10 @@ async fn a_replayed_export_does_not_double_count() {
         "a replay is acknowledged, not refused: {b2}"
     );
     assert_eq!(
-        store.list_events(Some("proj-a"), 10).unwrap().len(),
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
         2,
         "no double-count"
     );
@@ -348,10 +365,19 @@ async fn a_project_key_scopes_otlp_spans_to_its_own_project() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     assert!(
-        store.list_events(Some("proj-b"), 10).unwrap().is_empty(),
+        store
+            .list_events(TenantScope::Project("proj-b"), 10)
+            .unwrap()
+            .is_empty(),
         "tenant boundary crossed"
     );
-    assert_eq!(store.list_events(Some("proj-a"), 10).unwrap().len(), 2);
+    assert_eq!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -464,7 +490,9 @@ async fn an_otel_trace_keeps_its_shape_when_non_genai_spans_are_dropped() {
     );
 
     // No phantom LLM events were invented for the dropped spans.
-    let rows = store.list_events(Some("proj-a"), 10).unwrap();
+    let rows = store
+        .list_events(TenantScope::Project("proj-a"), 10)
+        .unwrap();
     assert_eq!(rows.len(), 2, "the event table holds LLM calls only");
 
     // The LLM call under the dropped HTTP handler has no GenAI ancestor: a genuine root.
@@ -494,7 +522,7 @@ async fn an_otel_trace_keeps_its_shape_when_non_genai_spans_are_dropped() {
     // And the trace reads as ONE connected tree rather than N roots.
     let trace = store
         .get_trace(
-            Some("proj-a"),
+            TenantScope::Project("proj-a"),
             "9f2c4d6e8a0b1c3d5e7f9a1b2c3d4e5f",
             lighttrack_store::MAX_TRACE_SPANS,
         )
@@ -544,7 +572,9 @@ async fn a_namespaced_vendor_id_is_kept_and_still_prices() {
     let (status, resp) = export(&app, &key, body).await;
     assert_eq!(status, StatusCode::OK, "{resp}");
 
-    let rows = store.list_events(Some("proj-az"), 10).unwrap();
+    let rows = store
+        .list_events(TenantScope::Project("proj-az"), 10)
+        .unwrap();
     assert_eq!(rows.len(), 1, "{resp}");
     assert_eq!(
         rows[0].provider.as_str(),
@@ -587,7 +617,7 @@ async fn a_mixed_otel_and_sdk_trace_is_one_trace() {
 
     let trace = store
         .get_trace(
-            Some("proj-a"),
+            TenantScope::Project("proj-a"),
             "9f2c4d6e8a0b1c3d5e7f9a1b2c3d4e5f",
             lighttrack_store::MAX_TRACE_SPANS,
         )
@@ -631,7 +661,11 @@ async fn a_non_w3c_trace_id_is_not_case_folded() {
         assert_eq!(status, StatusCode::OK, "{v}");
     }
     let upper = store
-        .get_trace(Some("proj-a"), "Order-7", lighttrack_store::MAX_TRACE_SPANS)
+        .get_trace(
+            TenantScope::Project("proj-a"),
+            "Order-7",
+            lighttrack_store::MAX_TRACE_SPANS,
+        )
         .unwrap();
     assert_eq!(
         upper.expect("kept verbatim").totals.spans,

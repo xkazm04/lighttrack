@@ -19,6 +19,7 @@ use lighttrack_core::{
     ScoreDim,
 };
 
+use crate::Scope;
 use crate::{Result, Store};
 
 pub(super) fn sample_label(project: &str, subject: LabelSubject, value: f64) -> Label {
@@ -174,7 +175,7 @@ fn dataset_join(store: &dyn Store, pid: &str) -> Result<()> {
     let stray = sample_label(pid, LabelSubject::DatasetItem(other_item.id.clone()), 0.1);
     store.insert_label(&stray)?;
 
-    let found = store.labels_for_dataset(&ds.id)?;
+    let found = store.labels_for_dataset(Scope::Operator, &ds.id)?;
     assert!(
         found.iter().any(|x| x.id == l.id),
         "a label on an item of this dataset must be reachable from the dataset id — a backend that \
@@ -185,7 +186,9 @@ fn dataset_join(store: &dyn Store, pid: &str) -> Result<()> {
         "…and a label on another dataset's item must not be"
     );
     assert!(
-        store.labels_for_dataset(&new_id())?.is_empty(),
+        store
+            .labels_for_dataset(Scope::Operator, &new_id())?
+            .is_empty(),
         "a dataset nobody has labelled has no labels"
     );
     Ok(())
@@ -288,7 +291,7 @@ fn newest_wins(store: &dyn Store, pid: &str, judge: &str, rubric: &str) -> Resul
     assert_eq!(got.id, fresh.id, "the newest record decides");
     assert!((got.kappa - 0.77).abs() < 1e-9);
 
-    let history = store.list_calibrations(Some(pid), 100, None)?;
+    let history = store.list_calibrations(Scope::Project(pid), 100, None)?;
     assert!(
         history.iter().filter(|c| c.judge == judge).count() >= 3,
         "a re-measurement appends: the earlier records must still be there for a drift check"
@@ -300,7 +303,7 @@ fn newest_wins(store: &dyn Store, pid: &str, judge: &str, rubric: &str) -> Resul
         "the history is newest-first"
     );
     assert!(
-        store.list_calibrations(Some(pid), 1, None)?.len() <= 1,
+        store.list_calibrations(Scope::Project(pid), 1, None)?.len() <= 1,
         "the page size is honoured"
     );
     Ok(())

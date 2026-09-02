@@ -34,35 +34,45 @@ pub(crate) async fn create(pool: &PgPool, d: &Dataset) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Dataset>> {
+pub(crate) async fn get(pool: &PgPool, project: Option<&str>, id: &str) -> Result<Option<Dataset>> {
     let row = sqlx::query(&format!(
-        "SELECT {DATASET_COLS} FROM datasets WHERE id = $1"
+        "SELECT {DATASET_COLS} FROM datasets WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)"
     ))
     .bind(id.to_string())
+    .bind(project.map(str::to_string))
     .fetch_optional(pool)
     .await
     .map_err(pgerr)?;
     row.as_ref().map(dataset_from_row).transpose()
 }
 
-pub(crate) async fn list(pool: &PgPool, project: &str) -> Result<Vec<Dataset>> {
+pub(crate) async fn list(pool: &PgPool, project: Option<&str>) -> Result<Vec<Dataset>> {
     let rows = sqlx::query(&format!(
-        "SELECT {DATASET_COLS} FROM datasets WHERE project_id = $1 ORDER BY created_at DESC"
+        "SELECT {DATASET_COLS} FROM datasets \
+         WHERE ($1::text IS NULL OR project_id = $1) ORDER BY created_at DESC"
     ))
-    .bind(project.to_string())
+    .bind(project.map(str::to_string))
     .fetch_all(pool)
     .await
     .map_err(pgerr)?;
     rows.iter().map(dataset_from_row).collect()
 }
 
-pub(crate) async fn set_frozen(pool: &PgPool, id: &str, frozen: bool) -> Result<()> {
-    sqlx::query("UPDATE datasets SET frozen = $2 WHERE id = $1")
-        .bind(id.to_string())
-        .bind(frozen as i64)
-        .execute(pool)
-        .await
-        .map_err(pgerr)?;
+pub(crate) async fn set_frozen(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+    frozen: bool,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE datasets SET frozen = $2 WHERE id = $1 AND ($3::text IS NULL OR project_id = $3)",
+    )
+    .bind(id.to_string())
+    .bind(frozen as i64)
+    .bind(project.map(str::to_string))
+    .execute(pool)
+    .await
+    .map_err(pgerr)?;
     Ok(())
 }
 
@@ -90,11 +100,18 @@ pub(crate) async fn create_item(pool: &PgPool, item: &DatasetItem) -> Result<()>
     Ok(())
 }
 
-pub(crate) async fn list_items(pool: &PgPool, dataset_id: &str) -> Result<Vec<DatasetItem>> {
+pub(crate) async fn list_items(
+    pool: &PgPool,
+    project: Option<&str>,
+    dataset_id: &str,
+) -> Result<Vec<DatasetItem>> {
     let rows = sqlx::query(&format!(
-        "SELECT {ITEM_COLS} FROM dataset_items WHERE dataset_id = $1"
+        "SELECT {ITEM_COLS} FROM dataset_items WHERE dataset_id = $1 \
+           AND ($2::text IS NULL OR EXISTS \
+                (SELECT 1 FROM datasets d WHERE d.id = dataset_id AND d.project_id = $2))"
     ))
     .bind(dataset_id.to_string())
+    .bind(project.map(str::to_string))
     .fetch_all(pool)
     .await
     .map_err(pgerr)?;

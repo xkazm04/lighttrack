@@ -267,6 +267,8 @@ mod tests_rollup;
 #[cfg(test)]
 mod tests_schedules;
 #[cfg(test)]
+mod tests_scope;
+#[cfg(test)]
 mod tests_storage;
 #[cfg(test)]
 mod tests_tenancy;

@@ -29,10 +29,13 @@ pub(super) fn create(conn: &Connection, r: &Rubric) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Rubric>> {
-    let sql = format!("SELECT {COLS} FROM rubrics WHERE id = ?1");
+pub(super) fn get(conn: &Connection, project: Option<&str>, id: &str) -> Result<Option<Rubric>> {
+    let sql = format!(
+        "SELECT {COLS} FROM rubrics WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![id], map_raw).optional()?;
+    let raw = stmt.query_row(params![id, project], map_raw).optional()?;
     raw.map(from_raw).transpose()
 }
 

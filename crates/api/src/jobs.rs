@@ -27,11 +27,16 @@ pub(crate) async fn list_jobs(
     headers: HeaderMap,
     Query(q): Query<JobsParams>,
 ) -> Result<Json<Vec<Job>>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let status = q.status;
     let limit = q.limit.unwrap_or(50).min(1000);
-    let jobs = spawn_db(move || store.list_jobs(status.as_deref(), limit)).await?;
+    // Scoped even though the door is admin-only today: the queue carries other projects' payloads,
+    // so the read must be safe on its own terms rather than by whoever guards the route (M17).
+    let sc = p.scope_owned();
+    let jobs =
+        spawn_db(move || store.list_jobs(sc.as_deref().into(), status.as_deref(), limit)).await?;
     Ok(Json(jobs))
 }
 
@@ -40,10 +45,12 @@ pub(crate) async fn get_job(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Job>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
-    let job = spawn_db(move || store.get_job(&id2))
+    let sc = p.scope_owned();
+    let job = spawn_db(move || store.get_job(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("job '{id}' not found")))?;
     Ok(Json(job))
@@ -113,10 +120,12 @@ pub(crate) async fn cancel_job(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<JobCancel>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
-    let outcome = spawn_db(move || store.cancel_job(&id2))
+    let sc = p.scope_owned();
+    let outcome = spawn_db(move || store.cancel_job(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("job '{id}' not found")))?;
     if let JobCancel::AlreadyFinished { status } = &outcome {

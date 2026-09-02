@@ -19,6 +19,7 @@ use lighttrack_core::{
     PolicyAction, PolicyTrigger, Threshold, ThresholdDimension,
 };
 
+use crate::Scope;
 use crate::{Result, Store, Surface};
 
 pub(super) fn margin_policies(store: &dyn Store, pid: &str) -> Result<()> {
@@ -47,7 +48,7 @@ fn policies(store: &dyn Store, pid: &str) -> Result<()> {
     store.create_margin_policy(&p)?;
 
     let got = store
-        .get_margin_policy(&p.id)?
+        .get_margin_policy(Scope::Operator, &p.id)?
         .expect("get_margin_policy finds the policy just created");
     assert_eq!(
         got.trigger,
@@ -87,13 +88,19 @@ fn policies(store: &dyn Store, pid: &str) -> Result<()> {
         "only_enabled excludes the disabled policy — otherwise the sweep would act on it"
     );
 
-    assert!(store.delete_margin_policy(&p.id)?, "delete removes the row");
-    assert!(store.get_margin_policy(&p.id)?.is_none(), "and it is gone");
     assert!(
-        !store.delete_margin_policy(&new_id())?,
+        store.delete_margin_policy(Scope::Operator, &p.id)?,
+        "delete removes the row"
+    );
+    assert!(
+        store.get_margin_policy(Scope::Operator, &p.id)?.is_none(),
+        "and it is gone"
+    );
+    assert!(
+        !store.delete_margin_policy(Scope::Operator, &new_id())?,
         "deleting an unknown id returns false (the API's 404)"
     );
-    store.delete_margin_policy(&disabled.id)?;
+    store.delete_margin_policy(Scope::Operator, &disabled.id)?;
     Ok(())
 }
 
@@ -125,7 +132,7 @@ fn guardrail_rule_fields(store: &dyn Store, pid: &str) -> Result<()> {
     };
     store.create_limit_rule(&derived)?;
     let got = store
-        .get_limit_rule(&derived.id)?
+        .get_limit_rule(Scope::Operator, &derived.id)?
         .expect("the derived rule is readable");
     assert_eq!(
         got.threshold,
@@ -161,9 +168,9 @@ fn guardrail_rule_fields(store: &dyn Store, pid: &str) -> Result<()> {
     calm.escalated_until = None;
     calm.origin = None;
     calm.threshold = Threshold::Fixed(42.0);
-    assert!(store.update_limit_rule(&calm)?);
+    assert!(store.update_limit_rule(Scope::Operator, &calm)?);
     let after = store
-        .get_limit_rule(&derived.id)?
+        .get_limit_rule(Scope::Operator, &derived.id)?
         .expect("still present after de-escalation");
     assert!(
         after.escalated_until.is_none(),
@@ -187,11 +194,13 @@ fn guardrail_rule_fields(store: &dyn Store, pid: &str) -> Result<()> {
         ..derived.clone()
     };
     store.create_limit_rule(&plain)?;
-    let got_plain = store.get_limit_rule(&plain.id)?.expect("plain rule reads");
+    let got_plain = store
+        .get_limit_rule(Scope::Operator, &plain.id)?
+        .expect("plain rule reads");
     assert_eq!(got_plain.threshold, Threshold::Fixed(9.5));
     assert!(got_plain.escalation.is_none() && got_plain.expires_at.is_none());
 
-    store.delete_limit_rule(&derived.id)?;
-    store.delete_limit_rule(&plain.id)?;
+    store.delete_limit_rule(Scope::Operator, &derived.id)?;
+    store.delete_limit_rule(Scope::Operator, &plain.id)?;
     Ok(())
 }

@@ -14,18 +14,29 @@ pub(crate) fn create_job(rest: &Rest, j: &Job) -> Result<()> {
     rest.put_doc("jobs", &j.id, &to_fields(j)?)
 }
 
-pub(crate) fn get_job(rest: &Rest, id: &str) -> Result<Option<Job>> {
-    rest.get_doc("jobs", id)?
+pub(crate) fn get_job(rest: &Rest, project: Option<&str>, id: &str) -> Result<Option<Job>> {
+    let j = rest
+        .get_doc("jobs", id)?
         .as_ref()
         .map(from_fields)
-        .transpose()
+        .transpose()?;
+    Ok(crate::scope::keep(project, j, |j| j.project_id.as_deref()))
 }
 
-pub(crate) fn list_jobs(rest: &Rest, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
-    let filters: Vec<(&str, &str, Value)> = match status {
+/// The queue as one scope sees it. A project reads only the work stamped with its own id; the
+/// operator additionally reads the project-less rows (sweeps, and anything enqueued before the
+/// field existed).
+pub(crate) fn list_jobs(
+    rest: &Rest,
+    project: Option<&str>,
+    status: Option<&str>,
+    limit: usize,
+) -> Result<Vec<Job>> {
+    let mut filters: Vec<(&str, &str, Value)> = match status {
         Some(s) => vec![("status", "EQUAL", json!(s))],
         None => vec![],
     };
+    crate::scope::push_filter(&mut filters, project);
     let docs = rest.query("jobs", &filters, Some(("created_at", true)), Some(limit))?;
     docs.iter().map(from_fields).collect()
 }
@@ -162,11 +173,18 @@ fn doc_handle(doc: &Value) -> (String, String) {
 /// the stale-reclaim query matches, so a cancelled run is never restarted). The flip is guarded by
 /// the document's `updateTime`, so a claim landing at the same moment loses or wins cleanly — on a
 /// lost race we re-read and decide again against the new status.
-pub(crate) fn cancel_job(rest: &Rest, id: &str) -> Result<Option<JobCancel>> {
+pub(crate) fn cancel_job(
+    rest: &Rest,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<JobCancel>> {
     for _ in 0..5 {
         let Some(doc) = doc_by_id(rest, id)? else {
             return Ok(None);
         };
+        if !crate::scope::allows(project, fstr(&decode_doc(&doc), "project_id").as_deref()) {
+            return Ok(None); // not this tenant's job: indistinguishable from no such job
+        }
         let name = doc
             .get("name")
             .and_then(Value::as_str)
@@ -333,6 +351,7 @@ fn to_fields(j: &Job) -> Result<Fields> {
     m.insert("stale_reclaims".into(), json!(j.stale_reclaims as i64));
     m.insert("created_at".into(), json!(fmt_ts(j.created_at)));
     m.insert("updated_at".into(), json!(fmt_ts(j.updated_at)));
+    m.insert("project_id".into(), json!(j.project_id));
     Ok(m)
 }
 
@@ -355,5 +374,6 @@ fn from_fields(m: &Fields) -> Result<Job> {
         updated_at: parse_ts(&freq(m, "updated_at")?)?,
         failures: fi64(m, "failures").unwrap_or(0) as u32,
         stale_reclaims: fi64(m, "stale_reclaims").unwrap_or(0) as u32,
+        project_id: fstr(m, "project_id"),
     })
 }

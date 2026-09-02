@@ -85,12 +85,19 @@ pub(crate) async fn list_filtered(
     })
 }
 
-pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<LlmEvent>> {
-    let row = sqlx::query(&format!("SELECT {COLS} FROM events WHERE id = $1"))
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+pub(crate) async fn get(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<LlmEvent>> {
+    let row = sqlx::query(&format!(
+        "SELECT {COLS} FROM events WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)"
+    ))
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     match row {
         Some(r) => Ok(Some(from_row(&r)?)),
         None => Ok(None),

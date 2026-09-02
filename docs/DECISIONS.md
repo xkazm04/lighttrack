@@ -188,6 +188,31 @@ project-scoped SQLite read carries an `INDEXED BY idx_events_project_trace` — 
 picks `idx_events_project_ts` (it satisfies `ORDER BY ts` without a sort) and filters `trace_id` across
 the whole project, which is the wrong shape for a trace read.
 
+**Addendum (2026-09-02, M17): the same rule, applied to the whole trait.** D13 fixed traces and the
+conformance suite pinned it — for traces only. Everything else kept the shape D13 rejected: a point
+read by bare id (`get_event`, `get_benchmark`, `get_dataset`, `get_rubric`, `get_job`,
+`get_limit_rule`, `get_relay_task`, `get_prompt_by_id`, `list_benchmark_runs`, `list_dataset_items`,
+`scored_event_ids`, plus the schedules, devices, alerts, channels, margin policies and labels the
+later waves added) followed by a handler-side `project_id` comparison that answered **403**. That
+403 is the existence oracle D13 removed, re-created seventeen times over: it says "this id exists,
+and it is not yours", which is exactly the fact a tenant must not be able to learn about a
+caller-chosen id. `jobs` was worse than that — the table had no `project_id` at all, so the queue's
+payloads were readable by whoever could reach `GET /v1/jobs`.
+
+So `project: Option<&str>` is replaced by a two-valued `Scope { Project(&str), Operator }` on every
+project-bearing read, and the reads that took no project at all gain one. The API's only mapping
+from principal to scope is `Principal::scope()`; the post-hoc `forbidden(...)` branches are deleted
+rather than kept as a second belt, because keeping them would keep the oracle. Two pure tests parse
+`crates/store/src/lib.rs` and fail if a read loses its scope or if `project: Option<&str>` comes
+back, and a generic `tenancy` conformance section asserts the collision property — owner sees its
+row, an unrelated project sees nothing distinguishable from missing, operator sees both — for every
+entity type rather than for traces alone.
+
+What we accept: a project key that genuinely mistyped an id and one that guessed a stranger's get
+the same 404, so "not found" is now slightly less diagnostic. That is the intended trade — the
+alternative is an endpoint that tells strangers which ids are real. What stays global: the price
+book, for the reason in ARCHITECTURE §9.
+
 ## D14 — Ingest scrubs PII unless an operator says otherwise (2026-08-05)
 
 `LIGHTTRACK_REDACT_INGEST` defaulted to `off`. An operator who deployed LightTrack and configured
