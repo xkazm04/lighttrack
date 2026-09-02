@@ -198,13 +198,29 @@ impl Alerter {
     pub(crate) fn should_send_key(&self, key: &str) -> bool {
         let now = Instant::now();
         let mut map = self.last_sent.lock().unwrap_or_else(|p| p.into_inner());
-        match map.get(key) {
+        let verdict = match map.get(key) {
             Some(t) if now.duration_since(*t) < self.config.cooldown => false,
             _ => {
                 map.insert(key.to_string(), now);
                 true
             }
-        }
+        };
+        // An entry past its cooldown can never suppress anything again, so it is only memory. Many
+        // keys are per-incident (`relay-dead:<task>`, `bench-run:<name>:<status>`, per-flush
+        // rejection keys), which made this map grow by one entry per event for the life of the
+        // process. Evict on the way out; the cost is a sweep of a small map per alert candidate.
+        let cooldown = self.config.cooldown;
+        map.retain(|_, t| now.duration_since(*t) < cooldown);
+        verdict
+    }
+
+    /// How many cooldown entries this replica is holding — a test hook for the eviction above.
+    #[cfg(test)]
+    pub(super) fn cooldown_entries(&self) -> usize {
+        self.last_sent
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .len()
     }
 
     /// Stable per-breach key (`project:metric:window:scope`) — shared by the cooldown gate and the

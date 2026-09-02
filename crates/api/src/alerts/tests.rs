@@ -107,6 +107,30 @@ fn zero_cooldown_always_sends() {
     assert!(a.should_send_key(&a.dedup_key(&b)));
 }
 
+/// The cooldown map is a cache, not a ledger: an entry past its cooldown cannot suppress anything,
+/// so keeping it is a leak — and per-incident keys (one per dead relay task) made it a steady one.
+#[test]
+fn cooldown_entries_are_evicted_once_they_can_no_longer_suppress() {
+    let a = alerter(0);
+    for i in 0..1_000 {
+        assert!(a.should_send_key(&format!("relay-dead:task-{i}")));
+    }
+    assert!(
+        a.cooldown_entries() <= 1,
+        "a zero cooldown means nothing can be suppressed, so nothing should be retained; got {}",
+        a.cooldown_entries()
+    );
+    let live = alerter(3600);
+    for i in 0..100 {
+        live.should_send_key(&format!("relay-dead:task-{i}"));
+    }
+    assert_eq!(
+        live.cooldown_entries(),
+        100,
+        "entries inside their cooldown are exactly the ones that still suppress"
+    );
+}
+
 #[test]
 fn error_window_counts_and_evicts() {
     let a = cfg_alerter(3600, 3, 60);
