@@ -53,6 +53,24 @@ pub(crate) struct ResultReq {
     /// or written.
     #[serde(default)]
     mode: Option<String>,
+    /// sha256 of the **rendered** prompt this run executed — the text the model actually read,
+    /// params substituted. The relay is the one LLM workload LightTrack originates, and its action
+    /// prompts live on the device with no version and no registry: without this the cloud cannot
+    /// tell a prompt that regressed six weeks ago from one that never changed.
+    #[serde(default)]
+    prompt_sha256: Option<String>,
+    /// The `version` the action declares, if any — the fingerprint's human-readable companion.
+    #[serde(default)]
+    action_version: Option<String>,
+    /// The rendered prompt and the result text, present only when the action set `report_io`
+    /// (`actions/README.md`). They become the event's `input`/`output`, which is what makes a relay
+    /// run judgeable at all — both judges skip an event with no content. Absent by default: an
+    /// action's prompt and result are the two things `docs/RELAY.md` promises stay on the device
+    /// unless the operator says otherwise, per action.
+    #[serde(default)]
+    input: Option<Value>,
+    #[serde(default)]
+    output: Option<Value>,
     /// The `lease_fence` this device was handed at lease time. Omitting it is the operator-shaped
     /// settle, which waives the ownership condition but never the liveness one — a device always
     /// sends it, and that is what makes a reclaimed device's late report a refusal rather than a
@@ -184,17 +202,25 @@ fn relay_run_event(st: &AppState, task: &RelayTask, req: &ResultReq) -> LlmEvent
             Status::Success
         },
         error: if failed { req.error.clone() } else { None },
-        input: None,
-        output: None,
+        // Content when the action opted in, `None` otherwise — and `None` is what both judges read
+        // as "skip". That is the whole gate: the relay run is judgeable exactly when its action
+        // says its prompt and result may be stored here.
+        input: req.input.clone(),
+        output: req.output.clone(),
         tags: vec!["relay".to_string()],
         source: task.source.clone(),
         metadata: serde_json::json!({
             "task_id": task.id,
+            // Also the key `GET /v1/relay/actions` groups by. It has always been on the row; what
+            // is new is that `prompt_sha256` sits beside it, so "which prompt" is answerable and
+            // not only "which action".
             "action_type": task.action_type,
             "attempt": task.attempts,
             // Reported by the device, not billed here — see `ResultReq::cost_usd`.
             "device_cost_usd": req.cost_usd,
             "mode": req.mode,
+            "prompt_sha256": req.prompt_sha256,
+            "action_version": req.action_version,
         }),
     }
 }
