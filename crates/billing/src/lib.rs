@@ -3,7 +3,9 @@
 //!
 //! The trait stays free of any HTTP framework — the API passes the raw request body and the value of
 //! the provider's signature header, so the same adapter is reusable from a webhook handler or a poll
-//! loop. Stripe ships today (`stripe`); Polar slots in behind the same [`BillingSource`] trait.
+//! loop. Two adapters ship behind the same [`BillingSource`] trait: `stripe` (HMAC hex, one header)
+//! and `polar` (Standard Webhooks: HMAC base64, three headers); [`BillingRegistry`] enables each
+//! from its webhook-secret env var.
 
 mod error;
 pub mod fx;
