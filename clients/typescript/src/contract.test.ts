@@ -170,6 +170,8 @@ test("contract: ingest limit signals", () => {
         shed_fraction: v.shedFraction,
         retry_after_secs: v.retryAfterSecs,
         error_code: v.errorCode,
+        binding_scope: v.bindingScope,
+        binding_rule: v.bindingRule,
       },
       c.expect,
       `${c.name}: ${c.why ?? ""}`,

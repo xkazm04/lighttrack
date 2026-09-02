@@ -1,6 +1,6 @@
 {
   "$schema": "../schema.json",
-  "note": "Parse only. What a client DOES with a limit view - pre-spend admission, backoff, shedding its own traffic - is M5; this file fixes what the view IS, so the three SDKs cannot each invent a different reading of the same response. Bodies are the real IngestResponse / ApiError shapes from crates/api.",
+  "note": "Parse only. What a client DOES with a limit view - pre-spend admission, backoff, shedding its own traffic - is the `admission` list; this list fixes what the view IS, so the three SDKs cannot each invent a different reading of the same response. Bodies are the real IngestResponse / ApiError shapes from crates/api. Signals arrive two ways: as body fields on POST /v1/events, and as X-LightTrack-* headers on every ingest door (the batch door answers multi-status and the OTLP door answers in the exporter's envelope, so neither has a body field to put them in). The body wins where both are present.",
   "limits": [
     {
       "name": "accepted-with-proximity",
@@ -20,7 +20,9 @@
         "usage_ratio": 0.82,
         "shed_fraction": null,
         "retry_after_secs": null,
-        "error_code": null
+        "error_code": null,
+        "binding_scope": null,
+        "binding_rule": null
       }
     },
     {
@@ -42,7 +44,9 @@
         "usage_ratio": 0.95,
         "shed_fraction": 0.25,
         "retry_after_secs": null,
-        "error_code": null
+        "error_code": null,
+        "binding_scope": null,
+        "binding_rule": null
       }
     },
     {
@@ -50,14 +54,21 @@
       "why": "A project with no limits reports no ratio at all. null means unknown, not zero - a client that read it as 0.0 would think it had infinite headroom.",
       "status": 201,
       "headers": {},
-      "body": { "id": "01J8W2", "project_id": "demo", "cost_usd": null, "ts": "2026-09-01T10:00:02.000000000Z" },
+      "body": {
+        "id": "01J8W2",
+        "project_id": "demo",
+        "cost_usd": null,
+        "ts": "2026-09-01T10:00:02.000000000Z"
+      },
       "expect": {
         "accepted": true,
         "rate_limited": false,
         "usage_ratio": null,
         "shed_fraction": null,
         "retry_after_secs": null,
-        "error_code": null
+        "error_code": null,
+        "binding_scope": null,
+        "binding_rule": null
       }
     },
     {
@@ -79,37 +90,57 @@
         "usage_ratio": 0.82,
         "shed_fraction": null,
         "retry_after_secs": null,
-        "error_code": null
+        "error_code": null,
+        "binding_scope": null,
+        "binding_rule": null
       }
     },
     {
       "name": "hard-cap-429",
       "why": "A hard cap advertises the wait until its window ages out. Header name casing is not guaranteed by HTTP, so the lookup has to be case-insensitive - this case spells it Retry-After.",
       "status": 429,
-      "headers": { "Retry-After": "3600" },
-      "body": { "error": { "code": "rate_limited", "message": "project 'demo' is over its monthly cost cap" } },
+      "headers": {
+        "Retry-After": "3600"
+      },
+      "body": {
+        "error": {
+          "code": "rate_limited",
+          "message": "project 'demo' is over its monthly cost cap"
+        }
+      },
       "expect": {
         "accepted": false,
         "rate_limited": true,
         "usage_ratio": null,
         "shed_fraction": null,
         "retry_after_secs": 3600,
-        "error_code": "rate_limited"
+        "error_code": "rate_limited",
+        "binding_scope": null,
+        "binding_rule": null
       }
     },
     {
       "name": "graduated-shed-429",
       "why": "A shed asks for a short pause, not the window. Same status, different schedule - and this case spells the header lower-case.",
       "status": 429,
-      "headers": { "retry-after": "5" },
-      "body": { "error": { "code": "rate_limited", "message": "shedding: 40% of ingest is being refused" } },
+      "headers": {
+        "retry-after": "5"
+      },
+      "body": {
+        "error": {
+          "code": "rate_limited",
+          "message": "shedding: 40% of ingest is being refused"
+        }
+      },
       "expect": {
         "accepted": false,
         "rate_limited": true,
         "usage_ratio": null,
         "shed_fraction": null,
         "retry_after_secs": 5,
-        "error_code": "rate_limited"
+        "error_code": "rate_limited",
+        "binding_scope": null,
+        "binding_rule": null
       }
     },
     {
@@ -117,44 +148,69 @@
       "why": "Not every rejection is a limit. A 400 must not be read as back-pressure, or a client would sleep an hour over a typo.",
       "status": 400,
       "headers": {},
-      "body": { "error": { "code": "bad_request", "message": "project_id is required" } },
+      "body": {
+        "error": {
+          "code": "bad_request",
+          "message": "project_id is required"
+        }
+      },
       "expect": {
         "accepted": false,
         "rate_limited": false,
         "usage_ratio": null,
         "shed_fraction": null,
         "retry_after_secs": null,
-        "error_code": "bad_request"
+        "error_code": "bad_request",
+        "binding_scope": null,
+        "binding_rule": null
       }
     },
     {
       "name": "overloaded-503",
       "why": "Back-pressure from the server rather than from a project's budget. It carries a Retry-After too, and a client should honour it, but it is not rate_limited.",
       "status": 503,
-      "headers": { "Retry-After": "30" },
-      "body": { "error": { "code": "overloaded", "message": "ingest queue is full" } },
+      "headers": {
+        "Retry-After": "30"
+      },
+      "body": {
+        "error": {
+          "code": "overloaded",
+          "message": "ingest queue is full"
+        }
+      },
       "expect": {
         "accepted": false,
         "rate_limited": false,
         "usage_ratio": null,
         "shed_fraction": null,
         "retry_after_secs": 30,
-        "error_code": "overloaded"
+        "error_code": "overloaded",
+        "binding_scope": null,
+        "binding_rule": null
       }
     },
     {
       "name": "unparseable-retry-after",
       "why": "Retry-After may legally be an HTTP-date. The SDKs do not parse dates; the contract is that an unreadable value is null, never 0 (which would mean retry immediately).",
       "status": 429,
-      "headers": { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" },
-      "body": { "error": { "code": "rate_limited", "message": "over cap" } },
+      "headers": {
+        "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"
+      },
+      "body": {
+        "error": {
+          "code": "rate_limited",
+          "message": "over cap"
+        }
+      },
       "expect": {
         "accepted": false,
         "rate_limited": true,
         "usage_ratio": null,
         "shed_fraction": null,
         "retry_after_secs": null,
-        "error_code": "rate_limited"
+        "error_code": "rate_limited",
+        "binding_scope": null,
+        "binding_rule": null
       }
     },
     {
@@ -169,7 +225,139 @@
         "usage_ratio": null,
         "shed_fraction": null,
         "retry_after_secs": null,
-        "error_code": null
+        "error_code": null,
+        "binding_scope": null,
+        "binding_rule": null
+      }
+    },
+    {
+      "name": "proximity-from-headers-when-the-body-has-no-room",
+      "why": "The batch door answers multi-status: the project's position is not a property of item 7, so it cannot be a body field. The OTLP door answers in the exporter's own envelope. Both carry the signal in headers instead, and a client that only read the body was blind on two of the three ingest doors.",
+      "status": 200,
+      "headers": {
+        "X-LightTrack-Usage-Ratio": "0.750000",
+        "X-LightTrack-Shed-Fraction": "0.250000"
+      },
+      "body": {
+        "accepted": 2,
+        "rejected": 0,
+        "invalid": 0,
+        "results": []
+      },
+      "expect": {
+        "accepted": true,
+        "rate_limited": false,
+        "usage_ratio": 0.75,
+        "shed_fraction": 0.25,
+        "retry_after_secs": null,
+        "error_code": null,
+        "binding_scope": null,
+        "binding_rule": null
+      }
+    },
+    {
+      "name": "body-wins-over-headers",
+      "why": "On POST /v1/events both channels carry the same admission, so they cannot disagree - but the precedence has to be stated rather than left to whichever the implementation happened to read first, or a proxy that rewrites a header would silently change a client's verdict.",
+      "status": 200,
+      "headers": {
+        "X-LightTrack-Usage-Ratio": "0.100000"
+      },
+      "body": {
+        "id": "01J8W3",
+        "project_id": "demo",
+        "ts": "2026-09-01T10:00:03.000000000Z",
+        "usage_ratio": 0.9
+      },
+      "expect": {
+        "accepted": true,
+        "rate_limited": false,
+        "usage_ratio": 0.9,
+        "shed_fraction": null,
+        "retry_after_secs": null,
+        "error_code": null,
+        "binding_scope": null,
+        "binding_rule": null
+      }
+    },
+    {
+      "name": "binding-scope-names-what-is-actually-full",
+      "why": "0.94 alone tells a client to stop everything. 0.94 on model=gpt-4o tells it to route the next call elsewhere and keep working. binding_rule is the other half: the server's shed decision is a hash of (rule_id, event_id), so without the rule's identity a client can run the same function and never reach the same answer.",
+      "status": 200,
+      "headers": {},
+      "body": {
+        "id": "01J8W4",
+        "project_id": "demo",
+        "ts": "2026-09-01T10:00:04.000000000Z",
+        "usage_ratio": 0.94,
+        "shed_fraction": 0.7,
+        "binding_scope": {
+          "kind": "model",
+          "value": "gpt-4o"
+        },
+        "binding_rule": "rule-hot"
+      },
+      "expect": {
+        "accepted": true,
+        "rate_limited": false,
+        "usage_ratio": 0.94,
+        "shed_fraction": 0.7,
+        "retry_after_secs": null,
+        "error_code": null,
+        "binding_scope": {
+          "kind": "model",
+          "value": "gpt-4o"
+        },
+        "binding_rule": "rule-hot"
+      }
+    },
+    {
+      "name": "retry-after-stripped-by-a-proxy",
+      "why": "Retry-After does not always survive the trip: proxies drop it and browser fetch stacks hide it. X-LightTrack-Retry-After mirrors it so the back-off schedule arrives anyway. It is only a fallback - where both are present the standard header is the one that counts.",
+      "status": 429,
+      "headers": {
+        "X-LightTrack-Retry-After": "30",
+        "X-LightTrack-Usage-Ratio": "1.000000"
+      },
+      "body": {
+        "error": {
+          "code": "rate_limited",
+          "message": "over cap"
+        }
+      },
+      "expect": {
+        "accepted": false,
+        "rate_limited": true,
+        "usage_ratio": 1.0,
+        "shed_fraction": null,
+        "retry_after_secs": 30,
+        "error_code": "rate_limited",
+        "binding_scope": null,
+        "binding_rule": null
+      }
+    },
+    {
+      "name": "a-mirrored-header-never-overrides-the-standard-one",
+      "why": "If the two ever disagree, the RFC-defined header is the contract and the mirror is the copy.",
+      "status": 429,
+      "headers": {
+        "Retry-After": "5",
+        "X-LightTrack-Retry-After": "3600"
+      },
+      "body": {
+        "error": {
+          "code": "rate_limited",
+          "message": "shedding"
+        }
+      },
+      "expect": {
+        "accepted": false,
+        "rate_limited": true,
+        "usage_ratio": null,
+        "shed_fraction": null,
+        "retry_after_secs": 5,
+        "error_code": "rate_limited",
+        "binding_scope": null,
+        "binding_rule": null
       }
     }
   ]

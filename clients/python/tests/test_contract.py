@@ -156,6 +156,11 @@ class Limits(unittest.TestCase):
                         "shed_fraction": v.shed_fraction,
                         "retry_after_secs": v.retry_after_secs,
                         "error_code": v.error_code,
+                        "binding_scope": (
+                            None if v.binding_scope is None
+                            else {"kind": v.binding_scope.kind, "value": v.binding_scope.value}
+                        ),
+                        "binding_rule": v.binding_rule,
                     },
                     case["expect"],
                     case.get("why", ""),

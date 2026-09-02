@@ -698,7 +698,7 @@ export type { PiiRule } from "./pii.ts";
 
 // Reading an ingest response's limit signals (see limits.ts).
 export { parseLimitView } from "./limits.ts";
-export type { LimitView } from "./limits.ts";
+export type { LimitView, BindingScope } from "./limits.ts";
 
 // Crash-surviving breadcrumbs for in-flight calls (see journal.ts).
 export { SpanJournal, unsettled, unsettledError, RECOVERED_TAG, DEFAULT_ORPHAN_MS } from "./journal.ts";

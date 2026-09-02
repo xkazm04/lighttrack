@@ -94,7 +94,7 @@
         "body": { "type": ["object", "null"], "description": "Parsed response body, or null when there was none." },
         "expect": {
           "type": "object",
-          "description": "The parsed limit view (parse only; acting on it is M5's pre-spend admission).",
+          "description": "The parsed limit view. Parse only - acting on it is the `admission` list.",
           "required": ["accepted", "rate_limited"],
           "properties": {
             "accepted": { "type": "boolean", "description": "2xx." },
@@ -102,7 +102,20 @@
             "usage_ratio": { "type": ["number", "null"] },
             "shed_fraction": { "type": ["number", "null"] },
             "retry_after_secs": { "type": ["number", "null"] },
-            "error_code": { "type": ["string", "null"] }
+            "error_code": { "type": ["string", "null"] },
+            "binding_scope": {
+              "type": ["object", "null"],
+              "description": "The dimension the worst rule applies to. `null` means project-wide.",
+              "required": ["kind", "value"],
+              "properties": {
+                "kind": { "enum": ["provider", "model", "name", "api_key", "customer"] },
+                "value": { "type": "string" }
+              }
+            },
+            "binding_rule": {
+              "type": ["string", "null"],
+              "description": "Id of the worst rule - the key the shed lottery hashes against."
+            }
           }
         }
       }

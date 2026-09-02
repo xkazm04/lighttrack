@@ -187,6 +187,18 @@ fn ingest_limit_signals() {
             "{name}: error_code — {}",
             why(&case)
         );
+        let scope = v
+            .binding_scope
+            .as_ref()
+            .map(|b| serde_json::json!({ "kind": b.kind, "value": b.value }))
+            .unwrap_or(serde_json::Value::Null);
+        assert_eq!(scope, e["binding_scope"], "{name}: binding_scope");
+        assert_eq!(
+            v.binding_rule.as_deref(),
+            e["binding_rule"].as_str(),
+            "{name}: binding_rule — {}",
+            why(&case)
+        );
     }
 }
 
