@@ -14,8 +14,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::invocation::{self, Invocation};
 use crate::retry::with_retry;
-use crate::{anthropic_api, claude, Determinism, EngineConfig, EngineError, GenOutcome, Result};
+use crate::{anthropic_api, Determinism, EngineConfig, EngineError, GenOutcome, Result};
 
 /// Outbound provider calls are bounded so a black-holed/overloaded endpoint can't hang an
 /// (unbudgeted) benchmark worker forever, and a pathological body can't be buffered into memory.
@@ -226,22 +227,25 @@ fn generate_anthropic(
     schema: Option<&Value>,
 ) -> Result<GenOutcome> {
     let schema_str = schema.map(|s| s.to_string());
-    let (envelope, latency_ms) =
-        claude::invoke(cfg, input, model, system_prompt, schema_str.as_deref())?;
-    let (input_tokens, output_tokens) = claude::token_counts(&envelope);
-    let output = claude::completion_text(&envelope);
-    if output.is_empty() {
+    let out = invocation::run(
+        &cfg.claude(),
+        &Invocation::generate(input, model)
+            .with_system(system_prompt)
+            .with_schema(schema_str.as_deref())
+            .with_bare(cfg.bare),
+    )?;
+    if out.text.is_empty() {
         return Err(EngineError::EmptyCompletion {
             who: "claude".into(),
         });
     }
     Ok(GenOutcome {
-        output,
-        cost_usd: envelope.get("total_cost_usd").and_then(Value::as_f64),
-        model: claude::model_of(&envelope, model),
-        latency_ms,
-        input_tokens,
-        output_tokens,
+        output: out.text,
+        cost_usd: out.cost_usd,
+        model: out.model,
+        latency_ms: out.latency_ms,
+        input_tokens: out.input_tokens,
+        output_tokens: out.output_tokens,
         // The CLI exposes neither temperature nor seed — this is the residual the bare API path
         // exists to shrink, and it is now stamped on the outcome instead of living in a comment.
         determinism: Determinism::BestEffort,

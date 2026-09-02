@@ -327,3 +327,56 @@ latency stays the batch's real wall clock, and `calibrate --compare-batch N` mea
 *your* rubric before you trust it. **Never compare a batched run to an unbatched baseline** — the
 difference is method, not quality. Batching is deterministic for a fixed dataset, so the honest path
 to the throughput is to re-baseline once and batch everything from then on.
+
+## D17 — One headless-Claude seam; a relay action declares what it may touch (2026-09-02)
+
+**Context.** Three crates spawned `claude -p` through their own `Command`: the engine (judging and
+candidate generation), the responder (its read-only investigation and its `acceptEdits` auto-fix),
+and the device agent through the engine. `resolve_claude_bin` existed twice and the copies had
+already drifted — only one knew about the native installer. Nothing probed whether the CLI was even
+installed before a service claimed paid work. The responder passed its prompt on **argv**, which on
+Windows meets a ~32k command-line cap and a quoting layer a judge prompt reliably breaks. And
+`ActionSpec` could express prompt, model, system and schema — nothing about tools, workspace,
+permission mode or budget — although `docs/RELAY.md` had always claimed that allowed tools live on
+the device.
+
+**Decision.** Every `claude -p` in the workspace goes through `lighttrack_engine::invocation::run`:
+one spawn site, one resolver, one probe, one decision about the billing key. A call is described by
+an `Invocation` whose `Mode` is the thing being enforced.
+
+- `Generate` — a completion. No tools, no permission mode, and a **neutral temp working directory**,
+  so no ambient `CLAUDE.md`, hooks or settings join the prompt and the same judge call means the
+  same thing in every checkout.
+- `ReadonlyScan` — the read-only base allowlist (`Read`/`Glob`/`Grep`/`LS`) plus declared extras,
+  each of which must itself be read-only; permission mode `plan` or `default` only.
+- `Edit` — an explicit workspace **and** an explicit permission mode. There is no default safe
+  enough to be implicit.
+
+A contradiction is `EngineError::Posture`, raised **before** a child exists, so an over-claiming
+caller costs nothing. The prompt travels over **stdin**, never argv. `--bare` requires
+`ANTHROPIC_API_KEY`; a seat run *strips* it from the child, so flat-rate subscription work cannot
+quietly bill the metered API — the decision is logged once per process.
+
+**Relay actions carry a mode**, and an edit-capable action must name a workspace and a permission
+mode. `workspace` is a name resolved under the agent's `workspaces_root`, validated by the same
+traversal rule as `action_type`; with no root configured the device runs no scan or edit action at
+all. Reaching a repository therefore takes an operator naming its parent directory — never a cloud
+payload, which is still only `action_type` + params.
+
+**Why it matters.** Tools, directory, permission mode and billing key are what decide a paid run's
+blast radius, and spread across three call sites they were four *different* answers that drifted
+independently. This is not a refactor: an allowlist that is advisory in one door is not an
+allowlist, and the "read-only" investigation was read-only only because a constant in
+`investigate.rs` happened to list read-only tools, with nothing checking it. Now the check is a
+test (`posture_matrix`, plus the responder asserting its own allowlist against the seam), so adding
+`Bash(git push:*)` fails in CI rather than on a production repo.
+
+**Consequences.** `crates/responder/src/claude.rs` and its private `resolve_claude_bin` are gone;
+the responder depends on the engine. `lt-responder` probes at startup and **exits non-zero** when
+the CLI is missing — it exists only to run Claude, so accepting webhooks it cannot serve would just
+burn investigation slots. `lt-runner serve` probes and **keeps polling**: most job types judge
+through a provider API, so a missing CLI disables a subset of the queue rather than justifying
+refusing all of it. The device reports `cost_usd` and `mode` on settle and both land in the run
+event's metadata as evidence. Relay pricing is untouched — the stamped `cost_usd` stays the flat
+rate (D5/M5), because making a pricing change a side effect of better reporting would move every
+margin number without anyone asking.

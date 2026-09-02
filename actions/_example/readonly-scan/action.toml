@@ -1,0 +1,29 @@
+# Example of a repository-reading action: summarize what changed in a checkout, read-only.
+#
+# `mode` is what makes this different from the plain `echo` action next door. A `generate` action
+# is a completion with no tools and no repository; a `readonly-scan` gets a workspace and the
+# read-only tool allowlist, and the invocation seam REFUSES to start it if `allowed_tools` names
+# anything that could write. That check runs before the CLI is spawned, so a mistake here costs
+# nothing.
+mode = "readonly-scan"
+
+# Resolved under the agent's `workspaces_root` (agent.toml). The cloud never names a path — it
+# sends only `action_type` + params — so the set of directories this device will ever open is
+# exactly what the operator put under that root.
+workspace = "my-repo"
+
+# `permission_mode` is optional for a scan (plan | default). `default` keeps the full analysis in
+# the result; `plan` makes Claude write it to a plan file and return only a terse note.
+permission_mode = "default"
+
+# On top of the base allowlist the seam always supplies: Read, Glob, Grep, LS.
+allowed_tools = ["Bash(git log:*)", "Bash(git diff:*)", "Bash(git status:*)"]
+
+model = "sonnet"
+max_budget_usd = 0.50
+timeout_secs = 300
+schema_file = "schema.json"
+
+# [connector]
+# kind = "http"
+# url = "https://my-app.example/internal/relay-results"

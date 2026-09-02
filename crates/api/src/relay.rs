@@ -241,6 +241,17 @@ pub(crate) struct ResultReq {
     output_tokens: Option<u64>,
     #[serde(default)]
     latency_ms: Option<u64>,
+    /// What the device's CLI envelope said the run cost. Recorded as **evidence**, in the event's
+    /// metadata — the relay's `cost_usd` stays the flat price (docs/RELAY.md, D5): switching to
+    /// token/envelope pricing is a separate decision, and silently doing it here would move every
+    /// margin number without anyone asking.
+    #[serde(default)]
+    cost_usd: Option<f64>,
+    /// The posture the run executed under (`generate` | `readonly-scan` | `edit`). The cloud names
+    /// only an `action_type`, so without this the record cannot say whether a repository was read
+    /// or written.
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 pub(crate) async fn post_result(
@@ -354,6 +365,9 @@ fn relay_run_event(st: &AppState, task: &RelayTask, req: &ResultReq) -> LlmEvent
             "task_id": task.id,
             "action_type": task.action_type,
             "attempt": task.attempts,
+            // Reported by the device, not billed here — see `ResultReq::cost_usd`.
+            "device_cost_usd": req.cost_usd,
+            "mode": req.mode,
         }),
     }
 }

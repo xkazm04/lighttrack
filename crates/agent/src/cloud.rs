@@ -81,6 +81,8 @@ impl Client {
                 "input_tokens": report.input_tokens,
                 "output_tokens": report.output_tokens,
                 "latency_ms": report.latency_ms,
+                "cost_usd": report.cost_usd,
+                "mode": report.mode,
             }),
         )?;
         Ok(())

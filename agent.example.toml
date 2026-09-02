@@ -7,6 +7,11 @@ max_batch = 3
 actions_dir = "actions"
 # claude_bin = "claude"  # default auto-resolves the npm claude.exe on Windows
 
+# Root for actions whose mode is readonly-scan or edit: their `workspace` is a name resolved under
+# this directory. Leave it unset and this device runs completions only — no action can reach a
+# repository. The cloud never names a path, so the reachable set is exactly what you put here.
+# workspaces_root = "C:/code"
+
 [[sources]]
 name = "lighttrack-cloud"
 url = "https://your-lighttrack.example.run.app"

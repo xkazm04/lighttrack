@@ -1,6 +1,8 @@
 //! Agent configuration (`agent.toml`). Device keys are named by env var, never inlined — the
 //! config file is committable; secrets stay in the environment / `.env`.
 
+use std::path::PathBuf;
+
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
@@ -27,6 +29,11 @@ pub(crate) struct AgentConfig {
     /// Root of the local action library (see `actions/README.md`).
     #[serde(default = "default_actions_dir")]
     pub actions_dir: String,
+    /// Root under which an action's `workspace` is resolved. Unset means this device runs no
+    /// scan/edit actions at all — the opt-in is the operator's, and it is a directory they name,
+    /// so a repository can only be reached if they pointed at its parent.
+    #[serde(default)]
+    pub workspaces_root: Option<PathBuf>,
     /// Claude executable; the default auto-resolves the npm `claude.exe` on Windows.
     #[serde(default = "default_claude_bin")]
     pub claude_bin: String,

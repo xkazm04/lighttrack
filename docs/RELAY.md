@@ -27,7 +27,7 @@ LightTrack ────┘                 relay_tasks: queued → leased → su
                                         │ outbound lease / result (LIGHTTRACK_RELAY_DEVICE_KEY)
                               lt-agent (local device)
                                  │ actions/<type>/  ← gitignored: prompt.md + action.toml + connector
-                                 │ claude.exe -p … --output-format json   (engine::run_raw)
+                                 │ claude.exe -p … --output-format json  (engine::invocation::run)
                                  │ connector (http | command) → pushes result into the app
                                  └─ POST /v1/relay/tasks/:id/result (+ usage → cloud logs $1 event)
 ```
@@ -61,7 +61,7 @@ failure report that exhausts the attempts, and the pre-lease sweep that catches 
 | `GET /v1/relay/tasks/:id` | project key (own) / admin | Status + result — the originating app's polling fallback. |
 | `GET /v1/relay/tasks?project=&status=&limit=` | project key (own) / admin | List/inspect. |
 | `POST /v1/relay/lease` | device key | Lease up to `max` due tasks for `device`, holding each for `lease_secs` (60s–6h). Optional `wait_secs` (≤25) long-polls until a task is due. |
-| `POST /v1/relay/tasks/:id/result` | device key | Settle: `succeeded` (+`result`) \| `failed` (+`error`) \| `deferred` (+`retry_after_secs`). |
+| `POST /v1/relay/tasks/:id/result` | device key | Settle: `succeeded` (+`result`) \| `failed` (+`error`) \| `deferred` (+`retry_after_secs`). Optional usage/accounting: `model`, `input_tokens`, `output_tokens`, `latency_ms`, `cost_usd`, `mode`. |
 
 Device enrollment is deliberately minimal for the single-device case: set
 `LIGHTTRACK_RELAY_DEVICE_KEY` on the cloud instance (Secret Manager on Cloud Run) and give the
@@ -82,8 +82,14 @@ The **cloud logs the event itself on settle** (no project key needed on the devi
 a terminal `succeeded`/`failed` report on a live lease inserts an `LlmEvent` with
 `cost_usd = LIGHTTRACK_RELAY_FLAT_COST_USD` (default 1.0), `provider: "anthropic"`, the
 `source`/tokens/latency the device reported, `trace_id = task_id` (retries of one task group
-into one trace), and `metadata: { task_id, action_type, attempt }`. `deferred` logs nothing —
-no run happened. Not precise, but a solid usage overview from day one; once the apps get
+into one trace), and `metadata: { task_id, action_type, attempt, device_cost_usd, mode }`.
+`deferred` logs nothing — no run happened.
+
+The device now reports what the CLI envelope said the run cost (`cost_usd`) and the posture it
+ran under (`mode`); both land in that metadata as **evidence, not a bill**. The stamped
+`cost_usd` stays the flat price — switching relay runs to envelope or token pricing is its own
+decision, and making it a side effect of reporting would move every margin number without anyone
+asking. Not precise, but a solid usage overview from day one; once the apps get
 traction, switch to token-priced costing from the DB price book — the tokens are already
 recorded, only the stamped `cost_usd` changes.
 
@@ -111,9 +117,35 @@ Action library — gitignored except `actions/README.md` + `actions/_example/`
 actions/
   xprice/reprice-summary/
     prompt.md        # required — template with {{params.*}} / {{payload}} / {{task_id}}
-    action.toml      # model = "sonnet@high", system, schema_file, [connector]
+    action.toml      # model, system, schema_file, posture (mode/workspace/tools/…), [connector]
     schema.json      # optional — result becomes schema-conforming JSON instead of text
 ```
+
+### Posture: what a relay run is allowed to touch
+
+This document always said allowed tools live on the device. Until the invocation seam landed the
+library could not actually *say* so: every action ran as a plain completion whatever it needed.
+Now each action declares a `mode`, and the engine's one seam (`lighttrack_engine::invocation`)
+enforces it — a contradiction is an error **before** the CLI is spawned, so an over-claiming
+action costs nothing rather than being discovered in a diff.
+
+| `mode` | workspace | tools | `--permission-mode` | argv shape |
+|---|---|---|---|---|
+| `generate` (default) | forbidden; runs in a neutral temp dir, so no ambient `CLAUDE.md`/hooks join the prompt | none | forbidden | `-p --output-format json --model … [--effort] [--append-system-prompt] [--json-schema] [--bare]` |
+| `readonly-scan` | **required** | base `Read`/`Glob`/`Grep`/`LS` + declared extras, each of which must be read-only | optional; `plan` or `default` only | the above, plus `--permission-mode`, `--max-budget-usd`, and `--allowedTools` **last** (it is variadic) |
+| `edit` | **required** | declared list, no base set | **required** (e.g. `acceptEdits`) | as `readonly-scan` |
+
+`workspace` is a name relative to `workspaces_root` in `agent.toml`, validated by the same rule as
+`action_type` (no absolute path, no `..`, no backslashes) and required to exist. With
+`workspaces_root` unset the device runs no scan or edit action at all: reaching a repository takes
+an operator naming its parent directory, never a cloud payload. A `readonly-scan` that lists a
+write-capable tool is rejected — anything the allowlist doesn't recognise counts as write-capable.
+
+Two more properties the seam fixes for every caller: the **prompt travels over stdin**, not argv
+(Windows caps a command line at ~32k characters and a quote-heavy judge prompt was fragile there),
+and the **billing key is decided once** — a seat run strips `ANTHROPIC_API_KEY` from the child so
+subscription work cannot silently bill the metered API, while `--bare` requires it. `lt-agent`
+runs seat-authenticated, which is the whole point of the relay.
 
 `http` POSTs the result envelope to the app's callback; `command` pipes it to a local script on
 stdin (covers any database or bespoke API without LightTrack needing drivers). A connector
@@ -165,9 +197,13 @@ and **raise/throw** (`RelayError`) on failure. Prefer the connector push for del
   routes, device-key guard, lease/settle semantics, store + router tests.
 - **Phase 2 (shipped):** `lt-agent` — multi-source round-robin lease loop, action library with
   template rendering + schema output, `http`/`command` connectors, deferred-on-rate-limit,
-  cloud-side $1-flat event logging on settle (`LIGHTTRACK_RELAY_FLAT_COST_USD`), public
-  `engine::run_raw` / `resolve_claude_bin`, `actions/` scaffolding + `agent.example.toml`.
-  Smoke-verified end to end against the real Claude CLI.
+  cloud-side $1-flat event logging on settle (`LIGHTTRACK_RELAY_FLAT_COST_USD`), `actions/`
+  scaffolding + `agent.example.toml`. Smoke-verified end to end against the real Claude CLI.
+- **Invocation seam (shipped):** every `claude -p` in the workspace runs through
+  `lighttrack_engine::invocation` — one spawn site, one bin resolver, prompt over stdin, one
+  billing-key decision, and posture enforced per `mode` (see the matrix above). Actions declare
+  `mode`/`workspace`/`allowed_tools`/`permission_mode`/`max_budget_usd`/`timeout_secs`;
+  `agent.toml` gains `workspaces_root`; `RunReport` and the settle body carry `cost_usd` + `mode`.
 - **Phase 3 (shipped):** dead-letter alerts on both death paths (settle-exhaustion + pre-lease
   sweep, webhook-verified), long-poll lease (`wait_secs`, agent-configurable), Python
   `relay_task`/`get_relay_task`/`wait_relay_task` + TS `relayTask`/`getRelayTask`/`waitRelayTask`

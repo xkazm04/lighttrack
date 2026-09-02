@@ -1,11 +1,10 @@
 //! Responder configuration: service settings from env + the project→repo map from a JSON file.
 
 use std::collections::HashMap;
-// Only `resolve_claude_bin`'s Windows branch probes the filesystem for a real claude.exe.
-#[cfg(windows)]
-use std::path::Path;
 
 use serde::Deserialize;
+
+use lighttrack_engine::resolve_claude_bin;
 
 use crate::email::EmailConfig;
 
@@ -156,34 +155,6 @@ impl Defaults {
             max_concurrent_investigations: 2,
         }
     }
-}
-
-/// Resolve a runnable claude executable. Mirrors `lighttrack_engine::resolve_claude_bin` but is kept
-/// local so the responder doesn't pull in the engine's generation/judge stack. A child process can't
-/// invoke the npm `.cmd`/`.ps1` shims, so on Windows we prefer a real `claude.exe`.
-fn resolve_claude_bin(given: &str) -> String {
-    if given != "claude" {
-        return given.to_string();
-    }
-    #[cfg(windows)]
-    {
-        // Native installer (`~/.local/bin`) first, then a global npm install.
-        if let Ok(home) = std::env::var("USERPROFILE") {
-            let p = format!("{home}\\.local\\bin\\claude.exe");
-            if Path::new(&p).exists() {
-                return p;
-            }
-        }
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let p = format!(
-                "{appdata}\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"
-            );
-            if Path::new(&p).exists() {
-                return p;
-            }
-        }
-    }
-    given.to_string()
 }
 
 fn env_or(key: &str, default: &str) -> String {
