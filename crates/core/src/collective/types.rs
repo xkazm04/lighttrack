@@ -71,7 +71,8 @@ pub struct ModelDigestEntry {
     /// bucket's runs disagree). Provider only — never the full judge model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge_provider: Option<String>,
-    /// v2: rubric-shape fingerprint (short one-way hash). `None` when the bucket mixes rubrics.
+    /// v2: rubric-shape fingerprint (short one-way hash), or `mixed` when the bucket's runs were scored
+    /// under different rubrics (the same collapse as `judge_provider`). `None` when none was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rubric_fingerprint: Option<String>,
     /// v3: the **weakest** determinism stamp across the bucket's runs — a bucket is only as
@@ -156,8 +157,8 @@ pub struct LeaderboardRow {
     pub quality: f64,
     /// Approximate 95% CI **half-width** on `quality` (i.e. `quality ± quality_ci95`), combining the
     /// pooled within-source case variance with a random-effects **between-source** term — so
-    /// contributors who disagree widen the interval instead of hiding in it. `None` when too little of
-    /// the weight carries a known variance to estimate the within term — an honest "insufficient
+    /// contributors who disagree widen the interval instead of hiding in it. `None` when too few of
+    /// the row's cases carry a known variance to estimate the within term — an honest "insufficient
     /// variance data" marker rather than a fabricated interval.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality_ci95: Option<f64>,
@@ -170,7 +171,8 @@ pub struct LeaderboardRow {
     pub source_spread: Option<f64>,
     pub pass_rate: f64,
     pub avg_cost_usd: f64,
-    /// Approximate merged p50: case-weighted mean of contributors' per-run p50s (see merge docs).
+    /// Approximate merged p50: mean of the contributors' p50s under the same winsorized source
+    /// weights as `quality`, so a whale cannot own the latency figure either (see merge docs).
     pub p50_latency_ms: Option<u64>,
     /// Worst-observed p95 across contributors (the max, not a mean) — a conservative tail signal.
     pub p95_latency_ms: Option<u64>,
