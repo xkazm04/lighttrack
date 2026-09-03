@@ -38,7 +38,7 @@ const MAX_DIM_FORECASTS: usize = 50;
 /// Shortest lookback a caller may ask for. Below the evidence floor a trend cannot be presented at
 /// all ([`lighttrack_core::forecast_gate`]), so accepting `lookback=2` would only mean answering
 /// every projection with a refusal — clamping says the same thing without pretending to try.
-const MIN_LOOKBACK_DAYS: u32 = MIN_OBSERVED_DAYS as u32;
+pub(crate) const MIN_LOOKBACK_DAYS: u32 = MIN_OBSERVED_DAYS as u32;
 
 #[derive(Deserialize)]
 pub(crate) struct ForecastParams {

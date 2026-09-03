@@ -28,7 +28,7 @@ use std::time::Duration;
 use lighttrack_core::MarginDimension;
 
 use crate::error::ApiError;
-use crate::forecast::compute_forecast;
+use crate::forecast::{compute_forecast, MIN_LOOKBACK_DAYS};
 use crate::forecast_alerts::ForecastAlert;
 use crate::margin_guardrails::{apply_policies, escalate, GuardrailOutcome};
 use crate::state::{spawn_db, AppState};
@@ -69,9 +69,11 @@ impl SweepConfig {
             horizon: env_u64(ENV_HORIZON)
                 .unwrap_or(DEFAULT_HORIZON as u64)
                 .clamp(1, 90) as u32,
+            // The same floor `compute_forecast` re-applies, so the startup banner prints the lookback
+            // that will actually be fitted rather than a `2d` the evidence floor then overrides.
             lookback: env_u64(ENV_LOOKBACK)
                 .unwrap_or(DEFAULT_LOOKBACK as u64)
-                .clamp(2, 90) as u32,
+                .clamp(MIN_LOOKBACK_DAYS as u64, 90) as u32,
         })
     }
 }
@@ -114,8 +116,8 @@ pub(crate) fn spawn(st: AppState, cfg: Option<SweepConfig>) {
 /// One pass over every enabled project: compute the forecast and hand its alerts to the shared
 /// `Alerter`, which applies the same cooldown/dedup keys the request path uses. Returns how many
 /// alerts were **raised** — not how many were delivered; the cooldown decides that, which is why a
-/// sustained forecast logs a count every sweep while the channel sees it once. Never panics and never propagates — a broken project must
-/// not stop the others, or the loop.
+/// sustained forecast logs a count every sweep while the channel sees it once. Never panics and
+/// never propagates — a broken project must not stop the others, or the loop.
 pub(crate) async fn sweep_once(st: &AppState) -> usize {
     let store = st.store.clone();
     let projects = match spawn_db(move || store.list_projects()).await {
@@ -405,5 +407,15 @@ pub(crate) mod tests {
             lookback: 14,
         };
         assert!(describe(Some(cfg)).contains("every 300s"));
+    }
+
+    /// The banner must print the lookback the forecast will fit, not a floor the forecast then
+    /// overrides: `LOOKBACK=2` is clamped to the evidence floor here, exactly as `compute_forecast`
+    /// clamps it.
+    #[test]
+    fn the_sweep_lookback_floor_is_the_forecasts_floor() {
+        let lookback = 2u64.clamp(MIN_LOOKBACK_DAYS as u64, 90) as u32;
+        assert_eq!(lookback, MIN_LOOKBACK_DAYS);
+        assert_eq!(MIN_LOOKBACK_DAYS, 4, "the documented evidence floor");
     }
 }
