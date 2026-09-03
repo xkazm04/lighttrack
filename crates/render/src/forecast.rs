@@ -18,9 +18,14 @@ pub(crate) fn report(v: &Value) -> Option<String> {
     let lookback = v.get("lookback_days").and_then(Value::as_u64).unwrap_or(0);
     let spend = v.get("spend")?;
 
+    // The fit's r² rides the headline when the API published one; under the evidence floor the API
+    // sends null and the `refused[]` block below says why, so nothing is printed here.
+    let confidence = opt_f(spend, "confidence")
+        .map(|r2| format!(" (fit r²={r2:.2})"))
+        .unwrap_or_default();
     let mut out = format!(
         "### Forecast — `{project}` (by {dim}, {horizon}d ahead from {lookback}d history)\n\n\
-         **Projected spend:** {}/day · {} next 7d · {} next 30d\n",
+         **Projected spend:** {}/day · {} next 7d · {} next 30d{confidence}\n",
         money(f(spend, "projected_daily_cost_usd")),
         money(f(spend, "projected_cost_next_7d_usd")),
         money(f(spend, "projected_cost_next_30d_usd")),
@@ -167,7 +172,7 @@ mod tests {
             "project_id": "p1", "dimension": "customer", "horizon_days": 14, "lookback_days": 14,
             "spend": {
                 "projected_daily_cost_usd": 1.5, "projected_cost_next_7d_usd": 10.5,
-                "projected_cost_next_30d_usd": 45.0
+                "projected_cost_next_30d_usd": 45.0, "confidence": 0.87
             },
             "budgets": [{
                 "rule_id": "r1", "metric": "cost_usd", "window": "day", "threshold": 20.0,
@@ -187,6 +192,10 @@ mod tests {
         let md = report(&sample()).unwrap();
         assert!(md.contains("Forecast — `p1`"));
         assert!(md.contains("$1.50/day"));
+        assert!(
+            md.contains("r²=0.87"),
+            "the published confidence rides the headline"
+        );
         assert!(md.contains("Budgets"));
         assert!(md.contains("~5d"));
         assert!(md.contains("Margins"));
@@ -224,9 +233,14 @@ mod tests {
             { "subject": "spend", "reason": "4 observed days needed, 2 seen" },
             { "subject": "r1", "reason": "observations span 2 days, 4 needed" }
         ]);
+        v["spend"]["confidence"] = json!(null);
         let md = report(&v).unwrap();
         assert!(md.contains("Not forecast"));
         assert!(md.contains("4 observed days needed, 2 seen"));
         assert!(md.contains("`r1`"));
+        assert!(
+            !md.contains("r²="),
+            "no confidence is invented for a refused fit"
+        );
     }
 }
