@@ -10,6 +10,8 @@ name = "lt-responder"
 path = "src/main.rs"
 
 [dependencies]
+# For `FailureClass` alone: the wire vocabulary of the class the producer minted has ONE address, so
+# this crate cannot grow a second, subtly different one beside the ingest boundary's.
 # The one headless-Claude invocation seam (posture, spawn, envelope, probe, bin resolution).
 lighttrack-engine = { path = "../engine" }
 # The alert-signature contract. The API SIGNS with this same code — see

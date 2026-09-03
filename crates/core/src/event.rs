@@ -68,6 +68,88 @@ impl Status {
     }
 }
 
+/// How a failed call failed, as a **class** rather than as prose: is it worth retrying, or worth
+/// diagnosing?
+///
+/// This is the single most consequential fact about a failure and the one every consumer wants.
+/// `crates/engine/src/retry.rs` states the rule the whole workspace is meant to follow —
+/// *"Classification is by typed `EngineError` variant — never by string-matching provider
+/// messages"* — and it holds inside the engine, where the structured response is still in hand. It
+/// cannot hold in `crates/responder`, which classifies an error **it did not produce**, arriving as
+/// an `Option<String>` that crossed a process boundary with no variant left to match on. A text
+/// classifier there is not sloppiness; it was the only thing available at that layer.
+///
+/// So the class is minted where the structure still exists — in the caller's process, by the SDK
+/// that held the provider's status code — and carried on the event, the same way
+/// [`Provider::from_wire`] canonicalizes a provider string at ingest instead of letting every
+/// consumer re-parse it.
+///
+/// **Three states, and the third is not decoration.** An event whose producer said nothing is
+/// [`FailureClass::Unknown`], and `Unknown` is not `Terminal`: the responder runs its prose
+/// fallback on an `Unknown` and does not run it on a `Terminal`, so the two reach different code.
+/// Collapsing "the producer did not say" into either answer fails in opposite directions — a
+/// terminal bug silently skipped, or a provider outage investigated at cost.
+///
+/// **Where it lives.** In `metadata` under `failure_class`, beside `cost_source` and `api_key_id`,
+/// for the reason stated there: metadata rides unchanged through all three store backends, so this
+/// needs no column and no migration in SQLite, Postgres and Firestore. It is still a structured,
+/// closed-vocabulary field validated at the boundary — which is what
+/// `resilience/error-handling` requires of a classifier input — not a substring of a human message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FailureClass {
+    /// The provider or the network failed and the caller could have succeeded by waiting: a rate
+    /// limit, an overload, a 5xx, a timeout. No code change fixes it.
+    Transient,
+    /// The call will fail the same way on every retry: a contract violation, a bad request, an
+    /// application bug. Worth diagnosing.
+    Terminal,
+    /// The producer did not say. The honest default — never inferred from the message here, because
+    /// inferring it here is exactly the layering mistake this type exists to fix.
+    #[default]
+    Unknown,
+}
+
+impl FailureClass {
+    /// Every class, so a wire validator derives its accepted set from the enum rather than keeping a
+    /// parallel string list that drifts when a variant is added.
+    pub const ALL: [FailureClass; 3] = [
+        FailureClass::Transient,
+        FailureClass::Terminal,
+        FailureClass::Unknown,
+    ];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FailureClass::Transient => "transient",
+            FailureClass::Terminal => "terminal",
+            FailureClass::Unknown => "unknown",
+        }
+    }
+
+    /// Parse a wire literal. Anything outside the vocabulary becomes [`FailureClass::Unknown`] — the
+    /// explicit quarantine, never a silent coercion into a real class. A producer that sends
+    /// `"retryable"` gets `Unknown` and the fallback classifier, which is the honest outcome: we do
+    /// not know what it meant.
+    pub fn from_wire(s: &str) -> FailureClass {
+        let s = s.trim().to_ascii_lowercase();
+        FailureClass::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .unwrap_or(FailureClass::Unknown)
+    }
+}
+
+impl std::fmt::Display for FailureClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The metadata key [`FailureClass`] is carried under. One address, so the ingest boundary that
+/// validates it, the redactor's passthrough list and the alert payload cannot drift apart.
+pub const FAILURE_CLASS_KEY: &str = "failure_class";
+
 /// Token accounting for a single call.
 ///
 /// **The convention, stated once:** `input` is the WHOLE prompt the provider counted, and
@@ -189,6 +271,20 @@ impl LlmEvent {
     /// the caller reported it verbatim, `"book"` when we priced it from the DB price book. `None`
     /// when the cost was never resolved (the model is absent from the book — the deliberate
     /// "unpriced means `None`, never a phantom zero" invariant) or the event predates the stamp.
+    /// The producer's own verdict on how this call failed, read from `metadata.failure_class`.
+    ///
+    /// [`FailureClass::Unknown`] when the field is absent (an SDK that predates it, a third-party
+    /// producer, an OTLP export), when it is outside the vocabulary, or when the call succeeded.
+    /// **Never inferred from [`LlmEvent::error`]** — that inference is the responder's fallback and
+    /// belongs to the layer that has nothing better, not to this one.
+    pub fn failure_class(&self) -> FailureClass {
+        self.metadata
+            .get(FAILURE_CLASS_KEY)
+            .and_then(Value::as_str)
+            .map(FailureClass::from_wire)
+            .unwrap_or_default()
+    }
+
     pub fn cost_source(&self) -> Option<&str> {
         self.metadata.get("cost_source").and_then(Value::as_str)
     }

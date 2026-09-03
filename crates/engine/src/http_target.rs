@@ -124,9 +124,10 @@ fn call_once(url: &str, body: &[u8], signature: Option<&str>) -> Result<GenOutco
     }
     let resp = req.send().map_err(|e| send_error(&who, e))?;
     let status = resp.status();
+    let headers = resp.headers().clone();
     let text = read_bounded(resp, &who)?;
     if !status.is_success() {
-        return Err(http_error(&who, status, text));
+        return Err(http_error(&who, status, &headers, text));
     }
     let parsed: HttpTargetResponse = serde_json::from_str(&text).map_err(|e| {
         EngineError::Parse(format!(

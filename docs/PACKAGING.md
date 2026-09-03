@@ -97,8 +97,11 @@ what makes "any DB" trustworthy — it catches dialect drift before users do.
 - Publish to **GHCR**: `docker run ghcr.io/xkazm04/lighttrack`.
 - **`docker-compose.yml`** brings up the whole stack locally (api + runner + Postgres + Grafana) in one
   command.
-- Reuse the existing `/health` endpoint for k8s liveness/readiness probes. Optional supply-chain extras:
-  SBOM (`syft`), signing (`cosign`).
+- Point the k8s probes at the endpoint shaped for each: `/health/live` for liveness (observes nothing
+  outside the process, so a slow store never restarts the pod) and `/health/ready` for readiness (round-trips
+  the store, so an unreachable dependency drops the pod out of the Service). `/health` stays the operator
+  rollup. One endpoint for both probes is one wrong answer — see `crates/api/src/health.rs`. Optional
+  supply-chain extras: SBOM (`syft`), signing (`cosign`).
 
 ---
 

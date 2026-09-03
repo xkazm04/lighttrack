@@ -76,7 +76,9 @@ pub use dataset_lineage::{
 };
 pub use device::{capability_matches, Device, DeviceEligibility, RelayAdmission};
 pub use error::LtError;
-pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
+pub use event::{
+    FailureClass, LlmEvent, Operation, Provider, Status, TokenUsage, FAILURE_CLASS_KEY,
+};
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
 pub use forecast_gate::{Refusal, FLAT_BAND, MIN_OBSERVED_DAYS, MIN_SPAN_DAYS};
 pub use job::{

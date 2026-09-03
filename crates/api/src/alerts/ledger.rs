@@ -137,6 +137,7 @@ impl Alerter {
             model: ev.model.clone(),
             status: ev.status.as_str().to_string(),
             error: ev.error.clone(),
+            failure_class: ev.failure_class(),
         };
         self.spawn_fire(vec![compose::error_spike(&spike)]);
     }

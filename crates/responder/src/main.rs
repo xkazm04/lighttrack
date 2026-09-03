@@ -80,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let app = Router::new()
         .route("/health", get(health))
+        .route("/classification", get(classification))
         .route("/webhook", post(webhook::receive))
         .with_state(state);
 
@@ -107,4 +108,28 @@ async fn main() -> anyhow::Result<()> {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+/// How this process has been deciding what to investigate.
+///
+/// The transient branch used to only print, so nothing recorded whether the classifier was right,
+/// wrong, or guessing — and an operator asking "how much did we spend on provider incidents" had
+/// no number to read. `fallback_rate` is the one that moves as producers start minting the class
+/// at the boundary: 1.0 means every decision here was made by reading a human-readable message.
+async fn classification() -> axum::Json<serde_json::Value> {
+    use crate::classify::{Class, Source};
+    use crate::pipeline::CLASSIFIED;
+    axum::Json(serde_json::json!({
+        "skipped_as_transient": {
+            "carried": CLASSIFIED.get(Class::Transient, Source::Carried),
+            "fallback": CLASSIFIED.get(Class::Transient, Source::Fallback),
+        },
+        "investigated_as_code": {
+            "carried": CLASSIFIED.get(Class::Code, Source::Carried),
+            "fallback": CLASSIFIED.get(Class::Code, Source::Fallback),
+        },
+        "fallback_rate": CLASSIFIED.fallback_rate(),
+        "note": "fallback = the producer sent no failure_class, so the verdict was read from the \
+                 error message. See docs/ARCHITECTURE.md.",
+    }))
 }

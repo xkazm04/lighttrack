@@ -178,6 +178,7 @@ is configured from these strings.
 | `postgres conformance (required)` (ephemeral PG service container) | yes |
 | `firestore conformance (required)` (gcloud emulator) | yes |
 | `cargo test --workspace` | yes |
+| `chart policy (required)` — `deploy/helm/lighttrack` against its deployment policies + must-fail fixtures | yes |
 | `cargo test (rust sdk)` — the detached `clients/rust` project | yes |
 | `python suite (python sdk)` — builds the wheel, runs `clients/python/tests` against it | yes |
 | `npm test (typescript sdk)` — `npm ci` + `tsc` + the suite + a `dist/` load smoke | yes |

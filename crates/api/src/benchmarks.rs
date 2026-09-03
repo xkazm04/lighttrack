@@ -217,7 +217,8 @@ pub(crate) async fn post_benchmark_run(
 /// `pass | regressed | no_baseline | no_runs | partial` — `partial` is a run the cost ceiling or an
 /// operator cut short, whose mean covers only what was reached: unverified, never green. Consumers
 /// (a pipeline step, a dashboard badge) branch on `status`; `run_id`/`mean`/`baseline`/`n` give the
-/// supporting numbers.
+/// supporting numbers, and `caveat` names the condition that made a floor verdict
+/// inapplicable when one did.
 #[derive(Debug, Serialize, PartialEq)]
 pub(crate) struct GateResponse {
     status: String,
@@ -229,6 +230,11 @@ pub(crate) struct GateResponse {
     baseline: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     n: Option<u64>,
+    /// Why the stored baseline could not be compared against. Present only when the predicate
+    /// below refused the floor, so an operator reads *which* condition expired rather than
+    /// hunting for a baseline that is sitting right there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caveat: Option<String>,
     /// Whether the judge behind this verdict has ever been checked against a human, for the rubric
     /// it judged under (M11). A green `status` from an `unknown` judge is a badge that means "the
     /// judge said so" and nothing about whether the judge is worth believing, so the gate reports
@@ -237,15 +243,54 @@ pub(crate) struct GateResponse {
     judge_trust: Option<JudgeTrustVerdict>,
 }
 
-/// Decide the gate verdict from a benchmark's runs (newest-first, as the store returns them) and its
-/// baseline. Uses the latest *finished* run's honest status (Direction 1/2); legacy runs that predate
-/// the honest-status work fall back to a scalar mean-vs-baseline compare. `n` prefers the report's
-/// significance `n`, else `n_cases`.
+/// Why a stored baseline cannot be compared against the run that was scored, or `None` when the
+/// comparison holds.
+///
+/// A baseline is not a constant — it is a measurement, and it carries the conditions it was taken
+/// under. `stamp_pins` records those conditions on every *run* (`judge_model`, `dataset_ref`, and
+/// the dataset's frozen state and version); the baseline is a bare scalar in the benchmark row and
+/// records none of them. So the strongest statement this gate can make is the one condition it can
+/// actually read off the run: **the case set was allowed to move.**
+///
+/// An unfrozen dataset means the cases could have changed between the moment the baseline was
+/// established and the moment this run was scored. The two numbers are then means over different
+/// populations, and subtracting them is arithmetic without a claim behind it. That is not a
+/// regression and it is not a pass; it is the *unverified* lane the exit-code contract already
+/// carries (`EXIT_NO_BASELINE`, deliberately distinct from `EXIT_REGRESSED` so CI can warn rather
+/// than hard-fail).
+fn baseline_not_comparable(run: &BenchmarkRun) -> Option<String> {
+    match run.report.get("dataset_frozen") {
+        Some(serde_json::Value::Bool(false)) => {
+            let v = run
+                .report
+                .get("dataset_version")
+                .and_then(serde_json::Value::as_i64);
+            Some(match v {
+                Some(v) => format!(
+                    "baseline not comparable: this run scored an UNFROZEN dataset (version {v}),                      so its case set may differ from the one the baseline was established on;                      freeze the dataset and re-establish the baseline"
+                ),
+                None => "baseline not comparable: this run scored an UNFROZEN dataset, so its case                          set may differ from the one the baseline was established on; freeze the                          dataset and re-establish the baseline"
+                    .into(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Decide the gate verdict from a benchmark's runs (newest-first, as the store returns them) and the
+/// benchmark itself. Uses the latest *finished* run's honest status (Direction 1/2); legacy runs that
+/// predate the honest-status work fall back to a scalar mean-vs-baseline compare. `n` prefers the
+/// report's significance `n`, else `n_cases`.
+///
+/// Takes the whole `Benchmark` rather than its `baseline_score` because the conditions a floor
+/// verdict depends on live beside the number, and narrowing to `Option<f64>` at this boundary threw
+/// them away while the caller was still holding them.
 pub(crate) fn decide_gate(
     runs: &[BenchmarkRun],
-    baseline: Option<f64>,
+    bench: &Benchmark,
     judge_trust: Option<JudgeTrustVerdict>,
 ) -> GateResponse {
+    let baseline = bench.baseline_score;
     let Some(run) = runs.iter().find(|r| r.finished_at.is_some()) else {
         return GateResponse {
             status: "no_runs".into(),
@@ -253,6 +298,7 @@ pub(crate) fn decide_gate(
             mean: None,
             baseline,
             n: None,
+            caveat: None,
             judge_trust,
         };
     };
@@ -271,6 +317,16 @@ pub(crate) fn decide_gate(
             _ => "no_baseline",
         },
     };
+    // The predicate runs on the verdicts that actually rest on the baseline. `no_baseline`,
+    // `no_runs` and `partial` never consulted it, so there is nothing to refuse and no caveat to
+    // add — re-labelling them would replace one honest unverified state with another and lose why.
+    let (status, caveat) = match status {
+        "pass" | "regressed" => match baseline.and_then(|_| baseline_not_comparable(run)) {
+            Some(why) => ("no_baseline", Some(why)),
+            None => (status, None),
+        },
+        _ => (status, None),
+    };
     let n = run
         .report
         .get("n")
@@ -282,6 +338,7 @@ pub(crate) fn decide_gate(
         mean: run.mean_score,
         baseline,
         n,
+        caveat,
         judge_trust,
     }
 }
@@ -312,20 +369,28 @@ pub(crate) async fn benchmark_gate(
     let store = st.store.clone();
     let sc = p.scope_owned();
     let runs = spawn_db(move || store.list_benchmark_runs(sc.as_deref().into(), &id)).await?;
-    Ok(Json(decide_gate(&runs, bench.baseline_score, Some(trust))))
+    Ok(Json(decide_gate(&runs, &bench, Some(trust))))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::embed_recurrence;
+    use super::{embed_recurrence, validate_target_matrix};
 
     /// The judge-trust annotation is exercised through the handler and `judges::policy_block`;
     /// these cases are about the *evidence* verdict, so they pass none.
-    fn decide_gate(runs: &[BenchmarkRun], baseline: Option<f64>) -> super::GateResponse {
-        super::decide_gate(runs, baseline, None)
+    fn decide_gate(runs: &[BenchmarkRun], bench: &Benchmark) -> super::GateResponse {
+        super::decide_gate(runs, bench, None)
     }
-    use lighttrack_core::BenchmarkRun;
+    use lighttrack_core::{Benchmark, BenchmarkRun};
     use serde_json::json;
+
+    /// A benchmark carrying just the baseline, built via serde like `run` below.
+    fn bench(baseline: Option<f64>) -> Benchmark {
+        serde_json::from_value(json!({
+            "name": "b", "rubric": "r", "judge_model": "haiku", "baseline_score": baseline,
+        }))
+        .unwrap()
+    }
 
     /// Build a run via serde so the test doesn't hand-construct every field.
     fn run(
@@ -346,10 +411,13 @@ mod tests {
 
     #[test]
     fn gate_no_runs_when_none_finished() {
-        let g = decide_gate(&[], Some(0.8));
+        let g = decide_gate(&[], &bench(Some(0.8)));
         assert_eq!(g.status, "no_runs");
         // A run that never finished is ignored.
-        let g = decide_gate(&[run("passed", false, Some(0.9), json!(null))], Some(0.8));
+        let g = decide_gate(
+            &[run("passed", false, Some(0.9), json!(null))],
+            &bench(Some(0.8)),
+        );
         assert_eq!(g.status, "no_runs");
     }
 
@@ -357,18 +425,26 @@ mod tests {
     fn gate_maps_honest_statuses() {
         let g = decide_gate(
             &[run("passed", true, Some(0.9), json!({ "n": 30 }))],
-            Some(0.8),
+            &bench(Some(0.8)),
         );
         assert_eq!(g.status, "pass");
         assert_eq!(g.n, Some(30)); // report n wins over n_cases
         assert_eq!(g.run_id.as_deref(), Some("run-passed"));
 
         assert_eq!(
-            decide_gate(&[run("regressed", true, Some(0.5), json!(null))], Some(0.8)).status,
+            decide_gate(
+                &[run("regressed", true, Some(0.5), json!(null))],
+                &bench(Some(0.8))
+            )
+            .status,
             "regressed"
         );
         assert_eq!(
-            decide_gate(&[run("no_baseline", true, Some(0.5), json!(null))], None).status,
+            decide_gate(
+                &[run("no_baseline", true, Some(0.5), json!(null))],
+                &bench(None)
+            )
+            .status,
             "no_baseline"
         );
     }
@@ -377,9 +453,15 @@ mod tests {
     fn gate_never_passes_a_cost_halted_run() {
         // The trap: a halted run whose partial mean happens to clear the baseline. If `partial` fell
         // through to the legacy scalar compare it would come back `pass` on 30% of the dataset.
-        let g = decide_gate(&[run("partial", true, Some(0.95), json!(null))], Some(0.8));
+        let g = decide_gate(
+            &[run("partial", true, Some(0.95), json!(null))],
+            &bench(Some(0.8)),
+        );
         assert_eq!(g.status, "partial");
-        let g = decide_gate(&[run("aborted", true, Some(0.95), json!(null))], Some(0.8));
+        let g = decide_gate(
+            &[run("aborted", true, Some(0.95), json!(null))],
+            &bench(Some(0.8)),
+        );
         assert_eq!(g.status, "partial");
     }
 
@@ -387,15 +469,26 @@ mod tests {
     fn gate_legacy_status_falls_back_to_scalar() {
         // "completed" predates honest statuses → scalar mean-vs-baseline compare.
         assert_eq!(
-            decide_gate(&[run("completed", true, Some(0.5), json!(null))], Some(0.8)).status,
+            decide_gate(
+                &[run("completed", true, Some(0.5), json!(null))],
+                &bench(Some(0.8))
+            )
+            .status,
             "regressed"
         );
         assert_eq!(
-            decide_gate(&[run("completed", true, Some(0.9), json!(null))], Some(0.8)).status,
+            decide_gate(
+                &[run("completed", true, Some(0.9), json!(null))],
+                &bench(Some(0.8))
+            )
+            .status,
             "pass"
         );
         // No baseline → no_baseline; n falls back to n_cases when the report has none.
-        let g = decide_gate(&[run("completed", true, Some(0.9), json!(null))], None);
+        let g = decide_gate(
+            &[run("completed", true, Some(0.9), json!(null))],
+            &bench(None),
+        );
         assert_eq!(g.status, "no_baseline");
         assert_eq!(g.n, Some(5));
     }
@@ -407,7 +500,115 @@ mod tests {
             run("regressed", true, Some(0.5), json!(null)),
             run("passed", true, Some(0.9), json!(null)),
         ];
-        assert_eq!(decide_gate(&runs, Some(0.8)).status, "regressed");
+        assert_eq!(decide_gate(&runs, &bench(Some(0.8))).status, "regressed");
+    }
+
+    #[test]
+    fn gate_refuses_the_floor_when_the_dataset_was_not_frozen() {
+        // `stamp_pins` records the dataset's frozen state on every run. An unfrozen dataset means
+        // the case set could have moved between the baseline's establishment and this run, so the
+        // two means are over different populations and neither `pass` nor `regressed` is a claim
+        // anyone can defend. It degrades to the UNVERIFIED lane, not to a verdict.
+        let unfrozen = json!({ "dataset_frozen": false, "dataset_version": 7 });
+
+        // The dangerous direction: a run that would have passed. A silent `pass` here is a gate
+        // that cannot fire, which is indistinguishable from a gate that is working.
+        let g = decide_gate(
+            &[run("passed", true, Some(0.9), unfrozen.clone())],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "no_baseline");
+        let caveat = g.caveat.expect("the refused floor names its condition");
+        assert!(caveat.contains("UNFROZEN"), "{caveat}");
+        assert!(
+            caveat.contains("version 7"),
+            "the version is named: {caveat}"
+        );
+
+        // And the other direction: a `regressed` verdict resting on the same unusable comparison is
+        // not a regression either. Reporting one would be a false alarm with a number behind it.
+        let g = decide_gate(
+            &[run("regressed", true, Some(0.5), unfrozen.clone())],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "no_baseline");
+        assert!(g.caveat.is_some());
+
+        // A legacy status reaching the scalar compare gets the predicate too — that path is the one
+        // with no significance testing at all, so it needs it most.
+        let g = decide_gate(
+            &[run("completed", true, Some(0.9), unfrozen)],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "no_baseline");
+        assert!(g.caveat.is_some());
+    }
+
+    #[test]
+    fn gate_keeps_its_verdict_when_the_dataset_was_frozen_or_absent() {
+        // A frozen dataset is the comparable case: the verdict stands, and no caveat is invented.
+        let frozen = json!({ "dataset_frozen": true, "dataset_version": 7 });
+        let g = decide_gate(
+            &[run("passed", true, Some(0.9), frozen.clone())],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "pass");
+        assert_eq!(g.caveat, None);
+
+        let g = decide_gate(
+            &[run("regressed", true, Some(0.5), frozen)],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "regressed");
+        assert_eq!(g.caveat, None);
+
+        // An inline dataset stamps no frozen flag at all. The predicate reads absence as "nothing
+        // says the cases moved" rather than as a refusal — a benchmark carrying its own cases has
+        // no separate dataset to drift underneath it.
+        let g = decide_gate(
+            &[run("passed", true, Some(0.9), json!({ "n": 30 }))],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "pass");
+        assert_eq!(g.caveat, None);
+    }
+
+    #[test]
+    fn gate_does_not_relabel_states_that_never_consulted_the_baseline() {
+        let unfrozen = json!({ "dataset_frozen": false, "dataset_version": 7 });
+
+        // `partial` is already unverified for a different and more specific reason — the run judged
+        // part of its dataset. Overwriting it with `no_baseline` would trade one honest state for
+        // another and lose why, so the predicate leaves it alone.
+        let g = decide_gate(
+            &[run("partial", true, Some(0.95), unfrozen.clone())],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "partial");
+        assert_eq!(g.caveat, None);
+
+        // With no baseline at all there is no floor to refuse: `no_baseline` from absence is a
+        // different state from `no_baseline` from expiry, and only the second carries a caveat.
+        let g = decide_gate(&[run("completed", true, Some(0.9), unfrozen)], &bench(None));
+        assert_eq!(g.status, "no_baseline");
+        assert_eq!(g.caveat, None);
+    }
+
+    #[test]
+    fn non_array_targets_pass_through() {
+        assert!(validate_target_matrix(&json!(null)).is_ok());
+        assert!(validate_target_matrix(&json!({ "endpoint": "https://x" })).is_ok());
+        assert!(validate_target_matrix(&json!("legacy")).is_ok());
+    }
+
+    #[test]
+    fn valid_matrix_ok_malformed_rejected() {
+        assert!(
+            validate_target_matrix(&json!([{ "provider": "openai", "model": "gpt-4o" }])).is_ok()
+        );
+        // Missing required `provider` → rejected (would otherwise silently degrade to simple mode).
+        assert!(validate_target_matrix(&json!([{ "model": "x" }])).is_err());
+        assert!(validate_target_matrix(&json!(["nope"])).is_err());
     }
 
     #[test]

@@ -20,6 +20,10 @@ pub(crate) struct ErrorSpike {
     pub(crate) model: String,
     pub(crate) status: String,
     pub(crate) error: Option<String>,
+    /// The PRODUCER's verdict, carried through rather than re-derived downstream. `unknown` when the
+    /// SDK did not send one — which is the signal the responder needs to know it must fall back to
+    /// reading the message, instead of silently doing so for every event.
+    pub(crate) failure_class: lighttrack_core::FailureClass,
 }
 
 /// A detected quality regression: the recent mean score for one (project, rubric) has fallen well

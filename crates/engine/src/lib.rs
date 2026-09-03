@@ -55,9 +55,30 @@ pub enum EngineError {
     Spawn { bin: String, source: std::io::Error },
     #[error("claude exited with status {code}: {stderr}")]
     NonZero { code: i32, stderr: String },
-    /// HTTP 429 — retryable.
+    /// HTTP 429 — retryable. `retry_after` is the delay the provider *stated* on the response, when
+    /// it stated one: a schedule that outranks our computed ladder, carried on the typed error
+    /// because [`with_retry`](crate::retry) never sees the response itself.
     #[error("{who} rate-limited (HTTP 429)")]
-    RateLimited { who: String },
+    RateLimited {
+        who: String,
+        retry_after: Option<std::time::Duration>,
+    },
+    /// The provider stated a wait longer than what remained of the call's wall-clock budget, so the
+    /// ladder **ended** instead of the wait being shortened. Its own terminal state, never folded
+    /// into exhaustion: the budget was not spent, it was found insufficient in advance — and
+    /// `asked_secs` (the wait that did not fit) is the only evidence an operator has for whether the
+    /// budget is set correctly. Retrying earlier than the provider asked is the one move politeness
+    /// must never make.
+    #[error(
+        "{who} asked us to wait {asked_secs:.1}s but only {remaining_secs:.1}s of the call budget \
+         remained; ended the ladder after {attempts} attempt(s) rather than retrying early"
+    )]
+    OverBudgetWait {
+        who: String,
+        asked_secs: f64,
+        remaining_secs: f64,
+        attempts: u32,
+    },
     /// HTTP 5xx — retryable.
     #[error("{who} server error (HTTP {status})")]
     ServerError { who: String, status: u16 },

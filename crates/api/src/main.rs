@@ -5,6 +5,9 @@
 //! `jobs`, `projects`, `limits`); shared plumbing in `state`, `error`, `guards`, `auth`.
 //!
 //! Routes:
+//!   GET  /health                        operator rollup: `ok`, or 503 naming the red member
+//!   GET  /health/live                   liveness: is this PROCESS wedged (observes nothing else)
+//!   GET  /health/ready                  readiness: can this pod serve (observes the real store)
 //!   GET  /health                         liveness + the store backend's declared surfaces
 //!   GET  /openapi.json                   this deployment's OpenAPI 3.1 description, generated from
 //!                                        `lighttrack-contract` (unauthenticated: it describes the
@@ -131,6 +134,8 @@
 //!      LIGHTTRACK_INGEST_TIMEOUT_SECS (ingest deadline → 504 `timeout`; default 10, 0 = off),
 //!      LIGHTTRACK_INGEST_RETRY_AFTER_SECS (Retry-After advertised when shedding; default 1),
 //!      LIGHTTRACK_AUTH_MODE (dev|enforced), LIGHTTRACK_ADMIN_KEY,
+//!      LIGHTTRACK_ALLOW_UNAUTHENTICATED (the ONE way to start an unenforced instance; its value is
+//!        a sentence, not a flag, so it cannot be set by accident — see `credential_boundary`),
 //!      LIGHTTRACK_AUTH_MAX_FAILURES (failed credential attempts one source may make per window
 //!        before it is refused with 429 `rate_limited` + Retry-After; default 10, 0 = off),
 //!      LIGHTTRACK_AUTH_FAILURE_WINDOW_SECS (that window; default 60),
@@ -183,6 +188,7 @@ mod capabilities;
 mod collective;
 mod collective_auto;
 mod costs_unpriced;
+mod credential_boundary;
 mod datasets;
 mod datasets_lineage;
 mod error;
@@ -195,6 +201,7 @@ mod forecast;
 mod forecast_alerts;
 mod forecast_sweep;
 mod guards;
+mod health;
 mod http;
 mod idempotency;
 mod ingest_proximity;
@@ -258,6 +265,8 @@ mod tests_eval_targets;
 #[cfg(test)]
 mod tests_forecast;
 #[cfg(test)]
+mod tests_health;
+#[cfg(test)]
 mod tests_ingest;
 #[cfg(test)]
 mod tests_limit_scope;
@@ -311,6 +320,18 @@ async fn main() -> anyhow::Result<()> {
     let admin_key = std::env::var("LIGHTTRACK_ADMIN_KEY")
         .ok()
         .filter(|s| !s.is_empty());
+    // Before the store is opened, the router is built or a port is bound: an instance that
+    // authenticates nobody does not start unless someone said the sentence (see
+    // `credential_boundary`). This is the one decision that cannot be a per-request check — a guard
+    // raising inside a handler leaves the process up, the port open and the health check green.
+    credential_boundary::check_boot(
+        auth_mode,
+        admin_key.as_deref(),
+        std::env::var(credential_boundary::OPT_OUT_ENV)
+            .ok()
+            .as_deref(),
+    )?;
+
     let relay_device_key = std::env::var("LIGHTTRACK_RELAY_DEVICE_KEY")
         .ok()
         .filter(|s| !s.is_empty());
@@ -518,7 +539,14 @@ pub(crate) fn build_router(state: AppState) -> Router {
     // `/v1/ingest/status`, the surface that says whether we ARE shedding) stay answerable.
     let shed_ingest = axum::middleware::from_fn_with_state(state.clone(), shed::ingest_admission);
     Router::new()
-        .route("/health", get(capabilities::health))
+        // One process, two answers, plus the rollup. `/health/live` answers "is this process
+        // wedged?" and touches nothing outside the process; `/health/ready` answers "should
+        // traffic arrive?" and observes the real store. Pointing a restarter at the second turns a
+        // slow dependency into a restart loop; pointing a router at the first sends traffic to a
+        // pod that is up and cannot serve. `/health` stays the operator rollup — see `health`.
+        .route("/health", get(health::composite))
+        .route("/health/live", get(health::live))
+        .route("/health/ready", get(health::ready))
         // Unauthenticated like /health: it describes the API's shape, never anyone's data.
         .route("/openapi.json", get(openapi::get_openapi))
         .route("/v1/capabilities", get(capabilities::get_capabilities))

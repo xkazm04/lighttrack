@@ -46,6 +46,11 @@ pub use threshold::{
     revenue_subject, window_key, RevenueWindows,
 };
 
+/// The project id [`Store::ping`] looks up. Deliberately un-creatable-looking so a probe can never
+/// collide with a real row, and stable so a backend that wants to special-case it (an index-only
+/// lookup, a cached miss) has one string to key on.
+pub const READINESS_PROBE_ID: &str = "__lighttrack_readiness_probe__";
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("sqlite error: {0}")]
@@ -834,6 +839,20 @@ pub trait Store: Send + Sync {
 
     /// Create tables if they don't exist.
     fn init_schema(&self) -> Result<()>;
+
+    /// A cheap round-trip that proves this backend can still answer a query **now**.
+    ///
+    /// This is what a readiness probe observes, and the reason it is a real query rather than a
+    /// flag set at boot: a proxy for "the dependency is reachable" passes exactly when the proxy
+    /// diverges from the target — a pool that died after startup, a file whose volume was
+    /// detached, a migration still running. The default is one indexed point lookup for an id no
+    /// project can have: constant cost on every backend, no rows, no writes, no side effects.
+    ///
+    /// A backend with something cheaper (`SELECT 1`, a driver-level ping) may override it; it must
+    /// stay side-effect-free, because probes run on a timer forever.
+    fn ping(&self) -> Result<()> {
+        self.get_project(READINESS_PROBE_ID).map(|_| ())
+    }
 
     /// Persist one normalized event.
     fn insert_event(&self, ev: &LlmEvent) -> Result<()>;

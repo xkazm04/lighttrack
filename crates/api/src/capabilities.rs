@@ -8,7 +8,6 @@
 use axum::{extract::State, http::HeaderMap, Json};
 use lighttrack_store::{Capabilities, Surface};
 use serde::Serialize;
-use serde_json::json;
 
 use crate::error::ApiError;
 use crate::guards::authenticate;
@@ -114,21 +113,6 @@ pub(crate) async fn get_capabilities(
     // may not read anything has no reason to enumerate what it could not reach.
     crate::auth_scopes::ensure_scope(&principal, lighttrack_core::Scope::Read)?;
     Ok(Json(st.store.capabilities().into()))
-}
-
-/// `GET /health` — liveness, plus what this deployment's store can serve.
-///
-/// Unauthenticated (a liveness probe is not a credential) and it names no data, only which surfaces
-/// exist. Folding the manifest in here means the answer to "why does /v1/forecast 501 in prod" is in
-/// the one endpoint every operator already curls. `status` stays first and stays `"ok"` — the smoke
-/// script and the container healthcheck read it.
-pub(crate) async fn health(State(st): State<AppState>) -> Json<serde_json::Value> {
-    let caps = st.store.capabilities();
-    Json(json!({
-        "status": "ok",
-        "backend": caps.backend,
-        "capabilities": CapabilitiesBody::from(caps),
-    }))
 }
 
 /// Log the backend's declaration at startup: one line for the manifest, then one `warn!` per

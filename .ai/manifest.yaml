@@ -37,6 +37,10 @@ capabilities:
   # Same scan on the NEWEST upstream rules rather than the pinned engine — a detection pattern
   # published today should find a token pushed last spring. Advisory: its input moves without us.
   audit-secrets-latest-rules: { command: "gitleaks git . --config .gitleaks.toml --redact --no-banner  # with the latest gitleaks release installed", verified: false }
+  # Policy over the deployment SHAPE, not over the code: what deploy/helm/lighttrack may never grant.
+  # Text-level (no helm binary, no cluster), with must-fail fixtures beside every policy. This closes
+  # the hole where the chart was the only shipped artifact no gate read.
+  chart-policy: { command: "cargo test -p lighttrack-core --test chart_policy_guard", verified: true }
   smoke: { command: "sh scripts/smoke.sh http://127.0.0.1:8787", verified: false }
   # cargo test --workspace ranges over the root Cargo.toml members list, which excludes all three
   # detached client SDKs. Each ships to users and needs its own command.
@@ -75,6 +79,7 @@ controls:
     [
       test,
       conformance,
+      chart-policy,
       lint,
       format-check,
       audit-policy,
@@ -115,3 +120,27 @@ skills:
   - mvp
   - perfect
   - scan-sweep
+
+# Scope - what this project does and deliberately does not do. Read by the registry's
+# scripts/build-fleet-map.mjs to classify subjects this project has NO context for: an
+# absence inside an out-of-scope category or subject is never proposed as a new direction;
+# every other in-domain absence is a `candidate` for the intake direction pass. Keys are
+# `<bundle>/<category>[/<subcategory>]` and `<bundle>/<subject>`. Decisions on proposed
+# directions live in .ai/directions/ledger.jsonl. DRAFT written by the registry on
+# 2026-09-02 from the purpose line and the project note - the owner edits this block, the
+# registry only reads it.
+scope:
+  does:
+    - ingest LLM telemetry, score with judges, benchmark providers, serve an operator API
+  does_not:
+    - end-user product UI beyond an operator dashboard
+    - agent runtime, companions or orchestration
+    - localization, recruiting, media
+  out_of_scope_categories:
+    - software-engineering/ui-surfaces/input-and-editing
+    - software-engineering/ui-surfaces/shell-and-navigation
+    - software-engineering/llm-agent/companion
+    - software-engineering/llm-agent/orchestration
+    - software-engineering/engineering-assessment
+  out_of_scope_subjects:
+  directions_ledger: .ai/directions/ledger.jsonl

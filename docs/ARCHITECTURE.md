@@ -163,6 +163,42 @@ The linkage rides in `metadata` (like `customer_id` / `cost_source`) rather than
 no migration on any backend; SQLite/Postgres read it with `json_extract` / `->>`, Firestore parses the
 stored JSON string client-side.
 
+**The failure class — `metadata.failure_class`.** The single most consequential fact about a failed call
+is whether it is **transient** (the provider or the network faltered; waiting fixes it) or **terminal**
+(it will fail identically on every retry; a person has to look). `crates/engine/src/retry.rs` states the
+workspace rule — *"Classification is by typed `EngineError` variant — never by string-matching provider
+messages"* — and it holds inside the engine, which still has the structured response. It could not hold
+in `crates/responder`, which classifies an error it did not produce, arriving as an `Option<String>` that
+crossed a process boundary with no variant left to match on. A second, prose-reading classifier grew
+there by necessity, and the two disagree by construction: `EngineError::is_retryable()` matches three
+variants; `classify.rs` matches eleven phrases and six status codes, and nothing compared them.
+
+So the class is minted where the structure still exists — in the caller's process, by the SDK holding the
+provider's status code — and **carried**:
+
+| stage | what happens |
+| --- | --- |
+| producer (SDK / any client) | sends `metadata.failure_class` = `transient` \| `terminal` on a failed call |
+| ingest (`crates/api/src/events.rs`) | accepts it, **validates** it against the closed vocabulary, and defaults it to `unknown` when absent. It is never *inferred* here from `error` — that inference is the fallback's job, one layer down. A success carries no class, and any the client sent is removed |
+| alert payload (`crates/api/src/alerts/channels.rs`) | `spike.failure_class` rides the `error_spike` webhook |
+| responder (`crates/responder/src/classify.rs`) | `decide()` reads the carried class first; `classify()` — the phrase list — runs **only** for `unknown` |
+
+Three states, and the third is not decoration: `terminal` goes straight to an investigation *without*
+consulting the message (so a real bug whose text happens to say "timed out" is still diagnosed), while
+`unknown` is the only input that reaches the phrase list at all. A value outside the vocabulary is
+quarantined to `unknown` rather than passed through, so a client cannot invent a class a downstream
+`match` has no arm for.
+
+The phrase list is not deleted, and it is not a defect: it is the correct handling for a record whose
+producer said nothing — an older SDK, a third-party producer, an OTLP export. What changed is that it is
+no longer the *primary* path and its scope is stateable. Every use of it is counted
+(`pipeline::CLASSIFIED`, `fallback_rate()`), so "how often are we still guessing" is a number.
+
+**Not yet done:** no shipped SDK *mints* the class from the provider's response. The contract above is
+open to any producer today (metadata is free-form), but until `clients/{rust,python,typescript}` set it,
+the dominant ingest mix will be `unknown` and the phrase list will remain the real classifier. That is
+the next piece of this, and it is a per-SDK change rather than a schema one.
+
 **Who is spending — `GET /v1/limits/usage?project=&by=&window=&limit=`.** Rolling usage grouped by one
 dimension (`api_key` default, or `customer`/`model`/`provider`/`name`), ranked by cost, each row
 carrying the scoped rules that bind *that* value evaluated against *that* value's usage. This answers

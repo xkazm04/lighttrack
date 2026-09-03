@@ -45,13 +45,54 @@ pub(crate) fn http_client() -> Result<&'static reqwest::blocking::Client> {
     Ok(CLIENT.get_or_init(|| client))
 }
 
-/// Map an HTTP status + body to a typed error (retryability is decided by the variant, never by
-/// string-matching the message).
-pub(crate) fn http_error(who: &str, status: reqwest::StatusCode, body: String) -> EngineError {
+/// Stated-delay headers, in precedence order, with the multiplier that turns each one's units into
+/// milliseconds. First match wins. Two unit systems live here: the `-ms` spellings are milliseconds
+/// (OpenAI and Azure OpenAI both emit them), plain `Retry-After` is seconds (RFC 9110).
+const RETRY_AFTER_HEADERS: [(&str, u64); 3] = [
+    ("retry-after-ms", 1),
+    ("x-ms-retry-after-ms", 1),
+    ("retry-after", 1000),
+];
+
+/// The delay the provider **stated** on this response, if any.
+///
+/// Classification happens once, here, at the boundary that still holds the structured response —
+/// the retry loop consumes the typed class and never re-parses anything. Only the delay-seconds
+/// form is read; `Retry-After` may also carry an HTTP-date, which needs a date parser we do not
+/// have a dependency for, and misreading one as a number would be worse than falling back to the
+/// computed ladder (which is what a `None` here does).
+pub(crate) fn stated_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    for (name, to_millis) in RETRY_AFTER_HEADERS {
+        let Some(raw) = headers.get(name).and_then(|v| v.to_str().ok()) else {
+            continue;
+        };
+        // Deliberately unclamped: a provider naming an implausibly long wait is not corrected here,
+        // it is *reported* — the ladder's budget rule turns it into a distinct terminal state
+        // carrying the number, and truncating it here would delete that evidence.
+        match raw.trim().parse::<f64>() {
+            Ok(n) if n.is_finite() && n >= 0.0 => {
+                return Some(Duration::from_millis((n * to_millis as f64) as u64))
+            }
+            _ => continue,
+        }
+    }
+    None
+}
+
+/// Map an HTTP status + headers + body to a typed error (retryability is decided by the variant,
+/// never by string-matching the message; a rate limit additionally carries the provider's own
+/// stated schedule).
+pub(crate) fn http_error(
+    who: &str,
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: String,
+) -> EngineError {
     let s = status.as_u16();
     match s {
         429 => EngineError::RateLimited {
             who: who.to_string(),
+            retry_after: stated_retry_after(headers),
         },
         401 | 403 => EngineError::Auth {
             who: who.to_string(),
@@ -231,6 +272,16 @@ fn generate_once(
     }
 }
 
+/// The API origin for a provider, overridable by env. Two callers need this: the provider-boundary
+/// suite, which points the *real* call path at a local stub rather than mocking the path away, and
+/// anyone routing these calls through a gateway. Empty is treated as unset.
+fn api_base(var: &str, default: &str) -> String {
+    std::env::var(var)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
 /// Fixed seed for pinned calls (judge *and* candidate generation) — any constant works; what
 /// matters is that it never varies, so two runs of the same benchmark ask for the same draw.
 pub const PINNED_SEED: u64 = 42;
@@ -298,8 +349,13 @@ fn generate_gemini(
         .or_else(|_| std::env::var("GOOGLE_API_KEY"))
         .or_else(|_| std::env::var("GOOGLE_GENERATIVE_AI_API_KEY"))
         .map_err(|_| EngineError::Other("no Gemini API key (set GEMINI_API_KEY)".into()))?;
-    let url =
-        format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
+    let url = format!(
+        "{}/v1beta/models/{model}:generateContent",
+        api_base(
+            "LIGHTTRACK_GEMINI_BASE",
+            "https://generativelanguage.googleapis.com"
+        )
+    );
     let mut body =
         serde_json::json!({ "contents": [{ "role": "user", "parts": [{ "text": input }] }] });
     if let Some(sys) = system_prompt {
@@ -333,9 +389,12 @@ fn generate_gemini(
         .map_err(|e| send_error("gemini", e))?;
     let latency_ms = Some(started.elapsed().as_millis() as u64);
     let status = resp.status();
+    // Cloned BEFORE the body is read: `read_bounded` consumes the response, and the stated retry
+    // schedule lives in the headers it takes with it.
+    let headers = resp.headers().clone();
     let text = read_bounded(resp, "gemini")?;
     if !status.is_success() {
-        return Err(http_error("gemini", status, text));
+        return Err(http_error("gemini", status, &headers, text));
     }
     let v: Value = serde_json::from_str(&text)?;
     let output = gemini_text(&v);
@@ -413,16 +472,20 @@ fn generate_openai(
 
     let started = Instant::now();
     let resp = http_client()?
-        .post("https://api.openai.com/v1/chat/completions")
+        .post(format!(
+            "{}/v1/chat/completions",
+            api_base("LIGHTTRACK_OPENAI_BASE", "https://api.openai.com")
+        ))
         .bearer_auth(&key)
         .json(&body)
         .send()
         .map_err(|e| send_error("openai", e))?;
     let latency_ms = Some(started.elapsed().as_millis() as u64);
     let status = resp.status();
+    let headers = resp.headers().clone();
     let text = read_bounded(resp, "openai")?;
     if !status.is_success() {
-        return Err(http_error("openai", status, text));
+        return Err(http_error("openai", status, &headers, text));
     }
     let v: Value = serde_json::from_str(&text)?;
     let output = v
@@ -464,8 +527,56 @@ fn generate_openai(
 
 #[cfg(test)]
 mod tests {
-    use super::{gemini_text, strip_schema_key};
+    use super::{gemini_text, stated_retry_after, strip_schema_key};
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
     use serde_json::json;
+    use std::time::Duration;
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(
+                HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        h
+    }
+
+    /// Three spellings, two unit systems, first match wins — and a header we cannot read is a
+    /// `None` that falls back to the computed ladder, never a misread number.
+    #[test]
+    fn reads_the_stated_delay_in_precedence_order() {
+        assert_eq!(
+            stated_retry_after(&headers(&[("retry-after", "5")])),
+            Some(Duration::from_secs(5)),
+            "plain Retry-After is SECONDS"
+        );
+        assert_eq!(
+            stated_retry_after(&headers(&[("retry-after-ms", "250")])),
+            Some(Duration::from_millis(250)),
+            "the -ms spellings are MILLISECONDS"
+        );
+        // The ms spelling is more precise, so it outranks the seconds one when both are present.
+        assert_eq!(
+            stated_retry_after(&headers(&[("retry-after", "5"), ("retry-after-ms", "80")])),
+            Some(Duration::from_millis(80))
+        );
+        assert_eq!(
+            stated_retry_after(&headers(&[("x-ms-retry-after-ms", "120")])),
+            Some(Duration::from_millis(120))
+        );
+        // An HTTP-date Retry-After is not guessed at.
+        assert_eq!(
+            stated_retry_after(&headers(&[(
+                "retry-after",
+                "Wed, 21 Oct 2026 07:28:00 GMT"
+            )])),
+            None
+        );
+        assert_eq!(stated_retry_after(&HeaderMap::new()), None);
+        assert_eq!(stated_retry_after(&headers(&[("retry-after", "-3")])), None);
+    }
 
     /// A thinking model's first part is its thought; the verdict is the text part after it.
     #[test]

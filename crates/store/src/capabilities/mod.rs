@@ -286,6 +286,7 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
         &[
             "capabilities",
             "init_schema",
+            "ping",
             "insert_event",
             "insert_event_checked",
             "insert_events_checked",

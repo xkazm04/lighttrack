@@ -285,15 +285,19 @@ fn write_stamp(ev: &mut LlmEvent, policy: Redaction, scrub: bool, spans: u32) {
 /// * `product_id` — same, for per-product attribution.
 /// * `cost_source` — a closed vocabulary (`client` | `book`) the server stamps.
 /// * `pricing_mode` — a closed vocabulary the price book resolves against.
+/// * `failure_class` — a closed vocabulary (`transient` | `terminal` | `unknown`) the ingest
+///   boundary validates. Scrubbing it would send every failure downstream as if its producer had
+///   said nothing, which is precisely the state the field exists to distinguish from.
 /// * `redaction` — the server's own [`RedactionStamp`] (M9). Written after the walk, so the scrub
 ///   never sees it in practice; listed here so a re-scrub of an already-stamped row cannot collapse
 ///   its rule fingerprint into `<SECRET>` and destroy the only record of what happened to the row.
-const METADATA_PASSTHROUGH: [&str; 7] = [
+const METADATA_PASSTHROUGH: [&str; 8] = [
     "api_key_id",
     "customer_id",
     "product_id",
     "cost_source",
     "pricing_mode",
+    "failure_class",
     // A relay run's prompt fingerprint (M19), server-computed from a device report. It is 64 hex
     // characters, so the "32+ hex is a secret" rule would collapse every one of them to the same
     // `<SECRET>` — and a fingerprint that is identical for every row is not a fingerprint. Exactly

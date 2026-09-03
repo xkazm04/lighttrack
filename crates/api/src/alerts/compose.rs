@@ -136,6 +136,9 @@ pub(crate) fn error_spike(s: &ErrorSpike) -> Alert {
     let extra = json!({ "spike": {
         "project_id": s.project_id, "count": s.count, "window_secs": s.window_secs,
         "model": s.model, "status": s.status, "error": s.error,
+        // The whole point of the field: a consumer reads the class the producer minted instead of
+        // re-deriving one from `error` at a layer that no longer holds the structured response.
+        "failure_class": s.failure_class.as_str(),
     }});
     Alert::new(
         AlertKind::ErrorSpike,

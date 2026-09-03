@@ -4,6 +4,7 @@
 //! lucky/unlucky output doesn't dominate — the judge is sampled separately via `samples`.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::Result;
 use serde_json::{json, Map, Value};
@@ -63,6 +64,92 @@ struct Cell {
     /// skipped cell is NOT an errored one: nothing failed, the operator's budget ran out — and the
     /// difference is what keeps a halted run from reading like a run that judged everything badly.
     skipped: bool,
+    /// True when this cell was never run because the target's breaker was open (implies `skipped`).
+    /// Reported apart from a budget skip: "we stopped paying" and "we stopped believing in this
+    /// provider" are different facts about a missing row, and a leaderboard that renders them the
+    /// same trades the product's own output for latency.
+    filtered: bool,
+    /// True when this cell was attempted *despite* an open breaker, because every target's breaker
+    /// was open. Recorded, never silent: an operator watching traffic climb against a provider
+    /// their dashboard shows as open needs the line that says the empty-set rule fired.
+    breaker_override: bool,
+}
+
+/// How many consecutive generation failures open one target's breaker.
+const OPEN_AFTER_FAILURES: u32 = 3;
+
+/// One breaker per target in the benchmark matrix, used as a **filter over the candidate set**
+/// rather than as admission control over a single call. The matrix's candidates are interchangeable
+/// only in the sense that any of them can be measured next; the breaker's verdict is therefore an
+/// input to "should this cell be dispatched?", not a permission.
+///
+/// Identity is the target's index in the caller's list and pruning never removes a member — the
+/// filter answers per index. A filter that compacted the list would renumber every target after the
+/// pruned one, and the next verdict would land on a healthy target that inherited a sick one's
+/// streak.
+pub(crate) struct TargetHealth {
+    consecutive: Vec<AtomicU32>,
+    threshold: u32,
+}
+
+/// The filter's verdict for one target.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum Admit {
+    /// Breaker closed — an ordinary attempt.
+    Attempt,
+    /// Breaker open, but so is every other target's: attempt anyway, and say so.
+    Override,
+    /// Breaker open while some other target still looks healthy: skip this cell.
+    Filtered,
+}
+
+impl TargetHealth {
+    pub(crate) fn new(n_targets: usize, threshold: u32) -> Self {
+        TargetHealth {
+            consecutive: (0..n_targets).map(|_| AtomicU32::new(0)).collect(),
+            // A misconfigured `0` must not open every breaker on the first cell — the same reason
+            // `crates/responder/src/breaker.rs:56-57` floors its permit count at one.
+            threshold: threshold.max(1),
+        }
+    }
+
+    fn is_open(&self, ti: usize) -> bool {
+        self.consecutive
+            .get(ti)
+            .is_some_and(|c| c.load(Ordering::Relaxed) >= self.threshold)
+    }
+
+    /// Whether target `ti`'s next cell should be dispatched.
+    ///
+    /// **All open is not "no candidates".** A health hypothesis that indicts every target at once is
+    /// the case where it is least likely to be exactly right and most expensive to obey: refusing on
+    /// it turns a partial outage into a total one, and it also removes the only thing that could
+    /// revise it, since the traffic that closes a breaker is traffic allowed through it. This is a
+    /// set narrowed by *health*, so it fails open; a set narrowed by *permission* would fail closed.
+    pub(crate) fn admit(&self, ti: usize) -> Admit {
+        if !self.is_open(ti) {
+            return Admit::Attempt;
+        }
+        if (0..self.consecutive.len()).all(|i| self.is_open(i)) {
+            Admit::Override
+        } else {
+            Admit::Filtered
+        }
+    }
+
+    /// Feed the breaker. Only **generation** failures count: a judge error or an unparseable verdict
+    /// says nothing about whether this target is alive, and letting it trip the target's breaker
+    /// would punish a healthy provider for the judge's bad hour.
+    pub(crate) fn record(&self, ti: usize, generation_failed: bool) {
+        if let Some(c) = self.consecutive.get(ti) {
+            if generation_failed {
+                c.fetch_add(1, Ordering::Relaxed);
+            } else {
+                // Closed by demonstrated success, not by the passage of time.
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
 }
 
 /// Generate `ng` candidates for one case from one target and judge each; pure (no printing/posting)
@@ -82,6 +169,8 @@ fn compute_cell(
     prices: &[ModelPriceRow],
     budget: &Budget,
     ctl: &RunControl,
+    health: &TargetHealth,
+    ti: usize,
 ) -> Cell {
     let t = &rt.target;
     let mut cell = Cell {
@@ -100,6 +189,8 @@ fn compute_cell(
         price_warnings: BTreeSet::new(),
         error_msg: None,
         skipped: false,
+        filtered: false,
+        breaker_override: false,
     };
     // Both stop conditions are checked HERE — at a case boundary, before the first paid call of this
     // cell: the operator's dollar ceiling, and an operator-requested cancellation. Neither ever
@@ -112,11 +203,25 @@ fn compute_cell(
         cell.skipped = true;
         return cell;
     }
+    // The third stop condition, also at a case boundary and also before the first paid call: this
+    // target's health. A ten-target, sixty-case run against a dead provider used to spend sixty
+    // calls learning it once.
+    match health.admit(ti) {
+        Admit::Filtered => {
+            cell.filtered = true;
+            cell.skipped = true;
+            return cell;
+        }
+        Admit::Override => cell.breaker_override = true,
+        Admit::Attempt => {}
+    }
     // Pin the candidate exactly as the judge is pinned — but only when one candidate per case was
     // asked for. With `--gen-samples > 1` the operator is deliberately drawing a distribution;
     // temperature 0 would collapse every draw onto the same output and silently delete the feature,
     // so we sample and stamp the run `sampled` rather than quietly claiming reproducibility.
     let pin = ng == 1;
+    // Only this — the target's own call failing — is evidence about the target's health.
+    let mut generation_failed = false;
     for _ in 0..ng {
         // The target decides how it generates: a model call with the RESOLVED prompt (not the
         // target's stored literal), or a POST to the operator's own endpoint.
@@ -124,6 +229,7 @@ fn compute_cell(
             Ok(g) => g,
             Err(e) => {
                 cell.error_msg = Some(format!("generation error — {e}"));
+                generation_failed = true;
                 break;
             }
         };
@@ -193,6 +299,7 @@ fn compute_cell(
     // Charge the run's ledger with what this cell actually cost, including the spend of a cell that
     // errored part-way: those calls were paid for too.
     budget.spend(cell.gen_cost + cell.judge_cost);
+    health.record(ti, generation_failed);
     cell
 }
 
@@ -359,6 +466,10 @@ pub(crate) fn run_compare(
     // `cell_matrix_is_order_independent`.
     let n_c = cases.len();
     let total_cells = targets.len() * n_c;
+    // One breaker per target, consulted at each cell boundary. In-memory and run-scoped on purpose:
+    // its whole evidence base is this run's cells, and carrying a streak across runs would open a
+    // breaker on yesterday's incident.
+    let health = TargetHealth::new(targets.len(), OPEN_AFTER_FAILURES);
     let cells: Vec<Cell> = parallel_map(total_cells, jobs, |idx| {
         let (ti, ci) = (idx / n_c.max(1), idx % n_c.max(1));
         let cell = compute_cell(
@@ -374,6 +485,8 @@ pub(crate) fn run_compare(
             &prices,
             &budget,
             ctl,
+            &health,
+            ti,
         );
         // Live progress: the job's status line used to be written once at claim time and never
         // again, so a 500-case run looked identical at second 1 and minute 40.
@@ -429,8 +542,19 @@ pub(crate) fn run_compare(
         // aggregation is identical to the old sequential path.
         let target_cells: Vec<Cell> = cells.by_ref().take(n_c).collect();
         let mut skipped = 0u32;
+        // Health-filtered cells, counted apart from budget/cancel skips, and cells attempted over an
+        // open breaker under the empty-set rule.
+        let (mut filtered, mut overrides) = (0u32, 0u32);
 
         for (i, cell) in target_cells.into_iter().enumerate() {
+            if cell.breaker_override {
+                overrides += 1;
+            }
+            if cell.filtered {
+                filtered += 1;
+                skipped += 1;
+                continue;
+            }
             if cell.skipped {
                 skipped += 1;
                 continue;
@@ -599,14 +723,32 @@ pub(crate) fn run_compare(
         // completed run. `partial` is that honest status (the `--gate` contract treats it as
         // unverified, like `no_baseline`).
         let status = halt_status(cancelled, skipped, sig.status);
-        if skipped > 0 && cancelled {
+        if filtered > 0 {
             println!(
-                "  CANCELLED: {skipped} of {n_c} case(s) were never run — an operator stopped this \
+                "  HEALTH FILTER: {filtered} of {n_c} case(s) were never run — this target failed \
+                 {OPEN_AFTER_FAILURES} consecutive generations, so its breaker opened. This row is \
+                 PARTIAL because the provider was unavailable, which is itself a measurement — not \
+                 because it scored badly."
+            );
+        }
+        if overrides > 0 {
+            println!(
+                "  BREAKER OVERRIDE: {overrides} case(s) were attempted with EVERY target's breaker \
+                 open. The empty-set rule fired: refusing to route when everything looks sick turns \
+                 a partial outage into a total one, and only allowed traffic can ever close a breaker."
+            );
+        }
+        // Budget/cancel skips are what the two lines below are about; a health-filtered cell has
+        // already reported itself.
+        let halted = skipped - filtered;
+        if halted > 0 && cancelled {
+            println!(
+                "  CANCELLED: {halted} of {n_c} case(s) were never run — an operator stopped this \
                  run. Results below are PARTIAL."
             );
-        } else if skipped > 0 {
+        } else if halted > 0 {
             println!(
-                "  BUDGET HALT: {skipped} of {n_c} case(s) were never run — the run's ${:.4} spend \
+                "  BUDGET HALT: {halted} of {n_c} case(s) were never run — the run's ${:.4} spend \
                  reached --max-cost ${:.2}. Results below are PARTIAL.",
                 budget.spent_usd(),
                 cli.max_cost,
@@ -649,8 +791,12 @@ pub(crate) fn run_compare(
             // answerable from the run alone.
             "partial": skipped > 0,
             "cancelled": cancelled,
-            "budget_halted": skipped > 0 && !cancelled,
+            "budget_halted": skipped > filtered && !cancelled,
             "skipped_cases": skipped,
+            // Rendered as distinctly as `partial` and `budget_halted`: a missing row because the
+            // provider was down must not read like a missing row because the money ran out.
+            "health_filtered_cases": filtered,
+            "breaker_overrides": overrides,
             "cases_planned": n_c,
             "budget_limit_usd": budget.limit_usd(),
             "budget_spent_usd": budget.spent_usd(),
@@ -744,8 +890,9 @@ pub(crate) fn run_compare(
 
 #[cfg(test)]
 mod tests {
-    use super::r3;
+    use super::{r3, Admit, TargetHealth, OPEN_AFTER_FAILURES};
     use crate::util::parallel_map;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
@@ -822,6 +969,112 @@ mod tests {
             new < old,
             "matrix scheduling must not be slower (old={old:?} new={new:?})"
         );
+    }
+
+    /// One run of the real dispatch shape — one `parallel_map` over `n_t × n_c` cells, folded in
+    /// (target, case) order — with the health filter consulted at each cell boundary. `dead` names
+    /// the targets whose generation call always fails. Returns per-target attempt counts and the
+    /// filtered/override tallies.
+    fn matrix(n_t: usize, n_c: usize, jobs: usize, dead: &[usize]) -> (Vec<u32>, u32, u32) {
+        let health = TargetHealth::new(n_t, OPEN_AFTER_FAILURES);
+        let attempts: Vec<AtomicU32> = (0..n_t).map(|_| AtomicU32::new(0)).collect();
+        let (filtered, overrides) = (AtomicU32::new(0), AtomicU32::new(0));
+        parallel_map(n_t * n_c, jobs, |idx| {
+            let ti = idx / n_c;
+            match health.admit(ti) {
+                Admit::Filtered => {
+                    filtered.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                Admit::Override => {
+                    overrides.fetch_add(1, Ordering::Relaxed);
+                }
+                Admit::Attempt => {}
+            }
+            attempts[ti].fetch_add(1, Ordering::Relaxed);
+            health.record(ti, dead.contains(&ti));
+        });
+        (
+            attempts.iter().map(|a| a.load(Ordering::Relaxed)).collect(),
+            filtered.load(Ordering::Relaxed),
+            overrides.load(Ordering::Relaxed),
+        )
+    }
+
+    /// The measurable: a ten-target, sixty-case matrix in which target 7 fails every call used to
+    /// spend sixty calls on it, learning the same fact sixty times. It now spends the breaker's
+    /// threshold and stops — while every healthy target is measured on every case.
+    #[test]
+    fn health_filter_prunes_a_dead_target_from_the_matrix() {
+        let (attempts, filtered, overrides) = matrix(10, 60, 1, &[7]);
+        assert_eq!(
+            attempts[7], OPEN_AFTER_FAILURES,
+            "the dead target must cost the threshold, not the case count"
+        );
+        assert_eq!(filtered, 60 - OPEN_AFTER_FAILURES);
+        assert_eq!(overrides, 0, "nine healthy targets means no empty-set rule");
+        for (ti, n) in attempts.iter().enumerate() {
+            if ti != 7 {
+                assert_eq!(*n, 60, "target {ti} was healthy and must be fully measured");
+            }
+        }
+
+        // Under real concurrency the streak is observed by several workers at once, so the bound is
+        // threshold + in-flight rather than exactly threshold. What matters is the order of
+        // magnitude: still nothing like sixty.
+        let (par, _, _) = matrix(10, 60, 8, &[7]);
+        assert!(
+            par[7] <= OPEN_AFTER_FAILURES + 8,
+            "dead target burned {} calls at --jobs 8 — nothing like the sixty it used to",
+            par[7]
+        );
+    }
+
+    /// The degenerate case, and the rule that is only ever discovered during an incident: when EVERY
+    /// candidate's breaker is open the filter does not apply — the strategy runs over the full set
+    /// and the call is attempted. Refusing here would convert a partial outage into a total one, and
+    /// would remove the only traffic that could ever close a breaker. The paired assertion to
+    /// `crates/responder/src/breaker.rs:56-57`, which floors its permits at one for the same reason.
+    #[test]
+    fn all_open_degrades_to_trying_not_to_refusing() {
+        let health = TargetHealth::new(3, OPEN_AFTER_FAILURES);
+        // One sick target among healthy ones is pruned.
+        for _ in 0..OPEN_AFTER_FAILURES {
+            health.record(0, true);
+        }
+        assert_eq!(health.admit(0), Admit::Filtered);
+        assert_eq!(health.admit(1), Admit::Attempt);
+        // Once the outage is total, every verdict flips to an attempt — recorded as an override,
+        // never as an ordinary attempt and never as a refusal.
+        for ti in 1..3 {
+            for _ in 0..OPEN_AFTER_FAILURES {
+                health.record(ti, true);
+            }
+        }
+        for ti in 0..3 {
+            assert_eq!(health.admit(ti), Admit::Override, "target {ti}");
+        }
+        // One target recovering re-arms the filter for the rest: the hypothesis is revisable, and
+        // the traffic that revised it was traffic the override let through.
+        health.record(2, false);
+        assert_eq!(health.admit(2), Admit::Attempt);
+        assert_eq!(health.admit(0), Admit::Filtered);
+    }
+
+    /// The same rule over the whole matrix: a total outage must never produce an empty run.
+    #[test]
+    fn a_total_outage_still_runs_cells() {
+        let all: Vec<usize> = (0..10).collect();
+        let (attempts, filtered, overrides) = matrix(10, 60, 1, &all);
+        assert!(
+            attempts.iter().all(|n| *n >= OPEN_AFTER_FAILURES),
+            "no target may be starved of every attempt: {attempts:?}"
+        );
+        // Cells are dispatched target-major, so the last target is the one running once every
+        // breaker is open — and it is attempted on all sixty, over the top of its own open breaker.
+        assert_eq!(attempts[9], 60);
+        assert_eq!(overrides, 60 - OPEN_AFTER_FAILURES);
+        assert!(filtered > 0 && filtered < 600, "filtered={filtered}");
     }
 
     #[test]
