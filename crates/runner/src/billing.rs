@@ -44,7 +44,7 @@ fn sync_stripe(
 ) -> Result<()> {
     let key = std::env::var("STRIPE_API_KEY").context("STRIPE_API_KEY is not set")?;
     let mut starting_after: Option<String> = None;
-    let mut total = 0usize;
+    let (mut total, mut skipped) = (0usize, 0usize);
 
     loop {
         let mut params: Vec<(String, String)> = vec![
@@ -76,10 +76,15 @@ fn sync_stripe(
         }
         let fx = shared_fx();
         for inv in &data {
-            if let Some(mut ev) = normalize_invoice(inv, &fx) {
-                ev.project_id = project.to_string();
-                post(cli, http, "/v1/revenue", &serde_json::to_value(&ev)?)?;
-                total += 1;
+            match normalize_invoice(inv, &fx) {
+                Some(mut ev) => {
+                    ev.project_id = project.to_string();
+                    post(cli, http, "/v1/revenue", &serde_json::to_value(&ev)?)?;
+                    total += 1;
+                }
+                // An invoice the normalizer declines (no amount, an unconvertible currency, ...)
+                // is revenue this sync did not record; "synced N" alone read as "all of it".
+                None => skipped += 1,
             }
         }
         if !resp
@@ -96,7 +101,14 @@ fn sync_stripe(
             .map(str::to_string);
     }
 
-    println!("synced {total} paid invoice(s) from stripe → project {project}");
+    println!(
+        "synced {total} paid invoice(s) from stripe → project {project}{}",
+        if skipped > 0 {
+            format!(" ({skipped} skipped: not normalizable into a revenue event)")
+        } else {
+            String::new()
+        }
+    );
     Ok(())
 }
 
