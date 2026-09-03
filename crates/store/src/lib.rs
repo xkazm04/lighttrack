@@ -1027,8 +1027,9 @@ pub trait Store: Send + Sync {
 
     // --- projects ---
     fn create_project(&self, p: &Project) -> Result<()>;
-    /// Replace a project's mutable fields (name / enabled / redaction / collective opt-in), matched by
-    /// `p.id`; `id` and `created_at` are immutable. Returns `true` when a row changed, `false` when the
+    /// Replace a project's mutable fields (name / enabled / redaction / collective opt-in /
+    /// `require_trusted_judge` / `archived_at`), matched by `p.id`; `id` and `created_at` are
+    /// immutable. Returns `true` when a row changed, `false` when the
     /// id is unknown (the API maps that to 404).
     ///
     /// Default is a clear unimplemented error rather than a silent no-op: `redaction` is a compliance
@@ -1047,8 +1048,9 @@ pub trait Store: Send + Sync {
     /// Best-effort update of `last_used_at`.
     fn touch_api_key(&self, id: &str, when: DateTime<Utc>) -> Result<()>;
     /// Every key minted for a project (revoked ones included — the caller decides what to show), so an
-    /// operator can list, audit last-use, and pick one to revoke. Default `Ok(vec![])` so unported
-    /// backends compile (matching the `get_limit_rule` precedent). NEVER expose `key_hash` upward.
+    /// operator can list, audit last-use, and pick one to revoke. Refuses by default
+    /// ([`StoreError::Unsupported`]), like every other read on an unported surface: an empty key
+    /// list would tell an operator a project has no credentials. NEVER expose `key_hash` upward.
     fn list_api_keys(&self, _project: &str) -> Result<Vec<ApiKey>> {
         Err(StoreError::Unsupported("listing API keys"))
     }
@@ -1074,8 +1076,8 @@ pub trait Store: Send + Sync {
     // --- limit rules ---
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()>;
     fn list_limit_rules(&self, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>>;
-    /// Fetch one rule by id (across projects — the caller is admin-gated). Default `None` so
-    /// backends that haven't ported the lifecycle read compile unchanged.
+    /// Fetch one rule by id within `scope`. Refuses by default rather than answering `None`: "no
+    /// such rule" and "this backend never looked" must not be the same answer.
     fn get_limit_rule(&self, _scope: Scope<'_>, _id: &str) -> Result<Option<LimitRule>> {
         Err(StoreError::Unsupported("limit-rule lookup"))
     }
@@ -1219,9 +1221,9 @@ pub trait Store: Send + Sync {
     }
 
     // --- traces: roll events sharing a trace_id into one end-to-end view ---
-    // Default impls so backends that don't (yet) index by trace compile unchanged: the listing reads
-    // empty and `get_trace` composes `list_trace_events` (so any backend that can list a trace's
-    // events gets a correct rollup for free, from the pure `Trace::from_events`).
+    // Default impls so backends that don't (yet) index by trace compile unchanged: every read
+    // refuses with `Unsupported`, and `get_trace` composes `list_trace_events` (so any backend that
+    // can list a trace's events gets a correct rollup for free, from the pure `Trace::from_events`).
     /// Whether this backend actually serves the trace surface (listing, detail, trace scores).
     ///
     /// A declared capability rather than a probe, on the same terms as
@@ -1411,8 +1413,9 @@ pub trait Store: Send + Sync {
     }
 
     // --- prompt registry (versioned prompts + label-gated promotion) ---
-    // Default impls so backends that don't (yet) host the registry compile unchanged: writes are a
-    // clear error rather than a silent drop, and reads are empty/None.
+    // Default impls so backends that don't (yet) host the registry compile unchanged: every method,
+    // read or write, refuses with `Unsupported` — a registry that read as empty would resolve every
+    // runtime fetch to "no such prompt".
     /// Register a new named prompt (with its initial labels/benchmark link).
     fn create_prompt(&self, _p: &Prompt) -> Result<()> {
         Err(StoreError::Unsupported("the prompt registry"))
@@ -1453,8 +1456,9 @@ pub trait Store: Send + Sync {
     }
 
     // --- revenue + margin (Phase 1 profit tracking) ---
-    // Default impls so backends that don't (yet) support profit tracking compile unchanged: cost is a
-    // no-op (empty), and inserting revenue is a clear error rather than a silent drop.
+    // Default impls so backends that don't (yet) support profit tracking compile unchanged: the
+    // revenue methods refuse outright, and the cost splits default over `rollup`, which refuses on a
+    // backend without the primitive — a margin that read as "no cost" would be pure profit.
     /// Persist one normalized revenue record.
     fn insert_revenue_event(&self, _ev: &RevenueEvent) -> Result<()> {
         Err(StoreError::Unsupported("revenue tracking"))
@@ -1547,8 +1551,9 @@ pub trait Store: Send + Sync {
     }
 
     // --- cloud→device relay queue (docs/RELAY.md) ---
-    // Default impls so backends that don't (yet) host the relay compile unchanged: writes are a
-    // clear error rather than a silent drop, and reads/leases are empty/None.
+    // Default impls so backends that don't (yet) host the relay compile unchanged: every method
+    // refuses with `Unsupported`. A lease that read as empty would look exactly like a drained queue
+    // to a device, which is the reading that leaves work stranded.
     /// Enqueue one device task.
     fn create_relay_task(&self, _t: &RelayTask) -> Result<()> {
         Err(StoreError::Unsupported("the relay queue"))
@@ -1662,8 +1667,9 @@ pub trait Store: Send + Sync {
     }
 
     // --- collective model intelligence (network effect) ---
-    // Default impls so backends that don't (yet) host a leaderboard compile unchanged: ingest is a
-    // clear error rather than a silent drop, and the leaderboard reads as empty.
+    // Default impls so backends that don't (yet) host a leaderboard compile unchanged: every method
+    // refuses with `Unsupported`; the two scanned defaults below compose the refusing reads and so
+    // refuse through them.
     /// Upsert one privacy-safe digest entry received from a contributor (keyed on
     /// contributor_id + provider + model + task_type).
     fn upsert_collective_entry(&self, _e: &CollectiveEntry) -> Result<()> {
