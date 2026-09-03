@@ -121,15 +121,33 @@ fn score_once(
 
     let mut scored = 0usize;
     let mut mined = 0u32;
+    // Counted, never fatal: every verdict in `judged` was already paid for, and `?` on the first
+    // bad one discarded the rest of the pass — the rubric runner skips a case loudly and keeps
+    // going, and so does this pass now.
+    let (mut judge_failures, mut post_failures) = (0usize, 0usize);
     for (i, verdict) in judged.into_iter().enumerate() {
         let (ev, _, _) = &eligible[i];
-        let mut v = verdict?;
+        let mut v = match verdict {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("  ! {} skipped — judge failed: {e:#}", short(&ev.id));
+                judge_failures += 1;
+                continue;
+            }
+        };
         // The judge read the *stored* text, which the ingest scrub may already have rewritten. Copy
         // what the boundary did onto the verdict, so "why is this score odd" has an answer at the
         // verdict rather than only at the row.
         crate::provenance::stamp_evidence(&mut v.detail, ev);
         let score = build_score(&ev.project_id, Some(&ev.id), judge, &v);
-        post(cli, http, "/v1/scores", &score)?;
+        if let Err(e) = post(cli, http, "/v1/scores", &score) {
+            eprintln!(
+                "  ! {} verdict not persisted — score post failed: {e:#}",
+                short(&ev.id)
+            );
+            post_failures += 1;
+            continue;
+        }
         scored += 1;
         // A failing verdict is the one artefact worth keeping from a bad call, and it used to be
         // discarded the moment the number was posted (M24). The import dedupes, so a repeat failure
@@ -159,7 +177,12 @@ fn score_once(
         );
     }
     println!(
-        "scored {scored}, skipped {skipped} (already-scored or no content) of {total} fetched"
+        "scored {scored}, skipped {skipped} (already-scored or no content) of {total} fetched{}",
+        if judge_failures + post_failures > 0 {
+            format!(" — {judge_failures} judge failure(s), {post_failures} post failure(s)")
+        } else {
+            String::new()
+        }
     );
     if mined > 0 {
         println!("mined {mined} failing case(s) into the project's regression set(s)");
