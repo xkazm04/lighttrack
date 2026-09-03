@@ -21,19 +21,42 @@ use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
 use crate::state::{spawn_db, AppState};
 
-/// Post one revenue record (manual, or from a future Stripe/Polar sync). Project is derived from the
-/// key, mirroring event ingest.
+/// Post one revenue record by hand or from the runner's billing sync (the Stripe/Polar webhooks
+/// land through `billing::post_webhook` instead). Project is derived from the key, mirroring event
+/// ingest — but the write needs `manage`, not `ingest`: recognized revenue is what a revenue-share
+/// cap (`{"pct": 80}`) resolves its threshold from, so a key that may only record calls must not be
+/// able to raise its own budget by posting revenue.
 pub(crate) async fn post_revenue(
     State(st): State<AppState>,
     headers: HeaderMap,
     Json(mut ev): Json<RevenueEvent>,
 ) -> Result<Json<RevenueEvent>, ApiError> {
     let principal = authenticate(&st, &headers).await?;
+    crate::auth_scopes::ensure_scope(&principal, lighttrack_core::Scope::Manage)?;
     ev.project_id = resolve_ingest_project(&principal, &ev.project_id)?;
+    validate_revenue(&ev).map_err(ApiError::bad_request)?;
     let store = st.store.clone();
     let to_insert = ev.clone();
     spawn_db(move || store.insert_revenue_event(&to_insert)).await?;
     Ok(Json(ev))
+}
+
+/// The shape rules recognition relies on. A NaN or negative amount used to be stored as sent and
+/// then poisoned every margin figure it touched (NaN sums stay NaN; a negative magnitude inverted
+/// the refund sign); an inverted period recognized nothing, silently.
+fn validate_revenue(ev: &RevenueEvent) -> Result<(), String> {
+    if !ev.amount_usd.is_finite() || ev.amount_usd < 0.0 {
+        return Err(format!(
+            "amount_usd must be a finite, non-negative magnitude (the sign comes from `kind`); got {}",
+            ev.amount_usd
+        ));
+    }
+    if let (Some(ps), Some(pe)) = (ev.period_start, ev.period_end) {
+        if pe <= ps {
+            return Err("period_end must be after period_start".into());
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
