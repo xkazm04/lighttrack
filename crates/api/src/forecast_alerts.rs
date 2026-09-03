@@ -140,13 +140,18 @@ pub(crate) fn build_alerts(
 /// Stamp `policy_applied` on every `margin_erosion` alert whose subject has a policy-raised
 /// guardrail standing. Applied after [`build_alerts`] because only the caller has read the rules;
 /// keeping the mapping pure is what lets it be tested without a store.
+///
+/// Only an **enabled** rule stands: the sweep reads every rule so the stamp sees ones it just
+/// raised, and a guardrail an operator switched off is not "what is already being done".
 pub(crate) fn attach_guardrails(
     alerts: &mut [ForecastAlert],
     rules: &[lighttrack_core::LimitRule],
 ) {
+    let standing: Vec<lighttrack_core::LimitRule> =
+        rules.iter().filter(|r| r.enabled).cloned().collect();
     for a in alerts.iter_mut().filter(|a| a.kind == "margin_erosion") {
         a.policy_applied =
-            crate::margin_guardrails::guardrail_for(rules, &a.subject).map(str::to_string);
+            crate::margin_guardrails::guardrail_for(&standing, &a.subject).map(str::to_string);
     }
 }
 
@@ -244,6 +249,30 @@ mod tests {
         let alerts = build_alerts("p1", &[b], &[]);
         let a = alerts.first().expect("a genuine ramp still pages");
         assert!(a.message.contains("r²=") && a.message.contains("over 6 days"));
+    }
+
+    #[test]
+    fn a_disabled_guardrail_is_not_reported_as_the_policy_in_force() {
+        let mut alerts = vec![ForecastAlert {
+            kind: "margin_erosion",
+            severity: "warning",
+            project_id: "p1".into(),
+            subject: "acme".into(),
+            eta_days: 5.0,
+            message: String::new(),
+            policy_applied: None,
+        }];
+        let mut guard = rule();
+        guard.id = "g1".into();
+        guard.origin = Some("margin-policy:pol-1:acme".into());
+        attach_guardrails(&mut alerts, std::slice::from_ref(&guard));
+        assert_eq!(alerts[0].policy_applied.as_deref(), Some("g1"));
+        guard.enabled = false;
+        attach_guardrails(&mut alerts, std::slice::from_ref(&guard));
+        assert!(
+            alerts[0].policy_applied.is_none(),
+            "a switched-off guardrail is a warning again, not a report"
+        );
     }
 
     #[test]
