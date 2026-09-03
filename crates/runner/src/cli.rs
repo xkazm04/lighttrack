@@ -266,7 +266,8 @@ pub(crate) enum Cmd {
         /// Events to sample per cycle (most recent).
         #[arg(long, default_value_t = 50)]
         n: usize,
-        /// Dataset name prefix; each cycle creates `<prefix>-<UTC timestamp>`.
+        /// Dataset name prefix; each cycle creates `<prefix>-<short id of the newest sampled event>`
+        /// — the watermark that makes a repeated cycle over the same window a no-op.
         #[arg(long, default_value = "online")]
         name_prefix: String,
         /// Add an LLM (claude -p) anonymization pass for names/free-text PII the regex misses.
