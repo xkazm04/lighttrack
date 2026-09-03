@@ -4,12 +4,13 @@
 //! `(contributor_id, provider, model, task_type)` makes a re-contribution upsert in place, and
 //! `delete` lets the ingest handler replace a contributor's whole set so dropped buckets don't linger.
 
+use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Row};
 
 use lighttrack_core::{CollectiveEntry, Coverage};
 
 use crate::codec::{fmt_ts, parse_ts};
-use crate::Result;
+use crate::{CollectiveFilter, ReplaceAck, Result};
 
 pub(super) fn upsert(conn: &Connection, e: &CollectiveEntry) -> Result<()> {
     conn.execute(
@@ -73,18 +74,94 @@ pub(super) fn purge_before(
     Ok(n as u64)
 }
 
+/// In the schema model's column order (`received_at` shipped with the table; the v2/v3 columns were
+/// added after it), which the test below holds it to - `map_raw` reads by position.
+const COLS: &str = "contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd, \
+     p50_latency_ms, p95_latency_ms, n_runs, n_cases, received_at, quality_variance, \
+     judge_provider, rubric_fingerprint, determinism, frozen_dataset, significance_tested";
+
 pub(super) fn list(conn: &Connection) -> Result<Vec<CollectiveEntry>> {
-    let sql =
-        "SELECT contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd, \
-               p50_latency_ms, p95_latency_ms, n_runs, n_cases, quality_variance, \
-               judge_provider, rubric_fingerprint, determinism, frozen_dataset, \
-               significance_tested, received_at \
-               FROM collective_entries";
-    let mut stmt = conn.prepare(sql)?;
+    let sql = format!("SELECT {COLS} FROM collective_entries");
+    let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
         .query_map([], map_raw)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(from_raw).collect()
+}
+
+/// Retention-narrowed read. `received_at` is fixed-width `RFC3339(Nanos, Z)`, so the `>=` is a
+/// correct chronological comparison and rides `idx_collective_received` instead of decoding every
+/// row into a struct only to drop most of them in the handler.
+pub(super) fn list_filtered(
+    conn: &Connection,
+    f: &CollectiveFilter,
+) -> Result<Vec<CollectiveEntry>> {
+    let Some(after) = f.received_after else {
+        return list(conn);
+    };
+    let sql = format!("SELECT {COLS} FROM collective_entries WHERE received_at >= ?1");
+    let mut stmt = conn.prepare(&sql)?;
+    let raws = stmt
+        .query_map(params![fmt_ts(after)], map_raw)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    raws.into_iter().map(from_raw).collect()
+}
+
+/// Newest receipt for one contributor. A keyed `MAX` on the primary key's leading column — the
+/// ingest rate limit used to answer this by decoding the whole table.
+pub(super) fn latest_receipt(
+    conn: &Connection,
+    contributor_id: &str,
+) -> Result<Option<DateTime<Utc>>> {
+    let raw: Option<String> = conn.query_row(
+        "SELECT MAX(received_at) FROM collective_entries WHERE contributor_id = ?1",
+        params![contributor_id],
+        |r| r.get(0),
+    )?;
+    raw.map(|s| parse_ts(&s)).transpose()
+}
+
+/// Replace a contributor's whole set (and optionally sweep retention) in **one** transaction, so a
+/// failure part-way through leaves the previous set intact rather than a half-replaced one. Nothing
+/// else can interleave: `SqliteStore` already holds the single write connection, which is why
+/// `unchecked_transaction` is sound here (same argument as `revenue::insert_batch`).
+pub(super) fn replace(
+    conn: &Connection,
+    contributor_id: &str,
+    entries: &[CollectiveEntry],
+    purge_before: Option<DateTime<Utc>>,
+) -> Result<ReplaceAck> {
+    let tx = conn.unchecked_transaction()?;
+    let ack = apply_replace(&tx, contributor_id, entries, purge_before)?;
+    tx.commit()?;
+    Ok(ack)
+}
+
+/// The body of [`replace`], factored out so a test can run it inside a transaction it then drops —
+/// which is the only way to prove the rollback rather than assert it in a comment.
+pub(super) fn apply_replace(
+    conn: &Connection,
+    contributor_id: &str,
+    entries: &[CollectiveEntry],
+    purge_before: Option<DateTime<Utc>>,
+) -> Result<ReplaceAck> {
+    let deleted = delete(conn, contributor_id)?;
+    for e in entries {
+        upsert(conn, e)?;
+    }
+    // The sweep is the standalone one, unchanged, so `replace` cannot drift from
+    // `purge_collective_entries_before`. It runs last: the hub stamps `received_at = now` on every
+    // entry it accepts, so the set just written is never older than the cutoff.
+    let purged = match purge_before {
+        Some(c) => self::purge_before(conn, c)?,
+        None => 0,
+    };
+    Ok(ReplaceAck {
+        deleted,
+        inserted: entries.len() as u64,
+        purged,
+        atomic: true,
+    })
 }
 
 struct Raw {
@@ -121,13 +198,13 @@ fn map_raw(row: &Row) -> rusqlite::Result<Raw> {
         p95_latency_ms: row.get(8)?,
         n_runs: row.get(9)?,
         n_cases: row.get(10)?,
-        quality_variance: row.get(11)?,
-        judge_provider: row.get(12)?,
-        rubric_fingerprint: row.get(13)?,
-        determinism: row.get(14)?,
-        frozen_dataset: row.get(15)?,
-        significance_tested: row.get(16)?,
-        received_at: row.get(17)?,
+        received_at: row.get(11)?,
+        quality_variance: row.get(12)?,
+        judge_provider: row.get(13)?,
+        rubric_fingerprint: row.get(14)?,
+        determinism: row.get(15)?,
+        frozen_dataset: row.get(16)?,
+        significance_tested: row.get(17)?,
     })
 }
 
@@ -163,146 +240,15 @@ fn from_raw(r: Raw) -> Result<CollectiveEntry> {
 }
 
 #[cfg(test)]
-mod tests {
+mod cols_tests {
     use super::*;
-    use chrono::Utc;
-    use lighttrack_core::{merge_leaderboard, DEFAULT_LOW_CONFIDENCE_CASES};
-
-    fn conn() -> Connection {
-        let c = Connection::open_in_memory().unwrap();
-        c.execute_batch(include_str!("../../../../schema/sqlite/001_init.sql"))
-            .unwrap();
-        c
-    }
-
-    fn entry(contrib: &str, model: &str, q: f64, cases: u32) -> CollectiveEntry {
-        CollectiveEntry {
-            contributor_id: contrib.into(),
-            provider: "anthropic".into(),
-            model: model.into(),
-            task_type: "qa".into(),
-            quality: q,
-            pass_rate: q,
-            avg_cost_usd: 0.003,
-            p50_latency_ms: Some(900),
-            p95_latency_ms: Some(2100),
-            n_runs: 1,
-            n_cases: cases,
-            quality_variance: None,
-            judge_provider: None,
-            rubric_fingerprint: None,
-            determinism: None,
-            frozen_dataset: Coverage::Unknown,
-            significance_tested: Coverage::Unknown,
-            received_at: Utc::now(),
-        }
-    }
 
     #[test]
-    fn upsert_is_idempotent_on_pk() {
-        let c = conn();
-        upsert(&c, &entry("contrib-a", "haiku", 0.7, 10)).unwrap();
-        // Same (contributor, provider, model, task) → updates in place, not a second row.
-        upsert(&c, &entry("contrib-a", "haiku", 0.9, 40)).unwrap();
-        let all = list(&c).unwrap();
-        assert_eq!(all.len(), 1);
-        assert!((all[0].quality - 0.9).abs() < 1e-9);
-        assert_eq!(all[0].n_cases, 40);
-    }
-
-    #[test]
-    fn delete_replaces_a_contributors_set() {
-        let c = conn();
-        upsert(&c, &entry("a", "haiku", 0.7, 10)).unwrap();
-        upsert(&c, &entry("a", "sonnet", 0.8, 10)).unwrap();
-        upsert(&c, &entry("b", "haiku", 0.6, 10)).unwrap();
-        let removed = delete(&c, "a").unwrap();
-        assert_eq!(removed, 2);
-        let all = list(&c).unwrap();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].contributor_id, "b");
-    }
-
-    #[test]
-    fn purge_before_drops_only_expired_rows() {
-        let c = conn();
-        let mut old = entry("a", "haiku", 0.7, 10);
-        old.received_at = Utc::now() - chrono::Duration::days(120);
-        upsert(&c, &old).unwrap();
-        upsert(&c, &entry("b", "haiku", 0.8, 10)).unwrap();
-        let removed = purge_before(&c, Utc::now() - chrono::Duration::days(90)).unwrap();
-        assert_eq!(removed, 1);
-        let all = list(&c).unwrap();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].contributor_id, "b");
-    }
-
-    #[test]
-    fn round_trips_into_a_merged_leaderboard() {
-        let c = conn();
-        upsert(&c, &entry("a", "sonnet", 0.8, 50)).unwrap();
-        upsert(&c, &entry("b", "sonnet", 0.9, 50)).unwrap();
-        let rows = merge_leaderboard(&list(&c).unwrap(), DEFAULT_LOW_CONFIDENCE_CASES);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].model, "sonnet");
-        assert_eq!(rows[0].n_contributors, 2);
-        assert_eq!(rows[0].n_cases, 100);
-        assert!((rows[0].quality - 0.85).abs() < 1e-9);
-        assert_eq!(rows[0].p50_latency_ms, Some(900));
-    }
-
-    #[test]
-    fn quality_variance_round_trips() {
-        let c = conn();
-        let mut e = entry("a", "sonnet", 0.8, 50);
-        e.quality_variance = Some(0.0081);
-        upsert(&c, &e).unwrap();
-        let got = list(&c).unwrap();
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].quality_variance, Some(0.0081));
-        // A NULL (v1) variance also round-trips as None.
-        upsert(&c, &entry("b", "haiku", 0.7, 20)).unwrap();
-        let b = list(&c)
-            .unwrap()
-            .into_iter()
-            .find(|r| r.model == "haiku")
-            .unwrap();
-        assert!(b.quality_variance.is_none());
-    }
-
-    #[test]
-    fn rigor_round_trips_and_v2_rows_read_back_as_unknown() {
-        let c = conn();
-        let mut e = entry("a", "sonnet", 0.8, 50);
-        e.determinism = Some("exact".into());
-        e.frozen_dataset = Coverage::All;
-        e.significance_tested = Coverage::Mixed;
-        upsert(&c, &e).unwrap();
-        let got = list(&c).unwrap();
-        assert_eq!(got[0].determinism.as_deref(), Some("exact"));
-        assert_eq!(got[0].frozen_dataset, Coverage::All);
-        assert_eq!(got[0].significance_tested, Coverage::Mixed);
-        // A v1/v2 contribution stores NULLs and reads back as Unknown — no backfill needed.
-        upsert(&c, &entry("b", "haiku", 0.7, 20)).unwrap();
-        let b = list(&c)
-            .unwrap()
-            .into_iter()
-            .find(|r| r.model == "haiku")
-            .unwrap();
-        assert!(b.determinism.is_none());
-        assert_eq!(b.frozen_dataset, Coverage::Unknown);
-        assert_eq!(b.significance_tested, Coverage::Unknown);
-    }
-
-    #[test]
-    fn judge_and_rubric_tags_round_trip() {
-        let c = conn();
-        let mut e = entry("a", "sonnet", 0.8, 50);
-        e.judge_provider = Some("openai".into());
-        e.rubric_fingerprint = Some("ab12cd34".into());
-        upsert(&c, &e).unwrap();
-        let got = list(&c).unwrap();
-        assert_eq!(got[0].judge_provider.as_deref(), Some("openai"));
-        assert_eq!(got[0].rubric_fingerprint.as_deref(), Some("ab12cd34"));
+    fn cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(
+            COLS,
+            tables::COLLECTIVE_ENTRIES.select_list(Dialect::Sqlite)
+        );
     }
 }

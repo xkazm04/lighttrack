@@ -38,6 +38,8 @@
 
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::Json;
+use serde_json::{json, Value};
 
 use crate::state::AppState;
 
@@ -118,18 +120,20 @@ pub(crate) fn render_ready(members: &[Member]) -> (StatusCode, String) {
 /// The operator rollup. Green is the literal `ok` the deploy docs, the smoke script and the Docker
 /// `HEALTHCHECK` have always compared against; red names its failing members instead of laundering
 /// them into a status code nobody can act on.
-pub(crate) fn render_composite(members: &[Member]) -> (StatusCode, String) {
-    let bad: Vec<String> = members
-        .iter()
-        .filter(|m| !m.is_up())
-        .map(Member::render)
-        .collect();
-    if bad.is_empty() {
-        (StatusCode::OK, "ok".to_string())
+pub(crate) fn render_composite(members: &[Member]) -> (StatusCode, Value) {
+    // JSON because `scripts/smoke.sh` and the container healthcheck read the `status` field ("ok"
+    // on green) and the deployment's declared surfaces ride along on the one endpoint every operator
+    // already curls. A red rollup still names its member and the reason in `members`.
+    let rendered: Vec<String> = members.iter().map(Member::render).collect();
+    if members.iter().all(Member::is_up) {
+        (
+            StatusCode::OK,
+            json!({ "status": "ok", "members": rendered }),
+        )
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            format!("degraded\n{}\n", bad.join("\n")),
+            json!({ "status": "degraded", "members": rendered }),
         )
     }
 }
@@ -149,8 +153,13 @@ pub(crate) async fn ready(State(st): State<AppState>) -> (StatusCode, String) {
 }
 
 /// `GET /health` — the operator's rollup.
-pub(crate) async fn composite(State(st): State<AppState>) -> (StatusCode, String) {
-    render_composite(&members(&st).await)
+pub(crate) async fn composite(State(st): State<AppState>) -> (StatusCode, Json<Value>) {
+    let (code, mut body) = render_composite(&members(&st).await);
+    let caps = st.store.capabilities();
+    body["backend"] = Value::String(caps.backend.to_string());
+    body["capabilities"] = serde_json::to_value(crate::capabilities::CapabilitiesBody::from(caps))
+        .unwrap_or(Value::Null);
+    (code, Json(body))
 }
 
 #[cfg(test)]
@@ -165,16 +174,14 @@ mod tests {
     fn green_composite_is_still_the_literal_ok_every_deploy_surface_compares_against() {
         let (status, body) = render_composite(&[m("store", Verdict::Up)]);
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            body, "ok",
-            "scripts/smoke.sh does a string equality on this"
-        );
+        assert_eq!(body["status"], "ok", "scripts/smoke.sh reads this field");
     }
 
     #[test]
     fn a_red_composite_names_the_member_and_the_reason() {
         let (status, body) = render_composite(&[m("store", Verdict::Down("pool is gone".into()))]);
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let body = body.to_string();
         assert!(body.contains("store: down (pool is gone)"), "body: {body}");
     }
 

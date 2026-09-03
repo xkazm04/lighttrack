@@ -13,7 +13,8 @@
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use lighttrack_core::new_id;
+use lighttrack_core::{new_id, Scope};
+use lighttrack_store::Scope as TenantScope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthMode {
@@ -37,8 +38,22 @@ impl AuthMode {
 /// acceptable is doing it silently: the banner line reads `auth=Dev` in the middle of a long
 /// diagnostics string, which is easy to run past on the way to production. So this is a block, on
 /// stderr, next to the other startup diagnostics.
-pub(crate) fn warn_if_unenforced(mode: AuthMode) {
+pub(crate) fn warn_if_unenforced(mode: AuthMode, has_admin_key: bool) {
     if mode == AuthMode::Enforced {
+        // The opposite failure, and the one that used to boot in silence: enforced with no admin
+        // key means every request needs a credential and nothing on the instance can mint one -
+        // creating a project or a key is an admin call. Unless keys already exist in the store,
+        // that is a locked door, and the banner's `admin_key=unset` field did not say so.
+        if !has_admin_key {
+            eprintln!(
+                "
+!!!!! WARNING: LIGHTTRACK_AUTH_MODE=enforced WITH NO LIGHTTRACK_ADMIN_KEY !!!!!
+      Every request needs a credential, and only the admin key can create a project or mint a
+      project key. Unless project keys already exist in the store, nothing can reach this
+      instance. Set LIGHTTRACK_ADMIN_KEY=<secret> and restart.
+"
+            );
+        }
         return;
     }
     eprintln!(
@@ -87,12 +102,21 @@ pub enum Principal {
     Dev,
     /// The admin key was presented.
     Admin,
-    /// A valid project key was presented; carries its project id **and the key's row id**.
+    /// A valid project key was presented; carries its project id, the key's row id **and the
+    /// capabilities that key was minted with**.
     ///
     /// `key_id` is the opaque `api_keys.id` — never the presented token, its prefix, or any hash of
     /// it. Ingest stamps it onto the event so a budget can be scoped to one key and a breach can name
     /// which key drove it; nothing derived from the secret ever leaves this function.
-    Project { project_id: String, key_id: String },
+    ///
+    /// `scopes` travels on the principal rather than being re-read per check: the key row was
+    /// already loaded to verify the secret, and a second read per authorization would put a store
+    /// round-trip on every door.
+    Project {
+        project_id: String,
+        key_id: String,
+        scopes: Vec<Scope>,
+    },
 }
 
 impl Principal {
@@ -105,6 +129,29 @@ impl Principal {
             Principal::Project { key_id, .. } => Some(key_id),
             Principal::Admin | Principal::Dev => None,
         }
+    }
+
+    /// The tenant scope every store read this request makes must carry (M17).
+    ///
+    /// A project key reads exactly its own rows, so a foreign id is simply not found — the 404 D13
+    /// established for traces, now applied to the whole trait. Admin and dev are the operator: every
+    /// project, plus the project-less rows (background jobs, global alert channels) no tenant owns.
+    ///
+    /// This is the only place the mapping is made. A handler that reaches past it and passes
+    /// `TenantScope::Operator` on a project request has re-opened the hole — which is why the post-hoc
+    /// `forbidden(...)` comparisons this replaces are deleted rather than kept as a second belt: a
+    /// 403 on a foreign id is itself the existence oracle.
+    pub(crate) fn scope(&self) -> TenantScope<'_> {
+        match self {
+            Principal::Project { project_id, .. } => TenantScope::Project(project_id),
+            Principal::Admin | Principal::Dev => TenantScope::Operator,
+        }
+    }
+
+    /// [`Principal::scope`] as an owned value, for the `'static` closures `spawn_db` hands to the
+    /// blocking pool. Rebuild the borrowed form inside the closure with `.as_deref().into()`.
+    pub(crate) fn scope_owned(&self) -> Option<String> {
+        self.scope().project().map(str::to_string)
     }
 }
 
@@ -143,11 +190,31 @@ pub fn verify_key(stored: &str, full_key: &str) -> bool {
     }
 }
 
+/// Scheme marker on a project API key.
+const KEY_SCHEME: &str = "lt";
+
+/// Scheme marker on a **relay device** key (M18). Distinct from [`KEY_SCHEME`] so the two can never
+/// be confused for one another: a device key that parsed as a project key would be looked up in the
+/// wrong table, and the miss would read as "bad credential" rather than "wrong kind of credential".
+/// The scheme is also what lets the device guard tell "this is a device key that failed" from "this
+/// is not a device key at all, try the legacy shared secret".
+pub const DEVICE_KEY_SCHEME: &str = "ltd";
+
 /// Generate a new API key (high-entropy, ~244 bits from two UUIDv4 secrets).
 pub fn generate_key() -> GeneratedKey {
+    generate_scheme(KEY_SCHEME)
+}
+
+/// Generate a new **device** key, `ltd_<prefix>_<secret>` — same entropy, same salted-digest
+/// storage, different scheme (see [`DEVICE_KEY_SCHEME`]). Shown to the operator once, at enrolment.
+pub fn generate_device_key() -> GeneratedKey {
+    generate_scheme(DEVICE_KEY_SCHEME)
+}
+
+fn generate_scheme(scheme: &str) -> GeneratedKey {
     let prefix = new_id().replace('-', "")[..8].to_string();
     let secret = format!("{}{}", new_id().replace('-', ""), new_id().replace('-', ""));
-    let full_key = format!("lt_{prefix}_{secret}");
+    let full_key = format!("{scheme}_{prefix}_{secret}");
     let key_hash = stored_hash(&full_key);
     GeneratedKey {
         prefix,
@@ -158,9 +225,21 @@ pub fn generate_key() -> GeneratedKey {
 
 /// Extract the `prefix` from a full key string `lt_<prefix>_<secret>`.
 pub fn prefix_of(full_key: &str) -> Option<String> {
+    scheme_prefix_of(KEY_SCHEME, full_key)
+}
+
+/// Extract the `prefix` from a device key `ltd_<prefix>_<secret>`, or `None` when the presented
+/// token is not a device key at all.
+pub fn device_prefix_of(full_key: &str) -> Option<String> {
+    scheme_prefix_of(DEVICE_KEY_SCHEME, full_key)
+}
+
+fn scheme_prefix_of(scheme: &str, full_key: &str) -> Option<String> {
     let mut parts = full_key.splitn(3, '_');
     match (parts.next(), parts.next(), parts.next()) {
-        (Some("lt"), Some(prefix), Some(_secret)) if !prefix.is_empty() => Some(prefix.to_string()),
+        (Some(s), Some(prefix), Some(_secret)) if s == scheme && !prefix.is_empty() => {
+            Some(prefix.to_string())
+        }
         _ => None,
     }
 }
@@ -176,6 +255,31 @@ mod tests {
         assert_eq!(prefix_of(&k.full_key).as_deref(), Some(k.prefix.as_str()));
         assert!(verify_key(&k.key_hash, &k.full_key));
         assert!(!verify_key(&k.key_hash, "lt_wrong_key"));
+    }
+
+    #[test]
+    fn a_device_key_and_a_project_key_are_never_mistaken_for_one_another() {
+        // The two schemes share the hashing and the entropy but not the namespace. A device key
+        // that parsed as a project key would be looked up in `api_keys`, and the miss would read as
+        // "bad credential" instead of "wrong kind of credential".
+        let d = generate_device_key();
+        assert!(d.full_key.starts_with("ltd_"));
+        assert_eq!(
+            device_prefix_of(&d.full_key).as_deref(),
+            Some(d.prefix.as_str())
+        );
+        assert!(verify_key(&d.key_hash, &d.full_key));
+        assert!(
+            prefix_of(&d.full_key).is_none(),
+            "a device key is not a project key"
+        );
+
+        let k = generate_key();
+        assert!(
+            device_prefix_of(&k.full_key).is_none(),
+            "a project key is not a device key — and this `None` is what makes the device guard \
+             fall through to the legacy shared secret rather than 401 on a valid admin key"
+        );
     }
 
     #[test]

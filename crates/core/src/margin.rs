@@ -24,11 +24,20 @@ pub enum MarginDimension {
 }
 
 impl MarginDimension {
+    /// Every dimension, so a wire parser can derive its accepted set and its error message from
+    /// the enum rather than from a hand-maintained list.
+    pub const ALL: [MarginDimension; 2] = [MarginDimension::Customer, MarginDimension::Product];
+
+    /// Lenient parse: anything but `product` is `customer`. Kept for callers that treat the
+    /// dimension as a preference; a request surface should use [`MarginDimension::from_wire`],
+    /// which refuses a misspelling instead of silently answering the customer question.
     pub fn parse(s: &str) -> Self {
-        match s {
-            "product" => MarginDimension::Product,
-            _ => MarginDimension::Customer,
-        }
+        Self::from_wire(s).unwrap_or(MarginDimension::Customer)
+    }
+
+    /// Strict parse: `None` outside the vocabulary.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|d| d.as_str() == s)
     }
 
     pub fn as_str(&self) -> &'static str {
@@ -40,12 +49,17 @@ impl MarginDimension {
 }
 
 /// LLM cost aggregated for one dimension value over the window (produced by the store from events).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct CostByDimension {
     /// The customer/product id (or prompt tag), or `None` for untagged (unattributed) cost.
     pub key: Option<String>,
     pub calls: i64,
     pub cost_usd: f64,
+    /// How many of `calls` had no price on the row, so they contributed `$0.00` to `cost_usd`. The
+    /// disclosure that keeps this row from reading as a complete number when it is a floor: a
+    /// margin computed from a bucket with unpriced traffic understates cost by an unknown amount.
+    #[serde(default)]
+    pub unpriced_calls: i64,
 }
 
 /// One profit/margin rollup row.
@@ -175,6 +189,10 @@ mod tests {
             product_id: None,
             amount_usd: amount,
             currency: "USD".into(),
+            amount_minor: None,
+            fx_rate: None,
+            fx_book_version: None,
+            converted: None,
             kind,
             period_start: None,
             period_end: None,
@@ -187,6 +205,7 @@ mod tests {
             key: customer.map(str::to_string),
             calls,
             cost_usd,
+            unpriced_calls: 0,
         }
     }
 

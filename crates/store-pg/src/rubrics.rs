@@ -8,13 +8,14 @@ use lighttrack_store::Result;
 
 use crate::util::{fmt_ts, parse_ts, pgerr};
 
-const COLS: &str = "id, project_id, name, dimensions, threshold, created_at";
+const COLS: &str = "id, project_id, name, dimensions, threshold, created_at, version, supersedes";
 
 pub(crate) async fn create(pool: &PgPool, r: &Rubric) -> Result<()> {
     let dims = serde_json::to_string(&r.dimensions)?;
     sqlx::query(
-        "INSERT INTO rubrics (id, project_id, name, dimensions, threshold, created_at) \
-         VALUES ($1,$2,$3,$4,$5,$6)",
+        "INSERT INTO rubrics \
+         (id, project_id, name, dimensions, threshold, created_at, version, supersedes) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
     )
     .bind(r.id.clone())
     .bind(r.project_id.clone())
@@ -22,18 +23,23 @@ pub(crate) async fn create(pool: &PgPool, r: &Rubric) -> Result<()> {
     .bind(dims)
     .bind(r.threshold)
     .bind(fmt_ts(r.created_at))
+    .bind(r.version as i32)
+    .bind(r.supersedes.clone())
     .execute(pool)
     .await
     .map_err(pgerr)?;
     Ok(())
 }
 
-pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Rubric>> {
-    let row = sqlx::query(&format!("SELECT {COLS} FROM rubrics WHERE id = $1"))
-        .bind(id.to_string())
-        .fetch_optional(pool)
-        .await
-        .map_err(pgerr)?;
+pub(crate) async fn get(pool: &PgPool, project: Option<&str>, id: &str) -> Result<Option<Rubric>> {
+    let row = sqlx::query(&format!(
+        "SELECT {COLS} FROM rubrics WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)"
+    ))
+    .bind(id.to_string())
+    .bind(project.map(str::to_string))
+    .fetch_optional(pool)
+    .await
+    .map_err(pgerr)?;
     row.as_ref().map(from_row).transpose()
 }
 
@@ -58,5 +64,24 @@ fn from_row(row: &PgRow) -> Result<Rubric> {
         dimensions: serde_json::from_str(&dims)?,
         threshold: row.try_get(4).map_err(pgerr)?,
         created_at: parse_ts(&created_at)?,
+        // A row written before versioning is generation 1 - the same reading `Rubric`'s serde
+        // default takes, so a stored rubric and a posted one agree.
+        version: row
+            .try_get::<Option<i32>, _>(6)
+            .map_err(pgerr)?
+            .unwrap_or(1)
+            .max(1) as u32,
+        supersedes: row.try_get(7).map_err(pgerr)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(COLS, tables::RUBRICS.select_list(Dialect::Postgres));
+    }
 }

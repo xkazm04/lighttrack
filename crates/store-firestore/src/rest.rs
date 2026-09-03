@@ -1,6 +1,8 @@
 //! Minimal Firestore REST client over blocking reqwest: document GET / upsert (PATCH) / partial
 //! PATCH / `runQuery`. Returns decoded plain-field maps (see `codec`).
 
+use std::time::Duration;
+
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::Method;
 use serde_json::{json, Value};
@@ -15,10 +17,22 @@ pub(crate) struct Rest {
     token: Option<String>,
 }
 
+/// Every Firestore call runs on the API's blocking pool under a request that is itself deadlined,
+/// so a call that never returns pins a pool thread until the process restarts. `Client::new()` had
+/// no timeout at all; every other HTTP client in the workspace bounds both halves.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Generous, because the client-side aggregates here read a whole window in one `runQuery`.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
 impl Rest {
     pub(crate) fn new(base: String, token: Option<String>) -> Self {
+        let client = Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
-            client: Client::new(),
+            client,
             base,
             token,
         }
@@ -140,11 +154,41 @@ impl Rest {
         order: Option<(&str, bool)>,
         limit: Option<usize>,
     ) -> Result<Vec<Fields>> {
-        Ok(self
-            .query_raw(collection, filters, order, limit)?
-            .iter()
-            .map(decode_doc)
-            .collect())
+        self.query_select(collection, &[], filters, order, limit)
+    }
+
+    /// `runQuery` returning only `select`ed fields of each matching document (all fields when
+    /// `select` is empty). The client-side aggregates fold four or five numeric fields per event,
+    /// and used to receive the whole document — `input`, `output` and `metadata` included — for
+    /// every event in the window, on every admission check. Firestore bills per document either
+    /// way; what a projection saves is the bytes, which on a payload-carrying collection is most
+    /// of them.
+    pub(crate) fn query_select(
+        &self,
+        collection: &str,
+        select: &[&str],
+        filters: &[(&str, &str, Value)],
+        order: Option<(&str, bool)>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Fields>> {
+        let url = format!("{}:runQuery", self.base);
+        let mut sq = build_sq(collection, filters, order, limit);
+        if !select.is_empty() {
+            sq["select"] = json!({
+                "fields": select.iter().map(|f| json!({ "fieldPath": f })).collect::<Vec<_>>()
+            });
+        }
+        let body = json!({ "structuredQuery": sq });
+        let arr = json_ok(self.req(Method::POST, url).json(&body).send().map_err(re)?)?;
+        let mut out = Vec::new();
+        if let Some(items) = arr.as_array() {
+            for it in items {
+                if let Some(doc) = it.get("document") {
+                    out.push(decode_doc(doc));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// `runQuery` returning raw documents (with `name` + `updateTime`) — used by `claim_job`.
@@ -167,6 +211,52 @@ impl Rest {
             }
         }
         Ok(out)
+    }
+
+    /// The resource name of a document — what a `:commit` write addresses (the `name` field), as
+    /// opposed to the URL a REST call goes to. Everything from `projects/` on.
+    pub(crate) fn doc_name(&self, collection: &str, id: &str) -> String {
+        let path = match self.base.split_once("/v1/") {
+            Some((_, rest)) => rest,
+            None => self.base.as_str(),
+        };
+        format!("{path}/{collection}/{id}")
+    }
+
+    /// Firestore's per-commit write limit. A batch at or under it applies **atomically**; past it
+    /// the caller must chunk, and the result is no longer one unit — which is why
+    /// [`crate::collective`] reports that fact rather than assuming it.
+    pub(crate) const MAX_BATCH: usize = 500;
+
+    /// One `:commit` of up to [`Rest::MAX_BATCH`] writes, applied atomically. Build the writes with
+    /// [`Rest::write_update`] / [`Rest::write_delete`].
+    pub(crate) fn commit_batch(&self, writes: &[Value]) -> Result<()> {
+        if writes.is_empty() {
+            return Ok(());
+        }
+        debug_assert!(writes.len() <= Self::MAX_BATCH);
+        let url = format!("{}:commit", self.base);
+        json_ok(
+            self.req(Method::POST, url)
+                .json(&json!({ "writes": writes }))
+                .send()
+                .map_err(re)?,
+        )
+        .map(|_| ())
+    }
+
+    /// A create-or-replace write for a batched commit.
+    pub(crate) fn write_update(&self, collection: &str, id: &str, fields: &Fields) -> Value {
+        json!({ "update": {
+            "name": self.doc_name(collection, id),
+            "fields": encode_fields(fields),
+        } })
+    }
+
+    /// A delete write for a batched commit. Deleting a document that is not there is a no-op, which
+    /// is what a replace wants: the previous set is whatever happens to be present.
+    pub(crate) fn write_delete(&self, collection: &str, id: &str) -> Value {
+        json!({ "delete": self.doc_name(collection, id) })
     }
 
     /// Non-transactional commit of one field update, optionally guarded by an `updateTime`
@@ -254,4 +344,35 @@ fn json_ok(resp: Response) -> Result<Value> {
         return Err(other(format!("firestore HTTP {}: {text}", status.as_u16())));
     }
     serde_json::from_str(&text).map_err(|e| other(format!("firestore bad json: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_sq;
+    use serde_json::json;
+
+    #[test]
+    fn a_structured_query_carries_its_filters_order_and_limit() {
+        let sq = build_sq(
+            "events",
+            &[
+                ("project_id", "EQUAL", json!("p")),
+                (
+                    "ts",
+                    "GREATER_THAN_OR_EQUAL",
+                    json!("2026-01-01T00:00:00.000000000Z"),
+                ),
+            ],
+            Some(("ts", true)),
+            Some(50),
+        );
+        assert_eq!(sq["from"][0]["collectionId"], "events");
+        assert_eq!(sq["where"]["compositeFilter"]["op"], "AND");
+        assert_eq!(sq["orderBy"][0]["direction"], "DESCENDING");
+        assert_eq!(sq["limit"], 50);
+        // A single filter is not wrapped in a composite.
+        let one = build_sq("events", &[("id", "EQUAL", json!("e"))], None, None);
+        assert!(one["where"]["fieldFilter"].is_object(), "{one}");
+        assert!(one.get("orderBy").is_none() && one.get("limit").is_none());
+    }
 }

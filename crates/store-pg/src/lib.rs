@@ -12,15 +12,31 @@
 //! `FOR UPDATE SKIP LOCKED … RETURNING` for concurrency-safe atomic dequeues.
 
 mod admission;
+mod alert_channels;
+mod alerts;
 mod benchmarks;
+mod calibrations;
+mod collective;
+mod contributions;
+mod dataset_lineage;
 mod datasets;
+mod devices;
 mod events;
 mod jobs;
+mod labels;
+mod margin_policies;
+mod price_fill;
 mod prices;
 mod projects;
+mod prompts;
+mod redaction;
 mod relay;
+mod relay_lease;
 mod revenue;
+mod rollup;
 mod rubrics;
+mod schedules;
+mod score_summary;
 mod scores;
 mod traces;
 mod util;
@@ -31,15 +47,21 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use tokio::runtime::Runtime;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CostByDimension, Dataset, DatasetItem, Job, JobCancel,
-    JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, RelayOutcome, RelayTask,
-    RevenueEvent, Rubric, Score, TraceSummary,
+    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CalibrationRecord, CollectiveEntry,
+    ContributionRecord, CostByDimension, Dataset, DatasetItem, Delivery, Device, DeviceEligibility,
+    Dimension, Job, JobCancel, JobFinish, Label, LabelFilter, LeaseHeld, LimitRule, LimitScope,
+    LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayCancel, RelayOutcome,
+    RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score,
+    TraceSummary,
 };
 use lighttrack_store::{
-    Admission, CostRow, EventFilter, EventPage, Result, ScopeUsage, Store, StoreError, TraceEvents,
-    TraceFilter, TracePage, Usage, UseCaseCostRow,
+    capabilities::{Capabilities, Surface},
+    Admission, AlertAdmission, AlertFilter, CollectiveFilter, CostRow, EventFilter, EventPage,
+    RedactionPostureRow, ReplaceAck, RepriceReport, Result, ScopeUsage, ScoreFilter,
+    ScoreSummaryRow, Store, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
+use lighttrack_store::Scope;
 use util::pgerr;
 
 const SCHEMA: &str = include_str!("../../../schema/postgres/001_init.sql");
@@ -72,7 +94,81 @@ impl PgStore {
     }
 }
 
+impl PgStore {
+    /// What this backend implements today, read off the `impl Store` block below.
+    ///
+    /// `Rollup` is the primitive the forecast and margin surfaces read through: implementing it
+    /// once is what makes `Forecast` and `MarginBreakdowns` answer here (their methods default over
+    /// it), instead of the 501s `/v1/forecast` and three `/v1/margin/*` routes used to return.
+    ///
+    /// The absent surfaces are honest gaps, not oversights: `Maintenance`/`Metrics` are SQLite-file
+    /// concerns a managed Postgres owns itself. Each refuses with `Unsupported` (HTTP 501) and the
+    /// conformance suite asserts that refusal.
+    pub const SURFACES: &'static [Surface] = &[
+        Surface::EventsCore,
+        Surface::EventFilters,
+        Surface::Rollup,
+        Surface::Forecast,
+        Surface::MarginBreakdowns,
+        Surface::RedactionPosture,
+        Surface::RevenueReprice,
+        Surface::ScoreFilters,
+        Surface::Traces,
+        Surface::ProjectAdmin,
+        Surface::KeyAdmin,
+        Surface::LimitLifecycle,
+        Surface::MarginPolicies,
+        Surface::JobLeases,
+        Surface::Relay,
+        Surface::Devices,
+        // The hub runs here: a managed Postgres is where a public leaderboard is actually deployed,
+        // so a 501 on `/v1/collective/*` was the gap that mattered most.
+        Surface::Collective,
+        Surface::Schedules,
+        // The prompt registry, and with it the promotion gate. It used to 501 here, which meant the
+        // one place a prompt edit becomes a measurable quality step did not exist on the managed
+        // deployments the product actually runs on.
+        Surface::Prompts,
+        Surface::Pricing,
+        // The ledger and its routing table: this is the backend that actually runs
+        // multi-replica, which is the deployment an in-memory cooldown map could never
+        // deduplicate across.
+        Surface::Alerts,
+        Surface::AlertRouting,
+        // The contributor-side ledger. It ships with the hub for a reason: the hash gate that keeps
+        // a scheduled push from tripping a hub'''s own min_interval IS a read of this table, so a
+        // backend that answered it empty would push on every single interval.
+        Surface::Contributions,
+        // The served-version quality ledger (M23). The registry and the promotion gate already run
+        // here; without this the loop stops at promotion on the one deployment that has production
+        // traffic to measure.
+        Surface::ScoreSummaries,
+        // The human verdict ledger and its calibration history. Declared here because this is the
+        // backend a real deployment gates promotions on: a 501 (or worse, an empty label listing)
+        // would leave `require_trusted_judge` unenforceable exactly where it matters.
+        Surface::Labels,
+        Surface::Calibrations,
+        // Versioned eval corpora (M24). Declared here because this is the backend a deployment with
+        // enough traffic to *need* a stratified or failure-mined corpus actually runs on: refusing
+        // it would leave the loop that turns production failures into permanent eval cases existing
+        // only on the laptop backend, and `Dataset::version` pinned at 1 wherever it matters.
+        Surface::DatasetLineage,
+    ];
+
+    /// This backend's manifest as a pure function of the type — `lighttrack-store`'s parity-doc
+    /// test renders the matrix from it without a live database.
+    pub fn manifest() -> Capabilities {
+        // Check-and-insert is one transaction, serialized per project by a transaction-scoped
+        // advisory lock — across every API process sharing the database. See `admission`.
+        Capabilities::new("postgres", Self::SURFACES, true)
+    }
+}
+
 impl Store for PgStore {
+    fn capabilities(&self) -> Capabilities {
+        Self::manifest()
+    }
+
     fn init_schema(&self) -> Result<()> {
         self.rt
             .block_on(async { sqlx::raw_sql(SCHEMA).execute(&self.pool).await })
@@ -84,11 +180,6 @@ impl Store for PgStore {
     fn insert_event(&self, ev: &LlmEvent) -> Result<()> {
         self.rt.block_on(events::insert(&self.pool, ev))
     }
-    fn admission_is_atomic(&self) -> bool {
-        // Check-and-insert is one transaction, serialized per project by a transaction-scoped
-        // advisory lock — across every API process sharing the database. See `admission`.
-        true
-    }
     fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
         self.rt
             .block_on(admission::insert_event_checked(&self.pool, ev))
@@ -97,36 +188,46 @@ impl Store for PgStore {
         self.rt
             .block_on(admission::insert_events_checked(&self.pool, evs))
     }
-    fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
+    fn list_events(&self, project: Scope<'_>, limit: usize) -> Result<Vec<LlmEvent>> {
+        let project = project.project();
         self.rt.block_on(events::list(&self.pool, project, limit))
     }
     fn list_events_filtered(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         filter: &EventFilter,
         limit: usize,
     ) -> Result<EventPage> {
+        let project = project.project();
         self.rt
             .block_on(events::list_filtered(&self.pool, project, filter, limit))
     }
-    fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
+    fn cost_summary(&self, project: Scope<'_>) -> Result<Vec<CostRow>> {
+        let project = project.project();
         self.rt.block_on(events::cost_summary(&self.pool, project))
+    }
+    /// The grouped-rollup primitive. Everything in the forecast and margin-breakdown surfaces
+    /// reaches Postgres through the trait defaults over this one method.
+    fn rollup(&self, q: &RollupQuery<'_>) -> Result<Vec<RollupRow>> {
+        self.rt.block_on(rollup::rollup(&self.pool, q))
     }
     fn cost_summary_windowed(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: Option<DateTime<Utc>>,
         until: Option<DateTime<Utc>>,
     ) -> Result<Vec<CostRow>> {
+        let project = project.project();
         self.rt.block_on(events::cost_summary_windowed(
             &self.pool, project, since, until,
         ))
     }
     fn usecase_costs(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<UseCaseCostRow>> {
+        let project = project.project();
         self.rt
             .block_on(events::usecase_costs(&self.pool, project, since))
     }
@@ -153,42 +254,53 @@ impl Store for PgStore {
         self.rt
             .block_on(events::usage_by_scope(&self.pool, project, since, kind))
     }
-    fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
-        self.rt.block_on(events::get(&self.pool, id))
+    fn redaction_posture(
+        &self,
+        project: Scope<'_>,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<RedactionPostureRow>> {
+        let project = project.project();
+        self.rt
+            .block_on(redaction::posture(&self.pool, project, since))
+    }
+    fn get_event(&self, scope: Scope<'_>, id: &str) -> Result<Option<LlmEvent>> {
+        self.rt
+            .block_on(events::get(&self.pool, scope.project(), id))
     }
 
     // --- traces ---
     // Implemented, not inherited: the trait defaults refuse with `Unsupported` (HTTP 501), which on
     // the backend most deployments actually run meant the whole trace surface was missing. Semantics
     // are ported from the SQLite reference — see `traces`.
-    fn serves_traces(&self) -> bool {
-        true
-    }
-    fn list_traces(&self, project: Option<&str>, limit: usize) -> Result<Vec<TraceSummary>> {
+    fn list_traces(&self, project: Scope<'_>, limit: usize) -> Result<Vec<TraceSummary>> {
+        let project = project.project();
         self.rt
             .block_on(traces::list_summaries(&self.pool, project, limit))
     }
     fn list_traces_filtered(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         filter: &TraceFilter,
         limit: usize,
     ) -> Result<TracePage> {
+        let project = project.project();
         self.rt.block_on(traces::list_summaries_filtered(
             &self.pool, project, filter, limit,
         ))
     }
     fn list_trace_events(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         trace_id: &str,
         max_spans: usize,
     ) -> Result<TraceEvents> {
+        let project = project.project();
         self.rt.block_on(traces::list_by_trace(
             &self.pool, project, trace_id, max_spans,
         ))
     }
-    fn list_trace_scores(&self, project: Option<&str>, trace_id: &str) -> Result<Vec<Score>> {
+    fn list_trace_scores(&self, project: Scope<'_>, trace_id: &str) -> Result<Vec<Score>> {
+        let project = project.project();
         self.rt
             .block_on(traces::list_scores_by_trace(&self.pool, project, trace_id))
     }
@@ -196,6 +308,9 @@ impl Store for PgStore {
     // --- projects / api keys / limits ---
     fn create_project(&self, p: &Project) -> Result<()> {
         self.rt.block_on(projects::create(&self.pool, p))
+    }
+    fn update_project(&self, p: &Project) -> Result<bool> {
+        self.rt.block_on(projects::update(&self.pool, p))
     }
     fn get_project(&self, id: &str) -> Result<Option<Project>> {
         self.rt.block_on(projects::get(&self.pool, id))
@@ -220,6 +335,10 @@ impl Store for PgStore {
         self.rt
             .block_on(projects::set_key_revoked(&self.pool, id, revoked))
     }
+    fn set_api_key_expiry(&self, id: &str, when: Option<DateTime<Utc>>) -> Result<bool> {
+        self.rt
+            .block_on(projects::set_key_expiry(&self.pool, id, when))
+    }
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()> {
         self.rt.block_on(projects::create_limit(&self.pool, r))
     }
@@ -227,35 +346,94 @@ impl Store for PgStore {
         self.rt
             .block_on(projects::list_limits(&self.pool, project, only_enabled))
     }
-    fn get_limit_rule(&self, id: &str) -> Result<Option<LimitRule>> {
-        self.rt.block_on(projects::get_limit(&self.pool, id))
+    fn get_limit_rule(&self, scope: Scope<'_>, id: &str) -> Result<Option<LimitRule>> {
+        self.rt
+            .block_on(projects::get_limit(&self.pool, scope.project(), id))
     }
-    fn update_limit_rule(&self, r: &LimitRule) -> Result<bool> {
-        self.rt.block_on(projects::update_limit(&self.pool, r))
+    fn update_limit_rule(&self, scope: Scope<'_>, r: &LimitRule) -> Result<bool> {
+        self.rt
+            .block_on(projects::update_limit(&self.pool, scope.project(), r))
     }
-    fn delete_limit_rule(&self, id: &str) -> Result<bool> {
-        self.rt.block_on(projects::delete_limit(&self.pool, id))
+    fn delete_limit_rule(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.rt
+            .block_on(projects::delete_limit(&self.pool, scope.project(), id))
+    }
+
+    // --- margin policies ---
+    fn create_margin_policy(&self, p: &lighttrack_core::MarginPolicy) -> Result<()> {
+        self.rt.block_on(margin_policies::create(&self.pool, p))
+    }
+    fn list_margin_policies(
+        &self,
+        project: &str,
+        only_enabled: bool,
+    ) -> Result<Vec<lighttrack_core::MarginPolicy>> {
+        self.rt
+            .block_on(margin_policies::list(&self.pool, project, only_enabled))
+    }
+    fn get_margin_policy(
+        &self,
+        scope: Scope<'_>,
+        id: &str,
+    ) -> Result<Option<lighttrack_core::MarginPolicy>> {
+        self.rt
+            .block_on(margin_policies::get(&self.pool, scope.project(), id))
+    }
+    fn delete_margin_policy(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.rt
+            .block_on(margin_policies::delete(&self.pool, scope.project(), id))
     }
 
     // --- scores ---
     fn insert_score(&self, s: &Score) -> Result<()> {
         self.rt.block_on(scores::insert(&self.pool, s))
     }
-    fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
+    fn list_scores(&self, project: Scope<'_>, limit: usize) -> Result<Vec<Score>> {
+        let project = project.project();
         self.rt.block_on(scores::list(&self.pool, project, limit))
+    }
+    fn list_scores_filtered(
+        &self,
+        project: Scope<'_>,
+        filter: &ScoreFilter,
+        limit: usize,
+    ) -> Result<Vec<Score>> {
+        let project = project.project();
+        self.rt
+            .block_on(scores::list_filtered(&self.pool, project, filter, limit))
     }
     fn list_run_scores(
         &self,
         run_id: &str,
-        project: Option<&str>,
+        project: Scope<'_>,
         limit: usize,
     ) -> Result<Vec<Score>> {
+        let project = project.project();
         self.rt
             .block_on(scores::list_by_run(&self.pool, run_id, project, limit))
     }
-    fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
-        self.rt
-            .block_on(scores::scored_event_ids(&self.pool, event_ids))
+    fn scored_event_ids(&self, scope: Scope<'_>, event_ids: &[String]) -> Result<Vec<String>> {
+        self.rt.block_on(scores::scored_event_ids(
+            &self.pool,
+            scope.project(),
+            event_ids,
+        ))
+    }
+    /// Verdicts grouped by a value on the joined event row (M23) — the served-version quality
+    /// ledger. This is the backend production runs on, so a quality surface that only answered on
+    /// SQLite would be a surface that does not exist.
+    fn score_summary_by_dimension(
+        &self,
+        project: Scope<'_>,
+        dim: Dimension,
+        since: DateTime<Utc>,
+        until: Option<DateTime<Utc>>,
+        rubric_id: Option<&str>,
+    ) -> Result<Vec<ScoreSummaryRow>> {
+        let project = project.project();
+        self.rt.block_on(score_summary::score_summary(
+            &self.pool, project, dim, since, until, rubric_id,
+        ))
     }
 
     // --- prices ---
@@ -265,13 +443,21 @@ impl Store for PgStore {
     fn list_prices(&self) -> Result<Vec<ModelPriceRow>> {
         self.rt.block_on(prices::list(&self.pool))
     }
+    fn list_price_history(&self, provider: &str, model: &str) -> Result<Vec<ModelPriceRow>> {
+        self.rt
+            .block_on(prices::history(&self.pool, provider, model))
+    }
+    fn fill_unpriced_cost(&self, f: &lighttrack_store::pricing::PriceFill<'_>) -> Result<u64> {
+        self.rt.block_on(price_fill::fill(&self.pool, f))
+    }
 
     // --- benchmarks ---
     fn create_benchmark(&self, b: &Benchmark) -> Result<()> {
         self.rt.block_on(benchmarks::create(&self.pool, b))
     }
-    fn get_benchmark(&self, id: &str) -> Result<Option<Benchmark>> {
-        self.rt.block_on(benchmarks::get(&self.pool, id))
+    fn get_benchmark(&self, scope: Scope<'_>, id: &str) -> Result<Option<Benchmark>> {
+        self.rt
+            .block_on(benchmarks::get(&self.pool, scope.project(), id))
     }
     fn list_benchmarks(&self, project: &str) -> Result<Vec<Benchmark>> {
         self.rt.block_on(benchmarks::list(&self.pool, project))
@@ -279,39 +465,56 @@ impl Store for PgStore {
     fn create_benchmark_run(&self, r: &BenchmarkRun) -> Result<()> {
         self.rt.block_on(benchmarks::create_run(&self.pool, r))
     }
-    fn list_benchmark_runs(&self, benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
-        self.rt
-            .block_on(benchmarks::list_runs(&self.pool, benchmark_id))
+    fn list_benchmark_runs(
+        &self,
+        scope: Scope<'_>,
+        benchmark_id: &str,
+    ) -> Result<Vec<BenchmarkRun>> {
+        self.rt.block_on(benchmarks::list_runs(
+            &self.pool,
+            scope.project(),
+            benchmark_id,
+        ))
     }
 
     // --- datasets ---
     fn create_dataset(&self, d: &Dataset) -> Result<()> {
         self.rt.block_on(datasets::create(&self.pool, d))
     }
-    fn get_dataset(&self, id: &str) -> Result<Option<Dataset>> {
-        self.rt.block_on(datasets::get(&self.pool, id))
-    }
-    fn list_datasets(&self, project: &str) -> Result<Vec<Dataset>> {
-        self.rt.block_on(datasets::list(&self.pool, project))
-    }
-    fn set_dataset_frozen(&self, id: &str, frozen: bool) -> Result<()> {
+    fn get_dataset(&self, scope: Scope<'_>, id: &str) -> Result<Option<Dataset>> {
         self.rt
-            .block_on(datasets::set_frozen(&self.pool, id, frozen))
+            .block_on(datasets::get(&self.pool, scope.project(), id))
+    }
+    fn list_datasets(&self, project: Scope<'_>) -> Result<Vec<Dataset>> {
+        self.rt
+            .block_on(datasets::list(&self.pool, project.project()))
+    }
+    fn set_dataset_frozen(&self, scope: Scope<'_>, id: &str, frozen: bool) -> Result<()> {
+        self.rt.block_on(datasets::set_frozen(
+            &self.pool,
+            scope.project(),
+            id,
+            frozen,
+        ))
     }
     fn create_dataset_item(&self, item: &DatasetItem) -> Result<()> {
         self.rt.block_on(datasets::create_item(&self.pool, item))
     }
-    fn list_dataset_items(&self, dataset_id: &str) -> Result<Vec<DatasetItem>> {
-        self.rt
-            .block_on(datasets::list_items(&self.pool, dataset_id))
+    fn list_dataset_items(&self, scope: Scope<'_>, dataset_id: &str) -> Result<Vec<DatasetItem>> {
+        self.rt.block_on(datasets::list_items(
+            &self.pool,
+            scope.project(),
+            dataset_id,
+        ))
     }
 
     // --- rubrics ---
     fn create_rubric(&self, r: &Rubric) -> Result<()> {
         self.rt.block_on(rubrics::create(&self.pool, r))
     }
-    fn get_rubric(&self, id: &str) -> Result<Option<Rubric>> {
-        self.rt.block_on(rubrics::get(&self.pool, id))
+    fn get_rubric(&self, scope: Scope<'_>, id: &str) -> Result<Option<Rubric>> {
+        self.rt
+            .block_on(rubrics::get(&self.pool, scope.project(), id))
     }
     fn list_rubrics(&self, project: &str) -> Result<Vec<Rubric>> {
         self.rt.block_on(rubrics::list(&self.pool, project))
@@ -321,11 +524,13 @@ impl Store for PgStore {
     fn create_job(&self, j: &Job) -> Result<()> {
         self.rt.block_on(jobs::create(&self.pool, j))
     }
-    fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
-        self.rt.block_on(jobs::claim(&self.pool, stale_before))
+    fn claim_job(&self, stale_before: DateTime<Utc>, kinds: &[&str]) -> Result<Option<Job>> {
+        self.rt
+            .block_on(jobs::claim(&self.pool, stale_before, kinds))
     }
-    fn cancel_job(&self, id: &str) -> Result<Option<JobCancel>> {
-        self.rt.block_on(jobs::cancel(&self.pool, id))
+    fn cancel_job(&self, scope: Scope<'_>, id: &str) -> Result<Option<JobCancel>> {
+        self.rt
+            .block_on(jobs::cancel(&self.pool, scope.project(), id))
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
         self.rt
@@ -345,19 +550,44 @@ impl Store for PgStore {
         self.rt
             .block_on(jobs::finish(&self.pool, id, status, result, error, fence))
     }
-    fn get_job(&self, id: &str) -> Result<Option<Job>> {
-        self.rt.block_on(jobs::get(&self.pool, id))
+    fn get_job(&self, scope: Scope<'_>, id: &str) -> Result<Option<Job>> {
+        self.rt.block_on(jobs::get(&self.pool, scope.project(), id))
     }
-    fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
-        self.rt.block_on(jobs::list(&self.pool, status, limit))
+    fn list_jobs(&self, scope: Scope<'_>, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
+        self.rt
+            .block_on(jobs::list(&self.pool, scope.project(), status, limit))
+    }
+
+    // --- stored schedules ---
+    fn create_schedule(&self, s: &Schedule) -> Result<()> {
+        self.rt.block_on(schedules::create(&self.pool, s))
+    }
+    fn get_schedule(&self, scope: Scope<'_>, id: &str) -> Result<Option<Schedule>> {
+        self.rt
+            .block_on(schedules::get(&self.pool, scope.project(), id))
+    }
+    fn list_schedules(&self, project: &str) -> Result<Vec<Schedule>> {
+        self.rt.block_on(schedules::list(&self.pool, project))
+    }
+    fn update_schedule(&self, scope: Scope<'_>, s: &Schedule) -> Result<bool> {
+        self.rt
+            .block_on(schedules::update(&self.pool, scope.project(), s))
+    }
+    fn delete_schedule(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.rt
+            .block_on(schedules::delete(&self.pool, scope.project(), id))
+    }
+    fn due_schedules(&self, now: DateTime<Utc>) -> Result<Vec<Schedule>> {
+        self.rt.block_on(schedules::due(&self.pool, now))
     }
 
     // --- cloud→device relay queue ---
     fn create_relay_task(&self, t: &RelayTask) -> Result<()> {
         self.rt.block_on(relay::create(&self.pool, t))
     }
-    fn get_relay_task(&self, id: &str) -> Result<Option<RelayTask>> {
-        self.rt.block_on(relay::get(&self.pool, id))
+    fn get_relay_task(&self, scope: Scope<'_>, id: &str) -> Result<Option<RelayTask>> {
+        self.rt
+            .block_on(relay::get(&self.pool, scope.project(), id))
     }
     fn find_relay_task_by_key(&self, project: &str, key: &str) -> Result<Option<RelayTask>> {
         self.rt
@@ -365,27 +595,79 @@ impl Store for PgStore {
     }
     fn list_relay_tasks(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         status: Option<&str>,
         limit: usize,
     ) -> Result<Vec<RelayTask>> {
+        let project = project.project();
         self.rt
             .block_on(relay::list(&self.pool, project, status, limit))
+    }
+    fn list_relay_tasks_by_action(
+        &self,
+        project: Scope<'_>,
+        action_type: &str,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RelayTask>> {
+        let project = project.project();
+        self.rt.block_on(relay::list_by_action(
+            &self.pool,
+            project,
+            action_type,
+            status,
+            limit,
+        ))
     }
     fn lease_relay_tasks(
         &self,
         device: &str,
+        capabilities: &[String],
         lease_secs: i64,
         max: usize,
     ) -> Result<Vec<RelayTask>> {
-        self.rt
-            .block_on(relay::lease(&self.pool, device, lease_secs, max))
+        self.rt.block_on(relay::lease(
+            &self.pool,
+            device,
+            capabilities,
+            lease_secs,
+            max,
+        ))
     }
     fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {
         self.rt.block_on(relay::sweep_dead(&self.pool))
     }
-    fn settle_relay_task(&self, id: &str, outcome: &RelayOutcome) -> Result<Option<RelayTask>> {
-        self.rt.block_on(relay::settle(&self.pool, id, outcome))
+    fn settle_relay_task(
+        &self,
+        id: &str,
+        fence: Option<DateTime<Utc>>,
+        outcome: &RelayOutcome,
+    ) -> Result<RelaySettle> {
+        self.rt
+            .block_on(relay_lease::settle(&self.pool, id, fence, outcome))
+    }
+    fn renew_relay_lease(
+        &self,
+        id: &str,
+        fence: DateTime<Utc>,
+        lease_secs: i64,
+    ) -> Result<LeaseHeld> {
+        self.rt
+            .block_on(relay_lease::renew(&self.pool, id, fence, lease_secs))
+    }
+    fn update_relay_progress(
+        &self,
+        id: &str,
+        fence: DateTime<Utc>,
+        progress: &str,
+    ) -> Result<LeaseHeld> {
+        self.rt.block_on(relay_lease::update_progress(
+            &self.pool, id, fence, progress,
+        ))
+    }
+    fn cancel_relay_task(&self, scope: Scope<'_>, id: &str) -> Result<Option<RelayCancel>> {
+        self.rt
+            .block_on(relay_lease::cancel(&self.pool, scope.project(), id))
     }
 
     // --- revenue + margin (profit tracking) ---
@@ -394,22 +676,283 @@ impl Store for PgStore {
     }
     fn list_revenue_events(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<RevenueEvent>> {
+        let project = project.project();
         self.rt
             .block_on(revenue::list(&self.pool, project, since, until))
     }
+    fn reprice_revenue(
+        &self,
+        project: Scope<'_>,
+        currency: &str,
+        rate: f64,
+        version: &str,
+        dry_run: bool,
+    ) -> Result<RepriceReport> {
+        let project = project.project();
+        self.rt.block_on(revenue::reprice(
+            &self.pool, project, currency, rate, version, dry_run,
+        ))
+    }
     fn cost_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
+        let project = project.project();
         self.rt.block_on(revenue::cost_by_dimension(
             &self.pool, project, dim, since, until,
         ))
+    }
+
+    // --- collective model intelligence (the shared leaderboard) ---
+    fn upsert_collective_entry(&self, e: &CollectiveEntry) -> Result<()> {
+        self.rt.block_on(collective::upsert(&self.pool, e))
+    }
+    fn delete_collective_entries(&self, contributor_id: &str) -> Result<u64> {
+        self.rt
+            .block_on(collective::delete(&self.pool, contributor_id))
+    }
+    fn list_collective_entries(&self) -> Result<Vec<CollectiveEntry>> {
+        self.rt.block_on(collective::list(&self.pool))
+    }
+    fn purge_collective_entries_before(&self, cutoff: DateTime<Utc>) -> Result<u64> {
+        self.rt
+            .block_on(collective::purge_before(&self.pool, cutoff))
+    }
+    fn replace_collective_contribution(
+        &self,
+        contributor_id: &str,
+        entries: &[CollectiveEntry],
+        purge_before: Option<DateTime<Utc>>,
+    ) -> Result<ReplaceAck> {
+        self.rt.block_on(collective::replace(
+            &self.pool,
+            contributor_id,
+            entries,
+            purge_before,
+        ))
+    }
+    fn latest_collective_receipt(&self, contributor_id: &str) -> Result<Option<DateTime<Utc>>> {
+        self.rt
+            .block_on(collective::latest_receipt(&self.pool, contributor_id))
+    }
+    fn list_collective_entries_filtered(
+        &self,
+        f: &CollectiveFilter,
+    ) -> Result<Vec<CollectiveEntry>> {
+        self.rt.block_on(collective::list_filtered(&self.pool, f))
+    }
+
+    // --- the contributor-side contribution ledger (M22) ---
+    fn insert_contribution(&self, c: &ContributionRecord) -> Result<()> {
+        self.rt.block_on(contributions::insert(&self.pool, c))
+    }
+    fn list_contributions(
+        &self,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Vec<ContributionRecord>> {
+        self.rt
+            .block_on(contributions::list(&self.pool, limit, cursor))
+    }
+    fn latest_contribution(&self, hub_url_hash: &str) -> Result<Option<ContributionRecord>> {
+        self.rt
+            .block_on(contributions::latest(&self.pool, hub_url_hash))
+    }
+
+    // --- prompt registry (M10) ---
+    fn create_prompt(&self, p: &Prompt) -> Result<()> {
+        self.rt.block_on(prompts::create(&self.pool, p))
+    }
+    fn update_prompt(&self, p: &Prompt) -> Result<()> {
+        self.rt.block_on(prompts::update(&self.pool, p))
+    }
+    fn get_prompt(&self, project: &str, name: &str) -> Result<Option<Prompt>> {
+        self.rt.block_on(prompts::get(&self.pool, project, name))
+    }
+    fn get_prompt_by_id(&self, scope: Scope<'_>, id: &str) -> Result<Option<Prompt>> {
+        self.rt
+            .block_on(prompts::get_by_id(&self.pool, scope.project(), id))
+    }
+    fn list_prompts(&self, project: &str) -> Result<Vec<Prompt>> {
+        self.rt.block_on(prompts::list(&self.pool, project))
+    }
+    fn create_prompt_version(&self, v: &PromptVersion) -> Result<()> {
+        self.rt.block_on(prompts::create_version(&self.pool, v))
+    }
+    fn get_prompt_version(
+        &self,
+        scope: Scope<'_>,
+        prompt_id: &str,
+        version: u32,
+    ) -> Result<Option<PromptVersion>> {
+        self.rt.block_on(prompts::get_version(
+            &self.pool,
+            scope.project(),
+            prompt_id,
+            version,
+        ))
+    }
+    fn list_prompt_versions(
+        &self,
+        scope: Scope<'_>,
+        prompt_id: &str,
+    ) -> Result<Vec<PromptVersion>> {
+        self.rt.block_on(prompts::list_versions(
+            &self.pool,
+            scope.project(),
+            prompt_id,
+        ))
+    }
+
+    // --- the relay device fleet (M18, see [`devices`]) ---
+    fn create_device(&self, d: &Device) -> Result<()> {
+        self.rt.block_on(devices::create(&self.pool, d))
+    }
+    fn get_device(&self, scope: Scope<'_>, id: &str) -> Result<Option<Device>> {
+        self.rt
+            .block_on(devices::get(&self.pool, scope.project(), id))
+    }
+    fn list_devices(&self, project: Scope<'_>) -> Result<Vec<Device>> {
+        let project = project.project();
+        self.rt.block_on(devices::list(&self.pool, project))
+    }
+    fn find_device_by_key_prefix(&self, prefix: &str) -> Result<Option<Device>> {
+        self.rt
+            .block_on(devices::find_by_key_prefix(&self.pool, prefix))
+    }
+    fn touch_device(
+        &self,
+        id: &str,
+        capabilities: &[String],
+        agent_version: Option<&str>,
+    ) -> Result<()> {
+        self.rt
+            .block_on(devices::touch(&self.pool, id, capabilities, agent_version))
+    }
+    fn revoke_device(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.rt
+            .block_on(devices::revoke(&self.pool, scope.project(), id))
+    }
+    fn count_eligible_devices(&self, action_type: &str) -> Result<DeviceEligibility> {
+        self.rt
+            .block_on(devices::count_eligible(&self.pool, action_type))
+    }
+
+    // --- alert ledger + routing (M3) ---
+    fn insert_alert_dedup(
+        &self,
+        a: &Alert,
+        cooldown: std::time::Duration,
+    ) -> Result<AlertAdmission> {
+        self.rt
+            .block_on(alerts::insert_dedup(&self.pool, a, cooldown))
+    }
+    fn mark_delivery(&self, alert_id: &str, d: &Delivery) -> Result<bool> {
+        self.rt
+            .block_on(alerts::mark_delivery(&self.pool, alert_id, d))
+    }
+    fn list_alerts(&self, f: &AlertFilter) -> Result<Vec<Alert>> {
+        self.rt.block_on(alerts::list(&self.pool, f))
+    }
+    fn get_alert(&self, scope: Scope<'_>, id: &str) -> Result<Option<Alert>> {
+        self.rt
+            .block_on(alerts::get(&self.pool, scope.project(), id))
+    }
+    fn ack_alert(&self, scope: Scope<'_>, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
+        self.rt
+            .block_on(alerts::ack(&self.pool, scope.project(), id, by, at))
+    }
+    fn attach_alert_resolution(
+        &self,
+        scope: Scope<'_>,
+        id: &str,
+        resolution: &Value,
+    ) -> Result<bool> {
+        self.rt.block_on(alerts::attach_resolution(
+            &self.pool,
+            scope.project(),
+            id,
+            resolution,
+        ))
+    }
+
+    fn create_alert_channel(&self, c: &AlertChannel) -> Result<()> {
+        self.rt.block_on(alert_channels::create(&self.pool, c))
+    }
+    fn get_alert_channel(&self, scope: Scope<'_>, id: &str) -> Result<Option<AlertChannel>> {
+        self.rt
+            .block_on(alert_channels::get(&self.pool, scope.project(), id))
+    }
+    fn list_alert_channels(&self, project: Scope<'_>) -> Result<Vec<AlertChannel>> {
+        let project = project.project();
+        self.rt.block_on(alert_channels::list(&self.pool, project))
+    }
+    fn delete_alert_channel(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.rt
+            .block_on(alert_channels::delete(&self.pool, scope.project(), id))
+    }
+
+    // --- the human verdict ledger + calibration history (M11) ---
+    fn insert_label(&self, l: &Label) -> Result<()> {
+        self.rt.block_on(labels::insert(&self.pool, l))
+    }
+    fn list_labels(&self, f: &LabelFilter) -> Result<Vec<Label>> {
+        self.rt.block_on(labels::list(&self.pool, f))
+    }
+    fn labels_for_dataset(&self, scope: Scope<'_>, dataset_id: &str) -> Result<Vec<Label>> {
+        self.rt
+            .block_on(labels::for_dataset(&self.pool, scope.project(), dataset_id))
+    }
+    fn insert_calibration(&self, c: &CalibrationRecord) -> Result<()> {
+        self.rt.block_on(calibrations::insert(&self.pool, c))
+    }
+    fn latest_calibration(
+        &self,
+        project: &str,
+        rubric_id: Option<&str>,
+        judge: &str,
+    ) -> Result<Option<CalibrationRecord>> {
+        self.rt
+            .block_on(calibrations::latest(&self.pool, project, rubric_id, judge))
+    }
+    fn list_calibrations(
+        &self,
+        project: Scope<'_>,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Vec<CalibrationRecord>> {
+        let project = project.project();
+        self.rt
+            .block_on(calibrations::list(&self.pool, project, limit, cursor))
+    }
+
+    // --- eval corpus lineage (M24) ---
+    fn fork_dataset(&self, scope: Scope<'_>, id: &str) -> Result<Dataset> {
+        self.rt
+            .block_on(dataset_lineage::fork(&self.pool, scope.project(), id))
+    }
+    fn import_dataset_items(
+        &self,
+        scope: Scope<'_>,
+        dataset_id: &str,
+        spec: &lighttrack_core::ImportSpec,
+    ) -> Result<u32> {
+        self.rt.block_on(dataset_lineage::import(
+            &self.pool,
+            scope.project(),
+            dataset_id,
+            spec,
+        ))
+    }
+    fn list_dataset_versions(&self, scope: Scope<'_>, name: &str) -> Result<Vec<Dataset>> {
+        self.rt
+            .block_on(dataset_lineage::versions(&self.pool, scope.project(), name))
     }
 }

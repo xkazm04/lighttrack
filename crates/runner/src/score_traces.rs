@@ -154,19 +154,41 @@ fn run_cycle(
         judge.judge(engine, &eligible[i].input, &eligible[i].output)
     });
     let mut scored = 0usize;
+    let mut failed = 0usize;
     for (i, verdict) in judged.into_iter().enumerate() {
         let e = &eligible[i];
-        let v = verdict?;
+        // One bad verdict used to discard every other verdict this cycle had already paid for.
+        let v = match verdict {
+            Ok(v) => v,
+            Err(err) => {
+                eprintln!(
+                    "  ! trace {} skipped — judge failed: {err:#}",
+                    short(&e.trace_id)
+                );
+                failed += 1;
+                continue;
+            }
+        };
         let body = json!({
             "rubric": label, "value": v.value, "max": v.max, "pass": v.pass,
             "reasoning": v.reasoning, "scored_by": v.scored_by, "cost_usd": v.cost_usd,
+            // The trace door stamps `kind: trace` itself (it knows whether the verdict anchors to
+            // the root), but the rubric this ran under is only known here.
+            "rubric_id": judge.rubric_id(),
         });
-        post(
+        if let Err(err) = post(
             cli,
             http,
             &format!("/v1/traces/{}/score", e.trace_id),
             &body,
-        )?;
+        ) {
+            eprintln!(
+                "  ! trace {} verdict not persisted — score post failed: {err:#}",
+                short(&e.trace_id)
+            );
+            failed += 1;
+            continue;
+        }
         scored += 1;
         println!(
             "  - trace {} score={:.2}/{:.0} pass={} :: {}",
@@ -176,6 +198,9 @@ fn run_cycle(
             v.pass,
             v.reasoning.chars().take(80).collect::<String>()
         );
+    }
+    if failed > 0 {
+        eprintln!("  {failed} trace(s) not scored this cycle (see above)");
     }
     Ok(scored)
 }

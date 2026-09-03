@@ -77,16 +77,18 @@ pub(crate) struct ScopeEntry {
     rules: Vec<LimitStatus>,
 }
 
-/// Parse the `window` query param, defaulting to `day`.
+/// Parse the `window` query param, defaulting to `day`. The accepted set and the error's expected
+/// list both come from the enum, so a new window cannot be silently rejected here.
 fn parse_window(s: Option<&str>) -> Result<LimitWindow, ApiError> {
-    match s.unwrap_or("day") {
-        "hour" => Ok(LimitWindow::Hour),
-        "day" => Ok(LimitWindow::Day),
-        "month" => Ok(LimitWindow::Month),
-        other => Err(ApiError::bad_request(format!(
-            "unknown window '{other}' (expected hour|day|month)"
-        ))),
-    }
+    let raw = s.unwrap_or(LimitWindow::default().as_str());
+    LimitWindow::from_wire(raw).ok_or_else(|| {
+        let expected = LimitWindow::ALL
+            .iter()
+            .map(|w| w.as_str())
+            .collect::<Vec<_>>()
+            .join("|");
+        ApiError::bad_request(format!("unknown window '{raw}' (expected {expected})"))
+    })
 }
 
 pub(crate) async fn usage_by_scope(
@@ -112,24 +114,34 @@ pub(crate) async fn usage_by_scope(
     let since = window.since(now);
     let store = st.store.clone();
     let (pid, kind) = (project.clone(), by.clone());
-    // One blocking hop: the grouped usage, the project total, the rules, and (for admins asking about
-    // keys) the key roster used purely for labels.
-    let (rows, total, rules, keys) = spawn_db(move || {
+    // One blocking hop: the grouped usage, the project total, the rules (with their revenue-share
+    // thresholds resolved), and (for admins asking about keys) the key roster used purely for labels.
+    let (rows, total, rules, resolved, keys) = spawn_db(move || {
         let rows = store.usage_by_scope(&pid, since, &kind)?;
         let total = store.usage_since(&pid, since)?;
         let rules = store.list_limit_rules(&pid, true)?;
+        // The same resolution `/v1/limits/status` and admission run: this surface used to evaluate a
+        // revenue-share rule unresolved, so a `{"pct": 80}` key cap read as inert (threshold ∞,
+        // basis unknown) here while the status page showed the figure it was actually enforcing.
+        let resolved = lighttrack_store::resolve_thresholds(&rules, now, |s, u| {
+            match store.list_revenue_events(lighttrack_store::Scope::Project(&pid), s, u) {
+                Err(StoreError::Unsupported(_)) => Ok(Vec::new()),
+                other => other,
+            }
+        })?;
         // Labels are a nicety: an unported backend (`Unsupported`) simply yields none.
         let keys: Vec<ApiKey> = if may_label && kind == "api_key" {
             store.list_api_keys(&pid).unwrap_or_default()
         } else {
             Vec::new()
         };
-        Ok::<_, StoreError>((rows, total, rules, keys))
+        Ok::<_, StoreError>((rows, total, rules, resolved, keys))
     })
     .await?;
+    let resolve = lighttrack_store::resolver(&resolved);
 
     Ok(Json(compose(
-        project, by, window, since, total, rows, &rules, &keys, limit,
+        project, by, window, since, now, total, rows, &rules, &resolve, &keys, limit,
     )))
 }
 
@@ -141,9 +153,11 @@ fn compose(
     by: String,
     window: LimitWindow,
     since: DateTime<Utc>,
+    now: DateTime<Utc>,
     total: Usage,
     mut rows: Vec<ScopeUsage>,
     rules: &[lighttrack_core::LimitRule],
+    resolve: &dyn Fn(&lighttrack_core::LimitRule) -> (f64, lighttrack_core::ThresholdBasis),
     keys: &[ApiKey],
     limit: usize,
 ) -> UsageByScopeResp {
@@ -171,17 +185,22 @@ fn compose(
                     .find(|k| k.id == v)
                     .map(|k| format!("{} ({})", k.name, k.prefix))
             });
-            // A rule binds this row when it is scoped to this dimension AND this value. Evaluated
-            // against the row's own usage — the same evaluator `/v1/limits/status` uses, so the two
-            // surfaces can't disagree about where a per-key cap stands.
+            // A rule binds this row when it is active, scoped to this dimension AND this value.
+            // Evaluated against the row's own usage with its threshold already resolved — the same
+            // evaluator and the same resolution `/v1/limits/status` uses, so the two surfaces can't
+            // disagree about where a per-key cap stands. An expired policy rule is inert there too.
             let rules = rules
                 .iter()
+                .filter(|rule| rule.is_active_at(now))
                 .filter(|rule| {
                     rule.scope.as_ref().is_some_and(|s| {
                         s.kind_str() == by && Some(s.value()) == r.value.as_deref()
                     })
                 })
-                .map(|rule| lighttrack_store::evaluate_rule(rule, &r.usage))
+                .map(|rule| {
+                    let (threshold, basis) = resolve(rule);
+                    lighttrack_store::evaluate_rule_resolved(rule, &r.usage, threshold, basis)
+                })
                 .collect();
             ScopeEntry {
                 cost_share_pct: if total_cost > 0.0 {
@@ -230,16 +249,21 @@ mod tests {
     }
 
     fn key_rule(id: &str, key: &str, threshold: f64) -> LimitRule {
+        use lighttrack_core::Threshold;
         LimitRule {
             id: id.into(),
             project_id: "p".into(),
             metric: LimitMetric::CostUsd,
             window: LimitWindow::Day,
-            threshold,
+            threshold: Threshold::Fixed(threshold),
             action: LimitAction::Block,
             enabled: true,
             warn_at: None,
             scope: Some(LimitScope::ApiKey(key.into())),
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         }
     }
 
@@ -258,12 +282,32 @@ mod tests {
             "api_key".into(),
             LimitWindow::Day,
             Utc::now(),
+            Utc::now(),
             total,
             rows,
             rules,
+            &|r: &LimitRule| r.threshold.resolve(None),
             keys,
             limit,
         )
+    }
+
+    /// The status page skips an expired policy rule; this surface must too, or a key page shows a
+    /// cap that no longer enforces anything.
+    #[test]
+    fn an_expired_policy_rule_does_not_bind_a_row() {
+        let live = key_rule("r-live", "k", 5.0);
+        let expired = LimitRule {
+            expires_at: Some(Utc::now() - chrono::Duration::hours(1)),
+            ..key_rule("r-expired", "k", 1.0)
+        };
+        let r = resp(vec![row(Some("k"), 6.0, 2)], &[live, expired], &[], 10);
+        let ids: Vec<&str> = r.entries[0]
+            .rules
+            .iter()
+            .map(|s| s.rule_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["r-live"]);
     }
 
     #[test]
@@ -335,6 +379,8 @@ mod tests {
             created_at: Utc::now(),
             last_used_at: None,
             revoked: false,
+            scopes: lighttrack_core::default_scopes(),
+            expires_at: None,
         }];
         let r = resp(
             vec![row(Some("k-staging"), 1.0, 1), row(Some("k-gone"), 1.0, 1)],

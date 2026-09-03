@@ -24,7 +24,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{new_id, Score, ScoreDetail, Trace, TraceCoverage};
+use lighttrack_core::{new_id, LlmEvent, Score, ScoreDetail, Trace, TraceCoverage, TraceSpan};
 use lighttrack_store::{TraceFilter, MAX_TRACE_SPANS};
 
 use crate::error::ApiError;
@@ -74,9 +74,21 @@ pub(crate) async fn list_traces(
             return Err(ApiError::bad_request("status must be 'success' or 'error'"));
         }
     }
+    let since = parse_opt_ts("since", q.since.as_deref())?;
+    let until = parse_opt_ts("until", q.until.as_deref())?;
+    // The same refusals `/v1/events` makes: an inverted window and a non-finite cost floor both
+    // used to page back empty and read as "no such traces".
+    if let (Some(s), Some(u)) = (since, until) {
+        if u <= s {
+            return Err(ApiError::bad_request("until must be after since"));
+        }
+    }
+    if q.min_cost.is_some_and(|c| !c.is_finite()) {
+        return Err(ApiError::bad_request("min_cost must be a finite number"));
+    }
     let filter = TraceFilter {
-        since: parse_opt_ts("since", q.since.as_deref())?,
-        until: parse_opt_ts("until", q.until.as_deref())?,
+        since,
+        until,
         status: q.status.clone(),
         min_cost: q.min_cost,
         cursor: q.cursor.clone(),
@@ -84,7 +96,8 @@ pub(crate) async fn list_traces(
     let store = st.store.clone();
     let limit = q.limit.unwrap_or(50).min(1000);
     let page =
-        spawn_db(move || store.list_traces_filtered(project.as_deref(), &filter, limit)).await?;
+        spawn_db(move || store.list_traces_filtered(project.as_deref().into(), &filter, limit))
+            .await?;
 
     let mut resp = Json(page.traces).into_response();
     if let Some(cursor) = page.next_cursor {
@@ -161,7 +174,7 @@ pub(crate) async fn get_trace(
 
     let store = st.store.clone();
     let tid = id.clone();
-    let scores = spawn_db(move || store.list_trace_scores(scope.as_deref(), &tid)).await?;
+    let scores = spawn_db(move || store.list_trace_scores(scope.as_deref().into(), &tid)).await?;
     let scores = views(scores, &trace.coverage());
     Ok(Json(TraceDetail { trace, scores }))
 }
@@ -199,9 +212,26 @@ pub(crate) async fn score_trace(
     Json(body): Json<TraceScoreBody>,
 ) -> Result<Json<Score>, ApiError> {
     let p = authenticate(&st, &headers).await?;
+    // Reads the trace, then writes a verdict about it — so both capabilities, and the same
+    // `Ingest` the sibling `POST /v1/scores` door requires (a verdict is a recorded observation,
+    // not a configuration change).
+    crate::auth_scopes::ensure_scope(&p, lighttrack_core::Scope::Ingest)?;
     let scope = resolve_read_project(&p, None)?;
     let trace = load_trace(&st, scope, &id).await?;
 
+    // Every span, not only the roots: `trace.spans` is a forest whose inner calls sit in
+    // `children`. Walking the top level alone meant a per-call verdict on a nested span never
+    // found its event, and a whole-trace verdict's evidence count covered the root spans only.
+    let events = all_events(&trace.spans);
+    if let Some(anchor) = body.event_id.as_deref() {
+        // The anchor must be one of this trace's own spans: an id from elsewhere (another trace,
+        // another project) used to be stored as the verdict's event_id unchecked.
+        if !events.iter().any(|e| e.id == anchor) {
+            return Err(ApiError::bad_request(format!(
+                "event_id {anchor:?} is not a span of trace '{id}'"
+            )));
+        }
+    }
     // Anchor to the requested call, else the trace's entry-point span.
     let event_id = body
         .event_id
@@ -210,16 +240,41 @@ pub(crate) async fn score_trace(
     // judged: the trace has no end marker, and without this receipt a span landing a second later
     // silently widens the trace while the verdict stays put. A verdict pinned to a specific inner
     // call is a per-call score — whole-trace coverage would misdescribe it, so it gets none.
-    let detail =
-        (event_id.is_some() && event_id.as_deref() == trace.root_event_id()).then(|| ScoreDetail {
-            coverage: Some(trace.coverage()),
-            ..Default::default()
-        });
+    // How mangled the judged evidence was. The judge reads the *stored* text, so a scrub that
+    // rewrote a payload changed what was judged — a per-call verdict reports its own event's spans,
+    // a whole-trace verdict the sum across the spans it covers. `None` (rather than 0) when no
+    // covered event carried a stamp: "we do not know" is a weaker claim than "nothing was rewritten"
+    // and must not be dressed up as it.
+    let judged: Vec<&LlmEvent> = match event_id.as_deref() {
+        Some(anchor) if Some(anchor) != trace.root_event_id() => {
+            events.iter().copied().filter(|e| e.id == anchor).collect()
+        }
+        _ => events.clone(),
+    };
+    let evidence_redacted_spans = judged
+        .iter()
+        .filter_map(|e| e.redaction())
+        .map(|r| r.spans)
+        .reduce(|a, b| a.saturating_add(b));
+    let whole_trace = event_id.is_some() && event_id.as_deref() == trace.root_event_id();
+    let detail = (whole_trace || evidence_redacted_spans.is_some()).then(|| ScoreDetail {
+        coverage: whole_trace.then(|| trace.coverage()),
+        evidence_redacted_spans,
+        ..Default::default()
+    });
     let score = Score {
         id: new_id(),
         project_id: trace.project_id.clone(),
         event_id,
         rubric: body.rubric,
+        // A verdict on a whole trace is a trace verdict; one pinned to an inner call is a
+        // per-call score against whatever rubric the caller names, which is freeform here.
+        rubric_id: None,
+        kind: if whole_trace {
+            lighttrack_core::ScoreKind::Trace
+        } else {
+            lighttrack_core::ScoreKind::Freeform
+        },
         value: body.value,
         max: body.max,
         pass: body.pass,
@@ -233,11 +288,27 @@ pub(crate) async fn score_trace(
         created_at: Utc::now(),
     };
 
+    // The same numeric contract POST /v1/scores enforces: a NaN or an over-max value must not
+    // reach the alert window and the averages through this door either.
+    crate::scores::validate_verdict(&score)?;
     let store = st.store.clone();
     let to_insert = score.clone();
     spawn_db(move || store.insert_score(&to_insert)).await?;
     st.alerts.record_score(&score);
     Ok(Json(score))
+}
+
+/// Every event in a span forest, depth-first — roots and their nested calls alike.
+fn all_events(spans: &[TraceSpan]) -> Vec<&LlmEvent> {
+    fn walk<'a>(spans: &'a [TraceSpan], out: &mut Vec<&'a LlmEvent>) {
+        for s in spans {
+            out.push(&s.event);
+            walk(&s.children, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(spans, &mut out);
+    out
 }
 
 /// Fetch a trace by id **within `scope`**, mapping an unknown trace to 404.
@@ -250,7 +321,7 @@ pub(crate) async fn score_trace(
 async fn load_trace(st: &AppState, scope: Option<String>, id: &str) -> Result<Trace, ApiError> {
     let store = st.store.clone();
     let tid = id.to_string();
-    spawn_db(move || store.get_trace(scope.as_deref(), &tid, MAX_TRACE_SPANS))
+    spawn_db(move || store.get_trace(scope.as_deref().into(), &tid, MAX_TRACE_SPANS))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("trace '{id}' not found")))
 }

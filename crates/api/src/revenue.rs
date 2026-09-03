@@ -21,19 +21,42 @@ use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
 use crate::state::{spawn_db, AppState};
 
-/// Post one revenue record (manual, or from a future Stripe/Polar sync). Project is derived from the
-/// key, mirroring event ingest.
+/// Post one revenue record by hand or from the runner's billing sync (the Stripe/Polar webhooks
+/// land through `billing::post_webhook` instead). Project is derived from the key, mirroring event
+/// ingest — but the write needs `manage`, not `ingest`: recognized revenue is what a revenue-share
+/// cap (`{"pct": 80}`) resolves its threshold from, so a key that may only record calls must not be
+/// able to raise its own budget by posting revenue.
 pub(crate) async fn post_revenue(
     State(st): State<AppState>,
     headers: HeaderMap,
     Json(mut ev): Json<RevenueEvent>,
 ) -> Result<Json<RevenueEvent>, ApiError> {
     let principal = authenticate(&st, &headers).await?;
+    crate::auth_scopes::ensure_scope(&principal, lighttrack_core::Scope::Manage)?;
     ev.project_id = resolve_ingest_project(&principal, &ev.project_id)?;
+    validate_revenue(&ev).map_err(ApiError::bad_request)?;
     let store = st.store.clone();
     let to_insert = ev.clone();
     spawn_db(move || store.insert_revenue_event(&to_insert)).await?;
     Ok(Json(ev))
+}
+
+/// The shape rules recognition relies on. A NaN or negative amount used to be stored as sent and
+/// then poisoned every margin figure it touched (NaN sums stay NaN; a negative magnitude inverted
+/// the refund sign); an inverted period recognized nothing, silently.
+fn validate_revenue(ev: &RevenueEvent) -> Result<(), String> {
+    if !ev.amount_usd.is_finite() || ev.amount_usd < 0.0 {
+        return Err(format!(
+            "amount_usd must be a finite, non-negative magnitude (the sign comes from `kind`); got {}",
+            ev.amount_usd
+        ));
+    }
+    if let (Some(ps), Some(pe)) = (ev.period_start, ev.period_end) {
+        if pe <= ps {
+            return Err("period_end must be after period_start".into());
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -83,16 +106,37 @@ pub(crate) struct MarginResponse {
     /// Absent (omitted) when the request was unfiltered.
     #[serde(skip_serializing_if = "Option::is_none")]
     below: Option<f64>,
-    rows: Vec<MarginRow>,
+    rows: Vec<GuardedMarginRow>,
 }
 
-/// Distinct non-convertible currencies present in `revenue` (per the shared FX table): non-USD codes
-/// with no rate, whose `amount_usd` was a 1:1 fallback. Sorted, deduped, for a stable health note.
+/// A margin row plus the guardrail (if any) standing over it. Carrying the rule id on the row is
+/// what turns `/v1/margin?below=0` from a list of complaints into a list of complaints **with the
+/// action already taken beside each one** — the question an operator asks next, answered without a
+/// second request.
+#[derive(Serialize)]
+pub(crate) struct GuardedMarginRow {
+    #[serde(flatten)]
+    row: MarginRow,
+    /// Id of the limit rule a margin policy raised for this key, when one stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    guardrail: Option<String>,
+}
+
+/// Distinct currencies whose stored `amount_usd` is a **1:1 fallback** — read from the rows
+/// themselves, not recomputed against the live FX table.
+///
+/// The old form asked `!fx.is_convertible(&r.currency)` of today's book, which made the caveat a
+/// property of the configuration rather than of the data: adding a missing EUR rate silently
+/// retired the warning while every row stored at 1:1 stayed exactly as wrong as before. The rows
+/// carry `converted` now, so the caveat says what happened to *these* rows and only stops appearing
+/// when they are actually repriced (`POST /v1/revenue/reprice`).
+///
+/// A row written before FX provenance existed reads through
+/// [`RevenueEvent::is_converted`], which infers from the currency rather than guessing `false`.
 fn unconverted_currencies(revenue: &[RevenueEvent]) -> Vec<String> {
-    let fx = lighttrack_billing::shared_fx();
     let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for r in revenue {
-        if !fx.is_convertible(&r.currency) {
+        if !r.is_converted() {
             set.insert(r.currency.to_uppercase());
         }
     }
@@ -106,7 +150,7 @@ pub(crate) async fn get_margin(
 ) -> Result<Json<MarginResponse>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
-    let dim = MarginDimension::parse(q.by.as_deref().unwrap_or("customer"));
+    let dim = parse_dimension(q.by.as_deref())?;
 
     let until = match q.until.as_deref() {
         Some(s) => parse_rfc3339(s)?,
@@ -123,26 +167,53 @@ pub(crate) async fn get_margin(
     let store = st.store.clone();
     let proj = project.clone();
     let revenue =
-        spawn_db(move || store.list_revenue_events(proj.as_deref(), since, until)).await?;
+        spawn_db(move || store.list_revenue_events(proj.as_deref().into(), since, until)).await?;
 
     let store = st.store.clone();
     let proj = project.clone();
     let dim_s = dim.as_str().to_string();
     let costs =
-        spawn_db(move || store.cost_by_dimension(proj.as_deref(), &dim_s, since, until)).await?;
+        spawn_db(move || store.cost_by_dimension(proj.as_deref().into(), &dim_s, since, until))
+            .await?;
 
     let unconverted = unconverted_currencies(&revenue);
 
     let mut rows = compute_margin(&revenue, &costs, dim, since, until);
     if let Some(below) = q.below {
+        // `below=NaN` compared false against every row and returned an empty roster - "nobody is
+        // below breakeven" - for a value that was never a number.
+        if !below.is_finite() {
+            return Err(ApiError::bad_request("`below` must be a finite percentage"));
+        }
         rows = filter_below(rows, below);
     }
     let total_revenue_usd: f64 = rows.iter().map(|r| r.revenue_usd).sum();
     let total_cost_usd: f64 = rows.iter().map(|r| r.llm_cost_usd).sum();
+    // Which of these rows a margin policy has already acted on. Only meaningful per project, and a
+    // backend that cannot read rules simply annotates nothing — the margin numbers are the answer
+    // here, the guardrail is the footnote.
+    let guard_rules = match project.clone() {
+        None => Vec::new(),
+        Some(pid) => {
+            let store = st.store.clone();
+            spawn_db(move || store.list_limit_rules(&pid, false))
+                .await
+                .unwrap_or_default()
+        }
+    };
+    let rows: Vec<GuardedMarginRow> = rows
+        .into_iter()
+        .map(|row| GuardedMarginRow {
+            guardrail: crate::margin_guardrails::guardrail_for(&guard_rules, &row.key)
+                .map(str::to_string),
+            row,
+        })
+        .collect();
     let currency_note = (!unconverted.is_empty()).then(|| {
         format!(
             "unconverted currencies present (stored 1:1, USD figures approximate): {}. \
-             Add rates to config/fx_rates.json.",
+             Add rates to config/fx_rates.json, then restate the stored rows with \
+             POST /v1/revenue/reprice - adding a rate alone fixes future syncs, not these rows.",
             unconverted.join(", ")
         )
     });
@@ -207,7 +278,7 @@ pub(crate) async fn get_margin_simulate(
 ) -> Result<Json<MarginSimulateResponse>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
-    let dim = MarginDimension::parse(q.by.as_deref().unwrap_or("customer"));
+    let dim = parse_dimension(q.by.as_deref())?;
 
     let until = match q.until.as_deref() {
         Some(s) => parse_rfc3339(s)?,
@@ -231,9 +302,9 @@ pub(crate) async fn get_margin_simulate(
         Vec<CostByDimension>,
         Vec<TokensByDimension>,
     ) = spawn_db(move || {
-        let revenue = store.list_revenue_events(proj.as_deref(), since, until)?;
-        let costs = store.cost_by_dimension(proj.as_deref(), &dim_s, since, until)?;
-        let tokens = store.tokens_by_dimension(proj.as_deref(), &dim_s, since, until)?;
+        let revenue = store.list_revenue_events(proj.as_deref().into(), since, until)?;
+        let costs = store.cost_by_dimension(proj.as_deref().into(), &dim_s, since, until)?;
+        let tokens = store.tokens_by_dimension(proj.as_deref().into(), &dim_s, since, until)?;
         Ok::<_, StoreError>((revenue, costs, tokens))
     })
     .await?;
@@ -245,7 +316,8 @@ pub(crate) async fn get_margin_simulate(
     let currency_note = (!unconverted.is_empty()).then(|| {
         format!(
             "unconverted currencies present (stored 1:1, USD figures approximate): {}. \
-             Add rates to config/fx_rates.json.",
+             Add rates to config/fx_rates.json, then restate the stored rows with \
+             POST /v1/revenue/reprice - adding a rate alone fixes future syncs, not these rows.",
             unconverted.join(", ")
         )
     });
@@ -309,7 +381,7 @@ pub(crate) async fn get_margin_trend(
 ) -> Result<Json<MarginTrendResponse>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
-    let dim = MarginDimension::parse(q.by.as_deref().unwrap_or("customer"));
+    let dim = parse_dimension(q.by.as_deref())?;
     let days = q.days.unwrap_or(30).clamp(1, MAX_TREND_DAYS);
     let top_n = q.top.unwrap_or_else(default_top_n).max(1);
 
@@ -322,8 +394,8 @@ pub(crate) async fn get_margin_trend(
     let proj = project.clone();
     let dim_s = dim.as_str().to_string();
     let (revenue, daily): (Vec<RevenueEvent>, Vec<DailyDimCost>) = spawn_db(move || {
-        let revenue = store.list_revenue_events(proj.as_deref(), since, until)?;
-        let daily = store.daily_cost_by_dimension(proj.as_deref(), &dim_s, since, until)?;
+        let revenue = store.list_revenue_events(proj.as_deref().into(), since, until)?;
+        let daily = store.daily_cost_by_dimension(proj.as_deref().into(), &dim_s, since, until)?;
         Ok::<_, lighttrack_store::StoreError>((revenue, daily))
     })
     .await?;
@@ -351,11 +423,12 @@ pub(crate) async fn get_margin_trend(
 }
 
 fn default_top_n() -> usize {
-    std::env::var("LIGHTTRACK_MARGIN_TREND_TOP_N")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_TREND_TOP_N)
+    // Announced when unparseable (the `.parse().ok()` class rounds 3 and 12 closed elsewhere); a
+    // zero is not a size, so it takes the default too.
+    match crate::state::env_parsed("LIGHTTRACK_MARGIN_TREND_TOP_N", DEFAULT_TREND_TOP_N) {
+        0 => DEFAULT_TREND_TOP_N,
+        n => n,
+    }
 }
 
 // --- per-customer breakdown (cost by model & by use-case) ---------------------------------------
@@ -411,9 +484,9 @@ pub(crate) async fn get_customer_margin(
     let proj = project.clone();
     let cust = customer_id.clone();
     let (revenue, by_model, by_name) = spawn_db(move || {
-        let revenue = store.list_revenue_events(proj.as_deref(), since, until)?;
-        let by_model = store.customer_cost_by_model(proj.as_deref(), &cust, since, until)?;
-        let by_name = store.customer_cost_by_name(proj.as_deref(), &cust, since, until)?;
+        let revenue = store.list_revenue_events(proj.as_deref().into(), since, until)?;
+        let by_model = store.customer_cost_by_model(proj.as_deref().into(), &cust, since, until)?;
+        let by_name = store.customer_cost_by_name(proj.as_deref().into(), &cust, since, until)?;
         Ok::<_, StoreError>((revenue, by_model, by_name))
     })
     .await?;
@@ -444,6 +517,20 @@ pub(crate) async fn get_customer_margin(
         by_model,
         by_name,
     }))
+}
+
+/// The `by` dimension, refusing a misspelling. `by=produkt` used to answer the customer question
+/// silently, labelled `dimension: "customer"` - true, but not what was asked, and easy to read past.
+fn parse_dimension(by: Option<&str>) -> Result<MarginDimension, ApiError> {
+    let raw = by.unwrap_or(MarginDimension::Customer.as_str());
+    MarginDimension::from_wire(raw).ok_or_else(|| {
+        let expected = MarginDimension::ALL
+            .iter()
+            .map(|d| d.as_str())
+            .collect::<Vec<_>>()
+            .join("|");
+        ApiError::bad_request(format!("unknown dimension '{raw}' (expected {expected})"))
+    })
 }
 
 fn parse_rfc3339(s: &str) -> Result<DateTime<Utc>, ApiError> {

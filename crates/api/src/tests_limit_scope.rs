@@ -11,7 +11,9 @@ use axum::Router;
 use serde_json::{json, Value};
 use tower::ServiceExt; // oneshot
 
-use lighttrack_core::{new_id, LimitAction, LimitMetric, LimitRule, LimitScope, LimitWindow};
+use lighttrack_core::{
+    new_id, LimitAction, LimitMetric, LimitRule, LimitScope, LimitWindow, Threshold,
+};
 use lighttrack_store::Store;
 
 use crate::redact::Redactor;
@@ -50,11 +52,15 @@ fn key_rule(project: &str, key_id: &str, threshold: f64) -> LimitRule {
         project_id: project.into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Day,
-        threshold,
+        threshold: Threshold::Fixed(threshold),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: Some(LimitScope::ApiKey(key_id.into())),
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     }
 }
 
@@ -375,7 +381,7 @@ async fn model_and_name_scoped_rules_behave_exactly_as_before() {
         .create_limit_rule(&LimitRule {
             scope: Some(LimitScope::Model("claude-haiku-4-5".into())),
             metric: LimitMetric::Calls,
-            threshold: 2.0,
+            threshold: Threshold::Fixed(2.0),
             ..key_rule("proj-a", "unused", 1.0)
         })
         .unwrap();
@@ -383,7 +389,7 @@ async fn model_and_name_scoped_rules_behave_exactly_as_before() {
         .create_limit_rule(&LimitRule {
             scope: Some(LimitScope::Name("other-usecase".into())),
             metric: LimitMetric::Calls,
-            threshold: 1.0,
+            threshold: Threshold::Fixed(1.0),
             ..key_rule("proj-a", "unused", 1.0)
         })
         .unwrap();

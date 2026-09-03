@@ -17,23 +17,40 @@ pub(crate) fn create_dataset(rest: &Rest, d: &Dataset) -> Result<()> {
     m.insert("frozen".into(), json!(d.frozen as i64));
     m.insert("source".into(), json!(d.source));
     m.insert("created_at".into(), json!(fmt_ts(d.created_at)));
+    // M24 columns round-trip even though this backend does not declare `Surface::DatasetLineage`:
+    // refusing to *fork* is a capability gap, silently dropping a fork's parent link on a plain
+    // read-back would be data loss.
+    m.insert("parent_id".into(), json!(d.parent_id));
     rest.put_doc("datasets", &d.id, &m)
 }
 
-pub(crate) fn get_dataset(rest: &Rest, id: &str) -> Result<Option<Dataset>> {
-    rest.get_doc("datasets", id)?
+pub(crate) fn get_dataset(rest: &Rest, project: Option<&str>, id: &str) -> Result<Option<Dataset>> {
+    let d = rest
+        .get_doc("datasets", id)?
         .as_ref()
         .map(dataset_from)
-        .transpose()
+        .transpose()?;
+    Ok(crate::scope::keep(project, d, |d| {
+        Some(d.project_id.as_str())
+    }))
 }
 
-pub(crate) fn list_datasets(rest: &Rest, project: &str) -> Result<Vec<Dataset>> {
-    let filters: Vec<(&str, &str, Value)> = vec![("project_id", "EQUAL", json!(project))];
+pub(crate) fn list_datasets(rest: &Rest, project: Option<&str>) -> Result<Vec<Dataset>> {
+    let mut filters: Vec<(&str, &str, Value)> = Vec::new();
+    crate::scope::push_filter(&mut filters, project);
     let docs = rest.query("datasets", &filters, Some(("created_at", true)), None)?;
     docs.iter().map(dataset_from).collect()
 }
 
-pub(crate) fn set_dataset_frozen(rest: &Rest, id: &str, frozen: bool) -> Result<()> {
+pub(crate) fn set_dataset_frozen(
+    rest: &Rest,
+    project: Option<&str>,
+    id: &str,
+    frozen: bool,
+) -> Result<()> {
+    if get_dataset(rest, project, id)?.is_none() {
+        return Ok(());
+    }
     let mut m = Fields::new();
     m.insert("frozen".into(), json!(frozen as i64));
     rest.patch_fields("datasets", id, &m, &["frozen"])
@@ -49,6 +66,7 @@ pub(crate) fn create_dataset_item(rest: &Rest, item: &DatasetItem) -> Result<()>
     m.insert("context".into(), json!(item.context));
     m.insert("tags".into(), json!(serde_json::to_string(&item.tags)?));
     m.insert("source_event_id".into(), json!(item.source_event_id));
+    m.insert("input_hash".into(), json!(item.input_hash));
     m.insert(
         "anonymization".into(),
         json!(json_or_null_str(&item.anonymization)?),
@@ -56,7 +74,16 @@ pub(crate) fn create_dataset_item(rest: &Rest, item: &DatasetItem) -> Result<()>
     rest.put_doc("dataset_items", &item.id, &m)
 }
 
-pub(crate) fn list_dataset_items(rest: &Rest, dataset_id: &str) -> Result<Vec<DatasetItem>> {
+/// `dataset_items` documents carry no `project_id`, so the tenant filter rides the parent dataset:
+/// a foreign dataset id yields an empty list, never someone else's cases.
+pub(crate) fn list_dataset_items(
+    rest: &Rest,
+    project: Option<&str>,
+    dataset_id: &str,
+) -> Result<Vec<DatasetItem>> {
+    if get_dataset(rest, project, dataset_id)?.is_none() {
+        return Ok(Vec::new());
+    }
     let filters: Vec<(&str, &str, Value)> = vec![("dataset_id", "EQUAL", json!(dataset_id))];
     let docs = rest.query("dataset_items", &filters, None, None)?;
     docs.iter().map(item_from).collect()
@@ -71,6 +98,7 @@ fn dataset_from(m: &Fields) -> Result<Dataset> {
         frozen: fbool(m, "frozen"),
         source: fstr(m, "source"),
         created_at: parse_ts(&freq(m, "created_at")?)?,
+        parent_id: fstr(m, "parent_id"),
     })
 }
 
@@ -88,5 +116,6 @@ fn item_from(m: &Fields) -> Result<DatasetItem> {
         },
         source_event_id: fstr(m, "source_event_id"),
         anonymization: fjson(m, "anonymization")?,
+        input_hash: fstr(m, "input_hash"),
     })
 }

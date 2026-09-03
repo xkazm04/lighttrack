@@ -14,30 +14,15 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use lighttrack_core::{
-    new_id, LlmEvent, Operation, Provider, RelayOutcome, RelayStatus, RelayTask, Status,
-    TokenUsage, RELAY_DEFAULT_MAX_ATTEMPTS, RELAY_DEFAULT_RETRY_INTERVAL_SECS,
+    new_id, RelayAdmission, RelayStatus, RelayTask, RELAY_DEFAULT_MAX_ATTEMPTS,
+    RELAY_DEFAULT_RETRY_INTERVAL_SECS,
 };
 
-use crate::auth::Principal;
 use crate::error::ApiError;
-use crate::guards::{
-    authenticate, bearer, ensure_can_admin, resolve_ingest_project, resolve_read_project,
-};
+use crate::events_admission::breach_reason;
+use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
+use crate::ingest_proximity::Proximity;
 use crate::state::{spawn_db, AppState};
-
-/// Device endpoints (lease / result) authenticate with the enrolled device key
-/// (`LIGHTTRACK_RELAY_DEVICE_KEY`); an admin principal (or dev mode) also passes, for local testing.
-async fn ensure_device(st: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
-    if let (Some(expected), Some(token)) = (st.relay_device_key.as_ref(), bearer(headers)) {
-        // Constant-time for the same reason the admin key is: this is an operator-chosen secret
-        // compared against raw presented bytes, so a short-circuiting `==` is a byte-at-a-time
-        // oracle. A *wrong* device key falls through to `authenticate`, which meters the failure.
-        if crate::auth::secret_eq(&token, expected) {
-            return Ok(());
-        }
-    }
-    ensure_can_admin(&authenticate(st, headers).await?)
-}
 
 #[derive(Deserialize)]
 pub(crate) struct EnqueueReq {
@@ -55,42 +40,176 @@ pub(crate) struct EnqueueReq {
     retry_interval_secs: Option<u32>,
 }
 
+/// An accepted enqueue: the task, plus **why it was accepted**.
+///
+/// The task is flattened so every existing caller (the SDKs read `id`/`status` straight off the
+/// body) keeps working unchanged, and `admission` is the new field beside it.
+#[derive(serde::Serialize)]
+pub(crate) struct EnqueueResp {
+    #[serde(flatten)]
+    task: RelayTask,
+    /// Always `queued { eligible_devices }` here — a refusal never reaches this shape, it is a 422.
+    /// Carried anyway because `eligible_devices: 1` and `eligible_devices: 6` are very different
+    /// things to have just enqueued against.
+    admission: RelayAdmission,
+    /// A soft-tier limit crossed its `warn_at` but nothing is enforcing yet. The task IS queued;
+    /// this is the heads-up that the next few might not be. Absent when the project is clear.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
+}
+
+/// Ask the fleet whether anything could run this action type.
+///
+/// Two answers are deliberately identical here: a backend that does not serve the device fleet, and
+/// a deployment with nobody enrolled. Both are "there is nothing to route against", which admits —
+/// the legacy shared-key relay is exactly that shape, and refusing its traffic would be this
+/// feature breaking the thing it hardens.
+async fn admit(st: &AppState, action_type: &str) -> RelayAdmission {
+    let store = st.store.clone();
+    let at = action_type.to_string();
+    match spawn_db(move || store.count_eligible_devices(&at)).await {
+        Ok(e) => e.admit(action_type),
+        Err(e) => {
+            tracing::debug!(error = %e, "relay enqueue: device fleet unavailable; admitting");
+            RelayAdmission::Queued {
+                eligible_devices: 0,
+            }
+        }
+    }
+}
+
+/// Whether the project's usage limits allow one more relay run to be queued.
+///
+/// **Why here.** A relay run is metered traffic — a headless `claude -p` bills at API rates (D0,
+/// D18) — but nothing on this path checked a single cap. The settle-time event could not: by then
+/// the run has happened, and refusing to *record* spend does not un-spend it. Enqueue is the last
+/// moment a refusal is still free, so it is where admission belongs.
+///
+/// This is [`crate::limits::evaluate_project_limits`] in its read-only mode: the same evaluator, the
+/// same thresholds, the same `basis` explanation the status page shows — so a caller cannot be told
+/// two different stories about one cap. It costs one usage read per enqueue, which a queue measured
+/// in tasks-per-minute can afford and the ingest path (measured in events-per-second) could not.
+///
+/// Returns `Ok(None)` when clear, `Ok(Some(warning))` for the soft tier, and `Err(429)` for a hard
+/// breach. A limits backend that cannot answer admits: an unavailable evaluator is not evidence of
+/// an exceeded budget, and refusing work on it would make a degraded read path an outage.
+async fn budget_allows(st: &AppState, project: &str) -> Result<Option<String>, ApiError> {
+    let statuses = match crate::limits::evaluate_project_limits(st, project).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!(project_id = %project, error = %e, "relay enqueue: limits unavailable; admitting");
+            return Ok(None);
+        }
+    };
+    if statuses.iter().any(|s| s.rejects_ingest()) {
+        let retry = statuses
+            .iter()
+            .filter(|s| s.rejects_ingest())
+            .map(|s| s.retry_after_secs())
+            .max();
+        let mut prox = Proximity::of(&statuses);
+        prox.retry_after_secs = retry;
+        return Err(ApiError::rate_limited(format!(
+            "relay task refused: {}",
+            breach_reason(&statuses)
+        ))
+        .retry_after(retry)
+        .proximity(prox));
+    }
+    Ok(statuses.iter().find(|s| s.warning).map(|s| {
+        format!(
+            "project '{}' is at {:.0}% of its {:?}/{:?} limit ({:.4} of {:.4}); relay runs count \
+             toward it",
+            s.project_id,
+            s.ratio * 100.0,
+            s.metric,
+            s.window,
+            s.current,
+            s.threshold
+        )
+    }))
+}
+
 pub(crate) async fn enqueue_task(
     State(st): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<EnqueueReq>,
-) -> Result<Json<RelayTask>, ApiError> {
+) -> Result<Json<EnqueueResp>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_ingest_project(&p, &req.project_id)?;
-    if req.action_type.trim().is_empty() {
+    // Trimmed ONCE, here, and the trimmed form is what is admitted, matched and stored. Admission
+    // used to trim while the row kept the raw string, so `" xprice/summary"` passed the door as
+    // routable and then sat queued forever: a device's capability match runs on the stored value.
+    let action_type = req.action_type.trim().to_string();
+    if action_type.is_empty() {
         return Err(ApiError::bad_request("action_type is required"));
     }
     // Idempotent enqueue: the same (project, key) returns the existing task instead of a duplicate.
+    // Checked BEFORE admission, so a re-submitted key keeps answering with the task that exists
+    // even if the fleet has since changed shape — idempotency is about the record, not the roster.
     if let Some(key) = req.idempotency_key.clone() {
         let store = st.store.clone();
         let project2 = project.clone();
         if let Some(existing) =
             spawn_db(move || store.find_relay_task_by_key(&project2, &key)).await?
         {
-            return Ok(Json(existing));
+            // A replay is the SAME request again. The same key with a different action or payload
+            // is a caller reusing keys across distinct work, and answering it with the old task
+            // told them their new work was queued when nothing was. Stripe's rule, for Stripe's
+            // reason: 409, naming the key.
+            if existing.action_type != action_type || existing.payload != req.payload {
+                return Err(ApiError::conflict(format!(
+                    "idempotency_key {:?} was already used for a different request (action                      {:?}); pick a new key for new work",
+                    req.idempotency_key.as_deref().unwrap_or_default(),
+                    existing.action_type
+                )));
+            }
+            let admission = admit(&st, &existing.action_type).await;
+            // No budget check on this arm: the task already exists, so answering with it enqueues
+            // nothing. Refusing a replay would break idempotency exactly when a caller is retrying.
+            return Ok(Json(EnqueueResp {
+                task: existing,
+                admission,
+                warning: None,
+            }));
         }
     }
+    // Admission (M18). Validation used to be "action_type is non-empty", so a typo was
+    // indistinguishable from a healthy backlog: the task sat queued, was handed to devices that had
+    // no such action, burned every attempt on "no action", and dead-lettered hours later. A 422
+    // here costs the caller one round trip and names the fix.
+    let admission = admit(&st, &action_type).await;
+    if let RelayAdmission::Refused { reason } = &admission {
+        return Err(ApiError::relay_unroutable(reason.clone()));
+    }
+    // Spend admission (M5), after routability: "nothing can run this" is a mistake in the request
+    // and "you are over budget" is a fact about the project, and a caller with both should hear
+    // about the typo it can fix.
+    let warning = budget_allows(&st, &project).await?;
     let now = Utc::now();
     let task = RelayTask {
         id: new_id(),
         project_id: project,
         source: req.source,
-        action_type: req.action_type,
+        action_type,
         payload: req.payload,
         status: RelayStatus::Queued.as_str().to_string(),
         attempts: 0,
+        failures: 0,
+        stale_reclaims: 0,
+        lease_fence: None,
+        progress: None,
         max_attempts: req
             .max_attempts
             .unwrap_or(RELAY_DEFAULT_MAX_ATTEMPTS)
             .max(1),
+        // Floored like `max_attempts`: a `0` interval made a deferred task (subscription window
+        // exhausted) leasable again the instant it was handed back, so the device and the cloud
+        // spun lease/defer at network speed for the rest of the window.
         retry_interval_secs: req
             .retry_interval_secs
-            .unwrap_or(RELAY_DEFAULT_RETRY_INTERVAL_SECS),
+            .unwrap_or(RELAY_DEFAULT_RETRY_INTERVAL_SECS)
+            .max(1),
         idempotency_key: req.idempotency_key,
         device: None,
         lease_deadline: None,
@@ -103,7 +222,11 @@ pub(crate) async fn enqueue_task(
     let store = st.store.clone();
     let t2 = task.clone();
     spawn_db(move || store.create_relay_task(&t2)).await?;
-    Ok(Json(task))
+    Ok(Json(EnqueueResp {
+        task,
+        admission,
+        warning,
+    }))
 }
 
 pub(crate) async fn get_task(
@@ -114,17 +237,11 @@ pub(crate) async fn get_task(
     let p = authenticate(&st, &headers).await?;
     let store = st.store.clone();
     let id2 = id.clone();
-    let task = spawn_db(move || store.get_relay_task(&id2))
+    // The scope IS the authorization (M17): another project's task is not found, not refused.
+    let sc = p.scope_owned();
+    let task = spawn_db(move || store.get_relay_task(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("relay task '{id}' not found")))?;
-    if let Principal::Project {
-        project_id: pid, ..
-    } = &p
-    {
-        if *pid != task.project_id {
-            return Err(ApiError::forbidden("key not authorized for that project"));
-        }
-    }
     Ok(Json(task))
 }
 
@@ -160,200 +277,9 @@ pub(crate) async fn list_tasks(
     let store = st.store.clone();
     let status = q.status;
     let limit = q.limit.unwrap_or(50).min(1000);
-    let tasks =
-        spawn_db(move || store.list_relay_tasks(project.as_deref(), status.as_deref(), limit))
-            .await?;
+    let tasks = spawn_db(move || {
+        store.list_relay_tasks(project.as_deref().into(), status.as_deref(), limit)
+    })
+    .await?;
     Ok(Json(tasks))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct LeaseReq {
-    #[serde(default = "default_device")]
-    device: String,
-    #[serde(default = "default_max")]
-    max: usize,
-    #[serde(default = "default_lease_secs")]
-    lease_secs: i64,
-    /// Long-poll: hold the request up to this many seconds until a task is due (0 = return
-    /// immediately). Cuts pickup latency without shrinking the device's poll interval.
-    #[serde(default)]
-    wait_secs: u64,
-}
-
-fn default_device() -> String {
-    "default".to_string()
-}
-
-fn default_max() -> usize {
-    1
-}
-
-fn default_lease_secs() -> i64 {
-    1800
-}
-
-pub(crate) async fn lease_tasks(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<LeaseReq>,
-) -> Result<Json<Vec<RelayTask>>, ApiError> {
-    ensure_device(&st, &headers).await?;
-    // Heavy Claude Code runs take a while — allow generous leases, but bound them so a crashed
-    // device's tasks are reclaimable the same day.
-    let lease_secs = req.lease_secs.clamp(60, 21_600);
-    let max = req.max.clamp(1, 20);
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(req.wait_secs.min(25));
-    loop {
-        // Sweep first so exhausted expired leases dead-letter (and alert) instead of lingering.
-        let store = st.store.clone();
-        let dead = spawn_db(move || store.sweep_relay_dead()).await?;
-        if !dead.is_empty() {
-            st.alerts.notify_relay_dead(&dead);
-        }
-        let store = st.store.clone();
-        let device = req.device.clone();
-        let tasks = spawn_db(move || store.lease_relay_tasks(&device, lease_secs, max)).await?;
-        if !tasks.is_empty() || std::time::Instant::now() >= deadline {
-            return Ok(Json(tasks));
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-}
-
-#[derive(Deserialize)]
-pub(crate) struct ResultReq {
-    /// `succeeded` | `failed` | `deferred`.
-    status: String,
-    #[serde(default)]
-    result: Value,
-    #[serde(default)]
-    error: Option<String>,
-    /// For `deferred`: when to retry (defaults to the task's retry interval).
-    #[serde(default)]
-    retry_after_secs: Option<u32>,
-    // Usage accounting from the CLI envelope, for the run's observability event.
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(default)]
-    input_tokens: Option<u64>,
-    #[serde(default)]
-    output_tokens: Option<u64>,
-    #[serde(default)]
-    latency_ms: Option<u64>,
-}
-
-pub(crate) async fn post_result(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    Json(req): Json<ResultReq>,
-) -> Result<Json<RelayTask>, ApiError> {
-    ensure_device(&st, &headers).await?;
-    let outcome = match req.status.as_str() {
-        "succeeded" => RelayOutcome::Succeeded(req.result.clone()),
-        "failed" => RelayOutcome::Failed(
-            req.error
-                .clone()
-                .unwrap_or_else(|| "unspecified error".to_string()),
-        ),
-        "deferred" => RelayOutcome::Deferred {
-            retry_after_secs: req.retry_after_secs,
-            reason: req.error.clone(),
-        },
-        other => {
-            return Err(ApiError::bad_request(format!(
-                "status must be succeeded|failed|deferred, got '{other}'"
-            )))
-        }
-    };
-    // Whether this report actually lands (vs a duplicate of an already-settled task) decides
-    // whether a usage event is logged; a task that is no longer leased settles as a no-op.
-    let store = st.store.clone();
-    let id2 = id.clone();
-    let prior = spawn_db(move || store.get_relay_task(&id2))
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("relay task '{id}' not found")))?;
-    let store = st.store.clone();
-    let id2 = id.clone();
-    let task = spawn_db(move || store.settle_relay_task(&id2, &outcome))
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("relay task '{id}' not found")))?;
-
-    // A terminal-outcome report on a live lease consumed a real Claude run: record it at the
-    // flat relay price (docs/RELAY.md). Always recorded — enforcing limits exist to cap metered
-    // spend, and this run already happened on the flat-rate subscription. Deferred ⇒ no run.
-    if prior.status == RelayStatus::Leased.as_str() && req.status != "deferred" {
-        let mut ev = relay_run_event(&st, &task, &req);
-        // This is the one door that writes an event without going through `events::prepare_event`,
-        // and that is deliberate: the event is server-generated, so it needs no validation, costing
-        // or limit admission (see below). What it does carry is `error` — device-supplied free text
-        // that routinely echoes the task payload it failed on — so the PII scrub every other door
-        // applies has to be applied here explicitly, or `docs/RELAY.md`'s claim that "ingest
-        // redaction applies" is false exactly where a failure dumps the payload into the DB.
-        let redacted = st
-            .redact
-            .redact_event(&mut ev, lighttrack_core::Redaction::None);
-        if redacted > 0 {
-            tracing::debug!(
-                project_id = %ev.project_id,
-                event_id = %ev.id,
-                task_id = %task.id,
-                spans = redacted,
-                "scrubbed PII from a relay run event",
-            );
-        }
-        let store = st.store.clone();
-        spawn_db(move || store.insert_event(&ev)).await?;
-        // A failure that exhausted the attempts just dead-lettered the task — page the owner.
-        if task.status == RelayStatus::Dead.as_str() {
-            st.alerts.notify_relay_dead(std::slice::from_ref(&task));
-        }
-    }
-    Ok(Json(task))
-}
-
-/// The observability event for one executed relay run. `trace_id` is the task id, so retried
-/// attempts of the same task group into one trace.
-fn relay_run_event(st: &AppState, task: &RelayTask, req: &ResultReq) -> LlmEvent {
-    let failed = req.status == "failed";
-    LlmEvent {
-        id: new_id(),
-        project_id: task.project_id.clone(),
-        trace_id: Some(task.id.clone()),
-        span_id: None,
-        parent_span_id: None,
-        ts: Utc::now(),
-        received_at: Utc::now(),
-        provider: Provider::Anthropic,
-        model: req
-            .model
-            .clone()
-            .unwrap_or_else(|| "claude-code".to_string()),
-        name: Some("relay-run".to_string()),
-        operation: Operation::Chat,
-        usage: TokenUsage {
-            input: req.input_tokens.unwrap_or(0),
-            output: req.output_tokens.unwrap_or(0),
-            cached_input: None,
-            reasoning: None,
-        },
-        cost_usd: Some(st.relay_flat_cost),
-        latency_ms: req.latency_ms,
-        status: if failed {
-            Status::Error
-        } else {
-            Status::Success
-        },
-        error: if failed { req.error.clone() } else { None },
-        input: None,
-        output: None,
-        tags: vec!["relay".to_string()],
-        source: task.source.clone(),
-        metadata: serde_json::json!({
-            "task_id": task.id,
-            "action_type": task.action_type,
-            "attempt": task.attempts,
-        }),
-    }
 }

@@ -25,12 +25,61 @@ pub(crate) struct Calibrated {
     pub(crate) skipped: u32,
 }
 
+/// Where a calibration set came from — and, when it came from a stored dataset, which one, so the
+/// recorded [`CalibrationRecord`](lighttrack_core::CalibrationRecord) can say what it measured.
+pub(crate) struct CalibrationSet {
+    pub(crate) items: Vec<CalibrationItem>,
+    pub(crate) dataset_id: Option<String>,
+    /// A human-readable name for the source, for messages.
+    pub(crate) source: String,
+}
+
+/// Load the set from exactly one source. Refusing "both" and "neither" here rather than picking a
+/// winner: two sources are two different answers to *what was measured*, on a record that claims to
+/// describe one set.
+pub(crate) fn load_set(
+    cli: &Cli,
+    http: &reqwest::blocking::Client,
+    file: Option<&str>,
+    dataset: Option<&str>,
+) -> Result<CalibrationSet> {
+    match (file, dataset) {
+        (Some(f), None) => Ok(CalibrationSet {
+            items: load_items(f)?,
+            dataset_id: None,
+            source: f.to_string(),
+        }),
+        (None, Some(d)) => {
+            let (items, unlabelled) = crate::labels::from_dataset(cli, http, d)?;
+            if unlabelled > 0 {
+                // Said out loud, never folded in: an ungraded case scored 0.0 would manufacture a
+                // judge regression out of an incomplete labelling pass.
+                eprintln!(
+                    "dataset {d}: {unlabelled} item(s) have no human label (or no stored output) \
+                     and were skipped — κ is measured over the {} that do",
+                    items.len()
+                );
+            }
+            Ok(CalibrationSet {
+                items,
+                dataset_id: Some(d.to_string()),
+                source: format!("dataset {d}"),
+            })
+        }
+        (Some(_), Some(_)) => bail!("give either --file or --dataset, not both"),
+        (None, None) => bail!(
+            "one of --file or --dataset is required (prefer --dataset: a set on one machine's \
+             disk cannot be listed, re-used or attributed)"
+        ),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn calibrate(
     cli: &Cli,
     http: &reqwest::blocking::Client,
     engine: &EngineConfig,
-    file: &str,
+    set: &CalibrationSet,
     rubric_text: Option<&str>,
     rubric_id: Option<&str>,
     threshold: f64,
@@ -39,7 +88,7 @@ pub(crate) fn calibrate(
     report_path: Option<&str>,
     jobs: usize,
 ) -> Result<()> {
-    let items = load_items(file)?;
+    let (items, file) = (&set.items, set.source.as_str());
     if items.is_empty() {
         bail!("no calibration items in {file}");
     }
@@ -49,7 +98,7 @@ pub(crate) fn calibrate(
     }
 
     let (jp, jm) = parse_judge_spec(&engine.model);
-    let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    let prices: Vec<ModelPriceRow> = crate::bench::fetch_prices(cli, http);
 
     let c = judge_set(
         engine,
@@ -57,7 +106,7 @@ pub(crate) fn calibrate(
         &jm,
         &rubric,
         rubric_text,
-        &items,
+        items,
         threshold,
         kappa_bar,
         samples,
@@ -65,6 +114,29 @@ pub(crate) fn calibrate(
         &prices,
         true,
     );
+
+    // Record the measurement, so `GET /v1/judges/trust` and both promotion gates can read it. This
+    // is what turns a one-shot calibration from a number on somebody's terminal into the fact a
+    // gate consults. Best-effort and *loud*: the measurement is already printed and correct, so an
+    // unreachable API must not throw it away — but it must not be silent either, because a gate
+    // that then reports `unknown` would otherwise be inexplicable.
+    let judge = format!("{jp}/{jm}");
+    let measured = crate::calibration_post::Measured {
+        project: None,
+        rubric_id: rubric_id.or(rubric.as_ref().map(|r| r.id.as_str())),
+        judge: &judge,
+        dataset_id: set.dataset_id.as_deref(),
+        cost: c.cost,
+    };
+    let reserved = crate::calibrate_watch::reserved_rubric(&jp, &jm);
+    if let Err(e) = crate::calibration_post::persist(cli, http, &measured, &c.agreement, &reserved)
+    {
+        eprintln!(
+            "warning: measured \u{3ba}={:.3} but could not record it ({e}) - \
+             `GET /v1/judges/trust` will still answer `unknown` for {judge}",
+            c.agreement.cohen_kappa
+        );
+    }
 
     if let Some(p) = report_path {
         let report = serde_json::json!({
@@ -271,19 +343,36 @@ pub(crate) fn load_items(file: &str) -> Result<Vec<CalibrationItem>> {
 /// (one object per line; blank lines and `//`-comment lines are skipped). `file` is used only for
 /// error context. I/O-free so it can be unit-tested without a temp file or a live provider.
 fn parse_items(text: &str, file: &str) -> Result<Vec<CalibrationItem>> {
-    if text.trim_start().starts_with('[') {
-        return serde_json::from_str(text)
-            .with_context(|| format!("{file}: invalid JSON array of items"));
-    }
-    let mut items = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        let l = line.trim();
-        if l.is_empty() || l.starts_with("//") {
-            continue;
+    let items: Vec<CalibrationItem> = if text.trim_start().starts_with('[') {
+        serde_json::from_str(text)
+            .with_context(|| format!("{file}: invalid JSON array of items"))?
+    } else {
+        let mut items = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            let l = line.trim();
+            if l.is_empty() || l.starts_with("//") {
+                continue;
+            }
+            items.push(
+                serde_json::from_str(l)
+                    .with_context(|| format!("{file}:{} \u{2014} invalid item", n + 1))?,
+            );
         }
-        items.push(
-            serde_json::from_str(l)
-                .with_context(|| format!("{file}:{} \u{2014} invalid item", n + 1))?,
+        items
+    };
+    // `human_score` is the ground truth κ is measured against, on the 0..1 scale the judge's
+    // normalized score is on. A value outside it (`85`, a percentage typo; `-1`) is not a harsh
+    // grader - it makes every pass/fail comparison and every MAE term nonsense, and the verdict
+    // that came out of it read as a real measurement.
+    if let Some((i, it)) = items
+        .iter()
+        .enumerate()
+        .find(|(_, it)| !(0.0..=1.0).contains(&it.human_score) || it.human_score.is_nan())
+    {
+        bail!(
+            "{file}: item #{} has human_score {} - scores are 0..1 (a fraction, not a percentage)",
+            i + 1,
+            it.human_score
         );
     }
     Ok(items)
@@ -342,6 +431,27 @@ mod tests {
         let text = "{\"input\":\"a\",\"output\":\"x\",\"human_score\":0.9}\nnot json";
         let err = parse_items(text, "bad.jsonl").unwrap_err();
         assert!(err.to_string().contains("bad.jsonl:2"), "got: {err}");
+    }
+
+    /// A percentage where a fraction belongs is the one typo that turns κ into fiction.
+    #[test]
+    fn a_human_score_outside_0_to_1_is_refused_naming_the_item() {
+        let text = "{\"input\":\"a\",\"output\":\"x\",\"human_score\":0.9}\n\
+                    {\"input\":\"b\",\"output\":\"y\",\"human_score\":85}";
+        let err = parse_items(text, "g.jsonl").unwrap_err().to_string();
+        assert!(err.contains("item #2") && err.contains("85"), "{err}");
+        assert!(parse_items(
+            "[{\"input\":\"a\",\"output\":\"x\",\"human_score\":-0.1}]",
+            "g"
+        )
+        .is_err());
+        // The boundaries themselves are legal grades.
+        assert!(parse_items(
+            "{\"input\":\"a\",\"output\":\"x\",\"human_score\":1.0}",
+            "g"
+        )
+        .is_ok());
+        assert!(parse_items("{\"input\":\"a\",\"output\":\"x\",\"human_score\":0}", "g").is_ok());
     }
 
     #[test]

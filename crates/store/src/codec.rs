@@ -48,10 +48,11 @@ pub fn enum_to_str<T: Serialize>(v: &T) -> Result<String> {
 /// (a corrupt privacy policy becomes "store raw payloads"), and `LimitAction`'s default (a corrupt
 /// cap silently changes what it does). None of those look wrong in a dashboard.
 ///
-/// Enums with an explicit quarantine variant — [`Provider::Unknown`] and [`Operation::Other`], via
-/// `#[serde(other)]` — parse successfully into it and never reach the error path. That is the
-/// technique's *other* sanctioned option, chosen per column: unknown is a value those two
-/// vocabularies deliberately have.
+/// An enum with an explicit quarantine variant — [`Operation::Other`], via `#[serde(other)]` —
+/// parses successfully into it and never reaches the error path. That is the technique's *other*
+/// sanctioned option, chosen per column: unknown is a value that vocabulary deliberately has. The
+/// `provider` column is no longer an enum at all (M8): it is an open id, mapped by
+/// `ProviderId::new`, so an unmodeled vendor is neither an error nor a coercion to `unknown`.
 ///
 /// `column` names where the bad value came from, because "invalid enum" without a column is a
 /// message nobody can act on. Symmetric with [`parse_ts`], which has always been strict — a
@@ -180,11 +181,9 @@ mod tests {
     /// HAS an unknown member parses into it and never reaches the error path.
     #[test]
     fn an_explicit_quarantine_variant_still_absorbs_the_unknown() {
-        use lighttrack_core::{Operation, Provider};
-        assert_eq!(
-            parse_enum::<Provider>("provider", "azure-openai").unwrap(),
-            Provider::Unknown
-        );
+        use lighttrack_core::{Operation, ProviderId};
+        // The provider column takes the other route: an open id keeps what it was given.
+        assert_eq!(ProviderId::new("azure-openai").as_str(), "azure-openai");
         assert_eq!(
             parse_enum::<Operation>("operation", "rerank").unwrap(),
             Operation::Other

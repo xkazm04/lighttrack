@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use super::tests_concurrency::ev;
 use super::{OpenOpts, SqliteStore};
+use crate::Scope;
 use crate::Store;
 
 const SEED_EVENTS: usize = 4_000;
@@ -52,8 +53,8 @@ fn measure(label: &str, opts: OpenOpts) -> Measured {
             thread::spawn(move || {
                 let mut n = 0usize;
                 while !stop.load(Ordering::Relaxed) {
-                    s.cost_summary(Some("bench")).unwrap();
-                    s.list_events(Some("bench"), 200).unwrap();
+                    s.cost_summary(Scope::Project("bench")).unwrap();
+                    s.list_events(Scope::Project("bench"), 200).unwrap();
                     n += 2;
                 }
                 n

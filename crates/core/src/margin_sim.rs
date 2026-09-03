@@ -164,6 +164,10 @@ mod tests {
             product_id: None,
             amount_usd: amount,
             currency: "USD".into(),
+            amount_minor: None,
+            fx_rate: None,
+            fx_book_version: None,
+            converted: None,
             kind,
             period_start: None,
             period_end: None,
@@ -176,6 +180,7 @@ mod tests {
             key: customer.map(str::to_string),
             calls,
             cost_usd,
+            unpriced_calls: 0,
         }
     }
 

@@ -1,0 +1,23 @@
+{
+  "$comment": "What this SDK actually does. `supported` means the contract suite exercises it; `not_supported` is a real gap stated in the SDK's own voice; `planned` is accepted work not yet landed. scripts/gen-sdk-matrix.mjs renders clients/README.md's capability table from these three files and CI diff-checks the result, so a README can no longer promise a feature one language does not have.",
+  "sdk": "rust",
+  "package": "lighttrack-client",
+  "dir": "clients/rust",
+  "capabilities": {
+    "track": "supported",
+    "span": "not_supported",
+    "journal": "not_supported",
+    "instrument": "not_supported",
+    "guard": "supported",
+    "relay": "not_supported",
+    "admit": "supported",
+    "batch": "not_supported"
+  },
+  "notes": {
+    "span": "The builder emits only on send(); there is no timed span type, so latency is caller-measured.",
+    "journal": "No crash-surviving breadcrumb. A Rust process killed mid-call leaves no record of it, where the Python and TypeScript clients would recover one. This is a gap, not a design choice - clients/catchup-marker.json has carried it as a flagged debt since 2026-08-24.",
+    "instrument": "No provider-SDK wrapping. Rust provider clients are third-party and un-monkey-patchable; instrumentation would need per-crate adapters.",
+    "relay": "No relay client. Enqueue tasks over plain HTTP against /v1/relay/tasks (docs/RELAY.md).",
+    "admit": "Pre-spend admission: `Client::admit()` / `Client::gate()` with `Client::enforce(\"block\" | \"warn\" | \"off\")`, default off. There is no instrument wrapper to gate here (see above), so the caller invokes the gate itself. The shed lottery calls straight through to lighttrack_core::shed_ticket - the server's own function."
+  }
+}

@@ -3,20 +3,22 @@
 //!
 //! Layout:
 //! - [`prompts`]  — judge/eval/rubric prompt + schema builders (re-exported).
-//! - `claude`     — the `claude -p` subprocess caller + envelope helpers.
+//! - [`invocation`] — the **one** headless-Claude seam: posture, spawn, envelope, probe, resolve.
 //! - `providers`  — [`generate`] across `anthropic` / `google` / `openai` (schema-enforced + retried).
 //! - `parse`      — JSON extraction + the one-shot repair re-ask around a single judge sample.
 //! - `fence`      — per-call nonce delimiters around untrusted content (judge-prompt injection defense).
 //! - `anthropic_api` — the bare Messages API judge path (used when `ANTHROPIC_API_KEY` is set).
+//! - [`http_target`] — generation from an operator-owned HTTP endpoint (a RAG pipeline, an agent).
 //! - `family`     — coarse model families, for the self-preference bias control.
 //! - `retry`      — bounded exponential backoff for transient (429/5xx/timeout) provider failures.
 //! - `scorers`   — deterministic (non-LLM) rubric dimensions: exact/regex/numeric/json_valid/contains.
 //! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_text`], [`parse_judge_spec`].
 
 mod anthropic_api;
-mod claude;
 mod family;
 mod fence;
+pub mod http_target;
+pub mod invocation;
 mod judge;
 mod pairwise;
 mod parse;
@@ -29,8 +31,12 @@ mod scorers;
 use lighttrack_core::JudgeVerdict;
 use thiserror::Error;
 
-pub use claude::{resolve_claude_bin, run_raw, RawOutcome};
 pub use family::{model_family, same_family};
+pub use http_target::{generate_http, HttpTargetRequest, HttpTargetResponse, HttpTargetUsage};
+pub use invocation::{
+    probe, resolve_claude_bin, run as run_claude, ClaudeBin, Invocation, Mode, Probe, RawOutcome,
+    READONLY_BASE_TOOLS,
+};
 pub use judge::batch::{run_rubric_batch, BatchCase};
 pub use judge::{parse_judge_spec, run_judge, run_rubric_judge, run_text};
 pub use pairwise::{run_pairwise, PairwiseOutcome, PairwiseVerdict, PairwiseWinner};
@@ -96,6 +102,10 @@ pub enum EngineError {
     /// A non-transient transport error (DNS, TLS, malformed response, …).
     #[error("{who} request failed: {detail}")]
     Http { who: String, detail: String },
+    /// The caller asked for a combination of mode, tools, workspace and permission mode that
+    /// contradicts itself. Raised **before** a child is spawned — no money is spent on it.
+    #[error("invalid claude invocation posture: {0}")]
+    Posture(String),
     #[error("could not parse judge output: {0}")]
     Parse(String),
     #[error("json: {0}")]
@@ -173,6 +183,13 @@ pub struct EngineConfig {
     /// Pass `--bare` to skip auto-loading hooks/skills/MCP/CLAUDE.md. Avoids re-caching ~40k tokens
     /// per call, but bypasses subscription OAuth, so it requires `ANTHROPIC_API_KEY` in the env.
     pub bare: bool,
+}
+
+impl EngineConfig {
+    /// The invocation seam's view of this config: where the CLI is.
+    pub fn claude(&self) -> crate::invocation::ClaudeBin {
+        crate::invocation::ClaudeBin::new(self.claude_bin.clone())
+    }
 }
 
 impl Default for EngineConfig {

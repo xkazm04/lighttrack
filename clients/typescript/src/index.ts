@@ -13,8 +13,12 @@
  *   await lt.flush();                             // await in-flight sends before exit
  */
 
-import { Diagnostics, noProjectMessage, sendFailureMessage, truncate } from "./diagnostics.ts";
+import { AdmissionCache, LightTrackBudgetExceeded, viewFromStatuses } from "./admission.ts";
+import type { Admit, AdmitQuery, Enforce } from "./admission.ts";
+import { Diagnostics, diagnosticKind, noProjectMessage, sendFailureMessage, truncate } from "./diagnostics.ts";
+import { parseLimitView } from "./limits.ts";
 import { RECOVERED_TAG, SpanJournal, unsettledError } from "./journal.ts";
+import { PII_RULES } from "./pii.ts";
 
 export type ProviderName = "openai" | "anthropic" | "google" | (string & {});
 
@@ -64,6 +68,25 @@ export interface LightTrackConfig {
    * process that may be rescheduled onto fresh storage should point this at a mounted volume, or
    * accept that its in-flight calls are not recoverable. */
   journalDir?: string;
+  /**
+   * Pre-spend admission (see admission.ts). `"block"` refuses a call the project's caps would turn
+   * away, by throwing {@link LightTrackBudgetExceeded} instead of calling the provider; `"warn"`
+   * logs and proceeds; `"off"` (the default) only observes. Defaults to `LIGHTTRACK_ENFORCE`.
+   *
+   * Off by default deliberately: adding an observability SDK must not change what an app does. You
+   * opt into having it stop calls.
+   */
+  enforce?: Enforce;
+  /** How long a cached limit view stays evidence, ms. Default 30000. */
+  admissionTtlMs?: number;
+  /**
+   * Record a locally-blocked call as a zero-usage event tagged `lt_blocked_locally`.
+   *
+   * A blocked call is *not* spend and is never recorded as spend — but it is traffic the app
+   * attempted, and a rollup that cannot see it reads as a quiet week rather than a throttled one.
+   * Off by default: the event still costs an ingest write against the very cap that refused it.
+   */
+  recordBlocked?: boolean;
 }
 
 const DEFAULT_URL = "http://127.0.0.1:8787";
@@ -92,7 +115,10 @@ export function extractOpenAI(resp: any): [string | undefined, number, number, n
   const u = resp?.usage ?? {};
   const input = num(u.prompt_tokens) ?? num(u.input_tokens) ?? 0;
   const output = num(u.completion_tokens) ?? num(u.output_tokens) ?? 0;
-  const cached = num(u.prompt_tokens_details?.cached_tokens);
+  // The Responses API renamed the pair AND moved the cache counter: `input_tokens_details`, not
+  // `prompt_tokens_details`. Reading only the older place reported every cached Responses call as
+  // uncached, which the price book then charged at full input rate.
+  const cached = num(u.prompt_tokens_details?.cached_tokens) ?? num(u.input_tokens_details?.cached_tokens);
   return [resp?.model, input, output, cached];
 }
 
@@ -127,7 +153,11 @@ export interface GuardRules {
   mustMatch?: RegExp | string;
   /** Output must NOT match any of these (banned content / patterns). */
   mustNotMatch?: Array<RegExp | string>;
-  /** Reject common PII (email, phone, credit-card-like, SSN). */
+  /**
+   * Reject PII. The rules are the *server's* — generated from `lighttrack_anon`'s scrubber into
+   * `clients/contract/fixtures/pii.json` (see pii.ts), so this guard cannot contradict what the
+   * ingest path would redact. Kinds: `email`, `iban`, `ssn`, `secret`, `phone`, `credit_card`, `ip`.
+   */
   noPII?: boolean;
 }
 
@@ -137,12 +167,22 @@ export interface GuardResult {
   checks: Record<string, boolean>;
 }
 
-const PII_PATTERNS: Array<[string, RegExp]> = [
-  ["email", /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/],
-  ["phone", /(?:\+?\d[\s().-]?){10,}/],
-  ["credit_card", /\b(?:\d[ -]?){13,16}\b/],
-  ["ssn", /\b\d{3}-\d{2}-\d{4}\b/],
-];
+/** Compiled once. `PII_RULES` is generated from the server's own scrubber (see pii.ts). */
+const PII_COMPILED: Array<[string, RegExp]> = PII_RULES.map((r) => [r.kind, new RegExp(r.pattern)]);
+
+/**
+ * The PII families present in `text`, in rule order, each reported once.
+ *
+ * A kind is a family, not a regex: a phone number has three shapes and a secret three prefixes, and
+ * a caller wants to know *a phone number leaked*, not which of three patterns noticed.
+ */
+export function piiKinds(text: string): string[] {
+  const found: string[] = [];
+  for (const [kind, re] of PII_COMPILED) {
+    if (!found.includes(kind) && re.test(text)) found.push(kind);
+  }
+  return found;
+}
 
 /**
  * Deterministic, network-free output validation — runs inline in the request path. Pure: it returns
@@ -178,34 +218,33 @@ export function guard(output: string, rules: GuardRules): GuardResult {
 
   const words = output.trim() ? output.trim().split(/\s+/).length : 0;
   if (rules.maxWords != null) {
-    words <= rules.maxWords ? ok("maxWords") : fail("maxWords", `too long: ${words} words > ${rules.maxWords}`);
+    words <= rules.maxWords ? ok("max_words") : fail("max_words", `too long: ${words} words > ${rules.maxWords}`);
   }
   if (rules.minWords != null) {
-    words >= rules.minWords ? ok("minWords") : fail("minWords", `too short: ${words} words < ${rules.minWords}`);
+    words >= rules.minWords ? ok("min_words") : fail("min_words", `too short: ${words} words < ${rules.minWords}`);
   }
   if (rules.maxChars != null) {
-    output.length <= rules.maxChars ? ok("maxChars") : fail("maxChars", `too long: ${output.length} chars > ${rules.maxChars}`);
+    output.length <= rules.maxChars ? ok("max_chars") : fail("max_chars", `too long: ${output.length} chars > ${rules.maxChars}`);
   }
   for (const s of rules.mustInclude ?? []) {
     output.includes(s) ? ok(`include:${s}`) : fail(`include:${s}`, `must include "${s}"`);
   }
   if (rules.mustMatch != null) {
+    const src = typeof rules.mustMatch === "string" ? rules.mustMatch : rules.mustMatch.source;
     const re = typeof rules.mustMatch === "string" ? new RegExp(rules.mustMatch) : rules.mustMatch;
-    re.test(output) ? ok("mustMatch") : fail("mustMatch", `must match ${re}`);
+    re.test(output) ? ok("must_match") : fail("must_match", `must match ${src}`);
   }
   for (const pat of rules.mustNotMatch ?? []) {
+    // Keyed on the PATTERN, not the stringified RegExp: `/nope/` is a JavaScript spelling no other
+    // SDK can produce, and a check key that differs by language is not a shared contract.
+    const src = typeof pat === "string" ? pat : pat.source;
     const re = typeof pat === "string" ? new RegExp(pat) : pat;
-    re.test(output) ? fail(`notMatch:${re}`, `must not match ${re}`) : ok(`notMatch:${re}`);
+    re.test(output) ? fail(`not_match:${src}`, `must not match ${src}`) : ok(`not_match:${src}`);
   }
   if (rules.noPII) {
-    let clean = true;
-    for (const [name, re] of PII_PATTERNS) {
-      if (re.test(output)) {
-        clean = false;
-        fail(`pii:${name}`, `contains ${name}-like PII`);
-      }
-    }
-    if (clean) ok("noPII");
+    const kinds = piiKinds(output);
+    for (const kind of kinds) fail(`pii:${kind}`, `contains ${kind}-like PII`);
+    if (kinds.length === 0) ok("no_pii");
   }
 
   return { ok: violations.length === 0, violations, checks };
@@ -221,21 +260,77 @@ export interface RelayTaskOptions {
   project?: string;
 }
 
+/**
+ * What the enqueue door decided about a task (M18): is there anything out there that could run it?
+ *
+ * Only `queued` is ever seen on a returned task — a refusal arrives as a thrown {@link RelayError}
+ * with `code === "relay_unroutable"`. `eligible_devices` is how much of the fleet advertises this
+ * action type; `0` means no devices are enrolled at all (the legacy single-device deployment), not
+ * that an enrolled fleet declined it.
+ */
+export interface RelayAdmission {
+  verdict: "queued" | "refused";
+  eligible_devices?: number;
+  reason?: string;
+}
+
 /** A relay task as returned by the API (see docs/RELAY.md). */
 export interface RelayTask {
   id: string;
   project_id: string;
   action_type: string;
-  status: "queued" | "leased" | "succeeded" | "dead";
+  status: "queued" | "leased" | "succeeded" | "dead" | "cancelling" | "cancelled";
   attempts: number;
   max_attempts: number;
   result?: unknown;
   error?: string;
+  /** Present on the response to `relayTask` (M18); absent on a task fetched later. */
+  admission?: RelayAdmission;
   [k: string]: unknown;
 }
 
-/** A relay call failed (network error or non-2xx). Relay calls are functional — they throw. */
-export class RelayError extends Error {}
+/**
+ * A relay call failed (network error or non-2xx). Relay calls are functional — they throw.
+ *
+ * `code` carries the API's own error code when the response had one, so a caller can act on the
+ * *kind* of failure instead of pattern-matching a message. The one worth branching on is
+ * `relay_unroutable` ({@link RelayError.isUnroutable}): no enrolled device advertises that action
+ * type, so unlike a timeout or a 503 the call will not succeed on a retry — the fix is the action's
+ * spelling, or a device's capabilities.
+ */
+export class RelayError extends Error {
+  /** The API error code (e.g. `relay_unroutable`), when the response carried one. */
+  readonly code?: string;
+  /** The HTTP status, when the failure was a response rather than a transport error. */
+  readonly status?: number;
+
+  constructor(message: string, opts: { code?: string; status?: number } = {}) {
+    super(message);
+    this.code = opts.code;
+    this.status = opts.status;
+  }
+
+  /** Whether this is the permanent refusal: nothing in the fleet can ever run that action type. */
+  get isUnroutable(): boolean {
+    return this.code === "relay_unroutable";
+  }
+}
+
+/**
+ * The API's error code out of an error body, or `undefined` when the body is not one.
+ *
+ * Deliberately total: an error response is exactly when a body is least likely to be well-formed
+ * (a proxy's HTML, a truncated stream), and a parse failure here must degrade to "no code" rather
+ * than replace the real failure with a JSON error nobody can act on.
+ */
+export function errorCode(body: string): string | undefined {
+  try {
+    const code = (JSON.parse(body) as { error?: { code?: unknown } })?.error?.code;
+    return typeof code === "string" ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export class LightTrack {
   private baseUrl: string;
@@ -257,6 +352,15 @@ export class LightTrack {
    * to have landed — a test, or a supervisor draining a crashed worker's journal — can await it.
    */
   readonly recovered: Promise<number>;
+  /**
+   * What the server last said about this project's caps, and the pre-spend verdict taken from it.
+   * Exposed so a host app can ask `lt.limits.admit(...)` directly, or seed it in a test.
+   */
+  readonly limits: AdmissionCache;
+  private enforce: Enforce;
+  private recordBlocked: boolean;
+  /** In-flight `GET /v1/limits/status` refresh, so a stale view triggers one poll, not a stampede. */
+  private refreshing?: Promise<void>;
 
   constructor(cfg: LightTrackConfig = {}) {
     this.baseUrl = (cfg.baseUrl ?? env("LIGHTTRACK_URL") ?? DEFAULT_URL).replace(/\/+$/, "");
@@ -268,6 +372,9 @@ export class LightTrack {
     this.timeoutMs = cfg.timeoutMs ?? 2000;
     this.diag = new Diagnostics({ quiet: cfg.quiet });
     this.journal = new SpanJournal({ enabled: cfg.journal, dir: cfg.journalDir });
+    this.enforce = cfg.enforce ?? (env("LIGHTTRACK_ENFORCE") as Enforce | undefined) ?? "off";
+    this.recordBlocked = cfg.recordBlocked ?? false;
+    this.limits = new AdmissionCache({ ttlMs: cfg.admissionTtlMs });
     // Report the calls a PREVIOUS process began and never settled, before anything else this client
     // sends. That is the whole point of the journal: a later client on the same machine is what
     // turns a killed process's in-flight calls back into records.
@@ -441,6 +548,71 @@ export class LightTrack {
     }
   }
 
+  /**
+   * Would a call be admitted right now? Pure and instant — decided from the last ingest response
+   * this client saw, with no round trip (see admission.ts).
+   */
+  admit(q: AdmitQuery = {}): Admit {
+    return this.limits.admit(q);
+  }
+
+  /**
+   * The enforcement gate the instrumentation wrappers call before a provider call.
+   *
+   * Throws {@link LightTrackBudgetExceeded} under `enforce: "block"`, warns under `"warn"`, and is
+   * a no-op under `"off"`. A stale view kicks off one background refresh and still admits — the
+   * decision never waits on the network.
+   */
+  gate(name?: string): void {
+    if (this.enforce === "off" || !this.enabled) return;
+    // The server mints the event id, so the client cannot know it in advance: this is a fresh
+    // ticket per call. The shed *rate* therefore matches the server's; the shed *set* does not.
+    // Proportional local shedding is the honest thing this can deliver, and saying so is better
+    // than implying an agreement that only holds when the caller supplies the id itself.
+    const verdict = this.limits.admit({ name, eventId: ticketId() });
+    if (verdict.stale) void this.refreshLimits();
+    if (verdict.ok) return;
+    if (this.recordBlocked) this.recordBlockedCall(name, verdict);
+    const msg = `LightTrack: ${name ?? "this call"} refused before it was made (${verdict.reason})`;
+    if (this.enforce === "warn") {
+      this.diag.warn("budget", `${msg}. enforce="warn", so the call is proceeding anyway.`);
+      return;
+    }
+    throw new LightTrackBudgetExceeded(verdict, `Use enforce: "warn" to log instead of throwing.`);
+  }
+
+  /** Record a call this client refused: real traffic, zero usage, and explicitly not spend. */
+  private recordBlockedCall(name: string | undefined, verdict: Admit): void {
+    this.track("lighttrack", "blocked", {
+      name,
+      status: "error",
+      error: `blocked locally by pre-spend admission (${verdict.reason})`,
+      tags: [BLOCKED_TAG],
+      metadata: { lt_admit_reason: verdict.reason, lt_retry_after_secs: verdict.retryAfterSecs },
+    });
+  }
+
+  /**
+   * Refresh the limit view from `GET /v1/limits/status`. Best-effort and deduplicated: a burst of
+   * stale verdicts triggers one poll, and a failure leaves the old view in place (fail open).
+   */
+  async refreshLimits(): Promise<void> {
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = (async () => {
+      try {
+        const q = this.project ? `?project=${encodeURIComponent(this.project)}` : "";
+        const body = (await this.request("GET", `/v1/limits/status${q}`)) as any;
+        const view = viewFromStatuses(body?.statuses);
+        if (view) this.limits.observe(view);
+      } catch {
+        /* best-effort: an unreachable status endpoint must not change what the app does */
+      } finally {
+        this.refreshing = undefined;
+      }
+    })();
+    return this.refreshing;
+  }
+
   /** Await all in-flight sends (call before process exit). */
   async flush(): Promise<void> {
     await Promise.allSettled([...this.inflight]);
@@ -468,7 +640,12 @@ export class LightTrack {
       throw new RelayError(`${method} ${path} failed: ${e}`);
     }
     const text = await resp.text();
-    if (!resp.ok) throw new RelayError(`${method} ${path} -> HTTP ${resp.status}: ${text}`);
+    if (!resp.ok) {
+      throw new RelayError(`${method} ${path} -> HTTP ${resp.status}: ${text}`, {
+        code: errorCode(text),
+        status: resp.status,
+      });
+    }
     try {
       return JSON.parse(text);
     } catch {
@@ -498,15 +675,19 @@ export class LightTrack {
       signal: ac?.signal,
     })
       .then(async (resp) => {
-        if (resp.ok) return;
-        let detail = "";
+        let text = "";
         try {
-          detail = truncate(await resp.text());
+          text = await resp.text();
         } catch {
           /* body unreadable (aborted / already consumed) — the status alone is still actionable */
         }
+        // Every ingest response, accepted or refused, is evidence about the project's position.
+        // Reading it here is what makes `admit()` answer from the wall the app is actually near.
+        this.observeLimits(resp.status, resp.headers, text);
+        if (resp.ok) return;
+        const detail = truncate(text);
         this.diag.warn(
-          `http-${resp.status}`,
+          diagnosticKind(resp.status),
           sendFailureMessage(this.baseUrl, path, `HTTP ${resp.status} ${detail}`, {
             status: resp.status,
             hasProject,
@@ -519,7 +700,7 @@ export class LightTrack {
         // crowd out) genuine connection failures.
         const aborted = (e as { name?: string })?.name === "AbortError";
         const detail = aborted ? `timed out after ${this.timeoutMs}ms` : String(e);
-        this.diag.warn(aborted ? "timeout" : "network", sendFailureMessage(this.baseUrl, path, detail, { hasProject, hasKey }));
+        this.diag.warn(diagnosticKind(undefined, { timedOut: aborted }), sendFailureMessage(this.baseUrl, path, detail, { hasProject, hasKey }));
       })
       .finally(() => {
         if (timer) clearTimeout(timer);
@@ -527,6 +708,29 @@ export class LightTrack {
       });
     this.inflight.add(p);
   }
+
+  /** Fold one ingest response into the admission cache. Never throws into the send path. */
+  private observeLimits(status: number, headers: Headers, text: string): void {
+    try {
+      let body: unknown;
+      try {
+        body = text ? JSON.parse(text) : undefined;
+      } catch {
+        /* a proxy's HTML, a truncated stream — the status and headers still carry the signal */
+      }
+      this.limits.observe(parseLimitView(status, headers, body));
+    } catch {
+      /* observing must never break a send */
+    }
+  }
+}
+
+/** Tag on the zero-usage event a locally-blocked call leaves behind. */
+export const BLOCKED_TAG = "lt_blocked_locally";
+
+/** A throwaway id for one shed-lottery draw. Not the event id — the server mints that. */
+function ticketId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /**
@@ -612,7 +816,25 @@ export class Span {
 }
 
 // Rate-limited failure reporting (see diagnostics.ts) — exported so a host app can inspect or reuse it.
-export { Diagnostics, noProjectMessage, sendFailureMessage } from "./diagnostics.ts";
+export { Diagnostics, diagnosticKind, noProjectMessage, sendFailureMessage } from "./diagnostics.ts";
+
+// The server's PII rule set, generated from crates/anon (see pii.ts).
+export { PII_RULES } from "./pii.ts";
+export type { PiiRule } from "./pii.ts";
+
+// Pre-spend admission: acting on those signals before the call (see admission.ts).
+export {
+  AdmissionCache,
+  LightTrackBudgetExceeded,
+  shedTicket,
+  viewFromStatuses,
+  DEFAULT_ADMISSION_TTL_MS,
+} from "./admission.ts";
+export type { Admit, AdmitQuery, AdmitReason, Enforce } from "./admission.ts";
+
+// Reading an ingest response's limit signals (see limits.ts).
+export { parseLimitView } from "./limits.ts";
+export type { LimitView, BindingScope } from "./limits.ts";
 
 // Crash-surviving breadcrumbs for in-flight calls (see journal.ts).
 export { SpanJournal, unsettled, unsettledError, RECOVERED_TAG, DEFAULT_ORPHAN_MS } from "./journal.ts";

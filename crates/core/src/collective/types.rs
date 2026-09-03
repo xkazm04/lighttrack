@@ -48,7 +48,7 @@ pub struct RunStat {
 
 /// A published digest entry: one `(provider, model, task_type)` bucket aggregated across an instance's
 /// runs. Purely aggregate — safe to share.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelDigestEntry {
     pub provider: String,
     pub model: String,
@@ -71,7 +71,8 @@ pub struct ModelDigestEntry {
     /// bucket's runs disagree). Provider only — never the full judge model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge_provider: Option<String>,
-    /// v2: rubric-shape fingerprint (short one-way hash). `None` when the bucket mixes rubrics.
+    /// v2: rubric-shape fingerprint (short one-way hash), or `mixed` when the bucket's runs were scored
+    /// under different rubrics (the same collapse as `judge_provider`). `None` when none was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rubric_fingerprint: Option<String>,
     /// v3: the **weakest** determinism stamp across the bucket's runs — a bucket is only as
@@ -91,7 +92,7 @@ pub struct ModelDigestEntry {
 /// A full digest an instance contributes to a hub. The `contributor_id` is **opaque** (a hash) but a
 /// hub ignores it and derives identity from the presented bearer key; it stays on the wire only for
 /// backward compatibility.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CollectiveDigest {
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
@@ -156,8 +157,8 @@ pub struct LeaderboardRow {
     pub quality: f64,
     /// Approximate 95% CI **half-width** on `quality` (i.e. `quality ± quality_ci95`), combining the
     /// pooled within-source case variance with a random-effects **between-source** term — so
-    /// contributors who disagree widen the interval instead of hiding in it. `None` when too little of
-    /// the weight carries a known variance to estimate the within term — an honest "insufficient
+    /// contributors who disagree widen the interval instead of hiding in it. `None` when too few of
+    /// the row's cases carry a known variance to estimate the within term — an honest "insufficient
     /// variance data" marker rather than a fabricated interval.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality_ci95: Option<f64>,
@@ -170,7 +171,8 @@ pub struct LeaderboardRow {
     pub source_spread: Option<f64>,
     pub pass_rate: f64,
     pub avg_cost_usd: f64,
-    /// Approximate merged p50: case-weighted mean of contributors' per-run p50s (see merge docs).
+    /// Approximate merged p50: mean of the contributors' p50s under the same winsorized source
+    /// weights as `quality`, so a whale cannot own the latency figure either (see merge docs).
     pub p50_latency_ms: Option<u64>,
     /// Worst-observed p95 across contributors (the max, not a mean) — a conservative tail signal.
     pub p95_latency_ms: Option<u64>,
@@ -181,8 +183,10 @@ pub struct LeaderboardRow {
     /// commensurable when these agree — the row is judged by whatever scored each contribution.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub judge_providers: Vec<String>,
-    /// `Some(n)` when more than one distinct judge family contributed — the number is incommensurable
-    /// across judges, so treat the ranking with care. `None` when a single judge (or none recorded).
+    /// `Some(n)` when more than one judge family stands behind the row — the number is incommensurable
+    /// across judges, so treat the ranking with care. A source tagged `mixed` counts as two families,
+    /// so a row built from one such source is flagged too. `None` when a single judge (or none
+    /// recorded).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mixed_judges: Option<u32>,
     pub n_contributors: u32,

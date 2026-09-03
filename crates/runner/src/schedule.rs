@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use lighttrack_core::{Dataset, LlmEvent};
+use lighttrack_core::{Dataset, ImportSpec, LlmEvent};
 use lighttrack_engine::EngineConfig;
 
 use crate::cli::Cli;
@@ -43,14 +43,19 @@ pub(crate) fn schedule(
         if once {
             break;
         }
-        std::thread::sleep(Duration::from_secs(interval));
+        // `--interval 0` on a daemon is a hot loop against the API, not "as fast as possible" —
+        // the one-shot spelling is `--once`. Floored to a second, the same as `serve`.
+        std::thread::sleep(Duration::from_secs(interval.max(1)));
     }
     Ok(())
 }
 
 /// One sampling cycle. Returns the new dataset name, or `None` if skipped (nothing new to sample, or
 /// this window was already captured).
-fn run_cycle(
+///
+/// `pub(crate)` because it is also what a `dataset_sample` job runs: the queue executes one cycle
+/// of the same thing this daemon loops over, rather than a second implementation of it.
+pub(crate) fn run_cycle(
     cli: &Cli,
     http: &reqwest::blocking::Client,
     engine: &EngineConfig,
@@ -78,6 +83,29 @@ fn run_cycle(
 
     let built = build_from_events(cli, http, engine, project, &name, &events, llm_scrub)?;
     Ok((built > 0).then_some(name))
+}
+
+/// One **versioned** sampling cycle (M24): open (or fork) the newest version of `name` and mine
+/// `spec` into it, then freeze it.
+///
+/// This is what the watermark naming was a workaround for. Naming each cycle's dataset after its
+/// newest event made a cycle idempotent, at the cost of leaving a year of online sampling as ~300
+/// unrelated corpora that no `dataset_version` could relate — so the paired-test guard `dataset_pin`
+/// feeds had nothing to compare. One name accumulating versions gives it something: v1 frozen after
+/// its window, v2 forked from it for the next.
+///
+/// Idempotence survives the change and gets stronger: `spec.dedupe` collapses a case whose
+/// normalised input is already in the set, so re-running a cycle over an overlapping window adds the
+/// genuinely new traffic and nothing else — rather than skipping the window wholesale.
+pub(crate) fn run_versioned_cycle(
+    cli: &Cli,
+    http: &reqwest::blocking::Client,
+    project: &str,
+    name: &str,
+    spec: &ImportSpec,
+) -> Result<Option<String>> {
+    let built = crate::dataset_import::run_import(cli, http, project, name, spec, true)?;
+    Ok((built > 0).then(|| name.to_string()))
 }
 
 /// The watermark dataset name for a cycle: `<prefix>-<short id>` of the newest sampled event that

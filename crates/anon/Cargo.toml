@@ -7,3 +7,11 @@ description = "LightTrack PII scrubber — heuristic (regex) anonymization for d
 
 [dependencies]
 regex = "1"
+# The rule-set fingerprint stamped on every scrubbed row (`rules_fingerprint`): a scrub that
+# rewrote judged evidence is only observable if the row says which rules did it.
+sha2 = "0.10"
+
+# Test-only: the rule-set export (src/export.rs) renders clients/contract/fixtures/pii.json, which
+# the client SDKs consume. Nothing in the scrubber itself needs JSON.
+[dev-dependencies]
+serde_json = "1"

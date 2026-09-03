@@ -2,13 +2,16 @@
 
 use rusqlite::{params, Connection, Row};
 
-use lighttrack_core::{Score, ScoreDetail};
+use lighttrack_core::{Score, ScoreDetail, ScoreKind};
 
 use crate::codec::{fmt_ts, parse_ts};
-use crate::Result;
+use crate::{Result, ScoreFilter};
 
-const COLS: &str = "id, project_id, event_id, rubric, value, max, pass, reasoning, detail, \
-    run_id, case_index, scored_by, cost_usd, created_at";
+/// Derived from the schema model (M14); `from_row` reads by position, so the list and the `get`
+/// indices are one contract.
+static COLS: crate::schema::SelectList = crate::schema::SelectList::new(|| {
+    crate::schema::tables::SCORES.select_list(crate::schema::Dialect::Sqlite)
+});
 
 pub(super) fn insert(conn: &Connection, s: &Score) -> Result<()> {
     // Verdict provenance rides as JSON in one column: it is read back whole with the score and never
@@ -20,8 +23,8 @@ pub(super) fn insert(conn: &Connection, s: &Score) -> Result<()> {
     conn.execute(
         "INSERT INTO scores \
          (id, project_id, event_id, rubric, value, max, pass, reasoning, detail, run_id, \
-          case_index, scored_by, cost_usd, created_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+          case_index, scored_by, cost_usd, created_at, rubric_id, kind) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
         params![
             s.id,
             s.project_id,
@@ -37,6 +40,8 @@ pub(super) fn insert(conn: &Connection, s: &Score) -> Result<()> {
             s.scored_by,
             s.cost_usd,
             fmt_ts(s.created_at),
+            s.rubric_id,
+            s.kind.as_str(),
         ],
     )?;
     Ok(())
@@ -89,7 +94,8 @@ pub(super) fn list_by_trace(
 
 /// `COLS` with each column qualified by `alias` (for joins that share column names across tables).
 fn prefixed_cols(alias: &str) -> String {
-    COLS.split(", ")
+    COLS.as_str()
+        .split(", ")
         .map(|c| format!("{alias}.{c}"))
         .collect::<Vec<_>>()
         .join(", ")
@@ -116,21 +122,74 @@ pub(super) fn list(conn: &Connection, project: Option<&str>, limit: usize) -> Re
     raws.into_iter().map(from_raw).collect()
 }
 
+/// Filtered listing: the flat [`list`] plus the two typed-identity predicates.
+///
+/// Kept beside `list` rather than replacing it — they answer different questions, and the
+/// unfiltered one is on every dashboard's hot path. `kind` binds the **wire string**, so a verdict
+/// written by a newer producer is matchable by name without this binary knowing the kind.
+pub(super) fn list_filtered(
+    conn: &Connection,
+    project: Option<&str>,
+    filter: &ScoreFilter,
+    limit: usize,
+) -> Result<Vec<Score>> {
+    let mut conds: Vec<String> = Vec::new();
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(p) = project {
+        conds.push("project_id = ?".into());
+        args.push(Box::new(p.to_string()));
+    }
+    if let Some(r) = &filter.rubric_id {
+        conds.push("rubric_id = ?".into());
+        args.push(Box::new(r.clone()));
+    }
+    if let Some(k) = &filter.kind {
+        // A row written before the column existed carries NULL and reads back as `freeform`, so the
+        // `freeform` filter has to match it too — otherwise "show me the ad-hoc verdicts" silently
+        // omits every verdict recorded before typing existed, which is most of them.
+        if k == ScoreKind::Freeform.as_str() {
+            conds.push("(kind IS NULL OR kind = ?)".into());
+        } else {
+            conds.push("kind = ?".into());
+        }
+        args.push(Box::new(k.clone()));
+    }
+    let where_clause = if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {} ", conds.join(" AND "))
+    };
+    args.push(Box::new(limit as i64));
+    let sql = format!("SELECT {COLS} FROM scores {where_clause}ORDER BY created_at DESC LIMIT ?");
+    let mut stmt = conn.prepare(&sql)?;
+    let raws = stmt
+        .query_map(rusqlite::params_from_iter(args.iter()), map_raw)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    raws.into_iter().map(from_raw).collect()
+}
+
 /// The subset of `event_ids` that already carry at least one score. `event_id IN (...)` rides
 /// `idx_scores_event`; scoped to the given ids so it never full-scans the scores table.
-pub(super) fn scored_event_ids(conn: &Connection, event_ids: &[String]) -> Result<Vec<String>> {
+pub(super) fn scored_event_ids(
+    conn: &Connection,
+    project: Option<&str>,
+    event_ids: &[String],
+) -> Result<Vec<String>> {
     if event_ids.is_empty() {
         return Ok(Vec::new());
     }
     let placeholders = std::iter::repeat_n("?", event_ids.len())
         .collect::<Vec<_>>()
         .join(",");
-    let sql = format!("SELECT DISTINCT event_id FROM scores WHERE event_id IN ({placeholders})");
+    let scope = super::scope_and(event_ids.len() + 1);
+    let sql =
+        format!("SELECT DISTINCT event_id FROM scores WHERE event_id IN ({placeholders}){scope}");
     let mut stmt = conn.prepare(&sql)?;
-    let bound: Vec<&dyn rusqlite::ToSql> = event_ids
+    let mut bound: Vec<&dyn rusqlite::ToSql> = event_ids
         .iter()
         .map(|s| s as &dyn rusqlite::ToSql)
         .collect();
+    bound.push(&project);
     let ids = stmt
         .query_map(bound.as_slice(), |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -152,6 +211,8 @@ type ScoreRaw = (
     String,
     Option<f64>,
     String,
+    Option<String>,
+    Option<String>,
 );
 
 fn map_raw(row: &Row) -> rusqlite::Result<ScoreRaw> {
@@ -170,6 +231,8 @@ fn map_raw(row: &Row) -> rusqlite::Result<ScoreRaw> {
         row.get(11)?,
         row.get(12)?,
         row.get(13)?,
+        row.get(14)?,
+        row.get(15)?,
     ))
 }
 
@@ -194,5 +257,13 @@ fn from_raw(r: ScoreRaw) -> Result<Score> {
         scored_by: r.11,
         cost_usd: r.12,
         created_at: parse_ts(&r.13)?,
+        rubric_id: r.14,
+        // A stored kind this binary does not know reads as `Other`, and a row written before the
+        // column existed as `Freeform` — the pre-typing default. Neither is an error: a listing
+        // must not fail because one verdict was written by a newer producer.
+        kind: match r.15.as_deref() {
+            None => ScoreKind::Freeform,
+            Some(k) => ScoreKind::parse(k).unwrap_or(ScoreKind::Other),
+        },
     })
 }

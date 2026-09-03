@@ -28,7 +28,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
-use lighttrack_core::{new_id, LlmEvent, Operation, Provider, Status, TokenUsage};
+use lighttrack_core::{new_id, LlmEvent, Operation, ProviderId, Status, TokenUsage};
 
 use super::proto::FlatSpan;
 
@@ -243,25 +243,16 @@ fn from_nanos(nanos: i128) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp(secs, rem)
 }
 
-/// `gen_ai.system` values are namespaced (`az.ai.openai`, `gcp.gemini`, `vertex_ai`, …); match on the
-/// family rather than the exact string. An unmodeled provider stays `Unknown` — accepted, unpriced,
-/// with the raw string preserved in metadata.
-fn provider_of(fs: &FlatSpan<'_>) -> Provider {
-    let raw = match fs.first(PROVIDER_KEYS).and_then(|v| v.as_str()) {
-        Some(s) => s.to_ascii_lowercase(),
-        None => return Provider::Unknown,
-    };
-    // `az.ai.openai` (Azure-hosted OpenAI) is still OpenAI models on OpenAI price-book keys.
-    if raw.contains("openai") {
-        return Provider::OpenAi;
+/// `gen_ai.system` values are namespaced (`az.ai.openai`, `gcp.gemini`, `vertex_ai`, …). We keep the
+/// **id as sent** — canonicalized, never coerced — because the id is what prices, limit scopes and
+/// rollups key on; the substring family matching this function used to do now lives in
+/// `lighttrack_core::family_of`, where classification belongs. A span with no provider attribute at
+/// all is the only `unknown`.
+fn provider_of(fs: &FlatSpan<'_>) -> ProviderId {
+    match fs.first(PROVIDER_KEYS).and_then(|v| v.as_str()) {
+        Some(s) => ProviderId::new(s),
+        None => ProviderId::default(),
     }
-    if raw.contains("anthropic") {
-        return Provider::Anthropic;
-    }
-    if raw.contains("gemini") || raw.contains("vertex") || raw.contains("google") {
-        return Provider::Google;
-    }
-    Provider::Unknown
 }
 
 fn operation_of(fs: &FlatSpan<'_>) -> Operation {

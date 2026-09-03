@@ -1,22 +1,29 @@
-//! Tool registry — combines the read + write catalogs and routes `tools/call`. Write tools are only
-//! listed and callable when writes are enabled; otherwise calling one returns a clear, safe error.
+//! Tool registry — the catalog comes from `lighttrack-contract`; this file routes `tools/call`.
+//!
+//! The list used to be assembled from four hand-kept catalogs living beside four dispatchers, which
+//! is how a tool could be listed and unroutable, or routable and unlisted, and how an `outputSchema`
+//! could lag the input schema it was supposed to describe. Now one table produces the list, the
+//! write gate reads each endpoint's `mutating` flag rather than a second name list, and the tests in
+//! `tool_contract` hold the generated surface to its pin.
+//!
+//! Write tools are only listed and callable when writes are enabled; otherwise calling one returns a
+//! clear, safe error.
 
 use serde_json::{json, Value};
 
 use crate::client::Client;
 use crate::errors::map_error;
 use crate::rpc::{more_results_line, tool_rendered, tool_text};
-use crate::{prompts_tools, read, write};
+use crate::{prompts_tools, read, relay_tools, write};
 
 /// The `tools/list` payload. Write tools appear only when `allow_writes`.
+///
+/// Relay reads are in the list unconditionally because they are side-effect-free; the relay's WRITE
+/// surface (enqueue, cancel, and above all device enrolment, which mints a key) is absent from the
+/// contract's `mcp` column entirely rather than gated behind the write flag — a key in a tool result
+/// is a key in a transcript.
 pub(crate) fn list(allow_writes: bool) -> Value {
-    let mut tools = read::tools();
-    tools.extend(prompts_tools::read_tools());
-    if allow_writes {
-        tools.extend(write::tools());
-        tools.extend(prompts_tools::write_tools());
-    }
-    json!({ "tools": tools })
+    json!({ "tools": lighttrack_contract::mcp::tools(allow_writes, crate::schemas::output_schema) })
 }
 
 /// Handle `tools/call`, returning MCP tool-result content (text + isError).
@@ -92,7 +99,9 @@ fn call_inner(c: &Client, allow_writes: bool, params: &Value) -> Value {
         r
     } else if let Some(r) = prompts_tools::read_dispatch(c, name, &args) {
         r
-    } else if write::is_write_tool(name) || prompts_tools::is_write_tool(name) {
+    } else if let Some(r) = relay_tools::read_dispatch(c, name, &args) {
+        r
+    } else if lighttrack_contract::mcp::is_write_tool(name) {
         if allow_writes {
             write::dispatch(c, name, &args)
                 .or_else(|| prompts_tools::write_dispatch(c, name, &args))

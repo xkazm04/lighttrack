@@ -6,12 +6,13 @@
 use std::process::Stdio;
 use std::time::Duration;
 
+use lighttrack_engine::invocation::Mode;
 use tokio::process::Command;
 
 use crate::breaker::Breaker;
-use crate::claude;
 use crate::config::{Config, ProjectEntry};
 use crate::git;
+use crate::invoke;
 use crate::webhook::Spike;
 
 pub(crate) struct ActOutcome {
@@ -79,10 +80,12 @@ pub(crate) async fn run_act(
     }
 
     let prompt = build_fix_prompt(entry, spike, diagnosis);
-    // No tool allowlist: the fix run needs edit + test tools, gated by act_permission_mode (acceptEdits).
-    let run = claude::run(
+    // No tool allowlist: the fix run needs edit + test tools, gated by act_permission_mode
+    // (acceptEdits), which `Mode::Edit` requires the caller to state rather than assume.
+    let run = invoke::run(
         cfg,
         &entry.repo,
+        Mode::Edit,
         &cfg.defaults.act_permission_mode,
         &[],
         &prompt,
@@ -91,10 +94,11 @@ pub(crate) async fn run_act(
 
     let applied = git::has_changes(&entry.repo).await;
     let mut tests = None;
-    let notes;
+    let mut notes;
+    let mut committed = true;
     if applied {
         breaker.record(&spike.project_id);
-        git::add_commit(
+        committed = git::add_commit(
             &entry.repo,
             &format!("lt-responder auto-fix: {} ({ts})", spike.project_id),
         )
@@ -110,8 +114,22 @@ pub(crate) async fn run_act(
         );
     }
 
-    // Always put the user's working copy back the way we found it.
-    git::checkout(&entry.repo, &orig).await;
+    // Put the user's working copy back the way we found it — but only when the fix is safely
+    // committed on its branch. `git checkout <orig>` with an uncommitted tree *carries the edits
+    // along*, which would leave the user's branch dirty with a machine-authored change they never
+    // saw: the one state this stage promises never to produce. When the commit failed (no git
+    // identity, a rejecting hook), staying on the fix branch is the honest outcome, and the report
+    // says so and names the branch.
+    if committed {
+        git::checkout(&entry.repo, &orig).await;
+    } else {
+        notes = format!(
+            "AUTO-FIX COMMIT FAILED on branch `{branch}` — the edits are left there UNCOMMITTED and \
+             the checkout was NOT restored to `{orig}`, because switching branches would have carried \
+             them onto it. Commit or discard them by hand (`git -C {repo} status`).\n\n{notes}",
+            repo = entry.repo
+        );
+    }
 
     ActOutcome {
         skipped_reason: None,

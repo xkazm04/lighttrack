@@ -21,16 +21,30 @@ import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from .diagnostics import Diagnostics, no_project_message, send_failure_message, truncate
+from .admission import (Admit, AdmissionCache, BudgetExceeded, DEFAULT_ADMISSION_TTL_MS,
+                        view_from_statuses)
+from .diagnostics import (Diagnostics, diagnostic_kind, no_project_message, send_failure_message,
+                          truncate)
 from .journal import RECOVERED_TAG, SpanJournal, unsettled_error
+from .limits import parse_limit_view
+from .pii import PII_RULES
 
 _DEFAULT_URL = "http://127.0.0.1:8787"
 
-# Map common provider names/aliases onto the API's enum (openai|anthropic|google; else "unknown").
+#: Tag on the zero-usage event a locally-blocked call leaves behind.
+BLOCKED_TAG = "lt_blocked_locally"
+
+# Spelling aliases for the three first-party providers. Anything else passes through VERBATIM: the
+# provider is an open id the server keys prices, limit scopes and rollups on (M8), not a closed enum,
+# and an unknown vendor is recorded under its own name — never rewritten to "unknown". Note the
+# vendor collapses (`azure` → openai, `vertex` → google) predate M8 and lose the original id; the
+# Rust SDK does not collapse them. Changing that is a wire-semantics decision, recorded in the sweep.
 _PROVIDER_ALIASES = {
     "openai": "openai", "azure": "openai", "azure_openai": "openai", "oai": "openai",
     "anthropic": "anthropic", "claude": "anthropic",
@@ -61,7 +75,12 @@ def _extract_openai(resp: Any):
     usage = _get(resp, "usage")
     inp = _get(usage, "prompt_tokens", "input_tokens") or 0
     out = _get(usage, "completion_tokens", "output_tokens") or 0
+    # The Responses API renamed the pair AND moved the cache counter: `input_tokens_details`, not
+    # `prompt_tokens_details`. Reading only the older place reported every cached Responses call as
+    # uncached, which the price book then charged at full input rate.
     cached = _get(_get(usage, "prompt_tokens_details"), "cached_tokens")
+    if cached is None:
+        cached = _get(_get(usage, "input_tokens_details"), "cached_tokens")
     return (_get(resp, "model"), int(inp), int(out), cached)
 
 
@@ -83,12 +102,21 @@ def _extract_gemini(resp: Any):
 
 # ---- Output guardrails ------------------------------------------------------
 
-_PII_PATTERNS = [
-    ("email", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
-    ("phone", re.compile(r"(?:\+?\d[\s().-]?){10,}")),
-    ("credit_card", re.compile(r"\b(?:\d[ -]?){13,16}\b")),
-    ("ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
-]
+#: Compiled once. `PII_RULES` is generated from the server's own scrubber (see `lighttrack.pii`).
+_PII_COMPILED = [(r["kind"], re.compile(r["pattern"])) for r in PII_RULES]
+
+
+def pii_kinds(text: str) -> list:
+    """The PII families present in `text`, in rule order, each reported once.
+
+    A kind is a family, not a regex: a phone number has three shapes and a secret three prefixes, and
+    a caller wants to know *a phone number leaked*, not which of three patterns noticed.
+    """
+    found = []
+    for kind, rx in _PII_COMPILED:
+        if kind not in found and rx.search(text):
+            found.append(kind)
+    return found
 
 
 @dataclass
@@ -123,9 +151,13 @@ def guard(output: str, rules: dict) -> GuardResult:
             record("json", True)
         except Exception:
             record("json", False, "output is not valid JSON")
-    if json_keys and isinstance(parsed, dict):
+    if json_keys and parsed is not None:
+        # Valid JSON that is not an object (`[1, 2]`, `"text"`, `42`) cannot carry the required
+        # keys: every one of them is missing. Skipping the check here let such an output pass with
+        # only "json: ok" recorded, while the Rust/TS guards refused it — one contract, two verdicts.
+        present = parsed if isinstance(parsed, dict) else {}
         for k in json_keys:
-            record(f"key:{k}", k in parsed, f"missing required JSON key '{k}'")
+            record(f"key:{k}", k in present, f"missing required JSON key '{k}'")
 
     stripped = output.strip()
     words = len(stripped.split()) if stripped else 0
@@ -142,12 +174,10 @@ def guard(output: str, rules: dict) -> GuardResult:
     for pat in rules.get("must_not_match") or []:
         record(f"not_match:{pat}", re.search(pat, output) is None, f"must not match {pat}")
     if rules.get("no_pii"):
-        clean = True
-        for name, rx in _PII_PATTERNS:
-            if rx.search(output):
-                clean = False
-                record(f"pii:{name}", False, f"contains {name}-like PII")
-        if clean:
+        kinds = pii_kinds(output)
+        for kind in kinds:
+            record(f"pii:{kind}", False, f"contains {kind}-like PII")
+        if not kinds:
             record("no_pii", True)
 
     return GuardResult(ok=len(violations) == 0, violations=violations, checks=checks)
@@ -163,7 +193,37 @@ def _error_body(e: "urllib.error.HTTPError") -> str:
 
 class RelayError(Exception):
     """A relay call failed (network error or non-2xx). Unlike telemetry, relay enqueue/status is a
-    functional call the app depends on, so failures raise instead of being swallowed."""
+    functional call the app depends on, so failures raise instead of being swallowed.
+
+    `code` carries the API's own error code when the response had one, so a caller can act on the
+    *kind* of failure instead of pattern-matching a message. The one worth branching on is
+    `relay_unroutable` (`is_unroutable`): no enrolled device advertises that action type, so unlike
+    a timeout or a 503 the call will not succeed on a retry -- the fix is the action type's
+    spelling, or a device's advertised capabilities."""
+
+    def __init__(self, message: str, *, code: Optional[str] = None,
+                 status: Optional[int] = None):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+    @property
+    def is_unroutable(self) -> bool:
+        """Whether nothing in the fleet can ever run that action type (HTTP 422)."""
+        return self.code == "relay_unroutable"
+
+
+def error_code(body: str) -> Optional[str]:
+    """The API's error code out of an error body, or None when the body is not one.
+
+    Deliberately total: an error response is exactly when a body is least likely to be well-formed
+    (a proxy's HTML, a truncated stream), and a parse failure here must degrade to "no code" rather
+    than replace the real failure with a JSON error nobody can act on."""
+    try:
+        code = json.loads(body).get("error", {}).get("code")
+    except Exception:
+        return None
+    return code if isinstance(code, str) else None
 
 
 class LightTrack:
@@ -171,13 +231,25 @@ class LightTrack:
                  project: Optional[str] = None, source: Optional[str] = None,
                  tags: Optional[list] = None, enabled: bool = True, async_: bool = True,
                  timeout: float = 2.0, max_queue: int = 1000, quiet: Optional[bool] = None,
-                 journal: Optional[bool] = None, journal_dir: Optional[str] = None):
+                 journal: Optional[bool] = None, journal_dir: Optional[str] = None,
+                 enforce: Optional[str] = None, admission_ttl_ms: int = DEFAULT_ADMISSION_TTL_MS,
+                 record_blocked: bool = False):
         """`quiet=True` (or `LIGHTTRACK_QUIET=1`) suppresses the stderr diagnostics that a dropped or
         rejected event otherwise reports; `None` defers to the env var.
 
         `journal=False` (or `LIGHTTRACK_JOURNAL=0`) turns off the crash-surviving breadcrumb that
         makes a call which began but never reported an outcome recoverable — see `journal.py` for
-        what that costs and what it buys."""
+        what that costs and what it buys.
+
+        `enforce` turns on pre-spend admission (see `admission.py`): `"block"` raises
+        `BudgetExceeded` instead of making a call the project's caps would turn away, `"warn"` logs
+        and proceeds, `"off"` (the default, also read from `LIGHTTRACK_ENFORCE`) only observes. Off
+        by default deliberately: adding an observability SDK must not change what an app does.
+
+        `record_blocked=True` records a locally-blocked call as a zero-usage event tagged
+        `lt_blocked_locally` — it is not spend and is never recorded as spend, but it is traffic the
+        app attempted, and a rollup that cannot see it reads as a quiet week rather than a throttled
+        one."""
         self.base_url = (base_url or os.environ.get("LIGHTTRACK_URL", _DEFAULT_URL)).rstrip("/")
         self.api_key = api_key or os.environ.get("LIGHTTRACK_KEY") or None
         # A project key derives the project server-side; set `project` only for dev mode (no key) or
@@ -193,6 +265,12 @@ class LightTrack:
         self._closed = False
         self._worker: Optional[threading.Thread] = None
         self.journal = SpanJournal(enabled=journal, directory=journal_dir)
+        self.enforce = enforce or os.environ.get("LIGHTTRACK_ENFORCE") or "off"
+        self.record_blocked = record_blocked
+        #: What the server last said about this project's caps, and the pre-spend verdict taken from
+        #: it. Public so a host app can ask `lt.limits.admit(...)` directly, or seed it in a test.
+        self.limits = AdmissionCache(ttl_ms=admission_ttl_ms)
+        self._refresh_lock = threading.Lock()
         if enabled and async_:
             self._worker = threading.Thread(target=self._run, name="lighttrack", daemon=True)
             self._worker.start()
@@ -291,7 +369,14 @@ class LightTrack:
                    project: Optional[str] = None) -> dict:
         """Enqueue a task for the enrolled local device (executed via Claude Code, offline-tolerant).
         Synchronous; returns the task dict (re-enqueueing an `idempotency_key` returns the existing
-        task). Raises `RelayError` on failure."""
+        task). Raises `RelayError` on failure.
+
+        The returned task carries an `admission` verdict (M18): `{"verdict": "queued",
+        "eligible_devices": N}` says how much of the fleet advertises this action type -- `0` means
+        no devices are enrolled at all (the legacy single-device deployment), never that an enrolled
+        fleet declined it. An action type nothing advertises does not come back as a task at all: it
+        raises `RelayError` with `is_unroutable`, because a queued task nothing can lease is a
+        slow-motion dead letter."""
         body: dict = {"action_type": action_type}
         if payload is not None:
             body["payload"] = payload
@@ -380,11 +465,82 @@ class LightTrack:
         from .instrument import instrument as _instrument
         return _instrument(self, providers=providers)
 
+    def admit(self, name: Optional[str] = None, event_id: Optional[str] = None) -> Admit:
+        """Would a call be admitted right now? Pure and instant — decided from the last ingest
+        response this client saw, with no round trip (see `admission.py`)."""
+        return self.limits.admit(name=name, event_id=event_id)
+
+    def gate(self, name: Optional[str] = None) -> None:
+        """The enforcement gate the instrumentation wrappers call before a provider call.
+
+        Raises `BudgetExceeded` under `enforce="block"`, warns under `"warn"`, and is a no-op under
+        `"off"`. A stale view kicks off one background refresh and still admits — the decision never
+        waits on the network.
+        """
+        if self.enforce == "off" or not self.enabled:
+            return
+        # The server mints the event id, so the client cannot know it in advance: this is a fresh
+        # ticket per call. The shed *rate* therefore matches the server's; the shed *set* does not.
+        verdict = self.limits.admit(name=name, event_id=uuid.uuid4().hex)
+        if verdict.stale:
+            self._refresh_limits_async()
+        if verdict.ok:
+            return
+        if self.record_blocked:
+            self._record_blocked(name, verdict)
+        msg = f"LightTrack: {name or 'this call'} refused before it was made ({verdict.reason})"
+        if self.enforce == "warn":
+            self.diag.warn("budget", f'{msg}. enforce="warn", so the call is proceeding anyway.')
+            return
+        raise BudgetExceeded(verdict, 'Use enforce="warn" to log instead of raising.')
+
+    def _record_blocked(self, name: Optional[str], verdict: Admit) -> None:
+        """Record a call this client refused: real traffic, zero usage, and explicitly not spend."""
+        self.track(
+            "lighttrack", "blocked", name=name, status="error",
+            error=f"blocked locally by pre-spend admission ({verdict.reason})",
+            tags=[BLOCKED_TAG],
+            metadata={"lt_admit_reason": verdict.reason,
+                      "lt_retry_after_secs": verdict.retry_after_secs},
+        )
+
+    def refresh_limits(self) -> None:
+        """Refresh the limit view from `GET /v1/limits/status`. Best-effort: a failure leaves the
+        old view in place (fail open)."""
+        try:
+            q = f"?project={urllib.parse.quote(self.project)}" if self.project else ""
+            body = self._request("GET", f"/v1/limits/status{q}")
+            view = view_from_statuses(body.get("statuses"))
+            if view is not None:
+                self.limits.observe(view)
+        except Exception:
+            # An unreachable status endpoint must not change what the app does.
+            pass
+
+    def _refresh_limits_async(self) -> None:
+        """One poll per stale burst, off the caller's thread."""
+        if not self._refresh_lock.acquire(blocking=False):
+            return
+
+        def run() -> None:
+            try:
+                self.refresh_limits()
+            finally:
+                self._refresh_lock.release()
+
+        threading.Thread(target=run, name="lighttrack-limits", daemon=True).start()
+
     def flush(self, timeout: float = 5.0) -> None:
+        """Wait (up to `timeout`) until every queued event has been *sent*, not merely dequeued.
+
+        `Queue.empty()` turns true the moment the worker takes the last item, while its POST is still
+        in flight — so a caller that flushed and then exited could lose the final event. The
+        unfinished-task count only drops when the worker calls `task_done()` after the send.
+        """
         if not (self.enabled and self._async):
             return
         deadline = time.monotonic() + timeout
-        while not self._q.empty() and time.monotonic() < deadline:
+        while self._q.unfinished_tasks and time.monotonic() < deadline:
             time.sleep(0.01)
 
     def close(self) -> None:
@@ -451,7 +607,12 @@ class LightTrack:
             with urllib.request.urlopen(req, timeout=max(self.timeout, 10.0)) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            raise RelayError(f"{method} {path} -> HTTP {e.code}: {e.read().decode('utf-8', 'replace')}") from e
+            body = e.read().decode("utf-8", "replace")
+            raise RelayError(
+                f"{method} {path} -> HTTP {e.code}: {body}",
+                code=error_code(body),
+                status=e.code,
+            ) from e
         except Exception as e:
             raise RelayError(f"{method} {path} failed: {e}") from e
 
@@ -466,14 +627,38 @@ class LightTrack:
                 headers["Authorization"] = f"Bearer {self.api_key}"
             req = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers,
                                          method="POST")
-            with urllib.request.urlopen(req, timeout=self.timeout):
-                pass
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                # Every ingest response, accepted or refused, is evidence about the project's
+                # position. Reading it here is what makes `admit()` answer from the wall the app is
+                # actually near, rather than from a poll it never makes.
+                self._observe_limits(resp.status, resp.headers, resp.read())
         except urllib.error.HTTPError as e:
-            self.diag.warn(f"http-{e.code}", send_failure_message(
-                self.base_url, path, f"HTTP {e.code} {_error_body(e)}", status=e.code, **ctx))
+            body = _error_body(e)
+            self._observe_limits(e.code, e.headers, body)
+            self.diag.warn(diagnostic_kind(e.code), send_failure_message(
+                self.base_url, path, f"HTTP {e.code} {body}", status=e.code, **ctx))
         except Exception as e:
-            self.diag.warn("network", send_failure_message(
+            # urlopen surfaces a timeout either directly or wrapped in URLError.reason, so both are
+            # checked: a timeout bucketed as "network" hides behind (and crowds out) real connection
+            # failures, which is exactly the confusion the per-kind rate limiter exists to avoid.
+            timed_out = isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+            self.diag.warn(diagnostic_kind(timed_out=timed_out), send_failure_message(
                 self.base_url, path, f"{type(e).__name__}: {e}", **ctx))
+
+    def _observe_limits(self, status: int, headers: Any, raw: Any) -> None:
+        """Fold one ingest response into the admission cache. Never raises into the send path."""
+        try:
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", "replace")
+            try:
+                body = json.loads(raw) if raw else None
+            except Exception:
+                # A proxy's HTML, a truncated stream — the status and headers still carry the signal.
+                body = None
+            self.limits.observe(parse_limit_view(status, dict(headers.items()) if headers else None,
+                                                 body))
+        except Exception:
+            pass
 
 
 class Span:

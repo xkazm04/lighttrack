@@ -72,11 +72,33 @@ fn setup_k(
         rejections: Arc::new(crate::rejections::RejectionLedger::new()),
         ingest_guard: Arc::new(crate::shed::IngestGuard::from_env()),
         auth_throttle: Arc::new(crate::auth_throttle::AuthThrottle::from_env()),
-        redaction_policies: Arc::new(crate::state::RedactionCache::new(HashMap::new())),
+        project_policies: Arc::new(crate::state::ProjectPolicyCache::new(HashMap::new())),
         activity: Arc::new(crate::storage::ActivityGauge::default()),
         maintenance: Arc::new(crate::storage::Maintenance::default()),
+        policy_cooldowns: Default::default(),
         maintenance_desc: "test fixture (no sweep task is spawned)".to_string(),
     };
+    (state, store)
+}
+
+/// The contributor-side fixture (M22): a plain instance in dev mode with a real `contributor_id`,
+/// which is what a ledger row and a digest preview both carry. Shared with `tests_contribute`
+/// rather than duplicated, so the two test modules cannot drift about what an instance looks like.
+pub(crate) fn setup_for_contribution() -> (AppState, Arc<SqliteStore>) {
+    let (mut state, store) = setup(false, false, 5);
+    let collective = Collective {
+        contributor_id: "c-testinstance".to_string(),
+        accept: false,
+        allow_anon: false,
+        min_cases: 5,
+        display_floor: 30,
+        min_contributors: 1,
+        min_interval_hours: 0,
+        max_age_days: 90,
+        aliases: ModelAliases::default(),
+        alias_source: "test fixture".to_string(),
+    };
+    state.collective = Arc::new(collective);
     (state, store)
 }
 
@@ -98,6 +120,8 @@ fn mint_key(store: &SqliteStore, name: &str, opt_in: bool) -> String {
             enabled: true,
             redaction: Redaction::None,
             collective_opt_in: opt_in,
+            require_trusted_judge: false,
+            archived_at: None,
             created_at: Utc::now(),
         })
         .unwrap();
@@ -112,6 +136,8 @@ fn mint_key(store: &SqliteStore, name: &str, opt_in: bool) -> String {
             created_at: Utc::now(),
             last_used_at: None,
             revoked: false,
+            scopes: lighttrack_core::default_scopes(),
+            expires_at: None,
         })
         .unwrap();
     g.full_key
@@ -383,6 +409,8 @@ async fn digest_includes_only_consenting_projects() {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: opt_in,
+        require_trusted_judge: false,
+        archived_at: None,
         created_at: Utc::now(),
     };
     let mk_bench_run = |project: &str, model: &str| {

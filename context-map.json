@@ -125,7 +125,10 @@
         "crates/api/src/guards.rs",
         "crates/api/src/error.rs",
         "crates/api/src/idempotency.rs",
-        "crates/api/src/redact.rs"
+        "crates/api/src/redact.rs",
+        "crates/api/src/auth_scopes.rs",
+        "crates/api/src/openapi.rs",
+        "crates/api/src/schema_registry.rs"
       ],
       "group": "Platform Infrastructure",
       "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
@@ -271,7 +274,11 @@
         "crates/cli/src/main.rs"
       ],
       "file_paths": [
-        "crates/cli/src/main.rs"
+        "crates/cli/src/main.rs",
+        "crates/cli/src/cli/mod.rs",
+        "crates/cli/src/contract.rs",
+        "crates/cli/src/http.rs",
+        "crates/cli/src/query.rs"
       ],
       "group": "Platform Infrastructure",
       "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
@@ -554,7 +561,9 @@
       ],
       "file_paths": [
         "crates/api/src/events.rs",
+        "crates/api/src/events_admission.rs",
         "crates/api/src/events_batch.rs",
+        "crates/api/src/events_query.rs",
         "crates/api/src/events_validate.rs",
         "crates/core/src/event.rs"
       ],
@@ -700,13 +709,17 @@
       "description": "Per-project usage caps that can throttle or block ingest traffic when cost, call-count, or token thresholds are exceeded within configurable rolling windows (hour/day/month). Rules support fine-grained scoping by provider, model, operation name, API key, or billing customer — so ten keys of one project can carry ten different budgets. An in-memory usage cache makes admission O(1) and TOCTOU-safe. GET /v1/limits/usage breaks rolling usage down by one scope dimension (who is spending) both before and after a cap trips. Rejected ingest attempts are tracked in-memory for attribution reporting.",
       "entry_points": [
         "crates/api/src/limits.rs",
-        "crates/core/src/limits.rs"
+        "crates/core/src/limits/mod.rs"
       ],
       "file_paths": [
         "crates/api/src/limits.rs",
         "crates/api/src/limits_usage.rs",
         "crates/api/src/rejections.rs",
-        "crates/core/src/limits.rs"
+        "crates/core/src/limits/mod.rs",
+        "crates/core/src/limits/rule.rs",
+        "crates/core/src/limits/scope.rs",
+        "crates/core/src/limits/status.rs",
+        "crates/core/src/limits/tests.rs"
       ],
       "group": "Usage Governance",
       "group_id": "ed6eab63-a4bf-4e3e-9b23-3baba606597a",
@@ -812,12 +825,13 @@
         "crates/mcp/src/tools.rs",
         "crates/mcp/src/read.rs",
         "crates/mcp/src/write.rs",
-        "crates/mcp/src/write_schemas.rs",
         "crates/mcp/src/schemas.rs",
         "crates/mcp/src/resources.rs",
         "crates/mcp/src/prompts.rs",
         "crates/mcp/src/prompts_tools.rs",
-        "crates/mcp/src/errors.rs"
+        "crates/mcp/src/errors.rs",
+        "crates/mcp/src/relay_tools.rs",
+        "crates/mcp/src/tool_contract.rs"
       ],
       "group": "Platform Infrastructure",
       "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
@@ -1144,7 +1158,8 @@
         "crates/render/src/collective.rs",
         "crates/render/src/prompts.rs",
         "crates/render/src/margin.rs",
-        "crates/render/tests/render.rs"
+        "crates/render/tests/render.rs",
+        "crates/render/src/margin_policies.rs"
       ],
       "group": "Platform Infrastructure",
       "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
@@ -1193,7 +1208,8 @@
         "crates/render/src/projects.rs",
         "crates/render/src/jobs.rs",
         "crates/render/src/limits.rs",
-        "crates/render/src/costs.rs"
+        "crates/render/src/costs.rs",
+        "crates/render/src/capabilities.rs"
       ],
       "group": "Platform Infrastructure",
       "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",

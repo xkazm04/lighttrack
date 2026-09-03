@@ -11,6 +11,7 @@ use crate::{MaintenanceOutcome, MaintenanceRequest, Store};
 
 use super::tests_concurrency::ev;
 use super::{maintenance, SqliteStore};
+use crate::Scope;
 
 /// A file-backed store in a fresh temp dir — the accounting surface is about a *file*, so an
 /// in-memory database would certify nothing about it.
@@ -144,7 +145,7 @@ fn an_older_file_says_it_cannot_reclaim_and_names_the_remedy() {
 fn a_maintenance_pass_never_costs_a_row() {
     let (_d, s) = store();
     seed(&s, 120);
-    let before = s.list_events(Some("acct"), 10_000).unwrap().len();
+    let before = s.list_events(Scope::Project("acct"), 10_000).unwrap().len();
     for _ in 0..3 {
         let p = s
             .maintenance_pass(MaintenanceRequest {
@@ -154,7 +155,7 @@ fn a_maintenance_pass_never_costs_a_row() {
             .unwrap();
         assert_ne!(p.outcome, MaintenanceOutcome::Failed, "{}", p.detail);
     }
-    let after = s.list_events(Some("acct"), 10_000).unwrap().len();
+    let after = s.list_events(Scope::Project("acct"), 10_000).unwrap().len();
     assert_eq!(before, 120);
     assert_eq!(
         before, after,
@@ -163,7 +164,10 @@ fn a_maintenance_pass_never_costs_a_row() {
     // And the store is still usable afterwards — a pass that leaves a broken file is not lossless
     // in any sense that matters.
     seed(&s, 5);
-    assert_eq!(s.list_events(Some("acct"), 10_000).unwrap().len(), 125);
+    assert_eq!(
+        s.list_events(Scope::Project("acct"), 10_000).unwrap().len(),
+        125
+    );
 }
 
 #[test]

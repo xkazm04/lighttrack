@@ -1,0 +1,21 @@
+{
+  "$comment": "What this SDK actually does. `supported` means the contract suite exercises it; `not_supported` is a real gap stated in the SDK's own voice; `planned` is accepted work not yet landed. scripts/gen-sdk-matrix.mjs renders clients/README.md's capability table from these three files and CI diff-checks the result, so a README can no longer promise a feature one language does not have.",
+  "sdk": "python",
+  "package": "lighttrack-client",
+  "dir": "clients/python",
+  "capabilities": {
+    "track": "supported",
+    "span": "supported",
+    "journal": "supported",
+    "instrument": "supported",
+    "guard": "supported",
+    "relay": "supported",
+    "admit": "supported",
+    "batch": "not_supported"
+  },
+  "notes": {
+    "instrument": "Also patches every installed provider SDK globally via `import lighttrack.auto` - the only language that offers the zero-code form.",
+    "admit": "Pre-spend admission: `enforce=\"block\" | \"warn\" | \"off\"` (default off) on LightTrack(), gated inside instrument()/wrap()/lighttrack.auto; `lt.admit()` for the raw verdict. The client does not choose the event id (the server mints it), so local shedding matches the server's RATE but not its exact set; hard caps and the advertised 429 wait are exact.",
+    "batch": "No client-side batching: events go one per POST from the background thread. /v1/events/batch exists server-side."
+  }
+}

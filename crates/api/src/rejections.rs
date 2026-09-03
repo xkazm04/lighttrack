@@ -14,10 +14,11 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 
 use lighttrack_core::{LimitMetric, LimitScope, LimitWindow};
+use lighttrack_store::codec::fmt_ts;
 
 /// How long a rejection key stays live after its last hit before it is pruned (rolling reset).
 const TTL_HOURS: i64 = 24;
@@ -28,6 +29,11 @@ struct Entry {
     est_cost_usd: f64,
     first_ts: DateTime<Utc>,
     last_ts: DateTime<Utc>,
+    /// What the last flush ([`RejectionLedger::take_deltas`]) already reported. The bucket keeps
+    /// accumulating for `/v1/limits/status` — this is only the high-water mark of what has been
+    /// turned into an alert row, so a flush reports a *delta* rather than a running total.
+    flushed_count: u64,
+    flushed_cost_usd: f64,
 }
 
 /// The key a rejection bucket is filed under. The scope is part of the key so a scoped cap
@@ -35,7 +41,8 @@ struct Entry {
 type RejectionKey = (String, LimitMetric, LimitWindow, Option<LimitScope>);
 
 /// A read-only snapshot of one rejection bucket, shaped for the `/v1/limits/status` `rejected` block.
-/// Timestamps are fixed-width `RFC3339(Nanos, Z)` for consistency with stored event times.
+/// Timestamps go through the store's one codec (`fmt_ts`: fixed-width `RFC3339(Nanos, Z)`), the
+/// same bytes stored event times carry.
 #[derive(Serialize, Clone, Debug)]
 pub(crate) struct RejectionStat {
     pub(crate) metric: LimitMetric,
@@ -111,6 +118,8 @@ impl RejectionLedger {
                 est_cost_usd: 0.0,
                 first_ts: now,
                 last_ts: now,
+                flushed_count: 0,
+                flushed_cost_usd: 0.0,
             });
         e.count += 1;
         e.est_cost_usd += cost;
@@ -119,11 +128,14 @@ impl RejectionLedger {
     }
 
     /// Snapshot every live rejection bucket for `project` (pruning stale ones first), for the
-    /// `/v1/limits/status` response. Order is unspecified.
+    /// `/v1/limits/status` response. Ordered worst-first by count, then by label, so two reads of a
+    /// quiet ledger produce the same document — the map's own order changed between identical
+    /// requests, which made the status body diff-noisy for an operator watching it.
     pub(crate) fn snapshot(&self, project: &str, now: DateTime<Utc>) -> Vec<RejectionStat> {
         let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         Self::prune(&mut map, now, self.ttl);
-        map.iter()
+        let mut out: Vec<RejectionStat> = map
+            .iter()
             .filter(|((p, _, _, _), _)| p == project)
             .map(|((_, metric, window, scope), e)| RejectionStat {
                 metric: *metric,
@@ -131,15 +143,50 @@ impl RejectionLedger {
                 scope: scope.clone(),
                 count: e.count,
                 est_missed_cost_usd: e.est_cost_usd,
-                first_ts: e.first_ts.to_rfc3339_opts(SecondsFormat::Nanos, true),
-                last_ts: e.last_ts.to_rfc3339_opts(SecondsFormat::Nanos, true),
+                first_ts: fmt_ts(e.first_ts),
+                last_ts: fmt_ts(e.last_ts),
             })
-            .collect()
+            .collect();
+        out.sort_by(|a, b| {
+            b.count.cmp(&a.count).then_with(|| {
+                format!("{:?}/{:?}/{:?}", a.metric, a.window, a.scope)
+                    .cmp(&format!("{:?}/{:?}/{:?}", b.metric, b.window, b.scope))
+            })
+        });
+        out
     }
 
     /// Evict buckets whose last hit is older than the TTL (rolling reset).
     fn prune(map: &mut HashMap<RejectionKey, Entry>, now: DateTime<Utc>, ttl: Duration) {
         map.retain(|_, e| now.signed_duration_since(e.last_ts) < ttl);
+    }
+
+    /// What has been rejected **since the last call**, as `(project, rule_label, count, cost)`, and
+    /// mark it reported.
+    ///
+    /// This is what turns a RAM-only counter into a durable record: the alert flush
+    /// ([`crate::alerts::flush`]) writes these as `ingest_rejected` alert rows. Deltas rather than
+    /// totals, because a sustained storm would otherwise re-report the same running count forever
+    /// and each flush would read as fresh damage.
+    pub(crate) fn take_deltas(&self, now: DateTime<Utc>) -> Vec<(String, String, u64, f64)> {
+        let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        Self::prune(&mut map, now, self.ttl);
+        let mut out = Vec::new();
+        for ((project, metric, window, scope), e) in map.iter_mut() {
+            let d_count = e.count.saturating_sub(e.flushed_count);
+            if d_count == 0 {
+                continue;
+            }
+            let d_cost = (e.est_cost_usd - e.flushed_cost_usd).max(0.0);
+            e.flushed_count = e.count;
+            e.flushed_cost_usd = e.est_cost_usd;
+            let label = match scope {
+                Some(s) => format!("{metric:?}/{window:?} [{}]", s.label()),
+                None => format!("{metric:?}/{window:?}"),
+            };
+            out.push((project.clone(), label, d_count, d_cost));
+        }
+        out
     }
 }
 
@@ -220,5 +267,58 @@ mod tests {
         );
         // A snapshot far in the future prunes everything.
         assert!(led.snapshot("p", t(base, 60 * 3600)).is_empty());
+    }
+
+    /// The flush must report *new* damage only. Re-reporting the running total would make every
+    /// flush of a sustained storm read as another storm.
+    #[test]
+    fn deltas_report_only_what_has_happened_since_the_last_flush() {
+        let led = RejectionLedger::new();
+        let now = Utc::now();
+        led.record("p", LimitMetric::CostUsd, LimitWindow::Day, None, 0.10, now);
+        led.record("p", LimitMetric::CostUsd, LimitWindow::Day, None, 0.10, now);
+        let first = led.take_deltas(now);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].0, "p");
+        assert_eq!(first[0].2, 2);
+        assert!((first[0].3 - 0.20).abs() < 1e-9);
+
+        assert!(
+            led.take_deltas(now).is_empty(),
+            "nothing new happened, so there is nothing to report"
+        );
+
+        led.record(
+            "p",
+            LimitMetric::CostUsd,
+            LimitWindow::Day,
+            None,
+            0.05,
+            t(now, 1),
+        );
+        let second = led.take_deltas(t(now, 1));
+        assert_eq!(second[0].2, 1, "the delta, not the running total");
+        assert!((second[0].3 - 0.05).abs() < 1e-9);
+    }
+
+    /// A scoped cap and a project-wide one on the same metric+window must not flush as one line —
+    /// an operator needs to know *which* rule is turning traffic away.
+    #[test]
+    fn a_scoped_rule_flushes_under_its_own_label() {
+        let led = RejectionLedger::new();
+        let now = Utc::now();
+        led.record("p", LimitMetric::CostUsd, LimitWindow::Day, None, 1.0, now);
+        led.record(
+            "p",
+            LimitMetric::CostUsd,
+            LimitWindow::Day,
+            Some(LimitScope::Model("gpt-4o".into())),
+            2.0,
+            now,
+        );
+        let mut labels: Vec<String> = led.take_deltas(now).into_iter().map(|d| d.1).collect();
+        labels.sort();
+        assert_eq!(labels.len(), 2);
+        assert!(labels[1].contains("gpt-4o"), "{labels:?}");
     }
 }

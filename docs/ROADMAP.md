@@ -142,23 +142,25 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
       key-minting deliberately not exposed. Fulfils D5 ("trigger benchmarks"). Verified: read-only
       hides/blocks writes; write mode runs the full create→freeze→benchmark→enqueue→poll loop;
       frozen-dataset writes still return 409 via the API.
-- [x] **Current tool catalog** — count it from the registry (`read::tools()` +
-      `prompts_tools::read_tools()`, and `write::tools()` + `prompts_tools::write_tools()` in
-      `crates/mcp/src/`), which is what `tools/list` returns: **28 read tools** (events + traces /
-      costs + use-cases / margin + forecast / scores / limits / prices / projects / benchmarks + runs +
-      CI gate / datasets + items / rubrics / prompt registry / jobs / collective leaderboard + digest,
-      all `readOnlyHint`) + **15 write tools** (`enqueue_benchmark`; `record_score`/`score_trace`;
-      create project/dataset/item/freeze/rubric/benchmark/limit; update/delete limit;
-      `create_prompt_version`/`promote_prompt`; `put_price`). README's MCP section quotes the same
-      numbers — change both together.
+- [x] **Current tool catalog** — no longer counted by hand. The catalog is generated from
+      `crates/contract` (M15), and **[docs/API.md](API.md)** is the generated matrix: every endpoint,
+      the capability it needs, and the MCP tool / `lt` verb / renderer that reaches it, with the
+      counts at the top. A test regenerates it and fails when the checked-in copy is stale, and a
+      second test pins the tool-name set so a rename cannot slip past. The hand-kept numbers this
+      bullet used to carry (28 read, 15 write) were wrong by 15 and 6 respectively when they were
+      replaced — which is the argument for generating them.
 
 ## Phase 5 — Packaging & multicloud (design: docs/PACKAGING.md)
 Reframed from "GCP cloud move" to portable, multi-DB/multicloud: one image + one
 `LIGHTTRACK_DATABASE_URL` DSN; `Store`-trait adapters; tiered deploy (compose → Terraform → Helm).
-- [x] 5a **Postgres backend** (`lighttrack-store-pg`, sqlx): full `Store` parity; `claim_job` via
+- [x] 5a **Postgres backend** (`lighttrack-store-pg`, sqlx): `claim_job` via
       `FOR UPDATE SKIP LOCKED`. Selected by `LIGHTTRACK_DATABASE_URL=postgres://…`. Verified vs PG 16.
-- [x] **Firestore backend** (`lighttrack-store-firestore`, REST-over-reqwest): full parity, modular
+- [x] **Firestore backend** (`lighttrack-store-firestore`, REST-over-reqwest): modular
       (rest/codec + per-domain). `LIGHTTRACK_DATABASE_URL=firestore://<project>`. See `docs/FIRESTORE.md`.
+- **Parity is a matrix, not a checkbox.** "Full `Store` parity" used to be claimed here for both
+      backends and was not true of either; what each one serves is now declared by the backend itself
+      and generated into **`docs/PARITY.md`**, with every undeclared surface refusing (501) and the
+      conformance suite asserting that refusal. Read that table rather than a prose claim here.
 - [x] 5b **Containerize → GHCR**: multi-stage `deploy/docker/Dockerfile` (all 4 bins), compose, buildx
       CI. Published **public** at `ghcr.io/xkazm04/lighttrack` — anonymously pullable, linux/amd64 +
       linux/arm64, one tag per release (currently through `v0.0.6`) plus a moving `:latest`. The image

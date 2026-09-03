@@ -8,14 +8,17 @@ use lighttrack_core::{Dataset, DatasetItem};
 use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
 
-const DATASET_COLS: &str = "id, project_id, name, version, frozen, source, created_at";
-const ITEM_COLS: &str =
-    "id, dataset_id, input, output, expected, context, tags, source_event_id, anonymization";
+pub(super) const DATASET_COLS: &str =
+    "id, project_id, name, version, frozen, source, created_at, parent_id";
+pub(super) const ITEM_COLS: &str =
+    "id, dataset_id, input, output, expected, context, tags, source_event_id, anonymization, \
+     input_hash";
 
 pub(super) fn create(conn: &Connection, d: &Dataset) -> Result<()> {
     conn.execute(
-        "INSERT INTO datasets (id, project_id, name, version, frozen, source, created_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO datasets \
+         (id, project_id, name, version, frozen, source, created_at, parent_id) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
             d.id,
             d.project_id,
@@ -23,22 +26,29 @@ pub(super) fn create(conn: &Connection, d: &Dataset) -> Result<()> {
             d.version as i64,
             d.frozen as i64,
             d.source,
-            fmt_ts(d.created_at)
+            fmt_ts(d.created_at),
+            d.parent_id,
         ],
     )?;
     Ok(())
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Dataset>> {
-    let sql = format!("SELECT {DATASET_COLS} FROM datasets WHERE id = ?1");
+pub(super) fn get(conn: &Connection, project: Option<&str>, id: &str) -> Result<Option<Dataset>> {
+    let sql = format!(
+        "SELECT {DATASET_COLS} FROM datasets WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![id], map_dataset).optional()?;
+    let raw = stmt
+        .query_row(params![id, project], map_dataset)
+        .optional()?;
     raw.map(dataset_from_raw).transpose()
 }
 
-pub(super) fn list(conn: &Connection, project: &str) -> Result<Vec<Dataset>> {
+pub(super) fn list(conn: &Connection, project: Option<&str>) -> Result<Vec<Dataset>> {
     let sql = format!(
-        "SELECT {DATASET_COLS} FROM datasets WHERE project_id = ?1 ORDER BY created_at DESC"
+        "SELECT {DATASET_COLS} FROM datasets WHERE 1 = 1{} ORDER BY created_at DESC",
+        super::scope_and(1)
     );
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
@@ -47,11 +57,17 @@ pub(super) fn list(conn: &Connection, project: &str) -> Result<Vec<Dataset>> {
     raws.into_iter().map(dataset_from_raw).collect()
 }
 
-pub(super) fn set_frozen(conn: &Connection, id: &str, frozen: bool) -> Result<()> {
-    conn.execute(
-        "UPDATE datasets SET frozen = ?2 WHERE id = ?1",
-        params![id, frozen as i64],
-    )?;
+pub(super) fn set_frozen(
+    conn: &Connection,
+    project: Option<&str>,
+    id: &str,
+    frozen: bool,
+) -> Result<()> {
+    let sql = format!(
+        "UPDATE datasets SET frozen = ?2 WHERE id = ?1{}",
+        super::scope_and(3)
+    );
+    conn.execute(&sql, params![id, frozen as i64, project])?;
     Ok(())
 }
 
@@ -64,8 +80,9 @@ pub(super) fn create_item(conn: &Connection, item: &DatasetItem) -> Result<()> {
     };
     conn.execute(
         "INSERT INTO dataset_items \
-         (id, dataset_id, input, output, expected, context, tags, source_event_id, anonymization) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+         (id, dataset_id, input, output, expected, context, tags, source_event_id, \
+          anonymization, input_hash) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             item.id,
             item.dataset_id,
@@ -76,23 +93,43 @@ pub(super) fn create_item(conn: &Connection, item: &DatasetItem) -> Result<()> {
             tags,
             item.source_event_id,
             anon,
+            item.input_hash,
         ],
     )?;
     Ok(())
 }
 
-pub(super) fn list_items(conn: &Connection, dataset_id: &str) -> Result<Vec<DatasetItem>> {
-    let sql = format!("SELECT {ITEM_COLS} FROM dataset_items WHERE dataset_id = ?1");
+/// `dataset_items` carries no `project_id` of its own, so the tenant filter rides the parent
+/// dataset: a foreign dataset id yields an empty list, never someone else's cases.
+pub(super) fn list_items(
+    conn: &Connection,
+    project: Option<&str>,
+    dataset_id: &str,
+) -> Result<Vec<DatasetItem>> {
+    let sql = format!(
+        "SELECT {ITEM_COLS} FROM dataset_items WHERE dataset_id = ?1 \
+           AND (?2 IS NULL OR EXISTS \
+                (SELECT 1 FROM datasets d WHERE d.id = dataset_id AND d.project_id = ?2))"
+    );
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
-        .query_map(params![dataset_id], map_item)?
+        .query_map(params![dataset_id, project], map_item)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(item_from_raw).collect()
 }
 
-type DatasetRaw = (String, String, String, i64, i64, Option<String>, String);
+type DatasetRaw = (
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    Option<String>,
+    String,
+    Option<String>,
+);
 
-fn map_dataset(row: &Row) -> rusqlite::Result<DatasetRaw> {
+pub(super) fn map_dataset(row: &Row) -> rusqlite::Result<DatasetRaw> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -101,10 +138,11 @@ fn map_dataset(row: &Row) -> rusqlite::Result<DatasetRaw> {
         row.get(4)?,
         row.get(5)?,
         row.get(6)?,
+        row.get(7)?,
     ))
 }
 
-fn dataset_from_raw(r: DatasetRaw) -> Result<Dataset> {
+pub(super) fn dataset_from_raw(r: DatasetRaw) -> Result<Dataset> {
     Ok(Dataset {
         id: r.0,
         project_id: r.1,
@@ -113,6 +151,7 @@ fn dataset_from_raw(r: DatasetRaw) -> Result<Dataset> {
         frozen: r.4 != 0,
         source: r.5,
         created_at: parse_ts(&r.6)?,
+        parent_id: r.7,
     })
 }
 
@@ -120,6 +159,7 @@ type ItemRaw = (
     String,
     String,
     String,
+    Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -139,6 +179,7 @@ fn map_item(row: &Row) -> rusqlite::Result<ItemRaw> {
         row.get(6)?,
         row.get(7)?,
         row.get(8)?,
+        row.get(9)?,
     ))
 }
 
@@ -161,5 +202,26 @@ fn item_from_raw(r: ItemRaw) -> Result<DatasetItem> {
         tags,
         source_event_id: r.7,
         anonymization,
+        input_hash: r.9,
     })
+}
+
+#[cfg(test)]
+mod cols_tests {
+    use super::*;
+
+    #[test]
+    fn dataset_cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(DATASET_COLS, tables::DATASETS.select_list(Dialect::Sqlite));
+    }
+
+    #[test]
+    fn item_cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(
+            ITEM_COLS,
+            tables::DATASET_ITEMS.select_list(Dialect::Sqlite)
+        );
+    }
 }

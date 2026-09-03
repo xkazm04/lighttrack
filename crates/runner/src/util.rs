@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 
-use lighttrack_core::{ModelPriceRow, PriceBook, Provider, TokenUsage};
+use lighttrack_core::{ModelPriceRow, PriceBook, TokenUsage};
 
 /// Comma-join a set of labels for a one-line log/warning.
 pub(crate) fn join_csv(items: &BTreeSet<String>) -> String {
@@ -138,7 +138,7 @@ pub(crate) fn price_gen_cost_checked(
         output: output_tokens.unwrap_or(0),
         ..Default::default()
     };
-    match book.cost_usd(Provider::from_wire(provider), model, &usage) {
+    match book.cost_usd(provider, model, &usage) {
         Some(cost) => (cost, true),
         // Unpriced stays `(0.0, false)`: the caller's contract is "0 with a warning", never a
         // phantom cost. The distinction is the whole reason this returns a pair.
@@ -416,8 +416,10 @@ mod tests {
                     input_per_mtok: *i,
                     output_per_mtok: *o,
                     cached_input_per_mtok: None,
-                    effective_date: Utc::now(),
+                    effective_from: Utc::now(),
                     source_url: None,
+                    verified_at: None,
+                    note: None,
                 })
                 .collect()
         };
@@ -429,8 +431,7 @@ mod tests {
         let same = |prices: &[ModelPriceRow], model: &str, i: u64, o: u64| {
             let (runner, priced) =
                 price_gen_cost_checked(prices, "anthropic", model, Some(i), Some(o));
-            let book =
-                PriceBook::from_rows(prices).cost_usd(Provider::Anthropic, model, &usage(i, o));
+            let book = PriceBook::from_rows(prices).cost_usd("anthropic", model, &usage(i, o));
             assert_eq!(
                 priced,
                 book.is_some(),

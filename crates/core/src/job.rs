@@ -4,7 +4,7 @@ use serde_json::Value;
 
 /// A unit of background work (Phase 3.6d). Enqueued by the API, executed by `lt-runner serve`,
 /// so long operations (benchmark runs) never block ingestion. Cloud path swaps the table for Pub/Sub.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Job {
     #[serde(default = "crate::new_id")]
     pub id: String,
@@ -20,6 +20,13 @@ pub struct Job {
     /// so the stale-claim reclaim path can never restart a run someone cancelled.
     #[serde(default = "default_status")]
     pub status: String,
+    /// The tenant this work belongs to, stamped at enqueue from the benchmark/schedule it runs.
+    ///
+    /// `None` is an operator/legacy job — a sweep the deployment itself enqueued, or a row written
+    /// before the column existed. Only an operator scope reads those; a project key never does
+    /// (M17), which is what stops `GET /v1/jobs` from being a cross-tenant payload dump.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     /// How many times a worker has CLAIMED this job. Bumped inside the atomic claim, so it counts
     /// crashes too — which is why it is no longer what decides a retry (see `failures`).
     #[serde(default)]
@@ -66,6 +73,91 @@ pub struct Job {
 
 fn default_status() -> String {
     "queued".to_string()
+}
+
+/// The closed vocabulary of work the queue can carry.
+///
+/// `Job::job_type` stays a `String` on the row (a kind written by a newer release deserializes on
+/// an older one rather than poisoning a whole list read), but this enum is what mints and validates
+/// those literals. The `snake_case` rename means the wire string for the original kind is still
+/// exactly `"bench_run"` — no stored row, no client, and no `?type=` filter changes.
+///
+/// Enumerability is the point. While `bench_run` was hard-coded in the enqueue handler and matched
+/// by a bare `&str` in the worker, the other four workloads each shipped as a separately-scheduled
+/// daemon loop with its own `--interval`, so the queue's lease/cancel/progress/retry machinery
+/// protected exactly one of five, and "what recurring work does this deployment run" had no answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    /// Run a stored benchmark.
+    BenchRun,
+    /// Judge recent unscored events for a project (one cycle).
+    ScoreEvents,
+    /// Judge whole traces for a project (one cycle).
+    ScoreTraces,
+    /// Sample live events into a frozen dataset (one cycle).
+    DatasetSample,
+    /// Re-measure judge/human agreement against a golden set (one cycle).
+    Calibrate,
+    /// Push this instance's privacy-safe digest to a collective hub, and record what came back
+    /// (one cycle). Hash-gated: an unchanged digest is a no-op, so a schedule of this kind is not
+    /// a machine for tripping a hub's `min_interval`.
+    Contribute,
+}
+
+impl JobKind {
+    /// Every kind, so consumers can enumerate/validate the closed vocabulary.
+    pub const ALL: [JobKind; 6] = [
+        JobKind::BenchRun,
+        JobKind::ScoreEvents,
+        JobKind::ScoreTraces,
+        JobKind::DatasetSample,
+        JobKind::Calibrate,
+        JobKind::Contribute,
+    ];
+
+    /// The persisted/wire literal for this kind.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JobKind::BenchRun => "bench_run",
+            JobKind::ScoreEvents => "score_events",
+            JobKind::ScoreTraces => "score_traces",
+            JobKind::DatasetSample => "dataset_sample",
+            JobKind::Calibrate => "calibrate",
+            JobKind::Contribute => "contribute",
+        }
+    }
+
+    /// Parse a wire literal, or `None` when it is not part of the vocabulary.
+    pub fn from_wire(s: &str) -> Option<JobKind> {
+        JobKind::ALL.into_iter().find(|k| k.as_str() == s)
+    }
+
+    /// Every kind's literal, joined — for a 400's "expected" list.
+    pub fn vocabulary() -> String {
+        JobKind::ALL
+            .iter()
+            .map(|k| k.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+}
+
+impl Job {
+    /// This job's kind, or `None` for a row naming a kind this build does not know.
+    pub fn kind(&self) -> Option<JobKind> {
+        JobKind::from_wire(&self.job_type)
+    }
+
+    /// This job's lease identity, expressed through the shared [`LeaseFence`] type.
+    ///
+    /// `claimed_at` *was* the fence long before the relay had one; naming it as such costs nothing
+    /// and stops the two queues from describing the same mechanism in two vocabularies.
+    ///
+    /// [`LeaseFence`]: crate::LeaseFence
+    pub fn fence(&self) -> Option<crate::LeaseFence> {
+        self.claimed_at.map(crate::LeaseFence::new)
+    }
 }
 
 /// What a cancel request did to a job. Returned by `Store::cancel_job` so the API can answer
@@ -124,4 +216,41 @@ pub fn job_is_terminal(status: &str) -> bool {
 
 fn default_max_attempts() -> u32 {
     3
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_kind_vocabulary_round_trips_and_keeps_the_original_wire_string() {
+        for k in JobKind::ALL {
+            assert_eq!(JobKind::from_wire(k.as_str()), Some(k));
+            // The enum and its serde form must agree, or a payload written by the API would not
+            // parse in the worker.
+            assert_eq!(
+                serde_json::to_value(k).expect("serialize kind"),
+                serde_json::Value::String(k.as_str().to_string())
+            );
+        }
+        // The one kind that predates the enum keeps its exact literal: stored rows and clients
+        // filtering `?status=` on `bench_run` must not notice this change at all.
+        assert_eq!(JobKind::BenchRun.as_str(), "bench_run");
+        assert_eq!(JobKind::from_wire("bench-run"), None);
+        assert_eq!(JobKind::from_wire("BenchRun"), None);
+    }
+
+    #[test]
+    fn a_job_reports_its_kind_and_its_fence() {
+        let mut j: Job = serde_json::from_value(serde_json::json!({ "type": "score_traces" }))
+            .expect("job from wire");
+        assert_eq!(j.kind(), Some(JobKind::ScoreTraces));
+        assert!(j.fence().is_none(), "an unclaimed job holds no lease");
+        let at = Utc::now();
+        j.claimed_at = Some(at);
+        assert_eq!(j.fence().map(|f| f.at()), Some(at));
+        // A kind from a newer release reads as None instead of failing the whole row.
+        j.job_type = "quantum_run".into();
+        assert_eq!(j.kind(), None);
+    }
 }

@@ -3,53 +3,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::pricing::{PriceBook, PricingMode};
+use crate::provider::ProviderId;
 
-/// LLM provider. `Unknown` captures anything we don't model yet (its pricing lookups miss → `None`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Provider {
-    OpenAi,
-    Anthropic,
-    Google,
-    #[serde(other)]
-    #[default]
-    Unknown,
-}
-
-impl Provider {
-    /// Parse a wire/DB provider literal. Anything outside the vocabulary becomes [`Provider::Unknown`]
-    /// — the explicit quarantine variant, not a silent coercion into a real provider.
-    ///
-    /// Exists so callers that hold a provider as a `&str` (a judge spec, a price-book row) reach the
-    /// same enum every other path uses, instead of comparing strings and quietly building a second
-    /// pricing or attribution vocabulary beside the first.
-    pub fn from_wire(s: &str) -> Provider {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "openai" => Provider::OpenAi,
-            "anthropic" => Provider::Anthropic,
-            "google" => Provider::Google,
-            _ => Provider::Unknown,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Provider::OpenAi => "openai",
-            Provider::Anthropic => "anthropic",
-            Provider::Google => "google",
-            Provider::Unknown => "unknown",
-        }
-    }
-}
-
-impl std::fmt::Display for Provider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+/// The provider a call went to.
+///
+/// A **type alias**, not an enum: provider identity is open (see [`crate::provider::ProviderId`]).
+/// The closed `{OpenAi, Anthropic, Google, Unknown}` enum this replaces stored every unmodeled
+/// vendor as the literal `"unknown"`, which is why a `mistral/*` price row could never be reached.
+pub type Provider = ProviderId;
 
 /// The kind of operation. `Other` catches anything unmodeled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Operation {
     #[default]
@@ -72,7 +38,9 @@ impl Operation {
 }
 
 /// Call outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
     #[default]
@@ -182,8 +150,17 @@ impl std::fmt::Display for FailureClass {
 /// validates it, the redactor's passthrough list and the alert payload cannot drift apart.
 pub const FAILURE_CLASS_KEY: &str = "failure_class";
 
-/// Token accounting for a single call. `cached_input`/`reasoning` are optional and provider-dependent.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Token accounting for a single call.
+///
+/// **The convention, stated once:** `input` is the WHOLE prompt the provider counted, and
+/// `cached_input` is the part of it served from a prompt cache — a subset, never an addition. The
+/// price book bills `input − cached_input` at the input rate and `cached_input` at the cached rate,
+/// so a sender that reports cached tokens *beside* rather than *within* `input` under-bills every
+/// cache hit. Providers differ on the wire (OpenAI's `prompt_tokens` includes cached tokens;
+/// Anthropic's `input_tokens` excludes `cache_read_input_tokens`), and it is each extractor's job to
+/// convert to this shape before the event is sent. `reasoning` is informational: providers count it
+/// inside `output`, which is where it is billed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TokenUsage {
     #[serde(default)]
     pub input: u64,
@@ -202,7 +179,7 @@ impl TokenUsage {
 }
 
 /// One normalized LLM call — the canonical record everything else is derived from.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LlmEvent {
     #[serde(default = "crate::new_id")]
     pub id: String,
@@ -232,7 +209,8 @@ pub struct LlmEvent {
     /// (the migration's backfill).
     #[serde(skip_deserializing, default = "Utc::now")]
     pub received_at: DateTime<Utc>,
-    pub provider: Provider,
+    #[serde(default)]
+    pub provider: ProviderId,
     pub model: String,
     /// Optional use-case / call-site name (e.g. "summarize-email"). The unit the
     /// Personas "LLM Overview" rollup groups by; falls back to provider+model when
@@ -276,7 +254,8 @@ impl LlmEvent {
     pub fn ensure_cost(&mut self, prices: &PriceBook) -> Option<f64> {
         if self.cost_usd.is_none() {
             let mode = self.pricing_mode();
-            self.cost_usd = prices.cost_usd_mode(self.provider, &self.model, &self.usage, mode);
+            self.cost_usd =
+                prices.cost_usd_mode(self.provider.as_str(), &self.model, &self.usage, mode);
         }
         self.cost_usd
     }
@@ -334,6 +313,19 @@ impl LlmEvent {
         self.metadata.get("api_key_id").and_then(Value::as_str)
     }
 
+    /// What the ingest boundary did to this row, read from `metadata.redaction`.
+    ///
+    /// `None` means the row carries no stamp — it was written before the stamp existed, or by a
+    /// path that does not scrub. That is deliberately **not** the same as `Some(stamp)` with
+    /// `scrub: false`, which is a row the boundary looked at and decided to leave verbatim.
+    ///
+    /// Like `api_key_id`, the value is server-owned: the redactor strips whatever a client sent
+    /// under this key before stamping its own, so a caller cannot claim to have been scrubbed.
+    pub fn redaction(&self) -> Option<crate::project::RedactionStamp> {
+        let raw = self.metadata.get(crate::project::REDACTION_KEY)?;
+        serde_json::from_value(raw.clone()).ok()
+    }
+
     /// The dimensions limit scopes are matched against.
     pub fn scope_dims(&self) -> crate::limits::ScopeDims<'_> {
         crate::limits::ScopeDims {
@@ -348,16 +340,7 @@ impl LlmEvent {
     /// The pricing lane for this call: an explicit `metadata.pricing_mode`, else a `batch` / `flex`
     /// (or `priority`) tag, else standard.
     fn pricing_mode(&self) -> PricingMode {
-        if let Some(m) = self.metadata.get("pricing_mode").and_then(Value::as_str) {
-            return PricingMode::parse(m);
-        }
-        if self.tags.iter().any(|t| t == "batch") {
-            return PricingMode::Batch;
-        }
-        if self.tags.iter().any(|t| t == "flex" || t == "priority") {
-            return PricingMode::Flex;
-        }
-        PricingMode::Standard
+        PricingMode::from_hints(&self.metadata, &self.tags)
     }
 }
 
@@ -400,6 +383,36 @@ mod tests {
         // …and it still round-trips out on reads.
         let v = serde_json::to_value(&e).unwrap();
         assert!(v.get("received_at").is_some());
+    }
+
+    /// The stamp round-trips through `metadata`, and the three states an operator must be able to
+    /// tell apart stay apart: no stamp, stamped-and-not-scrubbed, stamped-and-scrubbed.
+    #[test]
+    fn the_redaction_stamp_round_trips_and_keeps_its_three_states_distinct() {
+        assert!(ev(Value::Null).redaction().is_none(), "no stamp at all");
+
+        let verbatim = ev(json!({ "redaction": { "policy": "none", "scrub": false } }))
+            .redaction()
+            .expect("stamped");
+        assert!(!verbatim.scrub);
+        assert_eq!(verbatim.spans, 0);
+
+        let scrubbed = ev(json!({
+            "redaction": { "policy": "hash", "scrub": true, "spans": 3, "rules": "abc123" }
+        }))
+        .redaction()
+        .expect("stamped");
+        assert!(scrubbed.scrub);
+        assert_eq!(scrubbed.spans, 3);
+        assert_eq!(scrubbed.rules, "abc123");
+        assert_eq!(scrubbed.policy, crate::Redaction::Hash);
+    }
+
+    /// A client that writes garbage under the reserved key must not make the reader panic or lie;
+    /// it reads as "no stamp" (and ingest strips the key before storage anyway).
+    #[test]
+    fn an_unreadable_stamp_reads_as_absent() {
+        assert!(ev(json!({ "redaction": "nope" })).redaction().is_none());
     }
 
     #[test]

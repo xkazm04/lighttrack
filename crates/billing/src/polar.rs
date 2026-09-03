@@ -114,11 +114,19 @@ fn verify_signature(
         .map_err(|_| BillingError::Signature("bad signing key".into()))?;
     mac.update(format!("{id}.{ts}.").as_bytes());
     mac.update(body);
-    let expected = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
 
-    // `webhook-signature` is space-separated `version,signature`; accept any matching `v1`.
+    // `webhook-signature` is space-separated `version,signature`; accept any matching `v1`. Each
+    // candidate is base64-decoded and checked with the MAC's own `verify_slice` — the same
+    // constant-time compare Stripe's path uses — rather than a hand-rolled XOR fold, which carries
+    // none of the optimization barriers that keep a compiler from reintroducing the early exit.
     let matched = sig_header.split(' ').any(|entry| {
-        matches!(entry.split_once(','), Some(("v1", sig)) if ct_eq(sig.as_bytes(), expected.as_bytes()))
+        let Some(("v1", sig)) = entry.split_once(',') else {
+            return false;
+        };
+        base64::engine::general_purpose::STANDARD
+            .decode(sig)
+            .map(|bytes| mac.clone().verify_slice(&bytes).is_ok())
+            .unwrap_or(false)
     });
     if matched {
         Ok(())
@@ -138,9 +146,16 @@ pub fn normalize(envelope: &Value, customer_meta_key: &str, fx: &FxTable) -> Vec
         "order.paid" => normalize_order(data, customer_meta_key, fx)
             .into_iter()
             .collect(),
-        "order.refunded" => normalize_order_refund(data, customer_meta_key, fx)
-            .into_iter()
-            .collect(),
+        // The envelope's own `timestamp` is when the refund happened; the Order inside it carries
+        // only the sale's `created_at`, which is the wrong month for a clawback.
+        "order.refunded" => normalize_order_refund(
+            data,
+            rfc_dt(envelope.get("timestamp")),
+            customer_meta_key,
+            fx,
+        )
+        .into_iter()
+        .collect(),
         "refund.created" => normalize_refund(data, customer_meta_key, fx)
             .into_iter()
             .collect(),
@@ -162,6 +177,9 @@ pub fn normalize_order(obj: &Value, customer_meta_key: &str, fx: &FxTable) -> Op
             )
         })
         .unwrap_or((None, None));
+    // The whole conversion, so the row can carry its own provenance rather than having the caveat
+    // re-derived from whatever the live table happens to say later.
+    let usd = fx.to_usd(amount, &currency(obj));
     Some(RevenueEvent {
         id: format!("polar:{id}"),
         project_id: String::new(),
@@ -169,8 +187,12 @@ pub fn normalize_order(obj: &Value, customer_meta_key: &str, fx: &FxTable) -> Op
         external_id: Some(id.to_string()),
         customer_id: customer_id(obj, customer_meta_key),
         product_id: product_id(obj),
-        amount_usd: fx.to_usd(amount, &currency(obj)).amount_usd,
+        amount_usd: usd.amount_usd,
         currency: currency(obj),
+        amount_minor: Some(amount),
+        fx_rate: usd.rate,
+        fx_book_version: Some(fx.version().to_string()),
+        converted: Some(usd.converted),
         kind: if subscription.is_some() {
             RevenueKind::Subscription
         } else {
@@ -185,8 +207,11 @@ pub fn normalize_order(obj: &Value, customer_meta_key: &str, fx: &FxTable) -> Op
 /// An `order.refunded` event (data is an Order with `refunded_amount`) → a refund record, keyed on
 /// the order (its `data.id` *is* the order id). `refunded_amount` is Polar's running total for the
 /// order, so this record naturally tracks the order's cumulative refunds rather than one delta.
+/// `refunded_at` is the delivery's own timestamp — the Order has no refund time of its own, and its
+/// `created_at` is the sale.
 pub fn normalize_order_refund(
     obj: &Value,
+    refunded_at: Option<DateTime<Utc>>,
     customer_meta_key: &str,
     fx: &FxTable,
 ) -> Option<RevenueEvent> {
@@ -198,7 +223,11 @@ pub fn normalize_order_refund(
     if amount == 0 {
         return None;
     }
-    Some(refund_event(order_id, amount, obj, customer_meta_key, fx))
+    let mut ev = refund_event(order_id, amount, obj, customer_meta_key, fx);
+    if let Some(at) = refunded_at {
+        ev.ts = at;
+    }
+    Some(ev)
 }
 
 /// A `refund.created` event (data is a Refund) → a refund record. Keyed on the Refund's `order_id`
@@ -234,6 +263,7 @@ fn refund_event(
     customer_meta_key: &str,
     fx: &FxTable,
 ) -> RevenueEvent {
+    let usd = fx.to_usd(amount_minor, &currency(obj));
     RevenueEvent {
         id: format!("polar:refund:{order_id}"),
         project_id: String::new(),
@@ -241,8 +271,12 @@ fn refund_event(
         external_id: Some(format!("refund:{order_id}")),
         customer_id: customer_id(obj, customer_meta_key),
         product_id: None,
-        amount_usd: fx.to_usd(amount_minor, &currency(obj)).amount_usd,
+        amount_usd: usd.amount_usd,
         currency: currency(obj),
+        amount_minor: Some(amount_minor),
+        fx_rate: usd.rate,
+        fx_book_version: Some(fx.version().to_string()),
+        converted: Some(usd.converted),
         kind: RevenueKind::Refund,
         period_start: None,
         period_end: None,
@@ -285,14 +319,6 @@ fn rfc_dt(v: Option<&Value>) -> Option<DateTime<Utc>> {
     v.and_then(Value::as_str)
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
         .map(|d| d.with_timezone(&Utc))
-}
-
-/// Constant-time byte-slice equality (lengths are public — base64 of a 32-byte HMAC is fixed-width).
-fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[cfg(test)]
@@ -453,6 +479,33 @@ mod tests {
         assert_eq!(r[0].kind, RevenueKind::Refund);
         assert!((r[0].amount_usd - 5.0).abs() < 1e-9);
         assert_eq!(r[0].id, "polar:refund:ord_1");
+    }
+
+    /// `order.refunded` carries the Order, whose `created_at` is the sale; the clawback is dated by
+    /// the delivery's own `timestamp`, so a refund issued months later lands in the month it happened.
+    #[test]
+    fn an_order_refund_is_dated_by_the_delivery_not_the_sale() {
+        let r = normalize(
+            &json!({
+                "type": "order.refunded",
+                "timestamp": "2026-09-01T12:00:00Z",
+                "data": { "id": "ord_5", "refunded_amount": 500, "currency": "usd",
+                          "customer_id": "cust_1", "created_at": "2026-06-01T00:00:00Z" }
+            }),
+            "userId",
+            &fx(),
+        );
+        assert_eq!(r[0].ts.to_rfc3339(), "2026-09-01T12:00:00+00:00");
+        // Without an envelope timestamp the Order's own date is still the fallback.
+        let bare = normalize_order_refund(
+            &json!({ "id": "ord_6", "refunded_amount": 100, "currency": "usd",
+                     "created_at": "2026-06-01T00:00:00Z" }),
+            None,
+            "userId",
+            &fx(),
+        )
+        .unwrap();
+        assert_eq!(bare.ts.to_rfc3339(), "2026-06-01T00:00:00+00:00");
     }
 
     #[test]

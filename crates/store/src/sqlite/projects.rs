@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
-use lighttrack_core::{ApiKey, Project, Redaction};
+use lighttrack_core::{decode_scopes, encode_scopes, ApiKey, Project, Redaction};
 
 use crate::codec::{enum_to_str, fmt_ts, parse_enum, parse_ts};
 use crate::Result;
@@ -12,8 +12,9 @@ use crate::Result;
 
 pub(super) fn create(conn: &Connection, p: &Project) -> Result<()> {
     conn.execute(
-        "INSERT INTO projects (id, name, enabled, redaction, collective_opt_in, created_at) \
-         VALUES (?1,?2,?3,?4,?5,?6)",
+        "INSERT INTO projects \
+         (id, name, enabled, redaction, collective_opt_in, created_at, archived_at, require_trusted_judge) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
             p.id,
             p.name,
@@ -21,6 +22,8 @@ pub(super) fn create(conn: &Connection, p: &Project) -> Result<()> {
             enum_to_str(&p.redaction)?,
             p.collective_opt_in as i64,
             fmt_ts(p.created_at),
+            p.archived_at.map(fmt_ts),
+            p.require_trusted_judge as i64,
         ],
     )?;
     Ok(())
@@ -30,14 +33,16 @@ pub(super) fn create(conn: &Connection, p: &Project) -> Result<()> {
 /// and are never written.
 pub(super) fn update(conn: &Connection, p: &Project) -> Result<bool> {
     let n = conn.execute(
-        "UPDATE projects SET name = ?2, enabled = ?3, redaction = ?4, collective_opt_in = ?5 \
-         WHERE id = ?1",
+        "UPDATE projects SET name = ?2, enabled = ?3, redaction = ?4, collective_opt_in = ?5, \
+         archived_at = ?6, require_trusted_judge = ?7 WHERE id = ?1",
         params![
             p.id,
             p.name,
             p.enabled as i64,
             enum_to_str(&p.redaction)?,
             p.collective_opt_in as i64,
+            p.archived_at.map(fmt_ts),
+            p.require_trusted_judge as i64,
         ],
     )?;
     Ok(n > 0)
@@ -45,7 +50,7 @@ pub(super) fn update(conn: &Connection, p: &Project) -> Result<bool> {
 
 pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Project>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, enabled, redaction, collective_opt_in, created_at \
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at, require_trusted_judge \
          FROM projects WHERE id = ?1",
     )?;
     let raw = stmt.query_row(params![id], map_project).optional()?;
@@ -54,7 +59,7 @@ pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Project>> {
 
 pub(super) fn list(conn: &Connection) -> Result<Vec<Project>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, enabled, redaction, collective_opt_in, created_at \
+        "SELECT id, name, enabled, redaction, collective_opt_in, created_at, archived_at, require_trusted_judge \
          FROM projects ORDER BY created_at DESC",
     )?;
     let raws = stmt
@@ -63,7 +68,16 @@ pub(super) fn list(conn: &Connection) -> Result<Vec<Project>> {
     raws.into_iter().map(project_from_raw).collect()
 }
 
-type ProjectRaw = (String, String, i64, String, i64, String);
+type ProjectRaw = (
+    String,
+    String,
+    i64,
+    String,
+    i64,
+    String,
+    Option<String>,
+    i64,
+);
 
 fn map_project(row: &Row) -> rusqlite::Result<ProjectRaw> {
     Ok((
@@ -73,6 +87,8 @@ fn map_project(row: &Row) -> rusqlite::Result<ProjectRaw> {
         row.get(3)?,
         row.get(4)?,
         row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
     ))
 }
 
@@ -84,6 +100,8 @@ fn project_from_raw(r: ProjectRaw) -> Result<Project> {
         redaction: parse_enum::<Redaction>("redaction", &r.3)?,
         collective_opt_in: r.4 != 0,
         created_at: parse_ts(&r.5)?,
+        archived_at: r.6.as_deref().map(parse_ts).transpose()?,
+        require_trusted_judge: r.7 != 0,
     })
 }
 
@@ -92,8 +110,9 @@ fn project_from_raw(r: ProjectRaw) -> Result<Project> {
 pub(super) fn create_key(conn: &Connection, k: &ApiKey) -> Result<()> {
     conn.execute(
         "INSERT INTO api_keys \
-         (id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+         (id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked, scopes, \
+          expires_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             k.id,
             k.project_id,
@@ -103,6 +122,8 @@ pub(super) fn create_key(conn: &Connection, k: &ApiKey) -> Result<()> {
             fmt_ts(k.created_at),
             k.last_used_at.map(fmt_ts),
             k.revoked as i64,
+            encode_scopes(&k.scopes),
+            k.expires_at.map(fmt_ts),
         ],
     )?;
     Ok(())
@@ -110,8 +131,8 @@ pub(super) fn create_key(conn: &Connection, k: &ApiKey) -> Result<()> {
 
 pub(super) fn find_key_by_prefix(conn: &Connection, prefix: &str) -> Result<Option<ApiKey>> {
     let mut stmt = conn.prepare(
-        "SELECT id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked \
-         FROM api_keys WHERE prefix = ?1",
+        "SELECT id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked, \
+         scopes, expires_at FROM api_keys WHERE prefix = ?1",
     )?;
     let raw = stmt.query_row(params![prefix], map_key).optional()?;
     raw.map(key_from_raw).transpose()
@@ -127,8 +148,8 @@ pub(super) fn touch_key(conn: &Connection, id: &str, when: DateTime<Utc>) -> Res
 
 pub(super) fn list_keys(conn: &Connection, project: &str) -> Result<Vec<ApiKey>> {
     let mut stmt = conn.prepare(
-        "SELECT id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked \
-         FROM api_keys WHERE project_id = ?1 ORDER BY created_at DESC",
+        "SELECT id, project_id, name, prefix, key_hash, created_at, last_used_at, revoked, \
+         scopes, expires_at FROM api_keys WHERE project_id = ?1 ORDER BY created_at DESC",
     )?;
     let raws = stmt
         .query_map(params![project], map_key)?
@@ -144,6 +165,21 @@ pub(super) fn set_key_revoked(conn: &Connection, id: &str, revoked: bool) -> Res
     Ok(n > 0)
 }
 
+/// Stamp (or clear) a key's expiry. This is how a rotation's grace window is armed: the successor
+/// key is minted and the predecessor is given a deadline, so the window closes itself with no
+/// background task to lose across a restart.
+pub(super) fn set_key_expiry(
+    conn: &Connection,
+    id: &str,
+    when: Option<DateTime<Utc>>,
+) -> Result<bool> {
+    let n = conn.execute(
+        "UPDATE api_keys SET expires_at = ?2 WHERE id = ?1",
+        params![id, when.map(fmt_ts)],
+    )?;
+    Ok(n > 0)
+}
+
 type ApiKeyRaw = (
     String,
     String,
@@ -153,6 +189,8 @@ type ApiKeyRaw = (
     String,
     Option<String>,
     i64,
+    Option<String>,
+    Option<String>,
 );
 
 fn map_key(row: &Row) -> rusqlite::Result<ApiKeyRaw> {
@@ -165,6 +203,8 @@ fn map_key(row: &Row) -> rusqlite::Result<ApiKeyRaw> {
         row.get(5)?,
         row.get(6)?,
         row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
     ))
 }
 
@@ -181,5 +221,7 @@ fn key_from_raw(r: ApiKeyRaw) -> Result<ApiKey> {
             None => None,
         },
         revoked: r.7 != 0,
+        scopes: decode_scopes(r.8.as_deref()),
+        expires_at: r.9.as_deref().map(parse_ts).transpose()?,
     })
 }

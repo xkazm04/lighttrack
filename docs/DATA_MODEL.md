@@ -15,7 +15,7 @@ The heart of the system. Emitted by monitored apps, normalized + costed by `api`
 | `parent_span_id` | string? | parent span, for nested agent calls |
 | `ts` | timestamp | when the call happened, **as the client reports it**. Queryable/orderable; drives `since`/`until` on `GET /v1/events`, traces, and the cost/use-case rollups. Rejected on ingest when it is further than the configured skew window from server time (`ts_too_old` / `ts_too_new`, HTTP 400). |
 | `received_at` | timestamp | when the API accepted the call — **server-stamped, never read from the request body**. Every rolling-window accounting read keys on this: limit admission, `GET /v1/limits/status`, and the daily forecast series. That split is deliberate: a client owns its `ts`, so if budgets were measured on it a single wrong clock would silently corrupt enforcement. Rows written before this column existed are backfilled to `received_at = ts`. |
-| `provider` | string | `openai` \| `anthropic` \| `google` \| `unknown` |
+| `provider` | string | **Open vocabulary** (M8): any vendor id, canonicalized to lowercase `[a-z0-9._-]` (`openai`, `anthropic`, `google`, `mistral`, `groq`, `az.ai.openai`, …). `unknown` is the sentinel for "no provider was reported" — and, for rows written **before** M8, the backfill value every vendor outside the old closed enum was stored as; those rows cannot be recovered, so a `provider=unknown` row is either genuinely untagged or pre-M8 unmodeled traffic. Prices, limit scopes and rollups key on the raw id, so a `PUT /v1/prices/mistral/<model>` row is reachable by a `mistral` event. Dashboards that hard-code the three literals will now see more values; group by the column, don't enumerate it. |
 | `model` | string | e.g. `gpt-4.1`, `claude-opus-4-8`, `gemini-2.5-pro` |
 | `operation` | string | `chat` \| `completion` \| `embedding` \| `other` |
 | `input_tokens` | int | |
@@ -30,13 +30,28 @@ The heart of the system. Emitted by monitored apps, normalized + costed by `api`
 | `output` | json? | completion — optional, redactable |
 | `tags` | json (array) | freeform labels |
 | `source` | string? | host / app instance |
-| `metadata` | json | arbitrary app-supplied fields |
+| `metadata` | json | arbitrary app-supplied fields, **plus the server-owned keys below** |
+
+#### Server-owned `metadata` keys
+Written by the server and stripped from whatever the client sent, so they can be trusted as
+attribution and provenance rather than as claims: `api_key_id` (the authenticated principal),
+`cost_source` / `pricing_mode` (how `cost_usd` was resolved), and `redaction` — the
+[`RedactionStamp`](../crates/core/src/project.rs) `{policy, scrub, spans, rules}` recording what the
+ingest boundary did to this row. `rules` is `lighttrack_anon::rules_fingerprint()`, the digest of the
+scrubber's ordered rule set, so a span count written before a rule change is never silently compared
+with one written after. `customer_id` / `product_id` are client-supplied but pass the PII scrub
+un-rewritten (they are join keys, not payloads).
+
+A row with **no** `redaction` key predates the stamp or was written by a path that does not scrub —
+which is a different finding from `scrub: false` (the boundary looked and stored the text verbatim),
+and `GET /v1/projects/:id/redaction` reports the two separately rather than folding them together.
 
 ### Querying `events`
 `GET /v1/events` AND-combines: `project`, `since`/`until` (client `ts`), `provider`, `model`,
 `trace_id`, `name`, `status` (`success|error|timeout`), `tag` (array **membership**, not substring),
 `meta` (`key` or `key=value` over `metadata` — how per-customer/product questions are asked, since that
-linkage rides in metadata rather than a column) and `min_cost`. `count=1` additionally returns
+linkage rides in metadata rather than a column), `min_cost`, `redaction_rules` (rows stamped by one
+scrubber rule set) and `min_redacted_spans` (rows the scrub actually rewrote). `count=1` additionally returns
 `X-Total-Count`: the size of the whole matching set, independent of the cursor and page limit, so a
 client can render "n of N" without paging to count. Paging is keyset (`X-Next-Cursor`) and the cursor
 predicate is independent of the content predicates, so traversal is exact under every filter
@@ -46,6 +61,55 @@ Composite indexes `(project_id, provider|model|status, ts)` serve each equality 
 `ORDER BY ts DESC` in one seek; `min_cost`, `tag` and `meta` are residual within that range. Backends
 that have not ported the extended predicates answer **501 `unsupported`** naming the filter — never an
 unfiltered page presented as if the filter had been honored.
+
+### Rolling `events` up — the dimension vocabulary
+
+One primitive answers every "usage and cost over a window, grouped by X" question:
+`Store::rollup(RollupQuery)` (`crates/core/src/rollup.rs`), surfaced as
+`GET /v1/rollup?by=…&since=…&until=…&time=…&filter=…`. `/v1/costs`, `/v1/costs/prompts`,
+`/v1/usecases`, `/v1/limits/usage`, `/v1/margin/*` and `/v1/forecast` are all fixed groupings of it,
+and every backend implements the primitive once rather than one query per surface.
+
+`Dimension` is the **single** vocabulary — limit scopes (`LimitScope::kind_str`), the legacy `dim`
+arguments and the SQL/JSON extraction all route through it, so a dimension cannot exist in one place
+and silently not in another.
+
+| Dimension  | Where it lives on the row              | Also a limit scope? |
+|------------|----------------------------------------|:-------------------:|
+| `project`  | `project_id` column                    |                     |
+| `provider` | `provider` column                      | yes                 |
+| `model`    | `model` column                         | yes                 |
+| `name`     | `name` column (the use-case label)     | yes                 |
+| `api_key`  | `metadata.api_key_id` (server-stamped) | yes                 |
+| `customer` | `metadata.customer_id`                 | yes                 |
+| `product`  | `metadata.product_id`                  |                     |
+| `prompt`   | `metadata.prompt` (`name@vN`)          |                     |
+| `day`      | UTC day of the query's time key        |                     |
+
+A rollup groups by 1..=3 distinct dimensions; a row's `keys` align positionally with `group_by`. A
+row that carries no value on a dimension folds into a single `null` bucket rather than being dropped,
+so the parts always sum to the whole. Filters are equality only, and a `null` value never matches one
+(an untagged call cannot be charged to a customer).
+
+`time` selects the window and `day` bucket key: `ts` (client-declared) or `received_at` (server
+arrival). **Accounting reads use `received_at`** — a caller able to slide its spend out of a window by
+backdating its own events is a caller with no cap. Firestore stores no `received_at` and answers both
+on `ts`; see `docs/PARITY.md`.
+
+`api_key` is admin-only in both `by` and `filter`: grouping on it enumerates a project's key ids.
+
+### The `unpriced_calls` disclosure rule
+
+`cost_usd` is the **stored** sum — what `SUM(cost_usd)` sees. A call whose model was absent from the
+price book has `cost_usd IS NULL` on the row (we never write a phantom zero), so it contributes
+nothing. Every rollup row therefore also carries `unpriced_calls`, and `CostRow`, `UseCaseCostRow` and
+`CostByDimension` carry it too.
+
+The rule for anything that displays a cost: **when `unpriced_calls > 0`, the number is a floor, not a
+total, and must be presented as one.** A zero indistinguishable from "we don't know" is the failure
+this field exists to remove — it is why the limit path charges unpriced traffic by imputation
+(`Usage::cost_for_limits`) instead of letting an unpriced model be spent for free, and why the
+rendered rollup table prints the caveat under the total.
 
 ## traces — a derived end-to-end view (no table)
 A *trace* is every `event` sharing a `trace_id`, rolled up into one view of a multi-step / agentic
@@ -85,7 +149,7 @@ by `trace_id` and refuses with **501 `unsupported`** (see `docs/FIRESTORE.md`) �
 |---|---|---|
 | `id` | string | caller-choosable at create; else a server-minted UUID (see below) |
 | `name` | string | |
-| `enabled` | bool | |
+| `enabled` | bool | `false` refuses the project's events on both ingest doors (single POST → 403 `forbidden`; batch item → `invalid`/`forbidden`), nothing stored; reads and the project's keys keep working. Takes effect on the next event via the ingest policy cache |
 | `redaction` | string | `none` \| `hash` \| `drop` — how to store prompts/outputs |
 | `created_at` | timestamp | immutable |
 
@@ -133,7 +197,9 @@ for changes made by another replica or directly in the DB.
 | `id` | string | |
 | `project_id` | string | FK |
 | `event_id` | string? | scored event (null for benchmark-only) |
-| `rubric` | string | rubric/metric name |
+| `rubric` | string | the verdict's human-readable **label** — six encodings live here (a rubric name, `bench:{name}`, `{name}:{label}#case{i}`, a pairwise pairing, `lt:calibration:…`), which is why it is no longer the identity |
+| `rubric_id` | string? | the `rubrics` row this was judged against — the join the label could never be: stable across a rename, unique across two rubrics that share a name |
+| `kind` | string? | `freeform` \| `rubric` \| `bench_case` \| `compare_cell` \| `pairwise_game` \| `calibration` \| `trace`. Absent reads as `freeform` (the pre-typing default); an unrecognized value reads as `other` rather than being misfiled |
 | `value` | float | |
 | `max` | float | scale upper bound |
 | `pass` | bool? | |
@@ -141,6 +207,26 @@ for changes made by another replica or directly in the DB.
 | `scored_by` | string | judge model, e.g. `claude-haiku-4-5` |
 | `cost_usd` | float? | judge call cost (watched, never throttled) |
 | `created_at` | timestamp | |
+
+`GET /v1/scores` narrows on `rubric_id` and `kind` — a benchmark case is not the same measurement as
+an ad-hoc verdict, and averaging them together is what those filters exist to prevent. The alerting
+window keys on the same identity (`Score::alert_key`): per-case verdicts roll up under their
+benchmark, because a label carrying `#case7` is unique per case and a window that never sees the same
+key twice can never accumulate.
+
+## `rubrics`
+Beyond `{id, project_id, name, dimensions, threshold, created_at}`:
+
+| Field | Type | Notes |
+|---|---|---|
+| `version` | int | generation, from 1. Omitted from the wire at 1 (absent means 1) |
+| `supersedes` | string? | the rubric id this one replaces |
+
+A new version is a **new row with a new id** (`POST /v1/rubrics/:id/versions`), never a mutation:
+verdicts already stored cite the old rubric's id, and rewriting that row would silently change what
+those verdicts claim to have measured. The superseded rubric stays readable and stays cited. The
+collective digest's `rubric_fingerprint` includes the version for the same reason — two runs judged
+under materially different criteria must not merge into one leaderboard bucket.
 
 ## `benchmarks` / `benchmark_runs`
 | `benchmarks` | Type | | `benchmark_runs` | Type |
@@ -162,3 +248,41 @@ for changes made by another replica or directly in the DB.
 ```
 `api`/`runner` also read `total_cost_usd` and per-model `usage` from the `claude -p --output-format json`
 envelope to populate `scores.cost_usd`.
+
+<!-- BEGIN generated table index (cargo test -p lighttrack-store --test schema_doc) -->
+
+## Every table (generated)
+
+Rendered from the declarative model in `crates/store/src/schema/tables/`, which is also what generates the three DDLs in `schema/`. A table here without a section above is one this document has not explained yet — which is the point of generating the list.
+
+| Table | Columns | Added after ship | Indexes | Key |
+|---|---|---|---|---|
+| `projects` | 8 | 3 | 0 | `id` |
+| `api_keys` | 10 | 2 | 1 | `id` |
+| `events` | 24 | 2 | 8 | `id` |
+| `limit_rules` | 15 | 8 | 0 | `id` |
+| `scores` | 16 | 5 | 6 | `id` |
+| `benchmarks` | 11 | 0 | 0 | `id` |
+| `rubrics` | 8 | 2 | 0 | `id` |
+| `jobs` | 15 | 3 | 2 | `id` |
+| `prompts` | 9 | 2 | 1 | `id` |
+| `prompt_versions` | 7 | 0 | 1 | `id` |
+| `benchmark_runs` | 13 | 0 | 0 | `id` |
+| `model_prices` | 9 | 0 | 0 | `provider, model, effective_from` |
+| `datasets` | 8 | 1 | 1 | `id` |
+| `dataset_items` | 10 | 1 | 2 | `id` |
+| `revenue_events` | 16 | 4 | 2 | `id` |
+| `collective_entries` | 18 | 6 | 2 | `contributor_id, provider, model, task_type` |
+| `relay_tasks` | 21 | 4 | 3 | `id` |
+| `margin_policies` | 8 | 0 | 1 | `id` |
+| `schedules` | 9 | 0 | 2 | `id` |
+| `devices` | 10 | 0 | 2 | `id` |
+| `alerts` | 11 | 0 | 3 | `id` |
+| `alert_channels` | 10 | 0 | 1 | `id` |
+| `collective_contributions` | 12 | 0 | 2 | `id` |
+| `labels` | 11 | 0 | 3 | `id` |
+| `calibrations` | 14 | 0 | 1 | `id` |
+
+Totals: **25 tables**, **303 columns**, of which **43** were added after their table shipped (those are `ALTER TABLE … ADD COLUMN` on every dialect, never edits to a `CREATE TABLE`). Schema fingerprint: `sha256-d329cc1689cdc517` — the same value `GET /v1/capabilities` reports.
+
+<!-- END generated table index -->

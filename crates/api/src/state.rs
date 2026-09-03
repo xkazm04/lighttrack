@@ -35,10 +35,10 @@ pub(crate) struct AppState {
     /// Optional PII redaction of captured input/output on ingest, configured from env.
     pub(crate) redact: Arc<Redactor>,
     /// Per-project payload-persistence policies (the stored `Project.redaction` field), cached so the
-    /// ingest hot path doesn't pay a store read per event. See [`RedactionCache`] for the freshness
+    /// ingest hot path doesn't pay a store read per event. See [`ProjectPolicyCache`] for the freshness
     /// contract — this used to be a plain map that never invalidated, which meant *tightening* a
     /// project's redaction for compliance did nothing until the process restarted.
-    pub(crate) redaction_policies: Arc<RedactionCache>,
+    pub(crate) project_policies: Arc<ProjectPolicyCache>,
     /// Configured billing-webhook sources (Stripe/Polar), keyed by provider.
     pub(crate) billing: Arc<BillingRegistry>,
     /// In-process idempotency for webhook deliveries — collapses provider retries / duplicate
@@ -71,6 +71,10 @@ pub(crate) struct AppState {
     /// The sweep's configuration as one readable line, so the status surface can say whether
     /// anything will ever checkpoint this database.
     pub(crate) maintenance_desc: String,
+    /// Per-(policy, subject) last-applied instants for the margin guardrail pass. Process-local, in
+    /// the same spirit as the alert cooldowns: it exists so a policy with a long cooldown does not
+    /// rewrite its rule on every sweep tick.
+    pub(crate) policy_cooldowns: Arc<crate::margin_guardrails::PolicyCooldowns>,
 }
 
 /// Env: how long a cached redaction policy may be served before it is re-read from the store.
@@ -78,28 +82,62 @@ pub(crate) struct AppState {
 const ENV_POLICY_TTL: &str = "LIGHTTRACK_REDACTION_CACHE_TTL_SECS";
 const DEFAULT_POLICY_TTL: Duration = Duration::from_secs(60);
 
-/// Read-through cache of per-project payload-persistence policies, with two independent freshness
-/// guarantees — a redaction policy is a *compliance* control, so "eventually, after a restart" is not
-/// an acceptable propagation story:
+/// The slice of a project row the ingest path enforces on every event: the payload-persistence
+/// policy, and whether the project is accepting events at all. Cached together because they are
+/// read together, on the same hot path, from the same row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProjectPolicy {
+    pub(crate) redaction: Redaction,
+    /// `Project.enabled`. A disabled project's keys still authenticate (its operators keep reading),
+    /// but neither ingest door records an event for it — the switch the projects API accepts is a
+    /// switch, not a label.
+    pub(crate) enabled: bool,
+}
+
+impl Default for ProjectPolicy {
+    /// What ingest assumes when there is no project row yet (keyless dev traffic before the default
+    /// project is bootstrapped): store as sent, accept.
+    fn default() -> Self {
+        Self {
+            redaction: Redaction::default(),
+            enabled: true,
+        }
+    }
+}
+
+impl From<&lighttrack_core::Project> for ProjectPolicy {
+    fn from(p: &lighttrack_core::Project) -> Self {
+        Self {
+            redaction: p.redaction,
+            enabled: p.enabled,
+        }
+    }
+}
+
+/// Read-through cache of per-project ingest policies, with two independent freshness guarantees — a
+/// redaction policy is a *compliance* control and `enabled` is a kill switch, so "eventually, after
+/// a restart" is not an acceptable propagation story:
 ///
 /// 1. **Explicit invalidation.** `PUT /v1/projects/:id` drops the entry, so a tightening made through
-///    this instance takes effect on the very next event (see [`RedactionCache::invalidate`]).
+///    this instance takes effect on the very next event (see [`ProjectPolicyCache::invalidate`]).
 /// 2. **A TTL bound.** Entries expire after [`ENV_POLICY_TTL`], which bounds staleness for changes
 ///    this instance did *not* make — another replica's write, or a direct DB edit. This is the slice:
 ///    a bounded window, not a cross-replica invalidation bus.
-pub(crate) struct RedactionCache {
-    entries: RwLock<HashMap<String, (Redaction, Instant)>>,
+pub(crate) struct ProjectPolicyCache {
+    entries: RwLock<HashMap<String, (ProjectPolicy, Instant)>>,
     ttl: Duration,
 }
 
-impl RedactionCache {
+impl ProjectPolicyCache {
     /// Build a cache pre-warmed with the policies read at startup, with the TTL resolved from env.
-    pub(crate) fn new(warm: HashMap<String, Redaction>) -> Self {
-        let ttl = std::env::var(ENV_POLICY_TTL)
-            .ok()
-            .and_then(|s| s.trim().parse::<u64>().ok())
-            .map(Duration::from_secs)
-            .unwrap_or(DEFAULT_POLICY_TTL);
+    pub(crate) fn new(warm: HashMap<String, ProjectPolicy>) -> Self {
+        let ttl = Duration::from_secs(env_parsed(ENV_POLICY_TTL, DEFAULT_POLICY_TTL.as_secs()));
+        Self::with_ttl(warm, ttl)
+    }
+
+    /// [`ProjectPolicyCache::new`] with the TTL given rather than read from env — the seam the
+    /// freshness contract is tested through without mutating process-global state.
+    pub(crate) fn with_ttl(warm: HashMap<String, ProjectPolicy>, ttl: Duration) -> Self {
         let now = Instant::now();
         let entries = warm.into_iter().map(|(k, v)| (k, (v, now))).collect();
         Self {
@@ -109,7 +147,7 @@ impl RedactionCache {
     }
 
     /// The cached policy for `pid`, or `None` when absent or expired.
-    fn get_fresh(&self, pid: &str) -> Option<Redaction> {
+    fn get_fresh(&self, pid: &str) -> Option<ProjectPolicy> {
         if self.ttl.is_zero() {
             return None;
         }
@@ -119,7 +157,7 @@ impl RedactionCache {
     }
 
     /// Remember `policy` for `pid`, restamping its freshness clock.
-    pub(crate) fn put(&self, pid: &str, policy: Redaction) {
+    pub(crate) fn put(&self, pid: &str, policy: ProjectPolicy) {
         if let Ok(mut e) = self.entries.write() {
             e.insert(pid.to_string(), (policy, Instant::now()));
         }
@@ -134,22 +172,46 @@ impl RedactionCache {
     }
 }
 
-/// The payload-persistence policy for `pid`, from the cache — falling back to one store read when the
-/// cache has no fresh answer (then remembered, including the "no project row" default, so a hot
-/// project costs at most one read per TTL). This is what makes the stored `Project.redaction` field an
-/// *enforced* policy on ingest instead of a decorative column.
-pub(crate) async fn redaction_policy_for(st: &AppState, pid: &str) -> Result<Redaction, ApiError> {
-    if let Some(p) = st.redaction_policies.get_fresh(pid) {
+/// The ingest policy for `pid`, from the cache — falling back to one store read when the cache has
+/// no fresh answer (then remembered, including the "no project row" default, so a hot project costs
+/// at most one read per TTL). This is what makes the stored `Project.redaction` and `Project.enabled`
+/// fields *enforced* on ingest instead of decorative columns.
+pub(crate) async fn project_policy_for(
+    st: &AppState,
+    pid: &str,
+) -> Result<ProjectPolicy, ApiError> {
+    if let Some(p) = st.project_policies.get_fresh(pid) {
         return Ok(p);
     }
     let store = st.store.clone();
     let id = pid.to_string();
     let policy = spawn_db(move || store.get_project(&id))
         .await?
-        .map(|p| p.redaction)
+        .as_ref()
+        .map(ProjectPolicy::from)
         .unwrap_or_default();
-    st.redaction_policies.put(pid, policy);
+    st.project_policies.put(pid, policy);
     Ok(policy)
+}
+
+/// A numeric setting from env, or `default` — and a *warning* when the variable is set to something
+/// that is not a number. The `.parse().ok()` idiom this replaces treated `=60s` exactly like unset,
+/// so an operator's override was silently not in force while the banner still described the default
+/// they thought they had changed.
+pub(crate) fn env_parsed<T: std::str::FromStr + std::fmt::Display + Copy>(
+    key: &str,
+    default: T,
+) -> T {
+    match std::env::var(key) {
+        Ok(raw) if !raw.trim().is_empty() => raw.trim().parse::<T>().unwrap_or_else(|_| {
+            tracing::warn!(
+                var = key, value = %raw, default = %default,
+                "setting is not a number; using the default"
+            );
+            default
+        }),
+        _ => default,
+    }
 }
 
 /// Run a blocking store call on the blocking pool and flatten the two error layers.
@@ -162,4 +224,51 @@ where
         .await
         .map_err(|e| ApiError::internal(format!("task join error: {e}")))?
         .map_err(ApiError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn policy(redaction: Redaction) -> ProjectPolicy {
+        ProjectPolicy {
+            redaction,
+            enabled: true,
+        }
+    }
+
+    /// The two freshness guarantees the doc comment promises, pinned: an explicit invalidation is
+    /// immediate, and the TTL bounds how stale an entry this instance did not write can get. A
+    /// redaction policy is a compliance control, so "until restart" is the failure this guards.
+    #[test]
+    fn an_entry_is_served_until_it_is_invalidated_or_its_ttl_runs_out() {
+        let warm = HashMap::from([("p".to_string(), policy(Redaction::None))]);
+        let cache = ProjectPolicyCache::with_ttl(warm, Duration::from_millis(40));
+        assert_eq!(cache.get_fresh("p"), Some(policy(Redaction::None)));
+        assert_eq!(cache.get_fresh("absent"), None);
+
+        cache.invalidate("p");
+        assert_eq!(
+            cache.get_fresh("p"),
+            None,
+            "a tightening takes effect on the next event"
+        );
+
+        cache.put("p", policy(Redaction::Drop));
+        assert_eq!(cache.get_fresh("p"), Some(policy(Redaction::Drop)));
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(
+            cache.get_fresh("p"),
+            None,
+            "past the TTL the entry is re-read, bounding staleness for another replica's write"
+        );
+    }
+
+    /// `0` means "never cache": every read misses, even one written a moment ago.
+    #[test]
+    fn a_zero_ttl_disables_the_cache_entirely() {
+        let cache = ProjectPolicyCache::with_ttl(HashMap::new(), Duration::ZERO);
+        cache.put("p", policy(Redaction::Hash));
+        assert_eq!(cache.get_fresh("p"), None);
+    }
 }

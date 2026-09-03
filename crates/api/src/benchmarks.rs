@@ -8,12 +8,16 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{new_id, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun};
+use lighttrack_core::{
+    new_id, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, JudgeTrustVerdict,
+};
 
 use crate::alerts::BenchRunAlert;
 use crate::auth::Principal;
+use crate::benchmarks_target::{ensure_prompt_refs_exist, validate_target_matrix};
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
+use crate::judges;
 use crate::state::{spawn_db, AppState};
 
 #[derive(Deserialize)]
@@ -80,25 +84,6 @@ fn embed_recurrence(target: serde_json::Value, secs: u64) -> Result<serde_json::
     }
 }
 
-/// Validate the stored `target` field before it reaches the store. An **array** is unambiguously a
-/// comparison matrix and must deserialize as `Vec<BenchTarget>`; a malformed one is rejected here
-/// (400) rather than silently degrading to a different benchmark mode at run time. Non-array targets
-/// (null / object / string) are legacy free-form and pass through untouched.
-fn validate_target_matrix(target: &serde_json::Value) -> Result<(), String> {
-    if target.is_array() {
-        serde_json::from_value::<Vec<BenchTarget>>(target.clone())
-            .map(|_| ())
-            .map_err(|e| {
-                format!(
-                    "`target` is an array but not a valid comparison matrix \
-                 (expected [{{provider, model, system_prompt?, label?}}, ...]): {e}"
-                )
-            })
-    } else {
-        Ok(())
-    }
-}
-
 pub(crate) async fn create_benchmark(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -106,14 +91,26 @@ pub(crate) async fn create_benchmark(
     Json(req): Json<CreateBenchmarkReq>,
 ) -> Result<Json<Benchmark>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    // Every run's mean is normalized to 0..=1 (score / max), so a baseline outside that range can
+    // never be met or is met trivially: `80` (a percentage typo) would fail every run forever and
+    // read as a real regression in CI.
+    if let Some(b) = req.baseline_score {
+        if !(0.0..=1.0).contains(&b) || b.is_nan() {
+            return Err(ApiError::bad_request(format!(
+                "baseline_score must be within 0.0..=1.0 (run means are normalized); got {b}"
+            )));
+        }
+    }
     // The target matrix (if any) is stored in the `target` field as a JSON array. A typed `targets`
-    // is already valid; a raw `target` array must be validated before we persist it.
+    // deserialized, but that is not the same as being *runnable*: an `Http` target's URL and a
+    // `prompt_ref`'s name are both refusable facts, and both go through the same door.
     let target = if req.targets.is_empty() {
-        validate_target_matrix(&req.target).map_err(ApiError::bad_request)?;
         req.target
     } else {
         serde_json::to_value(&req.targets).unwrap_or(serde_json::Value::Null)
     };
+    let parsed = validate_target_matrix(&target).map_err(ApiError::bad_request)?;
+    ensure_prompt_refs_exist(&st, &pid, &parsed).await?;
     // Opt-in recurrence rides inside `target` (no schema/column change); reject the one combination
     // it can't carry (a comparison matrix) up front.
     let target = match req.schedule_interval_secs.filter(|s| *s > 0) {
@@ -151,7 +148,11 @@ pub(crate) async fn list_benchmarks(
     Ok(Json(v))
 }
 
-/// Fetch a benchmark and authorize project-key access to it.
+/// Fetch a benchmark **in the caller's scope** (M17).
+///
+/// The authorization is the read: a project key's query carries `project_id`, so another project's
+/// benchmark is not found rather than found-and-refused. The 403 this replaced confirmed that the
+/// id existed, which is the cross-tenant existence oracle D13 removed for traces.
 pub(crate) async fn load_benchmark_authorized(
     st: &AppState,
     p: &Principal,
@@ -159,18 +160,10 @@ pub(crate) async fn load_benchmark_authorized(
 ) -> Result<Benchmark, ApiError> {
     let store = st.store.clone();
     let id2 = id.to_string();
-    let bench = spawn_db(move || store.get_benchmark(&id2))
+    let sc = p.scope_owned();
+    spawn_db(move || store.get_benchmark(sc.as_deref().into(), &id2))
         .await?
-        .ok_or_else(|| ApiError::not_found(format!("benchmark '{id}' not found")))?;
-    if let Principal::Project {
-        project_id: pid, ..
-    } = p
-    {
-        if &bench.project_id != pid {
-            return Err(ApiError::forbidden("key not authorized for that benchmark"));
-        }
-    }
-    Ok(bench)
+        .ok_or_else(|| ApiError::not_found(format!("benchmark '{id}' not found")))
 }
 
 pub(crate) async fn get_benchmark(
@@ -188,9 +181,10 @@ pub(crate) async fn list_benchmark_runs(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<BenchmarkRun>>, ApiError> {
     let p = authenticate(&st, &headers).await?;
-    load_benchmark_authorized(&st, &p, &id).await?; // authorize
+    load_benchmark_authorized(&st, &p, &id).await?; // 404s a foreign benchmark
     let store = st.store.clone();
-    let runs = spawn_db(move || store.list_benchmark_runs(&id)).await?;
+    let sc = p.scope_owned();
+    let runs = spawn_db(move || store.list_benchmark_runs(sc.as_deref().into(), &id)).await?;
     Ok(Json(runs))
 }
 
@@ -200,6 +194,9 @@ pub(crate) async fn post_benchmark_run(
     Json(run): Json<BenchmarkRun>,
 ) -> Result<Json<BenchmarkRun>, ApiError> {
     let p = authenticate(&st, &headers).await?;
+    // The one benchmark *write* a project key can reach, so it is the one that needs `manage`:
+    // recording a run is what moves a gate, and an ingest/read key must not be able to.
+    crate::auth_scopes::ensure_scope(&p, lighttrack_core::Scope::Manage)?;
     let bench = load_benchmark_authorized(&st, &p, &run.benchmark_id).await?; // authorize via the benchmark
     let store = st.store.clone();
     let run2 = run.clone();
@@ -217,9 +214,11 @@ pub(crate) async fn post_benchmark_run(
 }
 
 /// Machine-readable CI-gate verdict for a benchmark, from its latest finished run. `status` is
-/// `pass | regressed | no_baseline | no_runs`. Consumers (a pipeline step, a dashboard badge) branch
-/// on `status`; `run_id`/`mean`/`baseline`/`n` give the supporting numbers, and `caveat` names the
-/// condition that made a floor verdict inapplicable when one did.
+/// `pass | regressed | no_baseline | no_runs | partial` — `partial` is a run the cost ceiling or an
+/// operator cut short, whose mean covers only what was reached: unverified, never green. Consumers
+/// (a pipeline step, a dashboard badge) branch on `status`; `run_id`/`mean`/`baseline`/`n` give the
+/// supporting numbers, and `caveat` names the condition that made a floor verdict
+/// inapplicable when one did.
 #[derive(Debug, Serialize, PartialEq)]
 pub(crate) struct GateResponse {
     status: String,
@@ -236,6 +235,12 @@ pub(crate) struct GateResponse {
     /// hunting for a baseline that is sitting right there.
     #[serde(skip_serializing_if = "Option::is_none")]
     caveat: Option<String>,
+    /// Whether the judge behind this verdict has ever been checked against a human, for the rubric
+    /// it judged under (M11). A green `status` from an `unknown` judge is a badge that means "the
+    /// judge said so" and nothing about whether the judge is worth believing, so the gate reports
+    /// both rather than making a caller ask a second question.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    judge_trust: Option<JudgeTrustVerdict>,
 }
 
 /// Why a stored baseline cannot be compared against the run that was scored, or `None` when the
@@ -280,7 +285,11 @@ fn baseline_not_comparable(run: &BenchmarkRun) -> Option<String> {
 /// Takes the whole `Benchmark` rather than its `baseline_score` because the conditions a floor
 /// verdict depends on live beside the number, and narrowing to `Option<f64>` at this boundary threw
 /// them away while the caller was still holding them.
-pub(crate) fn decide_gate(runs: &[BenchmarkRun], bench: &Benchmark) -> GateResponse {
+pub(crate) fn decide_gate(
+    runs: &[BenchmarkRun],
+    bench: &Benchmark,
+    judge_trust: Option<JudgeTrustVerdict>,
+) -> GateResponse {
     let baseline = bench.baseline_score;
     let Some(run) = runs.iter().find(|r| r.finished_at.is_some()) else {
         return GateResponse {
@@ -290,6 +299,7 @@ pub(crate) fn decide_gate(runs: &[BenchmarkRun], bench: &Benchmark) -> GateRespo
             baseline,
             n: None,
             caveat: None,
+            judge_trust,
         };
     };
     let status = match run.status.as_str() {
@@ -329,6 +339,7 @@ pub(crate) fn decide_gate(runs: &[BenchmarkRun], bench: &Benchmark) -> GateRespo
         baseline,
         n,
         caveat,
+        judge_trust,
     }
 }
 
@@ -339,14 +350,37 @@ pub(crate) async fn benchmark_gate(
 ) -> Result<Json<GateResponse>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let bench = load_benchmark_authorized(&st, &p, &id).await?;
+    // Keyed on the benchmark's own (rubric, judge) pair, so a benchmark that switched judges does
+    // not inherit the previous one's calibration.
+    let trust = judges::lookup(
+        &st,
+        &bench.project_id,
+        bench.rubric_id.as_deref(),
+        &bench.judge_model,
+    )
+    .await?;
+    // A project that requires a trusted judge gets a 409 rather than a `pass` beside an `unknown`:
+    // the evidence is unqualified, and a green badge from an unverified instrument is the
+    // uncalibrated gate at its most convincing.
+    let project = judges::load_project(&st, &bench.project_id).await?;
+    if let Some(reason) = judges::policy_block(project.as_ref(), &trust) {
+        return Err(ApiError::conflict(reason));
+    }
     let store = st.store.clone();
-    let runs = spawn_db(move || store.list_benchmark_runs(&id)).await?;
-    Ok(Json(decide_gate(&runs, &bench)))
+    let sc = p.scope_owned();
+    let runs = spawn_db(move || store.list_benchmark_runs(sc.as_deref().into(), &id)).await?;
+    Ok(Json(decide_gate(&runs, &bench, Some(trust))))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{decide_gate, embed_recurrence, validate_target_matrix};
+    use super::{embed_recurrence, validate_target_matrix};
+
+    /// The judge-trust annotation is exercised through the handler and `judges::policy_block`;
+    /// these cases are about the *evidence* verdict, so they pass none.
+    fn decide_gate(runs: &[BenchmarkRun], bench: &Benchmark) -> super::GateResponse {
+        super::decide_gate(runs, bench, None)
+    }
     use lighttrack_core::{Benchmark, BenchmarkRun};
     use serde_json::json;
 
@@ -380,7 +414,10 @@ mod tests {
         let g = decide_gate(&[], &bench(Some(0.8)));
         assert_eq!(g.status, "no_runs");
         // A run that never finished is ignored.
-        let g = decide_gate(&[run("passed", false, Some(0.9), json!(null))], &bench(Some(0.8)));
+        let g = decide_gate(
+            &[run("passed", false, Some(0.9), json!(null))],
+            &bench(Some(0.8)),
+        );
         assert_eq!(g.status, "no_runs");
     }
 
@@ -395,11 +432,19 @@ mod tests {
         assert_eq!(g.run_id.as_deref(), Some("run-passed"));
 
         assert_eq!(
-            decide_gate(&[run("regressed", true, Some(0.5), json!(null))], &bench(Some(0.8))).status,
+            decide_gate(
+                &[run("regressed", true, Some(0.5), json!(null))],
+                &bench(Some(0.8))
+            )
+            .status,
             "regressed"
         );
         assert_eq!(
-            decide_gate(&[run("no_baseline", true, Some(0.5), json!(null))], &bench(None)).status,
+            decide_gate(
+                &[run("no_baseline", true, Some(0.5), json!(null))],
+                &bench(None)
+            )
+            .status,
             "no_baseline"
         );
     }
@@ -408,9 +453,15 @@ mod tests {
     fn gate_never_passes_a_cost_halted_run() {
         // The trap: a halted run whose partial mean happens to clear the baseline. If `partial` fell
         // through to the legacy scalar compare it would come back `pass` on 30% of the dataset.
-        let g = decide_gate(&[run("partial", true, Some(0.95), json!(null))], &bench(Some(0.8)));
+        let g = decide_gate(
+            &[run("partial", true, Some(0.95), json!(null))],
+            &bench(Some(0.8)),
+        );
         assert_eq!(g.status, "partial");
-        let g = decide_gate(&[run("aborted", true, Some(0.95), json!(null))], &bench(Some(0.8)));
+        let g = decide_gate(
+            &[run("aborted", true, Some(0.95), json!(null))],
+            &bench(Some(0.8)),
+        );
         assert_eq!(g.status, "partial");
     }
 
@@ -418,15 +469,26 @@ mod tests {
     fn gate_legacy_status_falls_back_to_scalar() {
         // "completed" predates honest statuses → scalar mean-vs-baseline compare.
         assert_eq!(
-            decide_gate(&[run("completed", true, Some(0.5), json!(null))], &bench(Some(0.8))).status,
+            decide_gate(
+                &[run("completed", true, Some(0.5), json!(null))],
+                &bench(Some(0.8))
+            )
+            .status,
             "regressed"
         );
         assert_eq!(
-            decide_gate(&[run("completed", true, Some(0.9), json!(null))], &bench(Some(0.8))).status,
+            decide_gate(
+                &[run("completed", true, Some(0.9), json!(null))],
+                &bench(Some(0.8))
+            )
+            .status,
             "pass"
         );
         // No baseline → no_baseline; n falls back to n_cases when the report has none.
-        let g = decide_gate(&[run("completed", true, Some(0.9), json!(null))], &bench(None));
+        let g = decide_gate(
+            &[run("completed", true, Some(0.9), json!(null))],
+            &bench(None),
+        );
         assert_eq!(g.status, "no_baseline");
         assert_eq!(g.n, Some(5));
     }
@@ -458,7 +520,10 @@ mod tests {
         assert_eq!(g.status, "no_baseline");
         let caveat = g.caveat.expect("the refused floor names its condition");
         assert!(caveat.contains("UNFROZEN"), "{caveat}");
-        assert!(caveat.contains("version 7"), "the version is named: {caveat}");
+        assert!(
+            caveat.contains("version 7"),
+            "the version is named: {caveat}"
+        );
 
         // And the other direction: a `regressed` verdict resting on the same unusable comparison is
         // not a regression either. Reporting one would be a false alarm with a number behind it.
@@ -490,7 +555,10 @@ mod tests {
         assert_eq!(g.status, "pass");
         assert_eq!(g.caveat, None);
 
-        let g = decide_gate(&[run("regressed", true, Some(0.5), frozen)], &bench(Some(0.8)));
+        let g = decide_gate(
+            &[run("regressed", true, Some(0.5), frozen)],
+            &bench(Some(0.8)),
+        );
         assert_eq!(g.status, "regressed");
         assert_eq!(g.caveat, None);
 
@@ -525,7 +593,6 @@ mod tests {
         assert_eq!(g.status, "no_baseline");
         assert_eq!(g.caveat, None);
     }
-
 
     #[test]
     fn non_array_targets_pass_through() {

@@ -5,7 +5,9 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use lighttrack_anon::scrub;
-use lighttrack_core::LlmEvent;
+use lighttrack_core::{
+    Dataset, ImportFilter, ImportSource, ImportSpec, LlmEvent, SamplingStrategy,
+};
 use lighttrack_engine::{run_text, EngineConfig};
 
 use crate::cli::Cli;
@@ -81,16 +83,38 @@ pub(crate) fn build_from_events(
             }
             None => (None, 0),
         };
-        let redactions = r_in + r_out;
+        // Tags are client-set free text and travel into the corpus too. The ingest redactor scrubs
+        // them on the way in (D14), but not on a deployment that turned it off — and a dataset is
+        // built to be shared further than the event store is. Same regex pass as the payloads.
+        let mut r_tags = 0usize;
+        let tags: Vec<String> = ev
+            .tags
+            .iter()
+            .map(|t| {
+                let r = scrub(t);
+                r_tags += r.redactions;
+                r.text
+            })
+            .collect();
+        let redactions = r_in + r_out + r_tags;
         total_redactions += redactions;
         let item = json!({
             "input": input_clean,
             "output": output_clean,
             "source_event_id": ev.id,
-            "tags": ev.tags,
+            "tags": tags,
             "anonymization": { "method": method, "redactions": redactions },
         });
-        post(cli, http, &format!("/v1/datasets/{dsid}/items"), &item)?;
+        // A failure here used to propagate with nothing said about the dataset it left behind:
+        // created, partially filled, UNFROZEN, and invisible to the operator who saw only an HTTP
+        // error. Name what exists so it can be finished (`dataset import`), forked, or ignored.
+        if let Err(e) = post(cli, http, &format!("/v1/datasets/{dsid}/items"), &item) {
+            return Err(e.context(format!(
+                "dataset {dsid} '{name}' was created and holds {built} item(s) but is NOT frozen; \
+                 the item from event {} failed to post",
+                short(&ev.id)
+            )));
+        }
         built += 1;
         println!("  + item from {} ({redactions} redactions)", short(&ev.id));
     }
@@ -100,11 +124,109 @@ pub(crate) fn build_from_events(
         http,
         &format!("/v1/datasets/{dsid}/freeze"),
         &json!({}),
-    )?;
+    )
+    .with_context(|| {
+        format!(
+            "dataset {dsid} '{name}' holds all {built} item(s) but the freeze failed; it is open"
+        )
+    })?;
     println!(
         "built dataset {dsid} '{name}': {built} items, {total_redactions} total redactions, frozen"
     );
     Ok(built)
+}
+
+/// Turn the `dataset build|import` flags into an [`ImportSpec`], refusing an unknown spelling
+/// rather than falling back.
+///
+/// A silent fallback is the failure worth avoiding here: an operator who typed `--strategy
+/// startified` and got `recent` would read the resulting corpus as stratified and draw conclusions
+/// from a sample that never was one.
+pub(crate) fn spec_from_flags(
+    strategy: &str,
+    from: &str,
+    below: Option<f64>,
+    dedupe: bool,
+    n: usize,
+) -> Result<ImportSpec> {
+    let from = ImportSource::parse(from)
+        .ok_or_else(|| anyhow::anyhow!("unknown --from {from:?}: expected `events` or `scores`"))?;
+    let mut strategy = SamplingStrategy::parse(strategy).ok_or_else(|| {
+        anyhow::anyhow!("unknown --strategy: expected `recent`, `random`, `stratified` or `errors`")
+    })?;
+    // `--below` is a failure question by construction; asking it while sampling `recent` would mine
+    // the newest cases that happen to be bad rather than the bad ones.
+    if below.is_some() && strategy == SamplingStrategy::Recent {
+        strategy = SamplingStrategy::Errors;
+    }
+    Ok(ImportSpec {
+        from,
+        filter: ImportFilter {
+            below,
+            ..Default::default()
+        },
+        strategy,
+        n,
+        dedupe,
+        event_ids: Vec::new(),
+    })
+}
+
+/// `true` when the spec asks for nothing the pre-M24 client builder could not already do.
+pub(crate) fn is_plain_recent(spec: &ImportSpec) -> bool {
+    spec.from == ImportSource::Events
+        && spec.strategy == SamplingStrategy::Recent
+        && !spec.dedupe
+        && spec.filter == ImportFilter::default()
+}
+
+/// `dataset versions`: the lineage of one name, newest first.
+pub(crate) fn print_versions(
+    cli: &Cli,
+    http: &reqwest::blocking::Client,
+    project: &str,
+    name: &str,
+) -> Result<()> {
+    let versions: Vec<Dataset> = get(
+        cli,
+        http,
+        &format!(
+            "/v1/projects/{project}/datasets/versions?name={}",
+            crate::dataset_import::enc(name)
+        ),
+    )?;
+    if versions.is_empty() {
+        println!("no dataset named '{name}' in project '{project}'");
+        return Ok(());
+    }
+    for d in &versions {
+        println!(
+            "  v{:<3} {}  {}  parent={}",
+            d.version,
+            short(&d.id),
+            if d.frozen { "frozen" } else { "open  " },
+            d.parent_id.as_deref().map(short).unwrap_or("-")
+        );
+    }
+    Ok(())
+}
+
+/// `dataset fork`: the next version of a dataset's name, items and labels copied.
+pub(crate) fn fork(cli: &Cli, http: &reqwest::blocking::Client, id: &str) -> Result<()> {
+    let forked: Dataset = serde_json::from_value(post(
+        cli,
+        http,
+        &format!("/v1/datasets/{id}/fork"),
+        &json!({}),
+    )?)?;
+    println!(
+        "forked {} -> {} '{}' v{} (unfrozen)",
+        short(id),
+        short(&forked.id),
+        forked.name,
+        forked.version
+    );
+    Ok(())
 }
 
 /// Regex scrub (always) + optional LLM scrub pass. Returns (clean_text, redaction_count).
@@ -131,4 +253,34 @@ Return ONLY the rewritten text, with no preamble.\n\nTEXT:\n{out}"
         }
     }
     Ok((out, redactions))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The flag parser refuses an unknown spelling instead of falling back, and coerces `--below`
+    /// on `recent` into the failure strategy it implies. Both decide what corpus an operator gets.
+    #[test]
+    fn flags_refuse_unknown_spellings_and_coerce_below_onto_errors() {
+        assert!(spec_from_flags("startified", "events", None, false, 10).is_err());
+        assert!(spec_from_flags("recent", "logs", None, false, 10).is_err());
+
+        let plain = spec_from_flags("recent", "events", None, false, 10).expect("parses");
+        assert!(
+            is_plain_recent(&plain),
+            "the pre-M24 shape is recognised as such"
+        );
+
+        let below = spec_from_flags("recent", "events", Some(0.5), false, 10).expect("parses");
+        assert_eq!(below.strategy, SamplingStrategy::Errors);
+        assert_eq!(below.filter.below, Some(0.5));
+        assert!(!is_plain_recent(&below));
+
+        let random = spec_from_flags("random", "scores", None, true, 5).expect("parses");
+        assert_eq!(random.strategy, SamplingStrategy::Random);
+        assert_eq!(random.from, ImportSource::Scores);
+        assert!(random.dedupe && random.n == 5);
+        assert!(!is_plain_recent(&random));
+    }
 }

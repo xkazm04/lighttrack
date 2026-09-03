@@ -16,6 +16,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// buffered into memory. Well above any realistic dataset/benchmark response.
 const MAX_BODY_BYTES: u64 = 128 * 1024 * 1024;
 
+/// `base + path` with exactly one slash between them. `LIGHTTRACK_URL=https://host/` is the
+/// spelling half of the world types, and `format!("{base}{path}")` turned it into `//v1/...` — a
+/// 404 on every call. The CLI and MCP clients already join this way.
+pub(crate) fn url(cli: &Cli, path: &str) -> String {
+    format!("{}{}", cli.base.trim_end_matches('/'), path)
+}
+
 /// Build the shared blocking client used for every outbound call, with bounded timeouts.
 pub(crate) fn client() -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
@@ -44,7 +51,7 @@ pub(crate) fn get<T: serde::de::DeserializeOwned>(
     http: &reqwest::blocking::Client,
     path: &str,
 ) -> Result<T> {
-    let mut req = http.get(format!("{}{}", cli.base, path));
+    let mut req = http.get(url(cli, path));
     if let Some(k) = &cli.key {
         req = req.bearer_auth(k);
     }
@@ -65,7 +72,7 @@ pub(crate) fn get_paged<T: serde::de::DeserializeOwned>(
     http: &reqwest::blocking::Client,
     path: &str,
 ) -> Result<(T, Option<String>)> {
-    let mut req = http.get(format!("{}{}", cli.base, path));
+    let mut req = http.get(url(cli, path));
     if let Some(k) = &cli.key {
         req = req.bearer_auth(k);
     }
@@ -92,7 +99,7 @@ pub(crate) fn post(
     path: &str,
     body: &Value,
 ) -> Result<Value> {
-    let mut req = http.post(format!("{}{}", cli.base, path)).json(body);
+    let mut req = http.post(url(cli, path)).json(body);
     if let Some(k) = &cli.key {
         req = req.bearer_auth(k);
     }
@@ -103,4 +110,19 @@ pub(crate) fn post(
         anyhow::bail!("POST {path} -> HTTP {}: {text}", status.as_u16());
     }
     Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::url;
+    use crate::cli::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn a_trailing_slash_on_the_base_does_not_double_up() {
+        let cli = Cli::parse_from(["lt-runner", "--base", "https://h.example/", "serve"]);
+        assert_eq!(url(&cli, "/v1/prices"), "https://h.example/v1/prices");
+        let cli = Cli::parse_from(["lt-runner", "--base", "https://h.example", "serve"]);
+        assert_eq!(url(&cli, "/v1/prices"), "https://h.example/v1/prices");
+    }
 }

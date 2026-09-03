@@ -13,6 +13,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use lighttrack_core::{merge_leaderboard, LeaderboardRow};
+use lighttrack_store::CollectiveFilter;
 
 use crate::error::ApiError;
 use crate::guards::authenticate;
@@ -64,14 +65,16 @@ pub(crate) async fn get_leaderboard(
     Query(q): Query<LeaderboardParams>,
 ) -> Result<Json<LeaderboardResponse>, ApiError> {
     authenticate(&st, &headers).await?;
+    // Retention is enforced at read time so the policy holds on every backend — including those
+    // whose sweep is unimplemented, where the row survives on disk but is never published again.
+    // It is also the ONLY predicate pushed into the store: it drops rows that must not be published
+    // at all, so applying it early cannot strip a merged row down to a lone contributor. Every user
+    // filter below runs after the merge and after the source floor, for exactly that reason.
+    let filter = CollectiveFilter {
+        received_after: st.collective.retention_cutoff(Utc::now()),
+    };
     let store = st.store.clone();
-    let mut entries = spawn_db(move || store.list_collective_entries()).await?;
-
-    // Retention, enforced at read time so the policy holds on every backend — including those whose
-    // sweep is unimplemented, where the row survives on disk but is never published again.
-    if let Some(cutoff) = st.collective.retention_cutoff(Utc::now()) {
-        entries.retain(|e| e.received_at >= cutoff);
-    }
+    let entries = spawn_db(move || store.list_collective_entries_filtered(&filter)).await?;
 
     let mut rows = merge_leaderboard(&entries, st.collective.display_floor);
 

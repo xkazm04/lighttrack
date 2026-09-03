@@ -39,11 +39,16 @@ pub(crate) async fn create(pool: &PgPool, b: &Benchmark) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn get(pool: &PgPool, id: &str) -> Result<Option<Benchmark>> {
+pub(crate) async fn get(
+    pool: &PgPool,
+    project: Option<&str>,
+    id: &str,
+) -> Result<Option<Benchmark>> {
     let row = sqlx::query(&format!(
-        "SELECT {BENCH_COLS} FROM benchmarks WHERE id = $1"
+        "SELECT {BENCH_COLS} FROM benchmarks WHERE id = $1 AND ($2::text IS NULL OR project_id = $2)"
     ))
     .bind(id.to_string())
+    .bind(project.map(str::to_string))
     .fetch_optional(pool)
     .await
     .map_err(pgerr)?;
@@ -87,11 +92,19 @@ pub(crate) async fn create_run(pool: &PgPool, r: &BenchmarkRun) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn list_runs(pool: &PgPool, benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
+pub(crate) async fn list_runs(
+    pool: &PgPool,
+    project: Option<&str>,
+    benchmark_id: &str,
+) -> Result<Vec<BenchmarkRun>> {
     let rows = sqlx::query(&format!(
-        "SELECT {RUN_COLS} FROM benchmark_runs WHERE benchmark_id = $1 ORDER BY started_at DESC"
+        "SELECT {RUN_COLS} FROM benchmark_runs WHERE benchmark_id = $1 \
+           AND ($2::text IS NULL OR EXISTS \
+                (SELECT 1 FROM benchmarks b WHERE b.id = benchmark_id AND b.project_id = $2)) \
+         ORDER BY started_at DESC"
     ))
     .bind(benchmark_id.to_string())
+    .bind(project.map(str::to_string))
     .fetch_all(pool)
     .await
     .map_err(pgerr)?;
@@ -151,4 +164,27 @@ fn run_from_row(row: &PgRow) -> Result<BenchmarkRun> {
             .map(|v| v as u64),
         report: val_or_null(report)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bench_cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(
+            BENCH_COLS,
+            tables::BENCHMARKS.select_list(Dialect::Postgres)
+        );
+    }
+
+    #[test]
+    fn run_cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(
+            RUN_COLS,
+            tables::BENCHMARK_RUNS.select_list(Dialect::Postgres)
+        );
+    }
 }

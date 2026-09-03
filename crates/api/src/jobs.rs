@@ -1,4 +1,5 @@
-//! Job queue (Phase 3.6d) — enqueue returns immediately; `lt-runner serve` executes.
+//! Job queue (Phase 3.6d) — the worker-facing half: claim, progress, renew, finish, and the
+//! operator's cancel/read. Enqueue lives in [`crate::jobs_enqueue`].
 
 use axum::{
     extract::{Path, Query, State},
@@ -8,78 +9,12 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 
-use lighttrack_core::{new_id, Job, JobCancel, JobFinish};
+use lighttrack_core::{Job, JobCancel, JobFinish};
 
-use crate::benchmarks::load_benchmark_authorized;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin};
+use crate::jobs_enqueue::parse_kind;
 use crate::state::{spawn_db, AppState};
-
-#[derive(Deserialize)]
-pub(crate) struct EnqueueReq {
-    #[serde(default = "default_samples")]
-    samples: u32,
-    #[serde(default)]
-    heal: bool,
-}
-
-fn default_samples() -> u32 {
-    1
-}
-
-pub(crate) async fn enqueue_benchmark(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<String>,
-    Json(req): Json<EnqueueReq>,
-) -> Result<Json<Job>, ApiError> {
-    let p = authenticate(&st, &headers).await?;
-    ensure_can_admin(&p)?;
-    let bench = load_benchmark_authorized(&st, &p, &id).await?;
-    let job = enqueue_bench_run(
-        &st,
-        &bench.id,
-        serde_json::json!({ "samples": req.samples, "heal": req.heal }),
-    )
-    .await?;
-    Ok(Json(job))
-}
-
-/// Enqueue a `bench_run` job for a benchmark, merging `extra` payload keys (e.g. `samples`, `heal`,
-/// or a `prompt_id`/`version` for traceability). Shared by the manual enqueue route and the prompt
-/// registry's auto-enqueue on a new version.
-pub(crate) async fn enqueue_bench_run(
-    st: &AppState,
-    benchmark_id: &str,
-    extra: serde_json::Value,
-) -> Result<Job, ApiError> {
-    let mut payload = serde_json::json!({ "benchmark_id": benchmark_id });
-    if let (Some(obj), Some(into)) = (extra.as_object(), payload.as_object_mut()) {
-        for (k, v) in obj {
-            into.insert(k.clone(), v.clone());
-        }
-    }
-    let job = Job {
-        id: new_id(),
-        job_type: "bench_run".to_string(),
-        payload,
-        status: "queued".to_string(),
-        attempts: 0,
-        max_attempts: 3,
-        failures: 0,
-        stale_reclaims: 0,
-        progress: None,
-        error: None,
-        result: serde_json::Value::Null,
-        claimed_at: None,
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    };
-    let store = st.store.clone();
-    let j2 = job.clone();
-    spawn_db(move || store.create_job(&j2)).await?;
-    Ok(job)
-}
 
 #[derive(Deserialize)]
 pub(crate) struct JobsParams {
@@ -92,11 +27,16 @@ pub(crate) async fn list_jobs(
     headers: HeaderMap,
     Query(q): Query<JobsParams>,
 ) -> Result<Json<Vec<Job>>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let status = q.status;
     let limit = q.limit.unwrap_or(50).min(1000);
-    let jobs = spawn_db(move || store.list_jobs(status.as_deref(), limit)).await?;
+    // Scoped even though the door is admin-only today: the queue carries other projects' payloads,
+    // so the read must be safe on its own terms rather than by whoever guards the route (M17).
+    let sc = p.scope_owned();
+    let jobs =
+        spawn_db(move || store.list_jobs(sc.as_deref().into(), status.as_deref(), limit)).await?;
     Ok(Json(jobs))
 }
 
@@ -105,10 +45,12 @@ pub(crate) async fn get_job(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Job>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
-    let job = spawn_db(move || store.get_job(&id2))
+    let sc = p.scope_owned();
+    let job = spawn_db(move || store.get_job(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("job '{id}' not found")))?;
     Ok(Json(job))
@@ -118,6 +60,17 @@ pub(crate) async fn get_job(
 pub(crate) struct ClaimReq {
     #[serde(default = "default_stale_secs")]
     stale_secs: i64,
+    /// The kinds this worker can execute. Empty (or absent — what an older runner sends) means
+    /// "any kind", which is what every worker meant while `bench_run` was the only one.
+    #[serde(default)]
+    kinds: Vec<String>,
+    /// Which model providers this worker has credentials for. Advisory today: it is recorded in the
+    /// claim log so an operator can see *why* a queue is not draining, but it does not filter,
+    /// because a job's provider is a property of the benchmark/rubric it names rather than of the
+    /// job row — filtering on it would need a read per candidate inside the atomic claim. Declared
+    /// now so a worker fleet's capabilities are in one place when M18 gives it teeth.
+    #[serde(default)]
+    providers: Vec<String>,
 }
 
 /// How long a dead worker may go unnoticed — **not** how long a job may legitimately run.
@@ -133,15 +86,41 @@ fn default_stale_secs() -> i64 {
     120
 }
 
+/// The shortest stale window a claim may ask for. A worker renews every `stale / 3` seconds, so
+/// below this a live holder cannot heartbeat fast enough to keep its own job — and `0`, which the
+/// request shape allowed, reclaimed EVERY running job on the instance at once, so a misconfigured
+/// second runner re-ran (and re-paid for) work its colleague was mid-way through.
+const MIN_STALE_SECS: i64 = 10;
+
 pub(crate) async fn claim_job(
     State(st): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<ClaimReq>,
 ) -> Result<Json<Option<Job>>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
-    let stale_before = Utc::now() - chrono::Duration::seconds(req.stale_secs.max(0));
+    if req.stale_secs < MIN_STALE_SECS {
+        tracing::warn!(
+            requested = req.stale_secs,
+            floor = MIN_STALE_SECS,
+            "worker asked for a stale window below the floor; clamped"
+        );
+    }
+    let stale_before = Utc::now() - chrono::Duration::seconds(req.stale_secs.max(MIN_STALE_SECS));
+    // Refuse an unknown kind rather than silently dropping it from the filter: a typo'd declaration
+    // would otherwise narrow the worker to the kinds it spelled correctly, and it would look like
+    // an empty queue.
+    for k in &req.kinds {
+        parse_kind(k)?;
+    }
+    if !req.providers.is_empty() {
+        tracing::debug!(providers = ?req.providers, kinds = ?req.kinds, "worker claim");
+    }
     let store = st.store.clone();
-    let job = spawn_db(move || store.claim_job(stale_before)).await?;
+    let job = spawn_db(move || {
+        let kinds: Vec<&str> = req.kinds.iter().map(String::as_str).collect();
+        store.claim_job(stale_before, &kinds)
+    })
+    .await?;
     Ok(Json(job))
 }
 
@@ -154,10 +133,12 @@ pub(crate) async fn cancel_job(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<JobCancel>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let p = authenticate(&st, &headers).await?;
+    ensure_can_admin(&p)?;
     let store = st.store.clone();
     let id2 = id.clone();
-    let outcome = spawn_db(move || store.cancel_job(&id2))
+    let sc = p.scope_owned();
+    let outcome = spawn_db(move || store.cancel_job(sc.as_deref().into(), &id2))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("job '{id}' not found")))?;
     if let JobCancel::AlreadyFinished { status } = &outcome {

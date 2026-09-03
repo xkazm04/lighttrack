@@ -67,8 +67,17 @@ pub(crate) fn cost_by_dimension(
     let mut filters = project_filter(project);
     filters.push(("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))));
     filters.push(("ts", "LESS_THAN", json!(fmt_ts(until))));
-    let docs = rest.query("events", &filters, None, None)?;
-    let mut agg: BTreeMap<Option<String>, (i64, f64)> = BTreeMap::new();
+    // Projected: the fold reads three fields; the event's payloads are not among them.
+    let docs = rest.query_select(
+        "events",
+        &["ts", "metadata", "cost_usd"],
+        &filters,
+        None,
+        None,
+    )?;
+    // (calls, cost, unpriced): a doc with no `cost_usd` field is unpriced — counted, never summed as
+    // $0.00, so the row discloses how much of it is a floor rather than a total.
+    let mut agg: BTreeMap<Option<String>, (i64, f64, i64)> = BTreeMap::new();
     for m in &docs {
         // Belt-and-suspenders re-check of the window client-side (also skips ts-less docs).
         let ts = match fstr(m, "ts") {
@@ -79,16 +88,20 @@ pub(crate) fn cost_by_dimension(
             continue;
         }
         let key = metadata_key(m, field)?;
-        let e = agg.entry(key).or_insert((0, 0.0));
+        let e = agg.entry(key).or_insert((0, 0.0, 0));
         e.0 += 1;
-        e.1 += ff64(m, "cost_usd").unwrap_or(0.0);
+        match ff64(m, "cost_usd") {
+            Some(c) => e.1 += c,
+            None => e.2 += 1,
+        }
     }
     Ok(agg
         .into_iter()
-        .map(|(key, (calls, cost_usd))| CostByDimension {
+        .map(|(key, (calls, cost_usd, unpriced_calls))| CostByDimension {
             key,
             calls,
             cost_usd,
+            unpriced_calls,
         })
         .collect())
 }
@@ -127,6 +140,15 @@ fn to_fields(ev: &RevenueEvent) -> Fields {
     m.insert("period_start".into(), json!(ev.period_start.map(fmt_ts)));
     m.insert("period_end".into(), json!(ev.period_end.map(fmt_ts)));
     m.insert("ts".into(), json!(fmt_ts(ev.ts)));
+    // FX provenance (M9). Written as fields rather than folded into a blob so a future Firestore
+    // query can filter on `converted` the way the SQL backends do.
+    m.insert("amount_minor".into(), json!(ev.amount_minor));
+    m.insert("fx_rate".into(), json!(ev.fx_rate));
+    m.insert("fx_book_version".into(), json!(ev.fx_book_version));
+    // `Option<bool>` as an optional integer, matching how the codec reads booleans elsewhere. The
+    // three-way distinction is preserved on purpose: absent means "written before FX provenance
+    // existed", which `RevenueEvent::is_converted` reads differently from a stored `false`.
+    m.insert("converted".into(), json!(ev.converted.map(|b| b as i64)));
     m
 }
 
@@ -144,6 +166,12 @@ fn from_fields(m: &Fields) -> Result<RevenueEvent> {
         period_start: fstr(m, "period_start").map(|s| parse_ts(&s)).transpose()?,
         period_end: fstr(m, "period_end").map(|s| parse_ts(&s)).transpose()?,
         ts: parse_ts(&freq(m, "ts")?)?,
+        amount_minor: fi64(m, "amount_minor"),
+        fx_rate: ff64(m, "fx_rate"),
+        fx_book_version: fstr(m, "fx_book_version"),
+        // Not `fbool`: that one folds absence into `false`, which here would declare every pre-M9
+        // row a 1:1 fallback and put a spurious "approximate" caveat on historical revenue.
+        converted: fi64(m, "converted").map(|v| v != 0),
     })
 }
 
@@ -176,6 +204,10 @@ mod tests {
             product_id: None,
             amount_usd: 20.0, // whole number must survive as f64, not collapse to an integer value
             currency: "USD".into(),
+            amount_minor: Some(2_000),
+            fx_rate: Some(1.0),
+            fx_book_version: Some("test-book".into()),
+            converted: Some(true),
             kind: RevenueKind::OneTime,
             period_start: None,
             period_end: None,
@@ -190,6 +222,45 @@ mod tests {
         assert_eq!(got.kind, RevenueKind::OneTime);
         assert_eq!(got.period_start, None);
         assert_eq!(got.ts, ev.ts);
+        // FX provenance survives the typed-value codec. `amount_usd` is derived; without the
+        // provider's own figure and the rate behind it, a wrong conversion is permanently
+        // un-correctable on this backend — the row could only be re-ingested, never repriced.
+        assert_eq!(got.amount_minor, Some(2_000));
+        assert_eq!(got.fx_rate, Some(1.0));
+        assert_eq!(got.fx_book_version.as_deref(), Some("test-book"));
+        assert_eq!(got.converted, Some(true));
+    }
+
+    /// The three-way distinction has to survive storage: absent is "written before FX provenance
+    /// existed" and reads differently from a stored `false`. Firestore's `fbool` folds absence into
+    /// `false`, which is why this codec deliberately does not use it.
+    #[test]
+    fn an_unstamped_revenue_row_round_trips_as_unknown_not_as_unconverted() {
+        let legacy = RevenueEvent {
+            id: "r-legacy".into(),
+            project_id: "p1".into(),
+            source: "manual".into(),
+            external_id: None,
+            customer_id: None,
+            product_id: None,
+            amount_usd: 70.0,
+            currency: "USD".into(),
+            amount_minor: None,
+            fx_rate: None,
+            fx_book_version: None,
+            converted: None,
+            kind: RevenueKind::OneTime,
+            period_start: None,
+            period_end: None,
+            ts: t("2026-06-10T00:00:00Z"),
+        };
+        let got = roundtrip(&legacy);
+        assert_eq!(got.converted, None, "absence is not `false`");
+        assert_eq!(got.amount_minor, None);
+        assert!(
+            got.is_converted(),
+            "…and a USD row infers as converted rather than being flagged approximate"
+        );
     }
 
     #[test]
@@ -203,6 +274,10 @@ mod tests {
             product_id: Some("pro".into()),
             amount_usd: 30.5,
             currency: "EUR".into(),
+            amount_minor: Some(2_000),
+            fx_rate: Some(1.0),
+            fx_book_version: Some("test-book".into()),
+            converted: Some(true),
             kind: RevenueKind::Subscription,
             period_start: Some(t("2026-06-01T00:00:00Z")),
             period_end: Some(t("2026-07-01T00:00:00Z")),
@@ -235,6 +310,10 @@ mod tests {
             product_id: None,
             amount_usd: 1.0,
             currency: "USD".into(),
+            amount_minor: Some(2_000),
+            fx_rate: Some(1.0),
+            fx_book_version: Some("test-book".into()),
+            converted: Some(true),
             kind: RevenueKind::OneTime,
             period_start: None,
             period_end: None,

@@ -12,9 +12,14 @@ use crate::md::{
 /// supporting numbers so a pipeline log (or an agent) can read the pass/fail at a glance.
 pub(crate) fn gate(v: &Value) -> Option<String> {
     let status = v.get("status")?.as_str()?;
+    // The five verdicts the API emits (`crates/contract` `check_benchmark_gate` response). A
+    // partial run is neither a pass nor a regression: its mean covers only the cases that ran, so
+    // it wears a warning glyph and is pinned by test so a sixth verdict cannot fall through to the
+    // bare-dot arm unnoticed.
     let (glyph, headline) = match status {
         "pass" => ("✅", "PASS"),
         "regressed" => ("❌", "REGRESSED"),
+        "partial" => ("⚠️", "PARTIAL"),
         "no_baseline" => ("•", "NO BASELINE"),
         "no_runs" => ("•", "NO RUNS"),
         other => ("·", other),
@@ -160,4 +165,27 @@ pub(crate) fn list(v: &Value) -> Option<String> {
         ]);
     }
     Some(t.render())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gate;
+    use serde_json::json;
+
+    /// Every verdict the contract documents for `check_benchmark_gate` has a headline of its own;
+    /// `partial` used to fall through to the anonymous arm and render as `· **partial**`.
+    #[test]
+    fn every_documented_gate_verdict_has_its_own_headline() {
+        for (status, headline) in [
+            ("pass", "PASS"),
+            ("regressed", "REGRESSED"),
+            ("partial", "PARTIAL"),
+            ("no_baseline", "NO BASELINE"),
+            ("no_runs", "NO RUNS"),
+        ] {
+            let md = gate(&json!({ "status": status, "mean": 0.5, "n": 3 })).unwrap();
+            assert!(md.contains(&format!("**{headline}**")), "{status}: {md}");
+            assert!(!md.starts_with("### Gate ·"), "{status} fell through: {md}");
+        }
+    }
 }

@@ -8,11 +8,49 @@ use serde_json::Value;
 use crate::prompts::build_repair_prompt;
 use crate::{Determinism, GenOutcome, Result};
 
-/// Extract the outermost `{...}` from a string (handles stray prose / code fences).
+/// Extract the first balanced `{...}` that parses as JSON from a string (stray prose, code fences,
+/// braces in the surrounding text).
+///
+/// The first-`{`-to-last-`}` slice this replaces failed whenever the model's prose mentioned a brace
+/// before or after its verdict ("the shape {score, reasoning} is ... {\"score\":0.2}" — or a
+/// trailing "}" in a sentence), and every such failure bought a paid repair re-ask for output that
+/// was in fact fine. A balanced scan that respects string literals finds the verdict wherever the
+/// prose put it; the slice is the fallback when nothing balanced parses.
 pub(crate) fn extract_json_object(s: &str) -> Option<String> {
+    for (start, _) in s.match_indices('{') {
+        if let Some(end) = balanced_end(&s[start..]) {
+            let candidate = &s[start..start + end];
+            if serde_json::from_str::<Value>(candidate).is_ok() {
+                return Some(candidate.to_string());
+            }
+        }
+    }
     let start = s.find('{')?;
     let end = s.rfind('}')?;
     (end > start).then(|| s[start..=end].to_string())
+}
+
+/// Byte length of the balanced `{...}` at the start of `s`, honouring JSON string literals (a brace
+/// inside `"..."` does not count). `None` when the object never closes.
+fn balanced_end(s: &str) -> Option<usize> {
+    let (mut depth, mut in_str, mut escaped) = (0usize, false, false);
+    for (i, b) in s.bytes().enumerate() {
+        match (in_str, b) {
+            (true, b'\\') if !escaped => escaped = true,
+            (true, b'"') if !escaped => in_str = false,
+            (true, _) => escaped = false,
+            (false, b'"') => in_str = true,
+            (false, b'{') => depth += 1,
+            (false, b'}') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Extract a JSON object from text into a Value (lenient; `Null` if none).
@@ -119,4 +157,34 @@ pub(crate) fn sample_parsed<T>(
         acc.raw_failure = Some(malformed);
     }
     Ok(acc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_json_object;
+
+    /// A brace in the prose around the verdict must not turn a good verdict into a repair re-ask.
+    #[test]
+    fn a_verdict_is_found_despite_braces_in_the_surrounding_prose() {
+        let before =
+            "The required shape is {score, reasoning}. {\"score\":0.2,\"reasoning\":\"x\"}";
+        assert_eq!(
+            extract_json_object(before).as_deref(),
+            Some("{\"score\":0.2,\"reasoning\":\"x\"}")
+        );
+        let after = "{\"score\":0.9,\"reasoning\":\"fine\"} and that closes the case }";
+        assert_eq!(
+            extract_json_object(after).as_deref(),
+            Some("{\"score\":0.9,\"reasoning\":\"fine\"}")
+        );
+        // A brace inside a JSON string is content, not structure.
+        let nested = "{\"reasoning\":\"uses {curly} text\",\"score\":1}";
+        assert_eq!(extract_json_object(nested).as_deref(), Some(nested));
+        // Nothing balanced parses: the old outermost slice is still handed to the repair path.
+        assert_eq!(
+            extract_json_object("{not json} trailing }").as_deref(),
+            Some("{not json} trailing }")
+        );
+        assert_eq!(extract_json_object("no braces"), None);
+    }
 }

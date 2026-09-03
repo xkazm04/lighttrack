@@ -8,6 +8,7 @@
 //! yields no attribution and the alert still delivers.
 
 use lighttrack_core::{LimitScope, LimitWindow};
+use lighttrack_store::Scope as TenantScope;
 use lighttrack_store::{CostRow, Store, UseCaseCostRow};
 use serde_json::{json, Value};
 
@@ -75,10 +76,10 @@ pub(crate) fn fetch(
 ) -> Attribution {
     let since = window.since(now);
     let cost_rows = store
-        .cost_summary_windowed(Some(project), Some(since), None)
+        .cost_summary_windowed(TenantScope::Project(project), Some(since), None)
         .unwrap_or_default();
     let usecase_rows = store
-        .usecase_costs(Some(project), Some(since))
+        .usecase_costs(TenantScope::Project(project), Some(since))
         .unwrap_or_default();
     compose(&cost_rows, &usecase_rows, scope)
 }
@@ -107,8 +108,14 @@ pub(crate) fn compose(
             scoped(rank(group_models(rows, usecase_rows), total), s)
         }
         Some(s @ LimitScope::Model(m)) => {
-            // Within a model cap, the contributors are that model's use-cases.
-            let rows: Vec<_> = usecase_rows.iter().filter(|r| &r.model == m).collect();
+            // Within a model cap, the contributors are that model's use-cases. Membership is the
+            // scope's own rule (`LimitScope::matches`): a cap on `gpt-4o` also catches the dated
+            // `gpt-4o-2024-08-06`, so the attribution must fold those rows in too — filtering on
+            // the raw string reported "no attributable spend" for exactly the traffic that breached.
+            let rows: Vec<_> = usecase_rows
+                .iter()
+                .filter(|r| same_model(&r.provider, &r.model, m))
+                .collect();
             let total = sum(rows.iter().map(|r| r.cost_usd));
             let items = group_by(rows.iter().map(|r| {
                 (
@@ -143,6 +150,16 @@ pub(crate) fn compose(
             }
         }
     }
+}
+
+/// Does a rollup row's model fall under a model cap? The same test the admission path applies
+/// (`LimitScope::matches`): exact, or the same canonical family once dated suffixes and provider
+/// prefixes are stripped. One rule, evaluated twice, must agree — otherwise the breach the cap
+/// detected is not the spend the alert explains.
+fn same_model(provider: &str, model: &str, capped: &str) -> bool {
+    model == capped
+        || lighttrack_core::model_id::canonicalize(provider, model).family
+            == lighttrack_core::model_id::canonicalize(provider, capped).family
 }
 
 /// Aggregate cost rows by model, labelling each model with its dominant (highest-cost) named
@@ -233,6 +250,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             cost_usd: c,
+            unpriced_calls: 0,
         }
     }
 
@@ -245,6 +263,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             cost_usd: c,
+            unpriced_calls: 0,
         }
     }
 
@@ -284,6 +303,22 @@ mod tests {
         assert_eq!(a.contributors.len(), 2);
         assert_eq!(a.contributors[0].label, "summarize");
         assert!((a.contributors[0].share_pct - 70.0).abs() < 1e-9); // within-scope total = 10
+    }
+
+    /// The admission path treats a dated release as the capped model (`LimitScope::matches`), so the
+    /// alert's attribution must too — or the traffic that tripped the cap is the traffic the alert
+    /// says does not exist.
+    #[test]
+    fn model_scope_folds_in_the_dated_variants_the_cap_itself_caught() {
+        let ucs = vec![
+            uc(Some("summarize"), "openai", "gpt-4o-2024-08-06", 7.0),
+            uc(Some("chat"), "openai", "gpt-4o", 3.0),
+            uc(Some("other"), "openai", "gpt-4o-mini", 99.0), // a different family → excluded
+        ];
+        let a = compose(&[], &ucs, Some(&LimitScope::Model("gpt-4o".into())));
+        assert_eq!(a.contributors.len(), 2, "{a:?}");
+        assert_eq!(a.contributors[0].label, "summarize");
+        assert!((a.contributors[0].share_pct - 70.0).abs() < 1e-9);
     }
 
     #[test]

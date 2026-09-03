@@ -8,7 +8,7 @@ use serde_json::Value;
 use sqlx::postgres::PgRow;
 use sqlx::Row;
 
-use lighttrack_core::{LlmEvent, Operation, Provider, Status, TokenUsage};
+use lighttrack_core::{LlmEvent, Operation, ProviderId, Status, TokenUsage};
 use lighttrack_store::{Result, Usage};
 
 use crate::util::{parse_enum, parse_ts, pgerr};
@@ -71,7 +71,8 @@ pub(crate) fn from_row(row: &PgRow) -> Result<LlmEvent> {
         parent_span_id: row.try_get(4).map_err(pgerr)?,
         ts: parse_ts(&ts)?,
         received_at: parse_ts(&received_at)?,
-        provider: parse_enum::<Provider>("provider", &provider)?,
+        // Open id: the raw column, verbatim (see the SQLite mapper and docs/DATA_MODEL.md).
+        provider: ProviderId::new(&provider),
         model: row.try_get(7).map_err(pgerr)?,
         name: row.try_get(22).map_err(pgerr)?,
         operation: parse_enum::<Operation>("operation", &operation)?,
@@ -160,5 +161,15 @@ mod tests {
     #[test]
     fn window_expression_prefers_received_at_over_ts() {
         assert_eq!(RECEIVED, "COALESCE(received_at, ts)");
+    }
+
+    /// The Postgres list must be the schema model's (M14). The SQLite backend now derives its own
+    /// from `Table::select_list`; this side is still hand-written because the mapper's positions
+    /// cannot be re-verified without a live database, so the model is asserted against it instead —
+    /// which fails the moment a column is added to one and not the other.
+    #[test]
+    fn cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(COLS, tables::EVENTS.select_list(Dialect::Postgres));
     }
 }

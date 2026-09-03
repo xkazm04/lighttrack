@@ -1,0 +1,673 @@
+//! The other half of the contract: what an **undeclared** surface must do.
+//!
+//! A backend that has not ported a surface has to refuse every one of its methods with
+//! [`StoreError::Unsupported`] (which the API renders as HTTP 501). The failure this exists to
+//! prevent is the quiet one — an empty `Vec`, a `None`, an `Ok(())` that dropped the write — because
+//! an empty page reads as *authoritative zero* to whoever is looking at it, and a dropped write is
+//! discovered months later.
+//!
+//! Coverage is asserted, not assumed: each arm returns the method names it exercised and the driver
+//! checks them against [`Surface::methods`], so adding a method to a surface without giving it a
+//! refusal check fails here.
+
+use chrono::Utc;
+use serde_json::json;
+
+use lighttrack_core::{
+    new_id, AlertKind, Delivery, ImportSpec, LabelFilter, LabelSubject, RelayOutcome,
+};
+
+use super::fixtures::{
+    sample_alert, sample_alert_channel, sample_entry, sample_policy, sample_project, sample_rule,
+};
+use crate::Scope;
+use crate::{
+    AlertFilter, CollectiveFilter, MaintenanceRequest, Result, Store, StoreError, Surface,
+    TraceFilter,
+};
+
+/// Methods that cannot refuse because they do not return a `Result`. They are pure readers of the
+/// manifest (or of a per-item result vector), so there is nothing for them to refuse *with* — the
+/// assertions on them live in [`assert_all_refuse`]'s own arms where they mean something.
+const INFALLIBLE: &[&str] = &[
+    "capabilities",
+    "admission_is_atomic",
+    "insert_events_checked",
+    "serves_traces",
+];
+
+/// Assert that every method of an undeclared `surface` refuses.
+pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<()> {
+    let checked = match surface {
+        // Not a surface a backend may decline: without it there is no ingest, no project, no key,
+        // no verdict — nothing the rest of the system can be built on. Say so plainly rather than
+        // letting the refusal walk run against a store that cannot answer anything.
+        Surface::EventsCore | Surface::EventFilters => panic!(
+            "backend `{}` does not declare {:?} — that is not an optional surface; every backend \
+             must implement the ingest/read floor and its filter set",
+            store.capabilities().backend,
+            surface
+        ),
+        Surface::Rollup => rollup(store),
+        Surface::RedactionPosture => redaction_posture(store),
+        Surface::RevenueReprice => revenue_reprice(store),
+        Surface::ScoreFilters => score_filters(store),
+        Surface::Traces => traces(store),
+        Surface::Forecast => forecast(store),
+        Surface::MarginBreakdowns => margin(store),
+        Surface::Prompts => prompts(store),
+        Surface::Relay => relay(store),
+        Surface::Collective => collective(store),
+        Surface::ProjectAdmin => project_admin(store),
+        Surface::KeyAdmin => key_admin(store),
+        Surface::LimitLifecycle => limit_lifecycle(store),
+        Surface::MarginPolicies => margin_policies(store),
+        Surface::JobLeases => job_leases(store),
+        Surface::Schedules => schedules(store),
+        Surface::Alerts => alerts(store),
+        Surface::AlertRouting => alert_routing(store),
+        Surface::Maintenance => maintenance(store),
+        Surface::Metrics => metrics(store),
+        Surface::Pricing => pricing(store),
+        Surface::Devices => devices(store),
+        Surface::Contributions => contributions(store),
+        Surface::ScoreSummaries => score_summaries(store),
+        Surface::Labels => labels(store),
+        Surface::Calibrations => calibrations(store),
+        Surface::DatasetLineage => dataset_lineage(store),
+    };
+
+    let uncovered: Vec<&str> = surface
+        .methods()
+        .iter()
+        .copied()
+        .filter(|m| !checked.contains(m) && !INFALLIBLE.contains(m))
+        .collect();
+    assert!(
+        uncovered.is_empty(),
+        "{surface:?} is refused by this backend but these methods were never checked for a \
+         refusal: {uncovered:?} — an unchecked method is exactly where a silent empty page hides"
+    );
+    Ok(())
+}
+
+/// A backend that cannot store human labels must say so. An empty listing here would read as
+/// "nobody has graded anything in this project" — which is what lets a calibration run measure a
+/// judge against nothing and report the resulting κ = 0 as a judge regression.
+fn labels(store: &dyn Store) -> Vec<&'static str> {
+    let l = super::labels::sample_label(&new_id(), LabelSubject::Event(new_id()), 0.5);
+    refused("insert_label", store.insert_label(&l));
+    refused(
+        "list_labels",
+        store.list_labels(&LabelFilter {
+            project: Some(new_id()),
+            ..Default::default()
+        }),
+    );
+    refused(
+        "labels_for_dataset",
+        store.labels_for_dataset(Scope::Operator, &new_id()),
+    );
+    vec!["insert_label", "list_labels", "labels_for_dataset"]
+}
+
+/// A backend that cannot store calibrations must refuse rather than answer `None`: `None` is the
+/// load-bearing "nobody has measured this" that makes trust `unknown`, and a backend that says it
+/// for a reason other than the truth turns a capability gap into a permanent policy verdict.
+fn calibrations(store: &dyn Store) -> Vec<&'static str> {
+    let pid = new_id();
+    let c = super::labels::sample_calibration(&pid, "probe/judge");
+    refused("insert_calibration", store.insert_calibration(&c));
+    refused(
+        "latest_calibration",
+        store.latest_calibration(&pid, Some("rb"), "probe/judge"),
+    );
+    refused(
+        "list_calibrations",
+        store.list_calibrations(Scope::Project(&pid), 10, None),
+    );
+    vec![
+        "insert_calibration",
+        "latest_calibration",
+        "list_calibrations",
+    ]
+}
+
+/// A backend that cannot version an eval corpus must say so. The quiet failure here is not an empty
+/// page but a **frozen `version`**: a fork that silently did nothing (or answered v1 again) leaves
+/// the runner's paired-test guard comparing 1 with 1, which reports two different corpora as
+/// comparable — the precise bug this surface exists to end.
+fn dataset_lineage(store: &dyn Store) -> Vec<&'static str> {
+    let id = new_id();
+    refused("fork_dataset", store.fork_dataset(Scope::Operator, &id));
+    refused(
+        "import_dataset_items",
+        store.import_dataset_items(Scope::Operator, &id, &ImportSpec::default()),
+    );
+    refused(
+        "list_dataset_versions",
+        store.list_dataset_versions(Scope::Operator, "any"),
+    );
+    vec![
+        "fork_dataset",
+        "import_dataset_items",
+        "list_dataset_versions",
+    ]
+}
+
+/// Assert one call refused, naming the method in the failure.
+fn refused<T: std::fmt::Debug>(what: &str, r: Result<T>) {
+    match r {
+        Err(StoreError::Unsupported(_)) => {}
+        got => panic!(
+            "{what} must refuse with Unsupported on a backend that does not declare its surface, \
+             got {got:?}"
+        ),
+    }
+}
+
+/// A backend that cannot report its redaction posture must say so. An empty report here would read
+/// as "no events", which is the most reassuring possible lie about "is this database scrubbed".
+fn redaction_posture(store: &dyn Store) -> Vec<&'static str> {
+    refused(
+        "redaction_posture",
+        store.redaction_posture(
+            Scope::Project(&new_id()),
+            Utc::now() - chrono::Duration::hours(1),
+        ),
+    );
+    vec!["redaction_posture"]
+}
+
+/// A backend that cannot reprice must say so rather than reporting `matched: 0` — which would read
+/// as "there is nothing wrong with your stored revenue".
+fn revenue_reprice(store: &dyn Store) -> Vec<&'static str> {
+    refused(
+        "reprice_revenue",
+        store.reprice_revenue(Scope::Project(&new_id()), "GBP", 1.27, "test", true),
+    );
+    vec!["reprice_revenue"]
+}
+
+/// A backend that cannot join verdicts to their events must refuse, rather than answer with an empty
+/// quality table — which reads as "this version has not been judged", i.e. exactly the reassurance a
+/// regressed version should not be able to give.
+fn score_summaries(store: &dyn Store) -> Vec<&'static str> {
+    refused(
+        "score_summary_by_dimension",
+        store.score_summary_by_dimension(
+            Scope::Project(&new_id()),
+            lighttrack_core::Dimension::Prompt,
+            Utc::now() - chrono::Duration::hours(1),
+            None,
+            None,
+        ),
+    );
+    vec!["score_summary_by_dimension"]
+}
+
+/// A backend that cannot narrow verdicts must refuse, rather than answer a narrowed question with
+/// an unnarrowed page.
+fn score_filters(store: &dyn Store) -> Vec<&'static str> {
+    refused(
+        "list_scores_filtered",
+        store.list_scores_filtered(
+            Scope::Project(&new_id()),
+            &crate::ScoreFilter {
+                rubric_id: Some(new_id()),
+                kind: None,
+            },
+            10,
+        ),
+    );
+    vec!["list_scores_filtered"]
+}
+
+fn traces(store: &dyn Store) -> Vec<&'static str> {
+    let (p, t) = (new_id(), new_id());
+    assert!(
+        !store.serves_traces(),
+        "serves_traces must follow the manifest: the surface is undeclared"
+    );
+    refused("list_traces", store.list_traces(Scope::Project(&p), 10));
+    refused(
+        "list_traces_filtered",
+        store.list_traces_filtered(Scope::Project(&p), &TraceFilter::default(), 10),
+    );
+    refused(
+        "list_trace_events",
+        store.list_trace_events(Scope::Project(&p), &t, 10),
+    );
+    refused(
+        "list_trace_scores",
+        store.list_trace_scores(Scope::Project(&p), &t),
+    );
+    refused("get_trace", store.get_trace(Scope::Project(&p), &t, 10));
+    vec![
+        "list_traces",
+        "list_traces_filtered",
+        "list_trace_events",
+        "list_trace_scores",
+        "get_trace",
+    ]
+}
+
+/// A backend with no rollup primitive must say so. It is the one refusal that also decides nine
+/// others: the legacy grouped methods default over it, so a silent empty rollup would make every
+/// cost, margin and forecast surface answer "nobody spent anything" at once.
+fn rollup(store: &dyn Store) -> Vec<&'static str> {
+    let q = lighttrack_core::RollupQuery::new(&[lighttrack_core::Dimension::Model], Utc::now())
+        .project(Some("probe"));
+    refused("rollup", store.rollup(&q));
+    vec!["rollup"]
+}
+
+fn forecast(store: &dyn Store) -> Vec<&'static str> {
+    let (p, now) = (new_id(), Utc::now());
+    let since = now - chrono::Duration::days(7);
+    refused("daily_usage", store.daily_usage(&p, since, now));
+    refused(
+        "daily_cost_by_dimension",
+        store.daily_cost_by_dimension(Scope::Project(&p), "customer", since, now),
+    );
+    vec!["daily_usage", "daily_cost_by_dimension"]
+}
+
+fn margin(store: &dyn Store) -> Vec<&'static str> {
+    let (p, now) = (new_id(), Utc::now());
+    let since = now - chrono::Duration::days(7);
+    refused(
+        "tokens_by_dimension",
+        store.tokens_by_dimension(Scope::Project(&p), "customer", since, now),
+    );
+    refused(
+        "customer_cost_by_model",
+        store.customer_cost_by_model(Scope::Project(&p), "cus-1", since, now),
+    );
+    refused(
+        "customer_cost_by_name",
+        store.customer_cost_by_name(Scope::Project(&p), "cus-1", since, now),
+    );
+    vec![
+        "tokens_by_dimension",
+        "customer_cost_by_model",
+        "customer_cost_by_name",
+    ]
+}
+
+fn prompts(store: &dyn Store) -> Vec<&'static str> {
+    let p = super::prompts::sample_prompt(&new_id());
+    let v = super::prompts::sample_version(&p.id, 1);
+    refused("create_prompt", store.create_prompt(&p));
+    refused("update_prompt", store.update_prompt(&p));
+    refused("get_prompt", store.get_prompt(&p.project_id, &p.name));
+    refused(
+        "get_prompt_by_id",
+        store.get_prompt_by_id(Scope::Operator, &p.id),
+    );
+    refused("list_prompts", store.list_prompts(&p.project_id));
+    refused("create_prompt_version", store.create_prompt_version(&v));
+    refused(
+        "get_prompt_version",
+        store.get_prompt_version(Scope::Operator, &p.id, 1),
+    );
+    refused(
+        "list_prompt_versions",
+        store.list_prompt_versions(Scope::Operator, &p.id),
+    );
+    vec![
+        "create_prompt",
+        "update_prompt",
+        "get_prompt",
+        "get_prompt_by_id",
+        "list_prompts",
+        "create_prompt_version",
+        "get_prompt_version",
+        "list_prompt_versions",
+    ]
+}
+
+fn relay(store: &dyn Store) -> Vec<&'static str> {
+    let pid = new_id();
+    let t = super::relay::sample_task(&pid, 3);
+    refused("create_relay_task", store.create_relay_task(&t));
+    refused(
+        "get_relay_task",
+        store.get_relay_task(Scope::Operator, &t.id),
+    );
+    refused(
+        "find_relay_task_by_key",
+        store.find_relay_task_by_key(&pid, "k"),
+    );
+    refused(
+        "list_relay_tasks",
+        store.list_relay_tasks(Scope::Project(&pid), None, 10),
+    );
+    refused(
+        "list_relay_tasks_by_action",
+        store.list_relay_tasks_by_action(Scope::Project(&pid), "ns/act", None, 10),
+    );
+    refused(
+        "lease_relay_tasks",
+        store.lease_relay_tasks("dev-1", &[], 60, 5),
+    );
+    refused("sweep_relay_dead", store.sweep_relay_dead());
+    refused(
+        "settle_relay_task",
+        store.settle_relay_task(&t.id, None, &RelayOutcome::Succeeded(json!({}))),
+    );
+    refused(
+        "renew_relay_lease",
+        store.renew_relay_lease(&t.id, Utc::now(), 60),
+    );
+    refused(
+        "update_relay_progress",
+        store.update_relay_progress(&t.id, Utc::now(), "x"),
+    );
+    refused(
+        "cancel_relay_task",
+        store.cancel_relay_task(Scope::Operator, &t.id),
+    );
+    vec![
+        "create_relay_task",
+        "get_relay_task",
+        "find_relay_task_by_key",
+        "list_relay_tasks",
+        "list_relay_tasks_by_action",
+        "lease_relay_tasks",
+        "sweep_relay_dead",
+        "settle_relay_task",
+        "renew_relay_lease",
+        "update_relay_progress",
+        "cancel_relay_task",
+    ]
+}
+
+fn schedules(store: &dyn Store) -> Vec<&'static str> {
+    let s = super::schedules::sample_schedule(&new_id());
+    refused("create_schedule", store.create_schedule(&s));
+    refused("get_schedule", store.get_schedule(Scope::Operator, &s.id));
+    refused("list_schedules", store.list_schedules(&s.project_id));
+    refused(
+        "update_schedule",
+        store.update_schedule(Scope::Operator, &s),
+    );
+    refused(
+        "delete_schedule",
+        store.delete_schedule(Scope::Operator, &s.id),
+    );
+    refused("due_schedules", store.due_schedules(Utc::now()));
+    vec![
+        "create_schedule",
+        "get_schedule",
+        "list_schedules",
+        "update_schedule",
+        "delete_schedule",
+        "due_schedules",
+    ]
+}
+
+fn collective(store: &dyn Store) -> Vec<&'static str> {
+    let e = sample_entry();
+    refused("upsert_collective_entry", store.upsert_collective_entry(&e));
+    refused(
+        "delete_collective_entries",
+        store.delete_collective_entries(&e.contributor_id),
+    );
+    refused("list_collective_entries", store.list_collective_entries());
+    refused(
+        "purge_collective_entries_before",
+        store.purge_collective_entries_before(Utc::now()),
+    );
+    // The composed methods refuse *through* the fine-grained ones — asserted rather than reasoned
+    // about, because a backend that overrides only the composed half would otherwise silently
+    // accept a contribution the surface it declares cannot store.
+    refused(
+        "replace_collective_contribution",
+        store.replace_collective_contribution(&e.contributor_id, std::slice::from_ref(&e), None),
+    );
+    refused(
+        "latest_collective_receipt",
+        store.latest_collective_receipt(&e.contributor_id),
+    );
+    refused(
+        "list_collective_entries_filtered",
+        store.list_collective_entries_filtered(&CollectiveFilter::default()),
+    );
+    vec![
+        "upsert_collective_entry",
+        "delete_collective_entries",
+        "list_collective_entries",
+        "purge_collective_entries_before",
+        "replace_collective_contribution",
+        "latest_collective_receipt",
+        "list_collective_entries_filtered",
+    ]
+}
+
+fn project_admin(store: &dyn Store) -> Vec<&'static str> {
+    refused("update_project", store.update_project(&sample_project()));
+    vec!["update_project"]
+}
+
+fn key_admin(store: &dyn Store) -> Vec<&'static str> {
+    let id = new_id();
+    refused("list_api_keys", store.list_api_keys(&id));
+    refused("set_api_key_revoked", store.set_api_key_revoked(&id, true));
+    refused("set_api_key_expiry", store.set_api_key_expiry(&id, None));
+    vec!["list_api_keys", "set_api_key_revoked", "set_api_key_expiry"]
+}
+
+fn limit_lifecycle(store: &dyn Store) -> Vec<&'static str> {
+    let r = sample_rule();
+    refused(
+        "get_limit_rule",
+        store.get_limit_rule(Scope::Operator, &r.id),
+    );
+    refused(
+        "update_limit_rule",
+        store.update_limit_rule(Scope::Operator, &r),
+    );
+    refused(
+        "delete_limit_rule",
+        store.delete_limit_rule(Scope::Operator, &r.id),
+    );
+    vec!["get_limit_rule", "update_limit_rule", "delete_limit_rule"]
+}
+
+fn margin_policies(store: &dyn Store) -> Vec<&'static str> {
+    let p = sample_policy();
+    refused("create_margin_policy", store.create_margin_policy(&p));
+    refused(
+        "list_margin_policies",
+        store.list_margin_policies(&p.project_id, true),
+    );
+    refused(
+        "get_margin_policy",
+        store.get_margin_policy(Scope::Operator, &p.id),
+    );
+    refused(
+        "delete_margin_policy",
+        store.delete_margin_policy(Scope::Operator, &p.id),
+    );
+    vec![
+        "create_margin_policy",
+        "list_margin_policies",
+        "get_margin_policy",
+        "delete_margin_policy",
+    ]
+}
+
+fn job_leases(store: &dyn Store) -> Vec<&'static str> {
+    let id = new_id();
+    refused("cancel_job", store.cancel_job(Scope::Operator, &id));
+    refused("renew_job_lease", store.renew_job_lease(&id, Utc::now()));
+    vec!["cancel_job", "renew_job_lease"]
+}
+
+fn maintenance(store: &dyn Store) -> Vec<&'static str> {
+    refused("storage_report", store.storage_report());
+    refused(
+        "maintenance_pass",
+        store.maintenance_pass(MaintenanceRequest {
+            truncate_wal: false,
+            reclaim_pages: 0,
+        }),
+    );
+    vec!["storage_report", "maintenance_pass"]
+}
+
+fn metrics(store: &dyn Store) -> Vec<&'static str> {
+    refused("db_metrics", store.db_metrics());
+    vec!["db_metrics"]
+}
+
+fn pricing(store: &dyn Store) -> Vec<&'static str> {
+    // `list_unpriced` defaults *through* `Store::rollup`, so a backend that serves the rollup and
+    // declines this surface must still refuse here — asserted rather than reasoned about, because
+    // the alternative is an empty ledger that reads as "nothing is unpriced".
+    refused(
+        "list_unpriced",
+        store.list_unpriced(Scope::Operator, Utc::now()),
+    );
+    let book = lighttrack_core::PriceBook::default();
+    refused(
+        "fill_unpriced_cost",
+        store.fill_unpriced_cost(&crate::pricing::PriceFill::new(
+            "conformance",
+            "none",
+            &book,
+        )),
+    );
+    refused(
+        "list_price_history",
+        store.list_price_history("conformance", "none"),
+    );
+    vec!["list_unpriced", "fill_unpriced_cost", "list_price_history"]
+}
+
+/// A backend with no device table must refuse, never answer an empty fleet. "Nobody is enrolled" is
+/// a load-bearing answer on this surface — it is what admits a legacy shared-key deployment's
+/// traffic — so a backend that simply cannot store devices must not be able to say it by accident.
+fn devices(store: &dyn Store) -> Vec<&'static str> {
+    let d = super::devices::sample_device("refusal-probe", &["probe/*"]);
+    refused("create_device", store.create_device(&d));
+    refused("get_device", store.get_device(Scope::Operator, &d.id));
+    refused(
+        "list_devices",
+        store.list_devices(Scope::Project(&new_id())),
+    );
+    refused(
+        "find_device_by_key_prefix",
+        store.find_device_by_key_prefix(&d.key_prefix),
+    );
+    refused(
+        "touch_device",
+        store.touch_device(&d.id, &d.capabilities, Some("0.0.0")),
+    );
+    refused("revoke_device", store.revoke_device(Scope::Operator, &d.id));
+    refused(
+        "count_eligible_devices",
+        store.count_eligible_devices("probe/thing"),
+    );
+    vec![
+        "create_device",
+        "get_device",
+        "list_devices",
+        "find_device_by_key_prefix",
+        "touch_device",
+        "revoke_device",
+        "count_eligible_devices",
+    ]
+}
+
+/// A backend with no contribution ledger must refuse, not answer empty. An empty ledger reads as
+/// "this instance has never contributed anything", which is the one answer that makes a hash-gated
+/// push send on every interval and makes `withdraw --all` cover nothing — while an `Ok(())` from
+/// `insert_contribution` would drop the only record that data left the building.
+fn contributions(store: &dyn Store) -> Vec<&'static str> {
+    let c = super::contributions::sample_contribution();
+    refused("insert_contribution", store.insert_contribution(&c));
+    refused("list_contributions", store.list_contributions(10, None));
+    refused(
+        "latest_contribution",
+        store.latest_contribution(&c.hub_url_hash),
+    );
+    vec![
+        "insert_contribution",
+        "list_contributions",
+        "latest_contribution",
+    ]
+}
+
+/// A backend that cannot store an alert must refuse, not accept and drop it. An `Ok(Admitted)` that
+/// wrote nothing would tell the caller to go ahead and deliver, and then leave no record that
+/// anyone was ever told — the ledger's whole purpose, silently absent. `list_alerts` answering `[]`
+/// would be worse still: an empty alert page reads as "nothing has fired here".
+fn alerts(store: &dyn Store) -> Vec<&'static str> {
+    let a = sample_alert(&new_id(), AlertKind::LimitBreach, "conf:refusal");
+    refused(
+        "insert_alert_dedup",
+        store.insert_alert_dedup(&a, std::time::Duration::from_secs(60)),
+    );
+    refused(
+        "mark_delivery",
+        store.mark_delivery(
+            &a.id,
+            &Delivery {
+                channel_id: "env:webhook".into(),
+                ok: true,
+                status: Some("200".into()),
+                at: Utc::now(),
+            },
+        ),
+    );
+    refused("list_alerts", store.list_alerts(&AlertFilter::default()));
+    refused("get_alert", store.get_alert(Scope::Operator, &a.id));
+    refused(
+        "ack_alert",
+        store.ack_alert(Scope::Operator, &a.id, "ops", Utc::now()),
+    );
+    refused(
+        "attach_alert_resolution",
+        store.attach_alert_resolution(Scope::Operator, &a.id, &json!({ "ok": true })),
+    );
+    vec![
+        "insert_alert_dedup",
+        "mark_delivery",
+        "list_alerts",
+        "get_alert",
+        "ack_alert",
+        "attach_alert_resolution",
+    ]
+}
+
+/// Routing refuses as a set, `channels_for` included — it composes the listings, so a backend that
+/// overrode only the composed half would answer "no channels configured" where it means "no table".
+fn alert_routing(store: &dyn Store) -> Vec<&'static str> {
+    let c = sample_alert_channel(None);
+    refused("create_alert_channel", store.create_alert_channel(&c));
+    refused(
+        "get_alert_channel",
+        store.get_alert_channel(Scope::Operator, &c.id),
+    );
+    refused(
+        "list_alert_channels",
+        store.list_alert_channels(Scope::Operator),
+    );
+    refused(
+        "delete_alert_channel",
+        store.delete_alert_channel(Scope::Operator, &c.id),
+    );
+    refused(
+        "channels_for",
+        store.channels_for(Scope::Project(&new_id())),
+    );
+    vec![
+        "create_alert_channel",
+        "get_alert_channel",
+        "list_alert_channels",
+        "delete_alert_channel",
+        "channels_for",
+    ]
+}

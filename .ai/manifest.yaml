@@ -117,6 +117,9 @@ skills:
   - ship-loop
   - test-before-commit
   - tiger
+  - mvp
+  - perfect
+  - scan-sweep
 
 # Scope - what this project does and deliberately does not do. Read by the registry's
 # scripts/build-fleet-map.mjs to classify subjects this project has NO context for: an

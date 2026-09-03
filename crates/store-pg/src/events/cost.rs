@@ -22,7 +22,8 @@ pub(crate) async fn cost_summary_windowed(
 ) -> Result<Vec<CostRow>> {
     let cols = "project_id, provider, model, COUNT(*) AS calls, \
         COALESCE(SUM(input_tokens),0)::bigint AS it, COALESCE(SUM(output_tokens),0)::bigint AS ot, \
-        COALESCE(SUM(cost_usd),0.0) AS cost";
+        COALESCE(SUM(cost_usd),0.0) AS cost, \
+        COUNT(*) FILTER (WHERE cost_usd IS NULL)::bigint AS unpriced";
     let conds = window_conds(project, since, until);
     let where_clause = conds.where_clause();
     let sql = format!(
@@ -44,6 +45,7 @@ pub(crate) async fn cost_summary_windowed(
                 input_tokens: row.try_get(4).map_err(pgerr)?,
                 output_tokens: row.try_get(5).map_err(pgerr)?,
                 cost_usd: row.try_get(6).map_err(pgerr)?,
+                unpriced_calls: row.try_get(7).map_err(pgerr)?,
             })
         })
         .collect()
@@ -58,7 +60,8 @@ pub(crate) async fn usecase_costs(
 ) -> Result<Vec<UseCaseCostRow>> {
     let cols = "name, provider, model, COUNT(*) AS calls, \
         COALESCE(SUM(input_tokens),0)::bigint AS it, COALESCE(SUM(output_tokens),0)::bigint AS ot, \
-        COALESCE(SUM(cost_usd),0.0) AS cost";
+        COALESCE(SUM(cost_usd),0.0) AS cost, \
+        COUNT(*) FILTER (WHERE cost_usd IS NULL)::bigint AS unpriced";
     let conds = window_conds(project, since, None);
     let where_clause = conds.where_clause();
     let sql = format!(
@@ -79,6 +82,7 @@ pub(crate) async fn usecase_costs(
                 input_tokens: row.try_get(4).map_err(pgerr)?,
                 output_tokens: row.try_get(5).map_err(pgerr)?,
                 cost_usd: row.try_get(6).map_err(pgerr)?,
+                unpriced_calls: row.try_get(7).map_err(pgerr)?,
             })
         })
         .collect()

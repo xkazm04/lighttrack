@@ -1,30 +1,46 @@
 //! SQLite-backed [`Store`] — the local-development backend (bundled SQLite, no external service).
 //!
 //! `SqliteStore` delegates every method to a per-domain submodule of free functions over a
-//! `&Connection` (`events`, `scores`, `projects`, `benchmarks`, `datasets`, `rubrics`, `prices`,
-//! `jobs`). The timestamp/enum/JSON codecs are shared across all backends — see [`crate::codec`].
+//! `&Connection` — one per surface, thirty-odd of them today, declared below in the order the
+//! `impl Store` block visits them. The timestamp/enum/JSON codecs are shared across all backends —
+//! see [`crate::codec`].
 //!
 //! **Concurrency.** Writes serialize behind one mutex-guarded connection; reads are served from a
 //! pool of read-only connections ([`pool`]) that, under WAL, take a consistent snapshot without
 //! blocking or being blocked by ingest. See [`SqliteStore::read`] vs [`SqliteStore::with`].
 
+mod alert_channels;
+mod alerts;
 mod benchmarks;
+mod calibrations;
 mod collective;
+mod contributions;
+mod dataset_fork;
+mod dataset_import;
 mod datasets;
+mod devices;
 mod events;
 mod forecast;
 mod jobs;
+mod labels;
 mod limits;
 mod maintenance;
+mod margin_policies;
 mod metrics;
 mod pool;
+mod price_fill;
 mod prices;
 mod projects;
 mod prompts;
+mod redaction;
 mod relay;
+mod relay_lease;
 mod revenue;
+mod rollup;
 mod rubrics;
+mod schedules;
 mod schema;
+mod score_summary;
 mod scores;
 mod usage_cache;
 
@@ -33,11 +49,15 @@ mod bench;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_collective;
+#[cfg(test)]
 mod tests_concurrency;
 #[cfg(test)]
 mod tests_maintenance;
 #[cfg(test)]
 mod tests_metrics;
+#[cfg(test)]
+mod tests_migration;
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -48,19 +68,38 @@ use rusqlite::Connection;
 use serde_json::Value;
 
 use lighttrack_core::{
-    ApiKey, Benchmark, BenchmarkRun, CollectiveEntry, CostByDimension, Dataset, DatasetItem, Job,
-    JobCancel, JobFinish, LimitRule, LimitScope, LlmEvent, ModelPriceRow, Project, Prompt,
-    PromptVersion, RelayOutcome, RelayTask, RevenueEvent, Rubric, Score, TokensByDimension,
-    TraceSummary,
+    Alert, AlertChannel, ApiKey, Benchmark, BenchmarkRun, CalibrationRecord, CollectiveEntry,
+    ContributionRecord, CostByDimension, Dataset, DatasetItem, Delivery, Device, DeviceEligibility,
+    Dimension, Job, JobCancel, JobFinish, Label, LabelFilter, LeaseHeld, LimitRule, LimitScope,
+    LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayCancel, RelayOutcome,
+    RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score,
+    TokensByDimension, TraceSummary,
 };
 
 use crate::{
-    Admission, CostRow, CustomerCostRow, DailyDimCost, DailyUsage, DbMetricsReport, EventFilter,
-    EventPage, MaintenancePass, MaintenanceRequest, Result, ScopeUsage, StorageReport, Store,
-    StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
+    capabilities::{Capabilities, Surface},
+    Admission, AlertAdmission, AlertFilter, CollectiveFilter, CostRow, CustomerCostRow,
+    DailyDimCost, DailyUsage, DbMetricsReport, EventFilter, EventPage, MaintenancePass,
+    MaintenanceRequest, RedactionPostureRow, ReplaceAck, RepriceReport, Result, Scope, ScopeUsage,
+    ScoreFilter, ScoreSummaryRow, StorageReport, Store, StoreError, TraceEvents, TraceFilter,
+    TracePage, Usage, UseCaseCostRow,
 };
 
 use metrics::DbOp;
+
+/// The tenant filter for a read that already seeks by its own key: `AND (?n IS NULL OR
+/// project_id = ?n)`, appended to the `WHERE` clause.
+///
+/// The `OR` form [`project_pred`] avoids is right here and wrong there. These statements seek on a
+/// primary key (or a parent key), so there is no index for the planner to lose, and keeping ONE
+/// statement shape across both scopes keeps the prepared-statement cache warm — the alternative
+/// (two texts, chosen per call) doubles every point read's cache entry.
+///
+/// `NULL` — an operator scope — matches every row including the project-less ones; a project scope
+/// matches only its own, and never a `NULL`-project row.
+pub(super) fn scope_and(slot: usize) -> String {
+    format!(" AND (?{slot} IS NULL OR project_id = ?{slot})")
+}
 
 /// A **sargable** project predicate for `?1`-bound project queries. When a project is given this is an
 /// index-seekable equality (`project_id = ?1`), so a `WHERE project_pred(..) AND ts >= ?2 AND ts < ?3`
@@ -194,7 +233,18 @@ impl SqliteStore {
     /// remedies, and folding them together indicts the wrong one.
     fn with_op<R>(&self, op: DbOp, f: impl FnOnce(&Connection) -> R) -> R {
         let queued = Instant::now();
-        let conn = self.conn.lock().unwrap();
+        // A poisoned lock means one earlier closure panicked while holding the connection. The
+        // connection itself is fine — a statement or an uncommitted transaction is dropped and rolled
+        // back with the panicking frame — so it is recovered, not `unwrap()`ed: that unwrap turned
+        // one panic into a permanent outage of every store call until restart, the same failure the
+        // usage-cache lock below already refuses to have.
+        let conn = match self.conn.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                self.conn.clear_poison();
+                poisoned.into_inner()
+            }
+        };
         self.meter
             .record(DbOp::WriteLockWait, queued.elapsed(), None);
         // `total_changes` separates "the query got slower" from "the table got bigger": a write
@@ -250,7 +300,45 @@ fn set_journal_mode(conn: &Connection, wal: bool) -> Result<bool> {
     Ok(mode.eq_ignore_ascii_case("wal"))
 }
 
+impl SqliteStore {
+    /// The admission usage cache. A poisoned lock (an admission panicked mid-fold) is recovered by
+    /// RESETTING the cache, not by trusting it: a bucket may be half-updated, and a rebuilt cache
+    /// costs one full reload on the next admission — where an `unwrap()` here would have turned
+    /// one panic into a permanent ingest outage, and a trusted half-fold into a wrong cap.
+    fn usage_cache(&self) -> std::sync::MutexGuard<'_, usage_cache::UsageCache> {
+        match self.usage_cache.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                let mut g = poisoned.into_inner();
+                g.reset();
+                self.usage_cache.clear_poison();
+                g
+            }
+        }
+    }
+}
+
+impl SqliteStore {
+    /// The reference backend: it implements every surface, which is why the conformance suite run
+    /// against it is the definition of correct behaviour the other backends are held to.
+    ///
+    /// A const + a pure constructor (rather than only the trait method) so `tests/parity_doc.rs`
+    /// can render the parity matrix without opening a database.
+    pub const SURFACES: &'static [Surface] = Surface::ALL;
+
+    /// This backend's manifest, independent of any live connection.
+    pub fn manifest() -> Capabilities {
+        // One locked write connection (+ the usage-cache lock) spans check-count-insert, within a
+        // single process. The multi-process caveat is documented in docs/ARCHITECTURE.md.
+        Capabilities::new("sqlite", Self::SURFACES, true)
+    }
+}
+
 impl Store for SqliteStore {
+    fn capabilities(&self) -> Capabilities {
+        Self::manifest()
+    }
+
     fn init_schema(&self) -> Result<()> {
         self.with(schema::apply)
     }
@@ -259,15 +347,10 @@ impl Store for SqliteStore {
     fn insert_event(&self, ev: &LlmEvent) -> Result<()> {
         self.with_op(DbOp::EventsWrite, |c| events::insert(c, ev))
     }
-    fn admission_is_atomic(&self) -> bool {
-        // One locked write connection (+ the usage-cache lock) spans check-count-insert, within a
-        // single process. The multi-process caveat is documented in docs/ARCHITECTURE.md.
-        true
-    }
     fn insert_event_checked(&self, ev: &LlmEvent) -> Result<Admission> {
         // Lock the usage cache *before* the connection (consistent order in both admission methods,
         // so no deadlock) and hold both across the check-count-insert — one atomic critical section.
-        let mut cache = self.usage_cache.lock().unwrap();
+        let mut cache = self.usage_cache();
         self.with_op(DbOp::EventsWrite, |c| {
             events::insert_checked(c, &mut cache, ev)
         })
@@ -287,7 +370,7 @@ impl Store for SqliteStore {
         //
         // Limit rules are also hoisted: fetched once per distinct project (a batch is single-project
         // by construction today) instead of re-queried per item.
-        let mut cache = self.usage_cache.lock().unwrap();
+        let mut cache = self.usage_cache();
         self.with_op(DbOp::EventsWrite, |c| {
             let tx = match c.unchecked_transaction() {
                 Ok(tx) => tx,
@@ -319,8 +402,12 @@ impl Store for SqliteStore {
             }
             if let Err(e) = tx.commit() {
                 // The whole batch is lost (all-or-nothing beats a torn batch a client can't detect).
-                // The in-memory usage cache may now over-count the uncommitted events — the safe
-                // direction (over-enforcement), and it re-syncs from the table on its next rebuild.
+                // The usage cache folded the rolled-back rows in — and, worse, advanced its
+                // `seen_rowid` past rowids SQLite will now hand to the NEXT events (`events.id` is a
+                // TEXT key, so the implicit rowid is max+1 and a rollback frees it). Left alone, those
+                // events would never be counted: an under-count, the unsafe direction, for as long as
+                // the process lived. There is no periodic rebuild, so the reset is done here.
+                cache.reset();
                 let msg = format!("batch commit failed: {e}");
                 return evs
                     .iter()
@@ -330,37 +417,45 @@ impl Store for SqliteStore {
             out
         })
     }
-    fn list_events(&self, project: Option<&str>, limit: usize) -> Result<Vec<LlmEvent>> {
+    fn list_events(&self, project: Scope<'_>, limit: usize) -> Result<Vec<LlmEvent>> {
+        let project = project.project();
         self.read_op(DbOp::EventsRead, |c| events::list(c, project, limit))
     }
     fn list_events_filtered(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         filter: &EventFilter,
         limit: usize,
     ) -> Result<EventPage> {
+        let project = project.project();
         self.read_op(DbOp::EventsRead, |c| {
             events::list_filtered(c, project, filter, limit)
         })
     }
-    fn cost_summary(&self, project: Option<&str>) -> Result<Vec<CostRow>> {
+    fn cost_summary(&self, project: Scope<'_>) -> Result<Vec<CostRow>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| events::cost_summary(c, project))
+    }
+    fn rollup(&self, q: &RollupQuery<'_>) -> Result<Vec<RollupRow>> {
+        self.read_op(DbOp::UsageRead, |c| rollup::rollup(c, q))
     }
     fn cost_summary_windowed(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: Option<DateTime<Utc>>,
         until: Option<DateTime<Utc>>,
     ) -> Result<Vec<CostRow>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             events::cost_summary_windowed(c, project, since, until)
         })
     }
     fn usecase_costs(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<UseCaseCostRow>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             events::usecase_costs(c, project, since)
         })
@@ -388,6 +483,14 @@ impl Store for SqliteStore {
             events::usage_by_scope(c, project, since, kind)
         })
     }
+    fn redaction_posture(
+        &self,
+        project: Scope<'_>,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<RedactionPostureRow>> {
+        let project = project.project();
+        self.read_op(DbOp::EventsRead, |c| redaction::posture(c, project, since))
+    }
     fn daily_usage(
         &self,
         project: &str,
@@ -400,49 +503,51 @@ impl Store for SqliteStore {
     }
     fn daily_cost_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<DailyDimCost>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             forecast::daily_cost_by_dimension(c, project, dim, since, until)
         })
     }
-    fn get_event(&self, id: &str) -> Result<Option<LlmEvent>> {
-        self.read_op(DbOp::EventsRead, |c| events::get(c, id))
+    fn get_event(&self, scope: Scope<'_>, id: &str) -> Result<Option<LlmEvent>> {
+        self.read_op(DbOp::EventsRead, |c| events::get(c, scope.project(), id))
     }
 
     // --- traces ---
-    fn serves_traces(&self) -> bool {
-        true
-    }
-    fn list_traces(&self, project: Option<&str>, limit: usize) -> Result<Vec<TraceSummary>> {
+    fn list_traces(&self, project: Scope<'_>, limit: usize) -> Result<Vec<TraceSummary>> {
+        let project = project.project();
         self.read_op(DbOp::TracesRead, |c| {
             events::list_trace_summaries(c, project, limit)
         })
     }
     fn list_traces_filtered(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         filter: &TraceFilter,
         limit: usize,
     ) -> Result<TracePage> {
+        let project = project.project();
         self.read_op(DbOp::TracesRead, |c| {
             events::list_trace_summaries_filtered(c, project, filter, limit)
         })
     }
     fn list_trace_events(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         trace_id: &str,
         max_spans: usize,
     ) -> Result<TraceEvents> {
+        let project = project.project();
         self.read_op(DbOp::TracesRead, |c| {
             events::list_by_trace(c, project, trace_id, max_spans)
         })
     }
-    fn list_trace_scores(&self, project: Option<&str>, trace_id: &str) -> Result<Vec<Score>> {
+    fn list_trace_scores(&self, project: Scope<'_>, trace_id: &str) -> Result<Vec<Score>> {
+        let project = project.project();
         self.read_op(DbOp::TracesRead, |c| {
             scores::list_by_trace(c, project, trace_id)
         })
@@ -452,21 +557,51 @@ impl Store for SqliteStore {
     fn insert_score(&self, s: &Score) -> Result<()> {
         self.with_op(DbOp::ScoresWrite, |c| scores::insert(c, s))
     }
-    fn list_scores(&self, project: Option<&str>, limit: usize) -> Result<Vec<Score>> {
+    fn list_scores(&self, project: Scope<'_>, limit: usize) -> Result<Vec<Score>> {
+        let project = project.project();
         self.read_op(DbOp::ScoresRead, |c| scores::list(c, project, limit))
+    }
+    fn list_scores_filtered(
+        &self,
+        project: Scope<'_>,
+        filter: &ScoreFilter,
+        limit: usize,
+    ) -> Result<Vec<Score>> {
+        let project = project.project();
+        self.read_op(DbOp::ScoresRead, |c| {
+            scores::list_filtered(c, project, filter, limit)
+        })
     }
     fn list_run_scores(
         &self,
         run_id: &str,
-        project: Option<&str>,
+        project: Scope<'_>,
         limit: usize,
     ) -> Result<Vec<Score>> {
+        let project = project.project();
         self.read_op(DbOp::ScoresRead, |c| {
             scores::list_by_run(c, run_id, project, limit)
         })
     }
-    fn scored_event_ids(&self, event_ids: &[String]) -> Result<Vec<String>> {
-        self.read_op(DbOp::ScoresRead, |c| scores::scored_event_ids(c, event_ids))
+    fn scored_event_ids(&self, scope: Scope<'_>, event_ids: &[String]) -> Result<Vec<String>> {
+        self.read_op(DbOp::ScoresRead, |c| {
+            scores::scored_event_ids(c, scope.project(), event_ids)
+        })
+    }
+    /// Verdicts grouped by a value on the joined event row (M23) — the served-version quality
+    /// ledger. See the trait for the semantics every backend matches.
+    fn score_summary_by_dimension(
+        &self,
+        project: Scope<'_>,
+        dim: Dimension,
+        since: DateTime<Utc>,
+        until: Option<DateTime<Utc>>,
+        rubric_id: Option<&str>,
+    ) -> Result<Vec<ScoreSummaryRow>> {
+        let project = project.project();
+        self.read_op(DbOp::ScoresRead, |c| {
+            score_summary::score_summary(c, project, dim, since, until, rubric_id)
+        })
     }
 
     // --- projects / api keys / limits ---
@@ -497,28 +632,52 @@ impl Store for SqliteStore {
     fn set_api_key_revoked(&self, id: &str, revoked: bool) -> Result<bool> {
         self.with(|c| projects::set_key_revoked(c, id, revoked))
     }
+    fn set_api_key_expiry(&self, id: &str, when: Option<DateTime<Utc>>) -> Result<bool> {
+        self.with(|c| projects::set_key_expiry(c, id, when))
+    }
     fn create_limit_rule(&self, r: &LimitRule) -> Result<()> {
         self.with(|c| limits::create(c, r))
     }
     fn list_limit_rules(&self, project: &str, only_enabled: bool) -> Result<Vec<LimitRule>> {
         self.read(|c| limits::list(c, project, only_enabled))
     }
-    fn get_limit_rule(&self, id: &str) -> Result<Option<LimitRule>> {
-        self.read(|c| limits::get(c, id))
+    fn get_limit_rule(&self, scope: Scope<'_>, id: &str) -> Result<Option<LimitRule>> {
+        self.read(|c| limits::get(c, scope.project(), id))
     }
-    fn update_limit_rule(&self, r: &LimitRule) -> Result<bool> {
-        self.with(|c| limits::update(c, r))
+    fn update_limit_rule(&self, scope: Scope<'_>, r: &LimitRule) -> Result<bool> {
+        self.with(|c| limits::update(c, scope.project(), r))
     }
-    fn delete_limit_rule(&self, id: &str) -> Result<bool> {
-        self.with(|c| limits::delete(c, id))
+    fn create_margin_policy(&self, p: &lighttrack_core::MarginPolicy) -> Result<()> {
+        self.with(|c| margin_policies::create(c, p))
+    }
+    fn list_margin_policies(
+        &self,
+        project: &str,
+        only_enabled: bool,
+    ) -> Result<Vec<lighttrack_core::MarginPolicy>> {
+        self.read(|c| margin_policies::list(c, project, only_enabled))
+    }
+    fn get_margin_policy(
+        &self,
+        scope: Scope<'_>,
+        id: &str,
+    ) -> Result<Option<lighttrack_core::MarginPolicy>> {
+        self.read(|c| margin_policies::get(c, scope.project(), id))
+    }
+    fn delete_margin_policy(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.with(|c| margin_policies::delete(c, scope.project(), id))
+    }
+
+    fn delete_limit_rule(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.with(|c| limits::delete(c, scope.project(), id))
     }
 
     // --- benchmarks ---
     fn create_benchmark(&self, b: &Benchmark) -> Result<()> {
         self.with(|c| benchmarks::create(c, b))
     }
-    fn get_benchmark(&self, id: &str) -> Result<Option<Benchmark>> {
-        self.read(|c| benchmarks::get(c, id))
+    fn get_benchmark(&self, scope: Scope<'_>, id: &str) -> Result<Option<Benchmark>> {
+        self.read(|c| benchmarks::get(c, scope.project(), id))
     }
     fn list_benchmarks(&self, project: &str) -> Result<Vec<Benchmark>> {
         self.read(|c| benchmarks::list(c, project))
@@ -526,8 +685,12 @@ impl Store for SqliteStore {
     fn create_benchmark_run(&self, r: &BenchmarkRun) -> Result<()> {
         self.with(|c| benchmarks::create_run(c, r))
     }
-    fn list_benchmark_runs(&self, benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
-        self.read(|c| benchmarks::list_runs(c, benchmark_id))
+    fn list_benchmark_runs(
+        &self,
+        scope: Scope<'_>,
+        benchmark_id: &str,
+    ) -> Result<Vec<BenchmarkRun>> {
+        self.read(|c| benchmarks::list_runs(c, scope.project(), benchmark_id))
     }
 
     // --- prices ---
@@ -537,33 +700,39 @@ impl Store for SqliteStore {
     fn list_prices(&self) -> Result<Vec<ModelPriceRow>> {
         self.read(prices::list)
     }
+    fn list_price_history(&self, provider: &str, model: &str) -> Result<Vec<ModelPriceRow>> {
+        self.read(|c| prices::history(c, provider, model))
+    }
+    fn fill_unpriced_cost(&self, f: &crate::pricing::PriceFill<'_>) -> Result<u64> {
+        self.with_op(DbOp::EventsWrite, |c| price_fill::fill(c, f))
+    }
 
     // --- datasets ---
     fn create_dataset(&self, d: &Dataset) -> Result<()> {
         self.with(|c| datasets::create(c, d))
     }
-    fn get_dataset(&self, id: &str) -> Result<Option<Dataset>> {
-        self.read(|c| datasets::get(c, id))
+    fn get_dataset(&self, scope: Scope<'_>, id: &str) -> Result<Option<Dataset>> {
+        self.read(|c| datasets::get(c, scope.project(), id))
     }
-    fn list_datasets(&self, project: &str) -> Result<Vec<Dataset>> {
-        self.read(|c| datasets::list(c, project))
+    fn list_datasets(&self, project: Scope<'_>) -> Result<Vec<Dataset>> {
+        self.read(|c| datasets::list(c, project.project()))
     }
-    fn set_dataset_frozen(&self, id: &str, frozen: bool) -> Result<()> {
-        self.with(|c| datasets::set_frozen(c, id, frozen))
+    fn set_dataset_frozen(&self, scope: Scope<'_>, id: &str, frozen: bool) -> Result<()> {
+        self.with(|c| datasets::set_frozen(c, scope.project(), id, frozen))
     }
     fn create_dataset_item(&self, item: &DatasetItem) -> Result<()> {
         self.with(|c| datasets::create_item(c, item))
     }
-    fn list_dataset_items(&self, dataset_id: &str) -> Result<Vec<DatasetItem>> {
-        self.read(|c| datasets::list_items(c, dataset_id))
+    fn list_dataset_items(&self, scope: Scope<'_>, dataset_id: &str) -> Result<Vec<DatasetItem>> {
+        self.read(|c| datasets::list_items(c, scope.project(), dataset_id))
     }
 
     // --- rubrics ---
     fn create_rubric(&self, r: &Rubric) -> Result<()> {
         self.with(|c| rubrics::create(c, r))
     }
-    fn get_rubric(&self, id: &str) -> Result<Option<Rubric>> {
-        self.read(|c| rubrics::get(c, id))
+    fn get_rubric(&self, scope: Scope<'_>, id: &str) -> Result<Option<Rubric>> {
+        self.read(|c| rubrics::get(c, scope.project(), id))
     }
     fn list_rubrics(&self, project: &str) -> Result<Vec<Rubric>> {
         self.read(|c| rubrics::list(c, project))
@@ -573,11 +742,11 @@ impl Store for SqliteStore {
     fn create_job(&self, j: &Job) -> Result<()> {
         self.with_op(DbOp::JobsWrite, |c| jobs::create(c, j))
     }
-    fn claim_job(&self, stale_before: DateTime<Utc>) -> Result<Option<Job>> {
-        self.with_op(DbOp::JobsWrite, |c| jobs::claim(c, stale_before))
+    fn claim_job(&self, stale_before: DateTime<Utc>, kinds: &[&str]) -> Result<Option<Job>> {
+        self.with_op(DbOp::JobsWrite, |c| jobs::claim(c, stale_before, kinds))
     }
-    fn cancel_job(&self, id: &str) -> Result<Option<JobCancel>> {
-        self.with_op(DbOp::JobsWrite, |c| jobs::cancel(c, id))
+    fn cancel_job(&self, scope: Scope<'_>, id: &str) -> Result<Option<JobCancel>> {
+        self.with_op(DbOp::JobsWrite, |c| jobs::cancel(c, scope.project(), id))
     }
     fn update_job_progress(&self, id: &str, progress: &str) -> Result<()> {
         self.with_op(DbOp::JobsWrite, |c| jobs::update_progress(c, id, progress))
@@ -597,11 +766,33 @@ impl Store for SqliteStore {
             jobs::finish(c, id, status, result, error, fence)
         })
     }
-    fn get_job(&self, id: &str) -> Result<Option<Job>> {
-        self.read_op(DbOp::JobsRead, |c| jobs::get(c, id))
+    fn get_job(&self, scope: Scope<'_>, id: &str) -> Result<Option<Job>> {
+        self.read_op(DbOp::JobsRead, |c| jobs::get(c, scope.project(), id))
     }
-    fn list_jobs(&self, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
-        self.read_op(DbOp::JobsRead, |c| jobs::list(c, status, limit))
+    fn list_jobs(&self, scope: Scope<'_>, status: Option<&str>, limit: usize) -> Result<Vec<Job>> {
+        self.read_op(DbOp::JobsRead, |c| {
+            jobs::list(c, scope.project(), status, limit)
+        })
+    }
+
+    // --- stored schedules ---
+    fn create_schedule(&self, s: &Schedule) -> Result<()> {
+        self.with(|c| schedules::create(c, s))
+    }
+    fn get_schedule(&self, scope: Scope<'_>, id: &str) -> Result<Option<Schedule>> {
+        self.read(|c| schedules::get(c, scope.project(), id))
+    }
+    fn list_schedules(&self, project: &str) -> Result<Vec<Schedule>> {
+        self.read(|c| schedules::list(c, project))
+    }
+    fn update_schedule(&self, scope: Scope<'_>, s: &Schedule) -> Result<bool> {
+        self.with(|c| schedules::update(c, scope.project(), s))
+    }
+    fn delete_schedule(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.with(|c| schedules::delete(c, scope.project(), id))
+    }
+    fn due_schedules(&self, now: DateTime<Utc>) -> Result<Vec<Schedule>> {
+        self.read(|c| schedules::due(c, now))
     }
 
     // --- prompt registry ---
@@ -614,8 +805,8 @@ impl Store for SqliteStore {
     fn get_prompt(&self, project: &str, name: &str) -> Result<Option<Prompt>> {
         self.read(|c| prompts::get(c, project, name))
     }
-    fn get_prompt_by_id(&self, id: &str) -> Result<Option<Prompt>> {
-        self.read(|c| prompts::get_by_id(c, id))
+    fn get_prompt_by_id(&self, scope: Scope<'_>, id: &str) -> Result<Option<Prompt>> {
+        self.read(|c| prompts::get_by_id(c, scope.project(), id))
     }
     fn list_prompts(&self, project: &str) -> Result<Vec<Prompt>> {
         self.read(|c| prompts::list(c, project))
@@ -623,11 +814,20 @@ impl Store for SqliteStore {
     fn create_prompt_version(&self, v: &PromptVersion) -> Result<()> {
         self.with(|c| prompts::create_version(c, v))
     }
-    fn get_prompt_version(&self, prompt_id: &str, version: u32) -> Result<Option<PromptVersion>> {
-        self.read(|c| prompts::get_version(c, prompt_id, version))
+    fn get_prompt_version(
+        &self,
+        scope: Scope<'_>,
+        prompt_id: &str,
+        version: u32,
+    ) -> Result<Option<PromptVersion>> {
+        self.read(|c| prompts::get_version(c, scope.project(), prompt_id, version))
     }
-    fn list_prompt_versions(&self, prompt_id: &str) -> Result<Vec<PromptVersion>> {
-        self.read(|c| prompts::list_versions(c, prompt_id))
+    fn list_prompt_versions(
+        &self,
+        scope: Scope<'_>,
+        prompt_id: &str,
+    ) -> Result<Vec<PromptVersion>> {
+        self.read(|c| prompts::list_versions(c, scope.project(), prompt_id))
     }
 
     // --- revenue + margin (Phase 1 profit tracking) ---
@@ -639,52 +839,71 @@ impl Store for SqliteStore {
     }
     fn list_revenue_events(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<RevenueEvent>> {
+        let project = project.project();
         self.read(|c| revenue::list(c, project, since, until))
+    }
+    fn reprice_revenue(
+        &self,
+        project: Scope<'_>,
+        currency: &str,
+        rate: f64,
+        version: &str,
+        dry_run: bool,
+    ) -> Result<RepriceReport> {
+        let project = project.project();
+        // Through the write connection even for a dry run: the two counts it reports must come from
+        // one consistent view, and a dry run whose numbers a concurrent sync moved under it is a
+        // preview of something that never happens.
+        self.with(|c| revenue::reprice(c, project, currency, rate, version, dry_run))
     }
     fn cost_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CostByDimension>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             revenue::cost_by_dimension(c, project, dim, since, until)
         })
     }
     fn tokens_by_dimension(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         dim: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<TokensByDimension>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             revenue::tokens_by_dimension(c, project, dim, since, until)
         })
     }
     fn customer_cost_by_model(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         customer: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             revenue::customer_cost_by_model(c, project, customer, since, until)
         })
     }
     fn customer_cost_by_name(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         customer: &str,
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<CustomerCostRow>> {
+        let project = project.project();
         self.read_op(DbOp::UsageRead, |c| {
             revenue::customer_cost_by_name(c, project, customer, since, until)
         })
@@ -694,33 +913,69 @@ impl Store for SqliteStore {
     fn create_relay_task(&self, t: &RelayTask) -> Result<()> {
         self.with(|c| relay::create(c, t))
     }
-    fn get_relay_task(&self, id: &str) -> Result<Option<RelayTask>> {
-        self.read(|c| relay::get(c, id))
+    fn get_relay_task(&self, scope: Scope<'_>, id: &str) -> Result<Option<RelayTask>> {
+        self.read(|c| relay::get(c, scope.project(), id))
     }
     fn find_relay_task_by_key(&self, project: &str, key: &str) -> Result<Option<RelayTask>> {
         self.read(|c| relay::find_by_key(c, project, key))
     }
     fn list_relay_tasks(
         &self,
-        project: Option<&str>,
+        project: Scope<'_>,
         status: Option<&str>,
         limit: usize,
     ) -> Result<Vec<RelayTask>> {
+        let project = project.project();
         self.read(|c| relay::list(c, project, status, limit))
+    }
+    fn list_relay_tasks_by_action(
+        &self,
+        project: Scope<'_>,
+        action_type: &str,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RelayTask>> {
+        let project = project.project();
+        self.read(|c| relay::list_by_action(c, project, action_type, status, limit))
     }
     fn lease_relay_tasks(
         &self,
         device: &str,
+        capabilities: &[String],
         lease_secs: i64,
         max: usize,
     ) -> Result<Vec<RelayTask>> {
-        self.with(|c| relay::lease(c, device, lease_secs, max))
+        self.with(|c| relay::lease(c, device, capabilities, lease_secs, max))
     }
     fn sweep_relay_dead(&self) -> Result<Vec<RelayTask>> {
         self.with(relay::sweep_dead)
     }
-    fn settle_relay_task(&self, id: &str, outcome: &RelayOutcome) -> Result<Option<RelayTask>> {
-        self.with(|c| relay::settle(c, id, outcome))
+    fn settle_relay_task(
+        &self,
+        id: &str,
+        fence: Option<DateTime<Utc>>,
+        outcome: &RelayOutcome,
+    ) -> Result<RelaySettle> {
+        self.with(|c| relay_lease::settle(c, id, fence, outcome))
+    }
+    fn renew_relay_lease(
+        &self,
+        id: &str,
+        fence: DateTime<Utc>,
+        lease_secs: i64,
+    ) -> Result<LeaseHeld> {
+        self.with(|c| relay_lease::renew(c, id, fence, lease_secs))
+    }
+    fn update_relay_progress(
+        &self,
+        id: &str,
+        fence: DateTime<Utc>,
+        progress: &str,
+    ) -> Result<LeaseHeld> {
+        self.with(|c| relay_lease::update_progress(c, id, fence, progress))
+    }
+    fn cancel_relay_task(&self, scope: Scope<'_>, id: &str) -> Result<Option<RelayCancel>> {
+        self.with(|c| relay_lease::cancel(c, scope.project(), id))
     }
 
     // --- collective model intelligence ---
@@ -735,6 +990,38 @@ impl Store for SqliteStore {
     }
     fn purge_collective_entries_before(&self, cutoff: DateTime<Utc>) -> Result<u64> {
         self.with(|c| collective::purge_before(c, cutoff))
+    }
+    fn replace_collective_contribution(
+        &self,
+        contributor_id: &str,
+        entries: &[CollectiveEntry],
+        purge_before: Option<DateTime<Utc>>,
+    ) -> Result<ReplaceAck> {
+        self.with(|c| collective::replace(c, contributor_id, entries, purge_before))
+    }
+    fn latest_collective_receipt(&self, contributor_id: &str) -> Result<Option<DateTime<Utc>>> {
+        self.read(|c| collective::latest_receipt(c, contributor_id))
+    }
+    fn list_collective_entries_filtered(
+        &self,
+        f: &CollectiveFilter,
+    ) -> Result<Vec<CollectiveEntry>> {
+        self.read(|c| collective::list_filtered(c, f))
+    }
+
+    // --- the contributor-side contribution ledger (M22) ---
+    fn insert_contribution(&self, c: &ContributionRecord) -> Result<()> {
+        self.with(|conn| contributions::insert(conn, c))
+    }
+    fn list_contributions(
+        &self,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Vec<ContributionRecord>> {
+        self.read(|conn| contributions::list(conn, limit, cursor))
+    }
+    fn latest_contribution(&self, hub_url_hash: &str) -> Result<Option<ContributionRecord>> {
+        self.read(|conn| contributions::latest(conn, hub_url_hash))
     }
 
     // --- storage accounting + lossless maintenance (see [`maintenance`]) ---
@@ -755,5 +1042,155 @@ impl Store for SqliteStore {
         // The write connection, because a checkpoint and a vacuum are writers. One chunk per call:
         // the lock is released before the caller re-reads its activity gauge, never held across it.
         self.with_op(DbOp::Maintenance, |c| maintenance::pass(c, req))
+    }
+
+    // --- the relay device fleet (M18, see [`devices`]) ---
+    fn create_device(&self, d: &Device) -> Result<()> {
+        self.with(|c| devices::create(c, d))
+    }
+    fn get_device(&self, scope: Scope<'_>, id: &str) -> Result<Option<Device>> {
+        self.read(|c| devices::get(c, scope.project(), id))
+    }
+    fn list_devices(&self, project: Scope<'_>) -> Result<Vec<Device>> {
+        let project = project.project();
+        self.read(|c| devices::list(c, project))
+    }
+    fn find_device_by_key_prefix(&self, prefix: &str) -> Result<Option<Device>> {
+        self.read(|c| devices::find_by_key_prefix(c, prefix))
+    }
+    fn touch_device(
+        &self,
+        id: &str,
+        capabilities: &[String],
+        agent_version: Option<&str>,
+    ) -> Result<()> {
+        self.with(|c| devices::touch(c, id, capabilities, agent_version))
+    }
+    fn revoke_device(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.with(|c| devices::revoke(c, scope.project(), id))
+    }
+    fn count_eligible_devices(&self, action_type: &str) -> Result<DeviceEligibility> {
+        self.read(|c| devices::count_eligible(c, action_type))
+    }
+
+    // --- alert ledger + routing (M3) ---
+    fn insert_alert_dedup(
+        &self,
+        a: &Alert,
+        cooldown: std::time::Duration,
+    ) -> Result<AlertAdmission> {
+        // The write connection: this is the cooldown gate, and it decides nothing unless the
+        // look-back and the insert share one critical section.
+        self.with(|c| alerts::insert_dedup(c, a, cooldown))
+    }
+    fn mark_delivery(&self, alert_id: &str, d: &Delivery) -> Result<bool> {
+        self.with(|c| alerts::mark_delivery(c, alert_id, d))
+    }
+    fn list_alerts(&self, f: &AlertFilter) -> Result<Vec<Alert>> {
+        self.read(|c| alerts::list(c, f))
+    }
+    fn get_alert(&self, scope: Scope<'_>, id: &str) -> Result<Option<Alert>> {
+        self.read(|c| alerts::get(c, scope.project(), id))
+    }
+    fn ack_alert(&self, scope: Scope<'_>, id: &str, by: &str, at: DateTime<Utc>) -> Result<bool> {
+        self.with(|c| alerts::ack(c, scope.project(), id, by, at))
+    }
+    fn attach_alert_resolution(
+        &self,
+        scope: Scope<'_>,
+        id: &str,
+        resolution: &Value,
+    ) -> Result<bool> {
+        self.with(|c| alerts::attach_resolution(c, scope.project(), id, resolution))
+    }
+
+    fn create_alert_channel(&self, c: &AlertChannel) -> Result<()> {
+        self.with(|conn| alert_channels::create(conn, c))
+    }
+    fn get_alert_channel(&self, scope: Scope<'_>, id: &str) -> Result<Option<AlertChannel>> {
+        self.read(|c| alert_channels::get(c, scope.project(), id))
+    }
+    fn list_alert_channels(&self, project: Scope<'_>) -> Result<Vec<AlertChannel>> {
+        let project = project.project();
+        self.read(|c| alert_channels::list(c, project))
+    }
+    fn delete_alert_channel(&self, scope: Scope<'_>, id: &str) -> Result<bool> {
+        self.with(|c| alert_channels::delete(c, scope.project(), id))
+    }
+
+    // --- the human verdict ledger + calibration history (M11) ---
+    fn insert_label(&self, l: &Label) -> Result<()> {
+        self.with_op(DbOp::ScoresWrite, |c| labels::insert(c, l))
+    }
+    fn list_labels(&self, f: &LabelFilter) -> Result<Vec<Label>> {
+        self.read_op(DbOp::ScoresRead, |c| labels::list(c, f))
+    }
+    fn labels_for_dataset(&self, scope: Scope<'_>, dataset_id: &str) -> Result<Vec<Label>> {
+        self.read_op(DbOp::ScoresRead, |c| {
+            labels::for_dataset(c, scope.project(), dataset_id)
+        })
+    }
+    fn insert_calibration(&self, c: &CalibrationRecord) -> Result<()> {
+        self.with_op(DbOp::ScoresWrite, |conn| calibrations::insert(conn, c))
+    }
+    fn latest_calibration(
+        &self,
+        project: &str,
+        rubric_id: Option<&str>,
+        judge: &str,
+    ) -> Result<Option<CalibrationRecord>> {
+        self.read_op(DbOp::ScoresRead, |c| {
+            calibrations::latest(c, project, rubric_id, judge)
+        })
+    }
+    fn list_calibrations(
+        &self,
+        project: Scope<'_>,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<Vec<CalibrationRecord>> {
+        let project = project.project();
+        self.read_op(DbOp::ScoresRead, |c| {
+            calibrations::list(c, project, limit, cursor)
+        })
+    }
+
+    // --- eval corpus lineage (M24) ---
+    fn fork_dataset(&self, scope: Scope<'_>, id: &str) -> Result<Dataset> {
+        self.with(|c| dataset_fork::fork(c, scope.project(), id))
+    }
+    fn import_dataset_items(
+        &self,
+        scope: Scope<'_>,
+        dataset_id: &str,
+        spec: &lighttrack_core::ImportSpec,
+    ) -> Result<u32> {
+        self.with(|c| dataset_import::import(c, scope.project(), dataset_id, spec))
+    }
+    fn list_dataset_versions(&self, scope: Scope<'_>, name: &str) -> Result<Vec<Dataset>> {
+        self.read(|c| dataset_fork::versions(c, scope.project(), name))
+    }
+}
+
+#[cfg(test)]
+mod poison_tests {
+    use super::*;
+
+    /// One panic inside one store closure must not take the store down: the write-connection lock
+    /// is recovered, and the next call answers.
+    #[test]
+    fn a_panic_inside_one_store_call_does_not_poison_every_later_one() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        let boom = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            store.with(|_| -> () { panic!("a closure panicked while holding the connection") })
+        }));
+        assert!(
+            boom.is_err(),
+            "the panic propagated to the caller, as it should"
+        );
+        assert!(
+            store.list_projects().is_ok(),
+            "the store answers after the poisoned lock is recovered"
+        );
     }
 }

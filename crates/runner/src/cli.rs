@@ -59,11 +59,26 @@ pub(crate) enum Cmd {
         rubric_id: Option<String>,
         #[arg(long)]
         project: Option<String>,
+        /// Only judge events carrying this `metadata.prompt` tag ("<name>@v<version>", M23).
+        ///
+        /// Judge calls cost money and a freshly-promoted version has minutes of traffic against
+        /// production'''s days, so an unprioritized scorer spends its budget re-judging the version
+        /// nobody is asking a question about. Point this at the canary and the online quality read
+        /// (`GET /v1/quality/prompts`) accumulates evidence where a decision is pending.
+        #[arg(long)]
+        prompt_tag: Option<String>,
         #[arg(long, default_value_t = 10)]
         limit: usize,
         /// Run continuously, scoring newly-arrived (unscored) events every N seconds. 0 = one-shot.
         #[arg(long, default_value_t = 0)]
         interval: u64,
+        /// Enqueue this work as a job and let a worker run it, instead of running it here.
+        ///
+        /// The same cycle either way — the queue adds a lease, a heartbeat, cancellation, retry
+        /// accounting and a record that it ran. Recurrence belongs in a stored schedule
+        /// (`POST /v1/projects/:id/schedules`); this is the one-shot equivalent.
+        #[arg(long)]
+        via_queue: bool,
     },
     /// Score an ad-hoc input/output pair (not tied to a stored event).
     ScoreText {
@@ -116,6 +131,13 @@ pub(crate) enum Cmd {
         /// Run a single cycle and exit (for an external scheduler). Overrides --interval.
         #[arg(long)]
         once: bool,
+        /// Enqueue this work as a job and let a worker run it, instead of running it here.
+        ///
+        /// The same cycle either way — the queue adds a lease, a heartbeat, cancellation, retry
+        /// accounting and a record that it ran. Recurrence belongs in a stored schedule
+        /// (`POST /v1/projects/:id/schedules`); this is the one-shot equivalent.
+        #[arg(long)]
+        via_queue: bool,
     },
     /// Run a stored benchmark: judge each case, aggregate a scorecard, record a run.
     Bench {
@@ -163,8 +185,16 @@ pub(crate) enum Cmd {
     /// Measure judge↔human agreement on a labeled set (Cohen's κ, correlation) to validate a rubric.
     Calibrate {
         /// JSONL (one object per line) or JSON-array file of {input, output, human_score, ...}.
+        ///
+        /// The file path is now an *import* route rather than the only one: a set on one machine's
+        /// disk cannot be listed, re-used by a second calibration or attributed to whoever graded
+        /// it. Prefer `--dataset`; `lt-runner labels import <file>` moves an existing file across.
         #[arg(long)]
-        file: String,
+        file: Option<String>,
+        /// Stored dataset to calibrate against: its items paired with the human labels on them.
+        /// Use this OR --file.
+        #[arg(long)]
+        dataset: Option<String>,
         /// Freeform criteria text for the judge (use this OR --rubric-id).
         #[arg(long)]
         rubric: Option<String>,
@@ -209,6 +239,18 @@ pub(crate) enum Cmd {
         /// the API key). Also scopes the history read used for drift detection.
         #[arg(long)]
         project: Option<String>,
+        /// Enqueue this work as a job and let a worker run it, instead of running it here.
+        ///
+        /// The same cycle either way — the queue adds a lease, a heartbeat, cancellation, retry
+        /// accounting and a record that it ran. Recurrence belongs in a stored schedule
+        /// (`POST /v1/projects/:id/schedules`); this is the one-shot equivalent.
+        #[arg(long)]
+        via_queue: bool,
+    },
+    /// Human verdicts: the ground truth a judge is calibrated against.
+    Labels {
+        #[command(subcommand)]
+        action: LabelsCmd,
     },
     /// Periodically sample live events into frozen datasets (online sampling). Daemon by default;
     /// `--once` runs a single cycle (for OS cron / Cloud Scheduler / a systemd timer).
@@ -224,14 +266,22 @@ pub(crate) enum Cmd {
         /// Events to sample per cycle (most recent).
         #[arg(long, default_value_t = 50)]
         n: usize,
-        /// Dataset name prefix; each cycle creates `<prefix>-<UTC timestamp>`.
+        /// Dataset name prefix; each cycle creates `<prefix>-<short id of the newest sampled event>`
+        /// — the watermark that makes a repeated cycle over the same window a no-op.
         #[arg(long, default_value = "online")]
         name_prefix: String,
         /// Add an LLM (claude -p) anonymization pass for names/free-text PII the regex misses.
         #[arg(long)]
         llm_scrub: bool,
+        /// Enqueue this work as a job and let a worker run it, instead of running it here.
+        ///
+        /// The same cycle either way — the queue adds a lease, a heartbeat, cancellation, retry
+        /// accounting and a record that it ran. Recurrence belongs in a stored schedule
+        /// (`POST /v1/projects/:id/schedules`); this is the one-shot equivalent.
+        #[arg(long)]
+        via_queue: bool,
     },
-    /// Run as a worker: poll the job queue and execute jobs (e.g. bench_run).
+    /// Run as a worker: poll the job queue and execute jobs of every declared kind.
     Serve {
         /// Process at most one cycle (claim+run one job, or exit if none) and stop.
         #[arg(long)]
@@ -253,11 +303,40 @@ pub(crate) enum Cmd {
         /// spurious takeover.
         #[arg(long, default_value_t = 0)]
         lease_renew_secs: u64,
-        /// Seconds between benchmark-recurrence sweeps. Each sweep enqueues a `bench_run` for any
-        /// benchmark whose opt-in `schedule_interval_secs` is due (continuous quality monitoring).
-        /// `0` disables recurrence. With `--once`, one sweep always runs (so OS cron can drive it).
-        #[arg(long, default_value_t = 60)]
-        recur_interval: u64,
+        /// Job kinds this worker will claim, comma-separated
+        /// (`bench_run,score_events,score_traces,dataset_sample,calibrate`). Default: all.
+        ///
+        /// A capability declaration, not a filter for convenience: the API applies it INSIDE the
+        /// atomic claim, so a worker without a Claude install (or without a provider key) stops
+        /// taking jobs it would only fail — which used to strand them off the queue under a lease
+        /// while a capable worker idled beside them.
+        #[arg(long, value_delimiter = ',')]
+        kinds: Vec<String>,
+        /// Model providers this worker holds credentials for. Default: derived from the API keys
+        /// present in the environment.
+        #[arg(long, value_delimiter = ',')]
+        providers: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum LabelsCmd {
+    /// Write a labelled file into the ledger through the API — the migration path off files.
+    ///
+    /// Accepts the same shape a calibration file already has (`human_score`, `note`) plus a
+    /// `subject` (`event:<id>` / `dataset_item:<id>` / `score:<id>`), so an existing golden file
+    /// becomes importable by adding one field rather than being rewritten.
+    Import {
+        /// JSONL or JSON-array file of label rows.
+        #[arg(long)]
+        file: String,
+        /// Project to attach the labels to (else derived from the API key).
+        #[arg(long)]
+        project: Option<String>,
+        /// Who graded these, when a row does not say. Defaults to `import:<file>` — an
+        /// unattributable verdict is the one thing the ledger refuses.
+        #[arg(long)]
+        labeler: Option<String>,
     },
 }
 
@@ -274,6 +353,60 @@ pub(crate) enum DatasetCmd {
         /// Add an LLM (claude -p) anonymization pass for names/free-text PII the regex misses.
         #[arg(long)]
         llm_scrub: bool,
+        /// How to choose the cases: `recent` (default) | `random` | `stratified` | `errors`.
+        ///
+        /// Anything but `recent` runs the sampling on the SERVER (M24) — a stratified quota and a
+        /// uniform draw are statements about the matched population, which a client that has
+        /// already fetched a page cannot make. `--llm-scrub` keeps the client-side path, because
+        /// the LLM anonymization pass is a paid model call the server does not make.
+        #[arg(long, default_value = "recent")]
+        strategy: String,
+        /// Where the cases come from: `events` (default) | `scores`.
+        #[arg(long, default_value = "events")]
+        from: String,
+        /// With `--from scores`: only mine verdicts scoring below this (0..1) — the failure-mining
+        /// question. Implies `--strategy errors` when no strategy was given.
+        #[arg(long)]
+        below: Option<f64>,
+        /// Collapse cases whose normalised input is already in the set.
+        #[arg(long)]
+        dedupe: bool,
+    },
+    /// Mine stored rows into a dataset by name, forking its newest version if that one is frozen.
+    ///
+    /// The recurring half of `build`: `build` makes a corpus, `import` grows one across versions.
+    Import {
+        #[arg(long)]
+        project: String,
+        /// The dataset NAME (not id) — the key a version history is walked by.
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value_t = 50)]
+        n: usize,
+        #[arg(long, default_value = "recent")]
+        strategy: String,
+        #[arg(long, default_value = "events")]
+        from: String,
+        #[arg(long)]
+        below: Option<f64>,
+        #[arg(long)]
+        dedupe: bool,
+        /// Freeze the version after importing, making it a comparable pin for a benchmark run.
+        #[arg(long)]
+        freeze: bool,
+    },
+    /// List every version of a dataset name, newest first.
+    Versions {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        name: String,
+    },
+    /// Fork a dataset into the next version of its name: items and their labels copied, unfrozen.
+    Fork {
+        /// The dataset ID to fork (the frozen version you want to extend).
+        #[arg(long)]
+        id: String,
     },
 }
 

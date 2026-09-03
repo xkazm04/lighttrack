@@ -99,7 +99,7 @@ impl TraceShape {
 /// - it survives the [`Trace::spans_truncated`] cap — the detail read keeps the *oldest* spans, so
 ///   the root is always present and a clipped trace fingerprints identically to the whole one. A
 ///   truncated trace must never be mistaken for a changed one.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TraceCoverage {
     /// The trace's true span count when judged — `spans_total`, so a clipped read still records the
     /// real number.
@@ -491,7 +491,7 @@ fn take_subtree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{Provider, Status, TokenUsage};
+    use crate::event::{Status, TokenUsage};
     use chrono::Duration;
     use serde_json::Value;
 
@@ -511,7 +511,7 @@ mod tests {
             parent_span_id: parent.map(str::to_string),
             ts: base() + Duration::seconds(secs),
             received_at: base(),
-            provider: Provider::Anthropic,
+            provider: "anthropic".into(),
             model: format!("m-{span}"),
             name: None,
             operation: Default::default(),
@@ -531,6 +531,23 @@ mod tests {
             source: None,
             metadata: Value::Null,
         }
+    }
+
+    /// Both ingest doors share this rule: W3C hex ids fold to lower case, everything else is kept
+    /// verbatim, and a hex string of the wrong length is somebody's opaque id, not a W3C one.
+    #[test]
+    fn w3c_hex_ids_fold_and_opaque_ids_are_kept() {
+        assert_eq!(
+            normalize_trace_ref("5B8EFFF798038103D269B633813FC60C"),
+            "5b8efff798038103d269b633813fc60c"
+        );
+        assert_eq!(normalize_trace_ref("EEE19B7EC3C1B174"), "eee19b7ec3c1b174");
+        assert_eq!(normalize_trace_ref("Order-7"), "Order-7");
+        assert_eq!(
+            normalize_trace_ref("ABCDEF0123456789A"),
+            "ABCDEF0123456789A"
+        );
+        assert_eq!(normalize_trace_ref(""), "");
     }
 
     #[test]

@@ -155,3 +155,36 @@ pub(crate) fn opt_json_str(v: &Option<Value>) -> Result<Option<String>> {
         None => Ok(None),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_value, encode_value};
+    use serde_json::json;
+
+    /// The boundary every document crosses twice. The one distinction worth a test of its own is
+    /// integer-vs-double: a whole-number cost written as `20.0` must come back a double, and an
+    /// integer token count must come back an integer, or a SUM downstream silently changes type.
+    #[test]
+    fn plain_json_survives_the_typed_value_codec() {
+        for v in [
+            json!(null),
+            json!(true),
+            json!("text"),
+            json!(42),
+            json!(-7),
+            json!(20.0),
+            json!(0.125),
+            json!(["a", 1, null]),
+            json!({ "k": { "n": 3, "s": "x" }, "list": [1.5] }),
+        ] {
+            assert_eq!(decode_value(&encode_value(&v)), v, "{v}");
+        }
+        assert!(encode_value(&json!(42)).get("integerValue").is_some());
+        assert!(encode_value(&json!(20.0)).get("doubleValue").is_some());
+        // A typed value this codec never writes (a timestamp) is passed through as its string.
+        assert_eq!(
+            decode_value(&json!({ "timestampValue": "2026-01-01T00:00:00Z" })),
+            json!("2026-01-01T00:00:00Z")
+        );
+    }
+}

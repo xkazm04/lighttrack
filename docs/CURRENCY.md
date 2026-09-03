@@ -49,16 +49,54 @@ A non-USD currency **absent from the rate book** is deliberately *not* treated a
 
 - The event is still stored (revenue is never dropped), with `amount_usd` computed at **1:1** on its
   major units, and the original `currency` kept.
-- The FX table reports the currency as non-convertible, and `GET /v1/margin` surfaces it:
+- The row records that it happened: `converted: false`, plus the provider's own `amount_minor`, the
+  `fx_rate` used (none, here) and the `fx_book_version` in force. `GET /v1/margin` reads the caveat
+  off the **rows**, not off the live rate book — so adding a rate later no longer makes the warning
+  disappear while the stored figures stay wrong:
 
   ```json
   {
     "total_revenue_usd": 1234.5,
     "unconverted_currencies": ["GBP", "SEK"],
-    "currency_note": "unconverted currencies present (stored 1:1, USD figures approximate): GBP, SEK. Add rates to config/fx_rates.json."
+    "currency_note": "unconverted currencies present (stored 1:1, USD figures approximate): GBP, SEK. Add rates to config/fx_rates.json, then restate the stored rows with POST /v1/revenue/reprice - adding a rate alone fixes future syncs, not these rows."
   }
   ```
 
-  The Markdown renderer shows this as a `⚠️` caveat under the totals. The fix is to add the missing
-  rate and (optionally) re-ingest or wait for the next billing cycle. This makes a missing rate a
+  The Markdown renderer shows this as a `⚠️` caveat under the totals. This makes a missing rate a
   loud, visible caveat rather than a quiet mis-statement of revenue.
+
+## Fixing a missing rate after the fact
+
+"Add the rate and re-ingest" was the old answer and it is not one: a Stripe webhook cannot be
+replayed on demand, and the rows are already someone's recognized revenue. Because each row keeps the
+provider's own minor-unit figure, the correction is applied where the mistake is.
+
+1. Add the rate to `config/fx_rates.json` and restart (this fixes **future** syncs only).
+2. Preview: `lt reprice --currency GBP` → `{"matched": 42, "changed": 40, "dry_run": true}`.
+3. Apply: `lt reprice --currency GBP --apply`.
+
+Or over HTTP, admin key required — it is never exposed over MCP:
+
+```
+POST /v1/revenue/reprice?currency=GBP           # previews; dry_run defaults to true
+POST /v1/revenue/reprice?currency=GBP&dry_run=0 # writes
+```
+
+Three properties worth knowing before you run it:
+
+- **Only 1:1-fallback rows are touched.** A row that converted genuinely is recognized revenue at a
+  rate that was correct when it was taken; re-basing it would restate history.
+- **`matched` and `changed` differ, and the gap is the point.** A row that took the fallback but
+  carries no `amount_minor` (a manual post, or a row written before this provenance existed) matches
+  the correction and cannot take it — there is nothing to re-multiply, and deriving a figure from the
+  bad `amount_usd` would launder the error into a confident number. Those rows stay flagged.
+- **The rows are stamped** with the `fx_book_version` that repriced them, so the next question —
+  "which rows already have the fixed rate?" — is answerable.
+
+## Redelivery does not silently restate
+
+A billing provider retries any non-2xx, and a retry re-runs the conversion against *today's* rate
+book. The upsert therefore restates `amount_usd` (and the rate, book version and `converted` flag)
+only when the provider's own `amount_minor` actually changed — i.e. when it is a different charge.
+An identical redelivery keeps the conversion the row already has. Correcting a rate is a deliberate
+act (above), not a side effect of a webhook being retried.

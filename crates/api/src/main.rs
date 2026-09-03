@@ -8,6 +8,12 @@
 //!   GET  /health                        operator rollup: `ok`, or 503 naming the red member
 //!   GET  /health/live                   liveness: is this PROCESS wedged (observes nothing else)
 //!   GET  /health/ready                  readiness: can this pod serve (observes the real store)
+//!   GET  /health                         liveness + the store backend's declared surfaces
+//!   GET  /openapi.json                   this deployment's OpenAPI 3.1 description, generated from
+//!                                        `lighttrack-contract` (unauthenticated: it describes the
+//!                                        API's shape, never anyone's data)
+//!   GET  /v1/capabilities                what this deployment's store backend serves, and what
+//!                                        it answers 501 for (any authenticated principal)
 //!   POST /v1/events                      ingest one event (cost computed; limits evaluated)
 //!   GET  /v1/ingest/status               load-shedding view: in-flight depth + shed/timeout counts
 //!   GET  /v1/storage/status              (admin) disk accounting per table + index, the store's own
@@ -31,19 +37,30 @@
 //!   GET  /v1/costs?project=&since=&until=
 //!   GET  /v1/usecases?project=&since=   use-case rollup: usage+cost by name×provider×model, windowed
 //!   POST /v1/scores  GET /v1/scores?project=&limit=[&run=]   (`run` = one benchmark run's cases)
+//!   GET  /v1/scores?needs_review=1                          verdicts a human should look at (M11)
+//!   POST /v1/labels  GET /v1/labels?project=&subject=&rubric_id=&cursor=   human verdict ledger
+//!   GET  /v1/datasets/:id/labels                            a golden set's grades, joined
+//!   POST /v1/calibrations  GET /v1/calibrations?project=     judge-human agreement history
+//!   GET  /v1/judges/trust?project=&rubric_id=&judge=         trusted | untrusted | unknown
 //!   GET  /v1/prices  PUT /v1/prices/:provider/:model
 //!   .../datasets .../rubrics .../benchmarks .../jobs            (see modules)
 //!   GET  /v1/benchmarks/:id/gate         CI-gate verdict from the latest finished run
 //!                                        (pass|regressed|no_baseline|no_runs + run_id/mean/baseline/n)
 //!   POST /v1/projects/:id/prompts  GET /v1/projects/:id/prompts          prompt registry
 //!   GET  /v1/projects/:id/prompts/:name?label=production|version=N       runtime fetch by label
+//!   PUT  /v1/projects/:id/prompts/:name                                  link/unlink its gating benchmark
 //!   POST /v1/projects/:id/prompts/:name/versions                         new version (auto-benchmarks)
 //!   POST /v1/projects/:id/prompts/:name/promote                          label promote (regression-gated)
+//!   PUT  /v1/projects/:id/prompts/:name/canary                           set/clear the online canary policy
+//!   GET  /v1/quality/prompts?project=&since=&until=&rubric_id=           per-served-version quality
 //!   POST /v1/projects  GET /v1/projects   POST /v1/projects/:id/keys
 //!   PUT  /v1/projects/:id                update name/enabled/redaction/collective_opt_in (admin);
 //!                                        a redaction change is enforced on the NEXT ingested event
+//!   GET  /v1/projects/:id/redaction     what the ingest boundary did to the stored rows (M9)
 //!   POST /v1/projects/:id/limits  GET /v1/projects/:id/limits
 //!   PUT  /v1/limits/:id  DELETE /v1/limits/:id   update (incl. enable/disable) or remove a rule
+//!   POST /v1/projects/:id/margin-policies  GET  /v1/projects/:id/margin-policies
+//!   DELETE /v1/projects/:id/margin-policies/:pid   standing margin guardrails (admin)
 //!   GET  /v1/limits/status?project=      evaluate limits -> throttle flag + per-rule status, plus a
 //!                                        `rejected` block (count + est_missed_cost_usd + window) of
 //!                                        429'd ingest attempts per breached rule. That ledger is
@@ -57,11 +74,32 @@
 //!                                        is spending" BEFORE a cap trips, and "which key drove this
 //!                                        breach" after — over the API, not only via an alert channel.
 //!                                        501 `unsupported` on backends without the grouped query.
+//!   POST /v1/jobs                        enqueue any job kind (admin; payload validated per kind)
+//!   POST/GET /v1/projects/:id/schedules  stored recurrence: a job kind + payload on an interval
+//!   GET  /v1/schedules                   every recurring workload in this deployment (admin)
+//!   PUT/DELETE /v1/schedules/:id         patch (incl. enable/disable) or remove a schedule
+//!   GET  /v1/schedules/:id/runs          the jobs one schedule has produced
 //!   POST /v1/relay/tasks                 enqueue a device task (GET ?project=&status=&limit= lists)
 //!   GET  /v1/relay/tasks/:id             task status/result (the originating app polls this)
-//!   POST /v1/relay/lease                 device: lease due tasks (device key; outbound-only)
-//!   POST /v1/relay/tasks/:id/result      device: report succeeded | failed | deferred
+//!   POST /v1/relay/devices               enrol a device (admin; the key is shown ONCE, never on MCP)
+//!   GET  /v1/relay/devices               the fleet + liveness (admin)
+//!   DELETE /v1/relay/devices/:id         revoke a device (admin)
+//!   POST /v1/relay/lease                 device: lease due tasks (device key; outbound-only).
+//!                                        Answers { tasks, lease_secs, renew_secs } — the TTL is
+//!                                        detection latency now, not "how long a run may take"
+//!   POST /v1/relay/tasks/:id/renew       device: heartbeat, fenced (409 = stop, you lost it)
+//!   POST /v1/relay/tasks/:id/progress    device: liveness detail, fenced
+//!   POST /v1/relay/tasks/:id/cancel      stop a queued/leased task (own project key or admin)
+//!   POST /v1/relay/tasks/:id/result      device: report succeeded | failed | deferred, fenced
+//!   GET  /v1/relay/actions?project=&limit=   the action fingerprint ledger, derived from the settle
+//!                                        events: action_type × prompt_sha256, first/last seen, run
+//!                                        and error counts, and how many runs a judge can read
+//!   POST /v1/relay/actions/:action_type/dataset   (admin) snapshot that action's succeeded runs
+//!                                        (payload → input, result → output) into a dataset, so a
+//!                                        benchmark can gate the next prompt edit. A namespaced
+//!                                        action_type percent-encodes its `/`.
 //!   POST /v1/revenue                     record revenue (manual / billing sync) for profit tracking
+//!   POST /v1/revenue/reprice?currency=&rate=&dry_run=  restate 1:1-fallback rows at a real rate
 //!   GET  /v1/margin?by=customer|product&since=&until=&below=<pct>   revenue − LLM cost rollup
 //!   GET  /v1/margin/trend?by=&days=&top=   per-day revenue/cost/margin series per customer/product
 //!   GET  /v1/margin/customer/:id?since=&until=   one customer's revenue+cost by model & use-case
@@ -69,11 +107,16 @@
 //!   GET  /v1/forecast?project=&by=&horizon=&lookback=   projected spend/budget-breach + margin-erosion + pre-emptive alerts
 //!        The same alerts also fire on a schedule with no request involved when
 //!        LIGHTTRACK_FORECAST_SWEEP_SECS is set (off by default; see `forecast_sweep`).
+//!        LIGHTTRACK_PROMPT_CANARY_SWEEP_SECS likewise arms the served-version canary
+//!        (off by default; see `prompt_canary_sweep`).
 //!   POST /v1/billing/:provider/webhook?project=   signed Stripe/Polar webhook → revenue (unauth; HMAC)
 //!   GET  /v1/collective/digest?min_cases=     build this instance's privacy-safe model digest (admin)
 //!   POST /v1/collective/ingest                hub: accept a contributor's digest (gated; off default)
 //!   GET  /v1/collective/leaderboard?task_type=&provider=&judge=   merged real-world model leaderboard
 //!   DEL  /v1/collective/contribution        withdraw this source's contributed entries
+//!                                           (?all=1: withdraw OURS from every ledgered hub, admin)
+//!   POST /v1/collective/contribute            push our digest to a hub + record the ack (admin)
+//!   GET  /v1/collective/contributions         the contribution ledger: what we sent, and what came back (admin)
 //!
 //! Env: LIGHTTRACK_BIND, LIGHTTRACK_DB, LIGHTTRACK_DATABASE_URL, LIGHTTRACK_PRICING,
 //!      LIGHTTRACK_MAX_TS_SKEW_SECS (symmetric client-`ts` skew bound in seconds; 0 = disable the
@@ -99,12 +142,17 @@
 //!      LIGHTTRACK_AUTH_THROTTLE_MAX_SOURCES (bound on tracked sources; default 4096),
 //!      LIGHTTRACK_AUTH_TRUSTED_PROXY_HOPS (trust X-Forwarded-For from this many proxies in front of
 //!        the instance; default 0 = never — an untrusted XFF both evades and poisons the throttle),
-//!      LIGHTTRACK_RELAY_DEVICE_KEY (bearer key of the enrolled local device — relay lease/result),
+//!      LIGHTTRACK_RELAY_DEVICE_KEY (DEPRECATED shared single-device relay key — enrol devices via
+//!        POST /v1/relay/devices instead; kept as an all-capability fallback for one release),
+//!      LIGHTTRACK_RELAY_UNROUTABLE_SECS (how long a queued task with no eligible device waits
+//!        before the sweep raises relay_task_unroutable; default 900, 0 = off),
 //!      LIGHTTRACK_RELAY_FLAT_COST_USD (fixed cost stamped per relay run event; default 1.0),
 //!      LIGHTTRACK_ALERT_WEBHOOK / LIGHTTRACK_ALERT_NTFY / LIGHTTRACK_ALERT_COOLDOWN_SECS (see alerts),
 //!      LIGHTTRACK_FORECAST_SWEEP_SECS (cadence of the scheduled budget-ETA / margin-erosion alert
 //!        sweep; unset or 0 = off, floor 60s), LIGHTTRACK_FORECAST_SWEEP_HORIZON /
 //!        LIGHTTRACK_FORECAST_SWEEP_LOOKBACK (projection shape; default 14/14 days),
+//!      LIGHTTRACK_SCHEDULE_SWEEP_SECS (cadence of the stored-schedule sweep, which also reaps
+//!        dead relay leases; default 60, floor 10, 0 = off — stored schedules then never fire),
 //!      LIGHTTRACK_MAINTENANCE_SECS (how often the quiet-window maintenance gate is evaluated;
 //!        default 300, floor 30, 0 = no maintenance at all — the journal and the freelist then grow
 //!        unattended), LIGHTTRACK_MAINTENANCE_MIN_INTERVAL_SECS (minimum spacing between passes;
@@ -124,40 +172,79 @@
 //!      LIGHTTRACK_COLLECTIVE_MIN_CASES (hub-enforced k-anonymity floor; default 5, clamp ≥1),
 //!      LIGHTTRACK_COLLECTIVE_DISPLAY_FLOOR (merged rows below this many cases are flagged
 //!        low_confidence; default 30),
-//!      LIGHTTRACK_MODEL_ALIASES (model-identity normalization table; default config/model_aliases.json).
+//!      LIGHTTRACK_MODEL_ALIASES (model-identity normalization table; default config/pricing.json,
+//!      whose per-model `aliases` lists are the declared collapses since M8).
 
 mod alerts;
+mod alerts_canary;
+mod alerts_relay;
 mod auth;
+mod auth_scopes;
 mod auth_throttle;
 mod benchmarks;
+mod benchmarks_target;
 mod billing;
+mod capabilities;
 mod collective;
+mod collective_auto;
+mod costs_unpriced;
 mod credential_boundary;
 mod datasets;
+mod datasets_lineage;
 mod error;
 mod events;
+mod events_admission;
 mod events_batch;
+mod events_query;
 mod events_validate;
 mod forecast;
 mod forecast_alerts;
 mod forecast_sweep;
 mod guards;
 mod health;
+mod http;
 mod idempotency;
+mod ingest_proximity;
 mod jobs;
+mod jobs_enqueue;
+mod judges;
+mod labels;
+mod labels_promote;
 mod limits;
 mod limits_usage;
 mod logging;
+mod margin_guardrails;
+mod margin_policies;
+mod openapi;
 mod otlp;
 mod prices;
+mod prices_fill;
 mod projects;
+mod projects_keys;
+mod prompt_canary_sweep;
 mod prompts;
+mod prompts_canary;
+mod prompts_gate;
+mod quality;
 mod redact;
+mod redaction;
 mod rejections;
 mod relay;
+mod relay_actions;
+mod relay_devices;
+mod relay_lease;
+mod relay_result;
+mod relay_unroutable;
 mod revenue;
+mod revenue_reprice;
+mod rollup;
 mod rubrics;
+mod schedule_migrate;
+mod schedule_sweep;
+mod schedules;
+mod schema_registry;
 mod scores;
+mod scores_review;
 mod shed;
 mod state;
 mod storage;
@@ -166,9 +253,15 @@ mod traces;
 #[cfg(test)]
 mod tests_auth_throttle;
 #[cfg(test)]
+mod tests_capabilities;
+#[cfg(test)]
 mod tests_collective;
 #[cfg(test)]
+mod tests_contribute;
+#[cfg(test)]
 mod tests_dev_mode;
+#[cfg(test)]
+mod tests_eval_targets;
 #[cfg(test)]
 mod tests_forecast;
 #[cfg(test)]
@@ -178,11 +271,27 @@ mod tests_ingest;
 #[cfg(test)]
 mod tests_limit_scope;
 #[cfg(test)]
+mod tests_margin_policy;
+#[cfg(test)]
+mod tests_redaction;
+#[cfg(test)]
 mod tests_relay;
+#[cfg(test)]
+mod tests_rollup;
+#[cfg(test)]
+mod tests_schedules;
+#[cfg(test)]
+mod tests_scope;
 #[cfg(test)]
 mod tests_storage;
 #[cfg(test)]
+mod tests_tenancy;
+#[cfg(test)]
 mod tests_traces;
+#[cfg(test)]
+mod tests_unpriced;
+#[cfg(test)]
+mod tests_verdict_identity;
 
 use std::sync::{Arc, RwLock};
 
@@ -192,7 +301,7 @@ use axum::{
     Router,
 };
 
-use lighttrack_core::{PriceBook, Redaction};
+use lighttrack_core::PriceBook;
 use lighttrack_store::{SqliteStore, Store};
 
 use auth::AuthMode;
@@ -226,10 +335,7 @@ async fn main() -> anyhow::Result<()> {
     let relay_device_key = std::env::var("LIGHTTRACK_RELAY_DEVICE_KEY")
         .ok()
         .filter(|s| !s.is_empty());
-    let relay_flat_cost = std::env::var("LIGHTTRACK_RELAY_FLAT_COST_USD")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1.0);
+    let relay_flat_cost = state::env_parsed("LIGHTTRACK_RELAY_FLAT_COST_USD", 1.0_f64);
 
     // Backend selection: LIGHTTRACK_DATABASE_URL=postgres://... → Postgres; else SQLite at LIGHTTRACK_DB.
     let database_url = std::env::var("LIGHTTRACK_DATABASE_URL")
@@ -246,9 +352,10 @@ async fn main() -> anyhow::Result<()> {
     type StartupState = (
         Arc<dyn Store + Send + Sync>,
         PriceBook,
-        std::collections::HashMap<String, Redaction>,
+        lighttrack_core::PriceBookPosture,
+        std::collections::HashMap<String, state::ProjectPolicy>,
     );
-    let (store, book, redaction_policies) = tokio::task::spawn_blocking(
+    let (store, book, price_posture, project_policies) = tokio::task::spawn_blocking(
         move || -> anyhow::Result<StartupState> {
             let store: Arc<dyn Store + Send + Sync> = match &database_url {
                 Some(url) if url.starts_with("postgres") => {
@@ -272,25 +379,33 @@ async fn main() -> anyhow::Result<()> {
                 };
                 tracing::info!(count = seed.len(), source = %source, "seeded model prices into the DB");
             }
-            let book = PriceBook::from_rows(&store.list_prices()?);
+            let price_rows = store.list_prices()?;
+            let price_posture = crate::prices::measure_posture(&price_rows);
+            let book = PriceBook::from_rows(&price_rows).with_aliases(crate::prices::declared_aliases());
             // Warm the per-project persistence-policy cache here too: this closure is the one
             // startup context allowed to call the store synchronously (Postgres `block_on`s
             // internally and panics on the async main thread — created-after-startup projects
             // are added on create / first sight).
-            let redaction_policies: std::collections::HashMap<_, _> = store
+            let project_policies: std::collections::HashMap<_, _> = store
                 .list_projects()
                 .unwrap_or_default()
                 .into_iter()
-                .map(|p| (p.id, p.redaction))
+                .map(|p| (p.id.clone(), state::ProjectPolicy::from(&p)))
                 .collect();
-            Ok((store, book, redaction_policies))
+            Ok((store, book, price_posture, project_policies))
         },
     )
     .await??;
     let n_prices = book.len();
 
     let alerts = Arc::new(alerts::Alerter::from_env());
+    // The ledger, the routing table and breach attribution all hang off this. Attribution used to
+    // open a SECOND SQLite handle from a path re-derived from env, which meant it was simply absent
+    // on Postgres and Firestore — the backends carrying production traffic.
+    alerts.attach_store(store.clone());
     let alerts_desc = alerts.describe();
+    let rejection_flush = alerts::flush::interval();
+    let rejection_flush_desc = alerts::flush::describe();
     let redact = Arc::new(redact::Redactor::from_env());
     let redact_desc = redact.describe();
     let billing = Arc::new(lighttrack_billing::BillingRegistry::from_env());
@@ -323,14 +438,21 @@ async fn main() -> anyhow::Result<()> {
         rejections,
         ingest_guard,
         auth_throttle,
-        redaction_policies: Arc::new(state::RedactionCache::new(redaction_policies)),
+        project_policies: Arc::new(state::ProjectPolicyCache::new(project_policies)),
         activity: Arc::new(storage::ActivityGauge::default()),
         maintenance: Arc::new(storage::Maintenance::default()),
         maintenance_desc: maintenance_desc.clone(),
+        policy_cooldowns: Default::default(),
     };
 
     let sweep = forecast_sweep::SweepConfig::from_env();
     let sweep_desc = forecast_sweep::describe(sweep);
+    let sched_sweep = schedule_sweep::SweepConfig::from_env();
+    let sched_sweep_desc = schedule_sweep::describe(sched_sweep);
+    let auto_contribute_desc =
+        collective_auto::AutoContribute::describe(&collective_auto::AutoContribute::from_env());
+    let canary_sweep = prompt_canary_sweep::SweepConfig::from_env();
+    let canary_sweep_desc = prompt_canary_sweep::describe(canary_sweep);
     // The whole runtime configuration as one indexed event: "why did prod behave differently" is a
     // field comparison across two boots, not a diff of two prose lines. The human-critical part (are
     // we up, and on what address) stays in the message so it reads at a glance in either format.
@@ -342,26 +464,53 @@ async fn main() -> anyhow::Result<()> {
         admin_key = if state.admin_key.is_some() { "set" } else { "unset" },
         auth_throttle = %auth_throttle_desc,
         alerts = %alerts_desc,
+        alert_rejection_flush = %rejection_flush_desc,
         forecast_sweep = %sweep_desc,
+        schedule_sweep = %sched_sweep_desc,
+        prompt_canary_sweep = %canary_sweep_desc,
         ingest = %shed_desc,
         maintenance = %maintenance_desc,
         redact = %redact_desc,
         billing = %billing_desc,
         collective = %collective_desc,
+        collective_auto_contribute = %auto_contribute_desc,
         "lighttrack-api v{} listening on http://{bind}",
         env!("CARGO_PKG_VERSION"),
     );
     // Redaction is a *storage* posture: what an operator believes is in the DB has to match what is
     // actually in it, and the default changed (D14). Its own line, at a level that matches the risk.
     state.redact.log_posture();
+    // Same discipline, for the same reason: every cost, margin, limit and forecast number is
+    // computed from the price book, so an unverified book is a posture an operator must be told
+    // about at boot rather than discover from a number that felt wrong.
+    prices::log_price_posture(&price_posture);
+    // What this backend can and cannot serve, named once at boot. Until the manifest existed the
+    // only record of a gap was a 501 someone hit in production.
+    capabilities::log_posture(&state.store.capabilities());
     // `auth=Dev` in the banner above is one field among many; an unauthenticated server deserves a
     // block you cannot skim past, so that one stays a raw multi-line stderr shout rather than
     // becoming a JSON string with `\n`s in it.
-    auth::warn_if_unenforced(state.auth_mode);
+    auth::warn_if_unenforced(state.auth_mode, state.admin_key.is_some());
+    relay_devices::warn_if_legacy_key(state.relay_device_key.is_some());
 
     // Pre-emptive forecast alerts on a timer (off unless configured). Detached: it never shares a
     // task with a request, and its store reads go to the blocking pool like any handler's.
     forecast_sweep::spawn(state.clone(), sweep);
+
+    // Stored schedules, and the relay's dead-letter reap. On by default: a schedule an operator
+    // wrote down and that never fires is a broken feature, not a respected default. It is also the
+    // only thing that reaps a vanished device's tasks when nothing is polling for a lease.
+    schedule_sweep::spawn(state.clone(), sched_sweep);
+
+    // The served-version quality loop (M23): compare each prompt's canary label against production
+    // and, only where a prompt opted in, move the label back. Off unless configured — a background
+    // task that can change what a deployment serves is not something an upgrade turns on.
+    prompt_canary_sweep::spawn(state.clone(), canary_sweep);
+
+    // Flush the in-process rejection ledger into `ingest_rejected` alert rows. The counter itself
+    // stays in RAM (a store write per rejected call would be on the ingest path); its deltas become
+    // durable here, so "the caps turned 4,000 calls away last night" survives a restart.
+    alerts::flush::spawn(state.clone(), rejection_flush);
 
     // Quiet-window store maintenance: checkpoint the journal and hand already-freed pages back to
     // the filesystem, gated on the activity gauge. Lossless — it never deletes a row — and every
@@ -398,11 +547,14 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/health", get(health::composite))
         .route("/health/live", get(health::live))
         .route("/health/ready", get(health::ready))
+        // Unauthenticated like /health: it describes the API's shape, never anyone's data.
+        .route("/openapi.json", get(openapi::get_openapi))
+        .route("/v1/capabilities", get(capabilities::get_capabilities))
         .route(
             "/v1/events",
             post(events::post_event)
                 .layer(shed_ingest.clone())
-                .get(events::get_events)
+                .get(events_query::get_events)
                 .layer(DefaultBodyLimit::max(body_limit)),
         )
         .route(
@@ -413,7 +565,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/ingest/status", get(shed::get_ingest_status))
         .route("/v1/storage/status", get(storage::get_storage_status))
-        .route("/v1/events/:id", get(events::get_event_by_id))
+        .route("/v1/events/:id", get(events_query::get_event_by_id))
         .route(
             "/v1/traces",
             // The OTLP door is an ingest door: one export fans a whole batch into the same write
@@ -427,15 +579,23 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/traces/:id", get(traces::get_trace))
         .route("/v1/traces/:id/score", post(traces::score_trace))
-        .route("/v1/costs", get(events::get_costs))
-        .route("/v1/costs/prompts", get(events::get_prompt_costs))
-        .route("/v1/usecases", get(events::get_usecases))
+        .route("/v1/costs", get(events_query::get_costs))
+        .route("/v1/costs/prompts", get(events_query::get_prompt_costs))
+        .route("/v1/costs/unpriced", get(costs_unpriced::get_unpriced))
+        // The quality half of `/v1/costs/prompts`: how good each served version actually is.
+        .route("/v1/quality/prompts", get(quality::get_prompt_quality))
+        .route("/v1/usecases", get(events_query::get_usecases))
+        .route("/v1/rollup", get(rollup::get_rollup))
         .route(
             "/v1/scores",
             post(scores::post_score).get(scores::get_scores),
         )
         .route("/v1/prices", get(prices::get_prices))
-        .route("/v1/prices/:provider/:model", put(prices::put_price))
+        .route(
+            "/v1/prices/history/:provider/:model",
+            get(prices::get_price_history),
+        )
+        .route("/v1/prices/:provider/:model", put(prices_fill::put_price))
         .route(
             "/v1/projects/:id/datasets",
             post(datasets::create_dataset).get(datasets::list_datasets),
@@ -446,11 +606,47 @@ pub(crate) fn build_router(state: AppState) -> Router {
             post(datasets::add_dataset_item).get(datasets::list_dataset_items),
         )
         .route("/v1/datasets/:id/freeze", post(datasets::freeze_dataset))
+        // "Promote to golden set": a labelled production event becomes a permanent eval case with
+        // its human verdict copied across, instead of the grade evaporating in a spreadsheet.
+        .route(
+            "/v1/datasets/:id/items/from-label",
+            post(labels_promote::item_from_label),
+        )
+        .route(
+            "/v1/datasets/:id/labels",
+            get(labels_promote::dataset_labels),
+        )
+        // Eval corpus lineage (M24): a frozen set is a checkpoint, not a dead end.
+        .route(
+            "/v1/datasets/:id/fork",
+            post(datasets_lineage::fork_dataset),
+        )
+        .route(
+            "/v1/datasets/:id/items/import",
+            post(datasets_lineage::import_dataset_items),
+        )
+        .route(
+            "/v1/projects/:id/datasets/versions",
+            get(datasets_lineage::list_dataset_versions),
+        )
+        .route(
+            "/v1/labels",
+            post(labels::create_label).get(labels::list_labels),
+        )
+        .route(
+            "/v1/calibrations",
+            post(labels::create_calibration).get(labels::list_calibrations),
+        )
+        .route("/v1/judges/trust", get(judges::judge_trust))
         .route(
             "/v1/projects/:id/rubrics",
             post(rubrics::create_rubric).get(rubrics::list_rubrics),
         )
         .route("/v1/rubrics/:id", get(rubrics::get_rubric))
+        .route(
+            "/v1/rubrics/:id/versions",
+            post(rubrics::create_rubric_version),
+        )
         .route(
             "/v1/projects/:id/benchmarks",
             post(benchmarks::create_benchmark).get(benchmarks::list_benchmarks),
@@ -462,21 +658,34 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/benchmarks/:id/gate", get(benchmarks::benchmark_gate))
         .route("/v1/benchmark-runs", post(benchmarks::post_benchmark_run))
-        .route("/v1/benchmarks/:id/enqueue", post(jobs::enqueue_benchmark))
+        .route(
+            "/v1/benchmarks/:id/enqueue",
+            post(jobs_enqueue::enqueue_benchmark),
+        )
         .route(
             "/v1/projects/:id/prompts",
             post(prompts::create_prompt).get(prompts::list_prompts),
         )
-        .route("/v1/projects/:id/prompts/:name", get(prompts::get_prompt))
+        .route(
+            "/v1/projects/:id/prompts/:name",
+            get(prompts::get_prompt).put(prompts::link_benchmark),
+        )
         .route(
             "/v1/projects/:id/prompts/:name/versions",
             post(prompts::add_version).get(prompts::list_versions),
         )
         .route(
+            "/v1/projects/:id/prompts/:name/canary",
+            axum::routing::put(prompts_canary::set_canary),
+        )
+        .route(
             "/v1/projects/:id/prompts/:name/promote",
             post(prompts::promote),
         )
-        .route("/v1/jobs", get(jobs::list_jobs))
+        .route(
+            "/v1/jobs",
+            get(jobs::list_jobs).post(jobs_enqueue::enqueue_job),
+        )
         .route("/v1/jobs/claim", post(jobs::claim_job))
         .route("/v1/jobs/:id", get(jobs::get_job))
         .route("/v1/jobs/:id/cancel", post(jobs::cancel_job))
@@ -484,15 +693,39 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/v1/jobs/:id/renew", post(jobs::job_renew))
         .route("/v1/jobs/:id/finish", post(jobs::job_finish))
         .route(
+            "/v1/projects/:id/schedules",
+            post(schedules::create_schedule).get(schedules::list_schedules),
+        )
+        .route("/v1/schedules", get(schedules::list_all_schedules))
+        .route(
+            "/v1/schedules/:id",
+            put(schedules::update_schedule).delete(schedules::delete_schedule),
+        )
+        .route("/v1/schedules/:id/runs", get(schedules::schedule_runs))
+        .route(
             "/v1/projects",
             post(projects::create_project).get(projects::list_projects),
         )
-        .route("/v1/projects/:id", put(projects::update_project))
+        .route(
+            "/v1/projects/:id",
+            put(projects::update_project).delete(projects::archive_project),
+        )
+        .route(
+            "/v1/projects/:id/redaction",
+            get(redaction::get_redaction_posture),
+        )
         .route(
             "/v1/projects/:id/keys",
-            post(projects::create_key).get(projects::list_keys),
+            post(projects_keys::create_key).get(projects_keys::list_keys),
         )
-        .route("/v1/projects/:id/keys/:kid", delete(projects::revoke_key))
+        .route(
+            "/v1/projects/:id/keys/:kid",
+            delete(projects_keys::revoke_key),
+        )
+        .route(
+            "/v1/projects/:id/keys/:kid/rotate",
+            post(projects_keys::rotate_key),
+        )
         .route(
             "/v1/projects/:id/limits",
             post(limits::create_limit).get(limits::list_limits),
@@ -501,6 +734,14 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/limits/:id",
             put(limits::update_limit).delete(limits::delete_limit),
         )
+        .route(
+            "/v1/projects/:id/margin-policies",
+            post(margin_policies::create_policy).get(margin_policies::list_policies),
+        )
+        .route(
+            "/v1/projects/:id/margin-policies/:pid",
+            delete(margin_policies::delete_policy),
+        )
         .route("/v1/limits/status", get(limits::limits_status))
         .route("/v1/limits/usage", get(limits_usage::usage_by_scope))
         .route(
@@ -508,9 +749,32 @@ pub(crate) fn build_router(state: AppState) -> Router {
             post(relay::enqueue_task).get(relay::list_tasks),
         )
         .route("/v1/relay/tasks/:id", get(relay::get_task))
-        .route("/v1/relay/tasks/:id/result", post(relay::post_result))
-        .route("/v1/relay/lease", post(relay::lease_tasks))
+        .route(
+            "/v1/relay/tasks/:id/result",
+            post(relay_result::post_result),
+        )
+        .route("/v1/relay/tasks/:id/renew", post(relay_lease::renew_lease))
+        .route(
+            "/v1/relay/tasks/:id/progress",
+            post(relay_lease::post_progress),
+        )
+        .route("/v1/relay/tasks/:id/cancel", post(relay_lease::cancel_task))
+        .route("/v1/relay/lease", post(relay_lease::lease_tasks))
+        .route(
+            "/v1/relay/devices",
+            post(relay_devices::create_device).get(relay_devices::list_devices),
+        )
+        .route(
+            "/v1/relay/devices/:id",
+            delete(relay_devices::revoke_device),
+        )
+        .route("/v1/relay/actions", get(relay_actions::list_actions))
+        .route(
+            "/v1/relay/actions/:action_type/dataset",
+            post(relay_actions::snapshot_dataset),
+        )
         .route("/v1/revenue", post(revenue::post_revenue))
+        .route("/v1/revenue/reprice", post(revenue_reprice::post_reprice))
         .route("/v1/margin", get(revenue::get_margin))
         .route("/v1/margin/trend", get(revenue::get_margin_trend))
         .route("/v1/margin/customer/:id", get(revenue::get_customer_margin))
@@ -526,6 +790,35 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route(
             "/v1/collective/contribution",
             delete(collective::delete_contribution),
+        )
+        // The contributor side: push our digest to a hub and record what it said, then read the
+        // record back.
+        .route(
+            "/v1/collective/contribute",
+            post(collective::post_contribute),
+        )
+        .route(
+            "/v1/collective/contributions",
+            get(collective::get_contributions),
+        )
+        // The alert ledger: what fired, who was told, who acknowledged it, and what came of it.
+        .route("/v1/alerts", get(alerts::read::list_alerts))
+        .route("/v1/alerts/:id/ack", post(alerts::read::ack_alert))
+        .route(
+            "/v1/alerts/:id/resolution",
+            post(alerts::read::attach_resolution),
+        )
+        .route(
+            "/v1/projects/:id/alert-channels",
+            get(alerts::routing::list_channels).put(alerts::routing::put_channel),
+        )
+        .route(
+            "/v1/projects/:id/alert-channels/:cid",
+            delete(alerts::routing::delete_channel),
+        )
+        .route(
+            "/v1/alert-channels/:id/test",
+            post(alerts::routing::test_channel),
         )
         // Over every route: the maintenance sweep's activity gauge. It must see ALL foreground work,
         // not just the ingest doors — a long analytical read holds a WAL snapshot and is exactly the

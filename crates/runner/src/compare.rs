@@ -11,10 +11,9 @@ use serde_json::{json, Map, Value};
 
 use lighttrack_core::{
     BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, ModelPriceRow, Rubric, ScoreDetail,
+    ScoreKind,
 };
-use lighttrack_engine::{
-    generate, generate_deterministic, parse_judge_spec, same_family, Determinism, EngineConfig,
-};
+use lighttrack_engine::{parse_judge_spec, same_family, Determinism, EngineConfig};
 
 use crate::bench::judge_output;
 use crate::budget::{estimate_compare, Budget};
@@ -27,6 +26,7 @@ use crate::stats::{
     annotate_significance, annotate_verdict, paired_deltas, stability, superiority, verdict,
     Summary,
 };
+use crate::targets::ResolvedTarget;
 use crate::util::{
     add_price_warnings, aggregate_status, cost_or_book, join_csv, now_ts, parallel_map,
     percentiles, stamp_determinism,
@@ -158,7 +158,7 @@ impl TargetHealth {
 #[allow(clippy::too_many_arguments)]
 fn compute_cell(
     engine: &EngineConfig,
-    t: &BenchTarget,
+    rt: &ResolvedTarget,
     jp: &str,
     jm: &str,
     rubric: &Option<Rubric>,
@@ -172,6 +172,7 @@ fn compute_cell(
     health: &TargetHealth,
     ti: usize,
 ) -> Cell {
+    let t = &rt.target;
     let mut cell = Cell {
         cand_scores: Vec::new(),
         judge_agrees: Vec::new(),
@@ -222,19 +223,9 @@ fn compute_cell(
     // Only this — the target's own call failing — is evidence about the target's health.
     let mut generation_failed = false;
     for _ in 0..ng {
-        let gen_call = if pin {
-            generate_deterministic
-        } else {
-            generate
-        };
-        let gen = match gen_call(
-            engine,
-            &t.provider,
-            &t.model,
-            t.system_prompt.as_deref(),
-            &case.input,
-            None,
-        ) {
+        // The target decides how it generates: a model call with the RESOLVED prompt (not the
+        // target's stored literal), or a POST to the operator's own endpoint.
+        let gen = match rt.generate(engine, &case.input, case.expected.as_deref(), pin) {
             Ok(g) => g,
             Err(e) => {
                 cell.error_msg = Some(format!("generation error — {e}"));
@@ -391,7 +382,7 @@ pub(crate) fn run_compare(
     engine: &EngineConfig,
     bench: &Benchmark,
     cases: &[BenchmarkCase],
-    targets: &[BenchTarget],
+    targets: &[ResolvedTarget],
     samples: u32,
     gen_samples: u32,
     pairwise: bool,
@@ -412,13 +403,14 @@ pub(crate) fn run_compare(
         None => None,
     };
     // For providers whose API doesn't return a $ cost (e.g. Gemini/OpenAI), price by tokens from the DB.
-    let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    let prices: Vec<ModelPriceRow> = crate::bench::fetch_prices(cli, http);
 
     // Cost pre-flight, matching pairwise's contract: print the call count and a dollar estimate
     // BEFORE the first paid call, and refuse to start a matrix that blows past `--max-cost`. A
     // compare run costs `targets × cases × gen_samples × (1 generation + judge_samples judge calls)`;
     // until now a fat-fingered `--gen-samples` was discovered only after it had been spent.
-    let estimate = estimate_compare(&prices, targets, cases.len(), ng, samples, &jp, &jm);
+    let bench_targets: Vec<BenchTarget> = targets.iter().map(|r| r.target.clone()).collect();
+    let estimate = estimate_compare(&prices, &bench_targets, cases.len(), ng, samples, &jp, &jm);
     println!("  {}", estimate.line());
     if !estimate.unpriced.is_empty() {
         println!(
@@ -504,11 +496,9 @@ pub(crate) fn run_compare(
     let cancelled = ctl.cancelled();
     let mut cells = cells.into_iter();
 
-    for t in targets {
-        let label = t
-            .label
-            .clone()
-            .unwrap_or_else(|| format!("{}/{}", t.provider, t.model));
+    for rt in targets {
+        let t = &rt.target;
+        let label = t.display_label();
         println!("\n-- target {label} --");
         // One run per target, so the run id is minted per target — before judging, so every case
         // posted below is run-scoped even if this target's run post later fails.
@@ -536,10 +526,14 @@ pub(crate) fn run_compare(
         // lab as the target it grades tends to favour it. Documented as a control since the
         // framework was written and, until now, enforced by nothing. Warn and RECORD — never fail a
         // run: a same-family pairing is sometimes exactly what the operator wants to measure.
-        let self_preference = same_family(&jp, &jm, &t.provider, &t.model);
+        // `family_provider` is the target's provider for a model and its HOST for an endpoint, so
+        // an opaque service can never read as "the judge's own family" on a declared provider id.
+        let self_preference = same_family(&jp, &jm, &t.family_provider(), &t.model);
         if self_preference {
             eprintln!(
-                "  warning: SELF-PREFERENCE — judge {jp}/{jm} and target {}/{} are the same model                  family; this target's scores are biased upward. Judge on a different family (or                  use pairwise with a neutral judge) before publishing them.",
+                "  warning: SELF-PREFERENCE — judge {jp}/{jm} and target {}/{} are the same model \
+                 family; this target's scores are biased upward. Judge on a different family (or \
+                 use pairwise with a neutral judge) before publishing them.",
                 t.provider, t.model
             );
         }
@@ -655,6 +649,11 @@ pub(crate) fn run_compare(
             let score = json!({
                 "project_id": bench.project_id,
                 "rubric": format!("{}:{label}#case{}", bench.name, i + 1),
+                // This label embeds the case index, so it is unique per case — which is what
+                // made every compare cell its own alert window and stopped any of them ever
+                // accumulating. The kind is what lets the alert path roll them back up.
+                "kind": ScoreKind::CompareCell.as_str(),
+                "rubric_id": bench.rubric_id,
                 "run_id": run_id, "case_index": i as u32 + 1,
                 "value": r3(case_score), "max": 1.0, "pass": case_pass,
                 "reasoning": weakest_reasoning(&detail),
@@ -779,6 +778,8 @@ pub(crate) fn run_compare(
         let mut report = json!({
             "mode": "compare", "target": label, "provider": t.provider, "model": t.model,
             "prompt_label": t.label, "gen_cost_usd": gen_cost, "judge_cost_usd": judge_cost,
+            "target_kind": if t.http_url().is_some() { "http" } else { "model" },
+            "target_resolved_prompt_version": rt.resolved_version,
             "gen_tokens": gen_tokens, "judge_tokens": judge_tokens,
             "errored_cases": errored, "gen_samples": ng, "judge_samples": samples,
             "score_post_failures": score_post_failures,

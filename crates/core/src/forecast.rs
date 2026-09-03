@@ -18,6 +18,10 @@ pub const DEFAULT_ALPHA: f64 = 0.5;
 
 /// An EWMA level + least-squares linear trend fit over an evenly-spaced (one-value-per-day) series,
 /// ordered oldest→newest. `level` is the smoothed value at the last (most recent) observation.
+///
+/// The fit always succeeds — two points are enough for a slope — so the struct also carries the
+/// *evidence* behind it (`n_nonzero`, `span_days`, `r2`, `recent_mean`/`window_mean`). Whether that
+/// evidence is enough to show anyone is [`Trend::presentability`]'s job, in [`crate::forecast_gate`].
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct Trend {
     /// EWMA of the series — the smoothed "current" daily value.
@@ -26,7 +30,25 @@ pub struct Trend {
     pub slope: f64,
     /// Number of observations the fit used.
     pub n: usize,
+    /// How many of those observations were non-zero — days the project actually did something. A
+    /// window of zero-fill is not evidence, however long it is.
+    pub n_nonzero: usize,
+    /// Days from the first non-zero observation to the last, inclusive (`0` with no traffic). A
+    /// slope over points crowded into two adjacent days is an artefact of the window, not a trend.
+    pub span_days: u32,
+    /// Coefficient of determination of the linear fit, **withheld (`None`) under the evidence
+    /// floor** — publishing a confidence for a fit we would refuse to present is the same lie in
+    /// smaller type.
+    pub r2: Option<f64>,
+    /// Mean of the last (up to) [`RECENT_DAYS`] observations — the live burn rate.
+    pub recent_mean: f64,
+    /// Mean of every fitted observation — the window's baseline, which `recent_mean` is compared
+    /// against to corroborate a rising projection.
+    pub window_mean: f64,
 }
+
+/// How many trailing observations the burn-rate corroboration averages.
+pub const RECENT_DAYS: usize = 3;
 
 impl Trend {
     /// Fit with [`DEFAULT_ALPHA`].
@@ -43,6 +65,11 @@ impl Trend {
                 level: 0.0,
                 slope: 0.0,
                 n: 0,
+                n_nonzero: 0,
+                span_days: 0,
+                r2: None,
+                recent_mean: 0.0,
+                window_mean: 0.0,
             };
         }
         let alpha = alpha.clamp(f64::EPSILON, 1.0);
@@ -50,17 +77,36 @@ impl Trend {
         for &x in &series[1..] {
             ewma = alpha * x + (1.0 - alpha) * ewma;
         }
-        Trend {
+        let slope = least_squares_slope(series);
+        let recent = &series[n.saturating_sub(RECENT_DAYS)..];
+        let mut t = Trend {
             level: ewma,
-            slope: least_squares_slope(series),
+            slope,
             n,
+            n_nonzero: series.iter().filter(|v| **v != 0.0).count(),
+            span_days: nonzero_span(series),
+            r2: None,
+            recent_mean: recent.iter().sum::<f64>() / recent.len() as f64,
+            window_mean: series.iter().sum::<f64>() / n as f64,
+        };
+        // Withheld unless the fit clears the same floor that decides whether it may be presented:
+        // a confidence attached to a projection we would refuse to show is the lie in smaller type.
+        if t.is_presentable() {
+            t.r2 = r_squared(series, slope);
         }
+        t
     }
 
     /// Projected daily value `steps` days after the last observation (never negative — spend and
     /// usage can't go below zero, so a steeply falling trend flattens at the floor).
     pub fn project(&self, steps: f64) -> f64 {
         (self.level + self.slope * steps).max(0.0)
+    }
+
+    /// [`Trend::project`] with the flat band applied — a slope inside the band projects flat. Used
+    /// by the `days_until_*` gates, which are the ones that decide whether to page someone.
+    pub fn project_banded(&self, steps: f64) -> f64 {
+        (self.level + self.effective_slope() * steps).max(0.0)
     }
 
     /// Cumulative projected total over the next `days` whole days (`1..=days`).
@@ -75,10 +121,11 @@ impl Trend {
         if self.level >= threshold {
             return Some(0.0);
         }
-        if self.slope <= 0.0 {
+        let slope = self.effective_slope();
+        if slope <= 0.0 {
             return None;
         }
-        let d = (threshold - self.level) / self.slope;
+        let d = (threshold - self.level) / slope;
         (d <= horizon as f64).then_some(d)
     }
 
@@ -92,7 +139,7 @@ impl Trend {
         }
         let mut cum = 0.0;
         for d in 1..=horizon {
-            let day = self.project(d as f64);
+            let day = self.project_banded(d as f64);
             if cum + day >= budget {
                 let frac = if day > 0.0 { (budget - cum) / day } else { 0.0 };
                 return Some((d - 1) as f64 + frac);
@@ -132,8 +179,10 @@ pub fn forecast_budget(
 ) -> BudgetForecast {
     let trend = Trend::fit(series);
     let eta_days = match rule.window {
-        LimitWindow::Day => trend.days_until_daily(rule.threshold, horizon),
-        LimitWindow::Month => trend.days_until_cumulative(rule.threshold - current, horizon),
+        LimitWindow::Day => trend.days_until_daily(rule.nominal_threshold(), horizon),
+        LimitWindow::Month => {
+            trend.days_until_cumulative(rule.nominal_threshold() - current, horizon)
+        }
         LimitWindow::Hour => None,
     }
     // Drop eta==0 (already breached) — only surface a genuinely *pre-emptive* ETA.
@@ -142,7 +191,7 @@ pub fn forecast_budget(
         rule_id: rule.id.clone(),
         metric: rule.metric,
         window: rule.window,
-        threshold: rule.threshold,
+        threshold: rule.nominal_threshold(),
         current: round(current),
         projected_daily: round(trend.project(1.0)),
         trend,
@@ -234,6 +283,41 @@ fn least_squares_slope(series: &[f64]) -> f64 {
     }
 }
 
+/// Days from the first non-zero observation to the last, inclusive; `0` for an all-zero series.
+fn nonzero_span(series: &[f64]) -> u32 {
+    let Some(first) = series.iter().position(|v| *v != 0.0) else {
+        return 0;
+    };
+    let last = series
+        .iter()
+        .rposition(|v| *v != 0.0)
+        .expect("a first non-zero implies a last");
+    (last - first + 1) as u32
+}
+
+/// Coefficient of determination of the least-squares line against `series`. `None` with <2 points;
+/// a zero-variance series is fitted perfectly by its own flat line, so it scores `1.0`.
+fn r_squared(series: &[f64], slope: f64) -> Option<f64> {
+    let n = series.len();
+    if n < 2 {
+        return None;
+    }
+    let nf = n as f64;
+    let mean_x = (nf - 1.0) / 2.0;
+    let mean_y = series.iter().sum::<f64>() / nf;
+    let intercept = mean_y - slope * mean_x;
+    let (mut ss_res, mut ss_tot) = (0.0, 0.0);
+    for (i, &y) in series.iter().enumerate() {
+        let fitted = intercept + slope * i as f64;
+        ss_res += (y - fitted) * (y - fitted);
+        ss_tot += (y - mean_y) * (y - mean_y);
+    }
+    if ss_tot == 0.0 {
+        return Some(1.0);
+    }
+    Some((1.0 - ss_res / ss_tot).clamp(0.0, 1.0))
+}
+
 fn round(x: f64) -> f64 {
     (x * 1_000_000.0).round() / 1_000_000.0
 }
@@ -241,7 +325,7 @@ fn round(x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::limits::{LimitAction, LimitMetric, LimitWindow};
+    use crate::limits::{LimitAction, LimitMetric, LimitWindow, Threshold};
 
     fn cost_rule(window: LimitWindow, threshold: f64) -> LimitRule {
         LimitRule {
@@ -249,11 +333,15 @@ mod tests {
             project_id: "p1".into(),
             metric: LimitMetric::CostUsd,
             window,
-            threshold,
+            threshold: Threshold::Fixed(threshold),
             action: LimitAction::Alert,
             enabled: true,
             warn_at: None,
             scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
         }
     }
 

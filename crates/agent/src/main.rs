@@ -5,13 +5,15 @@
 //! into the originating apps via per-action connectors, and settles every task back to its cloud.
 //!
 //! This file is wiring only: parse args, load config, run the loop. Logic lives in the sibling
-//! modules (`config`, `actions`, `exec`, `connect`, `cloud`, `run`).
+//! modules (`config`, `actions`, `inventory`, `exec`, `connect`, `cloud`, `report`, `run`).
 
 mod actions;
 mod cloud;
 mod config;
 mod connect;
 mod exec;
+mod inventory;
+mod report;
 mod run;
 
 use anyhow::Result;
@@ -35,8 +37,25 @@ fn main() -> Result<()> {
     let _ = dotenvy::dotenv(); // device keys and connector secrets come from the environment
     let cli = Cli::parse();
     let cfg = config::AgentConfig::load(&cli.config)?;
+    // The inventory is printed at startup because "why is nothing being picked up" should be
+    // answerable here, not in the cloud's logs: since M18 a lease is filtered by what this device
+    // advertises, so an empty or unexpected library is the first thing to check.
+    // An agent with no runnable CLI would still lease tasks, fail each one, and burn a real attempt
+    // (plus the retry interval) per task discovering it — the one failure the inventory filter
+    // cannot catch, because the library is fine. Refuse to claim work instead, as the responder does.
+    let probe = lighttrack_engine::probe(&lighttrack_engine::resolve_claude_bin(&cfg.claude_bin));
+    println!("[lt-agent] {}", probe.summary());
+    if !probe.installed {
+        anyhow::bail!(
+            "the Claude CLI is not runnable at '{}' — set claude_bin in {} or install it",
+            cfg.claude_bin,
+            cli.config
+        );
+    }
+    let actions = inventory::inventory(&cfg.actions_dir);
     println!(
-        "lt-agent v{}  device={} sources={} actions={} poll={}s",
+        "lt-agent v{}  device={} sources={} actions={} poll={}s
+  advertising: {}",
         env!("CARGO_PKG_VERSION"),
         cfg.device,
         cfg.sources
@@ -46,6 +65,7 @@ fn main() -> Result<()> {
             .join(","),
         cfg.actions_dir,
         cfg.poll_secs,
+        inventory::describe(&actions),
     );
     run::run(&cfg, cli.once)
 }

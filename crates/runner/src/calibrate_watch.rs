@@ -3,26 +3,26 @@
 //! reserved rubric, and warns when the judge's trust degrades — so a silently-worsening judge (model
 //! update, prompt change) is caught instead of surfacing later as weird benchmarks.
 //!
-//! **No new table, no schema change.** History is just [`Score`] rows under the reserved rubric
-//! `lt:calibration:<provider>/<model>` (value = κ, pass = trusted, reasoning = a compact JSON blob of
-//! the full metrics). Because every `POST /v1/scores` feeds the API's rolling `score_drop` detector,
-//! a degrading κ **rides the existing alert channel automatically** — we build no parallel alerting.
-//! The runner additionally does an immediate per-cycle drift check (below-bar / drop vs the previous
-//! run) so cron gets a non-zero exit on the very next bad run, without waiting for the API window.
+//! Since M11 the durable fact is a `CalibrationRecord` in the `calibrations` table, and the
+//! reserved-rubric `lt:calibration:<provider>/<model>` score is *derived* from it — kept because
+//! every `POST /v1/scores` feeds the API's rolling `score_drop` detector, so a degrading κ still
+//! rides the existing alert channel with no parallel alerting built. See [`crate::calibration_post`]
+//! for why that order matters. The runner additionally does an immediate per-cycle drift check
+//! (below-bar / drop vs the previous run) so cron gets a non-zero exit on the very next bad run,
+//! without waiting for the API window.
 //!
 //! Like `schedule`, it runs as a daemon (`--interval` loop) or a single cycle (`--once`, for cron).
 
 use std::time::Duration;
 
 use anyhow::{bail, Result};
-use serde_json::json;
 
-use lighttrack_core::{Agreement, ModelPriceRow, Rubric, Score};
+use lighttrack_core::{Agreement, ModelPriceRow, Rubric};
 use lighttrack_engine::{parse_judge_spec, EngineConfig};
 
-use crate::calibrate::{judge_set, load_items, resolve_rubric};
+use crate::calibrate::{judge_set, resolve_rubric};
+use crate::calibration_post;
 use crate::cli::Cli;
-use crate::http::{get, post};
 use crate::util::now_ts;
 
 /// Exit code the runner returns when a `--once` cycle ends untrusted, so an external scheduler / CI
@@ -31,7 +31,7 @@ pub(crate) const UNTRUSTED_EXIT: i32 = 5;
 
 /// Parameters for a watch run (kept in a struct to avoid a long argument list).
 pub(crate) struct WatchParams<'a> {
-    pub(crate) file: &'a str,
+    pub(crate) set: &'a crate::calibrate::CalibrationSet,
     pub(crate) rubric_text: Option<&'a str>,
     pub(crate) rubric_id: Option<&'a str>,
     pub(crate) project: Option<&'a str>,
@@ -108,9 +108,9 @@ pub(crate) fn watch(
     engine: &EngineConfig,
     p: &WatchParams,
 ) -> Result<i32> {
-    let items = load_items(p.file)?;
+    let items = p.set.items.clone();
     if items.is_empty() {
-        bail!("no calibration items in {}", p.file);
+        bail!("no calibration items in {}", p.set.source);
     }
     let rubric = resolve_rubric(cli, http, p.rubric_id)?;
     if rubric.is_none() && p.rubric_text.is_none() {
@@ -118,7 +118,7 @@ pub(crate) fn watch(
     }
     let (jp, jm) = parse_judge_spec(&engine.model);
     let reserved = reserved_rubric(&jp, &jm);
-    let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    let prices: Vec<ModelPriceRow> = crate::bench::fetch_prices(cli, http);
 
     println!(
         "calibrate --watch: {} item(s), judge={jp}/{jm}, rubric={reserved}, every {}s (once={}), \
@@ -166,7 +166,11 @@ fn run_cycle(
     reserved: &str,
     prices: &[ModelPriceRow],
 ) -> Result<DriftLevel> {
-    let prev = previous_kappa(cli, http, p.project, reserved);
+    // Keyed on the (rubric, judge) pair rather than on a reserved rubric NAME in a 500-row scan —
+    // which returned "no baseline" the moment a busy project pushed the last calibration off that
+    // page, quietly disabling drift detection exactly where it was needed most.
+    let prev =
+        calibration_post::previous_kappa(cli, http, p.project, p.rubric_id, &judge_id(jp, jm));
     let c = judge_set(
         engine,
         jp,
@@ -187,65 +191,35 @@ fn run_cycle(
         p.kappa_bar,
         p.drift_threshold,
     );
-    post_calibration(cli, http, p.project, reserved, jp, jm, &c.agreement, c.cost)?;
+    // Loud, not fatal - the same rule the one-shot `calibrate` applies. This cycle's judging is
+    // already paid for and its verdict already known; a `?` here threw both away (nothing printed,
+    // the cycle logged only as an error) whenever the API blinked at the moment of recording.
+    if let Err(e) = calibration_post::persist(
+        cli,
+        http,
+        &calibration_post::Measured {
+            project: p.project,
+            rubric_id: p.rubric_id,
+            judge: &judge_id(jp, jm),
+            dataset_id: p.set.dataset_id.as_deref(),
+            cost: c.cost,
+        },
+        &c.agreement,
+        reserved,
+    ) {
+        eprintln!(
+            "  warning: measured \u{3ba}={:.3} but could not record it ({e}); this cycle will not \
+             feed the score_drop alert and the next cycle's drift baseline",
+            c.agreement.cohen_kappa
+        );
+    }
     report(&decision, &c.agreement, c.cost, c.skipped);
     Ok(decision.level)
 }
 
-/// The most recent κ persisted under the reserved rubric, or `None` on the first run. Scores come
-/// back newest-first, so the first match is the previous cycle. Best-effort: a read failure ⇒ `None`
-/// (treated as no prior baseline) so a transient blip doesn't abort the cycle.
-fn previous_kappa(
-    cli: &Cli,
-    http: &reqwest::blocking::Client,
-    project: Option<&str>,
-    reserved: &str,
-) -> Option<f64> {
-    let path = match project {
-        Some(pr) => format!("/v1/scores?project={pr}&limit=500"),
-        None => "/v1/scores?limit=500".to_string(),
-    };
-    let scores: Vec<Score> = get(cli, http, &path).unwrap_or_default();
-    scores
-        .into_iter()
-        .find(|s| s.rubric == reserved)
-        .map(|s| s.value)
-}
-
-/// Persist a cycle's agreement as a [`Score`] under the reserved rubric: value = κ, pass = trusted,
-/// reasoning = a compact JSON blob of the full metrics. This is the whole persistence + alert surface
-/// — the API's `record_score` fans a degrading κ out to the configured `score_drop` channels.
-#[allow(clippy::too_many_arguments)]
-fn post_calibration(
-    cli: &Cli,
-    http: &reqwest::blocking::Client,
-    project: Option<&str>,
-    reserved: &str,
-    jp: &str,
-    jm: &str,
-    a: &Agreement,
-    cost: f64,
-) -> Result<()> {
-    let metrics = json!({
-        "kappa": a.cohen_kappa, "pearson": a.pearson, "mae": a.mae, "rmse": a.rmse, "bias": a.bias,
-        "agreement_rate": a.agreement_rate, "human_pass_rate": a.human_pass_rate,
-        "judge_pass_rate": a.judge_pass_rate, "n": a.n, "threshold": a.threshold,
-        "kappa_bar": a.kappa_bar, "trusted": a.trusted, "judge_cost_usd": cost,
-    });
-    let mut body = json!({
-        "rubric": reserved,
-        "value": a.cohen_kappa,
-        "max": 1.0,
-        "pass": a.trusted,
-        "reasoning": metrics.to_string(),
-        "scored_by": format!("{jp}/{jm}"),
-        "cost_usd": cost,
-    });
-    if let Some(pr) = project {
-        body["project_id"] = json!(pr);
-    }
-    post(cli, http, "/v1/scores", &body)?;
-    Ok(())
+/// The canonical `[provider/]model` string a calibration record is keyed by.
+fn judge_id(jp: &str, jm: &str) -> String {
+    format!("{jp}/{jm}")
 }
 
 /// Print the compact per-cycle line and any drift warning. Warnings go to **stderr** so a daemon's

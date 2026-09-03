@@ -21,6 +21,7 @@ use crate::auth_throttle::AuthThrottle;
 use crate::redact::Redactor;
 use crate::state::AppState;
 use crate::tests_ingest::{make_key, setup};
+use lighttrack_store::Scope as TenantScope;
 
 /// App state with an explicit throttle, so a test spends a budget in a handful of requests rather
 /// than the production default of ten a minute.
@@ -293,7 +294,10 @@ async fn ingest_from_a_blocked_source_is_refused_before_it_reaches_the_store() {
 
     use lighttrack_store::Store;
     assert!(
-        store.list_events(Some("proj-a"), 10).unwrap().is_empty(),
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .is_empty(),
         "a blocked source must not reach the store"
     );
 }

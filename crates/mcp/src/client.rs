@@ -32,17 +32,29 @@ pub(crate) struct Client {
 
 impl Client {
     pub(crate) fn from_env() -> Self {
-        let timeout = std::env::var(ENV_TIMEOUT)
-            .ok()
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+        // Said out loud when set to something that is not a number of seconds: `=30s` used to run
+        // the default silently while the operator believed their override was in force.
+        let timeout = match std::env::var(ENV_TIMEOUT) {
+            Ok(raw) if !raw.trim().is_empty() => raw.trim().parse::<u64>().unwrap_or_else(|_| {
+                eprintln!(
+                    "lt-mcp: {ENV_TIMEOUT}={raw:?} is not a number of seconds; using {DEFAULT_TIMEOUT_SECS}s"
+                );
+                DEFAULT_TIMEOUT_SECS
+            }),
+            _ => DEFAULT_TIMEOUT_SECS,
+        };
         let mut builder = reqwest::blocking::Client::builder();
         if timeout > 0 {
             builder = builder.timeout(Duration::from_secs(timeout));
         }
         Self {
+            // Trimmed once: `LIGHTTRACK_URL=https://host/` is how a URL gets pasted, and the naive
+            // join produced `https://host//v1/...` - a 404 on every tool that read as "no such
+            // endpoint" (the CLI had the identical defect).
             base: std::env::var("LIGHTTRACK_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:8787".into()),
+                .unwrap_or_else(|_| "http://127.0.0.1:8787".into())
+                .trim_end_matches('/')
+                .to_string(),
             key: std::env::var("LIGHTTRACK_KEY")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -116,5 +128,59 @@ impl Client {
         }
         let value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         Ok((value, next_cursor))
+    }
+}
+
+/// Percent-encode a path segment. An id an agent supplies must stay ONE segment: a `/` in it
+/// used to walk into a different route, `?`/`#` started a query or fragment, and a space or a
+/// non-ASCII byte made an invalid request line. `:`, `@`, `.`, `-`, `_`, `~` — what ids
+/// legitimately contain — pass through unchanged.
+pub(crate) fn enc_seg(s: &str) -> String {
+    encode(s, |b| {
+        matches!(b, b'/' | b'?' | b'#' | b'%' | b'&' | b'+' | b'=') || b <= b' ' || b >= 0x7f
+    })
+}
+
+/// Percent-encode a query value. `&` and `=` would add or split parameters (an agent's value
+/// becoming `limit=100000`), `#` ends the query, `+` reads as a space, `%` gets decoded. `:`, `,`
+/// and `/` are legal in a query and appear in real values (timestamps, `customer:acme`,
+/// `customer,day`, `provider/model`), so they stay readable.
+pub(crate) fn enc_q(s: &str) -> String {
+    encode(s, |b| {
+        matches!(b, b'&' | b'=' | b'#' | b'+' | b'%' | b'?') || b <= b' ' || b >= 0x7f
+    })
+}
+
+fn encode(s: &str, escape: impl Fn(u8) -> bool) -> String {
+    s.bytes()
+        .map(|b| {
+            if escape(b) {
+                format!("%{b:02X}")
+            } else {
+                (b as char).to_string()
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{enc_q, enc_seg};
+
+    /// The three shapes that broke or smuggled: a `+` timezone (read as a space), an `&` in a
+    /// value (a second parameter), and a `/` in an id (a different route).
+    #[test]
+    fn agent_supplied_values_cannot_split_the_query_or_escape_their_segment() {
+        assert_eq!(
+            enc_q("2026-01-01T00:00:00+00:00"),
+            "2026-01-01T00:00:00%2B00:00"
+        );
+        assert_eq!(enc_q("x&limit=100000"), "x%26limit%3D100000");
+        assert_eq!(enc_q("customer:acme,day"), "customer:acme,day");
+        assert_eq!(enc_q("summarize email"), "summarize%20email");
+        assert_eq!(enc_seg("ev-1"), "ev-1");
+        assert_eq!(enc_seg("../projects"), "..%2Fprojects");
+        assert_eq!(enc_seg("x?y#z"), "x%3Fy%23z");
+        assert_eq!(enc_q("\u{10d}au"), "%C4%8Dau");
     }
 }

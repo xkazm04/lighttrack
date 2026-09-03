@@ -5,10 +5,11 @@ use serde_json::Value;
 
 use lighttrack_core::{
     new_id, ApiKey, Job, LimitAction, LimitMetric, LimitRule, LimitWindow, LlmEvent, Operation,
-    Project, Prompt, PromptVersion, Provider, Redaction, Status, TokenUsage,
+    Project, Prompt, PromptVersion, Redaction, Status, Threshold, TokenUsage,
 };
 
 use super::SqliteStore;
+use crate::Scope;
 use crate::{Store, TraceFilter, MAX_TRACE_SPANS};
 
 fn ev(project: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEvent {
@@ -20,7 +21,7 @@ fn ev(project: &str, model: &str, inp: u64, out: u64, cost: f64) -> LlmEvent {
         parent_span_id: None,
         ts: Utc::now(),
         received_at: Utc::now(),
-        provider: Provider::Anthropic,
+        provider: "anthropic".into(),
         model: model.into(),
         name: None,
         operation: Operation::Chat,
@@ -62,7 +63,7 @@ fn duplicate_event_id_is_a_conflict_not_an_opaque_error() {
         "got {err2:?}"
     );
     // Only the one row exists.
-    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 1);
+    assert_eq!(s.list_events(Scope::Project("p1"), 10).unwrap().len(), 1);
 }
 
 #[test]
@@ -74,6 +75,8 @@ fn batch_admission_counts_prior_items_no_cap_bypass() {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: false,
+        require_trusted_judge: false,
+        archived_at: None,
         created_at: Utc::now(),
     })
     .unwrap();
@@ -83,11 +86,15 @@ fn batch_admission_counts_prior_items_no_cap_bypass() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 3.0,
+        threshold: Threshold::Fixed(3.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
 
@@ -109,7 +116,7 @@ fn batch_admission_counts_prior_items_no_cap_bypass() {
         "3rd item must be capped"
     );
     assert_eq!(
-        s.list_events(Some("p1"), 10).unwrap().len(),
+        s.list_events(Scope::Project("p1"), 10).unwrap().len(),
         2,
         "only admitted rows stored"
     );
@@ -135,7 +142,7 @@ fn batch_reports_duplicate_id_as_conflict_without_aborting() {
         outcomes[2].is_ok(),
         "a later item still processes after a sibling's conflict"
     );
-    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 2);
+    assert_eq!(s.list_events(Scope::Project("p1"), 10).unwrap().len(), 2);
 }
 
 #[test]
@@ -154,7 +161,9 @@ fn keyset_pagination_is_stable_across_interleaved_inserts() {
     }
 
     let filter = crate::EventFilter::default();
-    let page1 = s.list_events_filtered(Some("p1"), &filter, 2).unwrap();
+    let page1 = s
+        .list_events_filtered(Scope::Project("p1"), &filter, 2)
+        .unwrap();
     assert_eq!(
         page1
             .events
@@ -173,7 +182,9 @@ fn keyset_pagination_is_stable_across_interleaved_inserts() {
         cursor: Some(c1),
         ..Default::default()
     };
-    let page2 = s.list_events_filtered(Some("p1"), &f2, 2).unwrap();
+    let page2 = s
+        .list_events_filtered(Scope::Project("p1"), &f2, 2)
+        .unwrap();
     assert_eq!(
         page2
             .events
@@ -188,7 +199,9 @@ fn keyset_pagination_is_stable_across_interleaved_inserts() {
         cursor: Some(c2),
         ..Default::default()
     };
-    let page3 = s.list_events_filtered(Some("p1"), &f3, 2).unwrap();
+    let page3 = s
+        .list_events_filtered(Scope::Project("p1"), &f3, 2)
+        .unwrap();
     assert_eq!(
         page3
             .events
@@ -206,12 +219,12 @@ fn filtered_listing_ands_all_predicates() {
     let s = SqliteStore::open_in_memory().unwrap();
     let mut a = ev("p1", "claude-haiku-4-5", 1, 1, 0.0);
     a.id = "a".into();
-    a.provider = Provider::Anthropic;
+    a.provider = "anthropic".into();
     a.name = Some("summarize".into());
     a.trace_id = Some("t-a".into());
     let mut b = ev("p1", "gpt-4o", 1, 1, 0.0);
     b.id = "b".into();
-    b.provider = Provider::OpenAi;
+    b.provider = "openai".into();
     b.name = Some("classify".into());
     b.trace_id = Some("t-b".into());
     s.insert_event(&a).unwrap();
@@ -222,7 +235,7 @@ fn filtered_listing_ands_all_predicates() {
         ..Default::default()
     };
     let r = s
-        .list_events_filtered(Some("p1"), &by_provider, 50)
+        .list_events_filtered(Scope::Project("p1"), &by_provider, 50)
         .unwrap();
     assert_eq!(r.events.len(), 1);
     assert_eq!(r.events[0].id, "b");
@@ -233,7 +246,7 @@ fn filtered_listing_ands_all_predicates() {
         ..Default::default()
     };
     let r = s
-        .list_events_filtered(Some("p1"), &by_model_and_name, 50)
+        .list_events_filtered(Scope::Project("p1"), &by_model_and_name, 50)
         .unwrap();
     assert_eq!(r.events.len(), 1);
     assert_eq!(r.events[0].id, "a");
@@ -245,7 +258,7 @@ fn filtered_listing_ands_all_predicates() {
         ..Default::default()
     };
     assert!(s
-        .list_events_filtered(Some("p1"), &none, 50)
+        .list_events_filtered(Scope::Project("p1"), &none, 50)
         .unwrap()
         .events
         .is_empty());
@@ -273,20 +286,24 @@ fn windowed_filter_and_cost_summary_respect_since_inclusive_until_exclusive() {
         until: Some(until),
         ..Default::default()
     };
-    let r = s.list_events_filtered(Some("p1"), &f, 50).unwrap();
+    let r = s
+        .list_events_filtered(Scope::Project("p1"), &f, 50)
+        .unwrap();
     assert_eq!(
         r.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
         ["h2"]
     );
 
     let costs = s
-        .cost_summary_windowed(Some("p1"), Some(since), Some(until))
+        .cost_summary_windowed(Scope::Project("p1"), Some(since), Some(until))
         .unwrap();
     assert_eq!(costs.len(), 1);
     assert_eq!(costs[0].calls, 1, "only h2 falls in the window");
 
     // No bounds == full history (matches cost_summary).
-    let all = s.cost_summary_windowed(Some("p1"), None, None).unwrap();
+    let all = s
+        .cost_summary_windowed(Scope::Project("p1"), None, None)
+        .unwrap();
     assert_eq!(all[0].calls, 3);
 }
 
@@ -300,14 +317,14 @@ fn insert_list_cost_roundtrip() {
     s.insert_event(&ev("p2", "claude-opus-4-8", 10, 5, 0.01))
         .unwrap();
 
-    assert_eq!(s.list_events(None, 10).unwrap().len(), 3);
-    let p1 = s.list_events(Some("p1"), 10).unwrap();
+    assert_eq!(s.list_events(Scope::Operator, 10).unwrap().len(), 3);
+    let p1 = s.list_events(Scope::Project("p1"), 10).unwrap();
     assert_eq!(p1.len(), 2);
     assert_eq!(p1[0].project_id, "p1");
     assert_eq!(p1[0].tags, vec!["smoke".to_string()]);
     assert_eq!(p1[0].metadata, serde_json::json!({"k":"v"}));
 
-    let costs = s.cost_summary(Some("p1")).unwrap();
+    let costs = s.cost_summary(Scope::Project("p1")).unwrap();
     assert_eq!(costs.len(), 1);
     assert_eq!(costs[0].calls, 2);
     assert_eq!(costs[0].input_tokens, 300);
@@ -331,7 +348,7 @@ fn usecase_costs_groups_by_name_with_fallback_and_window() {
     }
 
     // Grouped by (name, provider, model): summarize + classify + the un-named bucket = 3 rows.
-    let rows = s.usecase_costs(Some("p1"), None).unwrap();
+    let rows = s.usecase_costs(Scope::Project("p1"), None).unwrap();
     assert_eq!(rows.len(), 3);
     let summarize = rows
         .iter()
@@ -352,7 +369,7 @@ fn usecase_costs_groups_by_name_with_fallback_and_window() {
     old.ts = Utc::now() - chrono::Duration::days(10);
     s.insert_event(&old).unwrap();
     let since = Utc::now() - chrono::Duration::days(7);
-    let windowed = s.usecase_costs(Some("p1"), Some(since)).unwrap();
+    let windowed = s.usecase_costs(Scope::Project("p1"), Some(since)).unwrap();
     let summ_win = windowed
         .iter()
         .find(|r| r.name.as_deref() == Some("summarize"))
@@ -365,7 +382,7 @@ fn usecase_costs_groups_by_name_with_fallback_and_window() {
 
 #[test]
 fn trace_rollup_groups_events_and_scores() {
-    use lighttrack_core::Score;
+    use lighttrack_core::{Score, ScoreKind};
 
     let s = SqliteStore::open_in_memory().unwrap();
 
@@ -388,7 +405,7 @@ fn trace_rollup_groups_events_and_scores() {
     }
 
     // Listing is per-project and one row per trace, newest first.
-    let traces = s.list_traces(Some("p1"), 10).unwrap();
+    let traces = s.list_traces(Scope::Project("p1"), 10).unwrap();
     assert_eq!(traces.len(), 2, "two distinct p1 traces");
     let t1 = traces
         .iter()
@@ -401,14 +418,14 @@ fn trace_rollup_groups_events_and_scores() {
 
     // The rollup nests child under root and totals the trace.
     let trace = s
-        .get_trace(Some("p1"), "tr-1", MAX_TRACE_SPANS)
+        .get_trace(Scope::Project("p1"), "tr-1", MAX_TRACE_SPANS)
         .unwrap()
         .expect("get_trace Some");
     assert_eq!(trace.totals.spans, 2);
     assert_eq!(trace.spans.len(), 1, "single root span");
     assert_eq!(trace.spans[0].children.len(), 1, "child nests under root");
     assert!(
-        s.get_trace(Some("p1"), "nope", MAX_TRACE_SPANS)
+        s.get_trace(Scope::Project("p1"), "nope", MAX_TRACE_SPANS)
             .unwrap()
             .is_none(),
         "unknown trace -> None"
@@ -420,6 +437,8 @@ fn trace_rollup_groups_events_and_scores() {
         project_id: "p1".into(),
         event_id: Some(event_id.into()),
         rubric: rubric.into(),
+        rubric_id: None,
+        kind: ScoreKind::Trace,
         value: 0.8,
         max: 1.0,
         pass: Some(true),
@@ -435,7 +454,7 @@ fn trace_rollup_groups_events_and_scores() {
         .unwrap();
     s.insert_score(&mk_score(&root.id, "trace-coherence"))
         .unwrap();
-    let scores = s.list_trace_scores(Some("p1"), "tr-1").unwrap();
+    let scores = s.list_trace_scores(Scope::Project("p1"), "tr-1").unwrap();
     assert_eq!(
         scores.len(),
         2,
@@ -467,13 +486,13 @@ fn list_and_detail_report_the_same_duration_and_status() {
         .unwrap();
 
     let listed = s
-        .list_traces(Some("p1"), 10)
+        .list_traces(Scope::Project("p1"), 10)
         .unwrap()
         .into_iter()
         .find(|t| t.trace_id == "tr-dur")
         .expect("trace listed");
     let detail = s
-        .get_trace(Some("p1"), "tr-dur", MAX_TRACE_SPANS)
+        .get_trace(Scope::Project("p1"), "tr-dur", MAX_TRACE_SPANS)
         .unwrap()
         .expect("detail");
 
@@ -505,7 +524,7 @@ fn a_runaway_trace_is_clipped_and_says_so() {
     }
 
     let clipped = s
-        .get_trace(Some("p1"), "tr-loop", 3)
+        .get_trace(Scope::Project("p1"), "tr-loop", 3)
         .unwrap()
         .expect("detail");
     assert!(
@@ -519,7 +538,7 @@ fn a_runaway_trace_is_clipped_and_says_so() {
     assert_eq!(clipped.root_event_id(), Some("e0"));
 
     let whole = s
-        .get_trace(Some("p1"), "tr-loop", MAX_TRACE_SPANS)
+        .get_trace(Scope::Project("p1"), "tr-loop", MAX_TRACE_SPANS)
         .unwrap()
         .expect("detail");
     assert!(!whole.spans_truncated);
@@ -528,7 +547,7 @@ fn a_runaway_trace_is_clipped_and_says_so() {
 
 #[test]
 fn colliding_trace_id_across_projects_stays_separate() {
-    use lighttrack_core::Score;
+    use lighttrack_core::{Score, ScoreKind};
 
     let s = SqliteStore::open_in_memory().unwrap();
     // The ACCIDENTAL case: two tenants both use the natural upstream request id "req-1". p2's event
@@ -548,7 +567,7 @@ fn colliding_trace_id_across_projects_stays_separate() {
     }
 
     let mine = s
-        .get_trace(Some("p1"), "req-1", MAX_TRACE_SPANS)
+        .get_trace(Scope::Project("p1"), "req-1", MAX_TRACE_SPANS)
         .unwrap()
         .expect("p1 sees its own trace");
     assert_eq!(
@@ -566,7 +585,7 @@ fn colliding_trace_id_across_projects_stays_separate() {
     );
 
     let theirs_view = s
-        .get_trace(Some("p2"), "req-1", MAX_TRACE_SPANS)
+        .get_trace(Scope::Project("p2"), "req-1", MAX_TRACE_SPANS)
         .unwrap()
         .expect("p2 sees its own trace");
     assert_eq!(theirs_view.totals.spans, 1);
@@ -574,13 +593,13 @@ fn colliding_trace_id_across_projects_stays_separate() {
 
     // A third project sees nothing at all — not an empty-but-existing trace, None.
     assert!(s
-        .get_trace(Some("p3"), "req-1", MAX_TRACE_SPANS)
+        .get_trace(Scope::Project("p3"), "req-1", MAX_TRACE_SPANS)
         .unwrap()
         .is_none());
 
     // Unscoped (admin/dev) keeps the deliberate cross-project view.
     let merged = s
-        .get_trace(None, "req-1", MAX_TRACE_SPANS)
+        .get_trace(Scope::Operator, "req-1", MAX_TRACE_SPANS)
         .unwrap()
         .expect("operator view");
     assert_eq!(
@@ -594,6 +613,8 @@ fn colliding_trace_id_across_projects_stays_separate() {
         project_id: "p2".into(),
         event_id: Some("e-theirs".into()),
         rubric: "their-rubric".into(),
+        rubric_id: None,
+        kind: ScoreKind::Freeform,
         value: 1.0,
         max: 1.0,
         pass: Some(true),
@@ -607,12 +628,19 @@ fn colliding_trace_id_across_projects_stays_separate() {
     };
     s.insert_score(&score).unwrap();
     assert!(
-        s.list_trace_scores(Some("p1"), "req-1").unwrap().is_empty(),
+        s.list_trace_scores(Scope::Project("p1"), "req-1")
+            .unwrap()
+            .is_empty(),
         "p1 must not read p2's verdicts through a colliding trace id"
     );
-    assert_eq!(s.list_trace_scores(Some("p2"), "req-1").unwrap().len(), 1);
     assert_eq!(
-        s.list_trace_scores(None, "req-1").unwrap().len(),
+        s.list_trace_scores(Scope::Project("p2"), "req-1")
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        s.list_trace_scores(Scope::Operator, "req-1").unwrap().len(),
         1,
         "operator view unchanged"
     );
@@ -636,13 +664,13 @@ fn trace_list_and_detail_models_match_first_seen_order() {
     s.insert_event(&mk(1, "alpha", "e1")).unwrap();
     s.insert_event(&mk(2, "beta", "e2")).unwrap();
 
-    let list = s.list_traces(Some("p1"), 10).unwrap();
+    let list = s.list_traces(Scope::Project("p1"), 10).unwrap();
     let listed = list
         .iter()
         .find(|t| t.trace_id == "tr-order")
         .expect("trace listed");
     let detail = s
-        .get_trace(Some("p1"), "tr-order", MAX_TRACE_SPANS)
+        .get_trace(Scope::Project("p1"), "tr-order", MAX_TRACE_SPANS)
         .unwrap()
         .expect("trace detail");
 
@@ -662,7 +690,7 @@ fn trace_queries_use_indexes_not_full_scan() {
     // Prove (via EXPLAIN QUERY PLAN) the trace read paths hit an index rather than scanning the
     // whole events table. Runs against a raw connection seeded with the shipped schema.
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conn.execute_batch(super::schema::SCHEMA).unwrap();
+    super::schema::apply(&conn).unwrap();
 
     let plan = |sql: &str| -> String {
         let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
@@ -740,7 +768,7 @@ fn trace_filters_and_keyset_pagination() {
 
     // Keyset page 1 (limit 2): newest `ended` first, with a next cursor.
     let f = TraceFilter::default();
-    let p1 = s.list_traces_filtered(Some("p1"), &f, 2).unwrap();
+    let p1 = s.list_traces_filtered(Scope::Project("p1"), &f, 2).unwrap();
     assert_eq!(ids(&p1), vec!["tr-d", "tr-c"]);
     let cursor = p1.next_cursor.clone().expect("more pages remain");
 
@@ -755,7 +783,9 @@ fn trace_filters_and_keyset_pagination() {
         cursor: Some(cursor),
         ..Default::default()
     };
-    let p2 = s.list_traces_filtered(Some("p1"), &f2, 10).unwrap();
+    let p2 = s
+        .list_traces_filtered(Scope::Project("p1"), &f2, 10)
+        .unwrap();
     assert_eq!(
         ids(&p2),
         vec!["tr-f", "tr-b", "tr-a"],
@@ -766,7 +796,7 @@ fn trace_filters_and_keyset_pagination() {
     // status filter (aggregate-level HAVING).
     let err = s
         .list_traces_filtered(
-            Some("p1"),
+            Scope::Project("p1"),
             &TraceFilter {
                 status: Some("error".into()),
                 ..Default::default()
@@ -777,7 +807,7 @@ fn trace_filters_and_keyset_pagination() {
     assert_eq!(ids(&err), vec!["tr-d", "tr-b"]);
     let ok = s
         .list_traces_filtered(
-            Some("p1"),
+            Scope::Project("p1"),
             &TraceFilter {
                 status: Some("success".into()),
                 ..Default::default()
@@ -790,7 +820,7 @@ fn trace_filters_and_keyset_pagination() {
     // min_cost filter.
     let costly = s
         .list_traces_filtered(
-            Some("p1"),
+            Scope::Project("p1"),
             &TraceFilter {
                 min_cost: Some(0.10),
                 ..Default::default()
@@ -804,7 +834,7 @@ fn trace_filters_and_keyset_pagination() {
     let since = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, 26).unwrap();
     let recent = s
         .list_traces_filtered(
-            Some("p1"),
+            Scope::Project("p1"),
             &TraceFilter {
                 since: Some(since),
                 ..Default::default()
@@ -816,7 +846,7 @@ fn trace_filters_and_keyset_pagination() {
     let until = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, 26).unwrap();
     let older = s
         .list_traces_filtered(
-            Some("p1"),
+            Scope::Project("p1"),
             &TraceFilter {
                 until: Some(until),
                 ..Default::default()
@@ -829,7 +859,7 @@ fn trace_filters_and_keyset_pagination() {
     // filter + cursor combined: paginate the error traces one at a time.
     let e1 = s
         .list_traces_filtered(
-            Some("p1"),
+            Scope::Project("p1"),
             &TraceFilter {
                 status: Some("error".into()),
                 ..Default::default()
@@ -840,7 +870,7 @@ fn trace_filters_and_keyset_pagination() {
     assert_eq!(ids(&e1), vec!["tr-d"]);
     let e2 = s
         .list_traces_filtered(
-            Some("p1"),
+            Scope::Project("p1"),
             &TraceFilter {
                 status: Some("error".into()),
                 cursor: e1.next_cursor,
@@ -873,7 +903,7 @@ fn trace_since_prunes_to_in_window_spans() {
     let since = ChronoUtc.with_ymd_and_hms(2026, 1, 1, 0, 0, 15).unwrap();
     let page = s
         .list_traces_filtered(
-            Some("p1"),
+            Scope::Project("p1"),
             &TraceFilter {
                 since: Some(since),
                 ..Default::default()
@@ -902,6 +932,8 @@ fn projects_keys_limits_usage() {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: false,
+        require_trusted_judge: false,
+        archived_at: None,
         created_at: now,
     };
     s.create_project(&proj).unwrap();
@@ -918,6 +950,8 @@ fn projects_keys_limits_usage() {
         created_at: now,
         last_used_at: None,
         revoked: false,
+        scopes: lighttrack_core::default_scopes(),
+        expires_at: None,
     };
     s.create_api_key(&key).unwrap();
     assert_eq!(
@@ -934,11 +968,15 @@ fn projects_keys_limits_usage() {
         project_id: "p1".into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold: 0.005,
+        threshold: Threshold::Fixed(0.005),
         action: LimitAction::Alert,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     };
     s.create_limit_rule(&rule).unwrap();
     assert_eq!(s.list_limit_rules("p1", true).unwrap().len(), 1);
@@ -984,7 +1022,7 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
     let base = CU.with_ymd_and_hms(2026, 3, 1, 12, 0, 0).unwrap();
     let models = ["m-a", "m-b", "m-c"];
     let names: [Option<&str>; 3] = [Some("x"), Some("y"), None];
-    let providers = [Provider::OpenAi, Provider::Anthropic];
+    let providers: [lighttrack_core::ProviderId; 2] = ["openai".into(), "anthropic".into()];
     let windows = [LimitWindow::Hour, LimitWindow::Day, LimitWindow::Month];
     let scopes: Vec<Option<LimitScope>> = vec![
         None,
@@ -1018,7 +1056,7 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
                 (rng() % 40) as f64 * 0.25,
             );
             e.id = format!("e-{id_counter}");
-            e.provider = providers[(rng() % 2) as usize];
+            e.provider = providers[(rng() % 2) as usize].clone();
             e.name = names[(rng() % 3) as usize].map(|s| s.to_string());
             e.ts = base + Duration::seconds(offset);
             // Cost provenance is part of the cached total now, so the randomized set has to contain
@@ -1080,6 +1118,64 @@ fn usage_cache_equals_full_scan_reference_over_randomized_windows() {
             }
         }
     }
+}
+
+#[test]
+fn usage_cache_reset_recovers_rowids_reused_after_a_rollback() {
+    // A batch folds its rows into the cache inside the transaction. If that transaction rolls back,
+    // SQLite hands the freed rowids to the next inserts (`events.id` is TEXT; the implicit rowid is
+    // max+1) — and the cache's `seen_rowid` is already past them, so they would never be folded in.
+    // The batch path resets the cache on commit failure; this pins that a reset is what makes the
+    // cache equal the reference again, and that without one it silently under-counts.
+    let s = SqliteStore::open_in_memory().unwrap();
+    let mut cache = super::usage_cache::UsageCache::default();
+    let conn = s.conn.lock().unwrap();
+    let win = LimitWindow::Day;
+    let now = Utc::now();
+
+    let tx = conn.unchecked_transaction().unwrap();
+    let mut lost = ev("p", "m", 10, 10, 1.0);
+    lost.id = "lost".into();
+    super::events::insert(&tx, &lost).unwrap();
+    let u = cache.usage(&tx, "p", win, None, now).unwrap();
+    assert_eq!(u.calls, 1, "folded inside the transaction");
+    let lost_rowid: i64 = tx
+        .query_row("SELECT MAX(rowid) FROM events", [], |r| r.get(0))
+        .unwrap();
+    tx.rollback().unwrap();
+
+    // Two fresh events: the first takes the rowid the rollback freed, the second the one after.
+    for (id, cost) in [("kept-a", 4.0), ("kept-b", 8.0)] {
+        let mut e = ev("p", "m", 10, 10, cost);
+        e.id = id.into();
+        super::events::insert(&conn, &e).unwrap();
+    }
+    let first_kept_rowid: i64 = conn
+        .query_row("SELECT rowid FROM events WHERE id = 'kept-a'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        first_kept_rowid, lost_rowid,
+        "SQLite reused the rolled-back rowid"
+    );
+
+    let want = super::events::usage_since(&conn, "p", win.since(now)).unwrap();
+    assert_eq!(want.calls, 2);
+    assert_eq!(want.cost_usd, 12.0);
+
+    // Without a reset: `lost` is still counted, `kept-a` never is — 2 calls that look right, at
+    // the wrong cost. This is the under-count a cap could be walked past.
+    let stale = cache.usage(&conn, "p", win, None, now).unwrap();
+    assert_eq!(
+        stale.cost_usd, 9.0,
+        "stale cache: lost(1.0) + kept-b(8.0), kept-a unseen"
+    );
+
+    cache.reset();
+    let fresh = cache.usage(&conn, "p", win, None, now).unwrap();
+    assert_eq!(fresh.calls, want.calls);
+    assert_eq!(fresh.cost_usd, want.cost_usd);
 }
 
 #[test]
@@ -1152,7 +1248,7 @@ fn a_skewed_client_ts_cannot_move_a_budget_window() {
     // And the old, exploitable reading — "window it by the client's ts" — would have seen exactly one
     // call, which is the bypass this keys away from.
     let by_client_ts = s
-        .list_events(Some("p1"), 50)
+        .list_events(Scope::Project("p1"), 50)
         .unwrap()
         .into_iter()
         .filter(|e| e.ts >= now - Duration::hours(1) && e.ts <= now)
@@ -1190,9 +1286,9 @@ fn seed_query_corpus(s: &SqliteStore, n: u32) {
             CU.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap() + chrono::Duration::seconds(i as i64);
         e.received_at = e.ts;
         e.provider = if i % 2 == 0 {
-            Provider::OpenAi
+            "openai".into()
         } else {
-            Provider::Anthropic
+            "anthropic".into()
         };
         e.status = if i % 3 == 0 {
             Status::Error
@@ -1215,7 +1311,10 @@ fn seed_query_corpus(s: &SqliteStore, n: u32) {
 fn extended_event_filters_answer_the_operator_questions() {
     let s = SqliteStore::open_in_memory().unwrap();
     seed_query_corpus(&s, 20);
-    let f = |mk: crate::EventFilter| s.list_events_filtered(Some("p1"), &mk, 100).unwrap();
+    let f = |mk: crate::EventFilter| {
+        s.list_events_filtered(Scope::Project("p1"), &mk, 100)
+            .unwrap()
+    };
 
     // "Which calls errored?" — every 3rd of 20.
     let errored = f(crate::EventFilter {
@@ -1270,7 +1369,7 @@ fn extended_event_filters_answer_the_operator_questions() {
     // independent of the page limit.
     let counted = s
         .list_events_filtered(
-            Some("p1"),
+            Scope::Project("p1"),
             &crate::EventFilter {
                 status: Some("error".into()),
                 with_total: true,
@@ -1297,7 +1396,7 @@ fn extended_event_filters_answer_the_operator_questions() {
     assert!(anded
         .events
         .iter()
-        .all(|e| e.provider == Provider::OpenAi && e.status == Status::Error));
+        .all(|e| e.provider.as_str() == "openai" && e.status == Status::Error));
     assert_eq!(
         anded.events.len(),
         3,
@@ -1347,7 +1446,9 @@ fn keyset_paging_is_exact_under_every_new_filter_combination() {
     ];
 
     for (i, base) in combos.into_iter().enumerate() {
-        let all = s.list_events_filtered(Some("p1"), &base, 1000).unwrap();
+        let all = s
+            .list_events_filtered(Scope::Project("p1"), &base, 1000)
+            .unwrap();
         let want: Vec<String> = all.events.iter().map(|e| e.id.clone()).collect();
 
         let mut got: Vec<String> = Vec::new();
@@ -1357,7 +1458,7 @@ fn keyset_paging_is_exact_under_every_new_filter_combination() {
                 cursor: cursor.clone(),
                 ..base.clone()
             };
-            let page = s.list_events_filtered(Some("p1"), &f, 2).unwrap();
+            let page = s.list_events_filtered(Scope::Project("p1"), &f, 2).unwrap();
             assert!(page.events.len() <= 2, "combo {i}: page over limit");
             if base.with_total {
                 assert_eq!(
@@ -1386,7 +1487,7 @@ fn high_cardinality_event_filters_seek_an_index_instead_of_scanning() {
     // Complexity evidence. Before the composites, a provider/model/status-only predicate fell back to
     // a residual scan of the whole project-ts range — every row of the project read and discarded.
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conn.execute_batch(super::schema::SCHEMA).unwrap();
+    super::schema::apply(&conn).unwrap();
     let plan_of = |sql: &str| -> String {
         let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
         let rows = stmt
@@ -1466,7 +1567,7 @@ fn usage_cache_load_uses_rowid_range_not_full_scan() {
     // Complexity evidence: the per-ingest load rides the integer primary key as a range scan
     // (`rowid > seen`), so its cost is O(events since the last check) — never a full window SCAN.
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    conn.execute_batch(super::schema::SCHEMA).unwrap();
+    super::schema::apply(&conn).unwrap();
     let mut stmt = conn
         .prepare(
             "EXPLAIN QUERY PLAN SELECT rowid, project_id, provider, model, name, ts, cost_usd, \
@@ -1506,11 +1607,15 @@ fn insert_event_checked_enforces_caps() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 2.0,
+        threshold: Threshold::Fixed(2.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     let blocked = s
@@ -1521,7 +1626,7 @@ fn insert_event_checked_enforces_caps() {
 
     // The rejected event is not recorded: still exactly one event for p1.
     assert_eq!(
-        s.list_events(Some("p1"), 10).unwrap().len(),
+        s.list_events(Scope::Project("p1"), 10).unwrap().len(),
         1,
         "rejected event not persisted"
     );
@@ -1545,30 +1650,37 @@ fn limit_rule_update_delete_and_toggle() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 2.0,
+        threshold: Threshold::Fixed(2.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     };
     s.create_limit_rule(&rule).unwrap();
 
     // get round-trips.
-    let got = s.get_limit_rule("r1").unwrap().unwrap();
-    assert_eq!(got.threshold, 2.0);
-    assert!(s.get_limit_rule("nope").unwrap().is_none());
+    let got = s.get_limit_rule(Scope::Operator, "r1").unwrap().unwrap();
+    assert_eq!(got.threshold, Threshold::Fixed(2.0));
+    assert!(s.get_limit_rule(Scope::Operator, "nope").unwrap().is_none());
 
     // Update raises the threshold and switches the action; the row reads back changed.
-    rule.threshold = 9.0;
+    rule.threshold = Threshold::Fixed(9.0);
     rule.action = LimitAction::Alert;
-    assert!(s.update_limit_rule(&rule).unwrap(), "existing row updates");
-    let got = s.get_limit_rule("r1").unwrap().unwrap();
-    assert_eq!(got.threshold, 9.0);
+    assert!(
+        s.update_limit_rule(Scope::Operator, &rule).unwrap(),
+        "existing row updates"
+    );
+    let got = s.get_limit_rule(Scope::Operator, "r1").unwrap().unwrap();
+    assert_eq!(got.threshold, Threshold::Fixed(9.0));
     assert_eq!(got.action, LimitAction::Alert);
     // Updating an unknown id reports no row matched (the API maps that to 404).
     let mut ghost = rule.clone();
     ghost.id = "ghost".into();
-    assert!(!s.update_limit_rule(&ghost).unwrap());
+    assert!(!s.update_limit_rule(Scope::Operator, &ghost).unwrap());
 
     // Toggling disabled stops it from enforcing: a Block rule at threshold 1 admits when disabled.
     let block = LimitRule {
@@ -1576,11 +1688,15 @@ fn limit_rule_update_delete_and_toggle() {
         project_id: "p2".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 1.0,
+        threshold: Threshold::Fixed(1.0),
         action: LimitAction::Block,
         enabled: false,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     };
     s.create_limit_rule(&block).unwrap();
     let a = s
@@ -1594,16 +1710,16 @@ fn limit_rule_update_delete_and_toggle() {
     // Enable it, and the next event is blocked (usage-with-event = 1 >= 1).
     let mut on = block.clone();
     on.enabled = true;
-    assert!(s.update_limit_rule(&on).unwrap());
+    assert!(s.update_limit_rule(Scope::Operator, &on).unwrap());
     let b = s
         .insert_event_checked(&ev("p2", "claude-haiku-4-5", 1, 1, 0.0))
         .unwrap();
     assert!(!b.admitted, "enabling the rule enforces the cap");
 
     // Delete removes it from evaluation entirely.
-    assert!(s.delete_limit_rule("r-block").unwrap());
+    assert!(s.delete_limit_rule(Scope::Operator, "r-block").unwrap());
     assert!(
-        !s.delete_limit_rule("r-block").unwrap(),
+        !s.delete_limit_rule(Scope::Operator, "r-block").unwrap(),
         "second delete finds nothing"
     );
     let c = s
@@ -1621,16 +1737,23 @@ fn warn_at_round_trips_and_admission_reports_warning() {
         project_id: "p1".into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold: 1.0,
+        threshold: Threshold::Fixed(1.0),
         action: LimitAction::Alert,
         enabled: true,
         warn_at: Some(0.8),
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     // warn_at persists through the store.
     assert_eq!(
-        s.get_limit_rule("r-warn").unwrap().unwrap().warn_at,
+        s.get_limit_rule(Scope::Operator, "r-warn")
+            .unwrap()
+            .unwrap()
+            .warn_at,
         Some(0.8)
     );
     assert_eq!(
@@ -1661,22 +1784,29 @@ fn scoped_cap_rejects_only_matching_dimension() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 2.0,
+        threshold: Threshold::Fixed(2.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: Some(LimitScope::Model("gpt-4o".into())),
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     // scope round-trips through the store.
     assert_eq!(
-        s.get_limit_rule("r-model").unwrap().unwrap().scope,
+        s.get_limit_rule(Scope::Operator, "r-model")
+            .unwrap()
+            .unwrap()
+            .scope,
         Some(LimitScope::Model("gpt-4o".into()))
     );
 
     let gpt = |cost: f64| {
         let mut e = ev("p1", "gpt-4o", 1, 1, cost);
-        e.provider = Provider::OpenAi;
+        e.provider = "openai".into();
         e
     };
     // Two gpt-4o calls admit; the third (usage-with-event = 3 >=... no, threshold 2) — 2nd hits 2>=2.
@@ -1787,15 +1917,22 @@ fn a_per_key_cap_binds_only_its_own_key_and_usage_is_visible_before_it_breaches(
         project_id: "p1".into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold: 5.0,
+        threshold: Threshold::Fixed(5.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: Some(LimitScope::ApiKey("k-staging".into())),
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     assert_eq!(
-        s.get_limit_rule("r-key").unwrap().unwrap().scope,
+        s.get_limit_rule(Scope::Operator, "r-key")
+            .unwrap()
+            .unwrap()
+            .scope,
         Some(LimitScope::ApiKey("k-staging".into())),
         "the api_key scope round-trips through the store"
     );
@@ -1836,11 +1973,15 @@ fn a_customer_scoped_cap_reads_the_billing_linkage() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 2.0,
+        threshold: Threshold::Fixed(2.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: Some(LimitScope::Customer("acme".into())),
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     let for_customer = |c: &str| {
@@ -1892,11 +2033,15 @@ fn insert_event_checked_alert_never_blocks() {
         project_id: "p1".into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold: 0.001,
+        threshold: Threshold::Fixed(0.001),
         action: LimitAction::Alert,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     // Way over the Alert threshold, but Alert is observe-only: admitted + recorded, breach reported.
@@ -1912,7 +2057,7 @@ fn insert_event_checked_alert_never_blocks() {
         !a.statuses.iter().any(|st| st.rejects_ingest()),
         "Alert breach never rejects"
     );
-    assert_eq!(s.list_events(Some("p1"), 10).unwrap().len(), 1);
+    assert_eq!(s.list_events(Scope::Project("p1"), 10).unwrap().len(), 1);
 }
 
 #[test]
@@ -1924,6 +2069,7 @@ fn job_queue_claim_finish() {
         job_type: "bench_run".into(),
         payload: serde_json::json!({ "benchmark_id": "b1" }),
         status: "queued".into(),
+        project_id: None,
         attempts: 0,
         max_attempts: 3,
         failures: 0,
@@ -1937,14 +2083,14 @@ fn job_queue_claim_finish() {
     };
     s.create_job(&job).unwrap();
 
-    let claimed = s.claim_job(now).unwrap().unwrap();
+    let claimed = s.claim_job(now, &[]).unwrap().unwrap();
     assert_eq!(claimed.id, "j1");
     assert_eq!(claimed.status, "running");
     assert_eq!(claimed.attempts, 1);
     assert_eq!(claimed.payload["benchmark_id"], "b1");
 
     assert!(s
-        .claim_job(now - chrono::Duration::seconds(1))
+        .claim_job(now - chrono::Duration::seconds(1), &[])
         .unwrap()
         .is_none());
 
@@ -1956,10 +2102,15 @@ fn job_queue_claim_finish() {
         claimed.claimed_at,
     )
     .unwrap();
-    let got = s.get_job("j1").unwrap().unwrap();
+    let got = s.get_job(Scope::Operator, "j1").unwrap().unwrap();
     assert_eq!(got.status, "done");
     assert_eq!(got.result["run_id"], "r1");
-    assert_eq!(s.list_jobs(Some("done"), 10).unwrap().len(), 1);
+    assert_eq!(
+        s.list_jobs(Scope::Operator, Some("done"), 10)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -1972,6 +2123,8 @@ fn prompt_registry_versions_and_labels() {
         name: "support-reply".into(),
         benchmark_id: Some("b1".into()),
         labels: BTreeMap::new(),
+        canary: None,
+        label_history: Vec::new(),
         created_at: now,
         updated_at: now,
     };
@@ -1995,15 +2148,21 @@ fn prompt_registry_versions_and_labels() {
     let by_name = s.get_prompt("p1", "support-reply").unwrap().unwrap();
     assert_eq!(by_name.id, "pr1");
     assert_eq!(by_name.benchmark_id.as_deref(), Some("b1"));
-    assert!(s.get_prompt_by_id("pr1").unwrap().is_some());
+    assert!(s
+        .get_prompt_by_id(Scope::Operator, "pr1")
+        .unwrap()
+        .is_some());
     assert!(s.get_prompt("p1", "missing").unwrap().is_none());
 
     // Versions: newest first, config + note round-trip.
-    let versions = s.list_prompt_versions("pr1").unwrap();
+    let versions = s.list_prompt_versions(Scope::Operator, "pr1").unwrap();
     assert_eq!(versions.len(), 2);
     assert_eq!(versions[0].version, 2);
     assert_eq!(versions[0].config, serde_json::json!({ "model": "haiku" }));
-    let v1 = s.get_prompt_version("pr1", 1).unwrap().unwrap();
+    let v1 = s
+        .get_prompt_version(Scope::Operator, "pr1", 1)
+        .unwrap()
+        .unwrap();
     assert_eq!(v1.content, "v1 text");
     assert_eq!(v1.note.as_deref(), Some("cut 1"));
 
@@ -2029,6 +2188,10 @@ fn relay_task(project: &str, action: &str, max_attempts: u32) -> lighttrack_core
         payload: serde_json::json!({ "sku": "A-1" }),
         status: "queued".into(),
         attempts: 0,
+        failures: 0,
+        stale_reclaims: 0,
+        lease_fence: None,
+        progress: None,
         max_attempts,
         retry_interval_secs: 0,
         idempotency_key: None,
@@ -2042,6 +2205,22 @@ fn relay_task(project: &str, action: &str, max_attempts: u32) -> lighttrack_core
     }
 }
 
+/// Unwrap a settle that is expected to land, naming what refused instead.
+fn settled(v: lighttrack_core::RelaySettle) -> lighttrack_core::RelayTask {
+    match v {
+        lighttrack_core::RelaySettle::Settled(t) => *t,
+        other => panic!("expected the settle to land, got {other:?}"),
+    }
+}
+
+/// The fence the store handed the current holder at lease time.
+fn fence_of(s: &SqliteStore, id: &str) -> Option<chrono::DateTime<Utc>> {
+    s.get_relay_task(Scope::Operator, id)
+        .unwrap()
+        .unwrap()
+        .lease_fence
+}
+
 #[test]
 fn relay_lease_settle_success_roundtrip() {
     use lighttrack_core::RelayOutcome;
@@ -2050,7 +2229,7 @@ fn relay_lease_settle_success_roundtrip() {
     let t = relay_task("p1", "xprice/summary", 4);
     s.create_relay_task(&t).unwrap();
 
-    let leased = s.lease_relay_tasks("dev-1", 600, 5).unwrap();
+    let leased = s.lease_relay_tasks("dev-1", &[], 600, 5).unwrap();
     assert_eq!(leased.len(), 1);
     assert_eq!(leased[0].status, "leased");
     assert_eq!(leased[0].attempts, 1);
@@ -2058,24 +2237,36 @@ fn relay_lease_settle_success_roundtrip() {
     assert_eq!(leased[0].payload["sku"], "A-1");
 
     // Held lease is not re-leasable.
-    assert!(s.lease_relay_tasks("dev-1", 600, 5).unwrap().is_empty());
+    assert!(s
+        .lease_relay_tasks("dev-1", &[], 600, 5)
+        .unwrap()
+        .is_empty());
 
-    let done = s
-        .settle_relay_task(
+    let fence = leased[0].lease_fence.expect("a lease stamps its fence");
+    let done = settled(
+        s.settle_relay_task(
             &t.id,
+            Some(fence),
             &RelayOutcome::Succeeded(serde_json::json!({ "ok": true })),
         )
-        .unwrap()
-        .unwrap();
+        .unwrap(),
+    );
     assert_eq!(done.status, "succeeded");
     assert_eq!(done.result["ok"], true);
 
-    // A duplicate result report is harmless: the settled row comes back unchanged.
-    let again = s
-        .settle_relay_task(&t.id, &RelayOutcome::Failed("late duplicate".into()))
-        .unwrap()
-        .unwrap();
-    assert_eq!(again.status, "succeeded");
+    // A duplicate result report is refused rather than re-applied — and the verdict stands.
+    assert!(matches!(
+        s.settle_relay_task(&t.id, Some(fence), &RelayOutcome::Failed("late".into()))
+            .unwrap(),
+        lighttrack_core::RelaySettle::NotHeld { .. }
+    ));
+    assert_eq!(
+        s.get_relay_task(Scope::Operator, &t.id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "succeeded"
+    );
 }
 
 #[test]
@@ -2087,23 +2278,36 @@ fn relay_failure_requeues_then_dead_letters() {
     s.create_relay_task(&t).unwrap();
 
     // Attempt 1 fails → back to queued (zero interval ⇒ due immediately), error recorded.
-    s.lease_relay_tasks("dev-1", 600, 1).unwrap();
-    let requeued = s
-        .settle_relay_task(&t.id, &RelayOutcome::Failed("boom".into()))
-        .unwrap()
-        .unwrap();
+    s.lease_relay_tasks("dev-1", &[], 600, 1).unwrap();
+    let requeued = settled(
+        s.settle_relay_task(
+            &t.id,
+            fence_of(&s, &t.id),
+            &RelayOutcome::Failed("boom".into()),
+        )
+        .unwrap(),
+    );
     assert_eq!(requeued.status, "queued");
     assert_eq!(requeued.attempts, 1);
+    assert_eq!(
+        requeued.failures, 1,
+        "a reported failure is the retry budget"
+    );
     assert_eq!(requeued.error.as_deref(), Some("boom"));
 
-    // Attempt 2 fails → attempts exhausted → dead.
-    assert_eq!(s.lease_relay_tasks("dev-1", 600, 1).unwrap().len(), 1);
-    let dead = s
-        .settle_relay_task(&t.id, &RelayOutcome::Failed("boom again".into()))
-        .unwrap()
-        .unwrap();
+    // Attempt 2 fails → the RETRY budget is exhausted → dead.
+    assert_eq!(s.lease_relay_tasks("dev-1", &[], 600, 1).unwrap().len(), 1);
+    let dead = settled(
+        s.settle_relay_task(
+            &t.id,
+            fence_of(&s, &t.id),
+            &RelayOutcome::Failed("boom again".into()),
+        )
+        .unwrap(),
+    );
     assert_eq!(dead.status, "dead");
     assert_eq!(dead.attempts, 2);
+    assert_eq!(dead.failures, 2);
 }
 
 #[test]
@@ -2114,55 +2318,79 @@ fn relay_deferred_hands_the_attempt_back() {
     let t = relay_task("p1", "xprice/summary", 1);
     s.create_relay_task(&t).unwrap();
 
-    s.lease_relay_tasks("dev-1", 600, 1).unwrap();
-    let deferred = s
-        .settle_relay_task(
+    s.lease_relay_tasks("dev-1", &[], 600, 1).unwrap();
+    let deferred = settled(
+        s.settle_relay_task(
             &t.id,
+            fence_of(&s, &t.id),
             &RelayOutcome::Deferred {
                 retry_after_secs: Some(0),
                 reason: Some("subscription window exhausted".into()),
             },
         )
-        .unwrap()
-        .unwrap();
+        .unwrap(),
+    );
     assert_eq!(deferred.status, "queued");
-    assert_eq!(deferred.attempts, 0); // handed back — deferral never burns an attempt
+    assert_eq!(deferred.attempts, 0); // handed back — deferral never burns a claim
+    assert_eq!(deferred.failures, 0); // …and records no failure: the window is not the action
 
     // Still leasable despite max_attempts = 1.
-    let released = s.lease_relay_tasks("dev-1", 600, 1).unwrap();
+    let released = s.lease_relay_tasks("dev-1", &[], 600, 1).unwrap();
     assert_eq!(released.len(), 1);
     assert_eq!(released[0].attempts, 1);
 }
 
+/// A device that vanishes is not an action that failed, and the two have separate budgets. An
+/// expired lease is RECLAIMED while the device-death budget lasts — counted as a death, and marked
+/// as one rather than invented as a failure — and only the sweep, once that budget is gone, kills it.
+///
+/// A single counter could not tell the two apart: a task whose device dies every time never reports
+/// a failure, so a `max_attempts`-only rule either re-leased it forever or dead-lettered work that
+/// had never actually been tried.
 #[test]
-fn relay_expired_lease_is_reclaimed_or_dead_lettered() {
+fn relay_expired_lease_is_reclaimed_then_dead_lettered_on_the_device_budget() {
     let s = SqliteStore::open_in_memory().unwrap();
-    // Two tasks: one with attempts to spare, one on its last attempt.
-    let spare = relay_task("p1", "a/retry", 2);
-    let last = relay_task("p1", "a/last", 1);
-    s.create_relay_task(&spare).unwrap();
-    s.create_relay_task(&last).unwrap();
+    let t = relay_task("p1", "a/retry", 9); // retries to spare: only device deaths can end this
+    s.create_relay_task(&t).unwrap();
 
-    // Zero-second leases expire immediately (the device "vanished").
-    assert_eq!(s.lease_relay_tasks("dev-1", 0, 5).unwrap().len(), 2);
+    // Zero-second leases expire immediately (the device "vanished") — repeatedly.
+    for expected in 0..lighttrack_core::RELAY_MAX_STALE_RECLAIMS {
+        let leased = s.lease_relay_tasks("dev-1", &[], 0, 5).unwrap();
+        assert_eq!(leased.len(), 1, "still reclaimable at {expected} deaths");
+        assert_eq!(leased[0].stale_reclaims, expected);
+        assert_eq!(
+            leased[0].failures, 0,
+            "a dead device never failed the action"
+        );
+        assert!(
+            s.sweep_relay_dead().unwrap().is_empty(),
+            "a task with device budget left must be reclaimed, not killed"
+        );
+    }
+    // The last reclaim this task gets: it spends the final death.
+    let last = s.lease_relay_tasks("dev-1", &[], 0, 5).unwrap();
+    assert_eq!(last.len(), 1);
+    assert_eq!(
+        last[0].stale_reclaims,
+        lighttrack_core::RELAY_MAX_STALE_RECLAIMS
+    );
+    let held = s.get_relay_task(Scope::Operator, &t.id).unwrap().unwrap();
+    assert!(held
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("device lost"));
 
-    // The sweep dead-letters the exhausted task (and returns it, for alerting) …
+    // Budget gone: not re-leasable, and the sweep dead-letters it (returning it, for alerting).
+    assert!(s
+        .lease_relay_tasks("dev-2", &[], 600, 5)
+        .unwrap()
+        .is_empty());
     let dead = s.sweep_relay_dead().unwrap();
     assert_eq!(dead.len(), 1);
-    assert_eq!(dead[0].id, last.id);
+    assert_eq!(dead[0].id, t.id);
     assert_eq!(dead[0].status, "dead");
-    assert_eq!(
-        dead[0].error.as_deref(),
-        Some("lease expired without a result")
-    );
     assert!(s.sweep_relay_dead().unwrap().is_empty()); // idempotent
-
-    // … while the one with attempts to spare is re-leased on attempt 2.
-    let reclaimed = s.lease_relay_tasks("dev-2", 600, 5).unwrap();
-    assert_eq!(reclaimed.len(), 1);
-    assert_eq!(reclaimed[0].id, spare.id);
-    assert_eq!(reclaimed[0].attempts, 2);
-    assert_eq!(reclaimed[0].device.as_deref(), Some("dev-2"));
 }
 
 #[test]
@@ -2187,16 +2415,24 @@ fn relay_idempotency_key_is_unique_per_project() {
     // Listing filters by project and status.
     let other = relay_task("p2", "b/other", 4);
     s.create_relay_task(&other).unwrap();
-    assert_eq!(s.list_relay_tasks(None, None, 10).unwrap().len(), 2);
-    assert_eq!(s.list_relay_tasks(Some("p1"), None, 10).unwrap().len(), 1);
     assert_eq!(
-        s.list_relay_tasks(Some("p1"), Some("queued"), 10)
+        s.list_relay_tasks(Scope::Operator, None, 10).unwrap().len(),
+        2
+    );
+    assert_eq!(
+        s.list_relay_tasks(Scope::Project("p1"), None, 10)
             .unwrap()
             .len(),
         1
     );
     assert_eq!(
-        s.list_relay_tasks(Some("p1"), Some("dead"), 10)
+        s.list_relay_tasks(Scope::Project("p1"), Some("queued"), 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        s.list_relay_tasks(Scope::Project("p1"), Some("dead"), 10)
             .unwrap()
             .len(),
         0
@@ -2208,7 +2444,7 @@ fn relay_idempotency_key_is_unique_per_project() {
 /// and the reliability counters — otherwise a stored score is an unauditable scalar again.
 #[test]
 fn score_detail_round_trips_multi_dimension_multi_sample() {
-    use lighttrack_core::{Score, ScoreDetail, ScoreDim};
+    use lighttrack_core::{Score, ScoreDetail, ScoreDim, ScoreKind};
 
     let s = SqliteStore::open_in_memory().unwrap();
     s.init_schema().unwrap();
@@ -2226,6 +2462,7 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
                     "sample two".into(),
                     "sample three".into(),
                 ],
+                ..Default::default()
             },
             ScoreDim {
                 key: "safety".into(),
@@ -2234,6 +2471,7 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
                 floor: Some(0.5),
                 floor_hit: true,
                 reasoning: vec!["unsafe advice".into(), "still unsafe".into()],
+                ..Default::default()
             },
         ],
         agreement: Some(0.8),
@@ -2246,12 +2484,16 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
         notes: vec!["candidate spoofed a section marker".into()],
         // Whole-trace coverage: not a trace verdict, so none.
         coverage: None,
+        // The judged evidence carried an ingest scrub stamp of 2 spans.
+        evidence_redacted_spans: Some(2),
     };
     let score = Score {
         id: new_id(),
         project_id: "p1".into(),
         event_id: None,
         rubric: "bench:x".into(),
+        rubric_id: Some("rub-x".into()),
+        kind: ScoreKind::BenchCase,
         value: 0.575,
         max: 1.0,
         pass: Some(false),
@@ -2265,7 +2507,7 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
     };
     s.insert_score(&score).unwrap();
 
-    let listed = s.list_scores(Some("p1"), 10).unwrap();
+    let listed = s.list_scores(Scope::Project("p1"), 10).unwrap();
     assert_eq!(listed.len(), 1);
     let got = listed[0].detail.as_ref().expect("detail must round-trip");
     assert_eq!(got, &detail, "every field survives the JSON column");
@@ -2284,7 +2526,7 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
     bare.id = new_id();
     bare.detail = None;
     s.insert_score(&bare).unwrap();
-    let listed = s.list_scores(Some("p1"), 10).unwrap();
+    let listed = s.list_scores(Scope::Project("p1"), 10).unwrap();
     assert!(listed.iter().any(|x| x.id == bare.id && x.detail.is_none()));
 }
 
@@ -2318,7 +2560,7 @@ fn a_database_predating_run_scoped_cases_migrates_on_open() {
     let s = SqliteStore::open(&path).expect("an old database must survive the upgrade");
 
     // The pre-existing row is intact and reads back with the new fields empty.
-    let legacy = s.list_scores(Some("p1"), 10).unwrap();
+    let legacy = s.list_scores(Scope::Project("p1"), 10).unwrap();
     assert_eq!(legacy.len(), 1);
     assert_eq!(legacy[0].id, "legacy-1");
     assert!(
@@ -2331,7 +2573,9 @@ fn a_database_predating_run_scoped_cases_migrates_on_open() {
     fresh.run_id = Some("run-47".into());
     fresh.case_index = Some(1);
     s.insert_score(&fresh).unwrap();
-    let cases = s.list_run_scores("run-47", Some("p1"), 10).unwrap();
+    let cases = s
+        .list_run_scores("run-47", Scope::Project("p1"), 10)
+        .unwrap();
     assert_eq!(cases.len(), 1, "only the run's case, not the legacy row");
     assert_eq!(cases[0].case_index, Some(1));
 
@@ -2368,7 +2612,10 @@ fn a_database_predating_job_failure_accounting_migrates_on_open() {
     let s = SqliteStore::open(&path).expect("an old database must survive the upgrade");
 
     // The pre-existing job reads back, with the new counters defaulted rather than missing.
-    let old = s.get_job("old-1").unwrap().expect("legacy job survives");
+    let old = s
+        .get_job(Scope::Operator, "old-1")
+        .unwrap()
+        .expect("legacy job survives");
     assert_eq!(
         (old.status.as_str(), old.failures, old.stale_reclaims),
         ("queued", 0, 0)
@@ -2376,7 +2623,7 @@ fn a_database_predating_job_failure_accounting_migrates_on_open() {
 
     // …and the widened table serves the statements that now reference the new columns.
     let claimed = s
-        .claim_job(Utc::now())
+        .claim_job(Utc::now(), &[])
         .unwrap()
         .expect("claim the legacy job");
     assert_eq!(claimed.id, "old-1");
@@ -2392,9 +2639,15 @@ fn a_database_predating_job_failure_accounting_migrates_on_open() {
         claimed.claimed_at,
     )
     .unwrap();
-    assert_eq!(s.get_job("old-1").unwrap().unwrap().failures, 1);
     assert_eq!(
-        s.cancel_job("old-1").unwrap().unwrap(),
+        s.get_job(Scope::Operator, "old-1")
+            .unwrap()
+            .unwrap()
+            .failures,
+        1
+    );
+    assert_eq!(
+        s.cancel_job(Scope::Operator, "old-1").unwrap().unwrap(),
         lighttrack_core::JobCancel::AlreadyFinished {
             status: "failed".into(),
         }
@@ -2417,6 +2670,7 @@ fn cancel_is_race_safe_against_stale_reclaim() {
         job_type: "bench_run".into(),
         payload: serde_json::json!({ "benchmark_id": "b1" }),
         status: "queued".into(),
+        project_id: None,
         attempts: 0,
         max_attempts: 3,
         failures: 0,
@@ -2432,9 +2686,12 @@ fn cancel_is_race_safe_against_stale_reclaim() {
     // Order A — cancel BEFORE any claim: the job is cancelled outright and never becomes claimable,
     // no matter how stale the cutoff.
     s.create_job(&mk("a")).unwrap();
-    assert_eq!(s.cancel_job("a").unwrap(), Some(JobCancel::Cancelled));
+    assert_eq!(
+        s.cancel_job(Scope::Operator, "a").unwrap(),
+        Some(JobCancel::Cancelled)
+    );
     assert!(
-        s.claim_job(Utc::now()).unwrap().is_none(),
+        s.claim_job(Utc::now(), &[]).unwrap().is_none(),
         "a cancelled job is not claimable"
     );
 
@@ -2443,16 +2700,19 @@ fn cancel_is_race_safe_against_stale_reclaim() {
     // `status='running' AND claimed_at < stale`, so a cancelled runaway was handed straight back to
     // the next worker and kept spending.
     s.create_job(&mk("b")).unwrap();
-    let claimed = s.claim_job(Utc::now()).unwrap().expect("claim b");
+    let claimed = s.claim_job(Utc::now(), &[]).unwrap().expect("claim b");
     assert_eq!(claimed.id, "b");
-    assert_eq!(s.cancel_job("b").unwrap(), Some(JobCancel::Cancelling));
+    assert_eq!(
+        s.cancel_job(Scope::Operator, "b").unwrap(),
+        Some(JobCancel::Cancelling)
+    );
     assert!(
-        s.claim_job(Utc::now() + chrono::Duration::seconds(1))
+        s.claim_job(Utc::now() + chrono::Duration::seconds(1), &[])
             .unwrap()
             .is_none(),
         "a cancelling job must never be reclaimed as stale"
     );
-    let after = s.get_job("b").unwrap().unwrap();
+    let after = s.get_job(Scope::Operator, "b").unwrap().unwrap();
     assert_eq!(after.status, "cancelling");
     assert_eq!(after.attempts, 1, "the reclaim never touched it");
     assert_eq!(after.stale_reclaims, 0);
@@ -2466,10 +2726,10 @@ fn cancel_is_race_safe_against_stale_reclaim() {
         after.claimed_at,
     )
     .unwrap();
-    let done = s.get_job("b").unwrap().unwrap();
+    let done = s.get_job(Scope::Operator, "b").unwrap().unwrap();
     assert_eq!((done.status.as_str(), done.failures), ("cancelled", 0));
     assert!(s
-        .claim_job(Utc::now() + chrono::Duration::seconds(1))
+        .claim_job(Utc::now() + chrono::Duration::seconds(1), &[])
         .unwrap()
         .is_none());
 }
@@ -2485,6 +2745,8 @@ fn cost_capped_store(threshold: f64) -> SqliteStore {
         enabled: true,
         redaction: Redaction::None,
         collective_opt_in: false,
+        require_trusted_judge: false,
+        archived_at: None,
     })
     .unwrap();
     s.create_limit_rule(&LimitRule {
@@ -2492,11 +2754,15 @@ fn cost_capped_store(threshold: f64) -> SqliteStore {
         project_id: "p1".into(),
         metric: LimitMetric::CostUsd,
         window: LimitWindow::Hour,
-        threshold,
+        threshold: Threshold::Fixed(threshold),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     s
@@ -2526,7 +2792,7 @@ fn an_unpriced_model_cannot_walk_past_a_cost_cap() {
         "it is unmeasurable, not over budget"
     );
     assert_eq!(
-        s.list_events(Some("p1"), 10).unwrap().len(),
+        s.list_events(Scope::Project("p1"), 10).unwrap().len(),
         0,
         "and it was not recorded"
     );
@@ -2617,11 +2883,15 @@ fn calls_and_tokens_caps_are_untouched_by_unpriced_traffic() {
         project_id: "p1".into(),
         metric: LimitMetric::Calls,
         window: LimitWindow::Hour,
-        threshold: 3.0,
+        threshold: Threshold::Fixed(3.0),
         action: LimitAction::Block,
         enabled: true,
         warn_at: None,
         scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
     })
     .unwrap();
     for i in 0..4 {

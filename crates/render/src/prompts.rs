@@ -51,13 +51,31 @@ pub(crate) fn resolved(v: &Value) -> Option<String> {
     if let Some(note) = v.get("note").and_then(Value::as_str) {
         out.push_str(&format!("- **Note:** {note}\n"));
     }
-    out.push_str("\n```\n");
+    // A prompt that itself contains a code fence would close ours early and spill the rest of
+    // the content into the page as Markdown; the fence is one backtick longer than the longest
+    // run in the content, which is CommonMark's own rule for nesting.
+    let fence = "`".repeat(longest_backtick_run(content).max(2) + 1);
+    out.push_str(&format!("\n{fence}\n"));
     out.push_str(content);
     if !content.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str("```\n");
+    out.push_str(&format!("{fence}\n"));
     Some(out)
+}
+
+fn longest_backtick_run(s: &str) -> usize {
+    let mut longest = 0;
+    let mut run = 0;
+    for c in s.chars() {
+        if c == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    longest
 }
 
 /// Render a prompt's `labels` map (`{"production": 3}`) as `production→3, staging→5`, or `—` when
@@ -111,6 +129,24 @@ mod tests {
         assert!(md.contains("`production`"));
         assert!(md.contains("tightened tone"));
         assert!(md.contains("You are a helpful support agent."));
+    }
+
+    #[test]
+    fn a_prompt_containing_a_fence_does_not_close_ours() {
+        let v = json!({
+            "name": "coder", "version": 1,
+            "content": "Reply as:\n```json\n{\"ok\": true}\n```\nThanks."
+        });
+        let md = resolved(&v).unwrap();
+        assert!(
+            md.contains("\n````\n"),
+            "a four-backtick fence wraps three-backtick content: {md}"
+        );
+        assert!(md.ends_with("````\n"), "{md}");
+        assert!(md.contains("Thanks."));
+        // Plain content keeps the ordinary three-backtick fence.
+        let plain = resolved(&json!({ "name": "x", "version": 1, "content": "hello" })).unwrap();
+        assert!(plain.contains("\n```\nhello\n```\n"), "{plain}");
     }
 
     #[test]

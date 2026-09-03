@@ -16,6 +16,11 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+// Every lock here recovers from poisoning. The data under these mutexes is a counter or a set of
+// project names; a panic while holding one leaves it at worst slightly wrong, whereas propagating
+// the poison would panic every later admission (and the guard's `Drop`, which aborts the process
+// on a double panic) - the responder dead until restart, for a bookkeeping value.
+
 const HOUR: Duration = Duration::from_secs(3600);
 
 pub(crate) struct Breaker {
@@ -41,7 +46,10 @@ pub(crate) struct InvestigationGuard {
 
 impl Drop for InvestigationGuard {
     fn drop(&mut self) {
-        self.inflight.lock().unwrap().remove(&self.project);
+        self.inflight
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&self.project);
     }
 }
 
@@ -74,7 +82,12 @@ impl Breaker {
 
         // Per-project cooldown — a flap fires the same spike repeatedly; this is what stops each one
         // buying a fresh paid run.
-        if let Some(t) = self.last_investigate.lock().unwrap().get(project) {
+        if let Some(t) = self
+            .last_investigate
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(project)
+        {
             if now.duration_since(*t) < cooldown {
                 return Err(format!(
                     "'{project}' was investigated within cooldown ({}s)",
@@ -85,7 +98,10 @@ impl Breaker {
 
         // Global rolling-hour spawn cap.
         {
-            let recent = self.investigate_recent.lock().unwrap();
+            let recent = self
+                .investigate_recent
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
             let count = recent
                 .iter()
                 .filter(|t| now.duration_since(**t) < HOUR)
@@ -98,7 +114,12 @@ impl Breaker {
         }
 
         // Atomic in-flight reserve: `insert` returns false if the project is already in flight.
-        if !self.inflight.lock().unwrap().insert(project.to_string()) {
+        if !self
+            .inflight
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(project.to_string())
+        {
             return Err("an investigation for this project is already in flight".to_string());
         }
 
@@ -106,7 +127,10 @@ impl Breaker {
         let permit = match self.investigate_sem.clone().try_acquire_owned() {
             Ok(p) => p,
             Err(_) => {
-                self.inflight.lock().unwrap().remove(project);
+                self.inflight
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(project);
                 return Err("max concurrent investigations reached".to_string());
             }
         };
@@ -117,7 +141,10 @@ impl Breaker {
             .unwrap()
             .insert(project.to_string(), now);
         {
-            let mut recent = self.investigate_recent.lock().unwrap();
+            let mut recent = self
+                .investigate_recent
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
             recent.retain(|t| now.duration_since(*t) < HOUR);
             recent.push(now);
         }
@@ -137,7 +164,7 @@ impl Breaker {
         max_per_hour: u32,
     ) -> Result<(), String> {
         let now = Instant::now();
-        let recent = self.recent.lock().unwrap();
+        let recent = self.recent.lock().unwrap_or_else(|p| p.into_inner());
         let count = recent
             .iter()
             .filter(|t| now.duration_since(**t) < HOUR)
@@ -145,7 +172,12 @@ impl Breaker {
         if count as u32 >= max_per_hour {
             return Err(format!("hourly auto-fix cap reached ({max_per_hour}/h)"));
         }
-        if let Some(t) = self.last_act.lock().unwrap().get(project) {
+        if let Some(t) = self
+            .last_act
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(project)
+        {
             if now.duration_since(*t) < cooldown {
                 return Err(format!(
                     "'{project}' was auto-fixed within cooldown ({}s)",
@@ -163,7 +195,7 @@ impl Breaker {
             .lock()
             .unwrap()
             .insert(project.to_string(), now);
-        let mut recent = self.recent.lock().unwrap();
+        let mut recent = self.recent.lock().unwrap_or_else(|p| p.into_inner());
         recent.retain(|t| now.duration_since(*t) < HOUR);
         recent.push(now);
     }

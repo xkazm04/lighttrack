@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/contract",
     "crates/core",
     "crates/store",
     "crates/store-pg",
@@ -24,6 +25,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/xkazm04/lighttrack"
 
 [workspace.dependencies]
+lighttrack-contract = { path = "crates/contract" }
 lighttrack-core = { path = "crates/core" }
 lighttrack-render = { path = "crates/render" }
 lighttrack-billing = { path = "crates/billing" }
@@ -55,3 +57,19 @@ targets = [
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
 ]
+
+# Dev builds carry line tables only, not full debug info.
+#
+# Measured 2026-08-25 on this machine: this workspace's `target/` held 11.06 GB,
+# of which 866 MB of binaries plus 693 MB of incremental was MSVC `.pdb` debug symbols — a large share of the build tree, and
+# the largest single class in it. Cargo's default for dev is `debug = true`,
+# which on `x86_64-pc-windows-msvc` writes one complete packed PDB per binary,
+# and a test-heavy workspace produces one binary per integration test file.
+#
+# `line-tables-only` keeps file:line in panic backtraces and `RUST_BACKTRACE`
+# output — which is what CI, the test harness and any triage actually read.
+# What it drops is variable and type inspection under a native debugger. If
+# someone needs to attach WinDbg or rust-lldb to a binary here, raise this to
+# `debug = 1` ("limited") for that session rather than deleting the line.
+[profile.dev]
+debug = "line-tables-only"

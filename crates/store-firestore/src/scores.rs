@@ -2,7 +2,7 @@
 
 use serde_json::{json, Value};
 
-use lighttrack_core::{Score, ScoreDetail};
+use lighttrack_core::{Score, ScoreDetail, ScoreKind};
 use lighttrack_store::Result;
 
 use crate::codec::*;
@@ -32,6 +32,10 @@ pub(crate) fn insert_score(rest: &Rest, s: &Score) -> Result<()> {
     m.insert("scored_by".into(), json!(s.scored_by));
     m.insert("cost_usd".into(), json!(s.cost_usd));
     m.insert("created_at".into(), json!(fmt_ts(s.created_at)));
+    // The typed identity (M9-C). Written as its own fields, not folded into `rubric`, so the
+    // six encodings that string carries stop being the only way to tell verdicts apart.
+    m.insert("rubric_id".into(), json!(s.rubric_id));
+    m.insert("kind".into(), json!(s.kind.as_str()));
     rest.put_doc("scores", &s.id, &m)
 }
 
@@ -80,10 +84,15 @@ pub(crate) fn list_run_scores(
 /// anti-join, so we probe per id with the same single-field `EQUAL` query `list_scores` uses (a
 /// single-field index is automatic). The caller passes only one page of event ids at a time, so this
 /// stays a small, bounded number of point lookups — never a blind top-N scan of the collection.
-pub(crate) fn scored_event_ids(rest: &Rest, event_ids: &[String]) -> Result<Vec<String>> {
+pub(crate) fn scored_event_ids(
+    rest: &Rest,
+    project: Option<&str>,
+    event_ids: &[String],
+) -> Result<Vec<String>> {
     let mut scored = Vec::new();
     for id in event_ids {
-        let filters: Vec<(&str, &str, Value)> = vec![("event_id", "EQUAL", json!(id))];
+        let mut filters: Vec<(&str, &str, Value)> = vec![("event_id", "EQUAL", json!(id))];
+        crate::scope::push_filter(&mut filters, project);
         // limit 1: we only need existence, not the score rows.
         if !rest.query("scores", &filters, None, Some(1))?.is_empty() {
             scored.push(id.clone());
@@ -110,5 +119,12 @@ fn score_from(m: &Fields) -> Result<Score> {
         scored_by: freq(m, "scored_by")?,
         cost_usd: ff64(m, "cost_usd"),
         created_at: parse_ts(&freq(m, "created_at")?)?,
+        rubric_id: fstr(m, "rubric_id"),
+        // A kind this binary does not know reads as `Other`; an absent one as `Freeform`, the
+        // pre-typing default. Neither errors the listing.
+        kind: match fstr(m, "kind") {
+            None => ScoreKind::Freeform,
+            Some(k) => ScoreKind::parse(&k).unwrap_or(ScoreKind::Other),
+        },
     })
 }

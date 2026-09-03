@@ -32,8 +32,12 @@ impl Table {
         }
     }
 
+    /// Add a row. Every cell is made safe for one table cell on the way in: a `|` inside it would
+    /// start a new column and a newline a new row, so a dataset input of `2|3?` or a multi-line
+    /// alert message used to break the table for every row after it. Escaping here, once, covers
+    /// every renderer rather than trusting each of forty call sites to remember.
     pub(crate) fn row(&mut self, cells: Vec<String>) {
-        self.rows.push(cells);
+        self.rows.push(cells.iter().map(|c| cell(c)).collect());
     }
 
     pub(crate) fn render(&self) -> String {
@@ -52,6 +56,16 @@ impl Table {
         }
         out
     }
+}
+
+/// One string as one GFM table cell: pipes escaped, line breaks collapsed to a space.
+pub(crate) fn cell(s: &str) -> String {
+    if !s.contains(['|', '\n', '\r']) {
+        return s.to_string();
+    }
+    s.replace("\r\n", " ")
+        .replace(['\n', '\r'], " ")
+        .replace('|', "\\|")
 }
 
 fn render_row(cells: &[String], width: &[usize], aligns: &[Align]) -> String {
@@ -178,13 +192,48 @@ pub(crate) fn pct(frac: f64) -> String {
     format!("{:.0}%", frac * 100.0)
 }
 
-/// Trim an RFC3339 timestamp to `MM-DD HH:MM` for compact tables.
+/// Trim an RFC3339 timestamp to `MM-DD HH:MM` for compact tables. Anything not shaped like
+/// `YYYY-MM-DDTHH:MM` is returned unchanged: the old check (`len >= 16`) sliced any long string at
+/// byte offsets 5, 10 and 11, which turned a sentence into fragments and **panicked** on a
+/// multi-byte character straddling one of those offsets — inside a renderer, that is a crashed
+/// MCP tool call for a stored value that was merely not a timestamp.
 pub(crate) fn short_ts(s: &str) -> String {
-    if s.len() >= 16 && s.is_char_boundary(16) {
+    let b = s.as_bytes();
+    let digits = |r: std::ops::Range<usize>| b[r].iter().all(u8::is_ascii_digit);
+    let shaped = b.len() >= 16
+        && digits(0..4)
+        && b[4] == b'-'
+        && digits(5..7)
+        && b[7] == b'-'
+        && digits(8..10)
+        && (b[10] == b'T' || b[10] == b' ')
+        && digits(11..13)
+        && b[13] == b':'
+        && digits(14..16);
+    if shaped {
         format!("{} {}", &s[5..10], &s[11..16])
     } else {
         s.to_string()
     }
+}
+
+/// `body` in a fenced code block that the body cannot close early: the fence is one backtick longer
+/// than the longest run inside it (CommonMark's nesting rule), so a payload or a job result that
+/// itself contains ``` stays inside the block instead of spilling into the page as Markdown.
+pub(crate) fn fenced(lang: &str, body: &str) -> String {
+    let mut longest = 0;
+    let mut run = 0;
+    for c in body.chars() {
+        if c == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    let fence = "`".repeat(longest.max(2) + 1);
+    let nl = if body.ends_with('\n') { "" } else { "\n" };
+    format!("{fence}{lang}\n{body}{nl}{fence}\n")
 }
 
 /// Truncate to at most `n` chars, appending `…` when shortened.
@@ -237,6 +286,19 @@ mod tests {
         assert!(lines[2].contains("10"));
     }
 
+    /// A `|` or a newline in a cell used to corrupt the table from that row on.
+    #[test]
+    fn a_cell_cannot_break_out_of_its_column_or_row() {
+        let mut t = Table::new(&[("A", Align::Left), ("B", Align::Left)]);
+        t.row(vec!["what is 2|3?".into(), "line one\nline two".into()]);
+        let out = t.render();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3, "one header, one separator, ONE row: {out}");
+        assert_eq!(lines[2].matches('|').count(), 3 + 1, "{out}");
+        assert!(lines[2].contains("2\\|3?") && lines[2].contains("line one line two"));
+        assert_eq!(cell("plain"), "plain");
+    }
+
     #[test]
     fn sparkline_spans_levels() {
         let s = sparkline(&[0.0, 1.0, 2.0, 3.0]);
@@ -256,7 +318,27 @@ mod tests {
     #[test]
     fn short_ts_trims_rfc3339() {
         assert_eq!(short_ts("2026-06-17T12:34:56.789Z"), "06-17 12:34");
+        assert_eq!(short_ts("2026-06-17 12:34:56"), "06-17 12:34");
         assert_eq!(short_ts("short"), "short");
+    }
+
+    /// A long string that is not a timestamp is returned whole, and a multi-byte one no longer
+    /// panics at a byte offset inside a character.
+    #[test]
+    fn short_ts_leaves_non_timestamps_alone() {
+        assert_eq!(short_ts("not a timestamp at all"), "not a timestamp at all");
+        let accented = "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}";
+        assert_eq!(short_ts(accented), accented);
+        assert_eq!(short_ts("2026-06-17Tnot:ok"), "2026-06-17Tnot:ok");
+    }
+
+    #[test]
+    fn a_fenced_body_cannot_close_its_own_fence() {
+        assert_eq!(fenced("", "hello"), "```\nhello\n```\n");
+        let body = "say:\n```json\n{}\n```\ndone";
+        let out = fenced("json", body);
+        assert!(out.starts_with("````json\n"), "{out}");
+        assert!(out.ends_with("\ndone\n````\n"), "{out}");
     }
 
     #[test]

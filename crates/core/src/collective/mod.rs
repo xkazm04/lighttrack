@@ -8,11 +8,13 @@
 //! (another LightTrack acting as the public leaderboard); the hub merges contributions so every
 //! operator sees real-world model performance instead of vendor benchmarks.
 //!
-//! Two privacy guarantees are enforced here, in pure code, so they hold for every backend:
+//! Three privacy guarantees are enforced here, in pure code, so they hold for every backend:
 //!   1. **Aggregate-only inputs.** A digest is built from benchmark *run scorecards* ([`RunStat`]),
 //!      which already carry no prompt/response text — we never touch `events`.
 //!   2. **k-anonymity.** A `(provider, model, task_type)` bucket is published only when it aggregates
 //!      at least `min_cases` cases, so a rare/unique task can't be fingerprinted to one operator.
+//!   3. **Bucketed cost.** A per-case cost is an unbounded continuous value and therefore a
+//!      fingerprint; it is coarsened by [`bucket_cost`] before it leaves the instance.
 //!
 //! The coarse `task_type` is always one of a fixed vocabulary ([`task_type_from`]); a custom benchmark
 //! name is classified into a bucket, never published verbatim.
@@ -25,6 +27,7 @@
 
 mod aliases;
 mod classify;
+mod contribution;
 mod merge;
 mod privacy;
 pub mod rigor;
@@ -68,6 +71,9 @@ pub const TASK_TYPES: &[&str] = &[
 
 pub use aliases::ModelAliases;
 pub use classify::task_type_from;
+pub use contribution::{
+    digest_sha256, hub_url_hash, normalize_hub_url, ContributionRecord, ContributionStatus,
+};
 pub use merge::{build_digest, merge_leaderboard, MAX_SOURCE_WEIGHT_SHARE};
 pub use privacy::bucket_cost;
 pub use rigor::{canon_determinism, Coverage, RowRigor, DETERMINISM_LEVELS};

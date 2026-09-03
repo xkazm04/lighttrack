@@ -5,7 +5,7 @@
 //! while its siblings succeed, so no single status code fits the whole request). Each item runs the
 //! exact same pipeline as the single-event path — auth, project scoping, validation, PII redaction,
 //! cost-fill, and limit admission with alert fan-out — by sharing `events::prepare_event` /
-//! `on_admission`. The store call is one critical section (see [`Store::insert_events_checked`]) so a
+//! `events_admission::on_admission`. The store call is one critical section (see [`Store::insert_events_checked`]) so a
 //! batch cannot bypass a cap: admission for each item counts the previously-accepted items ahead of it.
 
 use axum::{extract::State, http::HeaderMap, Json};
@@ -14,11 +14,17 @@ use serde::Serialize;
 use lighttrack_core::{LimitStatus, LlmEvent};
 use lighttrack_store::{Admission, StoreError};
 
-use crate::error::ApiError;
-use crate::events::{breach_reason, on_admission, prepare_event, same_logical_event};
+use crate::auth::Principal;
+use crate::error::{ApiError, ErrorCode};
+use crate::events::{disabled_project_msg, prepare_event, same_logical_event};
+use crate::events_admission::{breach_reason, on_admission};
 use crate::events_validate;
-use crate::guards::{authenticate, resolve_ingest_project_ensuring, NO_PROJECT_MSG};
+use crate::guards::{
+    authenticate, ensure_dev_default_project, resolve_ingest_project, NO_PROJECT_MSG,
+};
+use crate::ingest_proximity::{Proximity, WithProximity};
 use crate::state::{spawn_db, AppState};
+use lighttrack_store::Scope as TenantScope;
 
 /// One item's outcome, tagged so a client can branch on `status`:
 /// - `accepted`: stored (with its resolved `cost_usd`) — or an acknowledged **replay** of an
@@ -31,8 +37,10 @@ use crate::state::{spawn_db, AppState};
 /// Every variant carries `index` (the item's position in the request array), so positional
 /// correlation is explicit rather than load-bearing-but-unstated, and non-accepted variants carry a
 /// stable machine-readable `code` (the same taxonomy the single-event path returns:
-/// `bad_request` | `ts_too_old` | `ts_too_new` | `conflict` | `rate_limited` | `internal`) so a
-/// client can branch without substring-matching English prose.
+/// `bad_request` | `ts_too_old` | `ts_too_new` | `project_disabled` | `conflict` | `rate_limited` |
+/// `internal`) so a client can branch without substring-matching English prose. A key that lacks
+/// the `ingest` scope is refused for the whole request with 403, as on the single-event door —
+/// it is a fact about the key, not about any item.
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub(crate) enum BatchItem {
@@ -85,8 +93,14 @@ pub(crate) async fn post_batch(
     State(st): State<AppState>,
     headers: HeaderMap,
     Json(evs): Json<Vec<LlmEvent>>,
-) -> Result<Json<BatchResponse>, ApiError> {
+) -> Result<WithProximity<BatchResponse>, ApiError> {
     let principal = authenticate(&st, &headers).await?;
+    // The ingest scope is a property of the KEY, not of any item: a read-only key fails every item
+    // identically, and the single-event door answers that with a 403. Before this check the batch
+    // path folded the refusal into the per-item project resolution and reported each item as
+    // `bad_request: project_id is required` - the wrong code and a message about a field the
+    // caller had in fact supplied.
+    crate::auth_scopes::ensure_scope(&principal, lighttrack_core::Scope::Ingest)?;
 
     if evs.is_empty() {
         return Err(ApiError::bad_request(
@@ -107,12 +121,24 @@ pub(crate) async fn post_batch(
     let mut results: Vec<Option<BatchItem>> = Vec::with_capacity(evs.len());
     let mut valid: Vec<LlmEvent> = Vec::new();
     let mut valid_idx: Vec<usize> = Vec::new();
+    // The dev default project is created-if-missing once per batch, not once per item: the ensure is
+    // a store read, and a keyless 500-event dev batch was paying for 500 of them.
+    let mut dev_default_ensured = false;
     for (i, mut ev) in evs.into_iter().enumerate() {
         let item_id = (!ev.id.is_empty()).then(|| ev.id.clone());
         // Same resolution as the single-event door, dev default included: a batching SDK must not be
         // the one client that still fails silently on a zero-config first run.
-        let pid = match resolve_ingest_project_ensuring(&st, &principal, &ev.project_id).await {
-            Ok(p) => p,
+        let pid = match resolve_ingest_project(&principal, &ev.project_id) {
+            Ok(p) => {
+                if !dev_default_ensured
+                    && matches!(principal, Principal::Dev)
+                    && ev.project_id.trim().is_empty()
+                {
+                    ensure_dev_default_project(&st).await;
+                    dev_default_ensured = true;
+                }
+                p
+            }
             // The only failure mode: an admin (or an enforced-mode caller) left project_id blank.
             Err(_) => {
                 results.push(Some(BatchItem::Invalid {
@@ -125,19 +151,30 @@ pub(crate) async fn post_batch(
             }
         };
         // Per-item policy lookup is a cache hit after the first event of each project in the batch.
-        let persistence = match crate::state::redaction_policy_for(&st, &pid).await {
+        let policy = match crate::state::project_policy_for(&st, &pid).await {
             Ok(p) => p,
+            // Same rule as the store-error arm below: the raw error goes to the log, not the wire.
             Err(e) => {
+                tracing::error!(index = i, project_id = %pid, error = %e, "batch item: could not resolve project policy");
                 results.push(Some(BatchItem::Invalid {
                     index: i,
                     id: item_id,
                     code: "internal",
-                    reason: format!("could not resolve project policy: {e}"),
+                    reason: "could not resolve project policy (see server logs)".to_string(),
                 }));
                 continue;
             }
         };
-        match prepare_event(&st, &mut ev, &pid, principal.key_id(), persistence) {
+        if !policy.enabled {
+            results.push(Some(BatchItem::Invalid {
+                index: i,
+                id: item_id,
+                code: ErrorCode::ProjectDisabled.as_str(),
+                reason: disabled_project_msg(&pid),
+            }));
+            continue;
+        }
+        match prepare_event(&st, &mut ev, &pid, principal.key_id(), policy.redaction) {
             Ok(()) => {
                 valid_idx.push(i);
                 valid.push(ev);
@@ -166,12 +203,21 @@ pub(crate) async fn post_batch(
         .await?
     };
 
+    // The batch answers multi-status, so the project's position cannot be a per-item field — it is
+    // one fact about the project, not about item 7. Folded across the whole request and returned in
+    // the shared `X-LightTrack-*` headers instead (worst ratio, worst shed, longest wait).
+    let mut prox = Proximity::default();
     for (k, admission) in admissions.into_iter().enumerate() {
         let ev = &valid[k];
         let index = valid_idx[k];
         let item = match admission {
             Ok(a) => {
                 let breached = on_admission(&st, ev, &a);
+                let mut item_prox = Proximity::of(&a.statuses);
+                if !a.admitted {
+                    item_prox.retry_after_secs = a.retry_after_secs;
+                }
+                prox.merge(&item_prox);
                 if a.admitted {
                     BatchItem::Accepted {
                         index,
@@ -199,16 +245,20 @@ pub(crate) async fn post_batch(
             Err(StoreError::Conflict(_)) => {
                 let store = st.store.clone();
                 let id = ev.id.clone();
-                let stored = spawn_db(move || store.get_event(&id)).await.ok().flatten();
-                match stored {
-                    Some(s) if same_logical_event(&s, ev) => BatchItem::Accepted {
+                // The read-back can itself fail. That is not a conflict — telling a client its
+                // payload differs when we never managed to look at the stored one would send it
+                // minting new ids for an event that is already recorded. Report the failure as
+                // what it is, so the item is retried rather than rewritten.
+                let sc = ev.project_id.clone();
+                match spawn_db(move || store.get_event(TenantScope::Project(&sc), &id)).await {
+                    Ok(Some(s)) if same_logical_event(&s, ev) => BatchItem::Accepted {
                         index,
                         id: ev.id.clone(),
                         cost_usd: s.cost_usd,
                         duplicate: true,
                         breached: Vec::new(),
                     },
-                    _ => BatchItem::Invalid {
+                    Ok(_) => BatchItem::Invalid {
                         index,
                         id: Some(ev.id.clone()),
                         code: "conflict",
@@ -217,6 +267,16 @@ pub(crate) async fn post_batch(
                             ev.id
                         ),
                     },
+                    Err(e) => {
+                        tracing::error!(index, event_id = %ev.id, error = %e, "batch replay check: could not read the stored event");
+                        BatchItem::Invalid {
+                            index,
+                            id: Some(ev.id.clone()),
+                            code: "internal",
+                            reason: "store error while checking for a replay (see server logs)"
+                                .to_string(),
+                        }
+                    }
                 }
             }
             // Any other per-item store failure is reported as invalid rather than aborting the
@@ -248,10 +308,13 @@ pub(crate) async fn post_batch(
             BatchItem::Invalid { .. } => invalid += 1,
         }
     }
-    Ok(Json(BatchResponse {
-        accepted,
-        rejected,
-        invalid,
-        results,
-    }))
+    Ok(WithProximity::new(
+        BatchResponse {
+            accepted,
+            rejected,
+            invalid,
+            results,
+        },
+        prox,
+    ))
 }

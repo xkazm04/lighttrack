@@ -16,16 +16,44 @@ use crate::rest::Rest;
 
 const COLL: &str = "events";
 
+/// What [`fold_usage`] reads off a document — the projection every rolling-usage read asks for,
+/// instead of the whole event with its payloads.
+const USAGE_FIELDS: &[&str] = &["cost_usd", "input_tokens", "output_tokens", "metadata"];
+/// [`USAGE_FIELDS`] plus the top-level scope dimensions, for the scoped and by-scope reads.
+const SCOPED_USAGE_FIELDS: &[&str] = &[
+    "cost_usd",
+    "input_tokens",
+    "output_tokens",
+    "metadata",
+    "provider",
+    "model",
+    "name",
+];
+/// What the cost rollups group and sum on.
+const COST_FIELDS: &[&str] = &[
+    "project_id",
+    "provider",
+    "model",
+    "name",
+    "input_tokens",
+    "output_tokens",
+    "cost_usd",
+];
+
 pub(crate) fn insert_event(rest: &Rest, ev: &LlmEvent) -> Result<()> {
     // Create, not upsert: a duplicate id is a Conflict (API 409), never a silent overwrite.
     rest.create_doc(COLL, &ev.id, &to_fields(ev)?)
 }
 
-pub(crate) fn get_event(rest: &Rest, id: &str) -> Result<Option<LlmEvent>> {
-    rest.get_doc(COLL, id)?
+pub(crate) fn get_event(rest: &Rest, project: Option<&str>, id: &str) -> Result<Option<LlmEvent>> {
+    let ev = rest
+        .get_doc(COLL, id)?
         .as_ref()
         .map(from_fields)
-        .transpose()
+        .transpose()?;
+    Ok(crate::scope::keep(project, ev, |e| {
+        Some(e.project_id.as_str())
+    }))
 }
 
 pub(crate) fn list_events(
@@ -57,7 +85,7 @@ pub(crate) fn cost_summary_windowed(
     if let Some(u) = until {
         filters.push(("ts", "LESS_THAN", json!(fmt_ts(u))));
     }
-    let docs = rest.query(COLL, &filters, None, None)?;
+    let docs = rest.query_select(COLL, COST_FIELDS, &filters, None, None)?;
     let mut agg: BTreeMap<(String, String, String), CostRow> = BTreeMap::new();
     for m in &docs {
         let pid = fstr(m, "project_id").unwrap_or_default();
@@ -73,11 +101,16 @@ pub(crate) fn cost_summary_windowed(
                 input_tokens: 0,
                 output_tokens: 0,
                 cost_usd: 0.0,
+                unpriced_calls: 0,
             });
         row.calls += 1;
         row.input_tokens += fi64(m, "input_tokens").unwrap_or(0);
         row.output_tokens += fi64(m, "output_tokens").unwrap_or(0);
-        row.cost_usd += ff64(m, "cost_usd").unwrap_or(0.0);
+        // A doc with no `cost_usd` is unpriced: counted, never summed as $0.00.
+        match ff64(m, "cost_usd") {
+            Some(c) => row.cost_usd += c,
+            None => row.unpriced_calls += 1,
+        }
     }
     let mut rows: Vec<CostRow> = agg.into_values().collect();
     rows.sort_by(|a, b| {
@@ -119,7 +152,7 @@ pub(crate) fn usage_since(rest: &Rest, project: &str, since: DateTime<Utc>) -> R
         ("project_id", "EQUAL", json!(project)),
         ("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))),
     ];
-    let docs = rest.query(COLL, &filters, None, None)?;
+    let docs = rest.query_select(COLL, USAGE_FIELDS, &filters, None, None)?;
     let mut u = Usage::default();
     for m in &docs {
         fold_usage(&mut u, m);
@@ -206,7 +239,7 @@ pub(crate) fn usage_since_scoped(
         ("project_id", "EQUAL", json!(project)),
         ("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))),
     ];
-    let docs = rest.query(COLL, &filters, None, None)?;
+    let docs = rest.query_select(COLL, SCOPED_USAGE_FIELDS, &filters, None, None)?;
     let mut u = Usage::default();
     for m in &docs {
         if scope_value(m, scope.kind_str()).as_deref() != Some(scope.value()) {
@@ -251,7 +284,7 @@ pub(crate) fn usage_by_scope(
         ("project_id", "EQUAL", json!(project)),
         ("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))),
     ];
-    let docs = rest.query(COLL, &filters, None, None)?;
+    let docs = rest.query_select(COLL, SCOPED_USAGE_FIELDS, &filters, None, None)?;
     let mut agg: BTreeMap<Option<String>, Usage> = BTreeMap::new();
     for m in &docs {
         fold_usage(agg.entry(scope_value(m, kind)).or_default(), m);
@@ -281,7 +314,7 @@ pub(crate) fn usecase_costs(
     if let Some(s) = since {
         filters.push(("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(s))));
     }
-    let docs = rest.query(COLL, &filters, None, None)?;
+    let docs = rest.query_select(COLL, COST_FIELDS, &filters, None, None)?;
     let mut agg: BTreeMap<(Option<String>, String, String), UseCaseCostRow> = BTreeMap::new();
     for m in &docs {
         let name = fstr(m, "name");
@@ -297,11 +330,15 @@ pub(crate) fn usecase_costs(
                 input_tokens: 0,
                 output_tokens: 0,
                 cost_usd: 0.0,
+                unpriced_calls: 0,
             });
         row.calls += 1;
         row.input_tokens += fi64(m, "input_tokens").unwrap_or(0);
         row.output_tokens += fi64(m, "output_tokens").unwrap_or(0);
-        row.cost_usd += ff64(m, "cost_usd").unwrap_or(0.0);
+        match ff64(m, "cost_usd") {
+            Some(c) => row.cost_usd += c,
+            None => row.unpriced_calls += 1,
+        }
     }
     let mut rows: Vec<UseCaseCostRow> = agg.into_values().collect();
     rows.sort_by(|a, b| {
@@ -327,6 +364,10 @@ fn to_fields(ev: &LlmEvent) -> Result<Fields> {
     m.insert("span_id".into(), json!(ev.span_id));
     m.insert("parent_span_id".into(), json!(ev.parent_span_id));
     m.insert("ts".into(), json!(fmt_ts(ev.ts)));
+    // Server-arrival time, the accounting clock the SQL backends window on. The reader below has
+    // accepted this field since the received_at migration; the writer never wrote it, so every
+    // document fell back to the client's `ts` on read and a backdated event moved its own window.
+    m.insert("received_at".into(), json!(fmt_ts(ev.received_at)));
     m.insert("provider".into(), json!(ev.provider.as_str()));
     m.insert("model".into(), json!(ev.model));
     m.insert("operation".into(), json!(ev.operation.as_str()));
@@ -361,10 +402,10 @@ fn from_fields(m: &Fields) -> Result<LlmEvent> {
         span_id: fstr(m, "span_id"),
         parent_span_id: fstr(m, "parent_span_id"),
         ts: parse_ts(&freq(m, "ts")?)?,
-        // No `received_at` field on this backend yet: mirror the SQLite migration's backfill
-        // (arrival time == event time). Mechanical only — the Firestore owner ports the real field.
+        // Documents written before `received_at` was stored fall back to `ts` (the SQLite
+        // migration's backfill rule); everything written since carries the real arrival time.
         received_at: parse_ts(&fstr(m, "received_at").unwrap_or(freq(m, "ts")?))?,
-        provider: parse_enum("provider", &freq(m, "provider")?)?,
+        provider: lighttrack_core::ProviderId::new(&freq(m, "provider")?),
         model: freq(m, "model")?,
         name: fstr(m, "name"),
         operation: parse_enum("operation", &freq(m, "operation")?)?,
@@ -387,4 +428,35 @@ fn from_fields(m: &Fields) -> Result<LlmEvent> {
         source: fstr(m, "source"),
         metadata: fjson(m, "metadata")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{from_fields, to_fields};
+    use crate::codec::{decode_doc, encode_fields};
+    use lighttrack_core::LlmEvent;
+    use serde_json::json;
+
+    /// The arrival clock survives storage: the reader accepted `received_at` for a release the
+    /// writer never wrote it, so every document answered accounting windows on the client's `ts`.
+    #[test]
+    fn received_at_round_trips_and_is_not_the_client_ts() {
+        let mut ev: LlmEvent = serde_json::from_value(json!({
+            "id": "e1", "project_id": "p", "provider": "anthropic", "model": "m",
+            "usage": { "input": 1, "output": 1 }, "ts": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        ev.received_at = chrono::DateTime::parse_from_rfc3339("2026-03-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let doc = json!({ "fields": encode_fields(&to_fields(&ev).unwrap()) });
+        let back = from_fields(&decode_doc(&doc)).unwrap();
+        assert_eq!(back.received_at, ev.received_at);
+        assert_ne!(back.received_at, back.ts);
+        // A pre-migration document with no field still reads as ts.
+        let mut legacy = to_fields(&ev).unwrap();
+        legacy.remove("received_at");
+        let back = from_fields(&decode_doc(&json!({ "fields": encode_fields(&legacy) }))).unwrap();
+        assert_eq!(back.received_at, back.ts);
+    }
 }

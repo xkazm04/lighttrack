@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 /// The `outputSchema` for a tool's structured result, or `None` if the tool returns text only.
 pub(crate) fn output_schema(tool: &str) -> Option<Value> {
     let s = match tool {
+        "get_capabilities" => capabilities_resp(),
         "list_projects" => list_of(project()),
         "get_cost_summary" => list_of(cost_row()),
         "get_margin" => margin_resp(),
@@ -19,15 +20,21 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "list_scores" => list_of(score()),
         "get_limit_status" => limit_status_resp(),
         "list_limits" => list_of(limit_rule()),
+        "list_alerts" => alerts_resp(),
+        "list_margin_policies" => list_of(margin_policy()),
         "list_prices" => list_of(price_row()),
+        "list_price_history" => list_of(price_row()),
+        "list_unpriced_models" => unpriced_resp(),
         "list_benchmarks" => list_of(benchmark()),
         "get_benchmark" => benchmark(),
         "get_benchmark_runs" => list_of(benchmark_run()),
         "check_benchmark_gate" => gate_resp(),
         "get_usecases" => list_of(usecase_row()),
+        "query_rollup" => rollup_resp(),
         "get_forecast" => forecast_resp(),
         "list_jobs" => list_of(job()),
         "get_job" => job(),
+        "list_schedules" => list_of(schedule()),
         "list_datasets" => list_of(dataset()),
         "get_dataset" => dataset(),
         "list_dataset_items" => list_of(dataset_item()),
@@ -35,8 +42,14 @@ pub(crate) fn output_schema(tool: &str) -> Option<Value> {
         "get_rubric" => rubric(),
         "get_collective_leaderboard" => collective_resp(),
         "get_collective_digest" => collective_digest_resp(),
+        "get_collective_contributions" => list_of(contribution()),
+        "list_labels" => list_of(label()),
+        "list_calibrations" => list_of(calibration()),
+        "get_judge_trust" => judge_trust_resp(),
+        "enqueue_job" => job(),
         "list_prompts" => list_of(prompt_entry()),
         "get_prompt" => resolved_prompt(),
+        "get_prompt_quality" => list_of(prompt_quality_row()),
         _ => return None,
     };
     Some(s)
@@ -53,6 +66,22 @@ fn list_of(item: Value) -> Value {
 
 fn obj(props: Value) -> Value {
     json!({ "type": "object", "additionalProperties": true, "properties": props })
+}
+
+/// The store capability manifest. `unsupported` is the half that changes an agent's behaviour: a
+/// surface listed there means a 501 from its routes is a permanent gap, not absent data.
+fn capabilities_resp() -> Value {
+    json!({
+        "type": "object",
+        "required": ["backend", "surfaces", "unsupported"],
+        "additionalProperties": true,
+        "properties": {
+            "backend": {"type":"string"},
+            "surfaces": {"type":"array","items":{"type":"string"}},
+            "unsupported": {"type":"array","items":{"type":"string"}},
+            "atomic_admission": {"type":"boolean"}
+        }
+    })
 }
 
 fn project() -> Value {
@@ -131,6 +160,45 @@ fn trace_detail() -> Value {
     })
 }
 
+/// A human verdict (M11). `subject` is the `kind:id` pair a label is *about* — the field an agent
+/// needs to join a label back to the event, dataset item or score it grades.
+fn label() -> Value {
+    obj(json!({
+        "id": {"type":"string"}, "project_id": {"type":"string"},
+        "subject": {"type":"string","description":"'<kind>:<id>' with kind one of event, dataset_item, score"},
+        "value": {"type":"number"}, "pass": {"type":["boolean","null"]},
+        "rubric_id": {"type":["string","null"]}, "labeler": {"type":"string"},
+        "note": {"type":["string","null"]}, "created_at": {"type":"string"}
+    }))
+}
+
+/// One judge-human calibration. `agreement` is the number a drift check reads; `n` is why it may or
+/// may not be believed.
+fn calibration() -> Value {
+    obj(json!({
+        "id": {"type":"string"}, "project_id": {"type":"string"},
+        "judge": {"type":"string"}, "rubric_id": {"type":["string","null"]},
+        "agreement": {"type":"number"}, "n": {"type":"integer"},
+        "created_at": {"type":"string"}
+    }))
+}
+
+/// `unknown` is not `untrusted`: a judge nobody has measured has taken no check, not failed one.
+/// The verdict is the field an agent branches on, so it is required.
+fn judge_trust_resp() -> Value {
+    json!({
+        "type": "object",
+        "required": ["verdict"],
+        "additionalProperties": true,
+        "properties": {
+            "verdict": {"type":"string","enum":["trusted","untrusted","unknown"]},
+            "judge": {"type":"string"}, "rubric_id": {"type":["string","null"]},
+            "agreement": {"type":["number","null"]}, "n": {"type":["integer","null"]},
+            "calibrated_at": {"type":["string","null"]}
+        }
+    })
+}
+
 fn score() -> Value {
     obj(json!({
         "id": {"type":"string"}, "project_id": {"type":"string"}, "event_id": {"type":["string","null"]},
@@ -170,7 +238,8 @@ fn gate_resp() -> Value {
         "required": ["status"],
         "additionalProperties": true,
         "properties": {
-            "status": {"type":"string","enum":["pass","regressed","no_baseline","no_runs"]},
+            // `partial`: a run the cost ceiling or an operator cut short - unverified, never green.
+            "status": {"type":"string","enum":["pass","regressed","no_baseline","no_runs","partial"]},
             "run_id": {"type":["string","null"]}, "mean": {"type":["number","null"]},
             "baseline": {"type":["number","null"]}, "n": {"type":["integer","null"]}
         }
@@ -183,6 +252,28 @@ fn usecase_row() -> Value {
         "calls": {"type":"integer"}, "input_tokens": {"type":"integer"},
         "output_tokens": {"type":"integer"}, "cost_usd": {"type":"number"}
     }))
+}
+
+/// The grouped rollup. `keys` aligns positionally with the echoed `group_by`, and `unpriced_calls`
+/// is what stops `cost_usd` from reading as a complete number when it is a floor.
+fn rollup_resp() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["group_by", "rows"],
+        "properties": {
+            "group_by": {"type":"array","items":{"type":"string"}},
+            "time_key": {"type":"string"},
+            "rows": {"type":"array","items": obj(json!({
+                "keys": {"type":"array","items":{"type":["string","null"]}},
+                "calls": {"type":"integer"}, "input_tokens": {"type":"integer"},
+                "output_tokens": {"type":"integer"}, "cost_usd": {"type":"number"},
+                "unpriced_calls": {"type":"integer"},
+                "client_reported_cost_usd": {"type":"number"},
+                "errors": {"type":"integer"}
+            }))}
+        }
+    })
 }
 
 fn forecast_resp() -> Value {
@@ -237,11 +328,68 @@ fn collective_digest_resp() -> Value {
     })
 }
 
+/// One contribution-ledger row. The digest **body** is deliberately absent from the shape as well
+/// as from the store: `digest_sha256` and the counts are what the ledger knows.
+fn contribution() -> Value {
+    obj(json!({
+        "id": {"type":"string"},
+        "hub_url_hash": {"type":"string"},
+        "contributor_id_as_acked": {"type":["string","null"]},
+        "schema_version": {"type":"integer"},
+        "generated_at": {"type":"string"},
+        "entries_count": {"type":"integer"},
+        "projects_included": {"type":"integer"},
+        "projects_excluded": {"type":"integer"},
+        "digest_sha256": {"type":"string"},
+        "ack": {},
+        "status": {"type":"string", "enum": ["sent", "rejected", "failed"]},
+        "created_at": {"type":"string"}
+    }))
+}
+
+/// The alert ledger's page. An envelope, not a bare array, so `next_cursor` travels with the rows —
+/// and `delivered` is declared explicitly because an EMPTY delivery list is the single most
+/// important thing on this page: it means the alert reached nobody.
+fn alerts_resp() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["alerts"],
+        "properties": {
+            "next_cursor": {"type":["string","null"]},
+            "alerts": { "type":"array", "items": obj(json!({
+                "id": {"type":"string"}, "project_id": {"type":["string","null"]},
+                "kind": {"type":"string"}, "dedup_key": {"type":"string"},
+                "severity": {"type":"string"}, "payload": {"type":["object","null"]},
+                "fired_at": {"type":"string"},
+                "delivered": { "type":"array", "items": obj(json!({
+                    "channel_id": {"type":"string"}, "ok": {"type":"boolean"},
+                    "status": {"type":["string","null"]}, "at": {"type":"string"}
+                })) },
+                "acked_at": {"type":["string","null"]}, "acked_by": {"type":["string","null"]},
+                "resolution": {"type":["object","null"]}
+            })) }
+        }
+    })
+}
+
 fn limit_rule() -> Value {
     obj(json!({
         "id": {"type":"string"}, "project_id": {"type":"string"}, "metric": {"type":"string"},
-        "window": {"type":"string"}, "threshold": {"type":"number"}, "action": {"type":"string"},
-        "enabled": {"type":"boolean"}
+        "window": {"type":"string"}, "threshold": {"type":["number","object"]},
+        "action": {"type":"string"}, "enabled": {"type":"boolean"},
+        "origin": {"type":["string","null"]}, "expires_at": {"type":["string","null"]}
+    }))
+}
+
+/// A limit rule's threshold is now a number OR an object (a share of recognized revenue), so the
+/// schema says so rather than promising a number the server may not send.
+fn margin_policy() -> Value {
+    obj(json!({
+        "id": {"type":"string"}, "project_id": {"type":"string"},
+        "trigger": {"type":["object","string"]}, "action": {"type":["object","string"]},
+        "min_cost_usd": {"type":"number"}, "cooldown_secs": {"type":"integer"},
+        "expiry_secs": {"type":"integer"}, "enabled": {"type":"boolean"}
     }))
 }
 
@@ -249,8 +397,28 @@ fn price_row() -> Value {
     obj(json!({
         "provider": {"type":"string"}, "model": {"type":"string"},
         "input_per_mtok": {"type":"number"}, "output_per_mtok": {"type":"number"},
-        "cached_input_per_mtok": {"type":["number","null"]}, "effective_date": {"type":"string"},
-        "source_url": {"type":["string","null"]}
+        "cached_input_per_mtok": {"type":["number","null"]}, "effective_from": {"type":"string"},
+        "source_url": {"type":["string","null"]},
+        "verified_at": {"type":["string","null"]}, "note": {"type":["string","null"]}
+    }))
+}
+
+/// `list_unpriced_models` — the ledger, plus how fresh the rates that *did* apply are.
+fn unpriced_resp() -> Value {
+    obj(json!({
+        "since": {"type":"string"},
+        "unpriced_calls": {"type":"integer"},
+        "notes": {"type":"string"},
+        "models": {"type":"array","items": obj(json!({
+            "provider": {"type":"string"}, "model": {"type":"string"},
+            "calls": {"type":"integer"},
+            "input_tokens": {"type":"integer"}, "output_tokens": {"type":"integer"},
+            "first_seen": {"type":"string"}, "last_seen": {"type":"string"}
+        }))},
+        "price_book": obj(json!({
+            "verified_at": {"type":["string","null"]}, "stale": {"type":"boolean"},
+            "stale_after_days": {"type":"integer"}, "rows": {"type":"integer"}
+        }))
     }))
 }
 
@@ -281,6 +449,15 @@ fn job() -> Value {
         "attempts": {"type":"integer"}, "max_attempts": {"type":"integer"},
         "progress": {"type":["string","null"]}, "error": {"type":["string","null"]},
         "result": {}, "created_at": {"type":"string"}, "updated_at": {"type":"string"}
+    }))
+}
+
+fn schedule() -> Value {
+    obj(json!({
+        "id": {"type":"string"}, "project_id": {"type":"string"}, "kind": {"type":"string"},
+        "payload": {}, "interval_secs": {"type":"integer"}, "next_due": {"type":"string"},
+        "last_job_id": {"type":["string","null"]}, "enabled": {"type":"boolean"},
+        "created_at": {"type":"string"}
     }))
 }
 
@@ -328,6 +505,26 @@ fn resolved_prompt() -> Value {
     }))
 }
 
+/// One served version'''s quality. `n` and the interval are `required` on purpose: an agent handed a
+/// bare mean will compare two versions that are not comparable, and this is the schema that makes
+/// the evidence impossible to omit.
+fn prompt_quality_row() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["tag", "n", "mean", "ci95_low", "ci95_high"],
+        "properties": {
+            "tag": {"type":["string","null"],"description":"the metadata.prompt tag, null for untagged traffic"},
+            "name": {"type":"string"}, "version": {"type":"integer"},
+            "n": {"type":"integer","description":"verdicts behind this row — read it before the mean"},
+            "mean": {"type":"number","description":"mean of value/max, so rubric scales are comparable"},
+            "pass_rate": {"type":"number"},
+            "ci95_low": {"type":"number"}, "ci95_high": {"type":"number"},
+            "cost_usd": {"type":"number","description":"what the judged events cost"}
+        }
+    })
+}
+
 fn collective_resp() -> Value {
     json!({
         "type": "object",
@@ -357,6 +554,7 @@ mod tests {
             "get_usecases",
             "get_forecast",
             "get_collective_digest",
+            "get_collective_contributions",
         ] {
             assert!(
                 output_schema(t).is_some(),
@@ -387,9 +585,13 @@ mod tests {
     }
 
     #[test]
-    fn gate_schema_enumerates_the_four_verdicts() {
+    fn gate_schema_enumerates_every_verdict_the_api_emits() {
         let s = output_schema("check_benchmark_gate").unwrap();
         let variants = s["properties"]["status"]["enum"].as_array().unwrap();
-        assert_eq!(variants.len(), 4);
+        assert_eq!(variants.len(), 5);
+        assert!(
+            variants.iter().any(|v| v == "partial"),
+            "a cost-halted run is its own verdict"
+        );
     }
 }

@@ -120,6 +120,28 @@ tiers: **Alert** (notify only — the event is still recorded), **Throttle** (gr
 readable via `GET /v1/limits/status` and MCP. Inline *pre-call* blocking (before the provider spend)
 still requires gateway mode. The scoring/benchmark engine is **not** subject to limits.
 
+### 7a1. A threshold can be derived, and a rule can be written by the system
+A `threshold` is a number **or** `{"pct": N, "dimension": "customer"}` — a share of the subject's
+recognized revenue, resolved at *evaluation* time against the same recognition the `/v1/margin`
+rollup uses, so a cap follows the invoice instead of going stale on it. Every `LimitStatus` carries a
+`basis` naming what the number came from, and the 429 says it in words. A derived threshold whose
+revenue cannot be measured resolves to `+inf` and never breaches (`basis.kind = "unknown"`): a
+guardrail we cannot measure is inert by design, never a guess that could become a surprise 429.
+
+Rules therefore have **provenance**. `origin` records what created a rule when it was not a human
+(`margin_policy:<policy id>:<subject>`), `expires_at` when a machine-made rule lapses, and
+`escalated_until` when a forecast-driven tightening reverses. Three consequences an operator can rely
+on, each pinned by a test:
+
+- The forecast sweep is the **only** writer of these fields, and it only ever touches rules carrying
+  its own `origin`. A hand-made cap is untouchable by automation.
+- Escalation *shadows* `action` rather than overwriting it, so de-escalation is a field clear and not
+  a remembered undo — and a sweep that stops running cannot leave a project throttled, because the
+  lapse is on the row.
+- An expired rule is inert at evaluation, sweep or no sweep.
+
+`docs/MARGIN.md` ("Guardrails") has the policy vocabulary and the full behaviour.
+
 ### 7a0. Scoped rules and per-key budgets
 A rule's optional `scope` narrows it to one value of one dimension:
 `{"provider":…}` · `{"model":…}` · `{"name":…}` (use-case) · `{"api_key":…}` · `{"customer":…}`.
@@ -194,8 +216,9 @@ points at `/v1/limits/usage`. The dimension is not exposed over MCP.
 An event whose model is absent from the price book stores `cost_usd = NULL` — never a phantom zero,
 because that invariant is what makes margin/analytics honest. But `SUM(cost_usd)` reads `NULL` as
 `0.00`, so a **cost cap used to be free to walk past on exactly the newest, least-vetted traffic**
-(`cost_usd` is also the *default* limit metric). Fixed **inside the limit path only** — nothing is
-written onto the event row, and there is no price discovery from providers:
+(`cost_usd` is also the *default* limit metric). Fixed **inside the limit path** — there is still no
+price discovery from providers, and nothing is written onto the event row *at ingest*; M26 added one
+explicit, operator-initiated exception (the forward fill below):
 
 - **Imputation.** Each unpriced call in a window is charged the mean cost of a *priced* call in the
   same window (`SUM(cost_usd) / priced_calls`). It uses only evidence already inside the window, and
@@ -212,6 +235,15 @@ written onto the event row, and there is no price discovery from providers:
   entry does not restate spend already inside a window — the cap stays wrong until the window rolls.
   Only *unpriced* traffic self-corrects (its charge is computed at evaluation time). This absence is
   stated in `GET /v1/limits/status` → `cost_basis.notes`, not left to be discovered during an incident.
+- **Seeing the gap, and closing it (M26).** `GET /v1/costs/unpriced` lists the `(provider, model)`
+  pairs carrying unpriced traffic, ranked by calls, with the price book's own freshness beside them —
+  before this, nothing said *which* models were missing, so the only symptom was a cost number that
+  felt low. `PUT /v1/prices/:provider/:model?fill_unpriced=1` prices the stored `cost_usd IS NULL`
+  rows for that key and answers `{filled, remaining_unpriced}`. The fill is opt-in, never automatic;
+  it touches only rows that were never costed, so the no-retroactive-repricing rule above is intact;
+  and every row it writes is stamped `metadata.cost_source = "book_fill"` + `priced_at`, so a cost
+  reconstructed later stays distinguishable from one that was right at the time. See
+  `docs/PRICING.md`.
 - **Client-reported cost** (`metadata.cost_source = "client"`) is summed separately and reported in
   `cost_evidence` / `cost_basis`, so an operator can see when a cap rests on the caller's own number.
 
@@ -276,6 +308,32 @@ was a `ratio` it had to poll a second endpoint to see. `Throttle` is now **propo
 - **Proximity on accepted writes.** `POST /v1/events` returns `usage_ratio` (worst ratio among the
   rules that applied) and `shed_fraction`, so a client learns it is approaching a cap from the response
   it already gets, not from a separate poll.
+- **The same signal on every ingest door, in headers.** The body could only ever carry it on
+  `/v1/events`: `/v1/events/batch` answers multi-status (the project's position is not a property of
+  item 7) and `/v1/traces` answers in the OTLP envelope, whose shape is the exporter's. So all three
+  doors — and the 429 itself, which is the response that needs it most and has no `IngestResponse`
+  body — also return `X-LightTrack-Usage-Ratio`, `X-LightTrack-Shed-Fraction` and
+  `X-LightTrack-Retry-After`. Ratios are exact six-decimal strings; an **absent header means
+  unknown, never `0`** (a project with no limits sends none at all). The batch door folds the worst
+  of each axis, and the longest wait, across its items. `X-LightTrack-Retry-After` mirrors
+  `Retry-After` — it exists because proxies and browser fetch stacks routinely strip or rewrite the
+  standard header, and a back-off schedule that survives only some hops is not a schedule.
+- **Which rule is binding.** `usage_ratio: 0.94` is only actionable if you know what is at 94%.
+  `POST /v1/events` therefore also returns `binding_scope` (`{"kind":"model","value":"gpt-4o"}`, or
+  omitted when the binding rule is project-wide) and `binding_rule` (its id). A project-wide cap
+  means stop; a `model`-scoped one means route the next call elsewhere; a `name`-scoped one means
+  only that call site pauses. `binding_rule` is what lets an SDK reproduce the server's own shed
+  verdict — the decision is a hash of `(rule_id, event_id)`, so without the rule's identity a client
+  can run the same function but never reach the same answer.
+- **Pre-spend admission is the client's half.** The server's caps are record-side: they refuse to
+  *record* a call that already cost money. The SDKs close that gap locally — each keeps the last
+  limit view per (project, key, binding scope), and `admit()` answers from it with no I/O, so a call
+  that would be refused is never made. `enforce: "block"` short-circuits the provider call with a
+  typed budget error; `"warn"` logs and proceeds; `"off"` (the default) only observes. A locally
+  blocked call is not spend and is not recorded as one — with `record_blocked` the SDK emits a
+  zero-usage event tagged `lt_blocked_locally` so the rollups show the refusal without inventing
+  cost. See `clients/README.md` and `clients/contract/fixtures/limits.json`, which fixes the
+  admission verdicts in all three languages.
 - **Attribution.** A shed event is recorded in the rejection ledger exactly like a hard rejection
   (`shedding` on the status names the rule), so `/v1/limits/status` → `rejected` stays complete.
 
@@ -296,6 +354,43 @@ request will succeed shortly.
 ## 9. Security
 - **API keys per project** for ingest (`Authorization: Bearer lt_<prefix>_<secret>`); only a salted hash is
   stored. An **admin key** guards management endpoints.
+- **Scoped keys.** A key carries a set of capabilities — `ingest` (the event / batch / OTLP doors),
+  `read` (the project's GETs), `manage` (its configuration writes). Three capabilities on a key, **not
+  RBAC**: no roles, no inheritance, no per-resource grants — that non-goal still stands. What it buys is
+  the case that used to be unaddressable: an ingest key embedded in a shipped client app could read back
+  every prompt and completion stored for its project, because a project key had exactly one shape.
+  `POST /v1/projects/:id/keys {"scopes": ["ingest"]}` (or `lt keys create --scope ingest`) fixes that.
+  A key minted before scopes existed reads as `["ingest","read"]` — the permissive back-compat default
+  for **one release**; the documented next default is `["ingest"]`.
+- **Key expiry and rotation.** A key may carry `expires_at`; past it, it authenticates as nothing
+  (401 `key_expired`). `POST /v1/projects/:id/keys/:kid/rotate {"grace_secs": 3600}` mints a successor with
+  the same name and scopes and stamps the predecessor's expiry, so a fleet gets a window to redeploy
+  instead of a cliff. The window is durable state on the row, not a background task a restart would drop.
+- **The project switch is real.** `enabled = false` is checked when the key is verified, so a disabled
+  project's keys open nothing — not ingest, not reads (403 `project_disabled`). Admin principals are
+  unaffected, so an operator can always re-enable it.
+- **`DELETE /v1/projects/:id` archives, it does not delete.** It sets `enabled = false` and stamps
+  `archived_at`; the events, scores and benchmark runs stay, because they are what every cost report and
+  gate decision was computed from. Archiving is idempotent, and effective — the tenant stops accepting work.
+- **Tenant scope is a typed parameter on every store read (M17).** A `Store` read that names a
+  project-bearing row takes a `Scope` — `Scope::Project(id)` for a project key, `Scope::Operator` for
+  admin/dev and for the background sweeps — and the backend puts that filter *in the query*. The
+  handler no longer reads a row and then compares its `project_id`, because that comparison could
+  only produce a **403 that confirms the id exists**. D13 established this for traces; it now holds
+  for events, scores, benchmarks and their runs, datasets and their items, rubrics, jobs, limit
+  rules, margin policies, schedules, prompts and their versions, relay tasks, devices, alerts,
+  alert channels and labels.
+  - *Behavior change:* reading, updating or deleting another project's row is **404, not 403**, on
+    every one of those endpoints. `GET /v1/benchmarks/:id`, `/v1/datasets/:id`, `/v1/rubrics/:id`,
+    `/v1/relay/tasks/:id` and `/v1/relay/tasks/:id/cancel` previously answered 403 and now answer
+    404 with the same `not_found` envelope. Clients that branched on 403 to mean "exists, not
+    yours" were reading an oracle, not an API.
+  - The one exception is the price book (`list_prices` / `upsert_price` / `list_price_history`):
+    one rate card belongs to the instance, not to a tenant, and a per-project book would fragment
+    every cost number computed from it.
+  - `jobs` carries a nullable `project_id`, stamped at enqueue from the benchmark or schedule the
+    work belongs to. `NULL` is an operator job (a sweep, or a row written before the column
+    existed): the operator scope reads those and a project scope never does.
 - **Local dev:** bind to `127.0.0.1`; auth can run in a relaxed `dev` mode.
 - **e2-micro:** API keys enforced; TLS via Cloud Run (managed) or Caddy in front of the VM. Secrets live in
   **Secret Manager** (cloud) / a git-ignored `.env`/`*.local.toml` (local), never committed.
@@ -313,7 +408,9 @@ their canonical HTTP status (see `crates/api/src/error.rs`):
 |------|--------|---------|
 | `bad_request`  | 400 | malformed / invalid request (validation) |
 | `unauthorized` | 401 | missing or invalid credentials |
-| `forbidden`    | 403 | authenticated but not permitted |
+| `key_expired`  | 401 | a valid key that is past its `expires_at` — rotate it, do not retry |
+| `forbidden`    | 403 | authenticated but not permitted (includes a key missing the route's scope) |
+| `project_disabled` | 403 | the key is fine, but its project is disabled — re-enable the project |
 | `not_found`    | 404 | resource does not exist |
 | `conflict`     | 409 | conflicts with current state (duplicate / frozen / gated regression) |
 | `rate_limited` | 429 | ingest rejected: an enforcing (`throttle`/`block`) limit was breached (see §7) |

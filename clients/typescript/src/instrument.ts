@@ -167,6 +167,11 @@ function patch(obj: any, key: string, lt: LightTrack, provider: string, extract:
     const first = args[0] && typeof args[0] === "object" ? args[0] : undefined;
     const stream = !!first?.stream;
     const fallback = first?.model as string | undefined;
+    // Pre-spend admission, before a single token is bought. A no-op unless the client was
+    // constructed with `enforce`, and it throws LightTrackBudgetExceeded rather than returning a
+    // fake response — a wrapper that swallowed the call and answered `undefined` would corrupt the
+    // host app's control flow far worse than a refusal it can catch.
+    lt.gate(first?.name as string | undefined);
     let ret: any;
     try {
       ret = bound(...args);

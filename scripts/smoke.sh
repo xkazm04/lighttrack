@@ -84,9 +84,12 @@ while : ; do
   sleep 1
   waited=$((waited + 1))
 done
-health="$(tr -d '\r\n' <"$BODY")"
-[ "$health" = "ok" ] || fail "/health returned '$health', expected 'ok'"
-step "health ok (after ${waited}s)"
+# /health now answers JSON: {"status":"ok","backend":…,"capabilities":{…}} — see
+# crates/api/src/capabilities.rs. `status` is the field the container healthcheck and this script
+# read; the manifest rides along so a smoke run also records what that deployment can serve.
+health="$(json_str status)"
+[ "$health" = "ok" ] || fail "/health status was '$health', expected 'ok'; body: $(excerpt)"
+step "health ok on $(json_str backend) (after ${waited}s)"
 
 # ---- 2. create a project (admin) -----------------------------------------
 name="smoke-$(date -u +%Y%m%d%H%M%S)-$$"

@@ -1,0 +1,133 @@
+{
+  "$schema": "../schema.json",
+  "note": "Real captured provider response shapes. Each SDK's extractor must return the same four values from the same bytes. Hand-maintained: add a case when a provider ships a new usage shape.",
+  "extractors": [
+    {
+      "name": "openai-chat-completions",
+      "provider": "openai",
+      "why": "The classic chat.completions shape: prompt/completion token names, cached tokens nested under prompt_tokens_details.",
+      "response": {
+        "id": "chatcmpl-BxQ7f2m1",
+        "object": "chat.completion",
+        "created": 1756700000,
+        "model": "gpt-4o-2024-08-06",
+        "choices": [{ "index": 0, "finish_reason": "stop", "message": { "role": "assistant", "content": "ok" } }],
+        "usage": {
+          "prompt_tokens": 1200,
+          "completion_tokens": 85,
+          "total_tokens": 1285,
+          "prompt_tokens_details": { "cached_tokens": 1024, "audio_tokens": 0 },
+          "completion_tokens_details": { "reasoning_tokens": 0 }
+        }
+      },
+      "expect": { "model": "gpt-4o-2024-08-06", "input_tokens": 1200, "output_tokens": 85, "cached_input_tokens": 1024 }
+    },
+    {
+      "name": "openai-responses",
+      "provider": "openai",
+      "why": "The Responses API renames the pair to input_tokens/output_tokens AND moves the cache counter to input_tokens_details. All three SDKs handled the rename and none handled the move, so a cached Responses call reported cached=null and was priced as if uncached.",
+      "response": {
+        "id": "resp_68c1a0",
+        "object": "response",
+        "model": "gpt-5-2025-08-07",
+        "status": "completed",
+        "usage": {
+          "input_tokens": 532,
+          "output_tokens": 118,
+          "total_tokens": 650,
+          "input_tokens_details": { "cached_tokens": 384 },
+          "output_tokens_details": { "reasoning_tokens": 64 }
+        }
+      },
+      "expect": { "model": "gpt-5-2025-08-07", "input_tokens": 532, "output_tokens": 118, "cached_input_tokens": 384 }
+    },
+    {
+      "name": "openai-embeddings",
+      "provider": "openai",
+      "why": "An embeddings response has no completion tokens at all. Output must be 0, not a missing field or a crash.",
+      "response": {
+        "object": "list",
+        "model": "text-embedding-3-small",
+        "data": [{ "object": "embedding", "index": 0, "embedding": [0.01, -0.02] }],
+        "usage": { "prompt_tokens": 8, "total_tokens": 8 }
+      },
+      "expect": { "model": "text-embedding-3-small", "input_tokens": 8, "output_tokens": 0, "cached_input_tokens": null }
+    },
+    {
+      "name": "openai-no-usage",
+      "provider": "openai",
+      "why": "A streamed or error-truncated response can carry no usage block. Zeroes, never an exception.",
+      "response": { "id": "chatcmpl-empty", "object": "chat.completion", "model": "gpt-4o-mini" },
+      "expect": { "model": "gpt-4o-mini", "input_tokens": 0, "output_tokens": 0, "cached_input_tokens": null }
+    },
+    {
+      "name": "anthropic-messages-with-cache",
+      "provider": "anthropic",
+      "why": "cache_read_input_tokens is the cached counter; cache_creation_input_tokens is a different (billed) thing and must not be read as cached.",
+      "response": {
+        "id": "msg_01XyZ",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "stop_reason": "end_turn",
+        "usage": {
+          "input_tokens": 24,
+          "output_tokens": 310,
+          "cache_creation_input_tokens": 1500,
+          "cache_read_input_tokens": 2048
+        }
+      },
+      "expect": { "model": "claude-sonnet-4-5-20250929", "input_tokens": 24, "output_tokens": 310, "cached_input_tokens": 2048 }
+    },
+    {
+      "name": "anthropic-messages-uncached",
+      "provider": "anthropic",
+      "why": "No cache fields at all: cached is unknown (null), not zero.",
+      "response": {
+        "id": "msg_01Abc",
+        "type": "message",
+        "model": "claude-haiku-4-5-20251001",
+        "usage": { "input_tokens": 12, "output_tokens": 7 }
+      },
+      "expect": { "model": "claude-haiku-4-5-20251001", "input_tokens": 12, "output_tokens": 7, "cached_input_tokens": null }
+    },
+    {
+      "name": "gemini-camel-case",
+      "provider": "gemini",
+      "why": "The REST/JS shape: modelVersion + usageMetadata.promptTokenCount.",
+      "response": {
+        "candidates": [{ "finishReason": "STOP" }],
+        "modelVersion": "gemini-2.5-flash",
+        "usageMetadata": {
+          "promptTokenCount": 45,
+          "candidatesTokenCount": 210,
+          "totalTokenCount": 255,
+          "cachedContentTokenCount": 32
+        }
+      },
+      "expect": { "model": "gemini-2.5-flash", "input_tokens": 45, "output_tokens": 210, "cached_input_tokens": 32 }
+    },
+    {
+      "name": "gemini-snake-case",
+      "provider": "gemini",
+      "why": "The google-genai Python objects (and their .to_json_dict()) use snake_case for exactly the same fields. TypeScript and Python read both duals; the Rust SDK read only camelCase, so every Rust user of google-genai's dict form recorded model=unknown and 0 tokens.",
+      "response": {
+        "model_version": "gemini-2.5-pro",
+        "usage_metadata": {
+          "prompt_token_count": 100,
+          "candidates_token_count": 50,
+          "total_token_count": 150,
+          "cached_content_token_count": null
+        }
+      },
+      "expect": { "model": "gemini-2.5-pro", "input_tokens": 100, "output_tokens": 50, "cached_input_tokens": null }
+    },
+    {
+      "name": "gemini-no-usage",
+      "provider": "gemini",
+      "why": "A blocked/filtered generation carries a modelVersion and no usage.",
+      "response": { "modelVersion": "gemini-2.0-flash", "promptFeedback": { "blockReason": "SAFETY" } },
+      "expect": { "model": "gemini-2.0-flash", "input_tokens": 0, "output_tokens": 0, "cached_input_tokens": null }
+    }
+  ]
+}

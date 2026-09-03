@@ -7,7 +7,8 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use lighttrack_core::{
-    BenchTarget, Benchmark, BenchmarkCase, Dataset, DatasetItem, ModelPriceRow, Rubric, ScoreDetail,
+    BenchTarget, Benchmark, BenchmarkCase, Dataset, DatasetItem, ModelPriceRow, Rubric,
+    ScoreDetail, ScoreKind, RESOLVED_PROMPT_VERSION,
 };
 use lighttrack_engine::{
     build_eval_prompt, parse_judge_spec, run_judge, run_rubric_judge, Determinism, EngineConfig,
@@ -21,6 +22,7 @@ use crate::provenance::{freeform_detail, rubric_detail};
 use crate::rubric::run_rubric_benchmark;
 use crate::runctl::RunControl;
 use crate::stats::{annotate_significance, significance_verdict, Summary};
+use crate::targets::{resolve_targets, run_resolved_version};
 use crate::util::{
     add_price_warnings, cost_or_book, join_csv, now_ts, parallel_map, percentiles,
     stamp_determinism,
@@ -34,7 +36,7 @@ pub(crate) fn parse_targets(target: &Value) -> Result<Vec<BenchTarget>> {
     if target.is_array() {
         serde_json::from_value(target.clone()).context(
             "benchmark `target` is an array but not a valid comparison matrix \
-             (expected [{provider, model, system_prompt?, label?}, ...])",
+             (expected [{provider, model, system_prompt?, label?, prompt_ref?, kind?}, ...])",
         )
     } else {
         Ok(Vec::new())
@@ -125,9 +127,12 @@ pub(crate) fn run_benchmark(
     // A referenced dataset also contributes its frozen-state + version to the run's provenance, so
     // "which cases was this scored on?" is answerable from the run alone.
     let mut extra_owned: Option<Value> = None;
-    let cases: Vec<BenchmarkCase> = if !bench.dataset.is_empty() {
-        bench.dataset.clone()
-    } else if let Some(ds) = bench.dataset_ref.as_deref() {
+    // Inline cases AND the referenced dataset's, as the API documents ("instead of, or in addition
+    // to"). The inline set used to win outright, so a benchmark carrying both silently ran only its
+    // inline cases and recorded no dataset pin - the referenced cases were paid attention to by
+    // nobody.
+    let mut cases: Vec<BenchmarkCase> = bench.dataset.clone();
+    if let Some(ds) = bench.dataset_ref.as_deref() {
         let items: Vec<DatasetItem> = get(cli, http, &format!("/v1/datasets/{ds}/items"))?;
         match get::<Dataset>(cli, http, &format!("/v1/datasets/{ds}")) {
             Ok(d) => {
@@ -147,28 +152,44 @@ pub(crate) fn run_benchmark(
                                  will not record its frozen-state/version"
             ),
         }
-        items
-            .into_iter()
-            .map(|it| BenchmarkCase {
-                input: it.input,
-                expected: it.expected,
-                output: it.output,
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+        cases.extend(items.into_iter().map(|it| BenchmarkCase {
+            input: it.input,
+            expected: it.expected,
+            output: it.output,
+        }));
+    }
     let report_extra = extra_owned.as_ref().or(report_extra);
 
     let targets = parse_targets(&bench.target)?;
     if !targets.is_empty() {
+        // Resolve every target's registry prompt BEFORE the first paid call: a run that cannot
+        // fetch what it is supposed to be testing must fail whole, not half-spent. The version
+        // override rides in the report_extra the version-triggered enqueue stamped.
+        let override_version = report_extra.and_then(|e| {
+            let name = e.get("prompt_name")?.as_str()?;
+            let v = e.get("prompt_version")?.as_u64()? as u32;
+            Some((name, v))
+        });
+        let resolved = resolve_targets(cli, http, &bench.project_id, &targets, override_version)?;
+        // What the run ACTUALLY generated with — the evidence the promotion gate requires, and the
+        // one report key no provenance passthrough can fake.
+        let mut extra_with_version = None;
+        if let Some(v) = run_resolved_version(&resolved, override_version.map(|(n, _)| n)) {
+            let mut m = match report_extra {
+                Some(Value::Object(o)) => o.clone(),
+                _ => serde_json::Map::new(),
+            };
+            m.insert(RESOLVED_PROMPT_VERSION.into(), json!(v));
+            extra_with_version = Some(Value::Object(m));
+        }
+        let report_extra = extra_with_version.as_ref().or(report_extra);
         return run_compare(
             cli,
             http,
             engine,
             &bench,
             &cases,
-            &targets,
+            &resolved,
             samples,
             gen_samples,
             pairwise,
@@ -215,7 +236,7 @@ fn run_simple(
     ctl: &RunControl,
 ) -> Result<String> {
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
-    let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    let prices: Vec<ModelPriceRow> = fetch_prices(cli, http);
     // Mint the run id BEFORE judging so every case posted below is already run-scoped. Deriving it
     // afterwards from the stored run would leave the cases orphaned whenever the run post fails.
     let run_id = lighttrack_core::new_id();
@@ -331,6 +352,11 @@ fn run_simple(
         let score = json!({
             "project_id": bench.project_id,
             "rubric": format!("bench:{}", bench.name),
+            // The typed identity beside the legacy label: what sort of verdict this is, and
+            // which rubric it cites. Without them the label is the only handle, and a label
+            // is neither stable across a rename nor unique across two rubrics.
+            "kind": ScoreKind::BenchCase.as_str(),
+            "rubric_id": bench.rubric_id,
             "run_id": run_id, "case_index": i as u32 + 1,
             "value": outcome.verdict.score, "max": outcome.verdict.max, "pass": outcome.verdict.pass,
             "reasoning": outcome.verdict.reasoning, "scored_by": outcome.model, "cost_usd": outcome.cost_usd,
@@ -353,7 +379,11 @@ fn run_simple(
     // Significance-aware verdict: a regression needs the whole ~95% CI below baseline (n≥2), else a
     // scalar fallback. Same regressed/passed/no_baseline vocabulary as the other modes.
     let summary = Summary::of(&scores);
-    let (verdict_status, scalar_fallback) = significance_verdict(bench.baseline_score, &summary);
+    // No verdict was produced (every case lacked an output, or was skipped) → there is nothing to
+    // hold against the baseline. Passing the baseline anyway let the n=0 scalar fallback compare a
+    // mean of 0.0 to it and publish `regressed` over zero cases; compare mode already withholds it.
+    let baseline = bench.baseline_score.filter(|_| n > 0);
+    let (verdict_status, scalar_fallback) = significance_verdict(baseline, &summary);
     // A cancelled run judged only part of its dataset — it must never be published under a verdict
     // that reads as a finished one.
     let status = if cancelled {
@@ -415,6 +445,19 @@ fn run_simple(
         stored.get("id").and_then(|v| v.as_str()).unwrap_or("?")
     );
     Ok(status.to_string())
+}
+
+/// The price book, or an empty one with the reason said out loud. `unwrap_or_default()` here made
+/// an unreachable API and a missing book entry indistinguishable: every model then surfaced as
+/// "no price book entry for …" and an operator went looking at the book instead of at the network.
+pub(crate) fn fetch_prices(cli: &Cli, http: &reqwest::blocking::Client) -> Vec<ModelPriceRow> {
+    get(cli, http, "/v1/prices").unwrap_or_else(|e| {
+        eprintln!(
+            "  warning: could not read the price book ({e}); every model will be reported as \
+             unpriced and this run's cost will be undercounted"
+        );
+        Vec::new()
+    })
 }
 
 /// One output's judge result, preserving the per-dimension breakdown + self-consistency agreement

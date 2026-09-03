@@ -33,10 +33,13 @@ pub(super) fn create(conn: &Connection, b: &Benchmark) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<Benchmark>> {
-    let sql = format!("SELECT {BENCH_COLS} FROM benchmarks WHERE id = ?1");
+pub(super) fn get(conn: &Connection, project: Option<&str>, id: &str) -> Result<Option<Benchmark>> {
+    let sql = format!(
+        "SELECT {BENCH_COLS} FROM benchmarks WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![id], map_bench).optional()?;
+    let raw = stmt.query_row(params![id, project], map_bench).optional()?;
     raw.map(bench_from_raw).transpose()
 }
 
@@ -81,13 +84,22 @@ pub(super) fn create_run(conn: &Connection, r: &BenchmarkRun) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn list_runs(conn: &Connection, benchmark_id: &str) -> Result<Vec<BenchmarkRun>> {
+/// `benchmark_runs` carries no `project_id` of its own, so the tenant filter rides the parent
+/// benchmark: a foreign benchmark id yields an empty list, never someone else's runs.
+pub(super) fn list_runs(
+    conn: &Connection,
+    project: Option<&str>,
+    benchmark_id: &str,
+) -> Result<Vec<BenchmarkRun>> {
     let sql = format!(
-        "SELECT {RUN_COLS} FROM benchmark_runs WHERE benchmark_id = ?1 ORDER BY started_at DESC"
+        "SELECT {RUN_COLS} FROM benchmark_runs WHERE benchmark_id = ?1 \
+           AND (?2 IS NULL OR EXISTS \
+                (SELECT 1 FROM benchmarks b WHERE b.id = benchmark_id AND b.project_id = ?2)) \
+         ORDER BY started_at DESC"
     );
     let mut stmt = conn.prepare(&sql)?;
     let raws = stmt
-        .query_map(params![benchmark_id], map_run)?
+        .query_map(params![benchmark_id, project], map_run)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     raws.into_iter().map(run_from_raw).collect()
 }
@@ -202,4 +214,24 @@ fn run_from_raw(r: RunRaw) -> Result<BenchmarkRun> {
             None => Value::Null,
         },
     })
+}
+
+#[cfg(test)]
+mod cols_tests {
+    use super::*;
+
+    #[test]
+    fn bench_cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(BENCH_COLS, tables::BENCHMARKS.select_list(Dialect::Sqlite));
+    }
+
+    #[test]
+    fn run_cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(
+            RUN_COLS,
+            tables::BENCHMARK_RUNS.select_list(Dialect::Sqlite)
+        );
+    }
 }

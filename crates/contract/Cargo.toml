@@ -1,0 +1,14 @@
+[package]
+name = "lighttrack-contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The typed LightTrack API contract — one table of endpoints that generates OpenAPI, the MCP tool catalog, the CLI verb tree and render dispatch."
+
+[dependencies]
+# Deliberately the only dependency. Every surface generated from this table (the API, the MCP
+# server, the CLI, the renderer) links it, and `lighttrack-render` in particular is documented as a
+# thin Value-in/Markdown-out layer with no `core` dependency — a heavier contract crate would take
+# that property away from it. The `Scope` names here are strings for the same reason; the API holds
+# the one test that binds them back to `lighttrack_core::Scope`.
+serde_json.workspace = true

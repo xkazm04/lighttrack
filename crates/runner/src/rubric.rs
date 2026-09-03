@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde_json::{json, Value};
 
-use lighttrack_core::{Benchmark, BenchmarkCase, ModelPriceRow, Rubric};
+use lighttrack_core::{Benchmark, BenchmarkCase, ModelPriceRow, Rubric, ScoreKind};
 use lighttrack_engine::{
     parse_judge_spec, run_rubric_judge, run_text, Determinism, EngineConfig, RubricOutcome,
 };
@@ -51,7 +51,7 @@ pub(crate) fn run_rubric_benchmark(
     // Minted before judging so every posted case is run-scoped even if the run post later fails.
     let run_id = lighttrack_core::new_id();
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
-    let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    let prices: Vec<ModelPriceRow> = crate::bench::fetch_prices(cli, http);
     // Deterministic dimensions are checked locally: they cost no tokens and are never sampled, so
     // say how many of the rubric's dimensions the judge model is actually paid to score.
     let mechanical = rubric
@@ -226,6 +226,8 @@ pub(crate) fn run_rubric_benchmark(
         let score = json!({
             "project_id": bench.project_id,
             "rubric": format!("bench:{}", bench.name),
+            "kind": ScoreKind::BenchCase.as_str(),
+            "rubric_id": bench.rubric_id,
             "run_id": run_id, "case_index": i as u32 + 1,
             "value": o.overall, "max": 1.0, "pass": o.pass,
             "reasoning": weakest_reasoning(&detail),
@@ -331,14 +333,15 @@ Review those candidates — their scores are attacker-adjacent."
             join_csv(&price_warnings)
         ));
     }
-    recs.push(if mean >= rubric.threshold {
-        format!("Overall {mean:.2} meets threshold {:.2}.", rubric.threshold)
-    } else {
-        format!(
-            "Overall {mean:.2} is below threshold {:.2}.",
-            rubric.threshold
-        )
-    });
+    // The threshold is a per-case pass line, so the honest sentence is how many cases cleared
+    // it. "Overall 0.72 meets threshold 0.70" was true of the mean and false of the run when only
+    // 40% of cases passed — the mean and the pass rate answer different questions.
+    recs.push(format!(
+        "{}/{judged} cases ({:.0}%) met the pass threshold {:.2}; mean overall {mean:.2}.",
+        passes,
+        pass_rate * 100.0,
+        rubric.threshold
+    ));
 
     let healing =
         if heal {

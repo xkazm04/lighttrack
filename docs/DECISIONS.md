@@ -188,6 +188,31 @@ project-scoped SQLite read carries an `INDEXED BY idx_events_project_trace` — 
 picks `idx_events_project_ts` (it satisfies `ORDER BY ts` without a sort) and filters `trace_id` across
 the whole project, which is the wrong shape for a trace read.
 
+**Addendum (2026-09-02, M17): the same rule, applied to the whole trait.** D13 fixed traces and the
+conformance suite pinned it — for traces only. Everything else kept the shape D13 rejected: a point
+read by bare id (`get_event`, `get_benchmark`, `get_dataset`, `get_rubric`, `get_job`,
+`get_limit_rule`, `get_relay_task`, `get_prompt_by_id`, `list_benchmark_runs`, `list_dataset_items`,
+`scored_event_ids`, plus the schedules, devices, alerts, channels, margin policies and labels the
+later waves added) followed by a handler-side `project_id` comparison that answered **403**. That
+403 is the existence oracle D13 removed, re-created seventeen times over: it says "this id exists,
+and it is not yours", which is exactly the fact a tenant must not be able to learn about a
+caller-chosen id. `jobs` was worse than that — the table had no `project_id` at all, so the queue's
+payloads were readable by whoever could reach `GET /v1/jobs`.
+
+So `project: Option<&str>` is replaced by a two-valued `Scope { Project(&str), Operator }` on every
+project-bearing read, and the reads that took no project at all gain one. The API's only mapping
+from principal to scope is `Principal::scope()`; the post-hoc `forbidden(...)` branches are deleted
+rather than kept as a second belt, because keeping them would keep the oracle. Two pure tests parse
+`crates/store/src/lib.rs` and fail if a read loses its scope or if `project: Option<&str>` comes
+back, and a generic `tenancy` conformance section asserts the collision property — owner sees its
+row, an unrelated project sees nothing distinguishable from missing, operator sees both — for every
+entity type rather than for traces alone.
+
+What we accept: a project key that genuinely mistyped an id and one that guessed a stranger's get
+the same 404, so "not found" is now slightly less diagnostic. That is the intended trade — the
+alternative is an endpoint that tells strangers which ids are real. What stays global: the price
+book, for the reason in ARCHITECTURE §9.
+
 ## D14 — Ingest scrubs PII unless an operator says otherwise (2026-08-05)
 
 `LIGHTTRACK_REDACT_INGEST` defaulted to `off`. An operator who deployed LightTrack and configured
@@ -239,6 +264,21 @@ four explicit shapes (`+CC` grouped, `+CC` solid E.164, parenthesized area code,
 is a separator only inside the tight 3-3-4 grouping, which drops dot-separated European numbers and
 bare separator-less digit runs. A redaction we miss is legible to whoever reads the row; a sentence
 we rewrote is not, and it silently becomes the evidence every downstream score is computed from.
+
+*Addendum (M9, 2026-09-02) — the scrub records itself.* Under-matching narrows the defect; it does
+not make it observable, and the paragraph above ends by conceding that no score, alert or dashboard
+will ever surface it. The missing piece was that the boundary recorded nothing: `redact_event`
+returned a span count that ingest logged at `debug` and dropped, so a database was an
+indistinguishable mix of raw and scrubbed rows and the question "was *this* row rewritten, and by
+which rules" had no answer at all. Every ingested row now carries a server-owned
+`metadata.redaction` stamp — `{policy, scrub, spans, rules}`, where `rules` is the fingerprint of the
+scrubber's ordered rule set — written after the walk and stripped from whatever the client sent, so
+it is provenance rather than a claim. Three states stay distinct on purpose: no stamp (we do not
+know), `scrub: false` (we looked and stored it verbatim), and a stamp with a span count.
+`GET /v1/projects/:id/redaction` groups the stored rows by it, `GET /v1/events` filters on
+`redaction_rules` / `min_redacted_spans`, and a judged verdict copies the count onto
+`ScoreDetail.evidence_redacted_spans` — so the class of defect this decision called unobservable is
+now a query.
 
 ## D15 — The default judge is `opus@xhigh` (2026-08-06)
 The judge was Claude Haiku (D12's default, cheapest of the aliases). Judging is the one call in this
@@ -327,3 +367,135 @@ latency stays the batch's real wall clock, and `calibrate --compare-batch N` mea
 *your* rubric before you trust it. **Never compare a batched run to an unbatched baseline** — the
 difference is method, not quality. Batching is deterministic for a fixed dataset, so the honest path
 to the throughput is to re-baseline once and batch everything from then on.
+
+## D17 — One headless-Claude seam; a relay action declares what it may touch (2026-09-02)
+
+**Context.** Three crates spawned `claude -p` through their own `Command`: the engine (judging and
+candidate generation), the responder (its read-only investigation and its `acceptEdits` auto-fix),
+and the device agent through the engine. `resolve_claude_bin` existed twice and the copies had
+already drifted — only one knew about the native installer. Nothing probed whether the CLI was even
+installed before a service claimed paid work. The responder passed its prompt on **argv**, which on
+Windows meets a ~32k command-line cap and a quoting layer a judge prompt reliably breaks. And
+`ActionSpec` could express prompt, model, system and schema — nothing about tools, workspace,
+permission mode or budget — although `docs/RELAY.md` had always claimed that allowed tools live on
+the device.
+
+**Decision.** Every `claude -p` in the workspace goes through `lighttrack_engine::invocation::run`:
+one spawn site, one resolver, one probe, one decision about the billing key. A call is described by
+an `Invocation` whose `Mode` is the thing being enforced.
+
+- `Generate` — a completion. No tools, no permission mode, and a **neutral temp working directory**,
+  so no ambient `CLAUDE.md`, hooks or settings join the prompt and the same judge call means the
+  same thing in every checkout.
+- `ReadonlyScan` — the read-only base allowlist (`Read`/`Glob`/`Grep`/`LS`) plus declared extras,
+  each of which must itself be read-only; permission mode `plan` or `default` only.
+- `Edit` — an explicit workspace **and** an explicit permission mode. There is no default safe
+  enough to be implicit.
+
+A contradiction is `EngineError::Posture`, raised **before** a child exists, so an over-claiming
+caller costs nothing. The prompt travels over **stdin**, never argv. `--bare` requires
+`ANTHROPIC_API_KEY`; a seat run *strips* it from the child, so flat-rate subscription work cannot
+quietly bill the metered API — the decision is logged once per process.
+
+**Relay actions carry a mode**, and an edit-capable action must name a workspace and a permission
+mode. `workspace` is a name resolved under the agent's `workspaces_root`, validated by the same
+traversal rule as `action_type`; with no root configured the device runs no scan or edit action at
+all. Reaching a repository therefore takes an operator naming its parent directory — never a cloud
+payload, which is still only `action_type` + params.
+
+**Why it matters.** Tools, directory, permission mode and billing key are what decide a paid run's
+blast radius, and spread across three call sites they were four *different* answers that drifted
+independently. This is not a refactor: an allowlist that is advisory in one door is not an
+allowlist, and the "read-only" investigation was read-only only because a constant in
+`investigate.rs` happened to list read-only tools, with nothing checking it. Now the check is a
+test (`posture_matrix`, plus the responder asserting its own allowlist against the seam), so adding
+`Bash(git push:*)` fails in CI rather than on a production repo.
+
+**Consequences.** `crates/responder/src/claude.rs` and its private `resolve_claude_bin` are gone;
+the responder depends on the engine. `lt-responder` probes at startup and **exits non-zero** when
+the CLI is missing — it exists only to run Claude, so accepting webhooks it cannot serve would just
+burn investigation slots. `lt-runner serve` probes and **keeps polling**: most job types judge
+through a provider API, so a missing CLI disables a subset of the queue rather than justifying
+refusing all of it. The device reports `cost_usd` and `mode` on settle and both land in the run
+event's metadata as evidence. Relay pricing was left untouched here — the stamped `cost_usd` stayed
+the flat rate — because making a pricing change a side effect of better reporting would move every
+margin number without anyone asking. **D18 is that decision, asked and answered.**
+
+
+## D18 — Relay runs are metered traffic; enqueue is the admission point (2026-09-02)
+
+**Decision.** A relay run is priced from what it actually cost, and a relay task's admission against
+the project's budget happens when it is **enqueued**, not when it settles.
+
+**Pricing.** `cost_usd` on a relay run event resolves in order: the device's CLI envelope
+(`cost_source: "envelope"`), else the DB price book applied to the tokens the device reported
+(`"book"`), else `LIGHTTRACK_RELAY_FLAT_COST_USD` (`"flat"`). This supersedes the flat-$1 premise
+this file carried since the relay shipped. That premise was not a simplification, it was a wrong
+number: a headless `claude -p` bills at API rates (D0), the device has reported `cost_usd` since M6,
+and the cloud was overwriting it with a placeholder. Every margin, forecast and cost report that
+included relay traffic inherited the error. A non-finite or negative envelope figure is refused and
+falls through — a device is not a trusted pricing oracle, and one `NaN` poisons every `SUM` that ever
+reads the row. The flat rate survives only as a last resort, so a run reporting neither cost nor
+priceable tokens is still *some* number rather than a silent zero.
+
+**Admission.** `POST /v1/relay/tasks` now evaluates the project's limits before queueing: an
+enforcing breach is a **429** with the breach reason and a `Retry-After`; the soft tier queues the
+task and returns a `warning`. It uses `evaluate_project_limits` — the same evaluator, thresholds and
+`basis` explanation the status page and the ingest 429 use — so a caller cannot be told two different
+stories about one cap. A limits backend that cannot answer admits: an unavailable evaluator is not
+evidence of an exceeded budget. An idempotent replay is not re-checked; answering with a task that
+already exists enqueues nothing.
+
+The settle-time event stays **un-admitted**. By then the run has happened, and declining to *record*
+spend does not un-spend it — it only corrupts the cost report. Enqueue is the last moment a refusal
+is still free, which is exactly why it is the admission point.
+
+**Scope.** This does not touch **D4**. The judge and the scoring engine remain unbudgeted; relay
+traffic is monitored ingest, which is what limits have always applied to. It supersedes the "$1 flat
+per request" cost model in `docs/RELAY.md` and the closing paragraph of D17.
+
+## D19 — The schema is data; the three DDLs are rendered from it (2026-09-02)
+
+**Decision.** The logical schema is declared once, as const data in
+`crates/store/src/schema/tables/`. `schema/sqlite/001_init.sql`, `schema/postgres/001_init.sql` and
+`schema/bigquery/001_init.sql` are **generated** from it and guarded by
+`cargo test -p lighttrack-store --test schema_doc` (regenerate with `UPDATE_SCHEMA_SQL=1`), the way
+`docs/PARITY.md` is guarded by `parity_doc`. The two hand-mirrored migration lists —
+`ADDED_COLUMNS`/`ADDED_COLUMNS_LATE` in the SQLite backend and the strewn `ALTER TABLE … ADD COLUMN
+IF NOT EXISTS` lines in the Postgres file — are now one projection of the model,
+`schema::migrations`.
+
+**Why.** The same fact lived in five places whose headers each claimed to mirror another, and they
+had already drifted. Nothing failed when a copy was missed: the column was simply absent on one
+backend, which reads as "no data" — the failure mode the capability manifest exists to refuse,
+arriving one layer further down. Adding a column was about nine coordinated edits across three
+crates; it is now one.
+
+**What is deliberately not declarative.** A migration that is correct *because of how it is
+written* stays verbatim: the M26 `model_prices` primary-key rewrite is a `DO $$ … $$` block guarded
+on `pg_index`, carried as a `schema::migrations::Raw` step, and its SQLite twin is a shape-guarded
+Rust function that reads `PRAGMA table_info` first. Paraphrasing either through a renderer would be
+a way to get it subtly wrong for no gain.
+
+**The BigQuery type map.** `Ts → STRING`, not `TIMESTAMP`. Store timestamps are fixed-width
+`RFC3339(Nanos, Z)` and every range filter in the product is a *string* comparison over that format
+(`crates/store/src/codec.rs`), so a native `TIMESTAMP` would give the warehouse different ordering
+and different boundary semantics from the two backends the tests actually run against — the mirror
+would disagree with the source and look authoritative doing it. `Json → STRING` for the same reason:
+the app writes serialized text, including the empty string a legacy row can carry, which BigQuery's
+`JSON` type rejects on load. BigQuery enforces no keys and has no secondary indexes, so neither is
+rendered; partitioning and clustering carry the read patterns instead. Before this the file had 9 of
+25 tables, 98 of 303 columns, native `TIMESTAMP`, and no test.
+
+**Index parity is declared, not silently closed.** Four `events` composites
+(`idx_events_project_{name,provider,model,status}_ts`) and Postgres's partial
+`idx_limit_rules_origin` exist on one dialect only. The model records that with `Index::only(..)`
+rather than hiding it — creating four indexes on a live production `events` table is a deliberate
+change with its own migration window, not a side effect of a refactor. The *columns* are now
+identical across dialects; the remaining gap is visible in one file instead of invisible across
+three.
+
+**Fingerprint.** `schema_fingerprint()` hashes the model and rides in the capability manifest and
+`GET /v1/capabilities`. It is backend-agnostic on purpose — two deployments on different backends
+but the same build answer the same thing, so "is prod running the schema this SDK was written
+against" is one comparison rather than a version number somebody has to remember to bump.

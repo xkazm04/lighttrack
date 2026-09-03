@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 /// mechanical check the engine runs locally at zero tokens and zero cost, scored into the same
 /// weighting / floor / aggregation pipeline. Additive and defaulted: a rubric written before kinds
 /// existed deserializes as all-`Llm` and re-serializes byte-identically.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DimensionKind {
     /// Scored by the judge model against the dimension's description and anchors.
@@ -43,7 +45,7 @@ impl DimensionKind {
 
 /// Per-kind configuration for a deterministic dimension. Every field is optional, so one struct
 /// serves all kinds and an `llm` dimension serializes without it at all.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DimensionCheck {
     /// The literal target for `exact` / `contains` / `numeric` (and, optionally, `json_valid`).
     /// Defaults to the case's `expected` reference answer when unset.
@@ -92,7 +94,7 @@ fn default_true() -> bool {
 }
 
 /// One scored dimension of a rubric (e.g. correctness, completeness, faithfulness, concision).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RubricDimension {
     /// Stable key used in the judge's JSON output (must be a valid identifier-ish string).
     pub key: String,
@@ -121,7 +123,7 @@ fn default_weight() -> f64 {
 }
 
 /// A weighted, anchored rubric — the judge's scoring contract (see docs/BENCHMARK_FRAMEWORK.md §3).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Rubric {
     #[serde(default = "crate::new_id")]
     pub id: String,
@@ -132,12 +134,63 @@ pub struct Rubric {
     /// Overall pass threshold (weighted score, 0–1).
     #[serde(default = "default_threshold")]
     pub threshold: f64,
+    /// Which generation of this rubric this is. Editing a rubric changes what a score *means*, so
+    /// comparing verdicts across an edit is comparing two different measurements — and nothing
+    /// recorded that an edit had happened. Starts at 1; `POST /v1/rubrics/:id/versions` mints the
+    /// next.
+    ///
+    /// A new version is a **new row with a new id**, not a mutation: the old rubric must stay
+    /// readable, because the verdicts that cite it are still stored and still cite it.
+    ///
+    /// Omitted from the wire at generation 1, which is the same statement as absence (absent
+    /// deserializes to 1) and keeps a pre-versioning rubric serializing byte-identically.
+    #[serde(default = "default_version", skip_serializing_if = "is_first_version")]
+    pub version: u32,
+    /// The rubric id this one replaces, so the chain is walkable in both directions. `None` on the
+    /// first version of a rubric.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
     #[serde(default = "Utc::now")]
     pub created_at: DateTime<Utc>,
 }
 
+/// The pass threshold a rubric gets when none is given. One constant, read by the core default and
+/// the API's request default alike — they were two literals that happened to agree.
+pub const DEFAULT_RUBRIC_THRESHOLD: f64 = 0.7;
+
 fn default_threshold() -> f64 {
-    0.7
+    DEFAULT_RUBRIC_THRESHOLD
+}
+
+/// A rubric written before versioning existed is generation 1 — the reading that keeps every stored
+/// verdict citing a coherent generation, rather than an unnumbered one.
+fn default_version() -> u32 {
+    1
+}
+
+fn is_first_version(v: &u32) -> bool {
+    *v == 1
+}
+
+impl Rubric {
+    /// The next generation of this rubric: a **new row with a new id**, linked back to this one.
+    ///
+    /// Not a mutation, on purpose. Verdicts already stored cite this rubric's id, and editing the
+    /// row underneath them would silently change what those verdicts claim to have measured — the
+    /// same class of restatement the revenue upsert refuses. `dimensions` and `threshold` come from
+    /// the caller; identity, lineage and the clock do not.
+    pub fn next_version(&self, dimensions: Vec<RubricDimension>, threshold: f64) -> Rubric {
+        Rubric {
+            id: crate::new_id(),
+            project_id: self.project_id.clone(),
+            name: self.name.clone(),
+            dimensions,
+            threshold,
+            version: self.version.saturating_add(1),
+            supersedes: Some(self.id.clone()),
+            created_at: Utc::now(),
+        }
+    }
 }
 
 #[cfg(test)]

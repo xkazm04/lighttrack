@@ -63,7 +63,7 @@ pub(crate) fn previous_case_scores(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lighttrack_core::new_id;
+    use lighttrack_core::{new_id, Dataset};
     use serde_json::json;
 
     fn run(report: Value, finished_offset: i64) -> BenchmarkRun {
@@ -140,6 +140,43 @@ mod tests {
         assert_eq!(
             previous_case_scores(&legacy, "gpt", 2, Some(3)),
             Some(vec![0.4, 0.4])
+        );
+    }
+
+    /// The guard against a **real** fork, not a hand-written version number (M24).
+    ///
+    /// Until forking existed, `Dataset::version` was `1` for every dataset that had ever been
+    /// created, so this refusal compared 1 with 1 and could never fire — a genuinely different
+    /// corpus paired as if it were the same one. This builds the pin the way `bench` builds it, from
+    /// a v1 and the v2 a fork produces, and asserts the two do not pair.
+    #[test]
+    fn a_run_over_a_forked_corpus_does_not_pair_with_its_parents_run() {
+        let v1: Dataset =
+            serde_json::from_value(json!({ "name": "golden", "version": 1, "frozen": true }))
+                .expect("v1");
+        let v2: Dataset = serde_json::from_value(json!({
+            "name": "golden", "version": 2, "frozen": false, "parent_id": v1.id,
+        }))
+        .expect("v2");
+        assert_eq!(v2.parent_id.as_deref(), Some(v1.id.as_str()));
+
+        let pin_v1 = crate::bench::dataset_pin(None, &v1);
+        let pin_v2 = crate::bench::dataset_pin(None, &v2);
+        let dsv = |p: &Value| p["dataset_version"].as_u64();
+        assert_eq!(dsv(&pin_v1), Some(1));
+        assert_eq!(dsv(&pin_v2), Some(2), "a fork moves the pin");
+
+        // The v1 run is the only finished baseline on record; a v2 run must refuse to pair with it.
+        let history = vec![run(compare_report("gpt", &[0.5, 0.6], dsv(&pin_v1)), 40)];
+        assert!(
+            previous_case_scores(&history, "gpt", 2, dsv(&pin_v2)).is_none(),
+            "a run over the fork must not be paired against its parent's run — the case set changed"
+        );
+        // …and a second v2 run pairs with the first, which is what makes the fork usable at all.
+        let history = vec![run(compare_report("gpt", &[0.5, 0.6], dsv(&pin_v2)), 50)];
+        assert_eq!(
+            previous_case_scores(&history, "gpt", 2, dsv(&pin_v2)),
+            Some(vec![0.5, 0.6])
         );
     }
 

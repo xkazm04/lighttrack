@@ -1,171 +1,162 @@
-# Scheduled online sampling
+# Scheduling — recurring work is a row, not a running process
 
-`lt-runner schedule` periodically samples recent live events for a project, scrubs PII, and freezes a
-new **dataset** — so your evaluation data keeps tracking real traffic instead of going stale. Pair the
-resulting datasets with `lt-runner bench` / `calibrate` to benchmark against fresh, representative data.
+Everything LightTrack does on its own — re-running a benchmark, judging new events, scoring traces,
+sampling live traffic into a frozen dataset, re-measuring the judge against a golden set — is one
+mechanism: a **job** of some **kind**, and optionally a stored **schedule** that enqueues it on an
+interval.
 
-It runs either as a **daemon** (its own interval loop) or as a **single cycle** (`--once`) driven by
-an external scheduler (OS cron, a systemd timer, Windows Task Scheduler, Cloud Scheduler).
+That is a change. Until M7 the queue carried exactly one kind (`bench_run`), the other four
+workloads each shipped as a separately-scheduled daemon (`lt-runner score --interval`,
+`score-traces --interval`, `schedule --interval`, `calibrate --watch`), and benchmark recurrence was
+a key smuggled into a benchmark's `target` JSON. Three consequences, all of which the current design
+exists to remove:
 
-## How it samples
+- everything the queue provides — a lease with a heartbeat, cancellation, honest retry accounting,
+  live progress, a durable record that the work ran — protected **one of five** workloads;
+- **compare benchmarks could not recur at all**: a matrix `target` is an array, and an array has no
+  room for a `schedule_interval_secs` key;
+- nothing could answer *"what runs on a schedule on this instance?"* — the answer lived in five
+  daemons' command lines.
+
+## The five job kinds
+
+| Kind | One cycle of | Required payload | Notable optional fields |
+|---|---|---|---|
+| `bench_run` | a stored benchmark | `benchmark_id` | `samples`, `gen_samples`, `heal`, `pairwise`, `jobs` |
+| `score_events` | judging recent unscored events | `rubric` **or** `rubric_id` | `project`, `limit` |
+| `score_traces` | judging whole traces | `project` + `rubric`/`rubric_id` | `sample_every`, `errors_always`, `settle_secs`, `limit`, `judge_model` |
+| `dataset_sample` | sampling live events into a frozen dataset | `project` | `n`, `name_prefix`, `llm_scrub` |
+| `calibrate` | judge/human agreement against a golden set | `file` + `rubric`/`rubric_id` | `project`, `threshold`, `kappa_bar`, `drift_threshold`, `samples` |
+
+A payload is validated **against its kind at the door** (`POST /v1/jobs`, and when a schedule is
+written). A malformed one is a `400` there rather than a job that claims, runs, fails, retries twice
+and dead-letters — three claims and a dead job to report a typo.
+
+> `calibrate`'s `file` is a path **on the worker's filesystem**. Calibration items are the operator's
+> own labelled data and deliberately never transit the API.
+
+## Enqueue one unit of work
+
+```bash
+curl -sX POST "$LIGHTTRACK_URL/v1/jobs" -H "authorization: Bearer $ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{ "type": "score_traces", "payload": { "project": "proj-a", "rubric_id": "r-1" } }'
+```
+
+```bash
+lt jobs enqueue --type bench_run --payload '{"benchmark_id":"b-1","samples":2}'
+lt jobs list --status running
+lt jobs show <job-id>
+lt jobs cancel <job-id>
+```
+
+## Make it recur
+
+```bash
+lt schedules create --project proj-a --type bench_run --every 6h \
+  --payload '{"benchmark_id":"b-1"}'
+
+lt schedules list                 # every recurring workload in the deployment
+lt schedules set <id> --disable   # pause it; it stays listed
+lt schedules runs <id>            # the jobs it has produced
+```
+
+A schedule is `{ project_id, kind, payload, interval_secs, next_due, last_job_id, enabled }`. Routes:
+
+| Route | Who | What |
+|---|---|---|
+| `POST /v1/projects/:id/schedules` | admin | create (payload validated against the kind) |
+| `GET /v1/projects/:id/schedules` | project key or admin | one project's schedules |
+| `GET /v1/schedules` | admin | every schedule in the deployment |
+| `PUT /v1/schedules/:id` | admin | patch — omitted fields are left alone |
+| `DELETE /v1/schedules/:id` | admin | remove (the jobs it produced are kept) |
+| `GET /v1/schedules/:id/runs` | admin | the jobs it has produced |
+
+### Who sweeps
+
+**The API process**, on a timer (`LIGHTTRACK_SCHEDULE_SWEEP_SECS`, default 60s, floor 10, `0` = off).
+Not the runner: a Cloud Run deployment ships the API alone, so recurrence hosted in the optional
+companion worker would silently not happen in the deployment that most needs it. The same sweep also
+reaps dead relay leases — see `docs/RELAY.md`.
+
+On by default, unlike the forecast sweep. That one turns a self-hosted instance into an outbound
+notifier, which is a decision; this one is upkeep of schedules the operator wrote down themselves,
+and a stored schedule that does not fire is just a broken feature.
+
+Two rules the sweep keeps:
+
+- **Idempotent.** A schedule whose previous job is still queued or running is skipped, so a benchmark
+  that takes longer than its own interval never stacks a second copy of itself.
+- **No catch-up.** `next_due` advances from *now*, not from the old due time. A sweep that was down
+  for a day comes back and fires each schedule once, not a day's worth of intervals at once — which
+  for a benchmark would be a day of generation spend nobody asked for.
+
+### Migration from `target.schedule_interval_secs`
+
+On boot, every benchmark still carrying the old recurrence key gets an equivalent `bench_run`
+schedule if it does not already have one (idempotent, so it is safe on every boot). The key stays
+readable for one release; nothing deletes it. Recurrence you configured keeps working, and a
+**compare** benchmark can now recur, which it never could before.
+
+## The worker
+
+```bash
+lt-runner serve                                   # claims every kind
+lt-runner serve --kinds bench_run,score_traces    # …or only what this machine can run
+```
+
+`--kinds` is a capability declaration, not a convenience filter: the API applies it **inside the
+atomic claim**. A worker that claims a kind it cannot execute has already taken the job off the queue
+and stamped a lease on it, so the job burns its retry budget failing while a capable worker sits idle
+beside it. `--providers` defaults to the providers whose API keys are present in the worker's
+environment.
+
+Each daemon subcommand also takes `--via-queue`, which enqueues one cycle and serves it here — the
+same work, with the queue's lease, cancellation and record around it:
+
+```bash
+lt-runner score --rubric-id r-1 --via-queue
+```
+
+## Externally-driven scheduling
+
+If you would rather own the cadence (OS cron, systemd timers, Cloud Scheduler), skip schedules
+entirely and post jobs:
+
+```cron
+0 * * * *  curl -sX POST "$LIGHTTRACK_URL/v1/jobs" -H "authorization: Bearer $ADMIN_KEY" \
+             -H 'content-type: application/json' \
+             -d '{"type":"dataset_sample","payload":{"project":"myproj","n":50}}'
+```
+
+`GET /v1/capabilities` says whether this deployment's store backend serves the `schedules` surface at
+all; where it does not, those routes answer `501 unsupported` and this is the supported path.
+
+## Online sampling (`dataset_sample`) in detail
 
 Each cycle:
-1. fetches the most recent `--n` events for the project,
-2. names the dataset `"<prefix>-<id8>"` after the **newest event that carries an input** (the
+
+1. fetches the most recent `n` events for the project,
+2. names the dataset `"<name_prefix>-<id8>"` after the **newest event that carries an input** (the
    "watermark"),
-3. **skips** if a dataset for that watermark already exists, or if there's nothing with an input to
-   sample,
-4. otherwise scrubs PII (regex always; optional `--llm-scrub` pass) and freezes the dataset.
+3. **skips** if a dataset for that watermark already exists, or there is nothing with an input,
+4. otherwise scrubs PII (regex always; optional `llm_scrub` pass) and freezes the dataset.
 
-Because the name is derived from the data (not the wall clock), the cycle is **idempotent**: idle
-periods cost nothing and never produce duplicate snapshots — even across separate `--once` runs. New
-traffic advances the watermark, which produces the next dataset.
+Because the name is derived from the data and not the wall clock, the cycle is idempotent: idle
+periods cost nothing and never produce duplicate snapshots. New traffic advances the watermark, which
+produces the next dataset. A skipped cycle is a **successful** job — that is the mechanism working,
+not a failure to retry.
 
-> The judge/scoring engine is unbudgeted; `--llm-scrub` makes one `claude -p` call per item, so it has
+> The judge/scoring engine is unbudgeted; `llm_scrub` makes one `claude -p` call per item, so it has
 > a cost. Plain regex scrubbing is free. See `docs/DECISIONS.md` D9.
 
-## Daemon mode
+Pair the resulting frozen datasets with `bench_run` / `calibrate` schedules so your evaluation data
+keeps tracking real traffic instead of going stale.
 
-```bash
-export LIGHTTRACK_URL=http://127.0.0.1:8787
-export LIGHTTRACK_KEY=lt_...          # a project key (or set in enforced mode); dev mode needs none
-lt-runner schedule --project <id> --interval 3600 --n 50
-# --interval seconds between cycles · --n events per cycle · --name-prefix <p> · --llm-scrub
-```
+## The direct commands still work
 
-## External schedulers (use `--once`)
-
-Each invocation runs exactly one cycle and exits; idempotency means running "too often" is harmless.
-
-**Linux cron** — hourly:
-```cron
-0 * * * * LIGHTTRACK_URL=http://127.0.0.1:8787 LIGHTTRACK_KEY=lt_... \
-  /usr/local/bin/lt-runner schedule --once --project myproj --n 50 >> /var/log/lighttrack-sample.log 2>&1
-```
-
-**systemd timer** — `lighttrack-sample.service` + `lighttrack-sample.timer`:
-```ini
-# lighttrack-sample.service
-[Service]
-Type=oneshot
-Environment=LIGHTTRACK_URL=http://127.0.0.1:8787
-Environment=LIGHTTRACK_KEY=lt_...
-ExecStart=/usr/local/bin/lt-runner schedule --once --project myproj --n 50
-
-# lighttrack-sample.timer
-[Timer]
-OnCalendar=hourly
-Persistent=true
-[Install]
-WantedBy=timers.target
-```
-
-**Windows Task Scheduler** — hourly:
-```powershell
-$env:LIGHTTRACK_URL = "http://127.0.0.1:8787"
-schtasks /Create /TN "LightTrack sample" /SC HOURLY `
-  /TR "C:\path\lt-runner.exe schedule --once --project myproj --n 50"
-```
-
-**GCP Cloud Scheduler** (Phase 5) — trigger a Cloud Run **job** running the same `schedule --once`
-command on a cron schedule; the runner reads `LIGHTTRACK_URL`/`LIGHTTRACK_KEY` from the environment /
-Secret Manager.
-
----
-
-# Auto-scoring traces (`score-traces`)
-
-`lt-runner score-traces` makes whole traces **score themselves**: on a schedule it samples recently
-**completed** traces for a project, judges each one's **root exchange** with an LLM judge, and posts a
-whole-trace score — so nobody has to run `POST /v1/traces/:id/score` by hand at 2am. Like `schedule`,
-it runs as a **daemon** (`--interval`) or a **single cycle** (`--once`) under an external scheduler.
-
-```bash
-export LIGHTTRACK_URL=http://127.0.0.1:8787
-export LIGHTTRACK_KEY=lt_...   # project key (dev mode needs none)
-# Judge every settled trace's root exchange against freeform criteria, once (for cron):
-lt-runner score-traces --project <id> --rubric "Did the assistant fully answer the user?" --once
-# Or judge against a structured rubric, sampling 1 in 5 traces but always judging errors, as a daemon:
-lt-runner score-traces --project <id> --rubric-id <rid> --sample-every 5 --errors-always --interval 3600
-```
-
-## What one cycle does
-
-1. Computes a **settle cutoff** = `now − --settle-secs` (default **120s**) and walks the project's
-   traces whose newest event is older than it — newest-ended first — through the `/v1/traces` keyset
-   window (`until=<cutoff>`, following `X-Next-Cursor`), up to `--limit` traces (default 100).
-2. Takes a **stable 1/N sample** (`--sample-every N`, default 1 = all): a trace is in the sample iff a
-   hash of its `trace_id` falls in the 1/N bucket — order-independent, so the same subset is picked
-   every cycle. With `--errors-always`, **every** error trace is judged on top of the sample.
-3. For each sampled trace, fetches the trace detail and **skips** it if it already has a whole-trace
-   score for this rubric that still *covers* the trace (idempotency + staleness, see below) or if its
-   root span carries **no output** to judge.
-4. Judges the surviving traces' root exchanges (root span's `input`/`output`) with the judge model —
-   concurrently, bounded by the global `--jobs` — and posts each verdict to `POST /v1/traces/:id/score`
-   with no `event_id`, so the score anchors to the trace's root span (the whole-request judgment).
-
-`--rubric "<criteria>"` uses a freeform judge (the criteria text is the score's `rubric` label);
-`--rubric-id <id>` fetches a structured rubric and judges per-dimension (its `name` is the label).
-Pass exactly one. `--judge "[provider/]model"` overrides the judge model for this run.
-
-## "Completed" is a settle window
-
-Traces carry **no explicit completion marker** — new spans can always arrive later. So a trace is
-*approximated* as completed once its newest event (`ended`) is older than the settle window
-(`--settle-secs`, default 120s). Choose it larger than your longest in-flight request so a
-still-streaming trace isn't judged mid-flight, and smaller if you want fresher scoring; there is no
-correctness cost either way, only how soon a trace becomes eligible.
-
-The window is a **heuristic, not a guarantee**: a span can always land after it. The verdict coverage
-below is the correction layer behind it, not a replacement for it.
-
-## Idempotent — never double-scores
-
-Before judging, `score-traces` checks the trace's existing scores: if one already has this run's
-`rubric` label anchored to the root event, the trace is skipped. Because the score it posts anchors to
-that same root, the very next cycle sees it and skips — so a daemon **and** repeated cron `--once` runs
-converge to "each trace scored once per rubric", never twice. Changing the rubric text / id scores the
-traces afresh under the new label. The judge is **unbudgeted** (it never counts against ingest limits)
-and uses only existing API endpoints.
-
-## A verdict records what it judged
-
-`POST /v1/traces/:id/score` stamps **coverage** onto every verdict anchored to the trace root, in the
-score's existing `detail` (`detail.coverage`): the trace's `spans` count, the `root_event_id`, a
-`digest` fingerprinting the judged root exchange, and whether that read was `truncated` by the span
-cap. No new table, no new column — it rides the same `ScoreDetail` provenance a judged score already
-carries.
-
-`GET /v1/traces/:id` then compares each verdict's coverage against the trace **as it now reads** and
-adds `scores[].stale` when it no longer covers it (`lt` renders it as `⚠ stale …` on the score line):
-
-| `stale.reason` | what moved | re-scored? |
-| --- | --- | --- |
-| *(absent)* | the trace is what was judged — or the verdict recorded no coverage (an older or third-party score), in which case silence means "nothing to report", never "verified fresh" | no |
-| `grown` | spans were added or removed; the **judged root exchange is byte-identical** | **no** |
-| `changed` | the judged root exchange itself differs — the verdict describes text that is no longer there | **yes** |
-
-Only `changed` is **material**. The rule is deliberately narrow because re-scoring spends real money:
-the judge is unbudgeted, so a policy that fired on every trailing span would be a spend bug, and a
-`grown` trace would re-send an identical prompt for an identical verdict. `changed` is exactly the
-case where the judge would read *different* text — the real root span landing after its children (as
-an OTel parent, exported when it finishes, routinely does), or a streamed output filling in after the
-settle window. Such a trace is not treated as already-scored and gets a corrected verdict on the next
-cycle; the corrected verdict then covers the trace, so it is not re-judged again.
-
-The digest covers the root exchange rather than every span so that the `MAX_TRACE_SPANS` cap cannot
-be mistaken for a change: the detail read keeps the **oldest** spans, so the root always survives
-clipping and a clipped trace fingerprints identically to the whole one. `spans` is the trace's true
-count (`spans_total`), not the clipped one.
-
-## External schedulers (use `--once`)
-
-Identical shape to `schedule --once` above — one cycle per invocation, safe to run "too often". e.g.
-**Linux cron**, every 15 min:
-```cron
-*/15 * * * * LIGHTTRACK_URL=http://127.0.0.1:8787 LIGHTTRACK_KEY=lt_... \
-  /usr/local/bin/lt-runner score-traces --once --project myproj \
-  --rubric "Did the assistant fully answer the user?" --errors-always >> /var/log/lighttrack-score.log 2>&1
-```
-A one-shot run **exits non-zero** if the cycle fails (e.g. the API is unreachable), so a scheduler step
-surfaces the failure; a daemon logs and continues instead.
+Nothing was removed. `lt-runner score`, `score-traces`, `schedule` and `calibrate --watch` run
+exactly as before, in-process, with their own `--interval`. They are the right tool for a one-off or
+a debugging session. What they cannot give you is a record: a daemon nobody restarted is
+indistinguishable from a schedule nobody created, and only one of those is visible in
+`GET /v1/schedules`.

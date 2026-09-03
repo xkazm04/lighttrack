@@ -14,6 +14,8 @@ use serde::Serialize;
 
 use lighttrack_store::StoreError;
 
+use crate::ingest_proximity::Proximity;
+
 /// Stable, machine-readable error codes returned in the `error.code` field.
 ///
 /// These are part of the public API contract: the wire strings (snake_case, via `as_str`) are
@@ -36,8 +38,27 @@ pub(crate) enum ErrorCode {
     Unauthorized,
     /// Authenticated, but not permitted to act on the resource. HTTP 403.
     Forbidden,
+    /// The key authenticated, but its project is disabled — no door of that tenant accepts work.
+    /// HTTP 403. Split out of `forbidden` because the fix is an operator action on the *project*
+    /// (`PUT /v1/projects/:id {"enabled": true}`), not a different credential: a client that saw a
+    /// generic 403 would keep rotating keys forever.
+    ProjectDisabled,
+    /// The key is past its `expires_at`. HTTP 401.
+    ///
+    /// Deliberately NOT `unauthorized`: an expired key is a *correct* credential that ran out of
+    /// time, so it must not be metered by the failed-credential throttle (see [`ApiError::code`]),
+    /// and a client can tell "rotate me" from "you guessed wrong".
+    KeyExpired,
     /// The referenced resource does not exist. HTTP 404.
     NotFound,
+    /// A relay enqueue names an `action_type` no enrolled device advertises. HTTP 422 (M18).
+    ///
+    /// Its own code rather than `bad_request`, because the request is *well-formed* and the fix is
+    /// not necessarily in it: either the action type is misspelled, or the fleet has not been told
+    /// it can run it. A 400 would send the caller looking at their JSON. The failure it replaces was
+    /// worse than either — the task was accepted, handed to devices that had no such action, burned
+    /// every attempt on "no action", and dead-lettered hours later.
+    RelayUnroutable,
     /// The request conflicts with current state (duplicate, frozen dataset, gated regression). HTTP 409.
     Conflict,
     /// A usage/ingest limit has been exceeded. HTTP 429.
@@ -78,15 +99,37 @@ pub(crate) enum ErrorCode {
 }
 
 impl ErrorCode {
+    /// Every code, for the test that holds the frozen wire table to the enum (a variant added here
+    /// and not there fails the build - five codes had shipped unpinned before it existed).
+    #[cfg(test)]
+    pub(crate) const ALL: [ErrorCode; 15] = [
+        ErrorCode::BadRequest,
+        ErrorCode::TsTooOld,
+        ErrorCode::TsTooNew,
+        ErrorCode::Unauthorized,
+        ErrorCode::Forbidden,
+        ErrorCode::ProjectDisabled,
+        ErrorCode::KeyExpired,
+        ErrorCode::NotFound,
+        ErrorCode::RelayUnroutable,
+        ErrorCode::Conflict,
+        ErrorCode::RateLimited,
+        ErrorCode::Overloaded,
+        ErrorCode::Timeout,
+        ErrorCode::Internal,
+        ErrorCode::Unsupported,
+    ];
+
     /// The canonical HTTP status for this code.
     pub(crate) fn status(self) -> StatusCode {
         match self {
             ErrorCode::BadRequest | ErrorCode::TsTooOld | ErrorCode::TsTooNew => {
                 StatusCode::BAD_REQUEST
             }
-            ErrorCode::Unauthorized => StatusCode::UNAUTHORIZED,
-            ErrorCode::Forbidden => StatusCode::FORBIDDEN,
+            ErrorCode::Unauthorized | ErrorCode::KeyExpired => StatusCode::UNAUTHORIZED,
+            ErrorCode::Forbidden | ErrorCode::ProjectDisabled => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
+            ErrorCode::RelayUnroutable => StatusCode::UNPROCESSABLE_ENTITY,
             ErrorCode::Conflict => StatusCode::CONFLICT,
             ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorCode::Overloaded => StatusCode::SERVICE_UNAVAILABLE,
@@ -104,7 +147,10 @@ impl ErrorCode {
             ErrorCode::TsTooNew => "ts_too_new",
             ErrorCode::Unauthorized => "unauthorized",
             ErrorCode::Forbidden => "forbidden",
+            ErrorCode::ProjectDisabled => "project_disabled",
+            ErrorCode::KeyExpired => "key_expired",
             ErrorCode::NotFound => "not_found",
+            ErrorCode::RelayUnroutable => "relay_unroutable",
             ErrorCode::Conflict => "conflict",
             ErrorCode::RateLimited => "rate_limited",
             ErrorCode::Overloaded => "overloaded",
@@ -122,6 +168,14 @@ pub(crate) struct ApiError {
     /// cooperating client has a schedule to honor instead of guessing (a graduated throttle asks for
     /// a short pause, a hard cap for the wait until its window ages out).
     retry_after: Option<u64>,
+    /// The project's position against its caps, mirrored into the `X-LightTrack-*` headers. Set on
+    /// a limit rejection: a client that is being refused needs the proximity signal *most*, and it
+    /// is exactly the response that carries no `IngestResponse` body to read it from.
+    ///
+    /// Boxed: `ApiError` is the `Err` half of nearly every handler signature in the crate, and
+    /// carrying ~100 bytes of proximity inline there would bloat every `Result` in the API for the
+    /// sake of the one variant that uses it.
+    proximity: Option<Box<Proximity>>,
 }
 
 impl ApiError {
@@ -130,12 +184,19 @@ impl ApiError {
             code,
             message: m.into(),
             retry_after: None,
+            proximity: None,
         }
     }
 
     /// Attach a `Retry-After` (seconds) to this error response.
     pub(crate) fn retry_after(mut self, secs: Option<u64>) -> Self {
         self.retry_after = secs;
+        self
+    }
+
+    /// Attach the proximity signal, emitted as the `X-LightTrack-*` headers.
+    pub(crate) fn proximity(mut self, p: Proximity) -> Self {
+        self.proximity = Some(Box::new(p));
         self
     }
 
@@ -157,11 +218,28 @@ impl ApiError {
     pub(crate) fn forbidden(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Forbidden, m)
     }
+    /// The tenant kill switch: this project accepts nothing until it is re-enabled.
+    pub(crate) fn project_disabled(m: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ProjectDisabled, m)
+    }
+    pub(crate) fn key_expired(m: impl Into<String>) -> Self {
+        Self::new(ErrorCode::KeyExpired, m)
+    }
     pub(crate) fn not_found(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::NotFound, m)
     }
     pub(crate) fn conflict(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::Conflict, m)
+    }
+    /// A relay enqueue nothing in the fleet could ever run (M18). See [`ErrorCode::RelayUnroutable`].
+    pub(crate) fn relay_unroutable(m: impl Into<String>) -> Self {
+        Self::new(ErrorCode::RelayUnroutable, m)
+    }
+    /// Whether this is a backend declining a surface it does not implement (HTTP 501), as opposed to
+    /// a genuine failure. Background sweeps use it to distinguish "this deployment can never do
+    /// this" — which deserves one line, once — from "this project failed right now".
+    pub(crate) fn is_unsupported(&self) -> bool {
+        matches!(self.code, ErrorCode::Unsupported)
     }
     pub(crate) fn rate_limited(m: impl Into<String>) -> Self {
         Self::new(ErrorCode::RateLimited, m)
@@ -203,6 +281,9 @@ impl IntoResponse for ApiError {
                 resp.headers_mut().insert("retry-after", v);
             }
         }
+        if let Some(p) = &self.proximity {
+            p.apply(resp.headers_mut());
+        }
         resp
     }
 }
@@ -228,44 +309,41 @@ mod tests {
         );
     }
 
+    /// The frozen wire contract, one row per code. Consumers `match` on these strings, so a row here
+    /// is a promise; the loop holds the table to [`ErrorCode::ALL`] so a new variant cannot ship
+    /// without a row, and checks the serde spelling against `as_str` so the two cannot drift.
     #[test]
-    fn code_status_mapping_is_canonical() {
-        assert_eq!(ErrorCode::BadRequest.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(ErrorCode::Unauthorized.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(ErrorCode::Forbidden.status(), StatusCode::FORBIDDEN);
-        assert_eq!(ErrorCode::NotFound.status(), StatusCode::NOT_FOUND);
-        assert_eq!(ErrorCode::Conflict.status(), StatusCode::CONFLICT);
-        assert_eq!(
-            ErrorCode::RateLimited.status(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
-        assert_eq!(
-            ErrorCode::Overloaded.status(),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
-        assert_eq!(ErrorCode::Timeout.status(), StatusCode::GATEWAY_TIMEOUT);
-        assert_eq!(
-            ErrorCode::Internal.status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-        assert_eq!(ErrorCode::Unsupported.status(), StatusCode::NOT_IMPLEMENTED);
-    }
-
-    #[test]
-    fn code_wire_strings_are_stable() {
-        assert_eq!(ErrorCode::BadRequest.as_str(), "bad_request");
-        assert_eq!(ErrorCode::Unauthorized.as_str(), "unauthorized");
-        assert_eq!(ErrorCode::Forbidden.as_str(), "forbidden");
-        assert_eq!(ErrorCode::NotFound.as_str(), "not_found");
-        assert_eq!(ErrorCode::Conflict.as_str(), "conflict");
-        assert_eq!(ErrorCode::RateLimited.as_str(), "rate_limited");
-        assert_eq!(ErrorCode::Overloaded.as_str(), "overloaded");
-        assert_eq!(ErrorCode::Timeout.as_str(), "timeout");
-        assert_eq!(ErrorCode::Internal.as_str(), "internal");
-        assert_eq!(ErrorCode::Unsupported.as_str(), "unsupported");
-        // Serialize matches as_str (the enum and the wire string can't drift).
-        let s = serde_json::to_string(&ErrorCode::NotFound).unwrap();
-        assert_eq!(s, "\"not_found\"");
+    fn every_code_has_a_frozen_wire_string_and_canonical_status() {
+        use ErrorCode::*;
+        use StatusCode as S;
+        let frozen = [
+            (BadRequest, "bad_request", S::BAD_REQUEST),
+            (TsTooOld, "ts_too_old", S::BAD_REQUEST),
+            (TsTooNew, "ts_too_new", S::BAD_REQUEST),
+            (Unauthorized, "unauthorized", S::UNAUTHORIZED),
+            (Forbidden, "forbidden", S::FORBIDDEN),
+            (ProjectDisabled, "project_disabled", S::FORBIDDEN),
+            (KeyExpired, "key_expired", S::UNAUTHORIZED),
+            (NotFound, "not_found", S::NOT_FOUND),
+            (RelayUnroutable, "relay_unroutable", S::UNPROCESSABLE_ENTITY),
+            (Conflict, "conflict", S::CONFLICT),
+            (RateLimited, "rate_limited", S::TOO_MANY_REQUESTS),
+            (Overloaded, "overloaded", S::SERVICE_UNAVAILABLE),
+            (Timeout, "timeout", S::GATEWAY_TIMEOUT),
+            (Internal, "internal", S::INTERNAL_SERVER_ERROR),
+            (Unsupported, "unsupported", S::NOT_IMPLEMENTED),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for code in ErrorCode::ALL {
+            let (_, wire, status) = frozen
+                .iter()
+                .find(|(c, _, _)| *c == code)
+                .unwrap_or_else(|| panic!("{code:?} has no frozen wire row"));
+            assert_eq!(code.as_str(), *wire);
+            assert_eq!(code.status(), *status);
+            assert_eq!(serde_json::to_string(&code).unwrap(), format!("\"{wire}\""));
+            assert!(seen.insert(*wire), "wire string {wire} is used twice");
+        }
     }
 
     #[tokio::test]

@@ -11,90 +11,9 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::client::Client;
-
-const WRITE_NAMES: &[&str] = &[
-    "record_score",
-    "score_trace",
-    "create_prompt_version",
-    "promote_prompt",
-];
+use crate::client::{enc_q, enc_seg, Client};
 
 /// True if `name` is one of this module's write tools.
-pub(crate) fn is_write_tool(name: &str) -> bool {
-    WRITE_NAMES.contains(&name)
-}
-
-/// Read tool definitions (always listed).
-pub(crate) fn read_tools() -> Vec<Value> {
-    vec![
-        rtool("list_prompts", "List a project's registry prompts with their label→version pointers and linked benchmark.",
-            json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"]})),
-        rtool("get_prompt", "Resolve one registry prompt to a concrete version's text: by explicit `version`, by `label` (e.g. production), or — absent both — the latest version.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "name":{"type":"string","description":"registry prompt name"},
-                "label":{"type":"string","description":"resolve the version this label points at (e.g. production)"},
-                "version":{"type":"integer","description":"resolve this exact version number"}
-            },"required":["project","name"]})),
-    ]
-}
-
-/// Write tool definitions (listed only when writes are enabled).
-pub(crate) fn write_tools() -> Vec<Value> {
-    vec![
-        wtool("record_score",
-            "Record an LLM-as-judge score against a rubric. Optionally tie it to the `event` it judges. `project` is required with an admin key (a project key derives it).",
-            json!({"type":"object","properties":{
-                "project":{"type":"string","description":"project id (required for an admin key)"},
-                "rubric":{"type":"string","description":"rubric name/label this verdict is against"},
-                "value":{"type":"number","description":"score achieved"},
-                "max":{"type":"number","description":"maximum possible score (default 1.0)"},
-                "pass":{"type":"boolean","description":"pass/fail verdict"},
-                "reasoning":{"type":"string","description":"the judge's rationale"},
-                "scored_by":{"type":"string","description":"who/what produced this score, e.g. a judge model (default mcp)"},
-                "cost_usd":{"type":"number","description":"cost of the judge call, for visibility"},
-                "event":{"type":"string","description":"event id this score judges (optional)"}
-            },"required":["rubric","value"]}),
-            false),
-        wtool("score_trace",
-            "Record a judge verdict for a whole trace (anchored to its root span, or to `event` if given). The trace supplies the project.",
-            json!({"type":"object","properties":{
-                "trace":{"type":"string","description":"trace id to score"},
-                "rubric":{"type":"string","description":"rubric name/label this verdict is against"},
-                "value":{"type":"number","description":"score achieved"},
-                "max":{"type":"number","description":"maximum possible score (default 1.0)"},
-                "pass":{"type":"boolean","description":"pass/fail verdict"},
-                "reasoning":{"type":"string","description":"the judge's rationale"},
-                "scored_by":{"type":"string","description":"who/what produced this score (default mcp)"},
-                "cost_usd":{"type":"number","description":"cost of the judge call, for visibility"},
-                "event":{"type":"string","description":"anchor to this specific call instead of the trace root (optional)"}
-            },"required":["trace","rubric","value"]}),
-            false),
-        wtool("create_prompt_version",
-            "Add a new version to a registry prompt, creating the prompt if it does not exist yet. A new version auto-enqueues the linked benchmark (poll it with get_job). `benchmark_id` is only honored when the prompt is first created.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "name":{"type":"string","description":"registry prompt name (unique per project)"},
-                "content":{"type":"string","description":"the prompt text / template for this version"},
-                "config":{"type":"object","description":"optional structured config (model, params, variable schema)"},
-                "note":{"type":"string","description":"change note describing why this version was cut"},
-                "benchmark_id":{"type":"string","description":"link a benchmark whose regression check gates promotion (only on first create)"}
-            },"required":["project","name","content"]}),
-            false),
-        wtool("promote_prompt",
-            "Point a label (e.g. production) at a version. Blocked (409) when the prompt's linked benchmark regressed below its baseline — pass force=true to override an intentional rollout.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "name":{"type":"string","description":"registry prompt name"},
-                "label":{"type":"string","description":"the label to move, e.g. production"},
-                "version":{"type":"integer","description":"the version number the label should point at"},
-                "force":{"type":"boolean","description":"override the benchmark regression gate (default false)"}
-            },"required":["project","name","label","version"]}),
-            true),
-    ]
-}
-
 /// Route a read tool. `None` if `name` is not one of ours.
 pub(crate) fn read_dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Value, String>> {
     let r = match name {
@@ -105,6 +24,10 @@ pub(crate) fn read_dispatch(c: &Client, name: &str, args: &Value) -> Option<Resu
         "get_prompt" => match (need(args, "project"), need(args, "name")) {
             (Ok(p), Ok(n)) => c.get(&get_prompt_path(&p, &n, args)),
             (Err(e), _) | (_, Err(e)) => Err(e),
+        },
+        "get_prompt_quality" => match need(args, "project") {
+            Ok(p) => c.get(&quality_path(&p, args)),
+            Err(e) => Err(e),
         },
         _ => return None,
     };
@@ -136,6 +59,22 @@ pub(crate) fn write_dispatch(
     Some(r)
 }
 
+/// Build the `GET /v1/quality/prompts` query. Every narrowing is optional: "how are my served
+/// versions doing" has a useful answer before an agent knows which window or rubric to ask about.
+fn quality_path(project: &str, args: &Value) -> String {
+    let mut p = format!("/v1/quality/prompts?project={project}");
+    for k in ["since", "until", "rubric_id"] {
+        if let Some(v) = args
+            .get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            p.push_str(&format!("&{k}={}", enc_q(v)));
+        }
+    }
+    p
+}
+
 /// Build the `GET /v1/projects/:id/prompts/:name` path with an optional `label`/`version` selector.
 fn get_prompt_path(project: &str, name: &str, args: &Value) -> String {
     let mut p = format!("/v1/projects/{project}/prompts/{name}");
@@ -146,7 +85,7 @@ fn get_prompt_path(project: &str, name: &str, args: &Value) -> String {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
     {
-        p.push_str(&format!("?label={l}"));
+        p.push_str(&format!("?label={}", enc_q(l)));
     }
     p
 }
@@ -233,41 +172,12 @@ fn promote_prompt(c: &Client, args: &Value) -> Result<Value, String> {
     )
 }
 
-fn rtool(name: &str, desc: &str, schema: Value) -> Value {
-    let mut t = json!({
-        "name": name,
-        "description": desc,
-        "inputSchema": schema,
-        "annotations": { "readOnlyHint": true, "openWorldHint": true }
-    });
-    if let Some(out) = crate::schemas::output_schema(name) {
-        if let Some(obj) = t.as_object_mut() {
-            obj.insert("outputSchema".to_string(), out);
-        }
-    }
-    t
-}
-
-fn wtool(name: &str, desc: &str, schema: Value, idempotent: bool) -> Value {
-    json!({
-        "name": name,
-        "description": desc,
-        "inputSchema": schema,
-        "annotations": {
-            "readOnlyHint": false,
-            "destructiveHint": false,
-            "idempotentHint": idempotent,
-            "openWorldHint": true
-        }
-    })
-}
-
-/// Require a non-empty string arg.
+/// Require a non-empty string arg, percent-encoded as the path segment every caller uses it as.
 fn need(args: &Value, key: &str) -> Result<String, String> {
     args.get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .map(enc_seg)
         .ok_or_else(|| format!("missing required argument: {key}"))
 }
 
@@ -299,56 +209,6 @@ fn is_status(err: &str, code: u16) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn write_tools_are_gated_and_listed() {
-        for n in WRITE_NAMES {
-            assert!(is_write_tool(n), "{n} should be a write tool");
-        }
-        let listed: Vec<String> = write_tools()
-            .iter()
-            .map(|t| t["name"].as_str().unwrap().to_string())
-            .collect();
-        for n in WRITE_NAMES {
-            assert!(
-                listed.contains(&n.to_string()),
-                "{n} missing from write_tools()"
-            );
-        }
-        assert!(!is_write_tool("list_prompts"), "reads are not gated");
-    }
-
-    #[test]
-    fn read_tools_are_read_only() {
-        for t in read_tools() {
-            assert_eq!(t["annotations"]["readOnlyHint"], json!(true));
-        }
-    }
-
-    #[test]
-    fn write_annotations_flag_not_read_only() {
-        for t in write_tools() {
-            assert_eq!(
-                t["annotations"]["readOnlyHint"],
-                json!(false),
-                "{}",
-                t["name"]
-            );
-        }
-    }
-
-    #[test]
-    fn no_key_minting_tool_exposed() {
-        let all: Vec<String> = read_tools()
-            .into_iter()
-            .chain(write_tools())
-            .map(|t| t["name"].as_str().unwrap().to_string())
-            .collect();
-        assert!(
-            !all.iter().any(|n| n.contains("key")),
-            "must never expose key-minting"
-        );
-    }
 
     #[test]
     fn score_body_requires_rubric_and_value() {

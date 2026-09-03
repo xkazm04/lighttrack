@@ -70,18 +70,24 @@ fn verify_signature(
     body: &[u8],
     now_unix: i64,
 ) -> Result<(), BillingError> {
-    let (mut t, mut v1) = (None, None);
+    // Every `v1=` entry, not the last one: while a signing secret is being rotated Stripe signs each
+    // delivery with both secrets and sends both signatures, and a verifier that kept only one of
+    // them refused a valid delivery whenever the other secret's signature came last.
+    let mut t = None;
+    let mut v1s: Vec<&str> = Vec::new();
     for part in header.split(',') {
         if let Some((k, val)) = part.split_once('=') {
             match k.trim() {
                 "t" => t = Some(val.trim()),
-                "v1" => v1 = Some(val.trim()),
+                "v1" => v1s.push(val.trim()),
                 _ => {}
             }
         }
     }
     let t = t.ok_or_else(|| BillingError::Signature("missing timestamp".into()))?;
-    let v1 = v1.ok_or_else(|| BillingError::Signature("missing v1 signature".into()))?;
+    if v1s.is_empty() {
+        return Err(BillingError::Signature("missing v1 signature".into()));
+    }
     let ts: i64 = t
         .parse()
         .map_err(|_| BillingError::Signature("bad timestamp".into()))?;
@@ -90,15 +96,19 @@ fn verify_signature(
             "timestamp outside tolerance".into(),
         ));
     }
-    let expected =
-        decode_hex(v1).ok_or_else(|| BillingError::Signature("bad hex signature".into()))?;
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
         .map_err(|_| BillingError::Signature("bad signing key".into()))?;
     mac.update(t.as_bytes());
     mac.update(b".");
     mac.update(body);
-    mac.verify_slice(&expected)
-        .map_err(|_| BillingError::Signature("signature mismatch".into()))
+    let matched = v1s.iter().any(|v1| {
+        decode_hex(v1).is_some_and(|expected| mac.clone().verify_slice(&expected).is_ok())
+    });
+    if matched {
+        Ok(())
+    } else {
+        Err(BillingError::Signature("signature mismatch".into()))
+    }
 }
 
 /// Normalize a Stripe event envelope `{type, data:{object}}` into revenue records. Events we don't
@@ -135,6 +145,9 @@ pub fn normalize_invoice(obj: &Value, fx: &FxTable) -> Option<RevenueEvent> {
     } else {
         RevenueKind::OneTime
     };
+    // The whole conversion, not just its result: `converted` used to be computed here and thrown
+    // away, which is why the margin surface had to guess the caveat back out of the live table.
+    let usd = fx.to_usd(amount_cents, currency);
     Some(RevenueEvent {
         id: format!("stripe:{id}"),
         project_id: String::new(),
@@ -148,8 +161,12 @@ pub fn normalize_invoice(obj: &Value, fx: &FxTable) -> Option<RevenueEvent> {
             .and_then(|l| l.pointer("/price/product"))
             .and_then(Value::as_str)
             .map(str::to_string),
-        amount_usd: fx.to_usd(amount_cents, currency).amount_usd,
+        amount_usd: usd.amount_usd,
         currency: currency.to_uppercase(),
+        amount_minor: Some(amount_cents),
+        fx_rate: usd.rate,
+        fx_book_version: Some(fx.version().to_string()),
+        converted: Some(usd.converted),
         kind,
         period_start,
         period_end,
@@ -165,6 +182,7 @@ pub fn normalize_refund(obj: &Value, fx: &FxTable) -> Option<RevenueEvent> {
         return None;
     }
     let currency = obj.get("currency").and_then(Value::as_str).unwrap_or("usd");
+    let usd = fx.to_usd(refunded, currency);
     Some(RevenueEvent {
         id: format!("stripe:refund:{id}"),
         project_id: String::new(),
@@ -175,13 +193,33 @@ pub fn normalize_refund(obj: &Value, fx: &FxTable) -> Option<RevenueEvent> {
             .and_then(Value::as_str)
             .map(str::to_string),
         product_id: None,
-        amount_usd: fx.to_usd(refunded, currency).amount_usd,
+        amount_usd: usd.amount_usd,
         currency: currency.to_uppercase(),
+        amount_minor: Some(refunded),
+        fx_rate: usd.rate,
+        fx_book_version: Some(fx.version().to_string()),
+        converted: Some(usd.converted),
         kind: RevenueKind::Refund,
         period_start: None,
         period_end: None,
-        ts: unix_dt(obj.get("created")).unwrap_or_else(Utc::now),
+        // WHEN the money went back, not when the charge was made. `charge.refunded` delivers the
+        // Charge, whose `created` is the sale; stamping the refund with it booked a clawback issued
+        // three months later into the sale's month and overstated that month's margin. The newest
+        // refund on the charge is the event this delivery announces.
+        ts: latest_refund_at(obj)
+            .or_else(|| unix_dt(obj.get("created")))
+            .unwrap_or_else(Utc::now),
     })
+}
+
+/// The `created` of the most recent entry in a Charge's `refunds.data`, when present.
+fn latest_refund_at(charge: &Value) -> Option<DateTime<Utc>> {
+    charge
+        .pointer("/refunds/data")?
+        .as_array()?
+        .iter()
+        .filter_map(|r| unix_dt(r.get("created")))
+        .max()
 }
 
 fn unix_dt(v: Option<&Value>) -> Option<DateTime<Utc>> {
@@ -190,12 +228,15 @@ fn unix_dt(v: Option<&Value>) -> Option<DateTime<Utc>> {
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
+    // Byte chunks, never `&s[i..i + 2]`: an unauthenticated caller controls this header, and a
+    // multi-byte character at an odd offset made the string slice panic mid-char (a 500 on the
+    // webhook route from a body nobody had verified yet). A non-ASCII byte is simply not hex.
+    if !s.len().is_multiple_of(2) || !s.is_ascii() {
         return None;
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+    s.as_bytes()
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
         .collect()
 }
 
@@ -305,6 +346,48 @@ mod tests {
             .is_err());
     }
 
+    /// During a secret rotation Stripe sends one `v1=` per active secret. A valid signature must be
+    /// accepted wherever it sits in the list, and a list with no valid signature still refused.
+    #[test]
+    fn any_matching_v1_among_several_is_accepted() {
+        let body = invoice_envelope();
+        let now = 1_780_000_100_i64;
+        let good = sign("whsec_new", now, &body);
+        let bad = sign("whsec_old", now, &body);
+        let (good_v1, bad_v1) = (
+            good.split_once(",v1=").unwrap().1,
+            bad.split_once(",v1=").unwrap().1,
+        );
+        let src = StripeSource::new("whsec_new");
+        for header in [
+            format!("t={now},v1={good_v1},v1={bad_v1}"),
+            format!("t={now},v1={bad_v1},v1={good_v1}"),
+        ] {
+            assert!(
+                src.verify_webhook(&lookup(&header), &body, now).is_ok(),
+                "{header}"
+            );
+        }
+        let none = format!("t={now},v1={bad_v1},v1={bad_v1}");
+        assert!(src.verify_webhook(&lookup(&none), &body, now).is_err());
+    }
+
+    /// The signature header is attacker-controlled and unverified when it is decoded. A multi-byte
+    /// character that lands across a two-byte hex pair used to panic the byte-offset slice.
+    #[test]
+    fn a_non_ascii_signature_is_a_mismatch_not_a_panic() {
+        let body = invoice_envelope();
+        let now = 1_780_000_100_i64;
+        for bad in ["a€", "€€", "zz", "0"] {
+            let header = format!("t={now},v1={bad}");
+            let r = StripeSource::new("whsec_test").verify_webhook(&lookup(&header), &body, now);
+            assert!(
+                r.is_err(),
+                "{bad:?} must be refused, not accepted or panicked on"
+            );
+        }
+    }
+
     #[test]
     fn refund_normalizes_negative_kind() {
         let r = normalize(
@@ -321,6 +404,38 @@ mod tests {
         assert_eq!(r[0].kind, RevenueKind::Refund);
         assert!((r[0].amount_usd - 5.0).abs() < 1e-9);
         assert_eq!(r[0].id, "stripe:refund:ch_7");
+    }
+
+    /// A refund is booked when the money went back, not when the charge was made.
+    #[test]
+    fn a_refund_is_dated_by_the_refund_not_the_original_charge() {
+        let sold = 1_780_000_000_i64;
+        let refunded = sold + 90 * 86_400;
+        let r = normalize(
+            &json!({
+                "type": "charge.refunded",
+                "data": { "object": {
+                    "id": "ch_8", "amount_refunded": 500, "currency": "usd", "created": sold,
+                    "refunds": { "data": [
+                        { "id": "re_1", "created": sold + 86_400 },
+                        { "id": "re_2", "created": refunded }
+                    ] }
+                } }
+            }),
+            &fx(),
+        );
+        assert_eq!(
+            r[0].ts.timestamp(),
+            refunded,
+            "the newest refund dates the record"
+        );
+        // A charge payload without the refunds list still falls back to the charge date.
+        let bare = normalize_refund(
+            &json!({ "id": "ch_9", "amount_refunded": 100, "currency": "usd", "created": sold }),
+            &fx(),
+        )
+        .unwrap();
+        assert_eq!(bare.ts.timestamp(), sold);
     }
 
     #[test]

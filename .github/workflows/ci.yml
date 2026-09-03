@@ -318,6 +318,81 @@ jobs:
       - name: Smoke the published entry point
         run: node -e "import('./dist/index.js').then(m => { if (typeof m.LightTrack !== 'function') throw new Error('dist/index.js does not export LightTrack'); console.log('dist entry point loads'); })"
 
+  # The three jobs above prove each SDK against ITSELF. None of them can see the thing that actually
+  # went wrong: the clients are three hand-synchronised implementations of ONE contract, and they had
+  # drifted. Provider extraction was triplicated (the Rust reader took only Gemini's camelCase, so a
+  # google-genai dict recorded `unknown` and zero tokens). The `guard(no_pii)` table was triplicated
+  # byte-for-byte, and when D14 replaced a phone regex that matched every ISO date, the server moved
+  # and the three copies did not. Each per-language job stayed green throughout — a green suite is
+  # not evidence about a contract nobody expressed.
+  #
+  # So this job runs the same fixtures (clients/contract/) through all three, plus the two generators
+  # that keep the fixtures and the docs honest:
+  #   - `cargo test -p lighttrack-anon` re-exports the server's PII rules and fails if the checked-in
+  #     fixture drifted, which is what stops the SDK guards contradicting the ingest scrubber.
+  #   - `gen-sdk-matrix.mjs --check` fails if clients/README.md's capability table no longer matches
+  #     the manifests, which is what stops the README promising a feature one language lacks.
+  #
+  # BLOCKING, deliberately. These are tests, and this repo's rule is that tests block and lint
+  # advises. An advisory contract job would be a contract nobody has to keep.
+  sdk-contract:
+    name: sdk contract (all three)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # reqwest (rust client) and the anon crate's dev-deps link native-tls here too.
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+      # The ruler is pinned by rust-toolchain.toml (one address, repo root). rustup ships on the
+      # runner image and reads that file on the first cargo invocation, installing exactly the
+      # pinned toolchain + components — so no job here names a version that could drift from it.
+      - run: cargo --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Two cargo projects are exercised here: the workspace (for crates/anon) and the detached
+          # Rust client. Its own key, so it shares no cache with the single-project jobs.
+          workspaces: |
+            .
+            clients/rust
+          shared-key: sdk-contract
+
+      # The generator half: crates/anon renders clients/contract/fixtures/pii.json and fails if the
+      # checked-in file has drifted from lighttrack_anon::rule_set().
+      - name: PII fixture is current with the server's scrubber
+        run: cargo test -p lighttrack-anon
+
+      # The three runners. Each loads every fixture file; each skips only what its own
+      # lighttrack.manifest.json declares not_supported.
+      - name: Rust SDK contract suite
+        run: cargo test --manifest-path clients/rust/Cargo.toml --test contract
+      - name: Install the Python wheel
+        run: python -m pip install ./clients/python
+      # `discover -s clients/python/tests` puts ONLY that directory on sys.path, so `import
+      # lighttrack` resolves to the wheel just installed rather than the adjacent source tree.
+      - name: Python SDK contract suite
+        run: python -m unittest discover -s clients/python/tests -p "test_contract.py" -v
+      - name: Install TypeScript dev deps
+        run: npm ci
+        working-directory: clients/typescript
+      - name: TypeScript SDK contract suite
+        run: npx tsx --test src/contract.test.ts
+        working-directory: clients/typescript
+
+      # The docs half: the capability matrix in clients/README.md is rendered from the three
+      # manifests, so a capability that changes in one language and not the others fails here
+      # instead of leaving a stale sentence on a page users read before choosing an SDK.
+      - name: SDK capability matrix is current
+        run: node scripts/gen-sdk-matrix.mjs --check
+
   # ── Required checks ───────────────────────────────────────────────────────────────────────────
   # Both gates are BLOCKING. The pre-existing fmt/clippy debt these jobs were once advisory for is
   # gone: the tree is stock-rustfmt clean and `clippy -D warnings` passes workspace-wide across all

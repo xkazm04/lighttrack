@@ -15,3 +15,11 @@ regex = "1"
 # HTTPS client for provider APIs (Gemini/OpenAI generation). rustls, validating against the OS
 # trust store (SChannel on Windows) via rustls-platform-verifier.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+# Request signing for HTTP benchmark targets (X-LightTrack-Signature).
+hmac = "0.13"
+sha2 = "0.11"
+
+[dev-dependencies]
+# A local stub endpoint for the HTTP-target round-trip test - no live service, no model call.
+axum = "0.7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }

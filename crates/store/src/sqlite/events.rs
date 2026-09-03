@@ -8,7 +8,7 @@ use rusqlite::{params, params_from_iter, Connection, ErrorCode, OptionalExtensio
 use serde_json::Value;
 
 use lighttrack_core::{
-    LimitScope, LlmEvent, Operation, Provider, Status, TokenUsage, TraceShape, TraceSummary,
+    LimitScope, LlmEvent, Operation, ProviderId, Status, TokenUsage, TraceShape, TraceSummary,
 };
 
 use super::usage_cache::UsageCache;
@@ -20,20 +20,33 @@ use crate::{
 
 /// Map a failed event insert to a typed error: a primary-key / uniqueness violation (a duplicate
 /// event `id`) becomes [`StoreError::Conflict`] so the API returns 409, not an opaque 500. Anything
-/// else keeps its native `Sqlite` mapping.
+/// else keeps its native `Sqlite` mapping — including the *other* constraint violations (a NOT
+/// NULL, a CHECK), which used to be reported as "already exists" too: a row the schema refused for
+/// being malformed was answered with a 409 that named a duplicate that did not exist.
 fn insert_err(e: rusqlite::Error, id: &str) -> StoreError {
+    /// `SQLITE_CONSTRAINT_PRIMARYKEY` and `SQLITE_CONSTRAINT_UNIQUE` — the two extended codes that
+    /// mean "this key is taken".
+    const DUPLICATE_KEY: [i32; 2] = [1555, 2067];
     match &e {
-        rusqlite::Error::SqliteFailure(f, _) if f.code == ErrorCode::ConstraintViolation => {
+        rusqlite::Error::SqliteFailure(f, _)
+            if f.code == ErrorCode::ConstraintViolation
+                && DUPLICATE_KEY.contains(&f.extended_code) =>
+        {
             StoreError::Conflict(format!("event '{id}' already exists"))
         }
         _ => e.into(),
     }
 }
 
-const COLS: &str = "id, project_id, trace_id, span_id, parent_span_id, ts, provider, model, \
-    operation, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, cost_usd, \
-    latency_ms, status, error, input, output, tags, source, metadata, name, \
-    COALESCE(received_at, ts) AS received_at";
+/// The event select list, derived from the schema model rather than restated here (M14).
+///
+/// `from_row` reads by position, so this list and the `get` indices are one contract: adding a
+/// column mid-list without moving the reads shifts every field after it — a silent corruption no
+/// type error would catch, since most of these are strings. Deriving it means the list can only
+/// change when the model does, and the arity assertion in the tests below fails the moment it has.
+static COLS: crate::schema::SelectList = crate::schema::SelectList::new(|| {
+    crate::schema::tables::EVENTS.select_list(crate::schema::Dialect::Sqlite)
+});
 
 pub(super) fn insert(conn: &Connection, ev: &LlmEvent) -> Result<()> {
     let tags = serde_json::to_string(&ev.tags)?;
@@ -111,9 +124,21 @@ pub(super) fn insert_checked_with_rules(
     rules: &[lighttrack_core::LimitRule],
 ) -> Result<Admission> {
     let now = Utc::now();
-    let admission = evaluate_admission(rules, ev, event_contribution(ev), |w, scope| {
-        cache.usage(conn, &ev.project_id, w, scope, now)
+    // Revenue-share thresholds are resolved on the SAME locked connection that is about to do the
+    // check-and-insert, so the number a cap enforces on and the revenue it was derived from are one
+    // consistent snapshot. `resolve_all` short-circuits entirely when no rule needs revenue, which
+    // is the overwhelmingly common case — a fixed cap still costs zero extra queries.
+    let resolved = crate::threshold::resolve_all(rules, now, |since, until| {
+        super::revenue::list(conn, Some(&ev.project_id), since, until)
     })?;
+    let resolve = crate::threshold::resolver(&resolved);
+    let admission = evaluate_admission(
+        rules,
+        ev,
+        event_contribution(ev),
+        |w, scope| cache.usage(conn, &ev.project_id, w, scope, now),
+        resolve,
+    )?;
     if admission.admitted {
         insert(conn, ev)?;
     }
@@ -202,6 +227,18 @@ fn build_predicates(project: Option<&str>, filter: &EventFilter) -> Predicates {
         conds
             .push("EXISTS (SELECT 1 FROM json_each(events.tags) WHERE json_each.value = ?)".into());
         args.push(Box::new(t.clone()));
+    }
+    // The redaction stamp is a server-owned object inside `metadata` (see `core::RedactionStamp`),
+    // so both predicates read fixed JSON paths — no client-supplied key to bind.
+    if let Some(r) = &filter.redaction_rules {
+        conds.push("json_extract(metadata, '$.redaction.rules') = ?".into());
+        args.push(Box::new(r.clone()));
+    }
+    if let Some(n) = filter.min_redacted_spans {
+        // COALESCE, not `>= ?` on a possibly-absent path: an unstamped row must compare as zero
+        // spans rather than drop out on NULL, so `min_redacted_spans: 0` still means "everything".
+        conds.push("COALESCE(json_extract(metadata, '$.redaction.spans'), 0) >= ?".into());
+        args.push(Box::new(n as i64));
     }
     if let Some(k) = &filter.metadata_key {
         // The path is a *bound parameter*, so an arbitrary key can't escape into the SQL text.
@@ -294,10 +331,13 @@ pub(super) fn list_filtered(
     })
 }
 
-pub(super) fn get(conn: &Connection, id: &str) -> Result<Option<LlmEvent>> {
-    let sql = format!("SELECT {COLS} FROM events WHERE id = ?1");
+pub(super) fn get(conn: &Connection, project: Option<&str>, id: &str) -> Result<Option<LlmEvent>> {
+    let sql = format!(
+        "SELECT {COLS} FROM events WHERE id = ?1{}",
+        super::scope_and(2)
+    );
     let mut stmt = conn.prepare(&sql)?;
-    let raw = stmt.query_row(params![id], map_raw).optional()?;
+    let raw = stmt.query_row(params![id, project], map_raw).optional()?;
     raw.map(from_raw).transpose()
 }
 
@@ -595,7 +635,8 @@ fn trace_summary_from_raw(r: TraceSummaryRaw) -> Result<TraceSummary> {
 pub(super) fn cost_summary(conn: &Connection, project: Option<&str>) -> Result<Vec<CostRow>> {
     let cols = "project_id, provider, model, COUNT(*) AS calls, \
         COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
-        COALESCE(SUM(cost_usd),0.0) AS cost";
+        COALESCE(SUM(cost_usd),0.0) AS cost, \
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),0) AS unpriced";
     let map = |row: &Row| -> rusqlite::Result<CostRow> {
         Ok(CostRow {
             project_id: row.get(0)?,
@@ -605,6 +646,7 @@ pub(super) fn cost_summary(conn: &Connection, project: Option<&str>) -> Result<V
             input_tokens: row.get(4)?,
             output_tokens: row.get(5)?,
             cost_usd: row.get(6)?,
+            unpriced_calls: row.get(7)?,
         })
     };
     let rows = if let Some(p) = project {
@@ -640,7 +682,8 @@ pub(super) fn cost_summary_windowed(
 ) -> Result<Vec<CostRow>> {
     let cols = "project_id, provider, model, COUNT(*) AS calls, \
         COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
-        COALESCE(SUM(cost_usd),0.0) AS cost";
+        COALESCE(SUM(cost_usd),0.0) AS cost, \
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),0) AS unpriced";
     let mut conds: Vec<&str> = Vec::new();
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
     if let Some(p) = project {
@@ -674,6 +717,7 @@ pub(super) fn cost_summary_windowed(
                 input_tokens: row.get(4)?,
                 output_tokens: row.get(5)?,
                 cost_usd: row.get(6)?,
+                unpriced_calls: row.get(7)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -873,7 +917,9 @@ fn from_raw(r: RawEvent) -> Result<LlmEvent> {
         parent_span_id: r.parent_span_id,
         ts,
         received_at,
-        provider: parse_enum::<Provider>("provider", &r.provider)?,
+        // An open id, not a vocabulary: the raw column is kept as written (historical rows that say
+        // `unknown` are the pre-M8 backfill sentinel — see docs/DATA_MODEL.md).
+        provider: ProviderId::new(&r.provider),
         model: r.model,
         name: r.name,
         operation: parse_enum::<Operation>("operation", &r.operation)?,
@@ -905,7 +951,8 @@ pub(super) fn usecase_costs(
 ) -> Result<Vec<UseCaseCostRow>> {
     let cols = "name, provider, model, COUNT(*) AS calls, \
         COALESCE(SUM(input_tokens),0) AS it, COALESCE(SUM(output_tokens),0) AS ot, \
-        COALESCE(SUM(cost_usd),0.0) AS cost";
+        COALESCE(SUM(cost_usd),0.0) AS cost, \
+        COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END),0) AS unpriced";
     let tail = "GROUP BY name, provider, model ORDER BY cost DESC";
     let map = |row: &Row| -> rusqlite::Result<UseCaseCostRow> {
         Ok(UseCaseCostRow {
@@ -916,6 +963,7 @@ pub(super) fn usecase_costs(
             input_tokens: row.get(4)?,
             output_tokens: row.get(5)?,
             cost_usd: row.get(6)?,
+            unpriced_calls: row.get(7)?,
         })
     };
     let since_str = since.map(fmt_ts);
@@ -957,4 +1005,38 @@ pub(super) fn usecase_costs(
         }
     };
     Ok(rows)
+}
+
+#[cfg(test)]
+mod insert_err_tests {
+    use super::insert_err;
+    use crate::StoreError;
+    use rusqlite::{ffi, Error, ErrorCode};
+
+    fn failure(extended_code: i32) -> Error {
+        Error::SqliteFailure(
+            ffi::Error {
+                code: ErrorCode::ConstraintViolation,
+                extended_code,
+            },
+            None,
+        )
+    }
+
+    /// A taken key is a 409; a NOT NULL or CHECK violation is a malformed row, not a duplicate.
+    #[test]
+    fn only_a_taken_key_reads_as_a_duplicate() {
+        assert!(matches!(
+            insert_err(failure(ffi::SQLITE_CONSTRAINT_PRIMARYKEY), "e"),
+            StoreError::Conflict(_)
+        ));
+        assert!(matches!(
+            insert_err(failure(ffi::SQLITE_CONSTRAINT_UNIQUE), "e"),
+            StoreError::Conflict(_)
+        ));
+        assert!(matches!(
+            insert_err(failure(ffi::SQLITE_CONSTRAINT_NOTNULL), "e"),
+            StoreError::Sqlite(_)
+        ));
+    }
 }

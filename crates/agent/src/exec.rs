@@ -6,67 +6,88 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use lighttrack_core::RelayTask;
-use lighttrack_engine::{run_raw, EngineConfig, EngineError};
+use lighttrack_engine::invocation::{self, Invocation};
+use lighttrack_engine::{EngineConfig, EngineError};
 
 use crate::actions;
 use crate::config::AgentConfig;
 use crate::connect;
-
-/// What the device reports back on settle (mirrors the result endpoint's body).
-pub(crate) struct RunReport {
-    /// `succeeded` | `failed` | `deferred`.
-    pub status: &'static str,
-    pub result: Value,
-    pub error: Option<String>,
-    pub retry_after_secs: Option<u32>,
-    pub model: Option<String>,
-    pub input_tokens: Option<u64>,
-    pub output_tokens: Option<u64>,
-    pub latency_ms: Option<u64>,
-}
-
-impl RunReport {
-    fn failed(error: String) -> Self {
-        RunReport {
-            status: "failed",
-            result: Value::Null,
-            error: Some(error),
-            retry_after_secs: None,
-            model: None,
-            input_tokens: None,
-            output_tokens: None,
-            latency_ms: None,
-        }
-    }
-
-    fn deferred(reason: String) -> Self {
-        RunReport {
-            status: "deferred",
-            ..Self::failed(reason)
-        }
-    }
-}
+use crate::report::{PromptIdentity, RunReport};
 
 pub(crate) fn execute(cfg: &AgentConfig, engine: &EngineConfig, task: &RelayTask) -> RunReport {
     let action = match actions::load(&cfg.actions_dir, &task.action_type) {
         Ok(a) => a,
         // A missing/broken action is a real failure: retrying later is right (the user can add
         // the action to the library between attempts), and exhaustion dead-letters it.
+        // Unstamped, and the only outcome that is: there was no prompt to fingerprint.
         Err(e) => return RunReport::failed(format!("action: {e:#}")),
     };
-    let prompt = actions::render(&action.prompt_template, task);
-
-    let out = match run_raw(
-        engine,
+    // Which prompt text is about to run, computed before anything is spawned so that every other
+    // outcome — including a posture refusal that costs nothing — can name it.
+    let prompt = match actions::render(&action.prompt_template, task) {
+        Ok(p) => p,
+        // Nothing was spawned; like a broken action this is retryable (the payload or the template
+        // can be fixed between attempts) and unstamped: there is no complete prompt to fingerprint.
+        Err(e) => return RunReport::failed(format!("prompt: {e:#}")),
+    };
+    let identity = PromptIdentity::new(
         &prompt,
-        &action.spec.model,
-        action.spec.system.as_deref(),
-        action.schema.as_deref(),
+        action.spec.version.as_deref(),
+        action.spec.report_io,
+    );
+    run(cfg, engine, task, &action, &prompt).stamp(&identity)
+}
+
+fn run(
+    cfg: &AgentConfig,
+    engine: &EngineConfig,
+    task: &RelayTask,
+    action: &actions::Action,
+    prompt: &str,
+) -> RunReport {
+    let spec = &action.spec;
+
+    // Resolve the posture before spending anything: an action that claims a mode it cannot back up
+    // (an edit run with no workspace, a scan naming a directory outside the root) fails here, at no
+    // cost, instead of after a paid run.
+    let workspace = match actions::resolve_workspace(
+        cfg.workspaces_root.as_deref(),
+        spec.workspace.as_deref(),
+        spec.mode,
     ) {
+        Ok(w) => w,
+        Err(e) => return RunReport::failed(format!("action posture: {e:#}")),
+    };
+    let mut inv = Invocation::with_mode(prompt, &spec.model, spec.mode)
+        .with_system(spec.system.as_deref())
+        .with_schema(action.schema.as_deref())
+        .with_allowed_tools(spec.allowed_tools.clone())
+        .with_permission_mode(spec.permission_mode.as_deref())
+        .with_budget_usd(spec.max_budget_usd)
+        .with_timeout(spec.timeout())
+        .with_bare(engine.bare);
+    if let Some(dir) = workspace {
+        inv = inv.with_cwd(dir);
+    }
+
+    let out = match invocation::run(&engine.claude(), &inv) {
         Ok(out) => out,
         Err(e) if rate_limited(&e) => return RunReport::deferred(format!("claude: {e}")),
         Err(e) => return RunReport::failed(format!("claude: {e}")),
     };
+    if !out.ok() {
+        // An agentic mode reads its envelope even on a controlled non-zero exit (a budget cap), so
+        // a run that reported an error must not settle `succeeded` with the error text as a result.
+        return RunReport::failed(format!(
+            "claude reported an error (subtype={}): {}",
+            out.subtype,
+            if out.text.is_empty() {
+                out.stderr.as_str()
+            } else {
+                out.text.as_str()
+            }
+        ));
+    }
 
     // With a schema the result is the structured JSON itself; otherwise the raw text, wrapped.
     let result = match &action.schema {
@@ -89,13 +110,18 @@ pub(crate) fn execute(cfg: &AgentConfig, engine: &EngineConfig, task: &RelayTask
 
     RunReport {
         status: "succeeded",
+        // Opt-in, and the model's raw text rather than the `{"text": …}` wrapper: what a judge has
+        // to read is what the model wrote.
+        result_text: spec.report_io.then(|| out.text.clone()),
         result,
         error: None,
-        retry_after_secs: None,
         model: Some(out.model),
         input_tokens: out.input_tokens,
         output_tokens: out.output_tokens,
         latency_ms: out.latency_ms,
+        cost_usd: out.cost_usd,
+        mode: Some(spec.mode.as_str()),
+        ..RunReport::failed(String::new())
     }
 }
 
@@ -147,12 +173,28 @@ mod tests {
     }
 
     fn cfg(actions_dir: &str) -> AgentConfig {
+        cfg_with_root(actions_dir, None)
+    }
+
+    fn cfg_with_root(actions_dir: &str, workspaces_root: Option<&str>) -> AgentConfig {
         std::env::set_var("LT_TEST_DEVICE_KEY", "k");
+        let esc = |s: &str| s.replace('\\', "\\\\");
+        let root = workspaces_root
+            .map(|r| format!("workspaces_root = \"{}\"\n", esc(r)))
+            .unwrap_or_default();
         let toml = format!(
-            "actions_dir = \"{}\"\n[[sources]]\nname = \"x\"\nurl = \"http://x\"\ndevice_key_env = \"LT_TEST_DEVICE_KEY\"\n",
-            actions_dir.replace('\\', "\\\\")
+            "actions_dir = \"{}\"\n{root}[[sources]]\nname = \"x\"\nurl = \"http://x\"\ndevice_key_env = \"LT_TEST_DEVICE_KEY\"\n",
+            esc(actions_dir)
         );
         toml::from_str(&toml).unwrap()
+    }
+
+    /// Write a one-file action library entry with the given `action.toml` body.
+    fn write_action(dir: &std::path::Path, spec: &str) {
+        let act = dir.join("ns").join("act");
+        std::fs::create_dir_all(&act).unwrap();
+        std::fs::write(act.join("prompt.md"), "Hello {{params.who}}").unwrap();
+        std::fs::write(act.join("action.toml"), spec).unwrap();
     }
 
     #[test]
@@ -168,6 +210,127 @@ mod tests {
         let r = execute(&cfg, &engine, &task("../escape"));
         assert_eq!(r.status, "failed");
         assert!(r.error.unwrap().contains("invalid action_type"));
+    }
+
+    /// The posture an action declares is resolved before anything is spawned, so a library that
+    /// over-claims costs nothing. `claude_bin` here cannot exist — reaching a spawn would be a
+    /// different error than the one each case asserts.
+    #[test]
+    fn an_over_claiming_action_fails_before_any_spawn() {
+        let engine = EngineConfig {
+            claude_bin: "definitely-not-an-executable-lighttrack-test".into(),
+            ..EngineConfig::default()
+        };
+        let cases: [(&str, bool, &str); 5] = [
+            // (action.toml, configure a workspaces_root, expected substring)
+            ("mode = \"edit\"\n", true, "requires a workspace"),
+            (
+                "mode = \"readonly-scan\"\nworkspace = \"repo\"\n",
+                false,
+                "no workspaces_root",
+            ),
+            (
+                "mode = \"readonly-scan\"\nworkspace = \"../outside\"\n",
+                true,
+                "invalid workspace",
+            ),
+            (
+                "mode = \"generate\"\nworkspace = \"repo\"\n",
+                true,
+                "takes no workspace",
+            ),
+            (
+                // A repository-touching mode with a write tool: the seam refuses the posture.
+                "mode = \"readonly-scan\"\nworkspace = \"repo\"\nallowed_tools = [\"Write\"]\n",
+                true,
+                "it can write",
+            ),
+        ];
+        for (spec, with_root, expect) in cases {
+            let lib = tempfile::tempdir().unwrap();
+            let roots = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(roots.path().join("repo")).unwrap();
+            write_action(lib.path(), spec);
+            let cfg = cfg_with_root(
+                lib.path().to_str().unwrap(),
+                with_root.then(|| roots.path().to_str().unwrap()),
+            );
+            let r = execute(&cfg, &engine, &task("ns/act"));
+            assert_eq!(r.status, "failed", "{spec}");
+            let err = r.error.unwrap_or_default();
+            assert!(
+                err.contains(expect),
+                "{spec}\nexpected '{expect}' in: {err}"
+            );
+            assert!(
+                !err.contains("lighttrack-test"),
+                "{spec}: reached a spawn instead of failing on posture: {err}"
+            );
+        }
+    }
+
+    /// A well-formed edit action passes posture and only then fails on the missing binary — the
+    /// proof that the posture gate is not simply rejecting everything.
+    #[test]
+    fn a_well_formed_edit_action_reaches_the_spawn() {
+        let lib = tempfile::tempdir().unwrap();
+        let roots = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(roots.path().join("repo")).unwrap();
+        write_action(
+            lib.path(),
+            "mode = \"edit\"\nworkspace = \"repo\"\npermission_mode = \"acceptEdits\"\nmax_budget_usd = 2.0\ntimeout_secs = 30\n",
+        );
+        let engine = EngineConfig {
+            claude_bin: "definitely-not-an-executable-lighttrack-test".into(),
+            ..EngineConfig::default()
+        };
+        let cfg = cfg_with_root(
+            lib.path().to_str().unwrap(),
+            Some(roots.path().to_str().unwrap()),
+        );
+        let r = execute(&cfg, &engine, &task("ns/act"));
+        assert_eq!(r.status, "failed");
+        assert!(
+            r.error.unwrap().contains("lighttrack-test"),
+            "a valid posture should get as far as the spawn"
+        );
+    }
+
+    /// The fingerprint is a property of the RUN, not of a successful one: a report that never
+    /// reached the CLI still names the prompt it was about to send, and an action that has not
+    /// opted in sends the fingerprint and nothing else. This is the privacy default, tested at the
+    /// place it is actually decided.
+    #[test]
+    fn a_run_names_its_prompt_but_ships_its_text_only_on_request() {
+        let engine = EngineConfig {
+            claude_bin: "definitely-not-an-executable-lighttrack-test".into(),
+            ..EngineConfig::default()
+        };
+        // The default library entry declares nothing: fingerprint yes, text no, version none.
+        let lib = tempfile::tempdir().unwrap();
+        write_action(lib.path(), "");
+        let closed = cfg(lib.path().to_str().unwrap());
+        let r = execute(&closed, &engine, &task("ns/act"));
+        assert_eq!(r.status, "failed", "the fake binary cannot run");
+        assert_eq!(
+            r.prompt_sha256.as_deref(),
+            Some(crate::report::sha256_hex("Hello world").as_str()),
+            "the fingerprint is over the RENDERED prompt, not the template"
+        );
+        assert!(r.rendered_prompt.is_none(), "not opted in");
+        assert!(r.action_version.is_none());
+
+        // Opted in, and versioned.
+        let lib = tempfile::tempdir().unwrap();
+        write_action(lib.path(), "report_io = true\nversion = \"7\"\n");
+        let opted_in = cfg(lib.path().to_str().unwrap());
+        let r = execute(&opted_in, &engine, &task("ns/act"));
+        assert_eq!(r.rendered_prompt.as_deref(), Some("Hello world"));
+        assert_eq!(r.action_version.as_deref(), Some("7"));
+
+        // No action, no prompt, nothing to fingerprint — the one unstamped outcome.
+        let r = execute(&opted_in, &engine, &task("ns/missing"));
+        assert!(r.prompt_sha256.is_none());
     }
 
     #[test]

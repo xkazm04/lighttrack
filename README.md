@@ -236,12 +236,15 @@ docs/                   architecture, data model, packaging, roadmap, decisions
 ```
 
 ## Use from Claude Code (MCP)
-`lt-mcp` is an MCP server over the API: **28 read tools** (events + traces / costs + use-cases / margin +
-forecast / scores / limits / prices / projects / benchmarks + runs + CI gate / datasets + items / rubrics /
-prompt registry / jobs / collective leaderboard + digest) plus **15 write tools** (enqueue runs, record
-scores, create project/dataset + items/rubric/benchmark, create/update/delete limit, prompt versions +
-gated promotion, `put_price`). Writes are **off by default**, gated behind
-`LIGHTTRACK_MCP_ALLOW_WRITES=1` on top of the API's admin checks; key-minting is deliberately not exposed.
+`lt-mcp` is an MCP server over the API, covering events and traces, costs and use-cases, margin and
+forecast, scores, limits, prices, projects, benchmarks and their CI gate, datasets, rubrics, the prompt
+registry, jobs, the relay fleet and the collective leaderboard. Writes are **off by default**, gated
+behind `LIGHTTRACK_MCP_ALLOW_WRITES=1` on top of the API's admin checks; key-minting is deliberately not
+exposed.
+
+The exact catalog — every tool, the route behind it, and the `lt` verb and renderer beside it — is
+generated from the endpoint contract into **[docs/API.md](docs/API.md)**, with the counts at the top.
+No number here is maintained by hand: the ones that were said 28 and 15 long after they were 43 and 21.
 
 A project-scoped [`.mcp.json`](.mcp.json) is committed, so after `cargo build` and starting the API on
 `:8787`, open Claude Code in this repo and approve the `lighttrack` server — then ask *"what did project

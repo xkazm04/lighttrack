@@ -1,16 +1,15 @@
-//! Projects & API keys management (admin-only).
+//! Project CRUD and archival (admin-only). Their API keys live in [`crate::projects_keys`].
 
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
     Json,
 };
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
+use serde::Deserialize;
 
-use lighttrack_core::{new_id, ApiKey, Project, Redaction};
+use lighttrack_core::{new_id, Project, Redaction};
 
-use crate::auth;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin};
 use crate::state::{spawn_db, AppState};
@@ -28,6 +27,20 @@ pub(crate) struct CreateProjectReq {
     /// Consent to include this project's benchmark runs in collective digests. Default off.
     #[serde(default)]
     collective_opt_in: bool,
+    /// Refuse to promote on a judge that is not `trusted` for the rubric being gated (M11).
+    /// Default off — see [`lighttrack_core::Project::require_trusted_judge`].
+    #[serde(default)]
+    require_trusted_judge: bool,
+}
+
+/// A project name is what every list, alert and banner prints for the tenant; blank is not a name.
+/// One door for both the create and update bodies, so the two cannot disagree on what a name is.
+fn validate_name(name: &str) -> Result<String, ApiError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("name must not be blank"));
+    }
+    Ok(name.to_string())
 }
 
 /// Longest accepted caller-supplied project id. A project id is a URL path segment, a query value
@@ -69,6 +82,7 @@ pub(crate) async fn create_project(
     Json(req): Json<CreateProjectReq>,
 ) -> Result<Json<Project>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let name = validate_name(&req.name)?;
     // An id the caller chose is honoured, not quietly replaced: it is the string they will type into
     // `LIGHTTRACK_PROJECT` and into the very next documented call (`POST /v1/projects/<id>/keys`),
     // and the dev-mode bootstrap already creates a human-readable `default` project — so readable
@@ -98,10 +112,12 @@ pub(crate) async fn create_project(
     };
     let proj = Project {
         id,
-        name: req.name,
+        name,
         enabled: true,
         redaction: req.redaction,
         collective_opt_in: req.collective_opt_in,
+        require_trusted_judge: req.require_trusted_judge,
+        archived_at: None,
         created_at: Utc::now(),
     };
     insert_project(&st, &proj).await?;
@@ -116,8 +132,19 @@ pub(crate) async fn insert_project(st: &AppState, proj: &Project) -> Result<(), 
     let store = st.store.clone();
     let pc = proj.clone();
     spawn_db(move || store.create_project(&pc)).await?;
-    st.redaction_policies.put(&proj.id, proj.redaction);
+    st.project_policies
+        .put(&proj.id, crate::state::ProjectPolicy::from(proj));
     Ok(())
+}
+
+/// One project by id, or the 404 both this module and [`crate::projects_keys`] answer with. Shared
+/// so "unknown project" reads identically whether you were creating a key or updating the tenant.
+pub(crate) async fn load_project(st: &AppState, pid: &str) -> Result<Project, ApiError> {
+    let store = st.store.clone();
+    let id = pid.to_string();
+    spawn_db(move || store.get_project(&id))
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("project '{pid}' not found")))
 }
 
 /// Mutable fields of a project. Every field is optional: an omitted one is left as-is, so a caller
@@ -128,6 +155,7 @@ pub(crate) struct UpdateProjectReq {
     enabled: Option<bool>,
     redaction: Option<Redaction>,
     collective_opt_in: Option<bool>,
+    require_trusted_judge: Option<bool>,
 }
 
 /// Update a project (admin). The reason this endpoint exists at all is `redaction`: it is the one
@@ -144,23 +172,12 @@ pub(crate) async fn update_project(
 ) -> Result<Json<Project>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
 
-    let store = st.store.clone();
-    let id = pid.clone();
-    let mut proj = spawn_db(move || store.get_project(&id))
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("project '{pid}' not found")))?;
-    if let Some(n) = req.name {
-        proj.name = n;
-    }
-    if let Some(e) = req.enabled {
-        proj.enabled = e;
-    }
-    if let Some(r) = req.redaction {
-        proj.redaction = r;
-    }
-    if let Some(c) = req.collective_opt_in {
-        proj.collective_opt_in = c;
-    }
+    let mut proj = load_project(&st, &pid).await?;
+    let req = UpdateProjectReq {
+        name: req.name.as_deref().map(validate_name).transpose()?,
+        ..req
+    };
+    apply_update(&mut proj, req);
 
     let store = st.store.clone();
     let pc = proj.clone();
@@ -170,7 +187,63 @@ pub(crate) async fn update_project(
     }
     // Invalidate rather than overwrite: the next ingest re-reads the committed row, so the cache can
     // never disagree with what the store actually persisted.
-    st.redaction_policies.invalidate(&proj.id);
+    st.project_policies.invalidate(&proj.id);
+    Ok(Json(proj))
+}
+
+/// Fold an update into the row. `enabled: true` is also the **un-archive**: the lifecycle vocabulary
+/// is closed — a project is live, disabled, or archived — and a row that is both enabled and
+/// stamped `archived_at` is none of those. Re-enabling restores the same entity, history intact,
+/// which is what un-archival means; nothing else clears the stamp.
+fn apply_update(proj: &mut Project, req: UpdateProjectReq) {
+    if let Some(n) = req.name {
+        proj.name = n;
+    }
+    if let Some(e) = req.enabled {
+        proj.enabled = e;
+        if e {
+            proj.archived_at = None;
+        }
+    }
+    if let Some(r) = req.redaction {
+        proj.redaction = r;
+    }
+    if let Some(c) = req.collective_opt_in {
+        proj.collective_opt_in = c;
+    }
+    if let Some(t) = req.require_trusted_judge {
+        proj.require_trusted_judge = t;
+    }
+}
+
+/// Archive a project (admin): `enabled = false`, `archived_at = now`, **rows kept**.
+///
+/// `DELETE` here is a lifecycle verb, not a `DROP`. A project's events, scores and benchmark runs
+/// are the record every cost report, margin figure and gate decision was computed from; deleting
+/// the tenant row would orphan all of it while leaving the numbers in place, so the endpoint that
+/// operators reach for does the safe thing and says so. Archiving is also *effective* — a disabled
+/// project's keys open nothing (see [`crate::guards`]) — so it stops the spend a delete was meant to.
+///
+/// Idempotent: archiving an already-archived project returns it unchanged rather than 404-ing.
+pub(crate) async fn archive_project(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(pid): Path<String>,
+) -> Result<Json<Project>, ApiError> {
+    ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let mut proj = load_project(&st, &pid).await?;
+    if proj.archived_at.is_none() {
+        proj.archived_at = Some(Utc::now());
+    }
+    proj.enabled = false;
+
+    let store = st.store.clone();
+    let pc = proj.clone();
+    let changed = spawn_db(move || store.update_project(&pc)).await?;
+    if !changed {
+        return Err(ApiError::not_found(format!("project '{pid}' not found")));
+    }
+    st.project_policies.invalidate(&proj.id);
     Ok(Json(proj))
 }
 
@@ -182,148 +255,6 @@ pub(crate) async fn list_projects(
     let store = st.store.clone();
     let v = spawn_db(move || store.list_projects()).await?;
     Ok(Json(v))
-}
-
-#[derive(Deserialize)]
-pub(crate) struct CreateKeyReq {
-    #[serde(default = "default_key_name")]
-    name: String,
-}
-
-fn default_key_name() -> String {
-    "default".to_string()
-}
-
-#[derive(Serialize)]
-pub(crate) struct CreateKeyResp {
-    id: String,
-    project_id: String,
-    name: String,
-    prefix: String,
-    /// The full secret — shown exactly once.
-    key: String,
-    created_at: DateTime<Utc>,
-}
-
-pub(crate) async fn create_key(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Path(pid): Path<String>,
-    Json(req): Json<CreateKeyReq>,
-) -> Result<Json<CreateKeyResp>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
-
-    let store = st.store.clone();
-    let pid_check = pid.clone();
-    if spawn_db(move || store.get_project(&pid_check))
-        .await?
-        .is_none()
-    {
-        return Err(ApiError::not_found(format!("project '{pid}' not found")));
-    }
-
-    let generated = auth::generate_key();
-    let now = Utc::now();
-    let key = ApiKey {
-        id: new_id(),
-        project_id: pid.clone(),
-        name: req.name,
-        prefix: generated.prefix.clone(),
-        key_hash: generated.key_hash,
-        created_at: now,
-        last_used_at: None,
-        revoked: false,
-    };
-
-    let store = st.store.clone();
-    let key2 = key.clone();
-    spawn_db(move || store.create_api_key(&key2)).await?;
-
-    Ok(Json(CreateKeyResp {
-        id: key.id,
-        project_id: pid,
-        name: key.name,
-        prefix: generated.prefix,
-        key: generated.full_key,
-        created_at: now,
-    }))
-}
-
-/// A key's non-secret metadata — everything an operator needs to audit and rotate, and **never**
-/// `key_hash`. (A bare `ApiKey` derives `Serialize` over the hash, so we project into this instead.)
-#[derive(Serialize)]
-pub(crate) struct KeyInfo {
-    id: String,
-    name: String,
-    prefix: String,
-    created_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_used_at: Option<DateTime<Utc>>,
-    revoked: bool,
-}
-
-/// List a project's API keys (admin). Surfaces `last_used_at` (previously write-only) and `revoked`
-/// so an operator can spot stale keys and confirm a rotation drained the old one.
-pub(crate) async fn list_keys(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Path(pid): Path<String>,
-) -> Result<Json<Vec<KeyInfo>>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
-    let store = st.store.clone();
-    let pid_check = pid.clone();
-    if spawn_db(move || store.get_project(&pid_check))
-        .await?
-        .is_none()
-    {
-        return Err(ApiError::not_found(format!("project '{pid}' not found")));
-    }
-    let store = st.store.clone();
-    let keys = spawn_db(move || store.list_api_keys(&pid)).await?;
-    Ok(Json(
-        keys.into_iter()
-            .map(|k| KeyInfo {
-                id: k.id,
-                name: k.name,
-                prefix: k.prefix,
-                created_at: k.created_at,
-                last_used_at: k.last_used_at,
-                revoked: k.revoked,
-            })
-            .collect(),
-    ))
-}
-
-/// Revoke an API key (admin, soft — the row is kept for audit). Revocation is immediate: auth reads
-/// the store per request and rejects a revoked key, so a leaked key is dead on the next call. 404 when
-/// the key id is unknown. The key is scoped to the path project so an admin can't revoke across tenants
-/// by id-guessing beyond the projects they can already see.
-pub(crate) async fn revoke_key(
-    State(st): State<AppState>,
-    headers: HeaderMap,
-    Path((pid, kid)): Path<(String, String)>,
-) -> Result<Json<KeyInfo>, ApiError> {
-    ensure_can_admin(&authenticate(&st, &headers).await?)?;
-    let store = st.store.clone();
-    let keys = {
-        let pid = pid.clone();
-        spawn_db(move || store.list_api_keys(&pid)).await?
-    };
-    let key = keys
-        .into_iter()
-        .find(|k| k.id == kid)
-        .ok_or_else(|| ApiError::not_found(format!("key '{kid}' not found on project '{pid}'")))?;
-    let store = st.store.clone();
-    let kid2 = kid.clone();
-    spawn_db(move || store.set_api_key_revoked(&kid2, true)).await?;
-    Ok(Json(KeyInfo {
-        id: key.id,
-        name: key.name,
-        prefix: key.prefix,
-        created_at: key.created_at,
-        last_used_at: key.last_used_at,
-        revoked: true,
-    }))
 }
 
 #[cfg(test)]
@@ -369,6 +300,47 @@ mod tests {
         ] {
             assert!(validate_project_id(id).is_err(), "should reject {id:?}");
         }
+    }
+
+    /// `PUT {"enabled": true}` on an archived project used to leave `archived_at` stamped, so the
+    /// row read as archived *and* live — a state the lifecycle has no word for.
+    #[test]
+    fn re_enabling_an_archived_project_is_the_un_archive() {
+        let mut proj = Project {
+            id: "p".into(),
+            name: "n".into(),
+            enabled: false,
+            redaction: Redaction::None,
+            collective_opt_in: false,
+            require_trusted_judge: false,
+            archived_at: Some(Utc::now()),
+            created_at: Utc::now(),
+        };
+        let untouched = UpdateProjectReq {
+            name: Some("renamed".into()),
+            enabled: None,
+            redaction: None,
+            collective_opt_in: None,
+            require_trusted_judge: None,
+        };
+        apply_update(&mut proj, untouched);
+        assert!(proj.archived_at.is_some(), "a rename does not un-archive");
+        let enable = UpdateProjectReq {
+            name: None,
+            enabled: Some(true),
+            redaction: None,
+            collective_opt_in: None,
+            require_trusted_judge: None,
+        };
+        apply_update(&mut proj, enable);
+        assert!(proj.enabled && proj.archived_at.is_none());
+    }
+
+    #[test]
+    fn a_blank_name_is_refused_on_both_doors_and_a_padded_one_is_trimmed() {
+        assert!(validate_name("").is_err());
+        assert!(validate_name("   ").is_err());
+        assert_eq!(validate_name("  acme  ").ok().as_deref(), Some("acme"));
     }
 
     /// The rejection message must name the broken rule — a 400 that only says "invalid" leaves the

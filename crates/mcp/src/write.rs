@@ -1,151 +1,21 @@
 //! Write tools — state-changing POST/PUT operations (enqueue benchmark runs, create
 //! projects/datasets/rubrics/benchmarks, set limits/prices).
 //!
+//! **Dispatch only**: the catalog (names, descriptions, input schemas, annotations) is generated
+//! from `lighttrack-contract`, and which tools are writes is derived from each endpoint's
+//! `mutating` flag rather than from a second hand-kept name list — that list is what drifted.
+//!
 //! These are gated behind `LIGHTTRACK_MCP_ALLOW_WRITES` (see `tools::call`) and annotated
 //! `readOnlyHint: false` so a client/agent treats them with care. The bodies are forwarded to the
 //! API, which validates them — the MCP server cannot bypass that. Note: minting API keys is
-//! deliberately *not* exposed here, to avoid leaking secrets into an agent's context.
+//! deliberately *not* exposed here, to avoid leaking secrets into an agent's context. Alert
+//! CHANNELS are excluded for exactly the same reason — creating one returns a webhook signing
+//! secret exactly once, and that would land verbatim in a transcript — and so is
+//! `POST /v1/alerts/:id/resolution`, which is the responder's door, not an agent's.
 
 use serde_json::{json, Value};
 
-use crate::client::Client;
-
-const NAMES: &[&str] = &[
-    "enqueue_benchmark",
-    "create_project",
-    "create_dataset",
-    "add_dataset_item",
-    "freeze_dataset",
-    "create_rubric",
-    "create_benchmark",
-    "create_limit",
-    "update_limit",
-    "delete_limit",
-    "put_price",
-];
-
-/// True if `name` is a write tool — lets the registry give a precise "writes disabled" error.
-pub(crate) fn is_write_tool(name: &str) -> bool {
-    NAMES.contains(&name)
-}
-
-pub(crate) fn tools() -> Vec<Value> {
-    vec![
-        wtool("enqueue_benchmark",
-            "Queue a benchmark run (non-blocking; `lt-runner serve` executes it). Returns the job — poll it with get_job.",
-            json!({"type":"object","properties":{
-                "benchmark":{"type":"string","description":"benchmark id"},
-                "samples":{"type":"integer","description":"runs per case (default 1)"},
-                "heal":{"type":"boolean","description":"attempt prompt healing on low scores (default false)"}
-            },"required":["benchmark"]}),
-            false),
-        wtool("create_project",
-            "Create a project.",
-            json!({"type":"object","properties":{
-                "name":{"type":"string"},
-                "redaction":{"type":"string","enum":["none","hash","drop"],"description":"payload persistence (default none)"}
-            },"required":["name"]}),
-            false),
-        wtool("create_dataset",
-            "Create a dataset in a project.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "name":{"type":"string"},
-                "source":{"type":"string","description":"provenance label, e.g. manual or events:recent"}
-            },"required":["project","name"]}),
-            false),
-        wtool("add_dataset_item",
-            "Append a case to a (non-frozen) dataset.",
-            json!({"type":"object","properties":{
-                "dataset":{"type":"string"},
-                "input":{"type":"string","description":"the prompt / case input"},
-                "output":{"type":"string","description":"a captured/candidate response"},
-                "expected":{"type":"string","description":"golden reference answer"},
-                "context":{"type":"string"},
-                "tags":{"type":"array","items":{"type":"string"}}
-            },"required":["dataset","input"]}),
-            false),
-        wtool("freeze_dataset",
-            "Freeze a dataset so it becomes immutable and runs stay comparable. Idempotent.",
-            json!({"type":"object","properties":{"dataset":{"type":"string"}},"required":["dataset"]}),
-            true),
-        wtool("create_rubric",
-            "Create a structured, weighted rubric for per-dimension judging.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "name":{"type":"string"},
-                "dimensions": crate::write_schemas::rubric_dimensions(),
-                "threshold":{"type":"number","description":"overall pass threshold 0-1 (default 0.7)"}
-            },"required":["project","name","dimensions"]}),
-            false),
-        wtool("create_benchmark",
-            "Create a benchmark definition. Use `rubric` (freeform text) or `rubric_id` (structured). Supply an inline `dataset` or a `dataset_ref`; `targets` defines a multi-model comparison matrix.",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "name":{"type":"string"},
-                "rubric":{"type":"string","description":"freeform rubric text (single-score mode)"},
-                "rubric_id":{"type":"string","description":"structured rubric id (per-dimension mode)"},
-                "judge_model":{"type":"string","description":"[provider/]model, e.g. haiku or openai/gpt-4o-mini (default haiku)"},
-                "dataset_ref":{"type":"string","description":"stored dataset id"},
-                "dataset": crate::write_schemas::benchmark_dataset(),
-                "targets": crate::write_schemas::benchmark_targets(),
-                "baseline_score":{"type":"number"}
-            },"required":["project","name"]}),
-            false),
-        wtool("create_limit",
-            "Add a usage-limit rule to a project (applies to monitored ingest traffic only — the judge is exempt).",
-            json!({"type":"object","properties":{
-                "project":{"type":"string"},
-                "metric":{"type":"string","enum":["cost_usd","calls","tokens"]},
-                "window":{"type":"string","enum":["hour","day","month"]},
-                "threshold":{"type":"number"},
-                "action":{"type":"string","enum":["alert","throttle","block"],"description":"default alert"}
-            },"required":["project","metric","window","threshold"]}),
-            false),
-        wtool("update_limit",
-            "Replace a usage-limit rule wholesale (by rule id). Toggle it with `enabled`, retune `threshold`/`warn_at`, or change `scope`. `metric`/`window`/`threshold` are required (the rule is replaced, not patched); `project_id` is immutable.",
-            json!({"type":"object","properties":{
-                "id":{"type":"string","description":"limit rule id (from list_limits)"},
-                "metric":{"type":"string","enum":["cost_usd","calls","tokens"]},
-                "window":{"type":"string","enum":["hour","day","month"]},
-                "threshold":{"type":"number"},
-                "action":{"type":"string","enum":["alert","throttle","block"],"description":"default alert"},
-                "enabled":{"type":"boolean","description":"toggle the rule on/off (default true)"},
-                "warn_at":{"type":"number","description":"soft-warning fraction of threshold in (0,1)"},
-                "scope":{"type":"object","description":"dimension scope, e.g. {\"model\":\"gpt-4o\"} or {\"provider\":\"openai\"} or {\"name\":\"summarize\"}; omit for project-wide"}
-            },"required":["id","metric","window","threshold"]}),
-            true),
-        wtool("delete_limit",
-            "Remove a usage-limit rule by id. Idempotent from the caller's view; 404s if the id is unknown.",
-            json!({"type":"object","properties":{"id":{"type":"string","description":"limit rule id (from list_limits)"}},"required":["id"]}),
-            true),
-        wtool("put_price",
-            "Upsert a model's price (per-million-token rates); hot-swaps the live price book. Idempotent.",
-            json!({"type":"object","properties":{
-                "provider":{"type":"string"},
-                "model":{"type":"string"},
-                "input_per_mtok":{"type":"number"},
-                "output_per_mtok":{"type":"number"},
-                "cached_input_per_mtok":{"type":"number"},
-                "source_url":{"type":"string"}
-            },"required":["provider","model","input_per_mtok","output_per_mtok"]}),
-            true),
-    ]
-}
-
-fn wtool(name: &str, desc: &str, schema: Value, idempotent: bool) -> Value {
-    json!({
-        "name": name,
-        "description": desc,
-        "inputSchema": schema,
-        "annotations": {
-            "readOnlyHint": false,
-            "destructiveHint": false,
-            "idempotentHint": idempotent,
-            "openWorldHint": true
-        }
-    })
-}
+use crate::client::{enc_seg, Client};
 
 /// Route a write tool. Returns `None` if `name` is not a write tool.
 pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Value, String>> {
@@ -154,6 +24,26 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
             Ok(b) => c.post(
                 &format!("/v1/benchmarks/{b}/enqueue"),
                 &pick(args, &["samples", "heal"]),
+            ),
+            Err(e) => Err(e),
+        },
+        "enqueue_job" => match need(args, "type") {
+            Ok(_) => c.post("/v1/jobs", &pick(args, &["type", "payload"])),
+            Err(e) => Err(e),
+        },
+        "create_schedule" => match need(args, "project") {
+            Ok(p) => post_with(
+                c,
+                args,
+                &["type", "interval_secs"],
+                &[
+                    "type",
+                    "payload",
+                    "interval_secs",
+                    "start_in_secs",
+                    "enabled",
+                ],
+                format!("/v1/projects/{p}/schedules"),
             ),
             Err(e) => Err(e),
         },
@@ -188,6 +78,32 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
             Ok(d) => c.post(&format!("/v1/datasets/{d}/freeze"), &json!({})),
             Err(e) => Err(e),
         },
+        "fork_dataset" => match need(args, "dataset") {
+            Ok(d) => c.post(&format!("/v1/datasets/{d}/fork"), &json!({})),
+            Err(e) => Err(e),
+        },
+        "import_dataset_items" => match need(args, "dataset") {
+            Ok(d) => c.post(
+                &format!("/v1/datasets/{d}/items/import"),
+                &import_spec(args),
+            ),
+            Err(e) => Err(e),
+        },
+        "record_label" => post_with(
+            c,
+            args,
+            &["subject", "value", "labeler"],
+            &[
+                "project_id",
+                "subject",
+                "value",
+                "pass",
+                "rubric_id",
+                "labeler",
+                "note",
+            ],
+            "/v1/labels".to_string(),
+        ),
         "create_rubric" => match need(args, "project") {
             Ok(p) => post_with(
                 c,
@@ -215,6 +131,10 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
                 ],
                 format!("/v1/projects/{p}/benchmarks"),
             ),
+            Err(e) => Err(e),
+        },
+        "ack_alert" => match need(args, "id") {
+            Ok(id) => c.post(&format!("/v1/alerts/{id}/ack"), &pick(args, &["by"])),
             Err(e) => Err(e),
         },
         "create_limit" => match need(args, "project") {
@@ -304,10 +224,37 @@ fn post_put(
 }
 
 /// Require a string arg.
+/// Build the `ImportSpec` body from `import_dataset_items`' flat arguments.
+///
+/// Flat on the wire and nested on the way out, deliberately: the API's spec nests the row predicates
+/// under `filter`, and asking an agent to construct a two-level object correctly — for a tool it
+/// will call once — is how a tool call becomes three attempts. The nesting is mechanical, so it
+/// happens here.
+fn import_spec(args: &Value) -> Value {
+    let mut filter = serde_json::Map::new();
+    for k in ["model", "status", "since", "below", "pass"] {
+        if let Some(v) = args.get(k) {
+            if !v.is_null() {
+                filter.insert(k.to_string(), v.clone());
+            }
+        }
+    }
+    let mut spec = pick(args, &["from", "strategy", "n", "dedupe", "event_ids"]);
+    if let Some(m) = spec.as_object_mut() {
+        if !filter.is_empty() {
+            m.insert("filter".to_string(), Value::Object(filter));
+        }
+    }
+    spec
+}
+
+/// Require a string arg, percent-encoded as the path segment every caller uses it as (the one
+/// `need` whose value goes into a body, `enqueue_job`'s `type`, is only checked here and re-read
+/// by `pick`).
 fn need(args: &Value, key: &str) -> Result<String, String> {
     args.get(key)
         .and_then(Value::as_str)
-        .map(str::to_string)
+        .map(enc_seg)
         .ok_or_else(|| format!("missing required argument: {key}"))
 }
 
@@ -336,33 +283,6 @@ fn pick(args: &Value, keys: &[&str]) -> Value {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn new_write_tools_are_gated() {
-        assert!(is_write_tool("update_limit"));
-        assert!(is_write_tool("delete_limit"));
-    }
-
-    #[test]
-    fn new_write_tools_are_listed_and_idempotent() {
-        let names: Vec<String> = tools()
-            .iter()
-            .map(|t| t["name"].as_str().unwrap().to_string())
-            .collect();
-        for n in ["update_limit", "delete_limit"] {
-            assert!(names.contains(&n.to_string()), "{n} missing from tools()");
-        }
-        // Both replace/remove a rule by id → idempotent from the caller's view.
-        for t in tools() {
-            if matches!(
-                t["name"].as_str(),
-                Some("update_limit") | Some("delete_limit")
-            ) {
-                assert_eq!(t["annotations"]["idempotentHint"], json!(true));
-                assert_eq!(t["annotations"]["readOnlyHint"], json!(false));
-            }
-        }
-    }
 
     #[test]
     fn dispatch_requires_id_before_any_http() {

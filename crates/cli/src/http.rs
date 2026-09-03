@@ -9,8 +9,16 @@ use serde_json::Value;
 
 use crate::cli::Cli;
 
+/// Wall-clock bound on one request. An unreachable-but-accepting address (a firewall that
+/// blackholes, a server wedged mid-response) used to hang the command until the operator killed it,
+/// with nothing printed; every verb is one request, so one generous bound covers them all.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub(crate) fn client() -> reqwest::blocking::Client {
-    reqwest::blocking::Client::new()
+    reqwest::blocking::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .unwrap_or_else(|_| reqwest::blocking::Client::new())
 }
 
 /// Whether a response should be shown as a rendered table. Only ever true for a *successful* body on
@@ -35,6 +43,22 @@ pub(crate) fn present(text: &str, kind: &str, table: bool) -> Result<String> {
     }
 }
 
+/// The request URL for `path` under `base`. `LIGHTTRACK_URL=https://host/` is how a URL is usually
+/// pasted, and the naive concatenation produced `https://host//v1/...`, which the router answers
+/// with a 404 that reads as "no such endpoint" — for every verb, on an otherwise correct setup.
+pub(crate) fn url(base: &str, path: &str) -> String {
+    format!("{}{path}", base.trim_end_matches('/'))
+}
+
+/// The API's error envelope `{"error":{"code","message"}}` as `code: message`, or `None` when the
+/// body is not one (a proxy's HTML page, a plain-text 502).
+pub(crate) fn error_line(text: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    let code = v.pointer("/error/code")?.as_str()?;
+    let message = v.pointer("/error/message")?.as_str()?;
+    Some(format!("{code}: {message}"))
+}
+
 /// Issue one request and print the response, then exit non-zero on HTTP error.
 pub(crate) fn call(
     cli: &Cli,
@@ -43,7 +67,7 @@ pub(crate) fn call(
     body: Option<Value>,
     kind: &str,
 ) -> Result<()> {
-    let mut req = client().request(method, format!("{}{}", cli.base, path));
+    let mut req = client().request(method, url(&cli.base, path));
     if let Some(k) = &cli.key {
         req = req.bearer_auth(k);
     }
@@ -54,12 +78,15 @@ pub(crate) fn call(
     let resp = req.send()?;
     let status = resp.status();
     let text = resp.text()?;
-    let table = wants_table(
-        cli.json,
-        status.is_success(),
-        std::io::stdout().is_terminal(),
-    );
-    println!("{}", present(&text, kind, table)?);
+    let tty = std::io::stdout().is_terminal();
+    let table = wants_table(cli.json, status.is_success(), tty);
+    // A refusal on an interactive terminal reads as one line, not a six-line JSON envelope; scripts
+    // (piped or `--json`) still get the envelope verbatim, so nothing that parses it changes.
+    let human_error = !status.is_success() && !cli.json && tty;
+    match error_line(&text).filter(|_| human_error) {
+        Some(line) => println!("{line}"),
+        None => println!("{}", present(&text, kind, table)?),
+    }
     if !status.is_success() {
         eprintln!("HTTP {}", status.as_u16());
         std::process::exit(1);
@@ -70,6 +97,26 @@ pub(crate) fn call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pasted base URL usually ends in `/`; the route must not start with `//`.
+    #[test]
+    fn a_trailing_slash_on_the_base_does_not_double_the_path_separator() {
+        assert_eq!(url("http://h:1/", "/v1/events"), "http://h:1/v1/events");
+        assert_eq!(url("http://h:1", "/v1/events"), "http://h:1/v1/events");
+        assert_eq!(url("https://h/lt//", "/health"), "https://h/lt/health");
+    }
+
+    /// The envelope collapses to `code: message` for a human; anything else is left to `present`.
+    #[test]
+    fn an_error_envelope_reads_as_one_line() {
+        let env = r#"{"error":{"code":"not_found","message":"event 'x' not found"}}"#;
+        assert_eq!(
+            error_line(env).as_deref(),
+            Some("not_found: event 'x' not found")
+        );
+        assert_eq!(error_line(r#"{"error":"legacy flat"}"#), None);
+        assert_eq!(error_line("<html>502 Bad Gateway</html>"), None);
+    }
 
     #[test]
     fn table_only_on_an_interactive_success() {

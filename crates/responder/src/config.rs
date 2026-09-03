@@ -1,11 +1,10 @@
 //! Responder configuration: service settings from env + the project→repo map from a JSON file.
 
 use std::collections::HashMap;
-// Only `resolve_claude_bin`'s Windows branch probes the filesystem for a real claude.exe.
-#[cfg(windows)]
-use std::path::Path;
 
 use serde::Deserialize;
+
+use lighttrack_engine::resolve_claude_bin;
 
 use crate::email::EmailConfig;
 
@@ -18,6 +17,17 @@ pub(crate) struct Config {
     pub projects: HashMap<String, ProjectEntry>,
     /// Optional email delivery of finished diagnoses (Resend).
     pub email: Option<EmailConfig>,
+    /// Bearer token for the LightTrack API (`LIGHTTRACK_API_KEY`).
+    ///
+    /// The enrichment reads used to send NO token at all, which meant that on any deployment with
+    /// auth enforced — i.e. every real one — every investigation ran on "(enrichment unavailable)"
+    /// and the model was handed the alert's single error string as its whole evidence. It is also
+    /// what authorises posting a diagnosis back as the alert's resolution.
+    pub api_key: Option<String>,
+    /// Shared secret for verifying `X-LightTrack-Signature` on inbound deliveries
+    /// (`LIGHTTRACK_RESPONDER_WEBHOOK_SECRET`). Unset = accept unsigned deliveries, which is only
+    /// appropriate on a loopback-only bind.
+    pub webhook_secret: Option<String>,
 }
 
 pub(crate) struct Defaults {
@@ -64,9 +74,18 @@ impl Config {
     pub(crate) fn from_env() -> anyhow::Result<Self> {
         let map_path = env_or("LIGHTTRACK_RESPONDER_MAP", "responder.map.json");
         let (mut defaults, projects) = load_map(&map_path);
-        // Env override for the one setting we tune per-run during testing.
-        if let Some(t) = env_opt("LIGHTTRACK_RESPONDER_TIMEOUT_SECS").and_then(|s| s.parse().ok()) {
-            defaults.timeout_secs = t;
+        // Env override for the one setting we tune per-run during testing. Present-but-unparseable
+        // is said out loud: `=4m` used to be silently ignored, and the map file's value ran instead
+        // while the operator believed their override was in force.
+        if let Some(raw) = env_opt("LIGHTTRACK_RESPONDER_TIMEOUT_SECS") {
+            match raw.trim().parse::<u64>() {
+                Ok(t) => defaults.timeout_secs = t,
+                Err(_) => eprintln!(
+                    "[responder] LIGHTTRACK_RESPONDER_TIMEOUT_SECS={raw:?} is not a number of \
+                     seconds; keeping {}s",
+                    defaults.timeout_secs
+                ),
+            }
         }
         Ok(Config {
             bind: env_or("LIGHTTRACK_RESPONDER_BIND", "127.0.0.1:8790"),
@@ -77,6 +96,8 @@ impl Config {
             defaults,
             projects,
             email: EmailConfig::from_env(),
+            api_key: env_opt("LIGHTTRACK_API_KEY"),
+            webhook_secret: env_opt("LIGHTTRACK_RESPONDER_WEBHOOK_SECRET"),
         })
     }
 }
@@ -141,7 +162,7 @@ fn load_map(path: &str) -> (Defaults, HashMap<String, ProjectEntry>) {
 }
 
 impl Defaults {
-    fn fallback() -> Self {
+    pub(crate) fn fallback() -> Self {
         Defaults {
             model: "sonnet".to_string(),
             permission_mode: "default".to_string(),
@@ -158,32 +179,19 @@ impl Defaults {
     }
 }
 
-/// Resolve a runnable claude executable. Mirrors `lighttrack_engine::resolve_claude_bin` but is kept
-/// local so the responder doesn't pull in the engine's generation/judge stack. A child process can't
-/// invoke the npm `.cmd`/`.ps1` shims, so on Windows we prefer a real `claude.exe`.
-fn resolve_claude_bin(given: &str) -> String {
-    if given != "claude" {
-        return given.to_string();
-    }
-    #[cfg(windows)]
-    {
-        // Native installer (`~/.local/bin`) first, then a global npm install.
-        if let Ok(home) = std::env::var("USERPROFILE") {
-            let p = format!("{home}\\.local\\bin\\claude.exe");
-            if Path::new(&p).exists() {
-                return p;
-            }
-        }
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let p = format!(
-                "{appdata}\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"
-            );
-            if Path::new(&p).exists() {
-                return p;
-            }
-        }
-    }
-    given.to_string()
+/// Is this bind address reachable only from the machine itself? Decides whether an unsigned
+/// `/webhook` is a local convenience or an open door — so it has to recognise every loopback
+/// spelling, not only the IPv4 one (`[::1]:8790` was warned about as if it were public).
+pub(crate) fn bind_is_loopback(bind: &str) -> bool {
+    let host = bind
+        .strip_prefix('[')
+        .and_then(|r| r.split(']').next())
+        .unwrap_or_else(|| bind.rsplit_once(':').map_or(bind, |(h, _)| h));
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -195,4 +203,33 @@ fn env_or(key: &str, default: &str) -> String {
 
 fn env_opt(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bind_is_loopback;
+
+    /// The unsigned-webhook warning keys on this. Every loopback spelling is local; anything routable
+    /// is not — and the IPv6 literal is the one the old prefix check got wrong.
+    #[test]
+    fn loopback_is_recognised_in_every_spelling_and_nothing_else_is() {
+        for local in [
+            "127.0.0.1:8790",
+            "127.1.2.3:80",
+            "localhost:8790",
+            "[::1]:8790",
+            "LOCALHOST:1",
+        ] {
+            assert!(bind_is_loopback(local), "{local}");
+        }
+        for open in [
+            "0.0.0.0:8790",
+            "[::]:8790",
+            "10.0.0.5:8790",
+            "192.168.1.2:80",
+            "example.test:80",
+        ] {
+            assert!(!bind_is_loopback(open), "{open}");
+        }
+    }
 }

@@ -320,7 +320,7 @@ async fn a_per_call_verdict_carries_no_whole_trace_coverage() {
     .await;
     assert_eq!(status, StatusCode::OK, "{posted}");
     assert!(
-        posted["detail"].is_null(),
+        posted["detail"]["coverage"].is_null(),
         "a per-call score gets no trace coverage: {posted}"
     );
 
@@ -438,4 +438,118 @@ async fn colliding_trace_id_never_merges_across_projects() {
     );
     let (_, b_detail) = get(&app, &key_b, "/v1/traces/req-1").await;
     assert_eq!(b_detail["scores"].as_array().unwrap().len(), 1);
+}
+
+/// The score door used to look only at the trace's root-level spans: a per-call verdict on a nested
+/// call never found its event, a whole-trace verdict counted redacted evidence on the roots only,
+/// and an `event_id` from anywhere at all was stored unchecked.
+#[tokio::test]
+async fn the_score_door_sees_every_span_and_refuses_a_foreign_anchor() {
+    let (state, store) = setup(Redactor::all());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    // A three-deep chain, every span carrying an email the scrubber rewrites.
+    let mut ids = Vec::new();
+    for (span, parent) in [("s1", None), ("s2", Some("s1")), ("s3", Some("s2"))] {
+        let mut body = json!({
+            "provider": "anthropic", "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 }, "cost_usd": 0.001,
+            "trace_id": "tr-deep", "span_id": span,
+            "input": "mail ada@example.com", "output": "sent",
+        });
+        if let Some(p) = parent {
+            body["parent_span_id"] = json!(p);
+        }
+        let (status, v) = ingest(&app, &key, body).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        ids.push(v["id"].as_str().unwrap().to_string());
+    }
+
+    // A whole-trace verdict counts the evidence of all three spans, not the root alone.
+    let (status, posted) = send(
+        &app,
+        &key,
+        "POST",
+        "/v1/traces/tr-deep/score",
+        Some(json!({ "rubric": "coherence", "value": 0.9, "scored_by": "judge" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{posted}");
+    assert_eq!(
+        posted["detail"]["evidence_redacted_spans"], 3,
+        "one scrubbed span per event, three events: {posted}"
+    );
+
+    // A per-call verdict on the grandchild is accepted and carries that span's own evidence.
+    let (status, posted) = send(
+        &app,
+        &key,
+        "POST",
+        "/v1/traces/tr-deep/score",
+        Some(
+            json!({ "rubric": "faithfulness", "value": 0.5, "scored_by": "judge",
+                     "event_id": ids[2] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{posted}");
+    assert_eq!(posted["event_id"], ids[2].as_str());
+    assert_eq!(posted["detail"]["evidence_redacted_spans"], 1, "{posted}");
+
+    // An anchor that is not a span of this trace is refused, not stored.
+    let (status, refused) = send(
+        &app,
+        &key,
+        "POST",
+        "/v1/traces/tr-deep/score",
+        Some(json!({ "rubric": "x", "value": 0.5, "scored_by": "judge",
+                     "event_id": "ev-from-somewhere-else" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+}
+
+/// The listing refuses the same malformed windows `/v1/events` refuses, instead of paging back an
+/// empty array that reads as "no traces".
+#[tokio::test]
+async fn an_inverted_window_or_a_nan_cost_floor_is_a_400_not_an_empty_page() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    let (status, body) = get(
+        &app,
+        &key,
+        "/v1/traces?since=2026-02-01T00:00:00Z&until=2026-01-01T00:00:00Z",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = get(&app, &key, "/v1/traces?min_cost=NaN").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, _) = get(&app, &key, "/v1/traces?min_cost=0.5").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// The whole-trace door validates the verdict's numbers with the same rule as `POST /v1/scores`.
+#[tokio::test]
+async fn a_trace_verdict_that_is_not_a_score_is_refused() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    ingest_span(&app, &key, "tr-v", "s1", None, 0.001).await;
+    for body in [
+        json!({ "rubric": "q", "value": 1.5, "max": 1.0, "scored_by": "judge" }),
+        json!({ "rubric": "q", "value": 0.5, "max": 0.0, "scored_by": "judge" }),
+        json!({ "rubric": "q", "value": 0.5, "scored_by": "" }),
+    ] {
+        let (status, v) = send(
+            &app,
+            &key,
+            "POST",
+            "/v1/traces/tr-v/score",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body} -> {v}");
+    }
 }

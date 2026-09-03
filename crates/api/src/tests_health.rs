@@ -27,7 +27,7 @@ use axum::http::{Request, StatusCode};
 use axum::routing::get;
 use axum::Router;
 use chrono::{DateTime, Utc};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use tower::ServiceExt; // oneshot
 
@@ -35,7 +35,9 @@ use lighttrack_core::{
     ApiKey, Benchmark, BenchmarkRun, Dataset, DatasetItem, Job, JobFinish, LimitRule, LlmEvent,
     ModelPriceRow, Project, Rubric, Score,
 };
-use lighttrack_store::{CostRow, Result as StoreResult, SqliteStore, Store, StoreError, Usage};
+use lighttrack_store::{
+    Capabilities, CostRow, Result as StoreResult, Scope, SqliteStore, Store, StoreError, Usage,
+};
 
 use crate::redact::Redactor;
 use crate::tests_ingest::{ingest, make_key, setup};
@@ -88,10 +90,9 @@ macro_rules! severable {
 impl Store for SeverableStore {
     severable! {
         fn init_schema(&self) -> StoreResult<()>;
-        fn ping(&self) -> StoreResult<()>;
         fn insert_event(&self, ev: &LlmEvent) -> StoreResult<()>;
-        fn list_events(&self, project: Option<&str>, limit: usize) -> StoreResult<Vec<LlmEvent>>;
-        fn cost_summary(&self, project: Option<&str>) -> StoreResult<Vec<CostRow>>;
+        fn list_events(&self, project: Scope<'_>, limit: usize) -> StoreResult<Vec<LlmEvent>>;
+        fn cost_summary(&self, project: Scope<'_>) -> StoreResult<Vec<CostRow>>;
         fn usage_since(&self, project: &str, since: DateTime<Utc>) -> StoreResult<Usage>;
         fn create_project(&self, p: &Project) -> StoreResult<()>;
         fn get_project(&self, id: &str) -> StoreResult<Option<Project>>;
@@ -101,39 +102,35 @@ impl Store for SeverableStore {
         fn touch_api_key(&self, id: &str, when: DateTime<Utc>) -> StoreResult<()>;
         fn create_limit_rule(&self, r: &LimitRule) -> StoreResult<()>;
         fn list_limit_rules(&self, project: &str, only_enabled: bool) -> StoreResult<Vec<LimitRule>>;
-        fn get_event(&self, id: &str) -> StoreResult<Option<LlmEvent>>;
+        fn get_event(&self, scope: Scope<'_>, id: &str) -> StoreResult<Option<LlmEvent>>;
         fn insert_score(&self, s: &Score) -> StoreResult<()>;
-        fn list_scores(&self, project: Option<&str>, limit: usize) -> StoreResult<Vec<Score>>;
-        fn scored_event_ids(&self, event_ids: &[String]) -> StoreResult<Vec<String>>;
+        fn list_scores(&self, project: Scope<'_>, limit: usize) -> StoreResult<Vec<Score>>;
+        fn scored_event_ids(&self, scope: Scope<'_>, event_ids: &[String]) -> StoreResult<Vec<String>>;
         fn create_benchmark(&self, b: &Benchmark) -> StoreResult<()>;
-        fn get_benchmark(&self, id: &str) -> StoreResult<Option<Benchmark>>;
+        fn get_benchmark(&self, scope: Scope<'_>, id: &str) -> StoreResult<Option<Benchmark>>;
         fn list_benchmarks(&self, project: &str) -> StoreResult<Vec<Benchmark>>;
         fn create_benchmark_run(&self, r: &BenchmarkRun) -> StoreResult<()>;
-        fn list_benchmark_runs(&self, benchmark_id: &str) -> StoreResult<Vec<BenchmarkRun>>;
+        fn list_benchmark_runs(&self, scope: Scope<'_>, benchmark_id: &str) -> StoreResult<Vec<BenchmarkRun>>;
         fn upsert_price(&self, p: &ModelPriceRow) -> StoreResult<()>;
         fn list_prices(&self) -> StoreResult<Vec<ModelPriceRow>>;
         fn create_dataset(&self, d: &Dataset) -> StoreResult<()>;
-        fn get_dataset(&self, id: &str) -> StoreResult<Option<Dataset>>;
-        fn list_datasets(&self, project: &str) -> StoreResult<Vec<Dataset>>;
-        fn set_dataset_frozen(&self, id: &str, frozen: bool) -> StoreResult<()>;
+        fn get_dataset(&self, scope: Scope<'_>, id: &str) -> StoreResult<Option<Dataset>>;
+        fn list_datasets(&self, project: Scope<'_>) -> StoreResult<Vec<Dataset>>;
+        fn set_dataset_frozen(&self, scope: Scope<'_>, id: &str, frozen: bool) -> StoreResult<()>;
         fn create_dataset_item(&self, item: &DatasetItem) -> StoreResult<()>;
-        fn list_dataset_items(&self, dataset_id: &str) -> StoreResult<Vec<DatasetItem>>;
+        fn list_dataset_items(&self, scope: Scope<'_>, dataset_id: &str) -> StoreResult<Vec<DatasetItem>>;
         fn create_rubric(&self, r: &Rubric) -> StoreResult<()>;
-        fn get_rubric(&self, id: &str) -> StoreResult<Option<Rubric>>;
+        fn get_rubric(&self, scope: Scope<'_>, id: &str) -> StoreResult<Option<Rubric>>;
         fn list_rubrics(&self, project: &str) -> StoreResult<Vec<Rubric>>;
         fn create_job(&self, j: &Job) -> StoreResult<()>;
-        fn claim_job(&self, stale_before: DateTime<Utc>) -> StoreResult<Option<Job>>;
+        fn claim_job(&self, stale_before: DateTime<Utc>, kinds: &[&str]) -> StoreResult<Option<Job>>;
         fn update_job_progress(&self, id: &str, progress: &str) -> StoreResult<()>;
-        fn finish_job(
-            &self,
-            id: &str,
-            status: &str,
-            result: &serde_json::Value,
-            error: Option<&str>,
-            cancelled_at: Option<DateTime<Utc>>
-        ) -> StoreResult<JobFinish>;
-        fn get_job(&self, id: &str) -> StoreResult<Option<Job>>;
-        fn list_jobs(&self, status: Option<&str>, limit: usize) -> StoreResult<Vec<Job>>;
+        fn finish_job(&self, id: &str, status: &str, result: &Value, error: Option<&str>, fence: Option<DateTime<Utc>>) -> StoreResult<JobFinish>;
+        fn get_job(&self, scope: Scope<'_>, id: &str) -> StoreResult<Option<Job>>;
+        fn list_jobs(&self, scope: Scope<'_>, status: Option<&str>, limit: usize) -> StoreResult<Vec<Job>>;
+    }
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
     }
 }
 
@@ -170,9 +167,10 @@ async fn a_severed_store_leaves_the_service_instead_of_collecting_5xx_for_it() {
     // --- healthy: every answer is green, and the rollup is still the literal `ok` ---------------
     let (status, body) = get_status(&app, "/health").await;
     assert_eq!(status, StatusCode::OK);
+    let parsed: Value = serde_json::from_str(&body).expect("the rollup is JSON");
     assert_eq!(
-        body, "ok",
-        "deploy/README.md, smoke.sh and the Dockerfile HEALTHCHECK compare this"
+        parsed["status"], "ok",
+        "deploy/README.md, smoke.sh and the Dockerfile HEALTHCHECK read this field"
     );
     assert_eq!(get_status(&app, "/health/live").await.0, StatusCode::OK);
     assert_eq!(get_status(&app, "/health/ready").await.0, StatusCode::OK);

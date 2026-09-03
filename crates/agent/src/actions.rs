@@ -5,12 +5,14 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
 use lighttrack_core::RelayTask;
+use lighttrack_engine::invocation::{self, Mode};
 
 use crate::connect::ConnectorSpec;
 
@@ -26,8 +28,55 @@ pub(crate) struct ActionSpec {
     /// schema-conforming JSON instead of free text.
     #[serde(default)]
     pub schema_file: Option<String>,
+    /// What this action's run is allowed to be: `generate` (default — a completion with no tools
+    /// and no repository), `readonly-scan`, or `edit`. `docs/RELAY.md` always promised that allowed
+    /// tools live on the device; until the seam landed the library could not actually say so, and
+    /// every action silently ran as a plain completion.
+    #[serde(default)]
+    pub mode: Mode,
+    /// Workspace for a scan/edit run, relative to the agent's `workspaces_root`. Required by any
+    /// mode other than `generate`, and resolved under that root — the cloud never names a path.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    /// Extra tools beyond the mode's base allowlist. The seam rejects a write-capable entry on a
+    /// `readonly-scan`.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    /// `--permission-mode`. Required by `edit`; `plan`/`default` are the legal values for a scan.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    /// Per-run spend ceiling handed to the CLI.
+    #[serde(default)]
+    pub max_budget_usd: Option<f64>,
+    /// Wall-clock ceiling for this action's run; defaults to the engine's.
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+    /// A label the author bumps when they change `prompt.md`. Free text (`"3"`, `"2026-09-02"`,
+    /// `"v2-tighter-rubric"`) — the cloud never parses it, it only groups by it beside the
+    /// rendered prompt's fingerprint. Optional because the fingerprint is what actually detects a
+    /// change; the version is what makes the change *legible* in a report.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Send the rendered prompt and the result text to the cloud on settle, so the run can be
+    /// judged like any other LLM call.
+    ///
+    /// **Off by default, and that default is the privacy contract.** An action's prompt and its
+    /// result are the two things `docs/RELAY.md` promises never leave the device unasked; turning
+    /// this on is the operator deciding, per action, that this particular workload's content is
+    /// safe to store in their cloud instance. With it off the cloud still gets `prompt_sha256`, so
+    /// a silent prompt regression is detectable without the text.
+    #[serde(default)]
+    pub report_io: bool,
     #[serde(default)]
     pub connector: Option<ConnectorSpec>,
+}
+
+impl ActionSpec {
+    pub fn timeout(&self) -> Duration {
+        self.timeout_secs
+            .map(Duration::from_secs)
+            .unwrap_or(invocation::DEFAULT_TIMEOUT)
+    }
 }
 
 fn default_model() -> String {
@@ -55,6 +104,42 @@ pub(crate) fn validate_action_type(action_type: &str) -> Result<()> {
         bail!("invalid action_type '{action_type}'");
     }
     Ok(())
+}
+
+/// Resolve an action's `workspace` under the agent's `workspaces_root`.
+///
+/// A scan or edit run needs a directory, and the only safe place for that decision is the device:
+/// the cloud names an `action_type`, never a path. So the name is constrained exactly like
+/// `action_type` (no absolute path, no `..`, no drive letters or backslashes), joined under a root
+/// the operator opted into, and required to exist — an edit run that silently created its own
+/// workspace would be an edit run nobody could review.
+pub(crate) fn resolve_workspace(
+    workspaces_root: Option<&Path>,
+    workspace: Option<&str>,
+    mode: Mode,
+) -> Result<Option<PathBuf>> {
+    if mode == Mode::Generate {
+        // A completion has no repository by construction; naming one is a config mistake worth
+        // saying out loud rather than ignoring.
+        if workspace.is_some() {
+            bail!("action mode 'generate' takes no workspace — set mode = \"readonly-scan\" or \"edit\"");
+        }
+        return Ok(None);
+    }
+    let name = workspace.ok_or_else(|| {
+        anyhow::anyhow!("action mode '{mode}' requires a workspace (relative to workspaces_root)")
+    })?;
+    validate_action_type(name).with_context(|| format!("invalid workspace '{name}'"))?;
+    let root = workspaces_root.ok_or_else(|| {
+        anyhow::anyhow!(
+            "action mode '{mode}' needs a workspace, but the agent config sets no workspaces_root"
+        )
+    })?;
+    let path = root.join(name);
+    if !path.is_dir() {
+        bail!("workspace '{name}' does not exist under {}", root.display());
+    }
+    Ok(Some(path))
 }
 
 pub(crate) fn load(actions_dir: &str, action_type: &str) -> Result<Action> {
@@ -91,8 +176,14 @@ pub(crate) fn load(actions_dir: &str, action_type: &str) -> Result<Action> {
 
 /// Substitute `{{…}}` placeholders: `{{params.<dotted.path>}}` reads from the task payload
 /// (strings verbatim, other values as JSON), `{{payload}}` is the whole payload as JSON, plus
-/// `{{task_id}}` / `{{action_type}}`. Unknown placeholders render empty (a warning on stderr).
-pub(crate) fn render(template: &str, task: &RelayTask) -> String {
+/// `{{task_id}}` / `{{action_type}}`.
+///
+/// A placeholder that resolves to nothing is an error, not an empty string. It used to render
+/// empty with a warning on stderr — and then the prompt with the hole in it was sent to a paid run
+/// whose result was settled as a success: a template typo (`{{params.skuu}}`) or a payload missing
+/// a field produced a confident answer to a question with its subject deleted. Failing here costs
+/// nothing and names the placeholder.
+pub(crate) fn render(template: &str, task: &RelayTask) -> Result<String> {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(start) = rest.find("{{") {
@@ -100,17 +191,20 @@ pub(crate) fn render(template: &str, task: &RelayTask) -> String {
         let after = &rest[start + 2..];
         let Some(end) = after.find("}}") else {
             out.push_str(&rest[start..]);
-            return out;
+            return Ok(out);
         };
         let token = after[..end].trim();
         match resolve(token, task) {
             Some(v) => out.push_str(&v),
-            None => eprintln!("warn: prompt placeholder '{{{{{token}}}}}' resolved empty"),
+            None => bail!(
+                "prompt placeholder '{{{{{token}}}}}' resolved to nothing (the payload has no such \
+                 field, or the template names one it does not define)"
+            ),
         }
         rest = &after[end + 2..];
     }
     out.push_str(rest);
-    out
+    Ok(out)
 }
 
 fn resolve(token: &str, task: &RelayTask) -> Option<String> {
@@ -179,16 +273,29 @@ mod tests {
     fn render_substitutes_params_payload_and_ids() {
         let t = task(json!({ "sku": "A-1", "n": 3, "nest": { "deep": "x" } }));
         let got = render(
-            "sku={{params.sku}} n={{params.n}} deep={{ params.nest.deep }} id={{task_id}} all={{payload}} missing={{params.nope}}!",
+            "sku={{params.sku}} n={{params.n}} deep={{ params.nest.deep }} id={{task_id}} all={{payload}}!",
             &t,
-        );
+        )
+        .unwrap();
         assert_eq!(
             got,
             format!(
-                "sku=A-1 n=3 deep=x id=t-1 all={} missing=!",
+                "sku=A-1 n=3 deep=x id=t-1 all={}!",
                 serde_json::to_string(&t.payload).unwrap()
             )
         );
+    }
+
+    /// A hole in the prompt is a failed run at zero cost, not a paid run with its subject missing.
+    #[test]
+    fn an_unresolved_placeholder_is_an_error_that_names_it() {
+        let t = task(json!({ "sku": "A-1" }));
+        let err = render("sku={{params.skuu}}", &t).unwrap_err().to_string();
+        assert!(err.contains("params.skuu"), "{err}");
+        assert!(render("{{params.sku.deeper}}", &t).is_err());
+        assert!(render("{{unknown}}", &t).is_err());
+        // An unterminated brace is literal text, as before.
+        assert_eq!(render("a {{b", &t).unwrap(), "a {{b");
     }
 
     #[test]
@@ -214,7 +321,79 @@ mod tests {
         assert_eq!(a.spec.model, "haiku");
         assert_eq!(a.schema.as_deref(), Some("{\"type\":\"object\"}"));
         assert!(a.spec.connector.is_some());
+        // An action that says nothing about posture is a plain completion, as it always was.
+        assert_eq!(a.spec.mode, Mode::Generate);
+        assert!(a.spec.workspace.is_none());
+        assert!(a.spec.allowed_tools.is_empty());
+        assert_eq!(a.spec.timeout(), invocation::DEFAULT_TIMEOUT);
+        // An action that says nothing about reporting keeps its prompt and result on the device.
+        assert!(!a.spec.report_io);
+        assert!(a.spec.version.is_none());
         assert!(load(dir.path().to_str().unwrap(), "ns/missing").is_err());
+    }
+
+    /// Opting in is explicit, per action, and independent of the version label.
+    #[test]
+    fn an_action_can_version_itself_and_opt_into_reporting_its_io() {
+        let dir = tempfile::tempdir().unwrap();
+        let act = dir.path().join("ns").join("judged");
+        std::fs::create_dir_all(&act).unwrap();
+        std::fs::write(act.join("prompt.md"), "rate this").unwrap();
+        std::fs::write(
+            act.join("action.toml"),
+            "version = \"3\"\nreport_io = true\n",
+        )
+        .unwrap();
+
+        let a = load(dir.path().to_str().unwrap(), "ns/judged").unwrap();
+        assert_eq!(a.spec.version.as_deref(), Some("3"));
+        assert!(a.spec.report_io);
+    }
+
+    #[test]
+    fn an_action_can_declare_its_whole_posture() {
+        let dir = tempfile::tempdir().unwrap();
+        let act = dir.path().join("ns").join("scan");
+        std::fs::create_dir_all(&act).unwrap();
+        std::fs::write(act.join("prompt.md"), "look").unwrap();
+        std::fs::write(
+            act.join("action.toml"),
+            "mode = \"readonly-scan\"\nworkspace = \"my-repo\"\nallowed_tools = [\"Bash(git log:*)\"]\n\
+             permission_mode = \"plan\"\nmax_budget_usd = 0.5\ntimeout_secs = 120\n",
+        )
+        .unwrap();
+
+        let a = load(dir.path().to_str().unwrap(), "ns/scan").unwrap();
+        assert_eq!(a.spec.mode, Mode::ReadonlyScan);
+        assert_eq!(a.spec.workspace.as_deref(), Some("my-repo"));
+        assert_eq!(a.spec.allowed_tools, vec!["Bash(git log:*)"]);
+        assert_eq!(a.spec.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(a.spec.max_budget_usd, Some(0.5));
+        assert_eq!(a.spec.timeout(), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn a_workspace_cannot_escape_its_root() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("repo")).unwrap();
+        let r = Some(root.path());
+
+        assert_eq!(
+            resolve_workspace(r, Some("repo"), Mode::Edit).unwrap(),
+            Some(root.path().join("repo"))
+        );
+        for bad in ["../repo", "/abs", "a\\b", "repo/", "", "a/../b"] {
+            assert!(
+                resolve_workspace(r, Some(bad), Mode::Edit).is_err(),
+                "'{bad}' should be rejected"
+            );
+        }
+        // Named but absent, no root configured, missing entirely, or named by a generate action.
+        assert!(resolve_workspace(r, Some("nope"), Mode::Edit).is_err());
+        assert!(resolve_workspace(None, Some("repo"), Mode::Edit).is_err());
+        assert!(resolve_workspace(r, None, Mode::ReadonlyScan).is_err());
+        assert!(resolve_workspace(r, Some("repo"), Mode::Generate).is_err());
+        assert_eq!(resolve_workspace(r, None, Mode::Generate).unwrap(), None);
     }
 
     #[test]

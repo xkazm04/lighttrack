@@ -8,7 +8,8 @@
 //! dimension read error out while the events path beside it kept answering.
 
 use chrono::{Duration, Utc};
-use lighttrack_core::{new_id, LlmEvent, Operation, Provider, Status, TokenUsage};
+use lighttrack_core::{new_id, LlmEvent, Operation, Status, TokenUsage};
+use lighttrack_store::Scope;
 use lighttrack_store::Store;
 use lighttrack_store_pg::PgStore;
 
@@ -22,7 +23,7 @@ fn event(pid: &str, metadata: serde_json::Value) -> LlmEvent {
         parent_span_id: None,
         ts: now,
         received_at: now,
-        provider: Provider::Anthropic,
+        provider: "anthropic".into(),
         model: "claude-haiku-4-5".into(),
         name: None,
         operation: Operation::Chat,
@@ -87,7 +88,7 @@ fn an_empty_metadata_string_does_not_break_the_margin_read() {
 
     let rows = store
         .cost_by_dimension(
-            Some(&pid),
+            Scope::Project(&pid),
             "customer",
             now - Duration::hours(1),
             now + Duration::hours(1),

@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use lighttrack_core::{judge_verdict_schema, JudgeVerdict, Rubric};
 
-use crate::claude;
+use crate::invocation::{self, Invocation};
 use crate::parse::{extract_json_object, extract_json_value, sample_parsed, Parsed};
 use crate::pool;
 use crate::prompts::{build_rubric_prompt, build_rubric_schema, Prompt};
@@ -189,16 +189,15 @@ pub fn run_judge(
 
 /// Free-form text generation on Claude (anonymization / healing paragraphs).
 pub fn run_text(cfg: &EngineConfig, prompt: &str) -> Result<TextOutcome> {
-    let (envelope, latency_ms) = claude::invoke(cfg, prompt, &cfg.model, None, None)?;
+    let out = invocation::run(
+        &cfg.claude(),
+        &Invocation::generate(prompt, &cfg.model).with_bare(cfg.bare),
+    )?;
     Ok(TextOutcome {
-        text: envelope
-            .get("result")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        cost_usd: envelope.get("total_cost_usd").and_then(Value::as_f64),
-        model: claude::model_of(&envelope, &cfg.model),
-        latency_ms,
+        text: out.text,
+        cost_usd: out.cost_usd,
+        model: out.model,
+        latency_ms: out.latency_ms,
     })
 }
 

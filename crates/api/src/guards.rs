@@ -3,7 +3,10 @@
 use axum::http::HeaderMap;
 use chrono::Utc;
 
+use lighttrack_core::Scope;
+
 use crate::auth::{self, AuthMode, Principal};
+use crate::auth_scopes::ensure_scope;
 use crate::auth_throttle;
 use crate::error::{ApiError, ErrorCode};
 use crate::state::{spawn_db, AppState};
@@ -68,17 +71,37 @@ async fn resolve_principal(st: &AppState, headers: &HeaderMap) -> Result<Princip
         let key = spawn_db(move || store.find_api_key_by_prefix(&prefix)).await?;
         if let Some(k) = key {
             if !k.revoked && auth::verify_key(&k.key_hash, &token) {
-                // Best-effort, detached: record last use without delaying the request.
-                let store2 = st.store.clone();
-                let id = k.id.clone();
-                tokio::spawn(async move {
-                    let _ =
-                        tokio::task::spawn_blocking(move || store2.touch_api_key(&id, Utc::now()))
-                            .await;
-                });
+                let now = Utc::now();
+                // A correct secret that ran out of time. Checked before anything else this key
+                // could unlock, and reported as its own code so the failed-credential throttle
+                // does not meter it — an expired key is not a guess.
+                if k.is_expired(now) {
+                    return Err(ApiError::key_expired(format!(
+                        "API key '{}' expired; rotate it with POST /v1/projects/{}/keys/{}/rotate",
+                        k.id, k.project_id, k.id
+                    )));
+                }
+                // The tenant kill switch, applied at the credential rather than at each door: a
+                // disabled project's keys open nothing — not ingest, not reads. Admin principals
+                // never reach here, so an operator can always still re-enable the project.
+                let policy = crate::state::project_policy_for(st, &k.project_id).await?;
+                if !policy.enabled {
+                    return Err(ApiError::project_disabled(
+                        crate::events::disabled_project_msg(&k.project_id),
+                    ));
+                }
+                tracing::debug!(
+                    key_id = %k.id,
+                    project_id = %k.project_id,
+                    scopes = ?k.scopes,
+                    "authenticated a project key"
+                );
+                // Best-effort, detached and debounced: record last use without delaying the request.
+                crate::idempotency::touch_key_later(st, &k.id);
                 return Ok(Principal::Project {
                     project_id: k.project_id,
                     key_id: k.id,
+                    scopes: k.scopes,
                 });
             }
         }
@@ -115,7 +138,12 @@ pub(crate) fn resolve_ingest_project(
     body_project: &str,
 ) -> Result<String, ApiError> {
     match p {
-        Principal::Project { project_id, .. } => Ok(project_id.clone()),
+        Principal::Project { project_id, .. } => {
+            // Every ingest door funnels through here, so this is the one place `Ingest` has to be
+            // required — a read-only key must not be able to write traffic into its own project.
+            ensure_scope(p, Scope::Ingest)?;
+            Ok(project_id.clone())
+        }
         // The zero-config first run: dev mode, no key, no project named. Rejecting it with a 400 is
         // what made the documented quickstart fail *silently* — the SDKs swallow the error, so the
         // user sees no events and no reason. Attribute it to a real default project instead.
@@ -159,7 +187,7 @@ pub(crate) async fn resolve_ingest_project_ensuring(
 /// `project_id` and there is no foreign key), so a failure here — including losing the create race
 /// to a concurrent first event — must never turn a good event into an error. The row exists so the
 /// project shows up in `GET /v1/projects`, can be given limits, and can be opened in the UI.
-async fn ensure_dev_default_project(st: &AppState) {
+pub(crate) async fn ensure_dev_default_project(st: &AppState) {
     let store = st.store.clone();
     match spawn_db(move || store.get_project(DEV_DEFAULT_PROJECT)).await {
         Ok(Some(_)) => return,
@@ -175,6 +203,8 @@ async fn ensure_dev_default_project(st: &AppState) {
         enabled: true,
         redaction: lighttrack_core::Redaction::None,
         collective_opt_in: false,
+        require_trusted_judge: false,
+        archived_at: None,
         created_at: Utc::now(),
     };
     match crate::projects::insert_project(st, &proj).await {
@@ -200,6 +230,10 @@ pub(crate) fn resolve_read_project(
         Principal::Project {
             project_id: pid, ..
         } => {
+            // Symmetrically, every project-scoped read funnels through here: this is what stops an
+            // ingest key embedded in a shipped client app from reading the project's stored prompts
+            // and completions.
+            ensure_scope(p, Scope::Read)?;
             if let Some(r) = requested {
                 if r != pid {
                     return Err(ApiError::forbidden("key not authorized for that project"));
@@ -219,7 +253,41 @@ mod tests {
         Principal::Project {
             project_id: "proj-a".into(),
             key_id: "key-1".into(),
+            scopes: lighttrack_core::default_scopes(),
         }
+    }
+
+    fn scoped(scopes: &[Scope]) -> Principal {
+        Principal::Project {
+            project_id: "proj-a".into(),
+            key_id: "key-1".into(),
+            scopes: scopes.to_vec(),
+        }
+    }
+
+    /// The headline of M16: one key shape used to grant both doors. A key scoped to only one of
+    /// them must be refused at the other, in its own project.
+    #[test]
+    fn a_key_only_opens_the_doors_it_was_scoped_for() {
+        let ingest_only = scoped(&[Scope::Ingest]);
+        assert_eq!(resolved(&ingest_only, "").unwrap(), "proj-a");
+        assert!(resolve_read_project(&ingest_only, None).is_err());
+
+        let read_only = scoped(&[Scope::Read]);
+        assert!(resolved(&read_only, "").is_err());
+        assert_eq!(
+            resolve_read_project(&read_only, None)
+                .map_err(|e| e.to_string())
+                .unwrap(),
+            Some("proj-a".to_string())
+        );
+    }
+
+    /// Scoping narrows a key within its project; it never widens one across projects.
+    #[test]
+    fn scopes_do_not_relax_the_cross_project_check() {
+        let k = scoped(&[Scope::Read]);
+        assert!(resolve_read_project(&k, Some("proj-b")).is_err());
     }
 
     /// `ApiError` is deliberately not `Debug` (it is a wire envelope, not a diagnostic), so flatten

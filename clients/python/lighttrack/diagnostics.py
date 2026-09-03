@@ -91,6 +91,19 @@ def no_project_message(base_url: str) -> str:
     )
 
 
+def diagnostic_kind(status: Optional[int] = None, *, timed_out: bool = False) -> str:
+    """The rate-limiting bucket a failure warns under.
+
+    One line per kind per cooldown, so the bucketing *is* the noise policy: statuses stay separate (a
+    401 and a 500 are different problems), while a timeout is split out from a plain connection
+    failure so it does not hide behind one. Shared by every SDK, because a bucket name that differs
+    by language makes the same outage look like different incidents to whoever is grepping the logs.
+    """
+    if status is not None:
+        return f"http-{status}"
+    return "timeout" if timed_out else "network"
+
+
 def send_failure_message(base_url: str, path: str, detail: str, *, status: Optional[int] = None,
                          has_project: bool = False, has_key: bool = False) -> str:
     hint = _hint(base_url, status, has_project=has_project, has_key=has_key)
@@ -114,7 +127,10 @@ def _hint(base_url: str, status: Optional[int], *, has_project: bool, has_key: b
                 "(or LightTrack(api_key='...'))." if has_key
                 else "This server requires authentication. Set LIGHTTRACK_KEY to a project API key.")
     if status == 404:
-        return f"No such endpoint — is LIGHTTRACK_URL ({url}) pointing at a LightTrack API?"
+        # Was `{url}` — an undefined name, so composing this one message raised NameError inside the
+        # diagnostic: the reporter becoming the failure it reports. The em dash went with it; these
+        # lines stay ASCII because a cp1252 Windows console turns one into mojibake.
+        return f"No such endpoint - is LIGHTTRACK_URL ({base_url}) pointing at a LightTrack API?"
     if status == 429:
         return "The project is over a configured usage limit, so ingest is being refused."
     if status >= 500:

@@ -11,3 +11,14 @@ serde_json.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
+# JSON Schema derivation for the DTOs the API's OpenAPI document names. The contract table
+# (crates/contract) refers to these types by name; `crates/api/src/schema_registry.rs` resolves the
+# name to the schema this derive produces, so /openapi.json describes real fields rather than a
+# permissive object. `chrono04` is what makes the RFC3339 timestamps on every row come out as
+# `string` / `date-time` instead of failing to compile.
+schemars = { version = "1", default-features = false, features = ["derive", "std", "chrono04"] }
+# HMAC-SHA256 for the alert webhook signature (`X-LightTrack-Signature`). Pure computation, no I/O —
+# it is here rather than in the API because the responder VERIFIES what the API signs, and one
+# implementation is the only way those two can agree.
+hmac = "0.12"
+sha2 = "0.10"

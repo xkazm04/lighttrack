@@ -29,6 +29,49 @@ Pipeline: `sample → anonymize → review → freeze`.
     never copied into the dataset; only the scrubbed version.
 - **Output:** a frozen, versioned dataset (immutable once `frozen=true`) so runs are comparable over time.
 
+### 1a. Lineage: the four strategies, and what a version means (M24)
+
+Until M24 this section described one product and shipped another. `Dataset.version` was written as
+`1` by `create_dataset` and updated by nothing, so "versioned" was a constant — which quietly
+hollowed out the two guards that read it: the paired-test refusal in `runner/history.rs` compared
+1 with 1, and a run's `dataset_pin` recorded 1 forever. And exactly one of the four sampling
+strategies existed, because sampling was a client loop over "the newest N events with an input".
+
+Both are now real, and the reason the strategies moved to the server is the reason they could not be
+written as a client loop: a stratified quota and a uniform draw are statements about the **matched
+population**, which a caller that has already fetched a page has thrown away.
+
+- `POST /v1/datasets/:id/items/import` mines rows into an **unfrozen** dataset by
+  `{from, filter, strategy, n, dedupe}` ([`ImportSpec`], `crates/core/src/dataset_lineage.rs`):
+  - `recent` — newest first (the historical behaviour, still the default);
+  - `random` — uniform over what the filter matched;
+  - `stratified` — a per-`(model, status)` quota, floored at one per group, so a model with three
+    calls all week is represented rather than drowned by the common one;
+  - `errors` — failures only (`status <> 'success'` from `events`, `pass = false` from `scores`).
+  - `from: scores` joins verdicts to events, which is what makes a **failure-mined** regression set
+    expressible at all: the `pass = false` lives on `scores` and the text lives on `events`.
+  - `dedupe` collapses a case whose *normalised* input (case-folded, whitespace-collapsed, hashed
+    **after** the scrub) already appears in the target set — so two calls differing only in the PII
+    the scrubber replaced are one case.
+  - Mined production text is scrubbed on the way in, by the same `lighttrack_anon` pass
+    `lt-runner dataset build` uses. A server-side import that skipped it would be a strictly easier
+    way to copy live PII into an eval corpus than the path it replaces.
+- `POST /v1/datasets/:id/fork` makes freezing a **checkpoint rather than a dead end**: the next
+  version of the same name, items and their M11 labels copied, `frozen` cleared, `parent_id` linked.
+  The parent keeps its freeze and its grades, so the run scored against it stays reproducible.
+  Importing into a frozen dataset is a `409`, and the answer to it is a fork.
+- `GET /v1/projects/:id/datasets/versions?name=…` walks the lineage, newest version first — the read
+  that resolves a run's `dataset_version` pin back to the corpus it names.
+- A benchmark may declare `regression_dataset` in its `target` object (a reserved key, like
+  `schedule_interval_secs`). `lt-runner score` then appends each failing verdict's event to the
+  current unfrozen version of that name, deduped and best-effort: mining is a side effect of scoring,
+  and a pass that died because a corpus was unreachable would trade the verdict for the sample.
+- CLI: `lt datasets versions|fork|import`, `lt-runner dataset build --strategy --from --below
+  --dedupe` and `lt-runner dataset import|versions|fork`. MCP: `fork_dataset` and
+  `import_dataset_items`, both write-gated behind `LIGHTTRACK_MCP_ALLOW_WRITES`.
+- Backends: SQLite and Postgres serve `Surface::DatasetLineage`; Firestore refuses it with a
+  documented 501 rather than an empty answer (`docs/PARITY.md`).
+
 ## 2. Multi-provider / multi-prompt comparison  (#2)
 A benchmark defines a **matrix** of targets = `{providers × models} × {prompt variants}`. For each
 DatasetItem × target, the framework **generates** an output, then **judges** it.
@@ -42,6 +85,46 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
   order, or a neutral judge.
 - **Output:** a comparison table — for each dimension and overall: score, pass-rate, **p50/p95 latency**,
   **tokens**, **$ cost** — so "best" is a quality/latency/cost trade-off, not just quality.
+
+**Target vocabulary.** One row of the matrix is:
+
+```json
+{ "provider": "openai", "model": "gpt-4o",
+  "system_prompt": "you are terse",                          // a literal, OR:
+  "prompt_ref": { "name": "support-reply", "label": "production" },
+  "label": "gpt4o-prod",
+  "kind": { "type": "http", "url": "https://rag.acme.com/answer" } }
+```
+
+- `system_prompt` — the literal instruction, as before. Everything below is additive; a stored
+  matrix that uses only `provider`/`model`/`system_prompt`/`label` is unchanged.
+- **`prompt_ref`** — resolve this target's prompt from the **registry** at run start instead of
+  using the literal, by `version`, by `label`, or (neither) the latest. Pass at most one of the two.
+  The name must already be a prompt in the benchmark's project; a typo is a 400 when the benchmark
+  is written, not a surprise inside the run that was meant to gate a deploy. A prompt containing
+  `{{input}}` is treated as a **template** (the case is substituted in, and there is no separate
+  system turn); without the placeholder it becomes the system prompt and the case stays the user
+  turn. That is the whole templating language on purpose — anything richer is a rendering engine
+  whose bugs would surface as quality regressions.
+  A run that resolved a ref records **`resolved_prompt_version`** in its report, and that is the
+  evidence the promotion gate requires (see `CI_GATE.md`).
+- **`kind`** — `{"type":"model"}` (the default) or `{"type":"http","url":…}`. An **HTTP target** is
+  an endpoint you own: LightTrack POSTs `{input, expected?, system_prompt?}` and reads back
+  `{output, usage?, latency_ms?, cost_usd?}`. This is how a benchmark reaches a RAG pipeline, a
+  retrieval chain, or an agent — a whole system whose quality does not live in one model call.
+  - The URL must be **https** and must not name a loopback, private, link-local, CGNAT or
+    single-label/`.internal` host: a worker POSTs there once per case, unattended, from inside your
+    deployment.
+  - Each request carries `X-LightTrack-Signature: sha256=<hex>`, an HMAC-SHA256 of the exact request
+    body keyed by **`LIGHTTRACK_HTTP_TARGET_SECRET`**, so your endpoint can tell LightTrack's traffic
+    from anyone who learned the URL. With no secret set, the header is omitted rather than sent
+    meaningless.
+  - An endpoint that reports no `usage` and no `cost_usd` is left **unpriced** on the existing
+    unpriced path — never assigned an invented number — and its reproducibility stamp is
+    `best-effort`, because a black box has no sampling knobs to pin.
+  - Its **family** for the self-preference control (§3) is its **host**, never the declared
+    `provider`. Whatever answers at `rag.acme.com` is opaque to us, so it can neither read as the
+    judge's own family nor as any other.
 
 ### 2a. Earning the words "B beats A" — the statistical contract
 A benchmark tool's entire value is a verdict you can act on, so every claim it prints is now backed by a
@@ -97,6 +180,57 @@ This is **deliberately weaker than the old rule in one direction**: a 0.001 dip 
 3-case run no longer blocks, because that was a false positive on the most expensive gate in the product.
 It is **not weaker for real regressions** — a drop larger than the run's own uncertainty still blocks, and
 so does a run the runner itself called regressed. `force=true` still overrides everything.
+
+### After promotion — the served-version canary
+
+The gate above answers "may this version ship". Nothing used to answer **"was shipping it right"**:
+`labels.insert(label, version)` was the last thing the registry ever observed about a version, so a
+regression in production was visible only to whoever happened to scroll `/v1/scores`. A benchmark is
+a rehearsal on frozen cases; production is the performance, and the two disagree.
+
+Three pieces close the loop, each opt-in:
+
+1. **The measurement.** `GET /v1/quality/prompts?project=&since=&until=&rubric_id=` groups verdicts by
+   the `metadata.prompt` tag (`"<name>@v<version>"`) that `GET …/prompts/:name` hands you and that
+   your app is expected to stamp on every event the prompt produces — the same tag `GET
+   /v1/costs/prompts` already grouped **cost** by. Each row carries `n`, `mean` (normalized by the
+   verdict's `max`, so two rubric scales are comparable), `pass_rate`, a ~95% interval, and what the
+   judged events cost. Read `n` first: a version judged four times has not beaten one judged four
+   hundred. Also `lt prompts quality`, and the MCP read tool `get_prompt_quality`.
+   Store surface `score_summaries`; Firestore refuses it (501) — see `PARITY.md`.
+
+2. **The policy.** `PUT /v1/projects/:id/prompts/:name/canary` stores a `CanaryPolicy`:
+
+   ```json
+   { "label": "canary", "production_label": "production", "min_n": 20,
+     "window_secs": 86400, "max_drop": 0.05, "auto_revert": false }
+   ```
+
+   `null` clears it. Every default is the safe one, and `auto_revert` is off: the first thing a canary
+   does is tell you, not act.
+
+3. **The sweep.** With `LIGHTTRACK_PROMPT_CANARY_SWEEP_SECS` set, the API compares each policied
+   prompt's canary label against its production label on a timer and raises a
+   `prompt_canary_regressed` alert through the normal ledger and routing. A regression requires
+   **both** conditions, for the same reason the promotion gate above is significance-aware:
+   - `min_n` verdicts on **each** side (evidence — below it the sweep is silent), and
+   - the canary's whole ~95% interval below production's, **and** a relative drop past `max_drop`.
+     The interval test stops noise from tripping a rollback; the band stops a real-but-trivial dip
+     from doing it.
+
+   The comparison is **paired on the rubric** the prompt's linked benchmark names, so both sides are
+   judged against the same criteria.
+
+   With `auto_revert`, the label is moved back to the version it replaced — read out of the prompt's
+   append-only `label_history`, never guessed; a label with no recorded predecessor is not reverted,
+   and the alert says so. Every label move (promotion and revert alike) appends a `LabelChange
+   { label, version, at, reason }`, with `reason` `"promote"` or `"canary_regressed"`, so a served
+   version always records how it got there.
+
+**Feeding it.** A fresh version has minutes of traffic against production's days, so an unprioritized
+online scorer spends its judge budget on the version nobody is asking a question about. `lt-runner
+score --prompt-tag "<name>@v<version>"` narrows the unscored work list server-side, which is how a
+canary accumulates evidence while a decision is pending.
 
 ## 3. Golden-standard LLM-as-judge methodology  (#3)  ← the core
 A clear, defensible scoring system. Defaults encode current best practice (see Sources).
@@ -187,7 +321,7 @@ The id is then the judging contract for:
 | `lt-runner score` — online, over stored events | `--rubric-id <id>` |
 | `lt-runner score-text` — an ad-hoc input/output pair | `--rubric-id <id>` |
 | `lt-runner score-traces` — whole traces (§ trace scoring) | `--rubric-id <id>` |
-| `lt-runner calibrate` — judge↔human agreement | `--rubric-id <id>` |
+| `lt-runner calibrate` — judge↔human agreement | `--rubric-id <id>` (set from `--dataset <id>` or `--file`) |
 | a stored benchmark (`POST …/benchmarks`) | `"rubric_id": "<id>"` |
 
 Each of those also takes freeform criteria text instead (`--rubric "<criteria>"`, or the benchmark's
@@ -217,10 +351,60 @@ score" is a reportable fact, not an invisible one.
   flag the item as ambiguous rather than trusting one score.
 - A **golden/calibration set** of human-labeled items measures judge↔human agreement (Cohen's κ /
   correlation); a rubric isn't "trusted" until agreement clears a bar. ✅ shipped: `lt-runner
-  calibrate --file <jsonl> --rubric "<criteria>" | --rubric-id <id>` re-judges each labeled
-  `{input, output, human_score}`, then reports Cohen's κ + Pearson + MAE/RMSE + judge-vs-human bias
-  and a TRUSTED/NOT-TRUSTED verdict against `--kappa-bar` (default 0.6). Judge-only (no generation),
-  self-contained (no Store/schema changes). Agreement math lives in `core::calibration` (unit-tested).
+  calibrate --dataset <id> | --file <jsonl>` with `--rubric "<criteria>" | --rubric-id <id>`
+  re-judges each labeled `{input, output, human_score}`, then reports Cohen's κ + Pearson + MAE/RMSE
+  + judge-vs-human bias and a TRUSTED/NOT-TRUSTED verdict against `--kappa-bar` (default 0.6).
+  Judge-only (no generation). Agreement math lives in `core::calibration` (unit-tested).
+
+**Human verdicts are data, and trust is a queryable state (M11).** The three sentences above used to
+describe something that existed only on somebody's terminal. A calibration set was a JSONL file on
+the runner's disk; the κ history was a metrics blob packed into a `Score.reasoning` under a reserved
+rubric name; and `Agreement.trusted` reached stdout and exit code 5. Nothing a gate could ask.
+
+- **`Label`** — one person's verdict about an `event`, a `dataset_item`, or a `score` (the last being
+  a human *reviewing the judge*). Stored beside the machine verdicts it exists to check, and
+  deliberately not a `Score`: a score is judge output — budgeted, costed, alerted on — while a label
+  is ground truth and is none of those. `labeler` is required; an unattributable verdict is a number
+  nobody can defend. Written with `manage`, never `ingest`: a key that could move ground truth would
+  let the thing being measured edit the measurement.
+- **`CalibrationRecord`** — one completed measurement, keyed `(project, rubric_id, judge)`,
+  append-only. Carries `n` (so trust on 12 cases reads as trust on 12 cases) and the `kappa_bar` it
+  was judged against (so raising the bar later cannot silently re-verdict history).
+- **`JudgeTrust`** — `trusted` | `untrusted` | **`unknown`**, from `GET /v1/judges/trust`. Three
+  values on purpose: a judge nobody has measured has taken no check, not failed one, and a policy
+  that wants to block on that must say so rather than have absence of evidence read as either
+  verdict.
+
+The lookup is **exact on the rubric, `NULL` included**. A rubric never inherits the freeform judge's
+κ nor a sibling rubric's: "good" means a different thing under different criteria. That same rule is
+what makes a new **rubric version** (§3's versioning mints a new id) start at `unknown` —
+`GET /v1/rubrics/:id` reports `active: false` and lists `calibrated_judges: []` until something is
+measured against that version specifically, so swapping a measured instrument for an unmeasured one
+is visible instead of silent.
+
+**Both gates consult it.** `GET /v1/benchmarks/:id/gate` and the prompt-label promotion look up the
+`(rubric_id, judge_model)` their benchmark names and report `judge_trust` **even when nothing
+blocks** — a green badge from an unverified instrument should say so on the way through. A project
+carrying `require_trusted_judge` is refused with **409** when trust is `untrusted` or `unknown`; the
+flag is off by default (turning it on retroactively would block every deployment's gates on upgrade
+day), and a promotion's `force` does not clear it — `force` is a flag on the promoting request while
+the policy is an admin's decision about the project, and letting the former beat the latter would
+make the policy decorative.
+
+**Triage: `GET /v1/scores?needs_review=1`.** The verdicts a person should look at first, most
+decisive reason first — a human graded the same subject and disagreed (or agreed on the number and
+not the pass/fail), an injection was flagged, the judge split across its own samples, a dimension
+floor was hit, position bias showed, samples failed to parse, or the verdict landed within a hair of
+the threshold. Every one of those signals already lived on the row; none was reachable as a question.
+
+**Closing the loop.** `POST /v1/datasets/:id/items/from-label` promotes a graded production event
+into an unfrozen golden set, **copying the human's grade onto the new case**. Without that copy the
+promoted case is an input with no ground truth — the state that makes a "golden set"
+un-calibratable, and the reason golden sets rot. Store surfaces: `Labels` and `Calibrations`, served
+by all three backends (see `docs/PARITY.md`); a backend that cannot host them returns
+`Unsupported` (501), never `[]` — an empty label listing would read as "nobody has graded anything
+here", which is what lets a calibration measure a judge against nothing and report the resulting
+κ = 0 as a regression.
 
 **Verdict provenance (D11).** Every posted score carries a nullable `detail`: per-dimension
 `{value, weight, floor, floor_hit, reasoning[]}` with **one reasoning per sample that parsed** (all k
@@ -337,7 +521,7 @@ not to. That is largely a weak-judge artifact: it disappears on Sonnet and Opus,
 at all. The effect is dose-dependent (haiku at batch=2: +0.113, 2 flips).
 
 Rules that keep it honest:
-- **Measure before trusting**: `lt-runner calibrate --file golden.jsonl --rubric-id <id>
+- **Measure before trusting**: `lt-runner calibrate --dataset <id> --rubric-id <id>
   --compare-batch 4` judges the same items both ways and reports the paired difference (§CALIBRATION).
 - **Never compare a batched run to an unbatched baseline** — the difference is method, not quality.
   Batching is deterministic for a fixed dataset, so the path to the throughput is to re-baseline once
@@ -407,46 +591,56 @@ Both are closed:
   naming the status and lease that actually hold, and the worker logs `VERDICT NOT RECORDED` instead
   of believing it finished. Omitting `claimed_at` is the operator-shaped finish — it waives the
   ownership condition, never the finality one.
-- The invariant is pinned in the **shared conformance suite** (`crates/store/src/conformance.rs`,
-  `job_leases`), so SQLite, Postgres and Firestore each prove it in CI. Each expresses the
+- The invariant is pinned in the **shared conformance suite**
+  (`crates/store/src/conformance/job_leases.rs`), so SQLite, Postgres and Firestore each prove it in CI. Each expresses the
   conditioned write in its own dialect (SQL `UPDATE … WHERE`; Firestore an `updateTime` precondition
   over a read-compare-commit loop), and a divergence in any one of them is a silent correctness hole.
 
-### 4a. Self-running benchmarks (opt-in recurrence)
+### 4a. Self-running benchmarks (recurrence is a stored schedule)
 By default a benchmark runs **only** on a manual enqueue (`POST /v1/benchmarks/:id/enqueue`) or a
 prompt-version cut (the registry auto-enqueues) — there is no cron in the benchmark path. Turn a
-benchmark into **continuous quality monitoring** by giving it a recurrence interval:
+benchmark into **continuous quality monitoring** by storing a schedule for it:
 
 ```bash
-# create a recurring benchmark: re-run itself ~every hour
-curl -sX POST "$LIGHTTRACK_URL/v1/projects/$PID/benchmarks" -H "authorization: Bearer $KEY" \
-  -H 'content-type: application/json' \
-  -d '{ "name": "support-quality", "rubric": "…", "dataset_ref": "online-latest",
-        "baseline_score": 0.8, "schedule_interval_secs": 3600 }'
+lt schedules create --project $PID --type bench_run --every 1h \
+  --payload '{"benchmark_id":"'"$BID"'","samples":1}'
 ```
 
-- **Storage:** `schedule_interval_secs` rides inside the benchmark's free-form `target` JSON — **no
-  schema/column change** (benchmarks are fixed-column rows; `target` is the only free-form field, and
-  it round-trips unchanged through SQLite *and* Postgres). It is therefore **not supported alongside a
-  comparison-matrix** benchmark (an array `target`/`targets` has no room for it) — that combination is
-  rejected with a `400`. Use a single-target, rubric, or simple benchmark for recurrence.
-- **Enable / disable:** set the interval to enable, `0`/unset to disable. There is no `PATCH` surface
-  today, so "changing" recurrence on an existing benchmark means recreating it (v1 story).
-- **Who runs it:** `lt-runner serve` performs a **recurrence sweep** on a subsampled cadence
-  (`--recur-interval`, default 60s; `0` disables). A benchmark is **due** when (a) it has an interval,
-  (b) it has **no** queued/running `bench_run` job, and (c) its most recent run's `finished_at` (or
-  `started_at` fallback) is older than the interval. The sweep enqueues a normal `bench_run` (reusing
-  the existing job path) — the same worker then claims and runs it. This is **idempotent**: an
-  in-flight job or a recent run means "not due", so repeated sweeps never pile up jobs.
-- **OS cron instead of a daemon:** `lt-runner serve --once` runs exactly one sweep + claims one job,
-  so an external scheduler can drive recurrence:
+```bash
+# or over HTTP
+curl -sX POST "$LIGHTTRACK_URL/v1/projects/$PID/schedules" -H "authorization: Bearer $ADMIN_KEY" \
+  -H 'content-type: application/json' \
+  -d '{ "type": "bench_run", "interval_secs": 3600, "payload": { "benchmark_id": "'"$BID"'" } }'
+```
+
+- **It works for every benchmark mode, including compare.** This is the reason the mechanism moved.
+  Recurrence used to ride inside the benchmark's free-form `target` JSON as `schedule_interval_secs`,
+  and a comparison matrix is an *array* `target` — there was no room for the key, so the headline
+  benchmark mode simply could not recur. A schedule is a separate row that names the benchmark, so
+  the target's shape is irrelevant to it.
+- **Enable / disable / retime** without recreating anything: `lt schedules set <id> --disable`,
+  `--every 6h`, `--payload '{…}'`. A paused schedule stays listed — an operator has to be able to see
+  the thing they paused.
+- **Who runs it:** the **API** sweeps due schedules (`LIGHTTRACK_SCHEDULE_SWEEP_SECS`, default 60s)
+  and enqueues a normal `bench_run`; a worker then claims and runs it. The sweep is idempotent — a
+  schedule whose previous job is still queued or running is skipped, so a benchmark slower than its
+  own interval never stacks copies of itself — and it does not catch up: `next_due` advances from
+  *now*, so a sweep that was down for a day fires each schedule once rather than a day's worth of
+  generation spend.
+- **Migration:** on boot, every benchmark still carrying `target.schedule_interval_secs` gets an
+  equivalent schedule if it does not already have one. The key stays readable for one release;
+  nothing deletes it, and recurrence you configured keeps working.
+- **External schedulers** are still fully supported — post a job instead of storing a schedule:
 
   ```cron
-  */15 * * * *  cd /srv/lighttrack && lt-runner serve --once >> /var/log/lt-serve.log 2>&1
+  0 * * * *  curl -sX POST "$LIGHTTRACK_URL/v1/jobs" -H "authorization: Bearer $ADMIN_KEY" \
+               -H 'content-type: application/json' \
+               -d '{"type":"bench_run","payload":{"benchmark_id":"b-1"}}'
   ```
 
-  Running "too often" is harmless — the due-check keeps it idempotent. Discovery uses existing read
-  endpoints (list projects → list benchmarks → list runs/jobs) with the runner's admin key.
+  Running "too often" is harmless: enqueue is cheap and the queue's own accounting is what bounds it.
+
+See `docs/SCHEDULING.md` for the full job/schedule model — benchmark runs are one of five kinds.
 
 ## 5. Latency + token cost, DB-backed price table  (#5)
 - **Per-call metrics** captured on generation/judge: `latency_ms`, `input/output/cached tokens`, `cost_usd`.
@@ -520,15 +714,75 @@ LightTrack, the better the data for everyone (the moat).
   - *The hub sees what you send.* Bucketing and the floors bound what a hub *learns*, but a hub is a
     party to the contribution, not an adversary you are hidden from. Contribute only from projects you
     have deliberately opted in (`collective_opt_in`, per project, never inherited).
+- **What left the building is a ledger, not a preview (M22).** `GET /v1/collective/digest` shows what
+  *would* go out; until M22 nothing recorded what *did*. The ack from a hub was printed to a terminal
+  and discarded, so an instance could not answer "have we already sent this", "which hubs hold our
+  data", or "what did they accept". `POST /v1/collective/contribute` (admin; CLI
+  `lt collective contribute --hub <url>`) now performs the push **from the API** and appends a
+  `collective_contributions` row per attempt — the `contributions` Store surface, served by all three
+  backends (`docs/PARITY.md`) and held to its own conformance section. Read it with
+  `GET /v1/collective/contributions` (CLI `lt collective history`, MCP
+  `get_collective_contributions`).
+  - *The row keeps a hash and counts, never the digest.* `digest_sha256`, `entries_count`,
+    `projects_included`/`projects_excluded`, `schema_version`, the hub's verbatim `ack`, and a status
+    of `sent` | `rejected` | `failed` — a hub that answered and declined is a different condition,
+    with a different fix, from one that never answered. The digest **body** is deliberately absent:
+    the ledger must not become a second copy of every model number this instance has measured, and it
+    can therefore never be mined for more than the hub already knows. The hub is identified by
+    `hub_url_hash` (`h-` + 12 hex), for the reason the contributor id is hashed: a ledger an operator
+    pastes into an issue, or an MCP tool drops into an agent transcript, should not be where a private
+    hub's address leaks from.
+  - *The consent envelope is at rest.* `GET /digest` recomputes `projects_included`/`projects_excluded`
+    per call, so before M22 the record of which projects consented to a given push existed on the wire
+    and nowhere else. Each ledger row now carries the envelope that push actually had.
+  - *An unchanged digest is not re-sent.* The hash deliberately **excludes** `generated_at`, so two
+    builds of the same measurements hash the same. If it matches the last row this hub *acked*, the
+    push is skipped with a reason and **no HTTP call is made at all** — which is what makes an
+    automated push safe against a hub's `min_interval` (see the differencing note above): the 429s it
+    would otherwise produce every interval are the kind an operator learns to ignore. A `rejected` or
+    `failed` attempt does not arm the gate — the hub does not have that digest — and a skip writes no
+    row, because the ledger records what left the building. `force=true` (CLI `--force`) is the escape
+    hatch for a hub that lost its database.
+  - *The hub key is named, never carried.* The request takes `hub_key_ref`, the **name** of a
+    server-side environment variable (default `LIGHTTRACK_COLLECTIVE_HUB_KEY`), which the API
+    resolves. A request body is logged and retried, and a schedule row is readable by anything that
+    can read the queue; neither is a place for a credential.
+  - *Contribution can recur like any other workload.* `JobKind::Contribute` is an ordinary job kind, so
+    setting `LIGHTTRACK_COLLECTIVE_AUTO_CONTRIBUTE_SECS` + `LIGHTTRACK_COLLECTIVE_HUB` creates a
+    stored `Contribute` **schedule** at startup (opt-in; idempotent — an existing schedule for that
+    hub keeps the cadence an operator set). It inherits the queue's lease, retry accounting,
+    cancellation and job rows, and appears in `GET /v1/schedules` like everything else. Per-project
+    `collective_opt_in` still gates what the scheduled push contains: it sends the same digest
+    `GET /digest` builds, from consenting projects only.
 - **The right to withdraw + retention.** `DELETE /v1/collective/contribution` (CLI:
   `lt collective withdraw --hub <url> --hub-key <k>`) removes every entry a source contributed,
   authenticated exactly like ingest — you may withdraw what you could have published — so leaving the
   network never requires asking the hub operator. An admin may pass `?contributor=c-xxxx` to withdraw a
   named source, which is the escape hatch for a contributor that lost its key. Entries also expire on a
   stated policy: `LIGHTTRACK_COLLECTIVE_MAX_AGE_DAYS` (default **90**, `0` disables) — an expired entry
-  is **filtered out of the leaderboard before merging on every backend**, and is physically swept from
-  storage on the next ingest by backends that implement `purge_collective_entries_before` (SQLite
-  today; others keep the dead row on disk but never publish it again).
+  is **filtered out of the leaderboard before merging on every backend** — the cutoff is now the one
+  predicate pushed *into* the store (`list_collective_entries_filtered`), because it drops rows that
+  must not be published at all; every user filter still runs after the merge and after the
+  source floor. It is also physically swept from storage on the same pass as the next ingest, on all
+  three backends.
+  `DELETE /v1/collective/contribution?all=1` (CLI `lt collective withdraw --all`) is the contributor
+  side of the same right: it walks the **ledger** and asks every hub that acked a contribution to
+  delete it, so revoking consent no longer depends on the operator remembering every hub they ever
+  pushed to. Because the ledger stores an opaque hash rather than an address, the URLs are resolved
+  from what this deployment already writes down — repeated `?hub=`, the `Contribute` schedules'
+  payloads, and `LIGHTTRACK_COLLECTIVE_HUBS` — and any ledgered hub none of those can name is
+  returned in `unresolved` rather than silently skipped: a withdrawal that quietly covered less than
+  it claimed would be worse than the gap it reports.
+- **Running a hub on Postgres or Firestore.** The hub endpoints (`POST /v1/collective/ingest`,
+  `GET /v1/collective/leaderboard`, `DELETE /v1/collective/contribution`) once answered 501 on
+  anything but SQLite, which meant the deployment shape a public hub actually has — a managed
+  database — was the one that could not host one. All three backends now declare the `collective`
+  surface (`docs/PARITY.md`) and are held to the same conformance section. A contributor's set is
+  replaced in **one** call: SQLite and Postgres do it in a transaction, so an interrupted ingest
+  leaves the previous set intact rather than a mixture the merged board would publish as the
+  collective's opinion. Firestore is atomic up to one 500-write commit batch and reports
+  `atomic: false` when a larger replacement has to be chunked — a hub on Firestore that wants the
+  guarantee unconditionally should keep a contributor's set under that bound.
 - **Hub-side identity is derived from a credential the hub issued, not asserted.** A hub does **not**
   trust the `contributor_id` in the request body (kept only for wire compat, ignored), *and it does not
   hash the bearer string either*: `authenticate` is deliberately lenient in `dev` auth mode (any
@@ -637,11 +891,15 @@ LightTrack, the better the data for everyone (the moat).
     hub clamps the judge tag to the known vocabulary. A leaderboard row exposes the distinct
     `judge_providers` and, when they disagree, a `mixed_judges` count; `GET …/leaderboard?judge=<prov>`
     filters to rows a given judge family scored. A bucket whose own runs disagree collapses to `mixed`.
-  - *Model-identity normalization.* At ingest the hub canonicalizes `(provider, model)` through
-    `config/model_aliases.json` (`LIGHTTRACK_MODEL_ALIASES`): a redundant `provider/` prefix is stripped
-    and dated/synonym variants collapse to their family **only where the alias file says so**
-    (`gpt-4o`, `openai/gpt-4o`, `gpt-4o-2024-08-06` → one row). An identity absent from the table passes
-    through unchanged, so a new model is never silently mis-merged.
+  - *Model-identity normalization.* At ingest the hub canonicalizes `(provider, model)` through the
+    single canonicalizer, `lighttrack_core::model_id` (M8): a redundant `provider/` prefix is stripped,
+    a declared provider synonym folds (`azure-openai` → `openai`), a `-YYYYMMDD` / `-YYYY-MM-DD` date
+    suffix and an `@batch`/`@flex`/`@in>N` lane come off, and only then the **declared** alias table
+    applies — the per-model `aliases` lists in `config/pricing.json` (`LIGHTTRACK_MODEL_ALIASES` still
+    overrides the file, in either that shape or the pre-M8 `model_aliases.json` one). So `gpt-4o`,
+    `openai/gpt-4o` and `gpt-4o-2024-08-06` are one row, an identity absent from the table passes
+    through unchanged, and rows never merge on *family*: an unmodeled provider keeps its own id rather
+    than being folded into the lab it proxies.
 - **Benchmark rigor rides the digest (schema v3).** Rounds 4 and 5 built exactly the signals that
   answer "should I trust this number" — determinism stamps, frozen datasets, significance-tested
   verdicts — and none of them used to reach the collective, so a pinned exact-determinism run against a
@@ -703,6 +961,22 @@ dataset_items(id, dataset_id, input, expected?, context?, tags, source_event_id?
 -- live in the prompt registry (prompts / prompt_versions).
 benchmark_runs(... + p50_latency_ms, p95_latency_ms, total_tokens, cost_usd, report)
 -- Case results are NOT a separate table: a case result IS a score row, run-scoped.
+-- M11: the human verdict ledger and the calibration history. The ground truth a judge is measured
+-- against, and the fact both gates read.
+labels(id, project_id, subject_kind, subject_id, rubric_id?, value, pass?, dimensions?, labeler,
+       note?, created_at)
+       -- subject_kind = event | dataset_item | score. TWO columns, not one "kind:id" string, for
+       --   the reason M9 split scores.rubric: a column carrying several encodings cannot be
+       --   indexed or joined, and the dataset read IS a join.
+       -- Indexed by (subject_kind, subject_id) and (project_id, created_at).
+calibrations(id, project_id, judge, rubric_id?, dataset_id?, dataset_version?,
+             kappa, pearson, mae, rmse, n, kappa_bar, trusted, created_at)
+       -- Append-only: a re-measurement is a new row, because the history is what a drift check
+       --   reads. kappa_bar is stored beside kappa so raising the bar cannot re-verdict history.
+       -- Indexed by (project_id, judge, rubric_id, created_at) - the lookup every gate makes,
+       --   matched with `rubric_id IS NULL` for the freeform judge (never `= NULL`, which is never
+       --   true in SQL and would make a freeform calibration unfindable).
+projects(... + require_trusted_judge)   -- the per-project gate policy; default OFF
 scores(id, project_id, event_id?, rubric, value, max, pass?, reasoning?, detail?,
        run_id?, case_index?, scored_by, cost_usd?, created_at)
        -- detail    = core::ScoreDetail as JSON: per-dimension {value, weight, floor, floor_hit,

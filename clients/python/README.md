@@ -4,6 +4,12 @@ Fire-and-forget client for ingesting LLM call events into [LightTrack](https://g
 Stdlib only (no third-party dependencies); sends happen on a background thread and never raise into
 your app.
 
+**What this SDK can do, next to the other two:** the generated capability matrix in
+[`clients/README.md`](../README.md#what-each-sdk-can-do) — rendered from
+[`lighttrack.manifest.json`](lighttrack.manifest.json), not from prose. The behaviour it shares with
+the TypeScript and Rust clients is pinned by [`clients/contract/`](../contract/) and asserted here by
+`tests/test_contract.py`.
+
 ## Install
 
 ```bash

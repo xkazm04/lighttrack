@@ -7,3 +7,9 @@ description = "Markdown rendering of LightTrack API responses — shared by the 
 
 [dependencies]
 serde_json.workspace = true
+
+[dev-dependencies]
+# The endpoint contract, for the two-directional dispatch tests. A dev dependency on purpose: this
+# crate renders whatever Value it is handed and must not need the route table at runtime — the
+# table is how the tests know which kinds should exist, not how rendering works.
+lighttrack-contract.workspace = true

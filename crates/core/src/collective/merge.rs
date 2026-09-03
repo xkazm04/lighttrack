@@ -409,8 +409,7 @@ pub fn merge_leaderboard(
         .map(
             |((provider, model, task_type), (a, max_source_share, between))| {
                 let judge_providers: Vec<String> = a.judge_providers.iter().cloned().collect();
-                let mixed_judges =
-                    (judge_providers.len() > 1).then_some(judge_providers.len() as u32);
+                let mixed_judges = mixed_judges_of(&judge_providers);
                 let rigor = a.row_rigor();
                 let mixed_rigor = rigor.is_mixed();
                 LeaderboardRow {
@@ -439,6 +438,15 @@ pub fn merge_leaderboard(
         .collect();
     sort_by_quality(&mut out, |r| (r.quality, &r.provider, &r.model));
     out
+}
+
+/// How many judge families a row's number was scored under, when that is more than one. A source
+/// tagged `mixed` already disagreed with itself, so it stands for at least two families: a row built
+/// from one such source is incommensurable exactly like a row judged by two contributors' different
+/// judges, and must not read as single-judge because only one tag is on it.
+fn mixed_judges_of(judge_providers: &[String]) -> Option<u32> {
+    let families = judge_providers.len() + judge_providers.iter().filter(|j| *j == "mixed").count();
+    (families > 1).then_some(families as u32)
 }
 
 /// Sort highest-quality first; ties broken by provider then model for stable output.
@@ -776,6 +784,25 @@ mod tests {
         );
         assert!(rows[0].mixed_judges.is_none());
         assert_eq!(rows[0].judge_providers, vec!["anthropic".to_string()]);
+        // A single source whose own bucket mixed judges is not a single-judge row: before, the one
+        // `mixed` tag counted as one family and the row read as commensurable.
+        let rows = merge_leaderboard(
+            &[judged("a", "haiku", 0.8, 50, None, Some("mixed"))],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert_eq!(
+            rows[0].mixed_judges,
+            Some(2),
+            "mixed stands for at least two"
+        );
+        let rows = merge_leaderboard(
+            &[
+                judged("a", "haiku", 0.8, 50, None, Some("mixed")),
+                judged("b", "haiku", 0.8, 50, None, Some("openai")),
+            ],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert_eq!(rows[0].mixed_judges, Some(3));
     }
 
     #[test]
