@@ -62,7 +62,7 @@ pub use bench_target::{
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use calibration_record::{CalibrationRecord, JudgeTrust, JudgeTrustVerdict};
 pub use collective::{
-    bucket_cost, build_digest, canon_determinism, digest_sha256, hub_url_hash, merge_leaderboard,
+    bucket_cost, build_digest, build_digest_counted, canon_determinism, digest_sha256, hub_url_hash, merge_leaderboard,
     normalize_hub_url, task_type_from, CollectiveDigest, CollectiveEntry, ContributionRecord,
     ContributionStatus, Coverage, LeaderboardRow, ModelAliases, ModelDigestEntry, RowRigor,
     RunStat, DEFAULT_LOW_CONFIDENCE_CASES, DEFAULT_MIN_CASES, DETERMINISM_LEVELS,

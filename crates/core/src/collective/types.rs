@@ -110,6 +110,11 @@ pub struct CollectiveDigest {
     pub projects_included: u32,
     #[serde(default)]
     pub projects_excluded: u32,
+    /// How many buckets the k-anonymity case floor withheld from `entries`. Disclosure, so an
+    /// empty board reads as "held back" rather than "nobody measured this"; not part of the
+    /// contribution hash, which gates on evidence rather than on what was suppressed.
+    #[serde(default)]
+    pub buckets_withheld: u32,
     #[serde(default)]
     pub entries: Vec<ModelDigestEntry>,
 }

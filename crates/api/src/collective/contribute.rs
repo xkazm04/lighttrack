@@ -273,6 +273,7 @@ mod tests {
             min_cases: 5,
             projects_included: 1,
             projects_excluded: 0,
+            buckets_withheld: 0,
             entries: Vec::new(),
         }
     }
