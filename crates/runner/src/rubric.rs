@@ -51,7 +51,7 @@ pub(crate) fn run_rubric_benchmark(
     // Minted before judging so every posted case is run-scoped even if the run post later fails.
     let run_id = lighttrack_core::new_id();
     let (jp, jm) = parse_judge_spec(&bench.judge_model);
-    let prices: Vec<ModelPriceRow> = get(cli, http, "/v1/prices").unwrap_or_default();
+    let prices: Vec<ModelPriceRow> = crate::bench::fetch_prices(cli, http);
     // Deterministic dimensions are checked locally: they cost no tokens and are never sampled, so
     // say how many of the rubric's dimensions the judge model is actually paid to score.
     let mechanical = rubric
