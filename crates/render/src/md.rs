@@ -217,6 +217,25 @@ pub(crate) fn short_ts(s: &str) -> String {
     }
 }
 
+/// `body` in a fenced code block that the body cannot close early: the fence is one backtick longer
+/// than the longest run inside it (CommonMark's nesting rule), so a payload or a job result that
+/// itself contains ``` stays inside the block instead of spilling into the page as Markdown.
+pub(crate) fn fenced(lang: &str, body: &str) -> String {
+    let mut longest = 0;
+    let mut run = 0;
+    for c in body.chars() {
+        if c == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    let fence = "`".repeat(longest.max(2) + 1);
+    let nl = if body.ends_with('\n') { "" } else { "\n" };
+    format!("{fence}{lang}\n{body}{nl}{fence}\n")
+}
+
 /// Truncate to at most `n` chars, appending `…` when shortened.
 pub(crate) fn trunc(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
@@ -311,6 +330,15 @@ mod tests {
         let accented = "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}";
         assert_eq!(short_ts(accented), accented);
         assert_eq!(short_ts("2026-06-17Tnot:ok"), "2026-06-17Tnot:ok");
+    }
+
+    #[test]
+    fn a_fenced_body_cannot_close_its_own_fence() {
+        assert_eq!(fenced("", "hello"), "```\nhello\n```\n");
+        let body = "say:\n```json\n{}\n```\ndone";
+        let out = fenced("json", body);
+        assert!(out.starts_with("````json\n"), "{out}");
+        assert!(out.ends_with("\ndone\n````\n"), "{out}");
     }
 
     #[test]

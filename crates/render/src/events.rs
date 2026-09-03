@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use crate::md::{
-    commafy, money, opt_f, opt_s, opt_u, s, short_ts, status_glyph, trunc, u, Align, Table,
+    commafy, fenced, money, opt_f, opt_s, opt_u, s, short_ts, status_glyph, trunc, u, Align, Table,
 };
 
 pub(crate) fn list(v: &Value) -> Option<String> {
@@ -127,5 +127,24 @@ fn payload_block(label: &str, v: &Value) -> String {
         Some(s) => s.to_string(),
         None => serde_json::to_string_pretty(v).unwrap_or_default(),
     };
-    format!("\n**{label}:**\n```\n{}\n```\n", trunc(&raw, 4000))
+    format!("\n**{label}:**\n{}", fenced("", &trunc(&raw, 4000)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detail;
+    use serde_json::json;
+
+    /// An LLM output that itself contains a code fence used to close the payload block early and
+    /// render the rest of the answer as page Markdown.
+    #[test]
+    fn a_payload_containing_a_fence_stays_inside_its_block() {
+        let md = detail(&json!({
+            "id": "ev-1", "ts": "2026-06-17T12:34:56Z", "provider": "p", "model": "m",
+            "output": "Here:\n```python\nprint(1)\n```\nDone."
+        }))
+        .unwrap();
+        assert!(md.contains("\n````\nHere:"), "{md}");
+        assert!(md.trim_end().ends_with("Done.\n````"), "{md}");
+    }
 }

@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::md::{opt_s, s, short_ts, status_glyph, trunc, u, Align, Table};
+use crate::md::{fenced, opt_s, s, short_ts, status_glyph, trunc, u, Align, Table};
 
 pub(crate) fn list(v: &Value) -> Option<String> {
     let rows = v.as_array()?;
@@ -61,8 +61,8 @@ pub(crate) fn detail(v: &Value) -> Option<String> {
     if let Some(res) = v.get("result").filter(|r| !r.is_null()) {
         let pretty = serde_json::to_string_pretty(res).unwrap_or_default();
         out.push_str(&format!(
-            "\n**Result:**\n```json\n{}\n```\n",
-            trunc(&pretty, 1500)
+            "\n**Result:**\n{}",
+            fenced("json", &trunc(&pretty, 1500))
         ));
     }
     Some(out)
