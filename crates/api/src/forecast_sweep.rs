@@ -232,8 +232,26 @@ async fn forecast_alerts_for(
     Ok(guardrail_pass(st, project).await?.0)
 }
 
+/// `None` when unset or blank. A value that is set but unparseable is announced rather than treated
+/// as unset: `LIGHTTRACK_FORECAST_SWEEP_SECS=5m` used to switch the sweep off with no trace, which
+/// is the failure the startup banner exists to prevent.
 fn env_u64(key: &str) -> Option<u64> {
-    std::env::var(key).ok()?.trim().parse().ok()
+    let raw = std::env::var(key).ok()?;
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    match raw.parse() {
+        Ok(v) => Some(v),
+        Err(_) => {
+            tracing::warn!(
+                key,
+                value = raw,
+                "not a whole number of seconds/days; treating it as unset"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
