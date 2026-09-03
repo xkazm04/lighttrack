@@ -212,12 +212,16 @@ impl Redactor {
 /// * `product_id` — same, for per-product attribution.
 /// * `cost_source` — a closed vocabulary (`client` | `book`) the server stamps.
 /// * `pricing_mode` — a closed vocabulary the price book resolves against.
-const METADATA_PASSTHROUGH: [&str; 5] = [
+/// * `failure_class` — a closed vocabulary (`transient` | `terminal` | `unknown`) the ingest
+///   boundary validates. Scrubbing it would send every failure downstream as if its producer had
+///   said nothing, which is precisely the state the field exists to distinguish from.
+const METADATA_PASSTHROUGH: [&str; 6] = [
     "api_key_id",
     "customer_id",
     "product_id",
     "cost_source",
     "pricing_mode",
+    "failure_class",
 ];
 
 /// Every client-supplied surface, scrubbed. Split out of [`Redactor::redact_event`] so the whole

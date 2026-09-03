@@ -35,7 +35,9 @@ pub use collective::{
 pub use customer::{BillingProduct, Customer};
 pub use dataset::{Dataset, DatasetItem};
 pub use error::LtError;
-pub use event::{LlmEvent, Operation, Provider, Status, TokenUsage};
+pub use event::{
+    FailureClass, LlmEvent, Operation, Provider, Status, TokenUsage, FAILURE_CLASS_KEY,
+};
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
 pub use job::{
     job_is_terminal, Job, JobCancel, JobFinish, JOB_ERROR_PREFIX_FAILURE, JOB_ERROR_WORKER_LOST,

@@ -3,13 +3,14 @@
 //! investigate → report, diagnosis-only (fixing a quality drop is a human judgment call, not an
 //! auto-edit). Runs on a detached task spawned by the webhook handler, so every step just logs.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
 
 use crate::breaker::Breaker;
-use crate::classify::{classify, Class};
+use crate::classify::{decide, Class, Source};
 use crate::config::{Config, ProjectEntry};
 use crate::webhook::{Drop, Spike, Trigger};
 use crate::{act, email, enrich, investigate, report};
@@ -50,15 +51,32 @@ fn admit(
 
 async fn run_error(cfg: &Config, breaker: &Breaker, entry: &ProjectEntry, spike: &Spike) {
     let project = &spike.project_id;
-    match classify(spike.status.as_deref(), spike.error.as_deref()) {
+    // Read the class the PRODUCER minted first; fall back to reading the message only when it said
+    // nothing. Which branch ran is counted, because "how often are we still guessing" is the number
+    // that says whether carrying the class was worth doing.
+    let (class, source) = decide(
+        spike.failure_class.as_deref(),
+        spike.status.as_deref(),
+        spike.error.as_deref(),
+    );
+    CLASSIFIED.record(class, source);
+    match class {
         Class::Transient => {
             println!(
-                "[responder] '{project}': transient/provider error — no code investigation (error: {})",
+                "[responder] '{project}': transient/provider error — no code investigation                  (class={}, error: {})",
+                label(source),
                 spike.error.as_deref().unwrap_or("")
             );
             return;
         }
         Class::Code => {}
+    }
+    if source == Source::Fallback {
+        // Not a failure — it is the honest handling for a producer that said nothing — but it is a
+        // paid decision made by reading prose, so it is visible rather than silent.
+        println!(
+            "[responder] '{project}': no carried failure class — spending an investigation on a              verdict read from the message"
+        );
     }
 
     // Gate the paid investigation after classification, so transient errors (which never spawn)
@@ -205,5 +223,72 @@ fn log_act(project: &str, o: &act::ActOutcome) {
         );
     } else {
         println!("[responder] '{project}': auto-fix made no changes (no confident fix)");
+    }
+}
+
+/// How each verdict was reached, over the life of the process.
+///
+/// Before this, `pipeline.rs`'s transient branch only printed, so nothing anywhere recorded how
+/// often the classifier was right, wrong, or guessing — the measurable the direction asks for did
+/// not exist to be read. Two numbers matter and both are here: investigations SKIPPED as transient
+/// (money not spent), and investigations SPENT on a verdict that came from reading a message
+/// (`code_fallback` — the population every false `Class::Code` is drawn from, each one a real
+/// Claude Code run against a codebase with no bug in it).
+#[derive(Default)]
+pub(crate) struct Classified {
+    pub transient_carried: AtomicU64,
+    pub transient_fallback: AtomicU64,
+    pub code_carried: AtomicU64,
+    pub code_fallback: AtomicU64,
+}
+
+impl Classified {
+    pub(crate) fn record(&self, class: Class, source: Source) {
+        let counter = match (class, source) {
+            (Class::Transient, Source::Carried) => &self.transient_carried,
+            (Class::Transient, Source::Fallback) => &self.transient_fallback,
+            (Class::Code, Source::Carried) => &self.code_carried,
+            (Class::Code, Source::Fallback) => &self.code_fallback,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn get(&self, class: Class, source: Source) -> u64 {
+        let counter = match (class, source) {
+            (Class::Transient, Source::Carried) => &self.transient_carried,
+            (Class::Transient, Source::Fallback) => &self.transient_fallback,
+            (Class::Code, Source::Carried) => &self.code_carried,
+            (Class::Code, Source::Fallback) => &self.code_fallback,
+        };
+        counter.load(Ordering::Relaxed)
+    }
+
+    /// Decisions still being made by reading prose, as a fraction of all of them. The number this
+    /// direction moves; 1.0 is where it started, because there was no other path.
+    pub(crate) fn fallback_rate(&self) -> f64 {
+        let fallback =
+            self.get(Class::Transient, Source::Fallback) + self.get(Class::Code, Source::Fallback);
+        let total = fallback
+            + self.get(Class::Transient, Source::Carried)
+            + self.get(Class::Code, Source::Carried);
+        if total == 0 {
+            0.0
+        } else {
+            fallback as f64 / total as f64
+        }
+    }
+}
+
+pub(crate) static CLASSIFIED: Classified = Classified {
+    transient_carried: AtomicU64::new(0),
+    transient_fallback: AtomicU64::new(0),
+    code_carried: AtomicU64::new(0),
+    code_fallback: AtomicU64::new(0),
+};
+
+fn label(source: Source) -> &'static str {
+    match source {
+        Source::Carried => "carried from the producer",
+        Source::Fallback => "read from the message",
     }
 }

@@ -102,7 +102,7 @@
       ]
     },
     {
-      "api_surface": "GET /health",
+      "api_surface": "GET /health, GET /health/live, GET /health/ready",
       "business_feature": "API Server",
       "category": "api",
       "cross_refs": [

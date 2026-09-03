@@ -10,6 +10,9 @@ name = "lt-responder"
 path = "src/main.rs"
 
 [dependencies]
+# For `FailureClass` alone: the wire vocabulary of the class the producer minted has ONE address, so
+# this crate cannot grow a second, subtly different one beside the ingest boundary's.
+lighttrack-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

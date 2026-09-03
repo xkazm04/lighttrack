@@ -60,6 +60,7 @@ gate test "" "cargo test --workspace"
 
 if [ "$FAST" -eq 0 ]; then
     gate conformance "" "cargo test -p lighttrack-store --test sqlite_conformance"
+    gate chart-policy "" "cargo test -p lighttrack-core --test chart_policy_guard"
     gate audit-policy cargo-deny "cargo deny --locked check bans licenses sources"
     gate audit-secrets gitleaks "gitleaks git . --config .gitleaks.toml --redact --no-banner"
     gate test-client-rust "" "cargo test --manifest-path clients/rust/Cargo.toml"

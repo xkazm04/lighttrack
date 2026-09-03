@@ -5,7 +5,9 @@
 //! `jobs`, `projects`, `limits`); shared plumbing in `state`, `error`, `guards`, `auth`.
 //!
 //! Routes:
-//!   GET  /health
+//!   GET  /health                        operator rollup: `ok`, or 503 naming the red member
+//!   GET  /health/live                   liveness: is this PROCESS wedged (observes nothing else)
+//!   GET  /health/ready                  readiness: can this pod serve (observes the real store)
 //!   POST /v1/events                      ingest one event (cost computed; limits evaluated)
 //!   GET  /v1/ingest/status               load-shedding view: in-flight depth + shed/timeout counts
 //!   GET  /v1/storage/status              (admin) disk accounting per table + index, the store's own
@@ -140,6 +142,7 @@ mod forecast;
 mod forecast_alerts;
 mod forecast_sweep;
 mod guards;
+mod health;
 mod idempotency;
 mod jobs;
 mod limits;
@@ -168,6 +171,8 @@ mod tests_collective;
 mod tests_dev_mode;
 #[cfg(test)]
 mod tests_forecast;
+#[cfg(test)]
+mod tests_health;
 #[cfg(test)]
 mod tests_ingest;
 #[cfg(test)]
@@ -385,7 +390,14 @@ pub(crate) fn build_router(state: AppState) -> Router {
     // `/v1/ingest/status`, the surface that says whether we ARE shedding) stay answerable.
     let shed_ingest = axum::middleware::from_fn_with_state(state.clone(), shed::ingest_admission);
     Router::new()
-        .route("/health", get(health))
+        // One process, two answers, plus the rollup. `/health/live` answers "is this process
+        // wedged?" and touches nothing outside the process; `/health/ready` answers "should
+        // traffic arrive?" and observes the real store. Pointing a restarter at the second turns a
+        // slow dependency into a restart loop; pointing a router at the first sends traffic to a
+        // pod that is up and cannot serve. `/health` stays the operator rollup — see `health`.
+        .route("/health", get(health::composite))
+        .route("/health/live", get(health::live))
+        .route("/health/ready", get(health::ready))
         .route(
             "/v1/events",
             post(events::post_event)
@@ -536,8 +548,4 @@ pub(crate) fn build_router(state: AppState) -> Router {
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
-}
-
-async fn health() -> &'static str {
-    "ok"
 }

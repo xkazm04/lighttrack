@@ -23,6 +23,12 @@ pub(crate) struct Spike {
     pub status: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    /// The class the PRODUCER minted, carried from the ingest boundary (`metadata.failure_class` on
+    /// the event → the alert payload → here). `None` for a spike from an older LightTrack that did
+    /// not send it; `Some("unknown")` when it did send one and the producer had nothing to say.
+    /// Both fall back to reading the message, which is the only honest thing left at this layer.
+    #[serde(default)]
+    pub failure_class: Option<String>,
 }
 
 /// The `drop` object LightTrack's alerter emits for a `score_drop` (quality regression) event.

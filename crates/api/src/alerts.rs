@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use lighttrack_core::{LimitStatus, LlmEvent, RelayTask, Score};
+use lighttrack_core::{FailureClass, LimitStatus, LlmEvent, RelayTask, Score};
 use lighttrack_store::SqliteStore;
 
 use crate::forecast_alerts::ForecastAlert;
@@ -72,6 +72,10 @@ struct ErrorSpike {
     model: String,
     status: String,
     error: Option<String>,
+    /// The PRODUCER's verdict, carried through rather than re-derived downstream. `unknown` when the
+    /// SDK did not send one — which is the signal the responder needs to know it must fall back to
+    /// reading the message, instead of silently doing so for every event.
+    failure_class: FailureClass,
 }
 
 /// A detected quality regression: the recent mean score for one (project, rubric) has fallen well
@@ -353,6 +357,7 @@ impl Alerter {
             model: ev.model.clone(),
             status: ev.status.as_str().to_string(),
             error: ev.error.clone(),
+            failure_class: ev.failure_class(),
         };
         let me = Arc::clone(self);
         tokio::spawn(
