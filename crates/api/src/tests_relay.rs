@@ -768,6 +768,41 @@ async fn idempotency_key_collapses_duplicate_enqueues() {
 
     let (_, listed) = call(&app, "GET", "/v1/relay/tasks?status=queued", &key_a, None).await;
     assert_eq!(listed.as_array().unwrap().len(), 1);
+
+    // The same key for DIFFERENT work is not a replay: it used to answer with the old task, so the
+    // caller believed its new action was queued when nothing was.
+    let (status, refused) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "xprice/reprice", "idempotency_key": "order-42" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("order-42"),
+        "{refused}"
+    );
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(
+            json!({ "action_type": "xprice/summary", "idempotency_key": "order-42",
+                     "payload": { "sku": "changed" } }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a changed payload is different work too"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

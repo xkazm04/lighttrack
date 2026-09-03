@@ -153,6 +153,17 @@ pub(crate) async fn enqueue_task(
         if let Some(existing) =
             spawn_db(move || store.find_relay_task_by_key(&project2, &key)).await?
         {
+            // A replay is the SAME request again. The same key with a different action or payload
+            // is a caller reusing keys across distinct work, and answering it with the old task
+            // told them their new work was queued when nothing was. Stripe's rule, for Stripe's
+            // reason: 409, naming the key.
+            if existing.action_type != action_type || existing.payload != req.payload {
+                return Err(ApiError::conflict(format!(
+                    "idempotency_key {:?} was already used for a different request (action                      {:?}); pick a new key for new work",
+                    req.idempotency_key.as_deref().unwrap_or_default(),
+                    existing.action_type
+                )));
+            }
             let admission = admit(&st, &existing.action_type).await;
             // No budget check on this arm: the task already exists, so answering with it enqueues
             // nothing. Refusing a replay would break idempotency exactly when a caller is retrying.
