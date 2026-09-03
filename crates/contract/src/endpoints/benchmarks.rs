@@ -19,7 +19,18 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             b("rubric", JsonTy::String, "freeform rubric text (single-score mode)"),
             b("rubric_id", JsonTy::String, "structured rubric id (per-dimension mode)"),
             b("judge_model", JsonTy::String, "[provider/]model (default opus@xhigh)"),
-            b("target", JsonTy::Object, "single generation target; superseded by `targets`"),
+            // The first row to carry a removal marker. `target` and `targets` have been two ways
+            // to say the same thing since the comparison matrix landed; a self-hosted caller that
+            // still sends `target` now learns the version that stops accepting it from
+            // /openapi.json and /v1/capabilities, not from a release note.
+            Param {
+                deprecated: Some(Deprecation {
+                    stage: DeprecationStage::Advertised,
+                    removed_in: "0.2.0",
+                    replacement: "send a one-element `targets` array instead",
+                }),
+                ..b("target", JsonTy::Object, "single generation target; superseded by `targets`")
+            },
             Param {
                 name: "targets",
                 kind: ParamKind::Body,
