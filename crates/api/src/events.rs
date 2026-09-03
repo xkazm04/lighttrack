@@ -63,6 +63,7 @@ pub(crate) fn prepare_event(
         ev.ensure_cost(&book);
     }
     mark_cost_source(ev, client_supplied);
+    normalize_failure_class(ev);
     Ok(())
 }
 
@@ -128,6 +129,58 @@ fn mark_cost_source(ev: &mut LlmEvent, client_supplied: bool) {
             *v = Value::Object([("cost_source".to_string(), src)].into_iter().collect())
         }
         _ => {} // non-object, non-null metadata is client-owned: don't clobber it
+    }
+}
+
+/// Canonicalize the producer's failure class at the boundary: accept it, VALIDATE it against the
+/// closed vocabulary, and default it to `unknown` when it is absent — never infer it.
+///
+/// This is the ingest half of the layering rule. The class is minted where the structured response
+/// still exists (in the caller's process, inside the SDK that held the provider's status code) and
+/// the API's job is to accept a fact, not to manufacture one: an event whose producer said nothing
+/// stays `unknown`, and `crates/responder` runs its prose fallback on exactly those. Inferring a
+/// class here from `ev.error` would be the same mistake one layer earlier, and would erase the
+/// distinction between "the producer said terminal" and "nobody knows".
+///
+/// A value outside the vocabulary is quarantined to `unknown` rather than passed through, so a
+/// client cannot invent a class that a downstream `match` has no arm for.
+///
+/// Stamped explicitly (including `unknown`) on failures, so a stored row states what the producer
+/// said instead of leaving a consumer to guess whether the field was absent or the row predates it.
+/// A successful call carries no class at all — there is no failure to classify — and any the client
+/// sent is removed.
+fn normalize_failure_class(ev: &mut LlmEvent) {
+    let failed = !matches!(ev.status, lighttrack_core::Status::Success);
+    let canonical = ev
+        .metadata
+        .get(lighttrack_core::FAILURE_CLASS_KEY)
+        .and_then(Value::as_str)
+        .map(lighttrack_core::FailureClass::from_wire)
+        .unwrap_or_default();
+    match &mut ev.metadata {
+        Value::Object(m) => {
+            if failed {
+                m.insert(
+                    lighttrack_core::FAILURE_CLASS_KEY.to_string(),
+                    Value::String(canonical.as_str().to_string()),
+                );
+            } else {
+                m.remove(lighttrack_core::FAILURE_CLASS_KEY);
+            }
+        }
+        v @ Value::Null if failed => {
+            *v = Value::Object(
+                [(
+                    lighttrack_core::FAILURE_CLASS_KEY.to_string(),
+                    Value::String(canonical.as_str().to_string()),
+                )]
+                .into_iter()
+                .collect(),
+            )
+        }
+        // Null metadata on a success, or non-object metadata (client-owned scalar/array — it can
+        // carry no class to launder): nothing to do.
+        _ => {}
     }
 }
 

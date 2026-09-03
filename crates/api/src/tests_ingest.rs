@@ -2032,3 +2032,83 @@ async fn a_shed_is_ledgered_and_is_never_confusable_with_server_overload() {
         "{body}"
     );
 }
+
+#[tokio::test]
+async fn the_failure_class_is_accepted_validated_and_defaulted_at_the_boundary() {
+    // The ingest half of "classification happens once, at the boundary, against structure". The API
+    // accepts a fact the producer minted where the provider's response was still in hand; it does
+    // not manufacture one, and it does not let a producer invent a word.
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-fc");
+    let app = crate::build_router(state);
+
+    let failure = |class: Option<&str>| {
+        let mut meta = json!({});
+        if let Some(c) = class {
+            meta["failure_class"] = json!(c);
+        }
+        json!({
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "status": "error",
+            "error": "overloaded_error: Overloaded",
+            "usage": { "input": 10, "output": 5 },
+            "metadata": meta
+        })
+    };
+
+    // A class the producer stated, carried through verbatim.
+    let (status, _) = ingest(&app, &key, failure(Some("transient"))).await;
+    assert_eq!(status, StatusCode::OK);
+    // A word outside the closed vocabulary is quarantined, not passed to a downstream `match`.
+    let (status, _) = ingest(&app, &key, failure(Some("retryable"))).await;
+    assert_eq!(status, StatusCode::OK);
+    // Absent means `unknown` — stamped explicitly, never inferred from the message. The message
+    // here says "Overloaded", and the boundary still refuses to guess: guessing here would erase
+    // the difference between "the producer said transient" and "nobody knows".
+    let (status, _) = ingest(&app, &key, failure(None)).await;
+    assert_eq!(status, StatusCode::OK);
+    // A success has no failure to classify, and any class the client sent is removed.
+    let (status, _) = ingest(
+        &app,
+        &key,
+        json!({
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "usage": { "input": 1, "output": 1 },
+            "metadata": { "failure_class": "terminal" }
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let rows = store.list_events(Some("proj-fc"), 10).unwrap();
+    assert_eq!(rows.len(), 4);
+    let classes: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.status.as_str(),
+                r.metadata
+                    .get("failure_class")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            )
+        })
+        .collect();
+    // Newest first.
+    assert_eq!(classes[0], ("success", None), "a success carries no class");
+    assert_eq!(classes[1], ("error", Some("unknown".into())));
+    assert_eq!(
+        classes[2],
+        ("error", Some("unknown".into())),
+        "`retryable` is not in the vocabulary and must not survive as itself"
+    );
+    assert_eq!(classes[3], ("error", Some("transient".into())));
+
+    // And the typed accessor every consumer reads it through agrees with the stored literal.
+    use lighttrack_core::FailureClass;
+    assert_eq!(rows[3].failure_class(), FailureClass::Transient);
+    assert_eq!(rows[2].failure_class(), FailureClass::Unknown);
+    assert_eq!(rows[0].failure_class(), FailureClass::Unknown);
+}
