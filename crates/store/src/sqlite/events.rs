@@ -20,10 +20,18 @@ use crate::{
 
 /// Map a failed event insert to a typed error: a primary-key / uniqueness violation (a duplicate
 /// event `id`) becomes [`StoreError::Conflict`] so the API returns 409, not an opaque 500. Anything
-/// else keeps its native `Sqlite` mapping.
+/// else keeps its native `Sqlite` mapping — including the *other* constraint violations (a NOT
+/// NULL, a CHECK), which used to be reported as "already exists" too: a row the schema refused for
+/// being malformed was answered with a 409 that named a duplicate that did not exist.
 fn insert_err(e: rusqlite::Error, id: &str) -> StoreError {
+    /// `SQLITE_CONSTRAINT_PRIMARYKEY` and `SQLITE_CONSTRAINT_UNIQUE` — the two extended codes that
+    /// mean "this key is taken".
+    const DUPLICATE_KEY: [i32; 2] = [1555, 2067];
     match &e {
-        rusqlite::Error::SqliteFailure(f, _) if f.code == ErrorCode::ConstraintViolation => {
+        rusqlite::Error::SqliteFailure(f, _)
+            if f.code == ErrorCode::ConstraintViolation
+                && DUPLICATE_KEY.contains(&f.extended_code) =>
+        {
             StoreError::Conflict(format!("event '{id}' already exists"))
         }
         _ => e.into(),
@@ -997,4 +1005,38 @@ pub(super) fn usecase_costs(
         }
     };
     Ok(rows)
+}
+
+#[cfg(test)]
+mod insert_err_tests {
+    use super::insert_err;
+    use crate::StoreError;
+    use rusqlite::{ffi, Error, ErrorCode};
+
+    fn failure(extended_code: i32) -> Error {
+        Error::SqliteFailure(
+            ffi::Error {
+                code: ErrorCode::ConstraintViolation,
+                extended_code,
+            },
+            None,
+        )
+    }
+
+    /// A taken key is a 409; a NOT NULL or CHECK violation is a malformed row, not a duplicate.
+    #[test]
+    fn only_a_taken_key_reads_as_a_duplicate() {
+        assert!(matches!(
+            insert_err(failure(ffi::SQLITE_CONSTRAINT_PRIMARYKEY), "e"),
+            StoreError::Conflict(_)
+        ));
+        assert!(matches!(
+            insert_err(failure(ffi::SQLITE_CONSTRAINT_UNIQUE), "e"),
+            StoreError::Conflict(_)
+        ));
+        assert!(matches!(
+            insert_err(failure(ffi::SQLITE_CONSTRAINT_NOTNULL), "e"),
+            StoreError::Sqlite(_)
+        ));
+    }
 }
