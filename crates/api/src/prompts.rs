@@ -10,7 +10,7 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use lighttrack_core::{new_id, JudgeTrustVerdict, Prompt, PromptVersion, REASON_PROMOTE};
@@ -298,9 +298,17 @@ pub(crate) async fn get_prompt(
 
 #[derive(Deserialize)]
 pub(crate) struct LinkReq {
-    /// The benchmark whose regression check gates this prompt's promotions. `null` unlinks.
-    #[serde(default)]
-    benchmark_id: Option<String>,
+    /// The benchmark whose regression check gates this prompt's promotions. An explicit `null`
+    /// unlinks; an **absent** field is a 400. The two used to be the same `None`, so `PUT {}` —
+    /// a body with nothing in it — silently removed the quality gate from the prompt.
+    #[serde(default, deserialize_with = "present")]
+    benchmark_id: Option<Option<String>>,
+}
+
+/// Distinguish `"benchmark_id": null` (`Some(None)`) from a missing key (`None`, via the field's
+/// `default`): serde collapses both into one `Option` otherwise.
+fn present<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(d).map(Some)
 }
 
 /// Point an existing prompt at the benchmark that gates it.
@@ -319,12 +327,17 @@ pub(crate) async fn link_benchmark(
     let p = authenticate(&st, &headers).await?;
     ensure_can_admin(&p)?;
     let mut prompt = load_prompt(&st, &pid, &name).await?;
-    if let Some(bid) = &req.benchmark_id {
+    let Some(benchmark_id) = req.benchmark_id else {
+        return Err(ApiError::bad_request(
+            "benchmark_id is required: a benchmark id links it, an explicit null unlinks it",
+        ));
+    };
+    if let Some(bid) = &benchmark_id {
         // Authorize it the same way every other benchmark reference is, so a link cannot be used to
         // point one project's gate at another project's runs.
         load_benchmark_authorized(&st, &p, bid).await?;
     }
-    prompt.benchmark_id = req.benchmark_id;
+    prompt.benchmark_id = benchmark_id;
     prompt.updated_at = Utc::now();
     let store = st.store.clone();
     let p2 = prompt.clone();
@@ -526,6 +539,17 @@ mod tests {
         }
         assert!(validate_ident("label", &"x".repeat(MAX_IDENT_LEN)).is_ok());
         assert!(validate_ident("label", &"x".repeat(MAX_IDENT_LEN + 1)).is_err());
+    }
+
+    /// `PUT {}` used to unlink: the absent key and an explicit `null` both read as `None`.
+    #[test]
+    fn an_absent_benchmark_id_is_not_an_unlink() {
+        let absent: LinkReq = serde_json::from_str("{}").unwrap();
+        assert!(absent.benchmark_id.is_none(), "missing key");
+        let null: LinkReq = serde_json::from_str(r#"{"benchmark_id": null}"#).unwrap();
+        assert_eq!(null.benchmark_id, Some(None), "explicit unlink");
+        let set: LinkReq = serde_json::from_str(r#"{"benchmark_id": "b1"}"#).unwrap();
+        assert_eq!(set.benchmark_id, Some(Some("b1".into())));
     }
 
     #[test]
