@@ -43,7 +43,9 @@ pub(crate) fn schedule(
         if once {
             break;
         }
-        std::thread::sleep(Duration::from_secs(interval));
+        // `--interval 0` on a daemon is a hot loop against the API, not "as fast as possible" —
+        // the one-shot spelling is `--once`. Floored to a second, the same as `serve`.
+        std::thread::sleep(Duration::from_secs(interval.max(1)));
     }
     Ok(())
 }

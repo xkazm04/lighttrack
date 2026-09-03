@@ -84,7 +84,9 @@ pub(crate) fn serve(
             }
             None => {
                 if !once {
-                    std::thread::sleep(Duration::from_secs(interval));
+                    // A zero poll interval is a claim storm against the API; `--once` is the
+                    // spelling for "do not wait".
+                    std::thread::sleep(Duration::from_secs(interval.max(1)));
                 }
             }
         }
