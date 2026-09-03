@@ -89,6 +89,8 @@
 //!      LIGHTTRACK_INGEST_TIMEOUT_SECS (ingest deadline → 504 `timeout`; default 10, 0 = off),
 //!      LIGHTTRACK_INGEST_RETRY_AFTER_SECS (Retry-After advertised when shedding; default 1),
 //!      LIGHTTRACK_AUTH_MODE (dev|enforced), LIGHTTRACK_ADMIN_KEY,
+//!      LIGHTTRACK_ALLOW_UNAUTHENTICATED (the ONE way to start an unenforced instance; its value is
+//!        a sentence, not a flag, so it cannot be set by accident — see `credential_boundary`),
 //!      LIGHTTRACK_AUTH_MAX_FAILURES (failed credential attempts one source may make per window
 //!        before it is refused with 429 `rate_limited` + Retry-After; default 10, 0 = off),
 //!      LIGHTTRACK_AUTH_FAILURE_WINDOW_SECS (that window; default 60),
@@ -128,6 +130,7 @@ mod auth_throttle;
 mod benchmarks;
 mod billing;
 mod collective;
+mod credential_boundary;
 mod datasets;
 mod error;
 mod events;
@@ -203,6 +206,18 @@ async fn main() -> anyhow::Result<()> {
     let admin_key = std::env::var("LIGHTTRACK_ADMIN_KEY")
         .ok()
         .filter(|s| !s.is_empty());
+    // Before the store is opened, the router is built or a port is bound: an instance that
+    // authenticates nobody does not start unless someone said the sentence (see
+    // `credential_boundary`). This is the one decision that cannot be a per-request check — a guard
+    // raising inside a handler leaves the process up, the port open and the health check green.
+    credential_boundary::check_boot(
+        auth_mode,
+        admin_key.as_deref(),
+        std::env::var(credential_boundary::OPT_OUT_ENV)
+            .ok()
+            .as_deref(),
+    )?;
+
     let relay_device_key = std::env::var("LIGHTTRACK_RELAY_DEVICE_KEY")
         .ok()
         .filter(|s| !s.is_empty());
