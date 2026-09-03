@@ -238,7 +238,10 @@ fn gen_phone(rng: &mut Rng) -> String {
     }
 }
 
-/// A named PII-shape generator: `(kind, fn)`.
+/// A named PII-shape generator: `(kind, fn)`. The name is the rule `kind` it exercises, and
+/// [`every_rule_kind_has_a_generator`] derives the required set from the rule table itself — a rule
+/// added without a generator would otherwise sit outside the property suite, unpropertied and
+/// unnoticed, while the suite kept reporting green.
 type Generator = (&'static str, fn(&mut Rng) -> String);
 
 const GENERATORS: &[Generator] = &[
@@ -246,7 +249,7 @@ const GENERATORS: &[Generator] = &[
     ("ssn", gen_ssn),
     ("iban", gen_iban),
     ("secret", gen_secret),
-    ("card", gen_card),
+    ("credit_card", gen_card),
     ("ip", gen_ip),
     ("phone", gen_phone),
 ];
@@ -254,6 +257,19 @@ const GENERATORS: &[Generator] = &[
 // ---------------------------------------------------------------------------
 // The core invariant
 // ---------------------------------------------------------------------------
+
+/// The generator list is hand-maintained; the rule table is the ground truth. Every `kind` the
+/// scrubber can emit must have a generator (so the no-leak property covers it), and every generator
+/// must name a real kind (so a renamed rule cannot leave a generator exercising nothing).
+#[test]
+fn every_rule_kind_has_a_generator() {
+    let kinds: std::collections::BTreeSet<&str> = rules().iter().map(|r| r.kind).collect();
+    let generated: std::collections::BTreeSet<&str> = GENERATORS.iter().map(|g| g.0).collect();
+    assert_eq!(
+        kinds, generated,
+        "rule kinds and generators must be the same set"
+    );
+}
 
 /// Re-run *every* rule's regex over scrubbed text and assert none matches. A surviving match is a
 /// raw-PII leak past the redaction boundary.
