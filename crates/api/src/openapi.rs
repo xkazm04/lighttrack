@@ -26,6 +26,20 @@ pub(crate) async fn get_openapi() -> Json<&'static Value> {
     Json(document())
 }
 
+/// The last PUBLISHED description of this API, committed beside the SDK contract vectors.
+///
+/// The baseline is the artifact, not the source. A check that diffs the table against itself can
+/// only ever be green: whatever the source says today is, by construction, what it says. What a
+/// self-hosted caller built against is the document a release actually served, so that is the file
+/// that has to be in the repository. Refresh it deliberately, at a release, with
+/// `LIGHTTRACK_UPDATE_SURFACE_BASELINE=1 cargo test -p lighttrack-api openapi` — the same shape as
+/// the `LIGHTTRACK_UPDATE_FIXTURES` convention the SDK contract already uses.
+#[cfg(test)]
+const BASELINE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../clients/contract/openapi.baseline.json"
+);
+
 #[cfg(test)]
 mod tests {
     use axum::body::{to_bytes, Body};
@@ -140,5 +154,109 @@ mod tests {
             body["paths"]["/health"]["get"]["security"],
             serde_json::json!([])
         );
+    }
+}
+
+/// The removal gate. See `docs/DEPRECATION.md`.
+///
+/// One rule, and only one: a name the previous published document carried may not vanish from this
+/// one unless that document already marked it `deprecated`. Additions are free, prose may change,
+/// and a marked field may be removed the moment its release arrives — the check has no opinion on
+/// any of that. It has an opinion on exactly the act the policy exists to govern, which is the
+/// silent disappearance of something somebody's deployment is still sending.
+#[cfg(test)]
+mod removal_guard {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use serde_json::Value;
+
+    use super::{document, BASELINE};
+
+    /// Every addressable name in one document, mapped to whether it carried a removal marker.
+    ///
+    /// Three kinds, because those are the three a caller can actually depend on: an operation
+    /// (`POST /v1/x`), one of its parameters or body fields, and a property of a named response
+    /// schema. Anything deeper is inside a `$ref`ed component and is reached through the third.
+    fn surface(doc: &Value) -> BTreeMap<String, bool> {
+        let mut out = BTreeMap::new();
+        let marked = |v: &Value| {
+            v.get("deprecated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        };
+        if let Some(paths) = doc["paths"].as_object() {
+            for (path, item) in paths {
+                for (method, op) in item.as_object().into_iter().flatten() {
+                    let key = format!("{} {path}", method.to_uppercase());
+                    let op_marked = marked(op);
+                    out.insert(key.clone(), op_marked);
+                    for p in op["parameters"].as_array().into_iter().flatten() {
+                        if let Some(n) = p["name"].as_str() {
+                            out.insert(format!("{key} ?{n}"), op_marked || marked(p));
+                        }
+                    }
+                    let body =
+                        &op["requestBody"]["content"]["application/json"]["schema"]["properties"];
+                    for (n, f) in body.as_object().into_iter().flatten() {
+                        out.insert(format!("{key} .{n}"), op_marked || marked(f));
+                    }
+                }
+            }
+        }
+        for (name, schema) in doc["components"]["schemas"]
+            .as_object()
+            .into_iter()
+            .flatten()
+        {
+            for (field, f) in schema["properties"].as_object().into_iter().flatten() {
+                out.insert(format!("{name}.{field}"), marked(f));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn nothing_leaves_the_published_surface_unmarked() {
+        let now = document();
+        if std::env::var("LIGHTTRACK_UPDATE_SURFACE_BASELINE").is_ok() {
+            std::fs::write(
+                BASELINE,
+                format!(
+                    "{}
+",
+                    serde_json::to_string_pretty(now).expect("serialize")
+                ),
+            )
+            .expect("write baseline");
+            return;
+        }
+        let text = std::fs::read_to_string(BASELINE).unwrap_or_else(|e| {
+            panic!("{BASELINE}: {e} — the published baseline is the gate's only honest input")
+        });
+        let previous: Value = serde_json::from_str(&text).expect("baseline is valid JSON");
+
+        let before = surface(&previous);
+        let after: BTreeSet<String> = surface(now).into_keys().collect();
+        let unmarked: Vec<&str> = before
+            .iter()
+            .filter(|(k, marked)| !**marked && !after.contains(*k))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert!(
+            unmarked.is_empty(),
+            "{} name(s) left the published surface without ever carrying a removal marker: {:#?}
+             Mark them first (see docs/DEPRECATION.md), ship that release, then remove.",
+            unmarked.len(),
+            unmarked
+        );
+    }
+
+    /// The measurable this direction buys, stated rather than asserted: how many marked elements
+    /// the surface currently carries. Zero is a legitimate answer and means nothing is in flight;
+    /// it is the instrument that must exist, not the number.
+    #[test]
+    fn the_surface_reports_how_much_of_it_is_going_away() {
+        let n = surface(document()).values().filter(|m| **m).count();
+        println!("surface elements carrying a removal marker: {n}");
     }
 }

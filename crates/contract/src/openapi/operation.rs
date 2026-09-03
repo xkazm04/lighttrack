@@ -5,7 +5,7 @@ use serde_json::{json, Map, Value};
 
 use super::SchemaResolver;
 use crate::mcp::property;
-use crate::types::{Access, Endpoint, Param, ParamKind, TypeRef};
+use crate::types::{Access, Deprecation, Endpoint, Param, ParamKind, TypeRef};
 
 pub(super) fn operation(e: &Endpoint, resolve: SchemaResolver<'_>) -> Value {
     let mut op = Map::new();
@@ -23,6 +23,9 @@ pub(super) fn operation(e: &Endpoint, resolve: SchemaResolver<'_>) -> Value {
     }
     if let Some(body) = request_body(e, resolve) {
         op.insert("requestBody".into(), body);
+    }
+    if let Some(d) = e.deprecated {
+        mark(&mut op, &d);
     }
     op.insert("responses".into(), responses(e, resolve));
     if matches!(e.access, Access::Unauthenticated) {
@@ -58,14 +61,58 @@ fn describe(e: &Endpoint) -> String {
     s
 }
 
+/// Stamp a removal marker onto an operation, a parameter or a body property.
+///
+/// `deprecated: true` is OpenAPI's own word and every generator already reads it; it says only
+/// *that* the thing is going. `x-removed-in` is the half OpenAPI has no field for and the half a
+/// self-hosted operator actually needs — the release that stops serving it, so an upgrade can be
+/// planned rather than discovered. Both, because a caller that reads only the standard field must
+/// still learn something true.
+fn mark(m: &mut Map<String, Value>, d: &Deprecation) {
+    m.insert("deprecated".into(), json!(true));
+    m.insert("x-removed-in".into(), json!(d.removed_in));
+    m.insert("x-deprecation-stage".into(), json!(d.stage.as_str()));
+    let described = match m.get("description").and_then(Value::as_str) {
+        Some(existing) if !existing.is_empty() => format!(
+            "{existing}
+
+{}",
+            d.note()
+        ),
+        _ => d.note(),
+    };
+    m.insert("description".into(), json!(described));
+}
+
+/// A parameter's schema, plus its marker when it carries one. Built here rather than inside
+/// `property` because that function also feeds the MCP `inputSchema`, whose argument shapes are
+/// pinned by `crates/mcp/tool-contract.json`.
+fn marked_property(p: &Param) -> Value {
+    let mut schema = property(p);
+    if let (Some(d), Some(m)) = (p.deprecated, schema.as_object_mut()) {
+        mark(m, &d);
+    }
+    schema
+}
+
 fn parameter(p: &Param) -> Value {
-    json!({
-        "name": p.name,
-        "in": if p.kind == ParamKind::Path { "path" } else { "query" },
-        "required": p.required,
-        "description": p.doc,
-        "schema": property(p),
-    })
+    let mut m = Map::new();
+    m.insert("name".into(), json!(p.name));
+    m.insert(
+        "in".into(),
+        json!(if p.kind == ParamKind::Path {
+            "path"
+        } else {
+            "query"
+        }),
+    );
+    m.insert("required".into(), json!(p.required));
+    m.insert("description".into(), json!(p.doc));
+    m.insert("schema".into(), marked_property(p));
+    if let Some(d) = p.deprecated {
+        mark(&mut m, &d);
+    }
+    Value::Object(m)
 }
 
 fn request_body(e: &Endpoint, resolve: SchemaResolver<'_>) -> Option<Value> {
@@ -80,7 +127,7 @@ fn request_body(e: &Endpoint, resolve: SchemaResolver<'_>) -> Option<Value> {
             let mut props = Map::new();
             let mut required = Vec::new();
             for p in &fields {
-                props.insert(p.name.to_string(), property(p));
+                props.insert(p.name.to_string(), marked_property(p));
                 if p.required {
                     required.push(json!(p.name));
                 }

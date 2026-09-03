@@ -24,7 +24,10 @@ mod nested;
 pub mod openapi;
 mod types;
 
-pub use types::{Access, Endpoint, JsonTy, KeyScope, McpTool, Method, Param, ParamKind, TypeRef};
+pub use types::{
+    Access, Deprecation, DeprecationStage, Endpoint, JsonTy, KeyScope, McpTool, Method, Param,
+    ParamKind, TypeRef,
+};
 
 /// Every endpoint in the contract, in router order.
 pub fn endpoints() -> impl Iterator<Item = &'static Endpoint> {
