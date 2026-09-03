@@ -232,7 +232,18 @@ impl SqliteStore {
     /// remedies, and folding them together indicts the wrong one.
     fn with_op<R>(&self, op: DbOp, f: impl FnOnce(&Connection) -> R) -> R {
         let queued = Instant::now();
-        let conn = self.conn.lock().unwrap();
+        // A poisoned lock means one earlier closure panicked while holding the connection. The
+        // connection itself is fine — a statement or an uncommitted transaction is dropped and rolled
+        // back with the panicking frame — so it is recovered, not `unwrap()`ed: that unwrap turned
+        // one panic into a permanent outage of every store call until restart, the same failure the
+        // usage-cache lock below already refuses to have.
+        let conn = match self.conn.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                self.conn.clear_poison();
+                poisoned.into_inner()
+            }
+        };
         self.meter
             .record(DbOp::WriteLockWait, queued.elapsed(), None);
         // `total_changes` separates "the query got slower" from "the table got bigger": a write
@@ -1157,5 +1168,28 @@ impl Store for SqliteStore {
     }
     fn list_dataset_versions(&self, scope: Scope<'_>, name: &str) -> Result<Vec<Dataset>> {
         self.read(|c| dataset_fork::versions(c, scope.project(), name))
+    }
+}
+
+#[cfg(test)]
+mod poison_tests {
+    use super::*;
+
+    /// One panic inside one store closure must not take the store down: the write-connection lock
+    /// is recovered, and the next call answers.
+    #[test]
+    fn a_panic_inside_one_store_call_does_not_poison_every_later_one() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        let boom = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            store.with(|_| -> () { panic!("a closure panicked while holding the connection") })
+        }));
+        assert!(
+            boom.is_err(),
+            "the panic propagated to the caller, as it should"
+        );
+        assert!(
+            store.list_projects().is_ok(),
+            "the store answers after the poisoned lock is recovered"
+        );
     }
 }
