@@ -43,6 +43,33 @@ resources: {}
   # limits:   { cpu: 500m, memory: 256Mi }
   # requests: { cpu: 100m, memory: 128Mi }
 
+# Probes. The two kubelet consumers ask DIFFERENT questions and read DIFFERENT endpoints:
+#   /health/live   is this process wedged?   -> a red RESTARTS the pod. Observes nothing outside the
+#                                               process, so a slow or unreachable store can never
+#                                               cause a restart loop.
+#   /health/ready  should traffic arrive?    -> a red REMOVES the pod from the Service. Observes the
+#                                               real store on every probe.
+#   /health        the operator rollup       -> `ok`, or 503 naming the member that is red.
+# The one number to raise for a slow database is `startup.failureThreshold`: startup × period is how
+# long a first migration may take before the kubelet gives up (default 60 × 5s = 5 minutes), and
+# liveness does not start counting until startup has passed once.
+#
+# NOTE: a NotReady pod is QUIET. Kubernetes will hold traffic off it indefinitely and page nobody.
+# If this install has no alert on readiness, add one (docs/ALERTS.md is about limit breaches, not
+# pod state — the signal here is `kube_pod_status_ready`/`kubectl get pod` and it belongs in
+# whatever watches the cluster).
+probes:
+  startup:
+    periodSeconds: 5
+    failureThreshold: 60       # 5 minutes for a first migration against a cold or busy database
+  liveness:
+    periodSeconds: 30
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 3
+    periodSeconds: 10
+    failureThreshold: 3
+
 nodeSelector: {}
 tolerations: []
 affinity: {}

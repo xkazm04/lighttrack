@@ -49,14 +49,37 @@ spec:
                   name: {{ include "lighttrack.fullname" . }}
                   key: database-url
             {{- end }}
+          # One process, two answers, and they must not be the same answer. Both probes used to read
+          # `/health`, which was a constant: the readiness probe was a liveness probe wearing a
+          # readiness name, and the pod joined the Service the moment axum bound — cold store,
+          # unfinished migration and all.
+          #
+          # startupProbe is what makes the two thresholds independent. Liveness does not begin until
+          # this has passed once, so a long first migration (the app auto-migrates on startup when
+          # handed a Postgres DSN — deploy/cloudrun/README.md) and a wedged steady-state process stop
+          # competing for one number. Raise `probes.startup.failureThreshold` for a slow database;
+          # nothing else needs to move.
+          startupProbe:
+            httpGet: { path: /health/live, port: http }
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          # Liveness asks "is this process wedged?" and reads the endpoint that observes NOTHING
+          # outside the process. Pointing it at a dependency check makes a slow store a restart loop,
+          # and the restart makes the store slower — the opposite remedy to the one the situation
+          # wants.
           livenessProbe:
-            httpGet: { path: /health, port: http }
-            initialDelaySeconds: 5
-            periodSeconds: 30
+            httpGet: { path: /health/live, port: http }
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          # Readiness asks "should traffic arrive?" and reads the endpoint that round-trips the real
+          # store. A red here removes the pod from the Service, which is the correct remedy for
+          # "temporarily unable to serve" — and the only thing standing between a severed store and
+          # clients collecting 5xx.
           readinessProbe:
-            httpGet: { path: /health, port: http }
-            initialDelaySeconds: 3
-            periodSeconds: 10
+            httpGet: { path: /health/ready, port: http }
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
           volumeMounts:
             - name: data
               mountPath: /data

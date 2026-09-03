@@ -22,5 +22,12 @@ NOTE: using ephemeral SQLite (no databaseUrl, persistence disabled) — data is 
 Set secrets.databaseUrl to a Postgres DSN (Phase 5a) or persistence.enabled=true for durability.
 {{- end }}
 
+Health: /health is the operator rollup (`ok`, or 503 naming the red member). The kubelet reads
+/health/live for "is the process wedged" (a red restarts the pod) and /health/ready for "should
+traffic arrive" (a red removes it from the Service). A NotReady pod is QUIET — nothing here pages
+you — so if the store is unreachable you will see it as an empty Service, not as an alert:
+  kubectl get pods -l app.kubernetes.io/name=lighttrack
+  kubectl port-forward svc/{{ include "lighttrack.fullname" . }} 8787:{{ .Values.service.port }} && curl http://127.0.0.1:8787/health
+
 The lt-runner judge/queue worker runs OUTSIDE the cluster (it needs the `claude` CLI + provider keys):
   lt-runner --base <service-url> --key <admin-or-project-key> serve --interval 10
