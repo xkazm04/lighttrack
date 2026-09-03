@@ -529,3 +529,27 @@ async fn an_inverted_window_or_a_nan_cost_floor_is_a_400_not_an_empty_page() {
     let (status, _) = get(&app, &key, "/v1/traces?min_cost=0.5").await;
     assert_eq!(status, StatusCode::OK);
 }
+
+/// The whole-trace door validates the verdict's numbers with the same rule as `POST /v1/scores`.
+#[tokio::test]
+async fn a_trace_verdict_that_is_not_a_score_is_refused() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    ingest_span(&app, &key, "tr-v", "s1", None, 0.001).await;
+    for body in [
+        json!({ "rubric": "q", "value": 1.5, "max": 1.0, "scored_by": "judge" }),
+        json!({ "rubric": "q", "value": 0.5, "max": 0.0, "scored_by": "judge" }),
+        json!({ "rubric": "q", "value": 0.5, "scored_by": "" }),
+    ] {
+        let (status, v) = send(
+            &app,
+            &key,
+            "POST",
+            "/v1/traces/tr-v/score",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body} -> {v}");
+    }
+}

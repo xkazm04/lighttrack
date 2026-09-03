@@ -55,7 +55,7 @@ pub(crate) async fn post_score(
 /// NaN; SQLite stores NULL and the row silently drops out of the denominator), a `max` of 0 made
 /// every downstream ratio a division by zero, and a `value` above `max` inflated pass rates. A
 /// verdict with no judge or no label is not a verdict either.
-fn validate_verdict(s: &Score) -> Result<(), ApiError> {
+pub(crate) fn validate_verdict(s: &Score) -> Result<(), ApiError> {
     let bad = |m: String| Err(ApiError::bad_request(m));
     if !(s.max.is_finite() && s.max > 0.0) {
         return bad(format!(

@@ -288,6 +288,9 @@ pub(crate) async fn score_trace(
         created_at: Utc::now(),
     };
 
+    // The same numeric contract POST /v1/scores enforces: a NaN or an over-max value must not
+    // reach the alert window and the averages through this door either.
+    crate::scores::validate_verdict(&score)?;
     let store = st.store.clone();
     let to_insert = score.clone();
     spawn_db(move || store.insert_score(&to_insert)).await?;
