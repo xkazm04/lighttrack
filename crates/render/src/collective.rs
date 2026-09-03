@@ -54,7 +54,8 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
         .unwrap_or_default();
     // Honest footnotes: what the annotations mean.
     let mut notes = vec![
-        "p50 is an approximate case-weighted mean of contributors' medians; p95 is the worst observed.",
+        "p50 is an approximate mean of contributors' medians under the same capped source weights as \
+         quality; p95 is the worst observed.",
         "±95% is an approximate CI on quality that INCLUDES between-source disagreement (sources who \
          disagree get a wider interval, not a narrower one); `n/a` = insufficient variance data. \
          `σ` is the spread across contributing sources — shown even when no CI could be formed, and \
@@ -302,10 +303,13 @@ fn judge_cell(r: &Value, cols: &Cols) -> String {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
-        match js.len() {
-            0 => "—".into(),
-            1 => js[0].to_string(),
-            n => format!("mixed({n})"),
+        // The API's `mixed_judges` is the count of judge FAMILIES, which is not the tag count: a
+        // source tagged `mixed` already stands for two. Read the verdict, fall back to the tags.
+        match (opt_u(r, "mixed_judges"), js.len()) {
+            (Some(n), _) if n > 1 => format!("mixed({n})"),
+            (_, 0) => "—".into(),
+            (_, 1) => js[0].to_string(),
+            (_, n) => format!("mixed({n})"),
         }
     } else {
         r.get("judge_provider")
@@ -424,6 +428,17 @@ mod tests {
             "legend explains the dagger"
         );
         assert!(md.contains("mixed(2)"), "mixed judges surfaced");
+        // A lone source whose own bucket mixed judges: one tag, but the API says two families.
+        let lone = json!({ "contributors": 1, "rows": [
+            {"provider":"anthropic","model":"haiku","task_type":"qa","quality":0.8,
+             "pass_rate":0.8,"avg_cost_usd":0.002,"judge_providers":["mixed"],"mixed_judges":2,
+             "rigor":{"determinism":"exact","frozen_dataset":"all","significance_tested":"all"},
+             "n_contributors":1,"n_runs":1,"n_cases":50}
+        ]});
+        assert!(
+            leaderboard(&lone).unwrap().contains("mixed(2)"),
+            "the API's family count wins over the tag count"
+        );
         assert!(md.contains("google"), "single judge family surfaced");
         assert!(md.contains("1,200"));
         // Rigor rides the row: the weakest stamp, the all-source badges, and the mixture marker.
