@@ -117,7 +117,16 @@ pub(crate) async fn get_forecast(
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?
         .ok_or_else(|| ApiError::bad_request("project is required"))?;
-    let dim = MarginDimension::parse(q.by.as_deref().unwrap_or("customer"));
+    // Strict, as on every `/v1/margin*` route: a misspelt axis is a 400 naming the vocabulary, not a
+    // silent customer forecast an operator reads as the product one they asked for.
+    let by = q.by.as_deref().unwrap_or("customer");
+    let dim = MarginDimension::from_wire(by).ok_or_else(|| {
+        let accepted: Vec<&str> = MarginDimension::ALL.iter().map(|d| d.as_str()).collect();
+        ApiError::bad_request(format!(
+            "by must be one of {}, got {by:?}",
+            accepted.join("|")
+        ))
+    })?;
     let horizon = q.horizon.unwrap_or(14).clamp(1, 90);
     let lookback = q.lookback.unwrap_or(14).clamp(MIN_LOOKBACK_DAYS, 90);
 

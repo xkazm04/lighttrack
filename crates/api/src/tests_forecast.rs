@@ -353,6 +353,28 @@ async fn forecast_is_quiet_with_no_history() {
     );
 }
 
+/// The same strictness `/v1/margin` gained: a misspelt axis is a 400 that names the vocabulary, not
+/// a customer forecast quietly standing in for the product one that was asked for.
+#[tokio::test]
+async fn a_misspelt_dimension_is_a_400_naming_the_vocabulary() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    let (status, f) = get(&app, &key, "/v1/forecast?project=proj-a&by=produkt").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{f}");
+    let msg = f["error"]["message"]
+        .as_str()
+        .or_else(|| f["message"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        msg.contains("customer|product"),
+        "the 400 names the accepted axes: {f}"
+    );
+    let (status, _) = get(&app, &key, "/v1/forecast?project=proj-a&by=product").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn forecast_requires_a_project() {
     let (state, _store) = setup(Redactor::off());
