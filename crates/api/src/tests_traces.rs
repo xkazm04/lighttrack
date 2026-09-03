@@ -509,3 +509,23 @@ async fn the_score_door_sees_every_span_and_refuses_a_foreign_anchor() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
 }
+
+/// The listing refuses the same malformed windows `/v1/events` refuses, instead of paging back an
+/// empty array that reads as "no traces".
+#[tokio::test]
+async fn an_inverted_window_or_a_nan_cost_floor_is_a_400_not_an_empty_page() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    let (status, body) = get(
+        &app,
+        &key,
+        "/v1/traces?since=2026-02-01T00:00:00Z&until=2026-01-01T00:00:00Z",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = get(&app, &key, "/v1/traces?min_cost=NaN").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, _) = get(&app, &key, "/v1/traces?min_cost=0.5").await;
+    assert_eq!(status, StatusCode::OK);
+}

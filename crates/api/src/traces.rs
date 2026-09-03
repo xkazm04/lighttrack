@@ -74,9 +74,21 @@ pub(crate) async fn list_traces(
             return Err(ApiError::bad_request("status must be 'success' or 'error'"));
         }
     }
+    let since = parse_opt_ts("since", q.since.as_deref())?;
+    let until = parse_opt_ts("until", q.until.as_deref())?;
+    // The same refusals `/v1/events` makes: an inverted window and a non-finite cost floor both
+    // used to page back empty and read as "no such traces".
+    if let (Some(s), Some(u)) = (since, until) {
+        if u <= s {
+            return Err(ApiError::bad_request("until must be after since"));
+        }
+    }
+    if q.min_cost.is_some_and(|c| !c.is_finite()) {
+        return Err(ApiError::bad_request("min_cost must be a finite number"));
+    }
     let filter = TraceFilter {
-        since: parse_opt_ts("since", q.since.as_deref())?,
-        until: parse_opt_ts("until", q.until.as_deref())?,
+        since,
+        until,
         status: q.status.clone(),
         min_cost: q.min_cost,
         cursor: q.cursor.clone(),
