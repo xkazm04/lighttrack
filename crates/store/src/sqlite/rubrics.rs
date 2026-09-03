@@ -86,3 +86,14 @@ fn from_raw(r: RubricRaw) -> Result<Rubric> {
         supersedes: r.7,
     })
 }
+
+#[cfg(test)]
+mod cols_tests {
+    use super::*;
+
+    #[test]
+    fn cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(COLS, tables::RUBRICS.select_list(Dialect::Sqlite));
+    }
+}

@@ -238,3 +238,23 @@ fn version_from_raw(r: VersionRaw) -> Result<PromptVersion> {
         created_at: parse_ts(&r.6)?,
     })
 }
+
+#[cfg(test)]
+mod cols_tests {
+    use super::*;
+
+    #[test]
+    fn prompt_cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(PROMPT_COLS, tables::PROMPTS.select_list(Dialect::Sqlite));
+    }
+
+    #[test]
+    fn version_cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(
+            VERSION_COLS,
+            tables::PROMPT_VERSIONS.select_list(Dialect::Sqlite)
+        );
+    }
+}

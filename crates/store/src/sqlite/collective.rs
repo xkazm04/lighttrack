@@ -74,10 +74,11 @@ pub(super) fn purge_before(
     Ok(n as u64)
 }
 
+/// In the schema model's column order (`received_at` shipped with the table; the v2/v3 columns were
+/// added after it), which the test below holds it to - `map_raw` reads by position.
 const COLS: &str = "contributor_id, provider, model, task_type, quality, pass_rate, avg_cost_usd, \
-     p50_latency_ms, p95_latency_ms, n_runs, n_cases, quality_variance, \
-     judge_provider, rubric_fingerprint, determinism, frozen_dataset, \
-     significance_tested, received_at";
+     p50_latency_ms, p95_latency_ms, n_runs, n_cases, received_at, quality_variance, \
+     judge_provider, rubric_fingerprint, determinism, frozen_dataset, significance_tested";
 
 pub(super) fn list(conn: &Connection) -> Result<Vec<CollectiveEntry>> {
     let sql = format!("SELECT {COLS} FROM collective_entries");
@@ -197,13 +198,13 @@ fn map_raw(row: &Row) -> rusqlite::Result<Raw> {
         p95_latency_ms: row.get(8)?,
         n_runs: row.get(9)?,
         n_cases: row.get(10)?,
-        quality_variance: row.get(11)?,
-        judge_provider: row.get(12)?,
-        rubric_fingerprint: row.get(13)?,
-        determinism: row.get(14)?,
-        frozen_dataset: row.get(15)?,
-        significance_tested: row.get(16)?,
-        received_at: row.get(17)?,
+        received_at: row.get(11)?,
+        quality_variance: row.get(12)?,
+        judge_provider: row.get(13)?,
+        rubric_fingerprint: row.get(14)?,
+        determinism: row.get(15)?,
+        frozen_dataset: row.get(16)?,
+        significance_tested: row.get(17)?,
     })
 }
 
@@ -236,4 +237,18 @@ fn from_raw(r: Raw) -> Result<CollectiveEntry> {
         significance_tested: cov(r.significance_tested),
         received_at: parse_ts(&r.received_at)?,
     })
+}
+
+#[cfg(test)]
+mod cols_tests {
+    use super::*;
+
+    #[test]
+    fn cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(
+            COLS,
+            tables::COLLECTIVE_ENTRIES.select_list(Dialect::Sqlite)
+        );
+    }
 }

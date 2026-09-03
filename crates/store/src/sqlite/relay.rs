@@ -288,3 +288,14 @@ pub(super) fn from_raw(r: RelayRaw) -> Result<RelayTask> {
         progress,
     })
 }
+
+#[cfg(test)]
+mod cols_tests {
+    use super::*;
+
+    #[test]
+    fn cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(COLS, tables::RELAY_TASKS.select_list(Dialect::Sqlite));
+    }
+}

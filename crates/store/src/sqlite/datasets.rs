@@ -205,3 +205,23 @@ fn item_from_raw(r: ItemRaw) -> Result<DatasetItem> {
         input_hash: r.9,
     })
 }
+
+#[cfg(test)]
+mod cols_tests {
+    use super::*;
+
+    #[test]
+    fn dataset_cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(DATASET_COLS, tables::DATASETS.select_list(Dialect::Sqlite));
+    }
+
+    #[test]
+    fn item_cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(
+            ITEM_COLS,
+            tables::DATASET_ITEMS.select_list(Dialect::Sqlite)
+        );
+    }
+}

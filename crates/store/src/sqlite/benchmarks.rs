@@ -215,3 +215,23 @@ fn run_from_raw(r: RunRaw) -> Result<BenchmarkRun> {
         },
     })
 }
+
+#[cfg(test)]
+mod cols_tests {
+    use super::*;
+
+    #[test]
+    fn bench_cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(BENCH_COLS, tables::BENCHMARKS.select_list(Dialect::Sqlite));
+    }
+
+    #[test]
+    fn run_cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(
+            RUN_COLS,
+            tables::BENCHMARK_RUNS.select_list(Dialect::Sqlite)
+        );
+    }
+}
