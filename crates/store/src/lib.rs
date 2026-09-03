@@ -243,6 +243,26 @@ pub struct TraceFilter {
     pub cursor: Option<String>,
 }
 
+impl TraceFilter {
+    /// The first predicate set here that a backend without the filtered trace listing cannot
+    /// honour, or `None` for an empty filter. Same contract as [`EventFilter::unsupported_extension`].
+    pub fn unsupported_extension(&self) -> Option<&'static str> {
+        if self.since.is_some() || self.until.is_some() {
+            return Some("the trace time-window filter");
+        }
+        if self.status.is_some() {
+            return Some("the `status` trace filter");
+        }
+        if self.min_cost.is_some() {
+            return Some("the `min_cost` trace filter");
+        }
+        if self.cursor.is_some() {
+            return Some("trace pagination");
+        }
+        None
+    }
+}
+
 /// One page of trace summaries plus the cursor to fetch the next page (newest-ended first).
 /// `next_cursor` is `Some` only when more traces remain beyond this page; pass it back as
 /// [`TraceFilter::cursor`] to continue.
@@ -1244,16 +1264,22 @@ pub trait Store: Send + Sync {
     /// and pages on `(ended, trace_id)` descending, returning up to `limit` summaries plus a
     /// `next_cursor` when more remain.
     ///
-    /// The default ignores the filter/cursor and delegates to [`Store::list_traces`] (no pagination),
-    /// which on a backend that doesn't serve traces is itself an [`StoreError::Unsupported`] refusal —
-    /// never a silently unfiltered page. SQLite and Postgres implement the full windowed/paginated
-    /// form. Correct string-keyset paging relies on the fixed-width `RFC3339(Nanos, Z)` invariant.
+    /// The default delegates an **empty** filter to [`Store::list_traces`] (no pagination) and
+    /// refuses a non-empty one with [`StoreError::Unsupported`] — the same rule
+    /// [`EventFilter::unsupported_extension`] applies to events. It used to drop the filter and
+    /// return the unfiltered page, so a backend that ported `list_traces` but not this would answer
+    /// `?status=error` with a page of successful traces and be believed. SQLite and Postgres
+    /// implement the full windowed/paginated form. Correct string-keyset paging relies on the
+    /// fixed-width `RFC3339(Nanos, Z)` invariant.
     fn list_traces_filtered(
         &self,
         project: Scope<'_>,
-        _filter: &TraceFilter,
+        filter: &TraceFilter,
         limit: usize,
     ) -> Result<TracePage> {
+        if let Some(what) = filter.unsupported_extension() {
+            return Err(StoreError::Unsupported(what));
+        }
         Ok(TracePage {
             traces: self.list_traces(project, limit)?,
             next_cursor: None,
