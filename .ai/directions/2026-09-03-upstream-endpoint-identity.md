@@ -5,7 +5,7 @@ raised_by: intake llmfit-0903
 source: librarian/sources/2026-09-03-llmfit.md
 stage: benchmark target resolution — where a run is told which provider it is measuring, before the result becomes a leaderboard row keyed on that string
 size: 3 files / ~150 lines / M
-status: proposed
+status: accepted
 ---
 
 ## Why the scope implies it
