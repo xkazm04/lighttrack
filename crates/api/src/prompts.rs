@@ -47,6 +47,34 @@ pub(crate) struct CreatedPrompt {
     enqueued_job: Option<String>,
 }
 
+/// Longest accepted registry name or label.
+const MAX_IDENT_LEN: usize = 128;
+
+/// Is this a registry identifier we are willing to store? A prompt name is a URL path segment
+/// (`/prompts/<name>`), the key a benchmark's `prompt_ref` matches on and the head of every
+/// `<name>@v<n>` attribution tag; a label is a query value (`?label=`) and a ledger key. Neither
+/// door validated them, so `""`, `"a b"` and `"a/b"` were all accepted — and a prompt named `a/b`
+/// could be created but never fetched, its route reading as two segments. Blank, whitespace and
+/// the four characters with URL meaning are refused; everything else (including `@`, which the
+/// tag parser already tolerates) passes. Returns the operator-facing reason.
+fn validate_ident(kind: &str, s: &str) -> Result<(), ApiError> {
+    let len = s.chars().count();
+    if len == 0 || len > MAX_IDENT_LEN {
+        return Err(ApiError::bad_request(format!(
+            "{kind} must be 1-{MAX_IDENT_LEN} characters (got {len})"
+        )));
+    }
+    if let Some(bad) = s
+        .chars()
+        .find(|c| c.is_whitespace() || matches!(c, '/' | '?' | '#' | '%'))
+    {
+        return Err(ApiError::bad_request(format!(
+            "{kind} may not contain whitespace or '/', '?', '#', '%' (found {bad:?})"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) async fn create_prompt(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -55,6 +83,7 @@ pub(crate) async fn create_prompt(
 ) -> Result<Json<CreatedPrompt>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     ensure_can_admin(&p)?;
+    validate_ident("prompt name", &req.name)?;
 
     // Reject a duplicate registry name within the project.
     let store = st.store.clone();
@@ -342,6 +371,7 @@ pub(crate) async fn promote(
 ) -> Result<Json<PromotedPrompt>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     ensure_can_admin(&p)?;
+    validate_ident("label", &req.label)?;
     let mut prompt = load_prompt(&st, &pid, &name).await?;
 
     // The target version must exist.
@@ -484,6 +514,18 @@ mod tests {
             note: None,
             created_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn registry_identifiers_are_one_url_safe_token() {
+        for ok in ["support-reply", "v2.final", "a@b", "prod_eu", "canary"] {
+            assert!(validate_ident("prompt name", ok).is_ok(), "{ok:?}");
+        }
+        for bad in ["", "   ", "a b", "a/b", "a?b", "a#b", "100%", "	a"] {
+            assert!(validate_ident("label", bad).is_err(), "{bad:?}");
+        }
+        assert!(validate_ident("label", &"x".repeat(MAX_IDENT_LEN)).is_ok());
+        assert!(validate_ident("label", &"x".repeat(MAX_IDENT_LEN + 1)).is_err());
     }
 
     #[test]
