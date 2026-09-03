@@ -7,13 +7,16 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::Result;
+use chrono::Utc;
 use serde_json::{json, Map, Value};
 
 use lighttrack_core::{
-    BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, ModelPriceRow, Rubric, ScoreDetail,
-    ScoreKind,
+    family_of, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, ModelPriceRow, ProviderFamily,
+    Rubric, ScoreDetail, ScoreKind,
 };
-use lighttrack_engine::{parse_judge_spec, same_family, Determinism, EngineConfig};
+use lighttrack_engine::{
+    parse_judge_spec, probe_openai_base, same_family, Determinism, EngineConfig,
+};
 
 use crate::bench::judge_output;
 use crate::budget::{estimate_compare, Budget};
@@ -496,6 +499,18 @@ pub(crate) fn run_compare(
     let cancelled = ctl.cancelled();
     let mut cells = cells.into_iter();
 
+    // **What actually answered**, resolved once per run rather than once per row, because it is a
+    // property of the endpoint and not of a target. Only asked when `LIGHTTRACK_OPENAI_BASE`
+    // re-points the OpenAI-compatible origin AND some target takes that path — otherwise generation
+    // goes to the vendor's documented address, whose identity that address already establishes, and
+    // nothing is fetched. See `lighttrack_core::endpoint_identity` for why the declared provider is
+    // not enough on a re-pointed base.
+    let endpoint_identity = bench_targets
+        .iter()
+        .any(|t| t.kind.is_model() && family_of(&t.provider) == ProviderFamily::OpenAi)
+        .then(|| probe_openai_base(&Utc::now().date_naive().to_string()))
+        .flatten();
+
     for rt in targets {
         let t = &rt.target;
         let label = t.display_label();
@@ -802,6 +817,15 @@ pub(crate) fn run_compare(
             "budget_spent_usd": budget.spent_usd(),
             "estimated_cost_usd": estimate.usd,
         });
+        // Stamped only on the rows that actually went through the probed endpoint: a matrix that
+        // compares a local runtime against Anthropic must not label the Anthropic row with the
+        // local endpoint's identity. Absent key = operator-asserted, which is what every row
+        // carried before this existed.
+        if t.kind.is_model() && family_of(&t.provider) == ProviderFamily::OpenAi {
+            if let Some(id) = &endpoint_identity {
+                report["endpoint_identity"] = json!(id);
+            }
+        }
         // The headline `determinism` is the weaker of generation and judging, with both halves
         // recorded beside it — a run whose candidates were resampled must not read as exact.
         stamp_determinism(&mut report, target_gen_determinism, target_determinism);

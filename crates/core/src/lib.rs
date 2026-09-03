@@ -19,6 +19,7 @@ pub mod customer;
 pub mod dataset;
 pub mod dataset_lineage;
 pub mod device;
+pub mod endpoint_identity;
 pub mod error;
 pub mod event;
 pub mod forecast;
@@ -75,6 +76,10 @@ pub use dataset_lineage::{
     MAX_IMPORT_N,
 };
 pub use device::{capability_matches, Device, DeviceEligibility, RelayAdmission};
+pub use endpoint_identity::{
+    native_routes, resolve as resolve_endpoint, Endpoint, EndpointIdentity, Evidence, Observations,
+    SELF_HOSTED_PREFIX,
+};
 pub use error::LtError;
 pub use event::{
     FailureClass, LlmEvent, Operation, Provider, Status, TokenUsage, FAILURE_CLASS_KEY,
