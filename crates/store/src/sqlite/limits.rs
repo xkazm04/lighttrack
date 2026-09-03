@@ -223,3 +223,17 @@ fn limit_from_raw(r: LimitRaw) -> Result<LimitRule> {
 fn opt_ts(s: Option<&str>) -> Result<Option<DateTime<Utc>>> {
     s.map(parse_ts).transpose()
 }
+
+#[cfg(test)]
+mod cols_tests {
+    use super::*;
+
+    /// `events` and `scores` derive their list from the schema model; this one is hand-kept and
+    /// read by position, so it is asserted against the model instead — it fails the moment a
+    /// column is added to one and not the other.
+    #[test]
+    fn cols_match_the_schema_model() {
+        use crate::schema::{tables, Dialect};
+        assert_eq!(COLS, tables::LIMIT_RULES.select_list(Dialect::Sqlite));
+    }
+}
