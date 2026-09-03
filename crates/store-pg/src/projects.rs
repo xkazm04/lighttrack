@@ -468,4 +468,13 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn limit_cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(
+            LIMIT_COLS,
+            tables::LIMIT_RULES.select_list(Dialect::Postgres)
+        );
+    }
 }

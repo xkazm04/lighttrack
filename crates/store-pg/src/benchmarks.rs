@@ -165,3 +165,26 @@ fn run_from_row(row: &PgRow) -> Result<BenchmarkRun> {
         report: val_or_null(report)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bench_cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(
+            BENCH_COLS,
+            tables::BENCHMARKS.select_list(Dialect::Postgres)
+        );
+    }
+
+    #[test]
+    fn run_cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(
+            RUN_COLS,
+            tables::BENCHMARK_RUNS.select_list(Dialect::Postgres)
+        );
+    }
+}

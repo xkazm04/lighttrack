@@ -90,3 +90,14 @@ fn from_row(row: &PgRow) -> Result<ModelPriceRow> {
         note: row.try_get(8).map_err(pgerr)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(COLS, tables::MODEL_PRICES.select_list(Dialect::Postgres));
+    }
+}

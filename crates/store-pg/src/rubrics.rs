@@ -74,3 +74,14 @@ fn from_row(row: &PgRow) -> Result<Rubric> {
         supersedes: row.try_get(7).map_err(pgerr)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(COLS, tables::RUBRICS.select_list(Dialect::Postgres));
+    }
+}

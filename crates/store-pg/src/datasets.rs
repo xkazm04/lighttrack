@@ -151,3 +151,26 @@ fn item_from_row(row: &PgRow) -> Result<DatasetItem> {
         input_hash: row.try_get(9).map_err(pgerr)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dataset_cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(
+            DATASET_COLS,
+            tables::DATASETS.select_list(Dialect::Postgres)
+        );
+    }
+
+    #[test]
+    fn item_cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(
+            ITEM_COLS,
+            tables::DATASET_ITEMS.select_list(Dialect::Postgres)
+        );
+    }
+}

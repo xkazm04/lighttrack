@@ -239,3 +239,14 @@ pub(crate) fn from_row(row: &PgRow) -> Result<RelayTask> {
         progress: row.try_get(20).map_err(pgerr)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cols_match_the_schema_model() {
+        use lighttrack_store::schema::{tables, Dialect};
+        assert_eq!(COLS, tables::RELAY_TASKS.select_list(Dialect::Postgres));
+    }
+}
