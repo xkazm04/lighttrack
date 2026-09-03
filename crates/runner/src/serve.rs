@@ -69,7 +69,21 @@ pub(crate) fn serve(
     // which is the process that is always deployed. A worker that also swept would silently be the
     // only source of recurrence in a deployment that happens to run one.
     loop {
-        match claim(cli, http, stale_secs, &p.kinds, &p.providers)? {
+        // A transient API error (a deploy, a network blip) used to propagate out of this loop and
+        // end the worker — so a queue that had a worker at midnight had none by morning, with
+        // nothing to show for it but a dead process. `schedule` already survives a failed cycle;
+        // the worker now does too. `--once` still propagates, because there is no next cycle to
+        // recover in.
+        let claimed = match claim(cli, http, stale_secs, &p.kinds, &p.providers) {
+            Ok(c) => c,
+            Err(e) if !once => {
+                eprintln!("claim failed (continuing after {interval}s): {e:#}");
+                std::thread::sleep(Duration::from_secs(interval.max(1)));
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        match claimed {
             Some(job) => {
                 println!(
                     "claimed job {} type={} (attempt {}/{}, failures {}, worker deaths {})",
@@ -80,7 +94,15 @@ pub(crate) fn serve(
                     job.failures,
                     job.stale_reclaims,
                 );
-                run_claimed_job(cli, http, engine, &job, renew)?;
+                if let Err(e) = run_claimed_job(cli, http, engine, &job, renew) {
+                    if once {
+                        return Err(e);
+                    }
+                    eprintln!(
+                        "job {} ended with an error (worker continues): {e:#}",
+                        short(&job.id)
+                    );
+                }
             }
             None => {
                 if !once {
