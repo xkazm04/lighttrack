@@ -1,8 +1,8 @@
 //! Heuristic PII scrubbing for dataset building.
 //!
 //! This is the **regex pass** of the hybrid anonymization pipeline (see
-//! `docs/BENCHMARK_FRAMEWORK.md` §1): structured PII with reliable shapes — emails, IBANs, national
-//! IDs, secrets, card numbers, IPs, phone numbers — replaced with typed placeholders. Free-text PII
+//! `docs/BENCHMARK_FRAMEWORK.md` §1): structured PII with reliable shapes — emails, IBANs, US SSNs,
+//! secrets, card numbers, IPs, phone numbers — replaced with typed placeholders. Free-text PII
 //! (names, orgs, locations) is left to the optional LLM pass in the runner.
 //!
 //! Rules run in a fixed order (most specific → least) so e.g. an IP isn't eaten by the phone rule.
@@ -12,6 +12,15 @@
 //! the evidence downstream scoring is computed from, and nothing in a score, alert or dashboard ever
 //! reveals it. Where a shape is ambiguous these rules deliberately **under-match**: a redaction we
 //! miss is visible to whoever reads the row, a sentence we mangle is not.
+//!
+//! **Known costs — shapes the rules cannot tell apart, stated so they are a decision and not a
+//! surprise.** The card rule is any 13–19 digit run, which is also every epoch-millisecond
+//! timestamp (`1725379200000` → `<CC>`) and every snowflake id; the hex-secret rule is any 32+ hex
+//! digits, which is also every full git SHA; the email rule has no anchor, so `git@github.com:org/repo`
+//! loses its host; an uppercase alnum code shaped `AB12…` types as `<IBAN>`. Narrowing any of these
+//! changes the rule set, and the rule set is a **contract**: `rule_set()` is exported to
+//! `clients/contract/fixtures/pii.json` and every SDK's `guard(no_pii)` runs the same table — so a
+//! rule change is a fixture regeneration plus three SDK updates, not a local edit.
 
 use std::sync::OnceLock;
 
