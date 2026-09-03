@@ -33,7 +33,7 @@ fn guidance(code: u16) -> Option<&'static str> {
         // scope, so a foreign id is not found rather than refused (M17). The agent should not read
         // one as evidence that the id exists somewhere else.
         404 => Some(
-            "not found — check the id (list it first with the matching list_* tool). An id that              belongs to another project reads the same way: this key cannot see it.",
+            "not found — check the id (list it first with the matching list_* tool). An id that belongs to another project reads the same way: this key cannot see it.",
         ),
         429 => None, // the breach body names the limit that was hit
         c if c >= 500 => {

@@ -146,7 +146,7 @@ mod tests {
             assert_eq!(
                 t.get("outputSchema").is_some(),
                 e.render_kind.is_some(),
-                "'{name}': outputSchema and render_kind disagree. A tool renders Markdown and returns                  structuredContent together or not at all, so a caller reading the schema must not be                  promised a shape it will never receive."
+                "'{name}': outputSchema and render_kind disagree. A tool renders Markdown and returns structuredContent together or not at all, so a caller reading the schema must not be promised a shape it will never receive."
             );
         }
     }
