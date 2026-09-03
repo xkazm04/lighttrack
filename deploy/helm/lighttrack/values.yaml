@@ -2,7 +2,15 @@
 # UNVERIFIED template (authored without a local helm to lint) — run `helm lint` / `helm template`
 # before installing.
 
+# >1 is only legal with secrets.databaseUrl set. SQLite is ONE writer on a ReadWriteOnce volume;
+# two pods are two writers on one file, and the failure is a corrupt database, not a scaling limit.
+# templates/deployment.yaml refuses the combination at render time — this is not advice.
 replicaCount: 1
+
+# How a new pod replaces the old one. Recreate by default for the same reason: a RollingUpdate
+# overlaps the old and new pod on one RWO volume, which is the two-writer failure for the length of
+# a deploy rather than forever. RollingUpdate is correct ONLY with secrets.databaseUrl set.
+updateStrategy: Recreate
 
 image:
   repository: ghcr.io/xkazm04/lighttrack
@@ -39,9 +47,29 @@ ingress:
   tls: false
   # tlsSecretName: lighttrack-tls
 
-resources: {}
-  # limits:   { cpu: 500m, memory: 256Mi }
-  # requests: { cpu: 100m, memory: 128Mi }
+# An empty map here is not "the defaults" — it is BestEffort QoS: first evicted under node pressure
+# and unbounded on the way there, for a process that serves ingest and runs judge scoring. Both a
+# request (so the scheduler can place it) and a limit (so it cannot take the node with it).
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits:   { cpu: "1", memory: 512Mi }
+
+# The image already builds and runs as uid 10001 (deploy/docker/Dockerfile) — this makes the cluster
+# enforce it rather than trust it, and fsGroup is what keeps the mounted PVC writable by that uid.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+# tracklight calls no Kubernetes API. Mounting the namespace default ServiceAccount's token hands a
+# cluster credential to a pod that has no use for one.
+automountServiceAccountToken: false
 
 # Probes. The two kubelet consumers ask DIFFERENT questions and read DIFFERENT endpoints:
 #   /health/live   is this process wedged?   -> a red RESTARTS the pod. Observes nothing outside the

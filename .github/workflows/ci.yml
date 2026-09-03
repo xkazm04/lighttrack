@@ -26,6 +26,9 @@ name: ci
 #   clients/typescript (npm package)           `clients-typescript`
 #   the container image                        docker.yml (build only — not a suite)
 #   release binaries                           release.yml (tag-triggered build)
+#   deploy/helm/lighttrack (the Helm chart)    `chart-policy`
+#     ^ this row read "none" until 2026-09-03. The chart is the artifact a stranger runs against
+#       their own cluster and nothing in CI had ever opened `deploy/`.
 #
 # The durable form of this is a check that walks the tree for package manifests and fails on any
 # manifest no job names; until that exists, this written list is the honest interim, and it is
@@ -179,6 +182,32 @@ jobs:
           done
           echo "::error::Firestore emulator did not become ready"; cat "${RUNNER_TEMP}/firestore-emulator.log"; exit 1
       - run: cargo test -p lighttrack-store-firestore --test conformance
+
+  # ── Required check ────────────────────────────────────────────────────────────────────────────
+  # Policy over the deployment SHAPE: `crates/core/tests/chart_policy_guard.rs` reads
+  # `deploy/helm/lighttrack/` as text and fails on a chart that grants what it must never grant —
+  # a templated replica count with no `{{ fail }}` guard behind it (two writers on one SQLite file),
+  # a missing update strategy, a BestEffort pod, a root uid, a mounted ServiceAccount token, both
+  # kubelet probes tidied back onto one path. It carries its own must-fail fixtures: every policy
+  # has a scratch chart that trips it, because a policy that cannot fail is a comment with an exit
+  # code.
+  #
+  # It needs no helm binary, no cluster and no new toolchain — it is `cargo test`, like the two
+  # sibling guards that read the CI workflow and the AI manifest. It is its own job rather than a
+  # line inside `cargo test --workspace` so branch protection can name it, and so a red here says
+  # "the chart regressed" instead of "some test failed".
+  chart-policy:
+    name: chart policy (required)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The ruler is pinned by rust-toolchain.toml (one address, repo root).
+      - run: cargo --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+      - run: cargo test -p lighttrack-core --test chart_policy_guard
 
   # ── Full workspace suite ──────────────────────────────────────────────────────────────────────
   # Everything: conformance + margin + pricing + billing + judge + store/api/engine unit tests.

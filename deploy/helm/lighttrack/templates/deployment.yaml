@@ -1,3 +1,16 @@
+{{- /*
+  The one invariant a chart policy in CI cannot enforce, because CI never sees `-f my-values.yaml`:
+  SQLite is a single writer on a ReadWriteOnce volume, so more than one replica is only legal once
+  state has moved to Postgres. Refuse the combination at RENDER time, where the operator's own
+  values are in scope. `crates/core/tests/chart_policy_guard.rs` then checks that this guard is
+  still here — CI's job shrinks to "the guard exists", which is the honest split.
+*/ -}}
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.secrets.databaseUrl) }}
+{{- fail "replicaCount > 1 requires secrets.databaseUrl: SQLite at config.dbPath is one writer on a ReadWriteOnce volume, and a second pod corrupts the database. Set a Postgres DSN, or keep replicaCount: 1." }}
+{{- end }}
+{{- if and (ne .Values.updateStrategy "Recreate") (not .Values.secrets.databaseUrl) }}
+{{- fail "updateStrategy must be Recreate without secrets.databaseUrl: a RollingUpdate overlaps the old and new pod on one ReadWriteOnce volume, which is the same two-writers-one-file failure for the length of a deploy." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,6 +19,8 @@ metadata:
     {{- include "lighttrack.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: {{ .Values.updateStrategy }}
   selector:
     matchLabels:
       {{- include "lighttrack.selectorLabels" . | nindent 6 }}
@@ -18,6 +33,11 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      # This service calls no Kubernetes API. A mounted ServiceAccount token is a cluster credential
+      # handed to a pod with no use for one, and the namespace default is what it would get.
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -27,6 +47,8 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["lighttrack-api"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
@@ -83,10 +105,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-          {{- with .Values.resources }}
+          # Emitted unconditionally. Under `{{- with }}` an empty map produced NO resources block at
+          # all — a BestEffort pod, silently, from a values file that looked like it said nothing.
           resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- toYaml .Values.resources | nindent 12 }}
       volumes:
         - name: data
           {{- if .Values.persistence.enabled }}

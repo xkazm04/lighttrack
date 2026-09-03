@@ -37,6 +37,10 @@ capabilities:
   # Same scan on the NEWEST upstream rules rather than the pinned engine — a detection pattern
   # published today should find a token pushed last spring. Advisory: its input moves without us.
   audit-secrets-latest-rules: { command: "gitleaks git . --config .gitleaks.toml --redact --no-banner  # with the latest gitleaks release installed", verified: false }
+  # Policy over the deployment SHAPE, not over the code: what deploy/helm/lighttrack may never grant.
+  # Text-level (no helm binary, no cluster), with must-fail fixtures beside every policy. This closes
+  # the hole where the chart was the only shipped artifact no gate read.
+  chart-policy: { command: "cargo test -p lighttrack-core --test chart_policy_guard", verified: true }
   smoke: { command: "sh scripts/smoke.sh http://127.0.0.1:8787", verified: false }
   # cargo test --workspace ranges over the root Cargo.toml members list, which excludes all three
   # detached client SDKs. Each ships to users and needs its own command.
@@ -75,6 +79,7 @@ controls:
     [
       test,
       conformance,
+      chart-policy,
       lint,
       format-check,
       audit-policy,
