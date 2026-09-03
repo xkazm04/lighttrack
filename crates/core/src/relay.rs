@@ -91,9 +91,11 @@ impl RelayStatus {
     }
 }
 
-/// One queued unit of device work. Status: `queued` | `leased` | `succeeded` | `dead`.
-/// A failed attempt goes back to `queued` (with `error` recorded and `next_attempt_at` pushed
-/// out) until `max_attempts` is exhausted, which flips it to `dead`.
+/// One queued unit of device work. `status` is one of [`RelayStatus::ALL`] (`queued` | `leased` |
+/// `succeeded` | `dead` | `cancelling` | `cancelled`). A failed attempt goes back to `queued` (with
+/// `error` recorded and `next_attempt_at` pushed out) until `max_attempts` is exhausted, which
+/// flips it to `dead`; a cancel moves a queued task to `cancelled` and a leased one through
+/// `cancelling`.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RelayTask {
     #[serde(default = "crate::new_id")]
