@@ -492,9 +492,9 @@ fn r6(x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::super::DEFAULT_LOW_CONFIDENCE_CASES;
+    use super::*;
     use crate::collective::contribution::digest_sha256;
     use crate::collective::types::CollectiveDigest;
-    use super::*;
     use chrono::Utc;
 
     fn stat(provider: &str, model: &str, task: &str, q: f64, cost: f64, cases: u32) -> RunStat {
