@@ -733,6 +733,27 @@ async fn a_padded_action_type_is_stored_trimmed_so_the_device_that_admitted_it_c
     );
 }
 
+/// Both retry knobs are floored the same way: `max_attempts: 0` already read as 1, while
+/// `retry_interval_secs: 0` was stored as written and re-leased a deferred task immediately.
+#[tokio::test]
+async fn zero_retry_knobs_are_floored_to_one_not_stored_as_written() {
+    let (state, store) = setup(Redactor::off());
+    let key_a = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    let (status, task) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "xprice/summary", "max_attempts": 0,
+                     "retry_interval_secs": 0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{task}");
+    assert_eq!(task["max_attempts"], 1);
+    assert_eq!(task["retry_interval_secs"], 1);
+}
+
 #[tokio::test]
 async fn idempotency_key_collapses_duplicate_enqueues() {
     let (state, store) = setup(Redactor::off());

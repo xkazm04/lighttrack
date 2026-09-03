@@ -192,9 +192,13 @@ pub(crate) async fn enqueue_task(
             .max_attempts
             .unwrap_or(RELAY_DEFAULT_MAX_ATTEMPTS)
             .max(1),
+        // Floored like `max_attempts`: a `0` interval made a deferred task (subscription window
+        // exhausted) leasable again the instant it was handed back, so the device and the cloud
+        // spun lease/defer at network speed for the rest of the window.
         retry_interval_secs: req
             .retry_interval_secs
-            .unwrap_or(RELAY_DEFAULT_RETRY_INTERVAL_SECS),
+            .unwrap_or(RELAY_DEFAULT_RETRY_INTERVAL_SECS)
+            .max(1),
         idempotency_key: req.idempotency_key,
         device: None,
         lease_deadline: None,
