@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-use crate::client::Client;
+use crate::client::{enc_q, enc_seg, Client};
 
 /// Route a read tool. Returns `None` if `name` is not a read tool (so the caller can try writes).
 pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Value, String>> {
@@ -78,7 +78,7 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "list_jobs" => c.get(&jobs_path(args)),
         "get_job" => bind(args, "job", |j| c.get(&format!("/v1/jobs/{j}"))),
         "list_schedules" => c.get(&match args.get("project").and_then(Value::as_str) {
-            Some(p) => format!("/v1/projects/{p}/schedules"),
+            Some(p) => format!("/v1/projects/{}/schedules", enc_seg(p)),
             None => "/v1/schedules".to_string(),
         }),
         "get_collective_leaderboard" => c.get(&collective_path(args)),
@@ -111,7 +111,7 @@ fn bind(
     f: impl FnOnce(&str) -> Result<Value, String>,
 ) -> Result<Value, String> {
     match args.get(key).and_then(Value::as_str) {
-        Some(v) => f(v),
+        Some(v) => f(&enc_seg(v)),
         None => Err(format!("missing required argument: {key}")),
     }
 }
@@ -127,7 +127,7 @@ fn bind2(
         args.get(a).and_then(Value::as_str),
         args.get(b).and_then(Value::as_str),
     ) {
-        (Some(x), Some(y)) => f(x, y),
+        (Some(x), Some(y)) => f(&enc_seg(x), &enc_seg(y)),
         (None, _) => Err(format!("missing required argument: {a}")),
         (_, None) => Err(format!("missing required argument: {b}")),
     }
@@ -144,7 +144,7 @@ fn unpriced_path(args: &Value) -> String {
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
         {
-            p.push_str(&format!("{sep}{k}={v}"));
+            p.push_str(&format!("{sep}{k}={}", enc_q(v)));
             sep = '&';
         }
     }
@@ -153,7 +153,7 @@ fn unpriced_path(args: &Value) -> String {
 
 fn with_project(base: &str, args: &Value) -> String {
     match args.get("project").and_then(Value::as_str) {
-        Some(p) => format!("{base}?project={p}"),
+        Some(p) => format!("{base}?project={}", enc_q(p)),
         None => base.to_string(),
     }
 }
@@ -162,14 +162,14 @@ fn list_path(base: &str, args: &Value) -> String {
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20);
     let mut p = format!("{base}?limit={limit}");
     if let Some(proj) = args.get("project").and_then(Value::as_str) {
-        p.push_str(&format!("&project={proj}"));
+        p.push_str(&format!("&project={}", enc_q(proj)));
     }
     p
 }
 
-/// Append `&key=value` for each present, non-empty string arg in `keys`. Cursors are opaque hex and the
-/// other values are ids/enums/timestamps, so no percent-encoding is needed (matching the rest of the
-/// client, which interpolates query values directly).
+/// Append `&key=value` for each present, non-empty string arg in `keys`, percent-encoded: a value
+/// used to reach the query string verbatim, so a `+00:00` timezone read as a space (a 400 for a
+/// well-formed timestamp) and an `&` inside an agent's value became a second parameter.
 fn push_str_params(p: &mut String, args: &Value, keys: &[&str]) {
     for k in keys {
         if let Some(v) = args
@@ -177,7 +177,7 @@ fn push_str_params(p: &mut String, args: &Value, keys: &[&str]) {
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
         {
-            p.push_str(&format!("&{k}={v}"));
+            p.push_str(&format!("&{k}={}", enc_q(v)));
         }
     }
 }
@@ -234,7 +234,7 @@ fn rollup_path(args: &Value) -> String {
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
         {
-            p.push_str(&format!("{sep}{k}={v}"));
+            p.push_str(&format!("{sep}{k}={}", enc_q(v)));
             sep = '&';
         }
     }
@@ -243,10 +243,10 @@ fn rollup_path(args: &Value) -> String {
 
 fn margin_path(args: &Value) -> String {
     let by = args.get("by").and_then(Value::as_str).unwrap_or("customer");
-    let mut p = format!("/v1/margin?by={by}");
+    let mut p = format!("/v1/margin?by={}", enc_q(by));
     for k in ["project", "since", "until"] {
         if let Some(v) = args.get(k).and_then(Value::as_str) {
-            p.push_str(&format!("&{k}={v}"));
+            p.push_str(&format!("&{k}={}", enc_q(v)));
         }
     }
     p
@@ -257,7 +257,7 @@ fn forecast_path(args: &Value) -> String {
     let mut sep = '?';
     for k in ["project", "by"] {
         if let Some(v) = args.get(k).and_then(Value::as_str) {
-            p.push_str(&format!("{sep}{k}={v}"));
+            p.push_str(&format!("{sep}{k}={}", enc_q(v)));
             sep = '&';
         }
     }
@@ -274,7 +274,7 @@ fn jobs_path(args: &Value) -> String {
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(20);
     let mut p = format!("/v1/jobs?limit={limit}");
     if let Some(s) = args.get("status").and_then(Value::as_str) {
-        p.push_str(&format!("&status={s}"));
+        p.push_str(&format!("&status={}", enc_q(s)));
     }
     p
 }
@@ -290,7 +290,7 @@ fn collective_path(args: &Value) -> String {
         "significance_tested",
     ] {
         if let Some(v) = args.get(k).and_then(Value::as_str) {
-            p.push_str(&format!("{sep}{k}={v}"));
+            p.push_str(&format!("{sep}{k}={}", enc_q(v)));
             sep = '&';
         }
     }
@@ -311,7 +311,7 @@ fn contributions_path(args: &Value) -> String {
         .and_then(Value::as_str)
         .filter(|c| !c.is_empty())
     {
-        p.push_str(&format!("{sep}cursor={c}"));
+        p.push_str(&format!("{sep}cursor={}", enc_q(c)));
     }
     p
 }
@@ -333,7 +333,7 @@ fn usecases_path(args: &Value) -> String {
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
         {
-            p.push_str(&format!("{sep}{k}={v}"));
+            p.push_str(&format!("{sep}{k}={}", enc_q(v)));
             sep = '&';
         }
     }

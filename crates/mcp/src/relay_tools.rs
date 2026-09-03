@@ -10,7 +10,7 @@
 
 use serde_json::Value;
 
-use crate::client::Client;
+use crate::client::{enc_q, enc_seg, Client};
 
 /// Tool definitions added to the read catalog.
 /// Route a relay read tool. `None` when `name` is not one, so the caller falls through.
@@ -25,18 +25,20 @@ pub(crate) fn read_dispatch(c: &Client, name: &str, args: &Value) -> Option<Resu
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
                 {
-                    p.push_str(&format!("&{k}={v}"));
+                    p.push_str(&format!("&{k}={}", enc_q(v)));
                 }
             }
             c.get(&p)
         }
         "get_relay_task" => match args.get("task").and_then(Value::as_str) {
-            Some(id) => c.get(&format!("/v1/relay/tasks/{id}")),
+            Some(id) => c.get(&format!("/v1/relay/tasks/{}", enc_seg(id))),
             None => Err("missing required argument: task".to_string()),
         },
         "list_relay_devices" => {
             let p = match args.get("project").and_then(Value::as_str) {
-                Some(proj) if !proj.is_empty() => format!("/v1/relay/devices?project={proj}"),
+                Some(proj) if !proj.is_empty() => {
+                    format!("/v1/relay/devices?project={}", enc_q(proj))
+                }
                 _ => "/v1/relay/devices".to_string(),
             };
             c.get(&p)

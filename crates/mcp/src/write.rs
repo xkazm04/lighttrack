@@ -15,7 +15,7 @@
 
 use serde_json::{json, Value};
 
-use crate::client::Client;
+use crate::client::{enc_seg, Client};
 
 /// Route a write tool. Returns `None` if `name` is not a write tool.
 pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Value, String>> {
@@ -248,10 +248,13 @@ fn import_spec(args: &Value) -> Value {
     spec
 }
 
+/// Require a string arg, percent-encoded as the path segment every caller uses it as (the one
+/// `need` whose value goes into a body, `enqueue_job`'s `type`, is only checked here and re-read
+/// by `pick`).
 fn need(args: &Value, key: &str) -> Result<String, String> {
     args.get(key)
         .and_then(Value::as_str)
-        .map(str::to_string)
+        .map(enc_seg)
         .ok_or_else(|| format!("missing required argument: {key}"))
 }
 

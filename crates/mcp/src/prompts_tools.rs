@@ -11,7 +11,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::client::Client;
+use crate::client::{enc_q, enc_seg, Client};
 
 /// True if `name` is one of this module's write tools.
 /// Route a read tool. `None` if `name` is not one of ours.
@@ -69,7 +69,7 @@ fn quality_path(project: &str, args: &Value) -> String {
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
         {
-            p.push_str(&format!("&{k}={v}"));
+            p.push_str(&format!("&{k}={}", enc_q(v)));
         }
     }
     p
@@ -85,7 +85,7 @@ fn get_prompt_path(project: &str, name: &str, args: &Value) -> String {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
     {
-        p.push_str(&format!("?label={l}"));
+        p.push_str(&format!("?label={}", enc_q(l)));
     }
     p
 }
@@ -172,12 +172,12 @@ fn promote_prompt(c: &Client, args: &Value) -> Result<Value, String> {
     )
 }
 
-/// Require a non-empty string arg.
+/// Require a non-empty string arg, percent-encoded as the path segment every caller uses it as.
 fn need(args: &Value, key: &str) -> Result<String, String> {
     args.get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .map(enc_seg)
         .ok_or_else(|| format!("missing required argument: {key}"))
 }
 

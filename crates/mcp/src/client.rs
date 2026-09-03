@@ -130,3 +130,57 @@ impl Client {
         Ok((value, next_cursor))
     }
 }
+
+/// Percent-encode a path segment. An id an agent supplies must stay ONE segment: a `/` in it
+/// used to walk into a different route, `?`/`#` started a query or fragment, and a space or a
+/// non-ASCII byte made an invalid request line. `:`, `@`, `.`, `-`, `_`, `~` — what ids
+/// legitimately contain — pass through unchanged.
+pub(crate) fn enc_seg(s: &str) -> String {
+    encode(s, |b| {
+        matches!(b, b'/' | b'?' | b'#' | b'%' | b'&' | b'+' | b'=') || b <= b' ' || b >= 0x7f
+    })
+}
+
+/// Percent-encode a query value. `&` and `=` would add or split parameters (an agent's value
+/// becoming `limit=100000`), `#` ends the query, `+` reads as a space, `%` gets decoded. `:`, `,`
+/// and `/` are legal in a query and appear in real values (timestamps, `customer:acme`,
+/// `customer,day`, `provider/model`), so they stay readable.
+pub(crate) fn enc_q(s: &str) -> String {
+    encode(s, |b| {
+        matches!(b, b'&' | b'=' | b'#' | b'+' | b'%' | b'?') || b <= b' ' || b >= 0x7f
+    })
+}
+
+fn encode(s: &str, escape: impl Fn(u8) -> bool) -> String {
+    s.bytes()
+        .map(|b| {
+            if escape(b) {
+                format!("%{b:02X}")
+            } else {
+                (b as char).to_string()
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{enc_q, enc_seg};
+
+    /// The three shapes that broke or smuggled: a `+` timezone (read as a space), an `&` in a
+    /// value (a second parameter), and a `/` in an id (a different route).
+    #[test]
+    fn agent_supplied_values_cannot_split_the_query_or_escape_their_segment() {
+        assert_eq!(
+            enc_q("2026-01-01T00:00:00+00:00"),
+            "2026-01-01T00:00:00%2B00:00"
+        );
+        assert_eq!(enc_q("x&limit=100000"), "x%26limit%3D100000");
+        assert_eq!(enc_q("customer:acme,day"), "customer:acme,day");
+        assert_eq!(enc_q("summarize email"), "summarize%20email");
+        assert_eq!(enc_seg("ev-1"), "ev-1");
+        assert_eq!(enc_seg("../projects"), "..%2Fprojects");
+        assert_eq!(enc_seg("x?y#z"), "x%3Fy%23z");
+        assert_eq!(enc_q("\u{10d}au"), "%C4%8Dau");
+    }
+}
