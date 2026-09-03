@@ -48,7 +48,9 @@ pub(crate) fn list(v: &Value) -> Option<String> {
                 .unwrap_or_else(|| "—".into()),
             dur(opt_u(r, "duration_ms").unwrap_or(0)),
             trunc(&models, 28),
-            trunc(s(r, "trace_id"), 28),
+            // Whole, never truncated: the id is the operator's handle into `get_trace`, and a
+            // clipped one cannot be pasted anywhere (events and projects already show theirs whole).
+            s(r, "trace_id").to_string(),
         ]);
     }
     Some(format!(
@@ -279,6 +281,13 @@ mod tests {
         .unwrap();
         assert!(md.contains("1 trace(s)"));
         assert!(md.contains("tr-1"));
+        let long_id = "trace-0123456789abcdef0123456789abcdef";
+        let long =
+            list(&json!([{ "trace_id": long_id, "status": "success", "spans": 1 }])).unwrap();
+        assert!(
+            long.contains(long_id),
+            "the id must be pasteable into get_trace: {long}"
+        );
         assert!(md.contains("1.50s"));
         assert!(md.contains("1,234"));
     }
