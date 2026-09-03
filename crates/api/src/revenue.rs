@@ -150,7 +150,7 @@ pub(crate) async fn get_margin(
 ) -> Result<Json<MarginResponse>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
-    let dim = MarginDimension::parse(q.by.as_deref().unwrap_or("customer"));
+    let dim = parse_dimension(q.by.as_deref())?;
 
     let until = match q.until.as_deref() {
         Some(s) => parse_rfc3339(s)?,
@@ -180,6 +180,11 @@ pub(crate) async fn get_margin(
 
     let mut rows = compute_margin(&revenue, &costs, dim, since, until);
     if let Some(below) = q.below {
+        // `below=NaN` compared false against every row and returned an empty roster - "nobody is
+        // below breakeven" - for a value that was never a number.
+        if !below.is_finite() {
+            return Err(ApiError::bad_request("`below` must be a finite percentage"));
+        }
         rows = filter_below(rows, below);
     }
     let total_revenue_usd: f64 = rows.iter().map(|r| r.revenue_usd).sum();
@@ -273,7 +278,7 @@ pub(crate) async fn get_margin_simulate(
 ) -> Result<Json<MarginSimulateResponse>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
-    let dim = MarginDimension::parse(q.by.as_deref().unwrap_or("customer"));
+    let dim = parse_dimension(q.by.as_deref())?;
 
     let until = match q.until.as_deref() {
         Some(s) => parse_rfc3339(s)?,
@@ -376,7 +381,7 @@ pub(crate) async fn get_margin_trend(
 ) -> Result<Json<MarginTrendResponse>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_read_project(&p, q.project.as_deref())?;
-    let dim = MarginDimension::parse(q.by.as_deref().unwrap_or("customer"));
+    let dim = parse_dimension(q.by.as_deref())?;
     let days = q.days.unwrap_or(30).clamp(1, MAX_TREND_DAYS);
     let top_n = q.top.unwrap_or_else(default_top_n).max(1);
 
@@ -511,6 +516,20 @@ pub(crate) async fn get_customer_margin(
         by_model,
         by_name,
     }))
+}
+
+/// The `by` dimension, refusing a misspelling. `by=produkt` used to answer the customer question
+/// silently, labelled `dimension: "customer"` - true, but not what was asked, and easy to read past.
+fn parse_dimension(by: Option<&str>) -> Result<MarginDimension, ApiError> {
+    let raw = by.unwrap_or(MarginDimension::Customer.as_str());
+    MarginDimension::from_wire(raw).ok_or_else(|| {
+        let expected = MarginDimension::ALL
+            .iter()
+            .map(|d| d.as_str())
+            .collect::<Vec<_>>()
+            .join("|");
+        ApiError::bad_request(format!("unknown dimension '{raw}' (expected {expected})"))
+    })
 }
 
 fn parse_rfc3339(s: &str) -> Result<DateTime<Utc>, ApiError> {

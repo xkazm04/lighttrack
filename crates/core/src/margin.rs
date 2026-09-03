@@ -24,11 +24,20 @@ pub enum MarginDimension {
 }
 
 impl MarginDimension {
+    /// Every dimension, so a wire parser can derive its accepted set and its error message from
+    /// the enum rather than from a hand-maintained list.
+    pub const ALL: [MarginDimension; 2] = [MarginDimension::Customer, MarginDimension::Product];
+
+    /// Lenient parse: anything but `product` is `customer`. Kept for callers that treat the
+    /// dimension as a preference; a request surface should use [`MarginDimension::from_wire`],
+    /// which refuses a misspelling instead of silently answering the customer question.
     pub fn parse(s: &str) -> Self {
-        match s {
-            "product" => MarginDimension::Product,
-            _ => MarginDimension::Customer,
-        }
+        Self::from_wire(s).unwrap_or(MarginDimension::Customer)
+    }
+
+    /// Strict parse: `None` outside the vocabulary.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|d| d.as_str() == s)
     }
 
     pub fn as_str(&self) -> &'static str {
