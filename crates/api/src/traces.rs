@@ -24,7 +24,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{new_id, Score, ScoreDetail, Trace, TraceCoverage};
+use lighttrack_core::{new_id, LlmEvent, Score, ScoreDetail, Trace, TraceCoverage, TraceSpan};
 use lighttrack_store::{TraceFilter, MAX_TRACE_SPANS};
 
 use crate::error::ApiError;
@@ -207,6 +207,19 @@ pub(crate) async fn score_trace(
     let scope = resolve_read_project(&p, None)?;
     let trace = load_trace(&st, scope, &id).await?;
 
+    // Every span, not only the roots: `trace.spans` is a forest whose inner calls sit in
+    // `children`. Walking the top level alone meant a per-call verdict on a nested span never
+    // found its event, and a whole-trace verdict's evidence count covered the root spans only.
+    let events = all_events(&trace.spans);
+    if let Some(anchor) = body.event_id.as_deref() {
+        // The anchor must be one of this trace's own spans: an id from elsewhere (another trace,
+        // another project) used to be stored as the verdict's event_id unchecked.
+        if !events.iter().any(|e| e.id == anchor) {
+            return Err(ApiError::bad_request(format!(
+                "event_id {anchor:?} is not a span of trace '{id}'"
+            )));
+        }
+    }
     // Anchor to the requested call, else the trace's entry-point span.
     let event_id = body
         .event_id
@@ -220,14 +233,11 @@ pub(crate) async fn score_trace(
     // a whole-trace verdict the sum across the spans it covers. `None` (rather than 0) when no
     // covered event carried a stamp: "we do not know" is a weaker claim than "nothing was rewritten"
     // and must not be dressed up as it.
-    let judged: Vec<&lighttrack_core::LlmEvent> = match event_id.as_deref() {
-        Some(anchor) if Some(anchor) != trace.root_event_id() => trace
-            .spans
-            .iter()
-            .map(|s| &s.event)
-            .filter(|e| e.id == anchor)
-            .collect(),
-        _ => trace.spans.iter().map(|s| &s.event).collect(),
+    let judged: Vec<&LlmEvent> = match event_id.as_deref() {
+        Some(anchor) if Some(anchor) != trace.root_event_id() => {
+            events.iter().copied().filter(|e| e.id == anchor).collect()
+        }
+        _ => events.clone(),
     };
     let evidence_redacted_spans = judged
         .iter()
@@ -271,6 +281,19 @@ pub(crate) async fn score_trace(
     spawn_db(move || store.insert_score(&to_insert)).await?;
     st.alerts.record_score(&score);
     Ok(Json(score))
+}
+
+/// Every event in a span forest, depth-first — roots and their nested calls alike.
+fn all_events(spans: &[TraceSpan]) -> Vec<&LlmEvent> {
+    fn walk<'a>(spans: &'a [TraceSpan], out: &mut Vec<&'a LlmEvent>) {
+        for s in spans {
+            out.push(&s.event);
+            walk(&s.children, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(spans, &mut out);
+    out
 }
 
 /// Fetch a trace by id **within `scope`**, mapping an unknown trace to 404.
