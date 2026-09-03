@@ -533,6 +533,23 @@ mod tests {
         }
     }
 
+    /// Both ingest doors share this rule: W3C hex ids fold to lower case, everything else is kept
+    /// verbatim, and a hex string of the wrong length is somebody's opaque id, not a W3C one.
+    #[test]
+    fn w3c_hex_ids_fold_and_opaque_ids_are_kept() {
+        assert_eq!(
+            normalize_trace_ref("5B8EFFF798038103D269B633813FC60C"),
+            "5b8efff798038103d269b633813fc60c"
+        );
+        assert_eq!(normalize_trace_ref("EEE19B7EC3C1B174"), "eee19b7ec3c1b174");
+        assert_eq!(normalize_trace_ref("Order-7"), "Order-7");
+        assert_eq!(
+            normalize_trace_ref("ABCDEF0123456789A"),
+            "ABCDEF0123456789A"
+        );
+        assert_eq!(normalize_trace_ref(""), "");
+    }
+
     #[test]
     fn empty_trace_is_none() {
         assert!(Trace::from_events(vec![]).is_none());
