@@ -162,21 +162,7 @@ pub(crate) async fn update_project(
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
 
     let mut proj = load_project(&st, &pid).await?;
-    if let Some(n) = req.name {
-        proj.name = n;
-    }
-    if let Some(e) = req.enabled {
-        proj.enabled = e;
-    }
-    if let Some(r) = req.redaction {
-        proj.redaction = r;
-    }
-    if let Some(c) = req.collective_opt_in {
-        proj.collective_opt_in = c;
-    }
-    if let Some(t) = req.require_trusted_judge {
-        proj.require_trusted_judge = t;
-    }
+    apply_update(&mut proj, req);
 
     let store = st.store.clone();
     let pc = proj.clone();
@@ -188,6 +174,31 @@ pub(crate) async fn update_project(
     // never disagree with what the store actually persisted.
     st.project_policies.invalidate(&proj.id);
     Ok(Json(proj))
+}
+
+/// Fold an update into the row. `enabled: true` is also the **un-archive**: the lifecycle vocabulary
+/// is closed — a project is live, disabled, or archived — and a row that is both enabled and
+/// stamped `archived_at` is none of those. Re-enabling restores the same entity, history intact,
+/// which is what un-archival means; nothing else clears the stamp.
+fn apply_update(proj: &mut Project, req: UpdateProjectReq) {
+    if let Some(n) = req.name {
+        proj.name = n;
+    }
+    if let Some(e) = req.enabled {
+        proj.enabled = e;
+        if e {
+            proj.archived_at = None;
+        }
+    }
+    if let Some(r) = req.redaction {
+        proj.redaction = r;
+    }
+    if let Some(c) = req.collective_opt_in {
+        proj.collective_opt_in = c;
+    }
+    if let Some(t) = req.require_trusted_judge {
+        proj.require_trusted_judge = t;
+    }
 }
 
 /// Archive a project (admin): `enabled = false`, `archived_at = now`, **rows kept**.
@@ -274,6 +285,40 @@ mod tests {
         ] {
             assert!(validate_project_id(id).is_err(), "should reject {id:?}");
         }
+    }
+
+    /// `PUT {"enabled": true}` on an archived project used to leave `archived_at` stamped, so the
+    /// row read as archived *and* live — a state the lifecycle has no word for.
+    #[test]
+    fn re_enabling_an_archived_project_is_the_un_archive() {
+        let mut proj = Project {
+            id: "p".into(),
+            name: "n".into(),
+            enabled: false,
+            redaction: Redaction::None,
+            collective_opt_in: false,
+            require_trusted_judge: false,
+            archived_at: Some(Utc::now()),
+            created_at: Utc::now(),
+        };
+        let untouched = UpdateProjectReq {
+            name: Some("renamed".into()),
+            enabled: None,
+            redaction: None,
+            collective_opt_in: None,
+            require_trusted_judge: None,
+        };
+        apply_update(&mut proj, untouched);
+        assert!(proj.archived_at.is_some(), "a rename does not un-archive");
+        let enable = UpdateProjectReq {
+            name: None,
+            enabled: Some(true),
+            redaction: None,
+            collective_opt_in: None,
+            require_trusted_judge: None,
+        };
+        apply_update(&mut proj, enable);
+        assert!(proj.enabled && proj.archived_at.is_none());
     }
 
     /// The rejection message must name the broken rule — a 400 that only says "invalid" leaves the
