@@ -11,6 +11,7 @@ use axum::{
 };
 use serde::Deserialize;
 
+use crate::credential_boundary;
 use crate::error::ApiError;
 use crate::state::{spawn_db, AppState};
 
@@ -40,9 +41,26 @@ pub(crate) async fn post_webhook(
             .and_then(|v| v.to_str().ok())
             .map(str::to_string)
     };
-    let mut events = source
-        .verify_webhook(&lookup, &body, now)
-        .map_err(|e| ApiError::unauthorized(e.to_string()))?;
+    // A rejected webhook is the failure an operator has to debug from the outside, and the reflex
+    // fix — log the request so you can see what the provider actually sent — is how the signing
+    // header ends up in a file nobody rotates. So this is the first surface rendered through the
+    // emission allowlist: the operator gets the shape of the call and our reason, and every header
+    // value, signature included, is replaced without anyone having enumerated which are sensitive.
+    let mut events = source.verify_webhook(&lookup, &body, now).map_err(|e| {
+        tracing::warn!(
+            record = %credential_boundary::render_operator_record(
+                &[
+                    ("provider", provider.clone()),
+                    ("project", project.clone()),
+                    ("route", "POST /v1/billing/webhooks/:provider".to_string()),
+                    ("reason", e.to_string()),
+                ],
+                &headers,
+            ),
+            "billing webhook signature verification failed",
+        );
+        ApiError::unauthorized(e.to_string())
+    })?;
     for ev in &mut events {
         ev.project_id = project.clone();
     }
