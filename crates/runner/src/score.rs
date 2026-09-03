@@ -45,7 +45,14 @@ pub(crate) fn score_recent(
         );
     }
     loop {
-        score_once(cli, http, engine, judge, project, prompt_tag, limit, jobs)?;
+        match score_once(cli, http, engine, judge, project, prompt_tag, limit, jobs) {
+            Ok(_) => {}
+            // A one-shot run propagates so a cron step fails loudly; the daemon logs and carries
+            // on, as `score-traces` and `schedule` already do — a scorer that died at the first
+            // API blip left every later event unjudged with nothing to show but a dead process.
+            Err(e) if interval == 0 => return Err(e),
+            Err(e) => eprintln!("scoring pass failed (continuing after {interval}s): {e:#}"),
+        }
         if interval == 0 {
             break;
         }
