@@ -5,7 +5,7 @@ raised_by: intake intake-portkey-0902 (peer comparison)
 source: librarian/sources/2026-09-02-portkey-gateway.md
 stage: the outbound provider call in crates/engine, and the target matrix in crates/runner that fans it out
 size: 4 files / ~200 lines / M
-status: proposed
+status: accepted
 ---
 
 ## Why the scope implies it

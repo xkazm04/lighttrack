@@ -5,7 +5,7 @@ raised_by: intake intake-portkey-0902 (peer comparison)
 source: librarian/sources/2026-09-02-portkey-gateway.md
 stage: price resolution — between the outbound provider call and the cost stamped on an event or a benchmark cell
 size: 3 files / ~150 lines / M
-status: proposed
+status: declined
 ---
 
 ## Why the scope implies it

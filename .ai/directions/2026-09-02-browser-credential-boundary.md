@@ -5,7 +5,7 @@ raised_by: intake intake-portkey-0902 (peer comparison)
 source: librarian/sources/2026-09-02-portkey-gateway.md
 stage: process boot and the operator-API middleware stack, before any route is served
 size: 3 files / ~120 lines / M
-status: proposed
+status: accepted
 ---
 
 ## Why the scope implies it
