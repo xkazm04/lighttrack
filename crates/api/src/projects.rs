@@ -33,6 +33,16 @@ pub(crate) struct CreateProjectReq {
     require_trusted_judge: bool,
 }
 
+/// A project name is what every list, alert and banner prints for the tenant; blank is not a name.
+/// One door for both the create and update bodies, so the two cannot disagree on what a name is.
+fn validate_name(name: &str) -> Result<String, ApiError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("name must not be blank"));
+    }
+    Ok(name.to_string())
+}
+
 /// Longest accepted caller-supplied project id. A project id is a URL path segment, a query value
 /// and a document id, so it stays short enough to read in a log line.
 const MAX_PROJECT_ID_LEN: usize = 64;
@@ -72,6 +82,7 @@ pub(crate) async fn create_project(
     Json(req): Json<CreateProjectReq>,
 ) -> Result<Json<Project>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    let name = validate_name(&req.name)?;
     // An id the caller chose is honoured, not quietly replaced: it is the string they will type into
     // `LIGHTTRACK_PROJECT` and into the very next documented call (`POST /v1/projects/<id>/keys`),
     // and the dev-mode bootstrap already creates a human-readable `default` project — so readable
@@ -101,7 +112,7 @@ pub(crate) async fn create_project(
     };
     let proj = Project {
         id,
-        name: req.name,
+        name,
         enabled: true,
         redaction: req.redaction,
         collective_opt_in: req.collective_opt_in,
@@ -162,6 +173,10 @@ pub(crate) async fn update_project(
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
 
     let mut proj = load_project(&st, &pid).await?;
+    let req = UpdateProjectReq {
+        name: req.name.as_deref().map(validate_name).transpose()?,
+        ..req
+    };
     apply_update(&mut proj, req);
 
     let store = st.store.clone();
@@ -319,6 +334,13 @@ mod tests {
         };
         apply_update(&mut proj, enable);
         assert!(proj.enabled && proj.archived_at.is_none());
+    }
+
+    #[test]
+    fn a_blank_name_is_refused_on_both_doors_and_a_padded_one_is_trimmed() {
+        assert!(validate_name("").is_err());
+        assert!(validate_name("   ").is_err());
+        assert_eq!(validate_name("  acme  ").ok().as_deref(), Some("acme"));
     }
 
     /// The rejection message must name the broken rule — a 400 that only says "invalid" leaves the
