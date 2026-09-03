@@ -427,7 +427,11 @@ pub struct BenchmarkRun {
     pub pass_rate: Option<f64>,
     #[serde(default)]
     pub cost_usd: f64,
-    /// `running` | `passed` | `regressed` | `failed`.
+    /// The runner's verdict for the run. Minted by the runner's `significance_verdict` and
+    /// `aggregate_status`: `passed` | `regressed` | `no_baseline`, or `partial` (a cost ceiling cut
+    /// the run) | `cancelled` (an operator did); `running` marks a run whose finish never arrived,
+    /// and `completed` is the serde default a row with no status reads as. The four-word list this
+    /// doc used to carry predated every status but the first two.
     #[serde(default = "default_run_status")]
     pub status: String,
     // Phase 3.6a: response-time + token aggregates for the run.
