@@ -1,8 +1,12 @@
 //! Prompt registry — named, versioned prompts fetched at runtime by label (e.g. `production`).
 //!
 //! A new version auto-enqueues the prompt's linked benchmark (reusing the job queue); promoting a
-//! label to a version is **blocked** when that benchmark's latest mean score has regressed against
-//! its baseline — turning a prompt edit into a gated, measurable quality step.
+//! label to a version is **blocked** (409) unless the latest run that scored *that version* actually
+//! generated with it, did not regress against the benchmark's baseline, and — when the project
+//! requires it — was judged by a judge that has been checked against a human. `force` overrides
+//! all but the last. The policy itself lives in [`crate::prompts_gate`]; this module owns the
+//! routes. A promotion also moves the label's ledger, which the canary sweep
+//! ([`crate::prompt_canary_sweep`]) later reads to know what to fall back to.
 
 use axum::{
     extract::{Path, Query, State},
