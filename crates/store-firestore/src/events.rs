@@ -364,6 +364,10 @@ fn to_fields(ev: &LlmEvent) -> Result<Fields> {
     m.insert("span_id".into(), json!(ev.span_id));
     m.insert("parent_span_id".into(), json!(ev.parent_span_id));
     m.insert("ts".into(), json!(fmt_ts(ev.ts)));
+    // Server-arrival time, the accounting clock the SQL backends window on. The reader below has
+    // accepted this field since the received_at migration; the writer never wrote it, so every
+    // document fell back to the client's `ts` on read and a backdated event moved its own window.
+    m.insert("received_at".into(), json!(fmt_ts(ev.received_at)));
     m.insert("provider".into(), json!(ev.provider.as_str()));
     m.insert("model".into(), json!(ev.model));
     m.insert("operation".into(), json!(ev.operation.as_str()));
@@ -398,8 +402,8 @@ fn from_fields(m: &Fields) -> Result<LlmEvent> {
         span_id: fstr(m, "span_id"),
         parent_span_id: fstr(m, "parent_span_id"),
         ts: parse_ts(&freq(m, "ts")?)?,
-        // No `received_at` field on this backend yet: mirror the SQLite migration's backfill
-        // (arrival time == event time). Mechanical only — the Firestore owner ports the real field.
+        // Documents written before `received_at` was stored fall back to `ts` (the SQLite
+        // migration's backfill rule); everything written since carries the real arrival time.
         received_at: parse_ts(&fstr(m, "received_at").unwrap_or(freq(m, "ts")?))?,
         provider: lighttrack_core::ProviderId::new(&freq(m, "provider")?),
         model: freq(m, "model")?,
@@ -424,4 +428,35 @@ fn from_fields(m: &Fields) -> Result<LlmEvent> {
         source: fstr(m, "source"),
         metadata: fjson(m, "metadata")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{from_fields, to_fields};
+    use crate::codec::{decode_doc, encode_fields};
+    use lighttrack_core::LlmEvent;
+    use serde_json::json;
+
+    /// The arrival clock survives storage: the reader accepted `received_at` for a release the
+    /// writer never wrote it, so every document answered accounting windows on the client's `ts`.
+    #[test]
+    fn received_at_round_trips_and_is_not_the_client_ts() {
+        let mut ev: LlmEvent = serde_json::from_value(json!({
+            "id": "e1", "project_id": "p", "provider": "anthropic", "model": "m",
+            "usage": { "input": 1, "output": 1 }, "ts": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        ev.received_at = chrono::DateTime::parse_from_rfc3339("2026-03-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let doc = json!({ "fields": encode_fields(&to_fields(&ev).unwrap()) });
+        let back = from_fields(&decode_doc(&doc)).unwrap();
+        assert_eq!(back.received_at, ev.received_at);
+        assert_ne!(back.received_at, back.ts);
+        // A pre-migration document with no field still reads as ts.
+        let mut legacy = to_fields(&ev).unwrap();
+        legacy.remove("received_at");
+        let back = from_fields(&decode_doc(&json!({ "fields": encode_fields(&legacy) }))).unwrap();
+        assert_eq!(back.received_at, back.ts);
+    }
 }
