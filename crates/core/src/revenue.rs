@@ -123,3 +123,51 @@ fn default_source() -> String {
 fn default_currency() -> String {
     "USD".to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(currency: &str, converted: Option<bool>) -> RevenueEvent {
+        serde_json::from_value(serde_json::json!({
+            "amount_usd": 1.0, "currency": currency, "converted": converted
+        }))
+        .expect("row")
+    }
+
+    /// The stamp wins when present; a row that predates it is inferred from its currency, never
+    /// defaulted to "unconverted" - or every historical USD invoice would read as approximate.
+    #[test]
+    fn conversion_is_read_from_the_stamp_and_inferred_only_when_absent() {
+        assert!(row("EUR", Some(true)).is_converted());
+        assert!(
+            !row("USD", Some(false)).is_converted(),
+            "an explicit fallback stamp is honoured"
+        );
+        assert!(
+            row("usd", None).is_converted(),
+            "a pre-stamp USD row needed no rate"
+        );
+        assert!(
+            !row("GBP", None).is_converted(),
+            "a pre-stamp GBP row may or may not have converted"
+        );
+    }
+
+    #[test]
+    fn kind_wire_strings_round_trip() {
+        for k in [
+            RevenueKind::Subscription,
+            RevenueKind::OneTime,
+            RevenueKind::Usage,
+            RevenueKind::Refund,
+        ] {
+            assert_eq!(RevenueKind::parse(k.as_str()), k);
+            assert_eq!(
+                serde_json::to_value(k).expect("kind"),
+                serde_json::Value::String(k.as_str().to_string())
+            );
+        }
+        assert_eq!(RevenueKind::parse("nonsense"), RevenueKind::OneTime);
+    }
+}
