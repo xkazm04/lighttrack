@@ -1,6 +1,8 @@
 //! Minimal Firestore REST client over blocking reqwest: document GET / upsert (PATCH) / partial
 //! PATCH / `runQuery`. Returns decoded plain-field maps (see `codec`).
 
+use std::time::Duration;
+
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::Method;
 use serde_json::{json, Value};
@@ -15,10 +17,22 @@ pub(crate) struct Rest {
     token: Option<String>,
 }
 
+/// Every Firestore call runs on the API's blocking pool under a request that is itself deadlined,
+/// so a call that never returns pins a pool thread until the process restarts. `Client::new()` had
+/// no timeout at all; every other HTTP client in the workspace bounds both halves.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Generous, because the client-side aggregates here read a whole window in one `runQuery`.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
 impl Rest {
     pub(crate) fn new(base: String, token: Option<String>) -> Self {
+        let client = Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
-            client: Client::new(),
+            client,
             base,
             token,
         }
