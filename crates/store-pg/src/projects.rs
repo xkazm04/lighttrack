@@ -41,9 +41,13 @@ pub(crate) async fn create(pool: &PgPool, p: &Project) -> Result<()> {
 /// deployments actually run: `PUT /v1/projects/:id` is how a *redaction* policy is changed, so
 /// inheriting the default meant production could not tighten what it stores. See `Surface::ProjectAdmin`.
 pub(crate) async fn update(pool: &PgPool, p: &Project) -> Result<bool> {
+    // `archived_at` is a mutable field like the others: `DELETE /v1/projects/:id` archives by
+    // writing it through this very method, and re-enabling clears it. The SQLite reference writes
+    // it; this port did not, so on the production backend an archive set `enabled = false` and
+    // stamped nothing, and every archived tenant read as merely disabled.
     let res = sqlx::query(
         "UPDATE projects SET name = $2, enabled = $3, redaction = $4, collective_opt_in = $5, \
-         require_trusted_judge = $6 WHERE id = $1",
+         require_trusted_judge = $6, archived_at = $7 WHERE id = $1",
     )
     .bind(p.id.clone())
     .bind(p.name.clone())
@@ -51,6 +55,7 @@ pub(crate) async fn update(pool: &PgPool, p: &Project) -> Result<bool> {
     .bind(enum_to_str(&p.redaction)?)
     .bind(p.collective_opt_in as i64)
     .bind(p.require_trusted_judge as i64)
+    .bind(p.archived_at.map(fmt_ts))
     .execute(pool)
     .await
     .map_err(pgerr)?;
