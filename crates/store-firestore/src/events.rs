@@ -16,6 +16,30 @@ use crate::rest::Rest;
 
 const COLL: &str = "events";
 
+/// What [`fold_usage`] reads off a document — the projection every rolling-usage read asks for,
+/// instead of the whole event with its payloads.
+const USAGE_FIELDS: &[&str] = &["cost_usd", "input_tokens", "output_tokens", "metadata"];
+/// [`USAGE_FIELDS`] plus the top-level scope dimensions, for the scoped and by-scope reads.
+const SCOPED_USAGE_FIELDS: &[&str] = &[
+    "cost_usd",
+    "input_tokens",
+    "output_tokens",
+    "metadata",
+    "provider",
+    "model",
+    "name",
+];
+/// What the cost rollups group and sum on.
+const COST_FIELDS: &[&str] = &[
+    "project_id",
+    "provider",
+    "model",
+    "name",
+    "input_tokens",
+    "output_tokens",
+    "cost_usd",
+];
+
 pub(crate) fn insert_event(rest: &Rest, ev: &LlmEvent) -> Result<()> {
     // Create, not upsert: a duplicate id is a Conflict (API 409), never a silent overwrite.
     rest.create_doc(COLL, &ev.id, &to_fields(ev)?)
@@ -61,7 +85,7 @@ pub(crate) fn cost_summary_windowed(
     if let Some(u) = until {
         filters.push(("ts", "LESS_THAN", json!(fmt_ts(u))));
     }
-    let docs = rest.query(COLL, &filters, None, None)?;
+    let docs = rest.query_select(COLL, COST_FIELDS, &filters, None, None)?;
     let mut agg: BTreeMap<(String, String, String), CostRow> = BTreeMap::new();
     for m in &docs {
         let pid = fstr(m, "project_id").unwrap_or_default();
@@ -128,7 +152,7 @@ pub(crate) fn usage_since(rest: &Rest, project: &str, since: DateTime<Utc>) -> R
         ("project_id", "EQUAL", json!(project)),
         ("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))),
     ];
-    let docs = rest.query(COLL, &filters, None, None)?;
+    let docs = rest.query_select(COLL, USAGE_FIELDS, &filters, None, None)?;
     let mut u = Usage::default();
     for m in &docs {
         fold_usage(&mut u, m);
@@ -215,7 +239,7 @@ pub(crate) fn usage_since_scoped(
         ("project_id", "EQUAL", json!(project)),
         ("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))),
     ];
-    let docs = rest.query(COLL, &filters, None, None)?;
+    let docs = rest.query_select(COLL, SCOPED_USAGE_FIELDS, &filters, None, None)?;
     let mut u = Usage::default();
     for m in &docs {
         if scope_value(m, scope.kind_str()).as_deref() != Some(scope.value()) {
@@ -260,7 +284,7 @@ pub(crate) fn usage_by_scope(
         ("project_id", "EQUAL", json!(project)),
         ("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))),
     ];
-    let docs = rest.query(COLL, &filters, None, None)?;
+    let docs = rest.query_select(COLL, SCOPED_USAGE_FIELDS, &filters, None, None)?;
     let mut agg: BTreeMap<Option<String>, Usage> = BTreeMap::new();
     for m in &docs {
         fold_usage(agg.entry(scope_value(m, kind)).or_default(), m);
@@ -290,7 +314,7 @@ pub(crate) fn usecase_costs(
     if let Some(s) = since {
         filters.push(("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(s))));
     }
-    let docs = rest.query(COLL, &filters, None, None)?;
+    let docs = rest.query_select(COLL, COST_FIELDS, &filters, None, None)?;
     let mut agg: BTreeMap<(Option<String>, String, String), UseCaseCostRow> = BTreeMap::new();
     for m in &docs {
         let name = fstr(m, "name");

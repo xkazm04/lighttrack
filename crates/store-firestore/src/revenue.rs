@@ -67,7 +67,14 @@ pub(crate) fn cost_by_dimension(
     let mut filters = project_filter(project);
     filters.push(("ts", "GREATER_THAN_OR_EQUAL", json!(fmt_ts(since))));
     filters.push(("ts", "LESS_THAN", json!(fmt_ts(until))));
-    let docs = rest.query("events", &filters, None, None)?;
+    // Projected: the fold reads three fields; the event's payloads are not among them.
+    let docs = rest.query_select(
+        "events",
+        &["ts", "metadata", "cost_usd"],
+        &filters,
+        None,
+        None,
+    )?;
     // (calls, cost, unpriced): a doc with no `cost_usd` field is unpriced — counted, never summed as
     // $0.00, so the row discloses how much of it is a floor rather than a total.
     let mut agg: BTreeMap<Option<String>, (i64, f64, i64)> = BTreeMap::new();

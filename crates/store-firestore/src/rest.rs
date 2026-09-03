@@ -154,11 +154,41 @@ impl Rest {
         order: Option<(&str, bool)>,
         limit: Option<usize>,
     ) -> Result<Vec<Fields>> {
-        Ok(self
-            .query_raw(collection, filters, order, limit)?
-            .iter()
-            .map(decode_doc)
-            .collect())
+        self.query_select(collection, &[], filters, order, limit)
+    }
+
+    /// `runQuery` returning only `select`ed fields of each matching document (all fields when
+    /// `select` is empty). The client-side aggregates fold four or five numeric fields per event,
+    /// and used to receive the whole document — `input`, `output` and `metadata` included — for
+    /// every event in the window, on every admission check. Firestore bills per document either
+    /// way; what a projection saves is the bytes, which on a payload-carrying collection is most
+    /// of them.
+    pub(crate) fn query_select(
+        &self,
+        collection: &str,
+        select: &[&str],
+        filters: &[(&str, &str, Value)],
+        order: Option<(&str, bool)>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Fields>> {
+        let url = format!("{}:runQuery", self.base);
+        let mut sq = build_sq(collection, filters, order, limit);
+        if !select.is_empty() {
+            sq["select"] = json!({
+                "fields": select.iter().map(|f| json!({ "fieldPath": f })).collect::<Vec<_>>()
+            });
+        }
+        let body = json!({ "structuredQuery": sq });
+        let arr = json_ok(self.req(Method::POST, url).json(&body).send().map_err(re)?)?;
+        let mut out = Vec::new();
+        if let Some(items) = arr.as_array() {
+            for it in items {
+                if let Some(doc) = it.get("document") {
+                    out.push(decode_doc(doc));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// `runQuery` returning raw documents (with `name` + `updateTime`) — used by `claim_job`.
@@ -314,4 +344,35 @@ fn json_ok(resp: Response) -> Result<Value> {
         return Err(other(format!("firestore HTTP {}: {text}", status.as_u16())));
     }
     serde_json::from_str(&text).map_err(|e| other(format!("firestore bad json: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_sq;
+    use serde_json::json;
+
+    #[test]
+    fn a_structured_query_carries_its_filters_order_and_limit() {
+        let sq = build_sq(
+            "events",
+            &[
+                ("project_id", "EQUAL", json!("p")),
+                (
+                    "ts",
+                    "GREATER_THAN_OR_EQUAL",
+                    json!("2026-01-01T00:00:00.000000000Z"),
+                ),
+            ],
+            Some(("ts", true)),
+            Some(50),
+        );
+        assert_eq!(sq["from"][0]["collectionId"], "events");
+        assert_eq!(sq["where"]["compositeFilter"]["op"], "AND");
+        assert_eq!(sq["orderBy"][0]["direction"], "DESCENDING");
+        assert_eq!(sq["limit"], 50);
+        // A single filter is not wrapped in a composite.
+        let one = build_sq("events", &[("id", "EQUAL", json!("e"))], None, None);
+        assert!(one["where"]["fieldFilter"].is_object(), "{one}");
+        assert!(one.get("orderBy").is_none() && one.get("limit").is_none());
+    }
 }
