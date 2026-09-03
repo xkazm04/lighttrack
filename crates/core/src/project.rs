@@ -198,6 +198,21 @@ impl ApiKey {
 mod tests {
     use super::*;
 
+    /// `redaction` is stored on every project row and stamped into every event's metadata, so its
+    /// three wire strings are a persisted format: a rename would strand every stored row.
+    #[test]
+    fn redaction_wire_strings_are_frozen() {
+        for (r, wire) in [
+            (Redaction::None, "\"none\""),
+            (Redaction::Hash, "\"hash\""),
+            (Redaction::Drop, "\"drop\""),
+        ] {
+            assert_eq!(serde_json::to_string(&r).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<Redaction>(wire).unwrap(), r);
+        }
+        assert!(serde_json::from_str::<Redaction>("\"redact\"").is_err());
+    }
+
     #[test]
     fn every_scope_round_trips_through_its_wire_string() {
         for s in Scope::ALL {
