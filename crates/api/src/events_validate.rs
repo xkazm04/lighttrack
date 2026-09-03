@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
 
-use lighttrack_core::LlmEvent;
+use lighttrack_core::{trace_ref_within_bound, LlmEvent, MAX_TRACE_REF_LEN};
 
 use crate::error::{ApiError, ErrorCode};
 
@@ -144,6 +144,37 @@ impl IngestPolicy {
                 "`model` must not be empty",
             ));
         }
+        // Propagation metadata is the one part of an event that arrives from a sender we do not
+        // control — an SDK or OTLP caller writes `trace_id` / `span_id` / `parent_span_id` by hand —
+        // and it is written straight into the record an operator reads during an incident. Every
+        // other caller-supplied identifier in this service is already bounded (a project id at 64
+        // characters, a prompt name or label at 128); these three were not, so the only cap on them
+        // was the request body limit — megabytes of caller-chosen text per field. They are bounded
+        // here, and only bounded: a non-W3C id is somebody's legitimate opaque id and its alphabet
+        // and case stay untouched (see `normalize_trace_ref`).
+        //
+        // Over-long is REJECTED, never truncated. Truncating an identifier is silently lossy in the
+        // worst way available: two distinct traces whose ids share a 128-character prefix would
+        // collapse into one, and the corruption would be invisible in exactly the view built to
+        // explain it. Rejecting matches how the project and prompt doors treat an over-long
+        // identifier — the caller is told, in the same breath, which field and which limit.
+        for (field, value) in [
+            ("trace_id", ev.trace_id.as_deref()),
+            ("span_id", ev.span_id.as_deref()),
+            ("parent_span_id", ev.parent_span_id.as_deref()),
+        ] {
+            if let Some(v) = value {
+                if !trace_ref_within_bound(v) {
+                    return Err(Rejection::new(
+                        ErrorCode::BadRequest,
+                        format!(
+                            "`{field}` must be at most {MAX_TRACE_REF_LEN} characters (got {})",
+                            v.chars().count()
+                        ),
+                    ));
+                }
+            }
+        }
         // A `provider` outside the modeled variants deserializes to `Unknown` and is ACCEPTED:
         // observability must ingest traffic from providers we haven't modeled yet (mistral, bedrock,
         // ollama, …). Its cost simply stays unpriced (`cost_usd: null`, no `cost_source`), which is
@@ -225,6 +256,49 @@ mod tests {
     #[test]
     fn accepts_a_well_formed_event() {
         let now = Utc::now();
+        assert!(disabled_skew().validate(&ev(json!({})), now).is_ok());
+    }
+
+    #[test]
+    fn rejects_an_over_long_trace_ref_on_every_one_of_the_three_fields() {
+        let now = Utc::now();
+        let over = "a".repeat(MAX_TRACE_REF_LEN + 1);
+        for field in ["trace_id", "span_id", "parent_span_id"] {
+            let e = ev(json!({ field: over.clone() }));
+            let err = disabled_skew().validate(&e, now).unwrap_err();
+            assert_eq!(err.code, ErrorCode::BadRequest);
+            assert!(err.message.contains(field), "{}", err.message);
+            assert!(
+                err.message.contains(&MAX_TRACE_REF_LEN.to_string()),
+                "the message names the limit: {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_ids_at_and_under_the_bound_whatever_they_look_like() {
+        let now = Utc::now();
+        // Exactly at the cap, an opaque id, a W3C trace id and a W3C span id all pass.
+        let at_cap = "a".repeat(MAX_TRACE_REF_LEN);
+        for id in [
+            at_cap.as_str(),
+            "req-1",
+            "Order-7",
+            "5b8efff798038103d269b633813fc60c",
+            "eee19b7ec3c1b174",
+        ] {
+            let e = ev(json!({
+                "trace_id": id,
+                "span_id": id,
+                "parent_span_id": id,
+            }));
+            assert!(
+                disabled_skew().validate(&e, now).is_ok(),
+                "id must be accepted: {id}"
+            );
+        }
+        // Absent ids are not a violation.
         assert!(disabled_skew().validate(&ev(json!({})), now).is_ok());
     }
 
