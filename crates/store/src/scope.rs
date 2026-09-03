@@ -174,6 +174,7 @@ mod trait_signature {
     const NO_SCOPE_NEEDED: &[(&str, &str)] = &[
         // Writes whose argument already carries the row's `project_id`; the scope would be a
         // second, disagreeable source of truth for the same fact.
+        ("ping", "a liveness probe of the store itself; it reads no project-bearing row"),
         ("insert_event", "the event carries its project"),
         ("insert_event_checked", "the event carries its project"),
         ("insert_events_checked", "the events carry their project"),
