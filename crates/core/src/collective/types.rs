@@ -181,8 +181,10 @@ pub struct LeaderboardRow {
     /// commensurable when these agree — the row is judged by whatever scored each contribution.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub judge_providers: Vec<String>,
-    /// `Some(n)` when more than one distinct judge family contributed — the number is incommensurable
-    /// across judges, so treat the ranking with care. `None` when a single judge (or none recorded).
+    /// `Some(n)` when more than one judge family stands behind the row — the number is incommensurable
+    /// across judges, so treat the ranking with care. A source tagged `mixed` counts as two families,
+    /// so a row built from one such source is flagged too. `None` when a single judge (or none
+    /// recorded).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mixed_judges: Option<u32>,
     pub n_contributors: u32,
