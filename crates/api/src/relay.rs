@@ -137,7 +137,11 @@ pub(crate) async fn enqueue_task(
 ) -> Result<Json<EnqueueResp>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let project = resolve_ingest_project(&p, &req.project_id)?;
-    if req.action_type.trim().is_empty() {
+    // Trimmed ONCE, here, and the trimmed form is what is admitted, matched and stored. Admission
+    // used to trim while the row kept the raw string, so `" xprice/summary"` passed the door as
+    // routable and then sat queued forever: a device's capability match runs on the stored value.
+    let action_type = req.action_type.trim().to_string();
+    if action_type.is_empty() {
         return Err(ApiError::bad_request("action_type is required"));
     }
     // Idempotent enqueue: the same (project, key) returns the existing task instead of a duplicate.
@@ -163,7 +167,7 @@ pub(crate) async fn enqueue_task(
     // indistinguishable from a healthy backlog: the task sat queued, was handed to devices that had
     // no such action, burned every attempt on "no action", and dead-lettered hours later. A 422
     // here costs the caller one round trip and names the fix.
-    let admission = admit(&st, req.action_type.trim()).await;
+    let admission = admit(&st, &action_type).await;
     if let RelayAdmission::Refused { reason } = &admission {
         return Err(ApiError::relay_unroutable(reason.clone()));
     }
@@ -176,7 +180,7 @@ pub(crate) async fn enqueue_task(
         id: new_id(),
         project_id: project,
         source: req.source,
-        action_type: req.action_type,
+        action_type,
         payload: req.payload,
         status: RelayStatus::Queued.as_str().to_string(),
         attempts: 0,

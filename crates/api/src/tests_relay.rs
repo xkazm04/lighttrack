@@ -698,6 +698,41 @@ async fn exhausted_failure_dead_letters_and_long_poll_waits() {
     assert!(t0.elapsed() >= std::time::Duration::from_secs(1));
 }
 
+/// Admission trimmed the action type while the row kept the raw string, so a padded
+/// `" xprice/summary"` was admitted as routable and then never matched a device's capabilities.
+#[tokio::test]
+async fn a_padded_action_type_is_stored_trimmed_so_the_device_that_admitted_it_can_lease_it() {
+    let (state, store) = setup(Redactor::off());
+    let key_a = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    let (_, device_key) = enrol(&app, "xprice-laptop", json!(["xprice/*"])).await;
+
+    let (status, task) = call(
+        &app,
+        "POST",
+        "/v1/relay/tasks",
+        &key_a,
+        Some(json!({ "action_type": "  xprice/summary
+" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{task}");
+    assert_eq!(task["action_type"], "xprice/summary");
+    let (_, leased) = call(
+        &app,
+        "POST",
+        "/v1/relay/lease",
+        &device_key,
+        Some(json!({ "capabilities": ["xprice/*"] })),
+    )
+    .await;
+    assert_eq!(
+        leased["tasks"].as_array().unwrap().len(),
+        1,
+        "the device that admitted it can lease it: {leased}"
+    );
+}
+
 #[tokio::test]
 async fn idempotency_key_collapses_duplicate_enqueues() {
     let (state, store) = setup(Redactor::off());
