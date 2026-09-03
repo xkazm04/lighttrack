@@ -39,9 +39,13 @@ pub(crate) fn status(v: &Value) -> Option<String> {
         let threshold = f(st, "threshold");
         let ratio = f(st, "ratio");
         let breached = st.get("breached").and_then(Value::as_bool).unwrap_or(false);
-        // Prefer the rule's explicit soft-warning flag; fall back to the 0.8 heuristic for rules
-        // that configured no warn_at.
-        let warning = st.get("warning").and_then(Value::as_bool).unwrap_or(false);
+        // The API's `warning` is the rule's own warn_at verdict and wins when present; the 0.8
+        // heuristic is only for a status that carries no flag at all. `unwrap_or(false) || ratio >=
+        // 0.8` let the heuristic override a rule whose warn_at was deliberately set higher.
+        let warning = st
+            .get("warning")
+            .and_then(Value::as_bool)
+            .unwrap_or(ratio >= 0.8);
         let (used, thr) = if metric == "cost_usd" {
             (money(current), money(threshold))
         } else {
@@ -49,7 +53,7 @@ pub(crate) fn status(v: &Value) -> Option<String> {
         };
         let badge = if breached {
             "❌ over"
-        } else if warning || ratio >= 0.8 {
+        } else if warning {
             "⚠️ warning"
         } else {
             "✅ ok"
@@ -104,6 +108,27 @@ fn rejected_table(v: &Value) -> Option<String> {
     ))
 }
 
+/// A rule's threshold: a number is a fixed cap in the metric's unit; an object is a revenue-share
+/// cap (`{"pct": 80, ..}`) resolved per customer at evaluation time, which used to read as `$0`
+/// because the number accessor saw an object.
+fn threshold_cell(metric: &str, threshold: Option<&Value>) -> String {
+    match threshold {
+        Some(Value::Object(o)) => format!(
+            "{}% of revenue",
+            o.get("pct").and_then(Value::as_f64).unwrap_or(0.0)
+        ),
+        Some(v) => {
+            let x = v.as_f64().unwrap_or(0.0);
+            if metric == "cost_usd" {
+                money(x)
+            } else {
+                commafy(x as u64)
+            }
+        }
+        None => "—".to_string(),
+    }
+}
+
 pub(crate) fn list(v: &Value) -> Option<String> {
     let rows = v.as_array()?;
     if rows.is_empty() {
@@ -120,12 +145,7 @@ pub(crate) fn list(v: &Value) -> Option<String> {
     ]);
     for r in rows {
         let metric = s(r, "metric");
-        let threshold = f(r, "threshold");
-        let thr = if metric == "cost_usd" {
-            money(threshold)
-        } else {
-            commafy(threshold as u64)
-        };
+        let thr = threshold_cell(metric, r.get("threshold"));
         // warn_at is an optional fraction of the threshold; show it as a percentage or an em dash.
         let warn = r
             .get("warn_at")
@@ -144,4 +164,44 @@ pub(crate) fn list(v: &Value) -> Option<String> {
         ]);
     }
     Some(t.render())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A rule that set warn_at above 80% is not second-guessed by the renderer's fallback.
+    #[test]
+    fn the_apis_warning_verdict_wins_over_the_heuristic() {
+        let md = status(
+            &json!({ "project_id": "p", "throttled": false, "statuses": [
+                { "metric": "cost_usd", "window": "day", "current": 8.5, "threshold": 10.0,
+                  "ratio": 0.85, "breached": false, "warning": false }
+            ]}),
+        )
+        .unwrap();
+        assert!(md.contains("✅ ok"), "{md}");
+        let md = status(
+            &json!({ "project_id": "p", "throttled": false, "statuses": [
+                { "metric": "cost_usd", "window": "day", "current": 8.5, "threshold": 10.0,
+                  "ratio": 0.85, "breached": false }
+            ]}),
+        )
+        .unwrap();
+        assert!(md.contains("⚠️ warning"), "no flag → heuristic: {md}");
+    }
+
+    #[test]
+    fn a_revenue_share_threshold_is_not_rendered_as_zero_dollars() {
+        let md = list(&json!([
+            { "metric": "cost_usd", "window": "month", "threshold": { "pct": 80.0, "dimension": "customer" },
+              "action": "alert", "enabled": true },
+            { "metric": "cost_usd", "window": "day", "threshold": 12.5, "action": "block", "enabled": true }
+        ]))
+        .unwrap();
+        assert!(md.contains("80% of revenue"), "{md}");
+        assert!(md.contains("$12.50"), "{md}");
+        assert!(!md.contains("$0 "), "{md}");
+    }
 }
