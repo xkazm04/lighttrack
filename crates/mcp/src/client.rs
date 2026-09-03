@@ -41,8 +41,13 @@ impl Client {
             builder = builder.timeout(Duration::from_secs(timeout));
         }
         Self {
+            // Trimmed once: `LIGHTTRACK_URL=https://host/` is how a URL gets pasted, and the naive
+            // join produced `https://host//v1/...` - a 404 on every tool that read as "no such
+            // endpoint" (the CLI had the identical defect).
             base: std::env::var("LIGHTTRACK_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:8787".into()),
+                .unwrap_or_else(|_| "http://127.0.0.1:8787".into())
+                .trim_end_matches('/')
+                .to_string(),
             key: std::env::var("LIGHTTRACK_KEY")
                 .ok()
                 .filter(|s| !s.is_empty()),
