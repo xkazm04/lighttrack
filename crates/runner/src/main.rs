@@ -389,8 +389,7 @@ fn main() -> Result<()> {
                 let rubric = calibrate::resolve_rubric(&cli, &http, Some(rid))?
                     .ok_or_else(|| anyhow::anyhow!("rubric {rid} not found"))?;
                 let items = set.items.clone();
-                let prices: Vec<lighttrack_core::ModelPriceRow> =
-                    http::get(&cli, &http, "/v1/prices").unwrap_or_default();
+                let prices = bench::fetch_prices(&cli, &http);
                 let (jp, jm) = lighttrack_engine::parse_judge_spec(&cli.model);
                 calibrate_batch::compare(
                     &engine, &jp, &jm, &rubric, &items, batch, *samples, cli.jobs, *threshold,
