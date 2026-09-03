@@ -423,11 +423,12 @@ pub(crate) async fn get_margin_trend(
 }
 
 fn default_top_n() -> usize {
-    std::env::var("LIGHTTRACK_MARGIN_TREND_TOP_N")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_TREND_TOP_N)
+    // Announced when unparseable (the `.parse().ok()` class rounds 3 and 12 closed elsewhere); a
+    // zero is not a size, so it takes the default too.
+    match crate::state::env_parsed("LIGHTTRACK_MARGIN_TREND_TOP_N", DEFAULT_TREND_TOP_N) {
+        0 => DEFAULT_TREND_TOP_N,
+        n => n,
+    }
 }
 
 // --- per-customer breakdown (cost by model & by use-case) ---------------------------------------
