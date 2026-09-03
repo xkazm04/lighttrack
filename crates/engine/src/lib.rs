@@ -9,12 +9,15 @@
 //! - `fence`      — per-call nonce delimiters around untrusted content (judge-prompt injection defense).
 //! - `anthropic_api` — the bare Messages API judge path (used when `ANTHROPIC_API_KEY` is set).
 //! - [`http_target`] — generation from an operator-owned HTTP endpoint (a RAG pipeline, an agent).
+//! - [`endpoint_probe`] — what is answering at a re-pointed OpenAI-compatible base, before a run
+//!   is attributed to a provider.
 //! - `family`     — coarse model families, for the self-preference bias control.
 //! - `retry`      — bounded exponential backoff for transient (429/5xx/timeout) provider failures.
 //! - `scorers`   — deterministic (non-LLM) rubric dimensions: exact/regex/numeric/json_valid/contains.
 //! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_text`], [`parse_judge_spec`].
 
 mod anthropic_api;
+pub mod endpoint_probe;
 mod family;
 mod fence;
 pub mod http_target;
@@ -31,6 +34,7 @@ mod scorers;
 use lighttrack_core::JudgeVerdict;
 use thiserror::Error;
 
+pub use endpoint_probe::{probe_openai_base, OPENAI_BASE_ENV};
 pub use family::{model_family, same_family};
 pub use http_target::{generate_http, HttpTargetRequest, HttpTargetResponse, HttpTargetUsage};
 pub use invocation::{
