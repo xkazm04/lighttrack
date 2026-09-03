@@ -154,8 +154,12 @@ pub struct Rubric {
     pub created_at: DateTime<Utc>,
 }
 
+/// The pass threshold a rubric gets when none is given. One constant, read by the core default and
+/// the API's request default alike — they were two literals that happened to agree.
+pub const DEFAULT_RUBRIC_THRESHOLD: f64 = 0.7;
+
 fn default_threshold() -> f64 {
-    0.7
+    DEFAULT_RUBRIC_THRESHOLD
 }
 
 /// A rubric written before versioning existed is generation 1 — the reading that keeps every stored
