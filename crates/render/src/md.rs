@@ -192,9 +192,25 @@ pub(crate) fn pct(frac: f64) -> String {
     format!("{:.0}%", frac * 100.0)
 }
 
-/// Trim an RFC3339 timestamp to `MM-DD HH:MM` for compact tables.
+/// Trim an RFC3339 timestamp to `MM-DD HH:MM` for compact tables. Anything not shaped like
+/// `YYYY-MM-DDTHH:MM` is returned unchanged: the old check (`len >= 16`) sliced any long string at
+/// byte offsets 5, 10 and 11, which turned a sentence into fragments and **panicked** on a
+/// multi-byte character straddling one of those offsets — inside a renderer, that is a crashed
+/// MCP tool call for a stored value that was merely not a timestamp.
 pub(crate) fn short_ts(s: &str) -> String {
-    if s.len() >= 16 && s.is_char_boundary(16) {
+    let b = s.as_bytes();
+    let digits = |r: std::ops::Range<usize>| b[r].iter().all(u8::is_ascii_digit);
+    let shaped = b.len() >= 16
+        && digits(0..4)
+        && b[4] == b'-'
+        && digits(5..7)
+        && b[7] == b'-'
+        && digits(8..10)
+        && (b[10] == b'T' || b[10] == b' ')
+        && digits(11..13)
+        && b[13] == b':'
+        && digits(14..16);
+    if shaped {
         format!("{} {}", &s[5..10], &s[11..16])
     } else {
         s.to_string()
@@ -283,7 +299,18 @@ mod tests {
     #[test]
     fn short_ts_trims_rfc3339() {
         assert_eq!(short_ts("2026-06-17T12:34:56.789Z"), "06-17 12:34");
+        assert_eq!(short_ts("2026-06-17 12:34:56"), "06-17 12:34");
         assert_eq!(short_ts("short"), "short");
+    }
+
+    /// A long string that is not a timestamp is returned whole, and a multi-byte one no longer
+    /// panics at a byte offset inside a character.
+    #[test]
+    fn short_ts_leaves_non_timestamps_alone() {
+        assert_eq!(short_ts("not a timestamp at all"), "not a timestamp at all");
+        let accented = "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}";
+        assert_eq!(short_ts(accented), accented);
+        assert_eq!(short_ts("2026-06-17Tnot:ok"), "2026-06-17Tnot:ok");
     }
 
     #[test]
