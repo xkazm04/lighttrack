@@ -8,7 +8,9 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{new_id, CalibrationRecord, Rubric, RubricDimension};
+use lighttrack_core::{
+    new_id, CalibrationRecord, DimensionKind, Rubric, RubricDimension, DEFAULT_RUBRIC_THRESHOLD,
+};
 
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
@@ -24,7 +26,66 @@ pub(crate) struct CreateRubricReq {
 }
 
 fn default_rubric_threshold() -> f64 {
-    0.7
+    DEFAULT_RUBRIC_THRESHOLD
+}
+
+/// The one door both `POST /rubrics` and `POST /rubrics/:id/versions` go through. The create
+/// route validated nothing and the version route only refused an empty list, so a rubric with no
+/// dimensions, a zero-weight dimension (the judge's weighted mean divides by the weight sum), a
+/// duplicate key (the judge's JSON can carry it once), a threshold of 7 (nothing passes) or a
+/// `regex` kind with no pattern could all be stored — and failed later, in a run, as a number.
+fn validate_rubric(
+    name: &str,
+    dimensions: &[RubricDimension],
+    threshold: f64,
+) -> Result<(), ApiError> {
+    let bad = |m: String| Err(ApiError::bad_request(m));
+    if name.trim().is_empty() {
+        return bad("name must not be blank".into());
+    }
+    if dimensions.is_empty() {
+        return bad("a rubric needs at least one dimension".into());
+    }
+    if !(0.0..=1.0).contains(&threshold) || threshold.is_nan() {
+        return bad(format!("threshold must be within 0..=1 (got {threshold})"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for d in dimensions {
+        let key = d.key.trim();
+        if key.is_empty() || key.chars().any(char::is_whitespace) {
+            return bad(format!(
+                "dimension key {:?} must be one non-blank token (it is the judge's JSON key)",
+                d.key
+            ));
+        }
+        if !seen.insert(key) {
+            return bad(format!("dimension key {key:?} appears twice"));
+        }
+        if !(d.weight.is_finite() && d.weight > 0.0) {
+            return bad(format!(
+                "dimension {key:?}: weight must be > 0 (got {})",
+                d.weight
+            ));
+        }
+        if let Some(fl) = d.floor {
+            if !(0.0..=1.0).contains(&fl) || fl.is_nan() {
+                return bad(format!(
+                    "dimension {key:?}: floor must be within 0..=1 (got {fl})"
+                ));
+            }
+        }
+        if d.kind == DimensionKind::Regex && d.check.pattern.as_deref().unwrap_or("").is_empty() {
+            return bad(format!("dimension {key:?}: kind regex needs check.pattern"));
+        }
+        if let Some(t) = d.check.tolerance {
+            if !(t.is_finite() && t >= 0.0) {
+                return bad(format!(
+                    "dimension {key:?}: tolerance must be >= 0 (got {t})"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn create_rubric(
@@ -34,6 +95,7 @@ pub(crate) async fn create_rubric(
     Json(req): Json<CreateRubricReq>,
 ) -> Result<Json<Rubric>, ApiError> {
     ensure_can_admin(&authenticate(&st, &headers).await?)?;
+    validate_rubric(&req.name, &req.dimensions, req.threshold)?;
     let r = Rubric {
         id: new_id(),
         project_id: pid,
@@ -141,6 +203,59 @@ mod tests {
         }
     }
 
+    fn dim(key: &str, weight: f64) -> RubricDimension {
+        RubricDimension {
+            key: key.into(),
+            description: "d".into(),
+            weight,
+            anchors: vec![],
+            floor: None,
+            kind: DimensionKind::Llm,
+            check: Default::default(),
+        }
+    }
+
+    #[test]
+    fn the_shapes_that_used_to_fail_later_as_a_number_are_refused_at_the_door() {
+        assert!(validate_rubric("q", &[dim("a", 1.0)], 0.7).is_ok());
+        assert!(
+            validate_rubric("", &[dim("a", 1.0)], 0.7).is_err(),
+            "blank name"
+        );
+        assert!(validate_rubric("q", &[], 0.7).is_err(), "no dimensions");
+        assert!(
+            validate_rubric("q", &[dim("a", 1.0)], 7.0).is_err(),
+            "threshold 7"
+        );
+        assert!(
+            validate_rubric("q", &[dim("a", 0.0)], 0.7).is_err(),
+            "zero weight"
+        );
+        assert!(
+            validate_rubric("q", &[dim("a", f64::NAN)], 0.7).is_err(),
+            "NaN weight"
+        );
+        assert!(
+            validate_rubric("q", &[dim("a b", 1.0)], 0.7).is_err(),
+            "key with a space"
+        );
+        assert!(
+            validate_rubric("q", &[dim("a", 1.0), dim("a", 2.0)], 0.7).is_err(),
+            "duplicate key"
+        );
+        let mut floored = dim("a", 1.0);
+        floored.floor = Some(1.5);
+        assert!(validate_rubric("q", &[floored], 0.7).is_err(), "floor 1.5");
+        let mut re = dim("a", 1.0);
+        re.kind = DimensionKind::Regex;
+        assert!(
+            validate_rubric("q", &[re.clone()], 0.7).is_err(),
+            "regex without a pattern"
+        );
+        re.check.pattern = Some("^ok$".into());
+        assert!(validate_rubric("q", &[re], 0.7).is_ok());
+    }
+
     /// The whole point of `active`: a new rubric version is a new id and starts unmeasured, however
     /// well-calibrated the version it superseded was.
     #[test]
@@ -200,12 +315,9 @@ pub(crate) async fn create_rubric_version(
         .ok_or_else(|| ApiError::not_found(format!("rubric '{id}' not found")))?;
 
     let dimensions = req.dimensions.unwrap_or_else(|| prev.dimensions.clone());
-    if dimensions.is_empty() {
-        return Err(ApiError::bad_request(
-            "a rubric version needs at least one dimension",
-        ));
-    }
-    let next = prev.next_version(dimensions, req.threshold.unwrap_or(prev.threshold));
+    let threshold = req.threshold.unwrap_or(prev.threshold);
+    validate_rubric(&prev.name, &dimensions, threshold)?;
+    let next = prev.next_version(dimensions, threshold);
 
     let store = st.store.clone();
     let to_insert = next.clone();

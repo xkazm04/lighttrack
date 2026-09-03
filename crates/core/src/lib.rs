@@ -123,7 +123,9 @@ pub use relay::{
 pub use relay_verdict::{RelayCancel, RelaySettle};
 pub use revenue::{RevenueEvent, RevenueKind};
 pub use rollup::{Dimension, RollupQuery, RollupRow, Storage, TimeKey, MAX_GROUP_BY};
-pub use rubric::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
+pub use rubric::{
+    DimensionCheck, DimensionKind, Rubric, RubricDimension, DEFAULT_RUBRIC_THRESHOLD,
+};
 pub use schedule::{Schedule, MIN_INTERVAL_SECS as SCHEDULE_MIN_INTERVAL_SECS};
 pub use score::{
     judge_verdict_schema, Benchmark, BenchmarkCase, BenchmarkRun, JudgeVerdict, Score, ScoreDetail,
