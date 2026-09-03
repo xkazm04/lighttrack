@@ -333,14 +333,15 @@ Review those candidates — their scores are attacker-adjacent."
             join_csv(&price_warnings)
         ));
     }
-    recs.push(if mean >= rubric.threshold {
-        format!("Overall {mean:.2} meets threshold {:.2}.", rubric.threshold)
-    } else {
-        format!(
-            "Overall {mean:.2} is below threshold {:.2}.",
-            rubric.threshold
-        )
-    });
+    // The threshold is a per-case pass line, so the honest sentence is how many cases cleared
+    // it. "Overall 0.72 meets threshold 0.70" was true of the mean and false of the run when only
+    // 40% of cases passed — the mean and the pass rate answer different questions.
+    recs.push(format!(
+        "{}/{judged} cases ({:.0}%) met the pass threshold {:.2}; mean overall {mean:.2}.",
+        passes,
+        pass_rate * 100.0,
+        rubric.threshold
+    ));
 
     let healing =
         if heal {
