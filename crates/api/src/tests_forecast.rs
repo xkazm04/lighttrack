@@ -15,6 +15,7 @@ use tower::ServiceExt; // oneshot
 
 use lighttrack_core::{
     new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, RevenueEvent, RevenueKind, Threshold,
+    ThresholdDimension,
 };
 use lighttrack_store::Store;
 
@@ -283,6 +284,53 @@ async fn a_project_with_two_days_of_history_refuses_instead_of_forecasting() {
     assert_eq!(
         f["lookback_days"], 4,
         "lookback is clamped to the floor: {f}"
+    );
+}
+
+/// A revenue-share cap has no fixed figure, so `nominal_threshold()` is infinity: the budget row used
+/// to come back with `threshold: null`, no ETA and no entry in `refused[]` — silence that reads as
+/// "no risk". It is now a named refusal and no budget row at all.
+#[tokio::test]
+async fn a_revenue_share_budget_is_refused_by_name_not_forecast_against_infinity() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let rule_id = new_id();
+    store
+        .create_limit_rule(&LimitRule {
+            id: rule_id.clone(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::CostUsd,
+            window: LimitWindow::Month,
+            threshold: Threshold::RevenueShare {
+                pct: 80.0,
+                dimension: ThresholdDimension::Customer,
+            },
+            action: LimitAction::Alert,
+            enabled: true,
+            warn_at: None,
+            scope: None,
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
+        })
+        .unwrap();
+    let app = crate::build_router(state);
+
+    let (status, f) = get(&app, &key, "/v1/forecast?project=proj-a").await;
+    assert_eq!(status, StatusCode::OK, "{f}");
+    assert!(
+        f["budgets"].as_array().unwrap().is_empty(),
+        "no row with a null threshold: {f}"
+    );
+    let refused = f["refused"].as_array().unwrap();
+    let r = refused
+        .iter()
+        .find(|r| r["subject"] == rule_id.as_str())
+        .expect("the revenue-share rule names itself in refused[]");
+    assert!(
+        r["reason"].as_str().unwrap().contains("revenue-share"),
+        "{r}"
     );
 }
 

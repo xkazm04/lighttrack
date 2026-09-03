@@ -189,9 +189,24 @@ pub(crate) async fn compute_forecast(
         cost_trend,
     };
 
+    // A revenue-share rule has no fixed figure to cross: its cap resolves per customer against that
+    // customer's recognized revenue, and the daily series here is the project's. Forecasting it
+    // against `nominal_threshold()` (infinity for a derived threshold) used to publish a row with
+    // `threshold: null`, no ETA and no refusal — the one shape this surface promises never to emit.
     let mut budgets: Vec<BudgetForecast> = raw
         .rules
         .iter()
+        .filter(|r| {
+            if r.threshold.fixed().is_some() {
+                return true;
+            }
+            refused.push(Refused {
+                subject: r.id.clone(),
+                reason: "revenue-share threshold resolves per customer; not forecast from the                          project's daily series"
+                    .into(),
+            });
+            false
+        })
         .map(|r| {
             let series = match r.metric {
                 LimitMetric::CostUsd => &cost_series,
