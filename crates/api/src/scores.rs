@@ -17,7 +17,7 @@ use serde::Deserialize;
 
 use std::collections::HashMap;
 
-use lighttrack_core::{Label, LabelFilter, Score, ScoreKind};
+use lighttrack_core::{Label, LabelFilter, Score, ScoreKind, DEFAULT_RUBRIC_THRESHOLD};
 
 use crate::error::ApiError;
 use crate::guards::{authenticate, resolve_ingest_project, resolve_read_project};
@@ -33,6 +33,7 @@ pub(crate) async fn post_score(
 ) -> Result<Json<Score>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     s.project_id = resolve_ingest_project(&p, &s.project_id)?;
+    validate_verdict(&s)?;
     // Bound verdict provenance at the boundary, not at the (many) callers: a score row is hot, and a
     // client posting unbounded reasoning must not be able to balloon it. An empty detail is dropped
     // so `{}` never persists as if it were provenance.
@@ -47,6 +48,41 @@ pub(crate) async fn post_score(
     // Best-effort quality-regression detection over the rolling per-(project,rubric) score window.
     st.alerts.record_score(&s);
     Ok(Json(s))
+}
+
+/// The numbers a verdict must satisfy before it is stored. Nothing checked them: a NaN `value`
+/// reached the alert window and every mean it is averaged into (Postgres stores it and AVG turns
+/// NaN; SQLite stores NULL and the row silently drops out of the denominator), a `max` of 0 made
+/// every downstream ratio a division by zero, and a `value` above `max` inflated pass rates. A
+/// verdict with no judge or no label is not a verdict either.
+fn validate_verdict(s: &Score) -> Result<(), ApiError> {
+    let bad = |m: String| Err(ApiError::bad_request(m));
+    if !(s.max.is_finite() && s.max > 0.0) {
+        return bad(format!(
+            "max must be a positive finite number (got {})",
+            s.max
+        ));
+    }
+    if !s.value.is_finite() || s.value < 0.0 || s.value > s.max {
+        return bad(format!(
+            "value must be within 0..={} (got {})",
+            s.max, s.value
+        ));
+    }
+    if let Some(c) = s.cost_usd {
+        if !(c.is_finite() && c >= 0.0) {
+            return bad(format!(
+                "cost_usd must be a non-negative finite number (got {c})"
+            ));
+        }
+    }
+    if s.rubric.trim().is_empty() {
+        return bad("rubric (the verdict's label) must not be blank".into());
+    }
+    if s.scored_by.trim().is_empty() {
+        return bad("scored_by (the judge) must not be blank".into());
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -190,5 +226,57 @@ async fn triage(
         .collect())
 }
 
-/// The same default `POST /v1/projects/:id/rubrics` gives a rubric with no threshold of its own.
-const DEFAULT_THRESHOLD: f64 = 0.7;
+/// The same default `POST /v1/projects/:id/rubrics` gives a rubric with no threshold of its own —
+/// read from core rather than restated, so the two cannot drift.
+const DEFAULT_THRESHOLD: f64 = DEFAULT_RUBRIC_THRESHOLD;
+
+#[cfg(test)]
+mod tests {
+    use super::validate_verdict;
+    use lighttrack_core::{Score, ScoreKind};
+
+    fn score(value: f64, max: f64) -> Score {
+        Score {
+            id: "s".into(),
+            project_id: "p".into(),
+            event_id: None,
+            rubric: "quality".into(),
+            rubric_id: None,
+            kind: ScoreKind::Freeform,
+            value,
+            max,
+            pass: None,
+            reasoning: None,
+            detail: None,
+            run_id: None,
+            case_index: None,
+            scored_by: "judge".into(),
+            cost_usd: None,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    /// The shapes that used to reach the alert window and the averages.
+    #[test]
+    fn a_verdict_that_is_not_a_number_in_range_is_refused() {
+        assert!(validate_verdict(&score(0.8, 1.0)).is_ok());
+        assert!(
+            validate_verdict(&score(5.0, 5.0)).is_ok(),
+            "value == max is a full score"
+        );
+        assert!(validate_verdict(&score(f64::NAN, 1.0)).is_err(), "NaN");
+        assert!(validate_verdict(&score(f64::INFINITY, 1.0)).is_err(), "inf");
+        assert!(validate_verdict(&score(1.5, 1.0)).is_err(), "above max");
+        assert!(validate_verdict(&score(-0.1, 1.0)).is_err(), "negative");
+        assert!(validate_verdict(&score(0.5, 0.0)).is_err(), "max 0");
+        let mut s = score(0.5, 1.0);
+        s.cost_usd = Some(-1.0);
+        assert!(validate_verdict(&s).is_err(), "negative cost");
+        let mut s = score(0.5, 1.0);
+        s.scored_by = " ".into();
+        assert!(validate_verdict(&s).is_err(), "no judge");
+        let mut s = score(0.5, 1.0);
+        s.rubric = "".into();
+        assert!(validate_verdict(&s).is_err(), "no label");
+    }
+}
