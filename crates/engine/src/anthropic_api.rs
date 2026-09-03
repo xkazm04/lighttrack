@@ -133,9 +133,16 @@ fn send(
         .map_err(|e| crate::providers::send_error("anthropic", e))?;
     let latency_ms = Some(started.elapsed().as_millis() as u64);
     let status = resp.status();
+    // Cloned before `read_bounded` consumes the response: a 429's stated schedule is in here.
+    let headers = resp.headers().clone();
     let text = crate::providers::read_bounded(resp, "anthropic")?;
     if !status.is_success() {
-        return Err(crate::providers::http_error("anthropic", status, text));
+        return Err(crate::providers::http_error(
+            "anthropic",
+            status,
+            &headers,
+            text,
+        ));
     }
     let v: Value = serde_json::from_str(&text)?;
     let output = completion_text(&v, schema.is_some());
