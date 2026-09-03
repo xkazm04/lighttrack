@@ -32,8 +32,12 @@ impl Table {
         }
     }
 
+    /// Add a row. Every cell is made safe for one table cell on the way in: a `|` inside it would
+    /// start a new column and a newline a new row, so a dataset input of `2|3?` or a multi-line
+    /// alert message used to break the table for every row after it. Escaping here, once, covers
+    /// every renderer rather than trusting each of forty call sites to remember.
     pub(crate) fn row(&mut self, cells: Vec<String>) {
-        self.rows.push(cells);
+        self.rows.push(cells.iter().map(|c| cell(c)).collect());
     }
 
     pub(crate) fn render(&self) -> String {
@@ -52,6 +56,16 @@ impl Table {
         }
         out
     }
+}
+
+/// One string as one GFM table cell: pipes escaped, line breaks collapsed to a space.
+pub(crate) fn cell(s: &str) -> String {
+    if !s.contains(['|', '\n', '\r']) {
+        return s.to_string();
+    }
+    s.replace("\r\n", " ")
+        .replace(['\n', '\r'], " ")
+        .replace('|', "\\|")
 }
 
 fn render_row(cells: &[String], width: &[usize], aligns: &[Align]) -> String {
@@ -235,6 +249,19 @@ mod tests {
         assert!(lines[0].starts_with("| A"));
         assert!(lines[1].contains(':')); // right-align marker on column N
         assert!(lines[2].contains("10"));
+    }
+
+    /// A `|` or a newline in a cell used to corrupt the table from that row on.
+    #[test]
+    fn a_cell_cannot_break_out_of_its_column_or_row() {
+        let mut t = Table::new(&[("A", Align::Left), ("B", Align::Left)]);
+        t.row(vec!["what is 2|3?".into(), "line one\nline two".into()]);
+        let out = t.render();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3, "one header, one separator, ONE row: {out}");
+        assert_eq!(lines[2].matches('|').count(), 3 + 1, "{out}");
+        assert!(lines[2].contains("2\\|3?") && lines[2].contains("line one line two"));
+        assert_eq!(cell("plain"), "plain");
     }
 
     #[test]
