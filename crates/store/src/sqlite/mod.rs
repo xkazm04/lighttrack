@@ -1,8 +1,9 @@
 //! SQLite-backed [`Store`] — the local-development backend (bundled SQLite, no external service).
 //!
 //! `SqliteStore` delegates every method to a per-domain submodule of free functions over a
-//! `&Connection` (`events`, `scores`, `projects`, `benchmarks`, `datasets`, `rubrics`, `prices`,
-//! `jobs`). The timestamp/enum/JSON codecs are shared across all backends — see [`crate::codec`].
+//! `&Connection` — one per surface, thirty-odd of them today, declared below in the order the
+//! `impl Store` block visits them. The timestamp/enum/JSON codecs are shared across all backends —
+//! see [`crate::codec`].
 //!
 //! **Concurrency.** Writes serialize behind one mutex-guarded connection; reads are served from a
 //! pool of read-only connections ([`pool`]) that, under WAL, take a consistent snapshot without
