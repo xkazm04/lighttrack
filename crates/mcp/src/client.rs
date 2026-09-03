@@ -32,10 +32,17 @@ pub(crate) struct Client {
 
 impl Client {
     pub(crate) fn from_env() -> Self {
-        let timeout = std::env::var(ENV_TIMEOUT)
-            .ok()
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+        // Said out loud when set to something that is not a number of seconds: `=30s` used to run
+        // the default silently while the operator believed their override was in force.
+        let timeout = match std::env::var(ENV_TIMEOUT) {
+            Ok(raw) if !raw.trim().is_empty() => raw.trim().parse::<u64>().unwrap_or_else(|_| {
+                eprintln!(
+                    "lt-mcp: {ENV_TIMEOUT}={raw:?} is not a number of seconds; using {DEFAULT_TIMEOUT_SECS}s"
+                );
+                DEFAULT_TIMEOUT_SECS
+            }),
+            _ => DEFAULT_TIMEOUT_SECS,
+        };
         let mut builder = reqwest::blocking::Client::builder();
         if timeout > 0 {
             builder = builder.timeout(Duration::from_secs(timeout));
