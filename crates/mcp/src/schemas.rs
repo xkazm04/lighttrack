@@ -238,7 +238,8 @@ fn gate_resp() -> Value {
         "required": ["status"],
         "additionalProperties": true,
         "properties": {
-            "status": {"type":"string","enum":["pass","regressed","no_baseline","no_runs"]},
+            // `partial`: a run the cost ceiling or an operator cut short - unverified, never green.
+            "status": {"type":"string","enum":["pass","regressed","no_baseline","no_runs","partial"]},
             "run_id": {"type":["string","null"]}, "mean": {"type":["number","null"]},
             "baseline": {"type":["number","null"]}, "n": {"type":["integer","null"]}
         }
@@ -584,9 +585,13 @@ mod tests {
     }
 
     #[test]
-    fn gate_schema_enumerates_the_four_verdicts() {
+    fn gate_schema_enumerates_every_verdict_the_api_emits() {
         let s = output_schema("check_benchmark_gate").unwrap();
         let variants = s["properties"]["status"]["enum"].as_array().unwrap();
-        assert_eq!(variants.len(), 4);
+        assert_eq!(variants.len(), 5);
+        assert!(
+            variants.iter().any(|v| v == "partial"),
+            "a cost-halted run is its own verdict"
+        );
     }
 }
