@@ -48,7 +48,12 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
                 ..Param::DEFAULT
             },
             b("dataset_ref", JsonTy::String, "stored dataset id, instead of (or beside) `dataset`"),
-            b("baseline_score", JsonTy::Number, "the mean a run must not fall below"),
+            b(
+                "baseline_score",
+                JsonTy::Number,
+                "the mean a run must not fall below (0.0..=1.0 — run means are normalized, so \
+                 this is a fraction and not a percentage; 85 is rejected, 0.85 is meant)",
+            ),
             b(
                 "schedule_interval_secs",
                 JsonTy::Integer,
