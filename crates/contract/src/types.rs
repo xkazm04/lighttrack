@@ -62,6 +62,53 @@ pub enum Access {
     Unauthenticated,
 }
 
+/// Where one published surface element sits on the removal path. `docs/DEPRECATION.md` is the
+/// policy; this is the machine-readable half of it, so a caller learns the removal version from
+/// the surface rather than from a changelog it never reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeprecationStage {
+    /// Stage 1 — still served, still honoured, and advertised as going away.
+    Advertised,
+    /// Stage 2 — off by default and erroring when used, re-enablable only by
+    /// `LIGHTTRACK_ALLOW_REMOVED`, which takes the version being escaped from and therefore
+    /// stops matching once the deployment moves past it.
+    Erroring,
+}
+
+impl DeprecationStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DeprecationStage::Advertised => "advertised",
+            DeprecationStage::Erroring => "erroring",
+        }
+    }
+}
+
+/// The marker a field or route carries while it is on its way off the published surface.
+///
+/// It exists on the row, beside the thing being removed, for the same reason `machine` does: the
+/// reason is visible where the decision is, not in a list somewhere else that quietly grows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Deprecation {
+    pub stage: DeprecationStage,
+    /// The release that removes it. Never a patch — see `docs/DEPRECATION.md`.
+    pub removed_in: &'static str,
+    /// What a caller should use instead, in one clause.
+    pub replacement: &'static str,
+}
+
+impl Deprecation {
+    /// The sentence appended to the surface's own prose, in both renderings.
+    pub fn note(&self) -> String {
+        format!(
+            "DEPRECATED ({}), removed in {}: {}. Policy: docs/DEPRECATION.md.",
+            self.stage.as_str(),
+            self.removed_in,
+            self.replacement
+        )
+    }
+}
+
 /// Where a parameter travels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamKind {
@@ -121,6 +168,8 @@ pub struct Param {
     /// derive from — an agent that omits it gets a 400 it cannot diagnose from the schema. Pinned in
     /// `crates/mcp/tool-contract.json`, so it is also a compatibility fact, not only a nicety.
     pub mcp_required: Option<bool>,
+    /// On its way off the published surface, if it is. `None` is the overwhelming majority.
+    pub deprecated: Option<Deprecation>,
 }
 
 impl Param {
@@ -134,6 +183,7 @@ impl Param {
         mcp_name: None,
         schema: None,
         mcp_required: None,
+        deprecated: None,
     };
 
     /// Is this parameter required of an MCP caller?
@@ -219,6 +269,8 @@ pub struct Endpoint {
     pub cli: Option<&'static [&'static str]>,
     /// The `lighttrack_render::render` key, when a Markdown view of the response exists.
     pub render_kind: Option<&'static str>,
+    /// On its way off the published surface, if it is — the route-level twin of `Param::deprecated`.
+    pub deprecated: Option<Deprecation>,
     pub doc: &'static str,
 }
 
@@ -240,6 +292,7 @@ impl Endpoint {
         mcp: None,
         cli: None,
         render_kind: None,
+        deprecated: None,
         doc: "",
     };
 

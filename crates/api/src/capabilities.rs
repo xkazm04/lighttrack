@@ -29,6 +29,60 @@ pub(crate) struct CapabilitiesBody {
     /// so "is prod running the schema this SDK was written against" is one comparison rather than a
     /// version number somebody has to remember to bump.
     pub schema_fingerprint: String,
+    /// Published surface elements on their way out, with the release that removes each.
+    ///
+    /// Deliberately a *separate* list from `surfaces`/`unsupported`, not a fourth state of them.
+    /// Those two answer "what can this deployment do", which is a property of the backend an
+    /// operator chose; this answers "what does this version still promise", which is a property of
+    /// the build and is the same on every backend. Folding them together would make a field that
+    /// is going away next release indistinguishable from one this backend never had.
+    pub deprecations: Vec<Deprecated>,
+}
+
+/// One marked element of the published surface. Flat and stringly-typed on purpose: this is read
+/// by three SDKs and by `curl`, and `"POST /v1/projects/:id/benchmarks"` is the name an operator
+/// already knows the thing by.
+#[derive(Debug, Serialize)]
+pub(crate) struct Deprecated {
+    pub surface: String,
+    /// The body/query field, or `null` when the whole route is going.
+    pub field: Option<&'static str>,
+    pub stage: &'static str,
+    pub removed_in: &'static str,
+    pub replacement: &'static str,
+}
+
+/// Every marker in the contract table, route-level and field-level.
+///
+/// Read from `lighttrack-contract` rather than kept as a second list here — a hand-kept copy is
+/// exactly the drift `crates/contract` exists to end, and a deprecation nobody re-typed into the
+/// manifest is one an SDK never hears about.
+fn deprecations() -> Vec<Deprecated> {
+    let mut out = Vec::new();
+    for e in lighttrack_contract::endpoints() {
+        let surface = || format!("{} {}", e.method.as_str().to_uppercase(), e.path);
+        if let Some(d) = e.deprecated {
+            out.push(Deprecated {
+                surface: surface(),
+                field: None,
+                stage: d.stage.as_str(),
+                removed_in: d.removed_in,
+                replacement: d.replacement,
+            });
+        }
+        for p in e.params {
+            if let Some(d) = p.deprecated {
+                out.push(Deprecated {
+                    surface: surface(),
+                    field: Some(p.name),
+                    stage: d.stage.as_str(),
+                    removed_in: d.removed_in,
+                    replacement: d.replacement,
+                });
+            }
+        }
+    }
+    out
 }
 
 impl From<Capabilities> for CapabilitiesBody {
@@ -39,6 +93,7 @@ impl From<Capabilities> for CapabilitiesBody {
             unsupported: c.missing().iter().map(|s| s.as_str()).collect(),
             atomic_admission: c.atomic_admission,
             schema_fingerprint: c.schema_fingerprint,
+            deprecations: deprecations(),
         }
     }
 }
@@ -218,6 +273,27 @@ mod tests {
             "the served fingerprint must be the model's own"
         );
         assert!(body.schema_fingerprint.starts_with("sha256-"));
+    }
+
+    /// The removal half of the manifest: a marker in the contract table must reach the served
+    /// body, and it must stay OUT of the two capability lists, which answer a different question.
+    #[test]
+    fn the_body_publishes_the_removal_markers() {
+        let body = CapabilitiesBody::from(Capabilities::new("test", &[Surface::EventsCore], true));
+        let d = body
+            .deprecations
+            .iter()
+            .find(|d| d.field == Some("target"))
+            .expect("the marked `target` body field must be advertised on the manifest");
+        assert_eq!(d.surface, "POST /v1/projects/:id/benchmarks");
+        assert_eq!(d.removed_in, "0.2.0");
+        assert!(
+            !d.replacement.is_empty(),
+            "a marker must name a way forward"
+        );
+        for name in body.surfaces.iter().chain(body.unsupported.iter()) {
+            assert_ne!(*name, "target", "removal is not a backend capability state");
+        }
     }
 
     /// Every surface has a sentence saying what its absence costs; a fallback would let a new

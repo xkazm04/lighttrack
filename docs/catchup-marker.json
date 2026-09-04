@@ -26,6 +26,10 @@
       "note": "§12 written this pass (disk accounting, the dated unbounded-retention decision, the quiet-window maintenance ladder); §5 and §11 re-read against the code while writing it. 2026-09-02, M5 (pre-spend admission) extended §7c against crates/api/src/ingest_proximity.rs: the X-LightTrack-Usage-Ratio / -Shed-Fraction / -Retry-After headers now on all three ingest doors and on the 429, the binding_scope/binding_rule fields on IngestResponse, and the SDK-side admission loop the headers exist to feed. The rest of §7c was re-read against the code while writing it; the §5 flag below is untouched and still stands. 2026-09-02, M17 (scope on every store read) added a §9 bullet: tenant scope is a typed `Scope` parameter on every project-bearing `Store` read, so reading another project's row is 404 rather than 403 on benchmarks / datasets / rubrics / relay tasks (a behavior change, listed endpoint by endpoint), the price book stays operator-global, and `jobs` gained a nullable `project_id`. Written against crates/store/src/scope.rs, crates/api/src/auth.rs and the handlers; no other section re-read."
     },
     {
+     "path": "docs/DEPRECATION.md",
+     "note": "written this pass — the surface-deprecation policy: three release stages (advertised with a stated removal version; off by default and erroring, re-enablable only by LIGHTTRACK_ALLOW_REMOVED which takes the version it escapes from and so expires by construction; removed), the rule that a patch release never removes, and the removal gate in crates/api/src/openapi.rs whose baseline is the published clients/contract/openapi.baseline.json rather than the source table."
+    },
+    {
       "path": "docs/harness/soak-lane.md",
       "note": "written this pass — the long lane's contract."
     },
