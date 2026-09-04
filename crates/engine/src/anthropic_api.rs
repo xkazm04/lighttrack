@@ -23,7 +23,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 
-use crate::{Determinism, EngineError, GenOutcome, Result};
+use crate::{Determinism, EngineError, GenOutcome, Result, SchemaEnforcement};
 
 /// Env var that switches the `anthropic` provider onto this path.
 pub(crate) const API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -181,6 +181,7 @@ fn send(
             .and_then(Value::as_u64),
         // Temperature-pinned, but Anthropic exposes no seed — reproducible by convention only.
         determinism: Determinism::BestEffort,
+        schema: SchemaEnforcement::NotRequested,
     })
 }
 

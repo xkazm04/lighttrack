@@ -348,6 +348,34 @@ pub struct RubricOutcome {
     pub batch_size: Option<u32>,
 }
 
+/// Whether the structured-output constraint the caller asked for actually reached the model.
+///
+/// A schema is a *guarantee about syntax*, and like [`Determinism`] it can silently degrade: a
+/// provider that rejects the schema is retried schema-less so a strict-schema model never hard-fails
+/// a run. Before this field existed that degradation was reported on stderr only, so a caller
+/// holding a [`GenOutcome`] could not tell an enforced result from a prose fallback and would parse
+/// the second believing the first. Report the weaker guarantee as a *value*, the way determinism is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaEnforcement {
+    /// A schema was sent and the provider accepted it — syntax is enforced by the provider.
+    Enforced,
+    /// A schema was requested but **shed**: the provider rejected it (4xx) and the call was retried
+    /// without it. The output is prose that merely *looks* structured; parse it defensively.
+    Shed,
+    /// No schema was requested by the caller. Not a degradation.
+    NotRequested,
+}
+
+impl SchemaEnforcement {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SchemaEnforcement::Enforced => "enforced",
+            SchemaEnforcement::Shed => "shed",
+            SchemaEnforcement::NotRequested => "not-requested",
+        }
+    }
+}
+
 /// The result of generating one candidate output from a target.
 #[derive(Debug, Clone)]
 pub struct GenOutcome {
@@ -362,4 +390,8 @@ pub struct GenOutcome {
     /// candidate per case; a plain [`generate`] reports `BestEffort` (or `Sampled`, when the caller
     /// is deliberately drawing several candidates).
     pub determinism: Determinism,
+    /// Whether the caller's structured-output constraint actually reached the model — see
+    /// [`SchemaEnforcement`]. `Shed` means a schema was asked for and dropped after a provider
+    /// rejection, so the output is unconstrained prose.
+    pub schema: SchemaEnforcement,
 }

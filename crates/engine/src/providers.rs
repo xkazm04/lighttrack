@@ -18,7 +18,9 @@ use crate::invocation::{self, Invocation};
 use crate::retry::with_retry;
 use lighttrack_core::ProviderFamily;
 
-use crate::{anthropic_api, Determinism, EngineConfig, EngineError, GenOutcome, Result};
+use crate::{
+    anthropic_api, Determinism, EngineConfig, EngineError, GenOutcome, Result, SchemaEnforcement,
+};
 
 /// Outbound provider calls are bounded so a black-holed/overloaded endpoint can't hang an
 /// (unbudgeted) benchmark worker forever, and a pathological body can't be buffered into memory.
@@ -162,7 +164,14 @@ pub fn generate(
                 "[judge] {who} rejected the JSON schema (HTTP {status}: {}); retrying schema-less",
                 body.chars().take(200).collect::<String>()
             );
-            generate_retrying(cfg, provider, model, system_prompt, input, None, false)
+            generate_retrying(cfg, provider, model, system_prompt, input, None, false).map(
+                |mut o| {
+                    // The caller asked for a schema and is not getting one. Say so in the value, not
+                    // only on stderr: downstream parses the output believing syntax was enforced.
+                    o.schema = SchemaEnforcement::Shed;
+                    o
+                },
+            )
         }
         other => other,
     }
@@ -275,6 +284,18 @@ fn generate_once(
 /// The API origin for a provider, overridable by env. Two callers need this: the provider-boundary
 /// suite, which points the *real* call path at a local stub rather than mocking the path away, and
 /// anyone routing these calls through a gateway. Empty is treated as unset.
+/// The schema guarantee a provider call *asked for*. A caller that supplied no schema gets
+/// `NotRequested`; one that supplied a schema the provider accepted gets `Enforced`. The third
+/// state, `Shed`, is not knowable here — it is stamped by [`generate`], which owns the
+/// reject-and-retry-schema-less fallback and is the only place that knows the retry happened.
+fn schema_state(schema: Option<&Value>) -> SchemaEnforcement {
+    if schema.is_some() {
+        SchemaEnforcement::Enforced
+    } else {
+        SchemaEnforcement::NotRequested
+    }
+}
+
 fn api_base(var: &str, default: &str) -> String {
     std::env::var(var)
         .ok()
@@ -317,6 +338,7 @@ fn generate_anthropic(
         // The CLI exposes neither temperature nor seed — this is the residual the bare API path
         // exists to shrink, and it is now stamped on the outcome instead of living in a comment.
         determinism: Determinism::BestEffort,
+        schema: schema_state(schema),
     })
 }
 
@@ -426,6 +448,7 @@ fn generate_gemini(
             .and_then(|u| u.get("candidatesTokenCount"))
             .and_then(Value::as_u64),
         // temperature 0 + a fixed seed were both accepted: reproducible by contract.
+        schema: schema_state(schema),
         determinism: if deterministic {
             Determinism::Exact
         } else {
@@ -563,6 +586,7 @@ fn generate_openai(
         output_tokens: usage
             .and_then(|u| u.get("completion_tokens"))
             .and_then(Value::as_u64),
+        schema: schema_state(schema),
         determinism: if deterministic {
             Determinism::Exact
         } else {
@@ -596,8 +620,10 @@ fn openai_truncation(v: &Value) -> Option<(u64, Option<u64>)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        gemini_text, gemini_truncation, openai_truncation, stated_retry_after, strip_schema_key,
+        gemini_text, gemini_truncation, openai_truncation, schema_state, stated_retry_after,
+        strip_schema_key,
     };
+    use crate::SchemaEnforcement;
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
     use serde_json::json;
     use std::time::Duration;
@@ -737,5 +763,21 @@ mod tests {
             cleaned["properties"]["dim"]["properties"]["score"]["type"],
             "number"
         );
+    }
+
+    /// A caller must be able to tell an enforced schema from a prose fallback **from the value it
+    /// holds**. Before `GenOutcome::schema` existed, the reject-and-retry-schema-less path in
+    /// [`generate`] reported the degradation on stderr only, so these three cases were
+    /// indistinguishable downstream and the third was parsed as though syntax were guaranteed.
+    #[test]
+    fn schema_state_distinguishes_requested_from_absent() {
+        let sc = serde_json::json!({"type": "object"});
+        assert_eq!(schema_state(Some(&sc)), SchemaEnforcement::Enforced);
+        assert_eq!(schema_state(None), SchemaEnforcement::NotRequested);
+        // The shed state is not derivable from the request alone — it is stamped by `generate`
+        // after a provider rejection, and it must not collapse into either of the other two.
+        assert_ne!(SchemaEnforcement::Shed, SchemaEnforcement::Enforced);
+        assert_ne!(SchemaEnforcement::Shed, SchemaEnforcement::NotRequested);
+        assert_eq!(SchemaEnforcement::Shed.as_str(), "shed");
     }
 }

@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use lighttrack_core::Rubric;
 
-use crate::{Determinism, GenOutcome, Result};
+use crate::{Determinism, GenOutcome, Result, SchemaEnforcement};
 
 use super::*;
 
@@ -48,6 +48,7 @@ fn gen_outcome(output: String) -> GenOutcome {
         input_tokens: Some(1000),
         output_tokens: Some(100),
         determinism: Determinism::Exact,
+        schema: SchemaEnforcement::NotRequested,
     }
 }
 
