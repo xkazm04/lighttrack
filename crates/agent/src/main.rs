@@ -67,5 +67,16 @@ fn main() -> Result<()> {
         cfg.poll_secs,
         inventory::describe(&actions),
     );
+    // An empty inventory has two causes with opposite remedies, and the routing filter cannot tell
+    // them apart by design (see inventory.rs). Say which one this is, so the banner's own question
+    // — "why is nothing being picked up" — is answerable when the answer is a mistyped path.
+    if actions.is_empty() {
+        if let Some(why) = inventory::unreadable_reason(&cfg.actions_dir) {
+            println!(
+                "  NOTE: the action library at '{}' could not be read ({why}) — set actions_dir in {}. This device still leases every action type, because an unreadable library must not take it out of the fleet.",
+                cfg.actions_dir, cli.config
+            );
+        }
+    }
     run::run(&cfg, cli.once)
 }

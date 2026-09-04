@@ -23,6 +23,16 @@ use std::path::Path;
 /// that as "advertise nothing" — which the cloud reads as **no filter**. That is the deliberate
 /// back-compat direction: a device that could not enumerate itself keeps leasing everything, exactly
 /// as it did before M18, instead of silently going idle over a permissions problem.
+///
+/// That direction is right and stays. What it must not also do is hide WHY the inventory is empty.
+/// "I read the library and it holds nothing runnable" and "I could not read the library at all" are
+/// different states with opposite remedies — add an action, versus fix a path or a permission — and
+/// this function collapses them into the same empty vector on purpose, because the cloud's routing
+/// must not change. `unreadable_reason` recovers the distinction for the operator WITHOUT changing
+/// what is advertised: the lease filter still sees "nothing", and the banner no longer has to
+/// pretend that is the whole story. Keeping the fix on the reporting side rather than the routing
+/// side is the point — permission to lease everything and the claim to have enumerated successfully
+/// are separate facts, and only the second one was ever in doubt.
 pub(crate) fn inventory(actions_dir: &str) -> Vec<String> {
     let root = Path::new(actions_dir);
     let mut found = Vec::new();
@@ -56,6 +66,26 @@ pub(crate) fn inventory(actions_dir: &str) -> Vec<String> {
     }
     found.sort();
     found
+}
+
+/// Why the library could not be enumerated, or `None` when it was read successfully.
+///
+/// Deliberately separate from `inventory` and deliberately advisory: it never changes what the
+/// device advertises, it only lets the startup banner say which of the two empty states this is.
+/// The banner exists to answer "why is nothing being picked up" without reading the cloud's logs
+/// (see `main`), and a mistyped `actions_dir` is the likeliest cause of that question — the one
+/// cause the banner could not name.
+///
+/// The asymmetry this closes was not designed. One line above the inventory call, `main` probes the
+/// engine binary and refuses to start with a message naming the path AND the config file it came
+/// from. Two capability checks, one line apart: the missing binary is fatal and actionable, the
+/// missing library was silent. The remedy is not to make the second fatal — it must not be — but to
+/// make it as legible.
+pub(crate) fn unreadable_reason(actions_dir: &str) -> Option<String> {
+    match std::fs::read_dir(Path::new(actions_dir)) {
+        Ok(_) => None,
+        Err(e) => Some(e.to_string()),
+    }
 }
 
 /// One line for the startup banner, so an operator can see what this device is offering before it
@@ -116,6 +146,28 @@ mod tests {
         // permission must not silently take a device out of the fleet.
         assert!(inventory("no/such/library").is_empty());
         assert!(describe(&[]).contains("will not filter"));
+    }
+
+    #[test]
+    fn an_unreadable_library_is_distinguishable_from_an_empty_one() {
+        // The two causes of an empty inventory have opposite remedies, and the banner is where an
+        // operator looks first. Routing is unchanged — both still advertise nothing — but only one
+        // of them is a mistyped path, and that one now says so.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let empty_but_readable = tmp.path().to_str().expect("utf8 path");
+
+        assert!(inventory(empty_but_readable).is_empty());
+        assert!(inventory("no/such/library").is_empty());
+
+        assert_eq!(
+            unreadable_reason(empty_but_readable),
+            None,
+            "a readable directory holding no actions is not an error"
+        );
+        assert!(
+            unreadable_reason("no/such/library").is_some(),
+            "a library that cannot be enumerated names why"
+        );
     }
 
     #[test]
