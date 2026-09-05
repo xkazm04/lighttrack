@@ -21,4 +21,4 @@ schemars = { version = "1", default-features = false, features = ["derive", "std
 # it is here rather than in the API because the responder VERIFIES what the API signs, and one
 # implementation is the only way those two can agree.
 hmac = "0.12"
-sha2 = "0.10"
+sha2 = "0.11"
