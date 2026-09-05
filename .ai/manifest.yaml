@@ -41,12 +41,39 @@ capabilities:
   # Text-level (no helm binary, no cluster), with must-fail fixtures beside every policy. This closes
   # the hole where the chart was the only shipped artifact no gate read.
   chart-policy: { command: "cargo test -p lighttrack-core --test chart_policy_guard", verified: true }
+  # The judge scoring the judge. `crates/engine/evals/judge/corpus.json` records whole verdicts for
+  # known cases and replays them through the real prompt/scorer/aggregate path with the provider call
+  # canned, so a reworded prompt or a changed fold moves a number here instead of moving customers'
+  # scores in silence. Closed over the model on purpose: a red run is always a change WE made, never
+  # an upstream model drifting — live-provider agreement is the benchmark lane's measurement
+  # (docs/CALIBRATION.md) and cannot be a gate, since it can go red without anyone touching the code.
+  judge-eval: { command: "cargo test -p lighttrack-engine judge::tests::corpus", verified: false }
   smoke: { command: "sh scripts/smoke.sh http://127.0.0.1:8787", verified: false }
   # cargo test --workspace ranges over the root Cargo.toml members list, which excludes all three
   # detached client SDKs. Each ships to users and needs its own command.
   test-client-rust: { command: "cargo test --manifest-path clients/rust/Cargo.toml", verified: false }
   test-client-python: { command: "python -m pip install ./clients/python && python -m unittest discover -s clients/python/tests", verified: true }
   test-client-typescript: { command: "cd clients/typescript && npm ci && npm run build && npm test", verified: true }
+
+# Which agent-guidance document wins when two of them disagree.
+#
+# There are two CLAUDE.md files, and until 2026-09-05 neither was declared canonical: the root one is
+# detailed and Rust-specific, `.claude/CLAUDE.md` still carried the generator's npm scaffold (`npm run
+# build`, "Add your project description here") for a workspace that has no npm build. So "how do I
+# build this" was answered by whichever file an agent happened to open first. One is canonical; every
+# other is a POINTER to it and restates nothing. Commands in particular are written down exactly once,
+# in `capabilities:` above — prose that repeats a command is prose that goes stale silently.
+#
+# KNOWN STALE, 2026-09-05: `.claude/CLAUDE.md` still holds the generator's npm scaffold (`npm run
+# build` / `npm run test` / "Add your project description here") for a workspace with no npm build.
+# It is listed here so a reader knows which document to disbelieve, which is the part that could be
+# fixed without editing it. Replacing its body with a stub that points at `canonical:` is the
+# outstanding work; do that and drop it from `staleProjections`.
+guidance:
+  canonical: CLAUDE.md
+  projections: [.claude/CLAUDE.md]
+  staleProjections: [.claude/CLAUDE.md]
+  commandsFrom: .ai/manifest.yaml
 
 # Pointers — these subsystems can change format underneath without breaking this contract.
 paths:
@@ -80,6 +107,7 @@ controls:
       test,
       conformance,
       chart-policy,
+      judge-eval,
       lint,
       format-check,
       audit-policy,

@@ -27,6 +27,15 @@ and another backend quietly defaults is how caps and filters silently become adv
 - [ ] Implemented in some; the rest return `StoreError::Unsupported` (→ 501), never a quiet default
 - [ ] The store-conformance suite was extended to cover the new behavior
 
+## Changelog
+
+Three SDKs and an unknown number of self-hosted deployments track this API. `openapi.baseline.json`
+records what the shape *is*; `CHANGELOG.md` is where somebody learns whether they need to care.
+
+- [ ] Not applicable — no user-visible change (internal refactor, test, docs)
+- [ ] Added a line under `## [Unreleased]` in `CHANGELOG.md`, naming the route/field if the HTTP
+      surface moved
+
 ## Checklist
 
 - [ ] Every touched file is still under ~300 LOC, or was split by responsibility

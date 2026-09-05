@@ -1,0 +1,61 @@
+{
+  "v": 1,
+  "items": [
+    {
+      "recommendationId": "a1344691-b779-49f5-86c3-4c238660d420",
+      "verdict": "resolved",
+      "reason": "Added a judge eval corpus (crates/engine/evals/judge/corpus.json) of seven cases with whole recorded verdicts — overall, pass, per-dimension score and floor_hit, agreement, parse accounting, injection signal — plus pinned judge-prompt phrases, replayed through the real prompt/scorer/aggregate path with the provider call canned; it runs inside the blocking cargo test --workspace gate and is declared as the judge-eval capability in .ai/manifest.yaml and run by scripts/gates.sh.",
+      "files": [
+        "crates/engine/evals/judge/corpus.json",
+        "crates/engine/src/judge/tests/corpus.rs",
+        "crates/engine/src/judge/tests.rs",
+        ".ai/manifest.yaml",
+        "scripts/gates.sh"
+      ]
+    },
+    {
+      "recommendationId": "a5c770e6-6368-41f6-9955-c35351fe9510",
+      "verdict": "resolved",
+      "reason": "Added .github/CODEOWNERS (global owner plus the store/engine/contract/workflow/deploy seams) and a second pre-commit rung that runs cargo fmt --all -- --check -l and fails the commit only when one of the author's staged .rs files is in the rewrite list; documented both in CONTRIBUTING.md, with LIGHTTRACK_SKIP_FMT=1 as the deliberate bypass and an announced skip when cargo is absent.",
+      "files": [
+        ".github/CODEOWNERS",
+        ".githooks/pre-commit",
+        "CONTRIBUTING.md"
+      ]
+    },
+    {
+      "recommendationId": "e18c7d87-8d5c-4ca5-a24c-fdcf4d4be6e0",
+      "verdict": "resolved",
+      "reason": "The OpenAPI half was already covered another way and left alone — crates/api/src/openapi.rs serves /openapi.json rendered from lighttrack-contract, clients/contract/openapi.baseline.json is the committed published baseline, and a removal guard fails the build when a name leaves the surface unmarked; the missing half, CHANGELOG.md, now exists in Keep-a-Changelog form with an Unreleased section, and the PR template asks for an entry (or an explicit N/A) so entries are written while the change is fresh.",
+      "files": [
+        "CHANGELOG.md",
+        ".github/pull_request_template.md",
+        "CONTRIBUTING.md"
+      ]
+    },
+    {
+      "recommendationId": "4599c3c6-db99-40b4-a9fe-6e98a5faac87",
+      "verdict": "skipped",
+      "reason": "Needs write access to .claude/CLAUDE.md, which this session's harness refuses as a sensitive path: the scaffold text (npm run build / npm run test / 'Add your project description here') is still there and only rewriting that file removes it, so a human must replace its body with a stub pointing at root CLAUDE.md; what could be done without touching it was done — .ai/manifest.yaml now declares guidance.canonical: CLAUDE.md with .claude/CLAUDE.md listed under staleProjections, and root CLAUDE.md declares itself canonical and names the stale file, so a reader now knows which document to disbelieve.",
+      "files": [
+        ".ai/manifest.yaml",
+        "CLAUDE.md"
+      ]
+    },
+    {
+      "recommendationId": "dd620f4e-3e67-4b5d-b659-67492f3a5436",
+      "verdict": "skipped",
+      "reason": "Needs network: pinning the 29 Action references requires asking GitHub what each floating tag points at right now, and inventing a SHA breaks a workflow rather than pinning it — so all 29 remain unpinned and the next scan will still see that; the signing/SBOM half of the item was implemented (keyless cosign sign-blob plus an SPDX SBOM in a separate release.yml job that runs after the artifacts are attached, cosign sign + spdxjson attestation over the pushed manifest digest at the end of docker.yml's merge job, and verification commands in SECURITY.md), but those steps are unverified because this session cannot run CI.",
+      "files": [
+        ".github/workflows/release.yml",
+        ".github/workflows/docker.yml",
+        "SECURITY.md"
+      ]
+    }
+  ],
+  "lessons": [
+    "This repository already answers most process gaps with a guard test rather than a document: crates/core/tests/{manifest_guard,gate_table_guard,catchup_marker_guard,chart_policy_guard}.rs each fail cargo test --workspace when a projection drifts from its authority. Before adding a new practice here, check whether an existing guard already covers it, and add the new one in the same shape — .ai/manifest.yaml is the authority for commands, .github/workflows/ci.yml for what blocks, and both are mechanically bound to scripts/gates.sh and CONTRIBUTING.md's gate table, so adding a blocking capability without updating gates.sh (and a CI job without a CONTRIBUTING table row) turns the suite red.",
+    "Scan findings here can be stale in both directions: this cycle's 'no OpenAPI spec' gap was already closed by a served /openapi.json plus a 400 kB committed baseline and a deprecation removal guard, and 'nothing catches a violation before push' understated an existing .githooks/pre-push that runs every blocking gate. Read the repo before writing; the real gap is usually narrower and more specific than the item states.",
+    "An Ascent session in this environment cannot write under .claude/ — the harness classifies it as a sensitive path and refuses both Write and Edit. Items whose fix is 'rewrite .claude/CLAUDE.md' cannot be closed by an agent here and should be routed to a human, or the guidance-canonical pointer should live somewhere writable (.ai/manifest.yaml works)."
+  ]
+}

@@ -100,6 +100,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # keyless signing: the OIDC token is the identity, so there is no key to leak
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -133,3 +137,32 @@ jobs:
 
       - name: Inspect
         run: docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+
+      # Supply chain: sign the manifest list and attest an SBOM against the same digest.
+      #
+      # Keyless (Fulcio/Rekor) — the signature's identity is this workflow's OIDC token (repository,
+      # ref, workflow path), so nothing has to hold a private key and a verifier can pin to exactly
+      # this workflow instead of to "whoever had the key". SECURITY.md carries the `cosign verify`
+      # invocation for the published image.
+      #
+      # Signing the DIGEST, not a tag: a tag is a moving pointer, and a signature over a name that can
+      # be repointed proves nothing about the bytes anyone actually pulled.
+      #
+      # Last in the job on purpose. The manifest list is already pushed by the time this runs, so a
+      # failure here is loud and re-runnable without ever unpublishing a tag.
+      - uses: sigstore/cosign-installer@v3
+      - uses: anchore/sbom-action/download-syft@v0
+
+      - name: Sign the image and attest its SBOM
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -eu
+          digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" \
+            --format '{{ json .Manifest }}' | jq -r .digest)
+          [ -n "$digest" ] && [ "$digest" != "null" ] || {
+            echo "could not resolve a digest for $IMAGE:$VERSION" >&2; exit 1; }
+          echo "signing $IMAGE@$digest"
+          cosign sign --yes "$IMAGE@$digest"
+          syft "$IMAGE@$digest" -o spdx-json=sbom.spdx.json
+          cosign attest --yes --type spdxjson --predicate sbom.spdx.json "$IMAGE@$digest"

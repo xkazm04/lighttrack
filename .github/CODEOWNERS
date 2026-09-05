@@ -1,0 +1,42 @@
+# Who GitHub asks for a review, automatically, on every pull request.
+#
+# This repository is maintained by one person today, so the honest question is whether the file earns
+# its place yet. It does, for two reasons that do not depend on team size:
+#
+#   * It is the list branch protection reads. "Require review from Code Owners" has nothing to
+#     enforce without this file, so the rule cannot be turned on later without first writing it — and
+#     the moment you want it turned on is the moment a second contributor arrives, which is the worst
+#     moment to be inventing an ownership map from memory.
+#   * A review request that arrives by itself is a different thing from one somebody remembered to
+#     send. Agents open PRs here too, and an agent will not remember.
+#
+# Syntax is gitignore-style, LAST matching rule wins. Paths are anchored with a leading `/`.
+
+# Everything, unless a rule below is more specific.
+*                               @xkazm04
+
+# The seams that decide what a deployment gets, or what a credential can reach. Same owner today;
+# listed separately so they are named in the review request rather than folded into "42 files
+# changed", and so the first split of ownership has somewhere obvious to happen.
+/.ai/manifest.yaml              @xkazm04
+/.github/                       @xkazm04
+/.githooks/                     @xkazm04
+/deny.toml                      @xkazm04
+/.gitleaks.toml                 @xkazm04
+/.gitleaksignore                @xkazm04
+/deploy/                        @xkazm04
+/scripts/                       @xkazm04
+
+# The store-selection block in crates/api/src/main.rs decides which backend a deployment gets, and
+# the three backends are held to a parity bar that is a correctness property here, not a nicety.
+/crates/api/                    @xkazm04
+/crates/store/                  @xkazm04
+/crates/store-pg/               @xkazm04
+/crates/store-firestore/        @xkazm04
+
+# The scoring engine and the corpus that pins its verdicts: a change here changes what a customer's
+# recorded score MEANS, retroactively.
+/crates/engine/                 @xkazm04
+
+# The published API surface the three SDKs are generated against.
+/clients/contract/              @xkazm04

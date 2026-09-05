@@ -157,13 +157,22 @@ sh scripts/gates.sh                   # or --fast for fmt + clippy + the workspa
 `controls.ciHardPass` is missing from the script or spelled differently there. Add a blocking gate
 and the local rung is red until it runs it too.
 
-`.githooks/pre-push` runs it for you. Push, not commit: a work-in-progress commit that does not
-compile is a legitimate thing to make, and a rung that forbids it gets bypassed within a day —
-taking the pre-commit secret scan down with it. `LIGHTTRACK_SKIP_GATES=1 git push` bypasses it
-deliberately (prefer that to `--no-verify`, which also silences the secret scan). A gate whose engine
-is not installed locally announces the skip and does not fail your run; CI installs every engine and
-blocks unconditionally, which is where the guarantee lives. The point of the local rung is that the
-remote run becomes a **confirmation** rather than a discovery.
+`.githooks/pre-push` runs it for you. Push, not commit — for the *compile* gates: a work-in-progress
+commit that does not compile is a legitimate thing to make, and a rung that forbids it gets bypassed
+within a day, taking the pre-commit secret scan down with it. `LIGHTTRACK_SKIP_GATES=1 git push`
+bypasses it deliberately (prefer that to `--no-verify`, which also silences the secret scan). A gate
+whose engine is not installed locally announces the skip and does not fail your run; CI installs
+every engine and blocks unconditionally, which is where the guarantee lives. The point of the local
+rung is that the remote run becomes a **confirmation** rather than a discovery.
+
+**Formatting is caught one rung earlier**, at commit. `.githooks/pre-commit` runs
+`cargo fmt --all -- --check -l` and fails only if one of *your staged* `.rs` files is in the list —
+`cargo fmt` cannot inspect a subset, so the whole tree is checked and then intersected with what you
+staged, because several sessions share this working tree and being blocked by someone else's
+half-formatted file is exactly how a hook gets turned off. Formatting is safe to gate at commit time
+when the compile gates are not: `--check` cannot fail for the reason a WIP commit exists, so the rung
+never fires on legitimate work and never teaches the bypass. `LIGHTTRACK_SKIP_FMT=1 git commit` skips
+it; a machine with no `cargo` on PATH gets an announced skip, not a blocked commit.
 
 CI runs on every PR to `main`. **`.github/workflows/ci.yml` is the authority on what blocks** — this
 table is a projection of it. It is no longer maintained on trust: `crates/core/tests/gate_table_guard.rs`
@@ -189,6 +198,23 @@ is configured from these strings.
 | `cargo deny (advisories, advisory)` — RUSTSEC feed | **no** — see below |
 | `gitleaks (secrets)` — full-history secret scan, pinned engine | yes |
 | `gitleaks (latest rules, advisory)` — Monday cron, newest upstream rules | **no** — see below |
+
+### Review, and the changelog
+
+`.github/CODEOWNERS` maps every path to an owner, so GitHub requests the review itself. It is a
+one-maintainer list today; it exists anyway because it is what branch protection's "require review
+from Code Owners" reads, and because agents open pull requests here and an agent will not remember to
+add a reviewer. The seams that decide what a deployment gets — the store backends, `crates/engine`,
+`clients/contract/`, `.github/`, `deploy/` — are listed separately so they are named in the request
+rather than folded into "42 files changed".
+
+`CHANGELOG.md` is the human half of the published contract. The machine half already exists and is
+enforced: `clients/contract/openapi.baseline.json` is the last published description of the API, and
+`crates/api/src/openapi.rs` fails the build if a name leaves that surface without having been marked
+deprecated first (see `docs/DEPRECATION.md`). What a 400 kB JSON diff cannot tell the maintainer of
+one of the three SDKs is whether they need to care. Add a line under `## [Unreleased]` for anything a
+user of the API, an SDK, or a deployment would notice — the pull-request template asks, so it gets
+written while the change is fresh rather than reconstructed at tag time.
 
 ### The documentation recovery lane
 

@@ -84,6 +84,56 @@ jobs:
         with:
           files: dist/*
 
+  # Supply chain: a signature and an SBOM for what this tag actually published.
+  #
+  # Keyless (Fulcio/Rekor). The signing identity is this workflow's OIDC token — repository, ref and
+  # workflow path — so there is no private key to store, rotate or leak, and a verifier can pin to
+  # exactly this workflow rather than to "somebody who had the key". See SECURITY.md for the
+  # `cosign verify-blob` invocation.
+  #
+  # A SEPARATE JOB, after `build`, on purpose: the binaries are already attached to the release by the
+  # time this runs. A failure here is loud and fixable by re-running the job, and it cannot stop a
+  # release that otherwise succeeded — signing is a property added to the artifacts, not a gate the
+  # artifacts have to pass.
+  sign:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # attach the SBOM and the signature bundles to the release
+      id-token: write # the OIDC token IS the signing identity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sigstore/cosign-installer@v3
+      - uses: anchore/sbom-action/download-syft@v0
+
+      - name: Build the SBOM for the source tree this tag was cut from
+        env:
+          TAG: ${{ github.ref_name }}
+        run: syft dir:. -o "spdx-json=lighttrack-$TAG.spdx.json"
+
+      - name: Sign every published artifact, and the SBOM
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          mkdir -p signed
+          cd signed
+          # Re-running this job re-downloads the bundles it wrote last time; skip them below rather
+          # than signing a signature.
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'lighttrack-*' --clobber
+          cp -f "../lighttrack-$TAG.spdx.json" .
+          for f in *; do
+            case "$f" in *.sigstore.json) continue ;; esac
+            echo "signing $f"
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
+          done
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "lighttrack-$TAG.spdx.json" ./*.sigstore.json
+          echo "signed:"; ls -1 ./*.sigstore.json
+
   # The defect behind the defect: with `fail-fast: false`, three legs can succeed and publish while a
   # fourth never runs, leaving a release that *looks* fine but silently has no binary for a platform
   # deploy/install.sh will happily ask for. This job makes that state loud instead of invisible.

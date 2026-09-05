@@ -25,10 +25,7 @@ if ! command -v gitleaks >/dev/null 2>&1; then
         "            \`brew install gitleaks\` / \`winget install gitleaks\`) to get the fast local" \
         "            answer. CI scans the full history and BLOCKS regardless — this is the cheap" \
         "            rung, not the gate." >&2
-    exit 0
-fi
-
-if ! gitleaks git --staged --no-banner --redact --config .gitleaks.toml .; then
+elif ! gitleaks git --staged --no-banner --redact --config .gitleaks.toml .; then
     printf '%s\n' \
         "" \
         "pre-commit: a staged change looks like a credential (see the finding above; the value is" \
@@ -41,4 +38,60 @@ if ! gitleaks git --staged --no-banner --redact --config .gitleaks.toml .; then
         "  must stay, add its FINGERPRINT (not its path) with a reason to .gitleaksignore — a" \
         "  directory exemption is a permanent blind spot where fixtures concentrate." >&2
     exit 1
+fi
+
+# Second rung: FORMAT, on the files this commit actually contains.
+#
+# Formatting was the one blocking gate whose first run was always remote: `-D warnings` and
+# `cargo fmt --check` both block in CI, and until now a contributor (or an agent) learned about a
+# missing blank line from a red board ten minutes after pushing. `pre-push` closes that for the whole
+# set, but the cheapest possible moment is the commit that introduced it.
+#
+# Why formatting is safe to gate at COMMIT time when the compile gates deliberately are not (see
+# .githooks/pre-push): `cargo fmt --check` cannot fail for the reason a work-in-progress commit
+# exists. Code that does not compile, does not pass, or is half-written is still perfectly
+# formattable. A rung that never fires on legitimate WIP is a rung nobody learns to bypass — and that
+# habit, once learned, would take the secret scan above down with it.
+#
+# Only YOUR staged files can fail it. `cargo fmt` has no way to inspect a subset, so the whole tree is
+# checked and then intersected with the staged set: several sessions share this working tree (see
+# CLAUDE.md), and being blocked by somebody else's half-formatted file is precisely how a hook gets
+# turned off for good.
+#
+# Same three outcomes as everywhere on this ladder — found something / found nothing / could not run.
+# `LIGHTTRACK_SKIP_FMT=1 git commit` bypasses deliberately. CI blocks on the identical command
+# regardless, which is where the guarantee lives.
+if [ "${LIGHTTRACK_SKIP_FMT:-0}" = "0" ]; then
+    staged=$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs')
+    if [ -n "$staged" ]; then
+        if ! command -v cargo >/dev/null 2>&1; then
+            printf '%s\n' \
+                "pre-commit: SKIPPED the format check — cargo is not on PATH. CI still blocks." >&2
+        else
+            # `-l` lists the files rustfmt would rewrite. It reports absolute paths, with backslashes
+            # on Windows, so normalize the separator before matching git's repo-relative names.
+            rewrites=$(cargo fmt --all -- --check -l 2>/dev/null | tr '\\' '/' || true)
+            offenders=""
+            for f in $staged; do
+                case "$rewrites" in
+                    *"$f"*) offenders="$offenders $f" ;;
+                esac
+            done
+            if [ -n "$offenders" ]; then
+                printf '%s\n' "" "pre-commit: staged file(s) are not rustfmt-clean:" >&2
+                # Word-splitting is intended: these are repo-relative Rust source paths.
+                # shellcheck disable=SC2086
+                printf '  %s\n' $offenders >&2
+                printf '%s\n' \
+                    "" \
+                    "  Run \`cargo fmt\` and re-stage. This is the same check CI blocks on" \
+                    "  (\`cargo fmt --all -- --check\`): finding it here costs a second, finding it" \
+                    "  there costs a push, a runner boot and a red board." \
+                    "" \
+                    "  LIGHTTRACK_SKIP_FMT=1 git commit  bypasses it deliberately — prefer that to" \
+                    "  --no-verify, which also silences the secret scan above." >&2
+                exit 1
+            fi
+        fi
+    fi
 fi

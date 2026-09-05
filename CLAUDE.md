@@ -5,6 +5,18 @@ data-open alternative to Langfuse). Rust workspace. Design docs live in `docs/`
 (`ARCHITECTURE.md`, `BENCHMARK_FRAMEWORK.md`, `DECISIONS.md`, `ROADMAP.md`, `PACKAGING.md`) — read
 those for *what* and *why*; this file is *how we write the code*.
 
+**This file is the canonical agent guidance** — declared as `guidance.canonical` in
+`.ai/manifest.yaml`. If any other guidance document disagrees with it, this one wins and the other is
+the bug. `.claude/CLAUDE.md` is currently exactly that bug: it still carries the generator's npm
+scaffold for a workspace with no npm build, and is listed under `guidance.staleProjections` until
+someone replaces its body with a pointer here. Ignore it.
+
+The **commands** (build, test, lint, format-check, conformance, the audits) are not restated in prose
+anywhere: `.ai/manifest.yaml` `capabilities:` is the single place they are written down, and
+`crates/core/tests/manifest_guard.rs` holds CI and `scripts/gates.sh` to exactly those strings. The
+"Build / test workflow" section below is repo-specific *operating* advice — which crate to build,
+which directory to run from, which Windows gotcha bites — not a competing list.
+
 ## Code structure & composability (enforce in every change)
 - **≤ ~300 LOC per file.** If a file grows past it, split by responsibility. Prefer many small,
   single-purpose files over one large one.

@@ -46,6 +46,44 @@ Only the latest `main` and the latest published container image
 ([`ghcr.io/xkazm04/lighttrack`](https://github.com/xkazm04/lighttrack/pkgs/container/lighttrack))
 receive fixes. There are no maintained release branches — the project is pre-1.0.
 
+## Verifying what you downloaded
+
+Release artifacts and the container image are signed **keylessly** with
+[cosign](https://docs.sigstore.dev/): there is no long-lived private key anywhere in this project, so
+there is none to leak. The signing identity is the GitHub Actions OIDC token of the workflow that
+published the artifact, which is why the commands below pin the *identity*, not just "a valid
+signature" — an unpinned `cosign verify` is satisfied by anything anyone ever signed.
+
+A release binary (`.sigstore.json` bundles are attached beside each archive, along with an SPDX SBOM
+for the tagged source tree):
+
+```bash
+cosign verify-blob \
+  --bundle lighttrack-x86_64-unknown-linux-gnu.tar.gz.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/xkazm04/lighttrack/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  lighttrack-x86_64-unknown-linux-gnu.tar.gz
+```
+
+The container image — signed by digest, because a tag is a moving pointer and a signature over a name
+that can be repointed says nothing about the bytes you pulled:
+
+```bash
+cosign verify ghcr.io/xkazm04/lighttrack:latest \
+  --certificate-identity-regexp '^https://github\.com/xkazm04/lighttrack/\.github/workflows/docker\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# and its SBOM, attested against the same digest
+cosign verify-attestation ghcr.io/xkazm04/lighttrack:latest --type spdxjson \
+  --certificate-identity-regexp '^https://github\.com/xkazm04/lighttrack/\.github/workflows/docker\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+**Known gap, 2026-09-05.** The GitHub Actions this project uses are still referenced by floating tag
+(`actions/checkout@v4`) rather than by commit SHA, so a compromised or retagged upstream action could
+run inside the workflow that does the signing. Signing raises the cost of tampering *after* the build;
+it does not close that one. Pinning is tracked as outstanding supply-chain work.
+
 ## In scope
 
 Anything that lets someone read, alter, or exfiltrate observability data they should not see, or take

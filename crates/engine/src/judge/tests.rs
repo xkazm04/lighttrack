@@ -567,3 +567,7 @@ fn concurrent_samples_match_sequential_aggregate() {
 
 #[cfg(test)]
 mod deterministic;
+
+/// The eval corpus: whole recorded verdicts, replayed through this same path. See `corpus.rs`.
+#[cfg(test)]
+mod corpus;
