@@ -145,13 +145,24 @@ fn send(
         ));
     }
     let v: Value = serde_json::from_str(&text)?;
+    let usage = v.get("usage");
+    // Read the stop condition BEFORE the payload is interpreted: a body cut off by `max_tokens`
+    // must never be salvaged into a fragment (empty or not) and read as the model's own doing.
+    if let Some(cap) = truncation_cap(&v) {
+        // The Messages API's `usage` carries no reasoning/answer split, so that field stays `None`
+        // here — an honest gap, not a guess.
+        return Err(EngineError::Truncated {
+            who: "anthropic".into(),
+            cap,
+            reasoning_tokens: None,
+        });
+    }
     let output = completion_text(&v, schema.is_some());
     if output.is_empty() {
         return Err(EngineError::EmptyCompletion {
             who: "anthropic".into(),
         });
     }
-    let usage = v.get("usage");
     Ok(GenOutcome {
         output,
         // The Messages API returns no dollar cost; the caller prices it from the DB price book.
@@ -171,6 +182,20 @@ fn send(
         // Temperature-pinned, but Anthropic exposes no seed — reproducible by convention only.
         determinism: Determinism::BestEffort,
     })
+}
+
+/// The token cap that applied, when a Messages API response was cut off by `stop_reason:
+/// "max_tokens"` — read back from `usage.output_tokens`, which is exactly that cap by construction.
+/// `None` on any other stop reason (including a response with no `stop_reason` at all).
+fn truncation_cap(v: &Value) -> Option<u64> {
+    if v.get("stop_reason").and_then(Value::as_str) != Some("max_tokens") {
+        return None;
+    }
+    Some(
+        v.pointer("/usage/output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    )
 }
 
 /// Pull the verdict out of a Messages response: the forced tool call's `input` (serialized, so the
@@ -238,5 +263,43 @@ mod tests {
     fn empty_content_yields_empty_text() {
         assert_eq!(completion_text(&json!({}), true), "");
         assert_eq!(completion_text(&json!({ "content": [] }), false), "");
+    }
+
+    /// `stop_reason: "max_tokens"` with an EMPTY `content` array — a forced tool call that never
+    /// got far enough to emit its `tool_use` block. Distinct from a normal stop that said nothing:
+    /// `truncation_cap` must say `Some`, not defer to `completion_text`'s empty string.
+    #[test]
+    fn max_tokens_with_empty_content_is_a_truncation_cap() {
+        let resp = json!({
+            "stop_reason": "max_tokens",
+            "content": [],
+            "usage": { "input_tokens": 200, "output_tokens": 4096 }
+        });
+        assert_eq!(truncation_cap(&resp), Some(4096));
+        assert_eq!(completion_text(&resp, true), "", "no tool_use block landed");
+    }
+
+    /// `stop_reason: "max_tokens"` with a PARTIAL text block cut off mid-object — still a
+    /// truncation, and the cap must be read before that fragment is ever handed to a JSON parser.
+    #[test]
+    fn max_tokens_with_partial_content_is_still_a_truncation_cap() {
+        let resp = json!({
+            "stop_reason": "max_tokens",
+            "content": [{ "type": "text", "text": "{\"score\": 0.9, \"reasoning\": \"cut off mid" }],
+            "usage": { "input_tokens": 200, "output_tokens": 4096 }
+        });
+        assert_eq!(truncation_cap(&resp), Some(4096));
+    }
+
+    /// A normal `end_turn` stop with empty content is NOT a truncation — `truncation_cap` says
+    /// `None`, leaving `EmptyCompletion`'s "stopped normally, said nothing" meaning untouched.
+    #[test]
+    fn a_normal_stop_with_empty_content_is_not_a_truncation_cap() {
+        let resp = json!({
+            "stop_reason": "end_turn",
+            "content": [],
+            "usage": { "input_tokens": 200, "output_tokens": 0 }
+        });
+        assert_eq!(truncation_cap(&resp), None);
     }
 }

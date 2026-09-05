@@ -397,13 +397,23 @@ fn generate_gemini(
         return Err(http_error("gemini", status, &headers, text));
     }
     let v: Value = serde_json::from_str(&text)?;
+    let usage = v.get("usageMetadata");
+    // Read the stop condition BEFORE the payload is interpreted: a thinking model that spends its
+    // whole cap on `thought` parts reaches `gemini_text` as 0 characters, which must read as a cap
+    // hit, not as a normal stop that said nothing.
+    if let Some((cap, reasoning_tokens)) = gemini_truncation(&v) {
+        return Err(EngineError::Truncated {
+            who: "gemini".into(),
+            cap,
+            reasoning_tokens,
+        });
+    }
     let output = gemini_text(&v);
     if output.is_empty() {
         return Err(EngineError::EmptyCompletion {
             who: "gemini".into(),
         });
     }
-    let usage = v.get("usageMetadata");
     Ok(GenOutcome {
         output,
         cost_usd: None,
@@ -422,6 +432,32 @@ fn generate_gemini(
             Determinism::BestEffort
         },
     })
+}
+
+/// Whether a Gemini `generateContent` response was cut off by `maxOutputTokens`, and if so, the
+/// cap that applied plus the tokens spent on hidden reasoning (`thoughtsTokenCount`), when the
+/// response reports one. `cap` is the answer tokens plus the reasoning tokens: the cap governs the
+/// whole generation, not just the visible part, and a thinking model can spend all of it before
+/// emitting a single answer token.
+fn gemini_truncation(v: &Value) -> Option<(u64, Option<u64>)> {
+    if v.pointer("/candidates/0/finishReason")
+        .and_then(Value::as_str)
+        != Some("MAX_TOKENS")
+    {
+        return None;
+    }
+    let usage = v.get("usageMetadata");
+    let answer_tokens = usage
+        .and_then(|u| u.get("candidatesTokenCount"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let reasoning_tokens = usage
+        .and_then(|u| u.get("thoughtsTokenCount"))
+        .and_then(Value::as_u64);
+    Some((
+        answer_tokens + reasoning_tokens.unwrap_or(0),
+        reasoning_tokens,
+    ))
 }
 
 /// The answer text of a Gemini `generateContent` response: every text part of the first candidate,
@@ -488,6 +524,17 @@ fn generate_openai(
         return Err(http_error("openai", status, &headers, text));
     }
     let v: Value = serde_json::from_str(&text)?;
+    let usage = v.get("usage");
+    // Read the stop condition BEFORE the payload is interpreted: a reasoning model that spends its
+    // whole cap on hidden reasoning tokens reaches `content` as an empty string, which must read as
+    // a cap hit, not as a normal stop that said nothing.
+    if let Some((cap, reasoning_tokens)) = openai_truncation(&v) {
+        return Err(EngineError::Truncated {
+            who: "openai".into(),
+            cap,
+            reasoning_tokens,
+        });
+    }
     let output = v
         .get("choices")
         .and_then(|c| c.get(0))
@@ -501,7 +548,6 @@ fn generate_openai(
             who: "openai".into(),
         });
     }
-    let usage = v.get("usage");
     Ok(GenOutcome {
         output,
         cost_usd: None,
@@ -525,9 +571,33 @@ fn generate_openai(
     })
 }
 
+/// Whether an OpenAI Chat Completions response was cut off by the token cap, and if so, the cap
+/// that applied (`usage.completion_tokens`, which OpenAI defines to include reasoning tokens) plus
+/// the share of it that went to hidden reasoning (`completion_tokens_details.reasoning_tokens`),
+/// when the response reports one.
+fn openai_truncation(v: &Value) -> Option<(u64, Option<u64>)> {
+    if v.pointer("/choices/0/finish_reason")
+        .and_then(Value::as_str)
+        != Some("length")
+    {
+        return None;
+    }
+    let usage = v.get("usage");
+    let cap = usage
+        .and_then(|u| u.get("completion_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let reasoning_tokens = usage
+        .and_then(|u| u.pointer("/completion_tokens_details/reasoning_tokens"))
+        .and_then(Value::as_u64);
+    Some((cap, reasoning_tokens))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{gemini_text, stated_retry_after, strip_schema_key};
+    use super::{
+        gemini_text, gemini_truncation, openai_truncation, stated_retry_after, strip_schema_key,
+    };
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
     use serde_json::json;
     use std::time::Duration;
@@ -590,6 +660,62 @@ mod tests {
         assert_eq!(gemini_text(&plain), "hi");
         assert_eq!(gemini_text(&json!({ "candidates": [] })), "");
         assert_eq!(gemini_text(&json!({})), "");
+    }
+
+    /// `length` (OpenAI) / `MAX_TOKENS` (Gemini) with an EMPTY answer: a reasoning model that spent
+    /// its whole cap on hidden thinking. This must read as [`crate::EngineError::Truncated`], never
+    /// as [`crate::EngineError::EmptyCompletion`] — the two outcomes look identical in the answer
+    /// text and differ only in the stop condition, which is why it has to be read first.
+    #[test]
+    fn a_capped_call_with_zero_answer_tokens_is_truncated_not_empty() {
+        let openai = json!({
+            "choices": [{ "finish_reason": "length", "message": { "content": "" } }],
+            "usage": { "completion_tokens": 16000, "completion_tokens_details": { "reasoning_tokens": 16000 } }
+        });
+        assert_eq!(openai_truncation(&openai), Some((16000, Some(16000))));
+
+        let gemini = json!({
+            "candidates": [{ "finishReason": "MAX_TOKENS", "content": { "parts": [] } }],
+            "usageMetadata": { "candidatesTokenCount": 0, "thoughtsTokenCount": 16000 }
+        });
+        assert_eq!(gemini_truncation(&gemini), Some((16000, Some(16000))));
+    }
+
+    /// `length` / `MAX_TOKENS` with a PARTIAL, non-empty answer cut off mid-object: also
+    /// [`crate::EngineError::Truncated`], and — this is the requirement that matters — the caller
+    /// gets `Err` before it ever sees the fragment, so it can never be salvaged into a JSON-shape
+    /// failure that blames the model for our cap.
+    #[test]
+    fn a_capped_call_with_a_partial_answer_is_still_truncated() {
+        let openai = json!({
+            "choices": [{ "finish_reason": "length", "message": { "content": "{\"score\": 0.8, \"reasoning\": \"cut off mid" } }],
+            "usage": { "completion_tokens": 16000 }
+        });
+        assert_eq!(openai_truncation(&openai), Some((16000, None)));
+
+        let gemini = json!({
+            "candidates": [{ "finishReason": "MAX_TOKENS", "content": { "parts": [{ "text": "{\"score\": 0.8" }] } }],
+            "usageMetadata": { "candidatesTokenCount": 16000 }
+        });
+        assert_eq!(gemini_truncation(&gemini), Some((16000, None)));
+    }
+
+    /// A normal stop with an empty answer is NOT truncation — `openai_truncation` /
+    /// `gemini_truncation` both say `None`, leaving the existing empty-completion path (a genuine
+    /// "stopped normally, said nothing") untouched.
+    #[test]
+    fn a_normal_stop_with_an_empty_answer_is_not_truncation() {
+        let openai = json!({
+            "choices": [{ "finish_reason": "stop", "message": { "content": "" } }],
+            "usage": { "completion_tokens": 0 }
+        });
+        assert_eq!(openai_truncation(&openai), None);
+
+        let gemini = json!({
+            "candidates": [{ "finishReason": "STOP", "content": { "parts": [] } }],
+            "usageMetadata": { "candidatesTokenCount": 0 }
+        });
+        assert_eq!(gemini_truncation(&gemini), None);
     }
 
     #[test]

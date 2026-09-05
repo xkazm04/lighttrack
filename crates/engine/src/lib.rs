@@ -105,9 +105,38 @@ pub enum EngineError {
     /// HTTP 401/403 — a credentials problem; not retryable.
     #[error("{who} authentication failed (HTTP {status})")]
     Auth { who: String, status: u16 },
-    /// The provider returned no completion text (distinct from unparseable output).
+    /// The provider returned no completion text (distinct from unparseable output). This is a
+    /// **normal** stop that said nothing — never conflate it with [`EngineError::Truncated`], an
+    /// **abnormal** stop that never got the chance to say anything (or to finish saying it).
     #[error("{who} returned an empty completion")]
     EmptyCompletion { who: String },
+    /// The completion was cut off by the token cap before the model reached a normal stop — a fact
+    /// about the caller's cap, not about the model's competence. Read from the provider's own stop
+    /// condition (`stop_reason: "max_tokens"` / `finish_reason: "length"` / `finishReason:
+    /// "MAX_TOKENS"`) *before* the payload is interpreted, so a truncated body is never salvaged
+    /// into a fragment and blamed on the model for failing to answer, and a truncated *empty* body
+    /// is never folded into [`EngineError::EmptyCompletion`]'s "stopped normally, said nothing".
+    ///
+    /// `cap` is the token ceiling that applied, read back from the provider's own usage accounting
+    /// (the completion is cut at exactly that many tokens, by construction). `reasoning_tokens`,
+    /// where the provider reports reasoning separately from the answer (OpenAI's
+    /// `completion_tokens_details.reasoning_tokens`, Gemini's `thoughtsTokenCount`), is the number
+    /// that tells "raise the cap" apart from "this model spends the whole budget thinking and never
+    /// gets to the answer" — `None` when the provider does not separate the two (e.g. the bare
+    /// Anthropic Messages API, whose `usage` has no such split).
+    #[error(
+        "{who} completion hit its {cap}-token cap before finishing{}",
+        reasoning_tokens
+            .map(|r| format!(
+                " ({r} of those tokens went to reasoning, not to the answer)"
+            ))
+            .unwrap_or_default()
+    )]
+    Truncated {
+        who: String,
+        cap: u64,
+        reasoning_tokens: Option<u64>,
+    },
     /// A non-transient transport error (DNS, TLS, malformed response, …).
     #[error("{who} request failed: {detail}")]
     Http { who: String, detail: String },
