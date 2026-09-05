@@ -20,5 +20,5 @@ schemars = { version = "1", default-features = false, features = ["derive", "std
 # HMAC-SHA256 for the alert webhook signature (`X-LightTrack-Signature`). Pure computation, no I/O —
 # it is here rather than in the API because the responder VERIFIES what the API signs, and one
 # implementation is the only way those two can agree.
-hmac = "0.12"
+hmac = "0.13"
 sha2 = "0.10"
