@@ -150,6 +150,13 @@ Three properties worth knowing:
   admits. A telemetry client that halts your LLM calls because it is itself confused is worse than
   one that records nothing. A stale verdict triggers one background refresh from
   `GET /v1/limits/status`; the decision never waits on it.
+  **Its worst case, stated:** the 30s bounds how long a *refusal* can rest on old evidence, not how
+  long the client can keep spending. With the server reachable, a client learns that the cap was
+  crossed from the next ingest response it gets, so the overshoot is the calls in flight during one
+  send round-trip — about `ingest latency × your call rate`, one step behind the server's own cap,
+  which is itself one call late. With the server unreachable the view goes stale and the client
+  admits everything, by design; nothing here bounds that spend, which is what the provider's own
+  spend ceiling is for.
 - **A blocked call is not spend.** It is never recorded as cost. Pass `record_blocked` /
   `recordBlocked` to leave a zero-usage event tagged `lt_blocked_locally` instead, so your rollups
   show a throttled week rather than a quiet one.
