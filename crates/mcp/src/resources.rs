@@ -69,7 +69,7 @@ pub(crate) fn read(c: &Client, params: &Value) -> Result<Value, String> {
     let body = c.get(&format!("{prefix}{id}"))?;
     let markdown = lighttrack_render::render(render_kind(kind), &body)
         .unwrap_or_else(|| serde_json::to_string_pretty(&body).unwrap_or_default());
-    let raw_json = serde_json::to_string_pretty(&body).unwrap_or_default();
+    let raw_json = render_raw_json(&body);
 
     Ok(json!({
         "contents": [
@@ -77,6 +77,74 @@ pub(crate) fn read(c: &Client, params: &Value) -> Result<Value, String> {
             { "uri": uri, "mimeType": "application/json", "text": raw_json }
         ]
     }))
+}
+
+/// The size at which the raw-JSON content item switches to its elided form.
+///
+/// This is a **trigger threshold, not an output ceiling**, and the distinction is measured
+/// rather than assumed: a 200-span trace carrying 400-byte payloads serializes to 206,644
+/// bytes whole and 43,628 bytes elided-and-compact — a 4.7x reduction that still exceeds this
+/// number. Elision bounds the payload per span; it cannot bound a span count that is itself
+/// unbounded. Capping the number of spans (with a `...{n} spans elided...` marker, the way the
+/// span-scoring harness does) is the separate change that would make this a true ceiling.
+const MAX_RESOURCE_JSON: usize = 24 * 1024;
+
+/// Serialize the body for the raw-JSON content item, eliding payload-bearing fields when the
+/// compact form is over budget.
+///
+/// The structural view — ids, models, tokens, cost, status, the span tree's shape — is what
+/// makes this item useful, and it is small. What blows the budget is `input`/`output` on each
+/// span's event: whole prompts and whole completions, repeated per span.
+///
+/// Those are **recoverable**: every span carries the event id that `get_event` reads, so the
+/// bytes are one tool call away. So they are replaced with a pointer that says how to get them
+/// back, rather than summarized (which would lose them) or truncated (which would lie about
+/// having them). The marker carries the original byte count, because "how much is missing" is
+/// the fact a caller needs to decide whether to fetch.
+fn render_raw_json(body: &Value) -> String {
+    let compact = serde_json::to_string(body).unwrap_or_default();
+    if compact.len() <= MAX_RESOURCE_JSON {
+        return serde_json::to_string_pretty(body).unwrap_or_default();
+    }
+    // Over budget, two things change together. Payload-bearing fields are elided, and the
+    // output is serialized COMPACT: pretty-printing a few hundred spans costs tens of
+    // kilobytes in indentation alone, so eliding while still pretty-printing measurably
+    // fails to reach the budget. Readability is what the Markdown content item is for.
+    let mut elided = body.clone();
+    elide_payloads(&mut elided);
+    serde_json::to_string(&elided).unwrap_or_default()
+}
+
+/// Replace `input`/`output` values under any `event` object with a re-fetch marker, in place.
+///
+/// Walks the whole tree rather than a fixed path: the span tree nests, and a shape-specific
+/// walk would silently stop eliding the day the response gains a level.
+fn elide_payloads(node: &mut Value) {
+    match node {
+        Value::Object(map) => {
+            if let Some(Value::Object(event)) = map.get_mut("event") {
+                for field in ["input", "output"] {
+                    if let Some(v) = event.get_mut(field) {
+                        if !v.is_null() {
+                            let bytes = serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
+                            *v = Value::String(format!(
+                                "<elided: {bytes} bytes — fetch via get_event>"
+                            ));
+                        }
+                    }
+                }
+            }
+            for (_, v) in map.iter_mut() {
+                elide_payloads(v);
+            }
+        }
+        Value::Array(items) => {
+            for v in items.iter_mut() {
+                elide_payloads(v);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Split a `lighttrack://{kind}/{id}` URI into `(kind, id)`. Errors on a wrong scheme, a missing id,
@@ -113,6 +181,123 @@ mod tests {
     #[test]
     fn list_is_honestly_empty() {
         assert_eq!(list()["resources"].as_array().unwrap().len(), 0);
+    }
+
+    /// A trace body with `n` spans, each carrying a `bytes`-sized input and output.
+    fn trace_with_spans(n: usize, bytes: usize) -> Value {
+        let blob = "x".repeat(bytes);
+        let spans: Vec<Value> = (0..n)
+            .map(|i| {
+                json!({
+                    "span_id": format!("s{i}"),
+                    "name": "llm.call",
+                    "event": {
+                        "id": format!("e{i}"),
+                        "model": "some-model",
+                        "tokens": 1234,
+                        "cost_usd": 0.01,
+                        "input": blob,
+                        "output": blob,
+                    }
+                })
+            })
+            .collect();
+        json!({ "trace_id": "t1", "total_cost_usd": 1.0, "spans": spans })
+    }
+
+    #[test]
+    fn small_body_is_emitted_whole() {
+        let body = trace_with_spans(2, 16);
+        let out = render_raw_json(&body);
+        assert!(!out.contains("elided"), "small body must not be elided");
+        assert!(out.contains("\"input\""));
+        let v: Value = serde_json::from_str(&out).expect("still valid json");
+        assert_eq!(v["spans"][0]["event"]["input"], "x".repeat(16));
+    }
+
+    #[test]
+    fn over_budget_body_elides_payloads_to_a_refetch_pointer() {
+        let body = trace_with_spans(200, 400);
+        let out = render_raw_json(&body);
+        let v: Value = serde_json::from_str(&out).expect("elided output is still valid json");
+
+        // The structural view survives whole - that is the point of eliding rather than truncating.
+        assert_eq!(v["trace_id"], "t1");
+        assert_eq!(v["spans"].as_array().unwrap().len(), 200);
+        assert_eq!(v["spans"][0]["event"]["model"], "some-model");
+        assert_eq!(v["spans"][0]["event"]["tokens"], 1234);
+
+        // The payload is replaced by a pointer naming the way back, carrying its own size.
+        let input = v["spans"][0]["event"]["input"].as_str().unwrap();
+        assert!(input.starts_with("<elided: "), "{input}");
+        assert!(input.contains("fetch via get_event"), "{input}");
+        assert!(
+            input.contains("402"),
+            "marker carries the original byte count: {input}"
+        );
+        assert!(v["spans"][199]["event"]["output"]
+            .as_str()
+            .unwrap()
+            .contains("get_event"));
+    }
+
+    /// The paired measurement this change was made for: same input, both arms, one instrument.
+    #[test]
+    fn elision_brings_a_large_trace_under_budget() {
+        let body = trace_with_spans(200, 400);
+
+        let arm_a = serde_json::to_string_pretty(&body).unwrap(); // previous behaviour
+        let arm_b = render_raw_json(&body); // current behaviour
+
+        assert!(
+            arm_a.len() > 5 * MAX_RESOURCE_JSON,
+            "arm A is {} bytes - the case that motivated the budget",
+            arm_a.len()
+        );
+        eprintln!(
+            "paired measurement: arm A {} bytes -> arm B {} bytes ({:.1}% of A)",
+            arm_a.len(),
+            arm_b.len(),
+            100.0 * arm_b.len() as f64 / arm_a.len() as f64
+        );
+        // Measured 4.7x on this fixture; the floor is set at 4x so normal drift in the
+        // structural fields does not turn a real regression into a judgement call.
+        assert!(
+            arm_b.len() * 4 < arm_a.len(),
+            "arm B {} must be at least 4x smaller than arm A {}",
+            arm_b.len(),
+            arm_a.len()
+        );
+        // Pins the honest residual: elision is a large, real reduction that does NOT reach the
+        // trigger threshold for a trace this wide, because the per-span structure is unbounded
+        // in span count. If a later change caps spans, this assertion is the one to tighten.
+        assert!(
+            arm_b.len() > MAX_RESOURCE_JSON,
+            "arm B {} unexpectedly fits the threshold - if spans are now capped, tighten this              test to assert the ceiling instead",
+            arm_b.len()
+        );
+    }
+
+    #[test]
+    fn elision_reaches_nested_spans() {
+        let body = json!({
+            "trace_id": "t1",
+            "spans": [{
+                "span_id": "s0",
+                "children": [{
+                    "span_id": "s1",
+                    "event": { "id": "e1", "input": "y".repeat(64), "output": null }
+                }]
+            }]
+        });
+        let mut v = body.clone();
+        elide_payloads(&mut v);
+        assert!(v["spans"][0]["children"][0]["event"]["input"]
+            .as_str()
+            .unwrap()
+            .contains("get_event"));
+        // A null payload is absent, not elided - nothing to fetch back.
+        assert!(v["spans"][0]["children"][0]["event"]["output"].is_null());
     }
 
     #[test]

@@ -268,7 +268,22 @@ fn collapse(set: &BTreeSet<String>) -> Option<String> {
 
 /// Build this instance's privacy-safe digest from its benchmark run scorecards. Buckets with fewer
 /// than `min_cases` total cases are **dropped** (k-anonymity); the rest are sorted by quality desc.
+///
+/// Drops the withheld count on the floor. Prefer [`build_digest_counted`] on any path that shows
+/// the digest to an operator: a bucket withheld by the floor and a bucket nobody measured are the
+/// same absence here, and only the count separates them.
 pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> {
+    build_digest_counted(stats, min_cases).0
+}
+
+/// [`build_digest`], plus the number of buckets the k-anonymity floor withheld.
+///
+/// The count is *disclosure*, not payload: an empty board must be legible as "held back" rather
+/// than read as "nobody measured this". It is deliberately **not** part of [`digest_sha256`] —
+/// the hash gates whether a repeat push carries new evidence, and two digests whose entries are
+/// identical carry the same evidence however many thin buckets sat behind them. Hashing it would
+/// make every existing instance re-push unchanged data once.
+pub fn build_digest_counted(stats: &[RunStat], min_cases: u32) -> (Vec<ModelDigestEntry>, u32) {
     let mut groups: BTreeMap<Key, Acc> = BTreeMap::new();
     for s in stats {
         if s.n_cases == 0 {
@@ -299,6 +314,10 @@ pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> 
                 None,
             );
     }
+    let withheld = groups
+        .values()
+        .filter(|a| a.cases < min_cases as u64)
+        .count() as u32;
     let mut out: Vec<ModelDigestEntry> = groups
         .into_iter()
         .filter(|(_, a)| a.cases >= min_cases as u64)
@@ -324,7 +343,7 @@ pub fn build_digest(stats: &[RunStat], min_cases: u32) -> Vec<ModelDigestEntry> 
         })
         .collect();
     sort_by_quality(&mut out, |e| (e.quality, &e.provider, &e.model));
-    out
+    (out, withheld)
 }
 
 /// Winsorize one row's per-source case counts so no single source exceeds
@@ -474,6 +493,8 @@ fn r6(x: f64) -> f64 {
 mod tests {
     use super::super::DEFAULT_LOW_CONFIDENCE_CASES;
     use super::*;
+    use crate::collective::contribution::digest_sha256;
+    use crate::collective::types::CollectiveDigest;
     use chrono::Utc;
 
     fn stat(provider: &str, model: &str, task: &str, q: f64, cost: f64, cases: u32) -> RunStat {
@@ -533,6 +554,59 @@ mod tests {
             frozen_dataset: Coverage::Unknown,
             significance_tested: Coverage::Unknown,
             received_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn withheld_count_separates_held_back_from_never_measured() {
+        // Both arms produce an empty entry list. Only the count tells them apart, which is the
+        // whole point: an empty board must read as "held back", not as "nobody measured this".
+        let (entries, withheld) =
+            build_digest_counted(&[stat("openai", "gpt-x", "qa", 0.9, 0.01, 3)], 5);
+        assert!(entries.is_empty());
+        assert_eq!(withheld, 1, "a thin bucket is withheld and disclosed");
+
+        let (entries, withheld) = build_digest_counted(&[], 5);
+        assert!(entries.is_empty());
+        assert_eq!(withheld, 0, "nothing measured withholds nothing");
+
+        // A mixed digest discloses only the suppressed buckets, not the published ones.
+        let (entries, withheld) = build_digest_counted(
+            &[
+                stat("openai", "gpt-x", "qa", 0.9, 0.01, 6),
+                stat("openai", "gpt-y", "qa", 0.8, 0.01, 2),
+            ],
+            5,
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(withheld, 1);
+    }
+
+    #[test]
+    fn withheld_count_is_not_in_the_contribution_hash() {
+        // The hash gates whether a repeat push carries new evidence. Two digests with identical
+        // entries carry the same evidence however many thin buckets sat behind them.
+        let mut a = digest_for_hash();
+        let mut b = digest_for_hash();
+        a.buckets_withheld = 0;
+        b.buckets_withheld = 7;
+        assert_eq!(
+            digest_sha256(&a),
+            digest_sha256(&b),
+            "disclosure must not make an unchanged digest look new"
+        );
+    }
+
+    fn digest_for_hash() -> CollectiveDigest {
+        CollectiveDigest {
+            schema_version: 3,
+            contributor_id: "c-abc".into(),
+            generated_at: Utc::now(),
+            min_cases: 5,
+            projects_included: 1,
+            projects_excluded: 0,
+            buckets_withheld: 0,
+            entries: Vec::new(),
         }
     }
 

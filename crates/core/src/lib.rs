@@ -19,6 +19,7 @@ pub mod customer;
 pub mod dataset;
 pub mod dataset_lineage;
 pub mod device;
+pub mod endpoint_identity;
 pub mod error;
 pub mod event;
 pub mod forecast;
@@ -62,11 +63,11 @@ pub use bench_target::{
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use calibration_record::{CalibrationRecord, JudgeTrust, JudgeTrustVerdict};
 pub use collective::{
-    bucket_cost, build_digest, canon_determinism, digest_sha256, hub_url_hash, merge_leaderboard,
-    normalize_hub_url, task_type_from, CollectiveDigest, CollectiveEntry, ContributionRecord,
-    ContributionStatus, Coverage, LeaderboardRow, ModelAliases, ModelDigestEntry, RowRigor,
-    RunStat, DEFAULT_LOW_CONFIDENCE_CASES, DEFAULT_MIN_CASES, DETERMINISM_LEVELS,
-    DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
+    bucket_cost, build_digest, build_digest_counted, canon_determinism, digest_sha256,
+    hub_url_hash, merge_leaderboard, normalize_hub_url, task_type_from, CollectiveDigest,
+    CollectiveEntry, ContributionRecord, ContributionStatus, Coverage, LeaderboardRow,
+    ModelAliases, ModelDigestEntry, RowRigor, RunStat, DEFAULT_LOW_CONFIDENCE_CASES,
+    DEFAULT_MIN_CASES, DETERMINISM_LEVELS, DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
 };
 pub use customer::{BillingProduct, Customer};
 pub use dataset::{Dataset, DatasetItem};
@@ -75,6 +76,10 @@ pub use dataset_lineage::{
     MAX_IMPORT_N,
 };
 pub use device::{capability_matches, Device, DeviceEligibility, RelayAdmission};
+pub use endpoint_identity::{
+    native_routes, resolve as resolve_endpoint, Endpoint, EndpointIdentity, Evidence, Observations,
+    SELF_HOSTED_PREFIX,
+};
 pub use error::LtError;
 pub use event::{
     FailureClass, LlmEvent, Operation, Provider, Status, TokenUsage, FAILURE_CLASS_KEY,

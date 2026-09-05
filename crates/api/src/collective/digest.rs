@@ -13,7 +13,7 @@ use chrono::Utc;
 use serde::Deserialize;
 
 use lighttrack_core::{
-    build_digest, CollectiveDigest, RunStat, DEFAULT_MIN_CASES, DIGEST_SCHEMA_VERSION,
+    build_digest_counted, CollectiveDigest, RunStat, DEFAULT_MIN_CASES, DIGEST_SCHEMA_VERSION,
 };
 use lighttrack_store::{Store, StoreError};
 
@@ -55,7 +55,7 @@ pub(crate) async fn build_instance_digest(
     let store = st.store.clone();
     let (stats, projects_included, projects_excluded) =
         spawn_db(move || gather_run_stats(store.as_ref())).await?;
-    let entries = build_digest(&stats, min_cases);
+    let (entries, buckets_withheld) = build_digest_counted(&stats, min_cases);
     Ok(CollectiveDigest {
         schema_version: DIGEST_SCHEMA_VERSION,
         contributor_id: st.collective.contributor_id.clone(),
@@ -63,6 +63,7 @@ pub(crate) async fn build_instance_digest(
         min_cases,
         projects_included,
         projects_excluded,
+        buckets_withheld,
         entries,
     })
 }

@@ -130,6 +130,13 @@ fn rubric_fingerprint_of(bench: &Benchmark, version: Option<u32>) -> Option<Stri
 }
 
 /// Resolve the model identity from the compare-mode run report, else the benchmark's single target.
+///
+/// The provider is then **overridden by the run's endpoint identity when one was established**. The
+/// declared string is what an operator typed; on a re-pointed OpenAI-compatible base it says
+/// `openai` while a local runtime generated the tokens, and the hub admits any non-empty provider
+/// name (`super::sanitize`), so nothing downstream would ever catch it. `aliases.rs` refuses to
+/// merge `openrouter` into `anthropic` for exactly this reason — this is the same refusal one layer
+/// down, where the identity was never declared in the first place.
 fn provider_model(bench: &Benchmark, run: &BenchmarkRun) -> Option<(String, String)> {
     let from = |v: &Value| {
         let p = v
@@ -140,7 +147,20 @@ fn provider_model(bench: &Benchmark, run: &BenchmarkRun) -> Option<(String, Stri
         let m = v.get("model").and_then(Value::as_str)?.trim().to_string();
         (!p.is_empty() && !m.is_empty()).then_some((p, m))
     };
-    from(&run.report).or_else(|| from(&bench.target))
+    let (provider, model) = from(&run.report).or_else(|| from(&bench.target))?;
+    Some((endpoint_provider(&run.report).unwrap_or(provider), model))
+}
+
+/// The provider id a probed endpoint contributes under, read off the run report the runner stamped.
+/// `None` when no probe ran (every commercial provider at its documented address), when the record
+/// is unreadable, or when it records an operator assertion — in each case the declared string
+/// stands, which is the pre-existing behaviour.
+fn endpoint_provider(report: &Value) -> Option<String> {
+    serde_json::from_value::<lighttrack_core::EndpointIdentity>(
+        report.get("endpoint_identity")?.clone(),
+    )
+    .ok()?
+    .collective_provider()
 }
 
 #[cfg(test)]
@@ -263,6 +283,72 @@ mod tests {
             None,
             "unrecorded ≠ untested"
         );
+    }
+
+    /// The measure, as a test. Two operators benchmark "their local setup" through a re-pointed
+    /// `LIGHTTRACK_OPENAI_BASE`; both runs declare `provider: "openai"` because that is the code
+    /// path they took. Before the probe, both contributed under `openai` — one merged row, pooled
+    /// and winsorized and given a confidence interval, over two different programs, sitting in a
+    /// *named vendor's* row. After it, each is keyed on what actually answered.
+    #[test]
+    fn an_established_endpoint_identity_outranks_the_declared_provider() {
+        let b = bench("Local QA bench", Value::Null);
+        let declared = json!({ "provider": "openai", "model": "qwen3-8b" });
+        // Before: the operator's string is the whole identity.
+        let before = run_stat(&b, &run(declared.clone(), Some(0.7), 40, 0.0), None).unwrap();
+        assert_eq!(before.provider, "openai");
+
+        let with_identity = |runtime: &str| {
+            let mut r = declared.clone();
+            r["endpoint_identity"] = json!({
+                "endpoint": { "kind": "runtime", "name": runtime },
+                "evidence": "native-route",
+                "probed_on": "2026-09-03",
+            });
+            run_stat(&b, &run(r, Some(0.7), 40, 0.0), None).unwrap()
+        };
+        assert_eq!(with_identity("ollama").provider, "self-hosted.ollama");
+        assert_eq!(with_identity("vllm").provider, "self-hosted.vllm");
+        // …and neither can be confused with the vendor whose name the run declared.
+        assert_ne!(with_identity("ollama").provider, before.provider);
+        // The model identity is untouched: this layer never loosens `aliases.rs`.
+        assert_eq!(with_identity("ollama").model, "qwen3-8b");
+    }
+
+    #[test]
+    fn an_unresolvable_endpoint_is_marked_rather_than_named() {
+        let b = bench("Local QA bench", Value::Null);
+        let stamped = |identity: Value| {
+            let mut r = json!({ "provider": "openai", "model": "m" });
+            r["endpoint_identity"] = identity;
+            run_stat(&b, &run(r, Some(0.7), 10, 0.0), None)
+                .unwrap()
+                .provider
+        };
+        // A proxy fronting several runtimes is not a runtime; naming it would manufacture confidence.
+        assert_eq!(
+            stamped(json!({
+                "endpoint": { "kind": "multiplexed", "name": "litellm" },
+                "evidence": "native-route", "probed_on": "2026-09-03"
+            })),
+            "self-hosted.unresolved"
+        );
+        assert_eq!(
+            stamped(json!({
+                "endpoint": { "kind": "unrecognized" },
+                "evidence": "no-evidence", "probed_on": "2026-09-03"
+            })),
+            "self-hosted.unrecognized"
+        );
+        // An explicit operator assertion, and a record we cannot read, both leave the string alone.
+        assert_eq!(
+            stamped(json!({
+                "endpoint": { "kind": "unrecognized" },
+                "evidence": "operator-asserted", "probed_on": ""
+            })),
+            "openai"
+        );
+        assert_eq!(stamped(json!({ "garbage": true })), "openai");
     }
 
     #[test]

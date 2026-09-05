@@ -208,6 +208,7 @@ mod tests {
             min_cases: 5,
             projects_included: 2,
             projects_excluded: 1,
+            buckets_withheld: 0,
             entries,
         }
     }
