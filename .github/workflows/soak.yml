@@ -118,7 +118,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the run artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: soak-artifact-${{ github.run_number }}
           path: soak-artifact.json
