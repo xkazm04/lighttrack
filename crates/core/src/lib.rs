@@ -49,6 +49,7 @@ pub mod schedule;
 pub mod score;
 pub mod trace;
 pub mod unpriced;
+pub mod use_case;
 
 pub use alert::{Alert, AlertKind, Delivery, Severity};
 pub use alert_channel::{AlertChannel, ChannelKind};
@@ -144,6 +145,7 @@ pub use trace::{
     TraceTotals,
 };
 pub use unpriced::{UnpricedLedger, UnpricedRow, UNPRICED_NOTES};
+pub use use_case::{UseCase, UseCaseKind, UseCaseStatus};
 
 /// Convenience: a fresh UUIDv4 as a `String` (our canonical id form).
 pub fn new_id() -> String {

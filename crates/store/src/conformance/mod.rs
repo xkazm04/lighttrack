@@ -46,6 +46,7 @@ mod score_summary;
 mod scores;
 mod tenancy;
 mod traces;
+mod use_cases;
 
 use crate::{Result, Store};
 

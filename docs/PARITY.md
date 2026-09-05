@@ -39,6 +39,7 @@ conformance suite asserts that refusal, so a gap can never quietly become an emp
 | `labels` | full | full | full |
 | `calibrations` | full | full | full |
 | `dataset_lineage` | full | full | refused |
+| `use_cases` | full | refused | refused |
 
 ## Atomic admission
 
@@ -83,3 +84,4 @@ cap that reads as enforced is the failure this row exists to name.
 - **`labels`** — `insert_label`, `list_labels`, `labels_for_dataset`
 - **`calibrations`** — `insert_calibration`, `latest_calibration`, `list_calibrations`
 - **`dataset_lineage`** — `fork_dataset`, `import_dataset_items`, `list_dataset_versions`
+- **`use_cases`** — `upsert_use_case`, `get_use_case`, `list_use_cases`, `delete_use_case`, `observed_use_case_names`

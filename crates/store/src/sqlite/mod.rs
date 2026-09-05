@@ -43,6 +43,7 @@ mod schema;
 mod score_summary;
 mod scores;
 mod usage_cache;
+mod use_cases;
 
 #[cfg(test)]
 mod bench;
@@ -73,7 +74,7 @@ use lighttrack_core::{
     Dimension, Job, JobCancel, JobFinish, Label, LabelFilter, LeaseHeld, LimitRule, LimitScope,
     LlmEvent, ModelPriceRow, Project, Prompt, PromptVersion, RelayCancel, RelayOutcome,
     RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule, Score,
-    TokensByDimension, TraceSummary,
+    TokensByDimension, TraceSummary, UseCase,
 };
 
 use crate::{
@@ -736,6 +737,27 @@ impl Store for SqliteStore {
     }
     fn list_rubrics(&self, project: &str) -> Result<Vec<Rubric>> {
         self.read(|c| rubrics::list(c, project))
+    }
+
+    // --- use-case registry ---
+    fn upsert_use_case(&self, u: &UseCase) -> Result<()> {
+        self.with(|c| use_cases::upsert(c, u))
+    }
+    fn get_use_case(&self, project: &str, key: &str) -> Result<Option<UseCase>> {
+        self.read(|c| use_cases::get(c, project, key))
+    }
+    fn list_use_cases(&self, project: &str) -> Result<Vec<UseCase>> {
+        self.read(|c| use_cases::list(c, project))
+    }
+    fn delete_use_case(&self, project: &str, key: &str) -> Result<bool> {
+        self.with(|c| use_cases::delete(c, project, key))
+    }
+    fn observed_use_case_names(
+        &self,
+        project: &str,
+        since: Option<&str>,
+    ) -> Result<Vec<(String, u64, Vec<String>)>> {
+        self.read(|c| use_cases::observed(c, project, since))
     }
 
     // --- jobs ---

@@ -538,6 +538,35 @@ CREATE TABLE IF NOT EXISTS calibrations (
 -- The lookup every gate makes: exactly one (project, judge, rubric) pair, newest first.
 CREATE INDEX IF NOT EXISTS idx_calibrations_key ON calibrations(project_id, judge, rubric_id, created_at);
 
+-- The declared inventory of places this project calls an LLM. Deliberately NOT a foreign key on
+-- `events`: ingest must never drop an observation because its use case is unregistered, and the
+-- unmatched rows are the most useful thing here - an event name with no row is shadow usage or
+-- a typo splitting one use case's cost in two. `key` joins `events.name` by convention, and the
+-- gap between declared and observed is a report rather than a constraint.
+CREATE TABLE IF NOT EXISTS use_cases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  -- stable identifier events attribute to via events.name; unique per project
+  key TEXT NOT NULL,
+  -- human title for a dashboard row
+  name TEXT NOT NULL,
+  description TEXT,
+  -- generation|classification|extraction|summarization|judge|agent|embedding|rerank|other
+  kind TEXT NOT NULL DEFAULT 'generation',
+  -- active|planned|deprecated - decides whether silence or traffic is the finding
+  status TEXT NOT NULL DEFAULT 'active',
+  -- where in the application this call site lives
+  component TEXT,
+  -- JSON array of [provider/]model ids; absent means NO declaration, which is not the same as
+  -- 'any model is fine'
+  expected_models TEXT,
+  owner TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (project_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_use_cases_project ON use_cases(project_id, key);
+
 -- Post-ship columns, applied by crate::sqlite::schema::apply in this order:
 --   ALTER TABLE projects ADD COLUMN collective_opt_in INTEGER NOT NULL DEFAULT 0
 --   ALTER TABLE projects ADD COLUMN archived_at TEXT

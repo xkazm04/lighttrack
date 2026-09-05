@@ -282,7 +282,8 @@ Rendered from the declarative model in `crates/store/src/schema/tables/`, which 
 | `collective_contributions` | 12 | 0 | 2 | `id` |
 | `labels` | 11 | 0 | 3 | `id` |
 | `calibrations` | 14 | 0 | 1 | `id` |
+| `use_cases` | 12 | 0 | 1 | `id` |
 
-Totals: **25 tables**, **303 columns**, of which **43** were added after their table shipped (those are `ALTER TABLE … ADD COLUMN` on every dialect, never edits to a `CREATE TABLE`). Schema fingerprint: `sha256-d329cc1689cdc517` — the same value `GET /v1/capabilities` reports.
+Totals: **26 tables**, **315 columns**, of which **43** were added after their table shipped (those are `ALTER TABLE … ADD COLUMN` on every dialect, never edits to a `CREATE TABLE`). Schema fingerprint: `sha256-3bf9c26485555c04` — the same value `GET /v1/capabilities` reports.
 
 <!-- END generated table index -->

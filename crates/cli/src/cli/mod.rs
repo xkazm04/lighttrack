@@ -12,6 +12,7 @@ mod projects;
 mod prompts;
 mod relay;
 mod usage;
+mod use_cases;
 mod work;
 
 pub(crate) use alerts::{AlertChannelsCmd, AlertsCmd};
@@ -26,6 +27,7 @@ pub(crate) use relay::{
 pub(crate) use usage::{
     CostsArgs, CostsCmd, IngestCmd, MarginArgs, MarginCmd, PricesCmd, RevenueCmd, StorageCmd,
 };
+pub(crate) use use_cases::UseCasesCmd;
 pub(crate) use work::{JobsCmd, SchedulesCmd};
 
 use clap::{Parser, Subcommand};
@@ -87,6 +89,12 @@ pub(crate) enum Cmd {
     Alerts {
         #[command(subcommand)]
         action: AlertsCmd,
+    },
+    /// The use-case registry — where this project calls an LLM, and declared-vs-observed coverage.
+    #[command(name = "use-cases")]
+    UseCases {
+        #[command(subcommand)]
+        action: UseCasesCmd,
     },
     /// Manage rubrics — the weighted, anchored contract the LLM judge scores against.
     Rubrics {
