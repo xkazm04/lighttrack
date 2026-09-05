@@ -68,10 +68,15 @@ capabilities:
 # build` / `npm run test` / "Add your project description here") for a workspace with no npm build.
 # It is listed here so a reader knows which document to disbelieve, which is the part that could be
 # fixed without editing it. Replacing its body with a stub that points at `canonical:` is the
-# outstanding work; do that and drop it from `staleProjections`.
+# outstanding work; do that and drop it from `staleProjections`. TWO AGENT SESSIONS HAVE NOW TRIED
+# AND FAILED: the harness classifies `.claude/**` as a sensitive path and refuses to write it, so
+# this one edit needs a human. Everything around it is done — `AGENTS.md` gives the other tool
+# ecosystems the same pointer, and `crates/core/tests/guidance_guard.rs` fails the build if a
+# projection that is NOT declared stale carries a command or stops naming the canonical file, so
+# the list below cannot grow a second contradiction quietly.
 guidance:
   canonical: CLAUDE.md
-  projections: [.claude/CLAUDE.md]
+  projections: [.claude/CLAUDE.md, AGENTS.md]
   staleProjections: [.claude/CLAUDE.md]
   commandsFrom: .ai/manifest.yaml
 

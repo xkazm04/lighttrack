@@ -9,11 +9,18 @@ those for *what* and *why*; this file is *how we write the code*.
 `.ai/manifest.yaml`. If any other guidance document disagrees with it, this one wins and the other is
 the bug. `.claude/CLAUDE.md` is currently exactly that bug: it still carries the generator's npm
 scaffold for a workspace with no npm build, and is listed under `guidance.staleProjections` until
-someone replaces its body with a pointer here. Ignore it.
+someone replaces its body with a pointer here. **Ignore it — and note that fixing it needs a human**:
+two agent sessions have tried, and the agent harness refuses to write anything under `.claude/`
+(sensitive path). `AGENTS.md` at the root is the same pointer for the other tool ecosystems, and
+`crates/core/tests/guidance_guard.rs` fails the build if a projection that is *not* declared stale
+carries a command or stops naming this file — so the list cannot grow a second contradiction quietly.
 
 The **commands** (build, test, lint, format-check, conformance, the audits) are not restated in prose
 anywhere: `.ai/manifest.yaml` `capabilities:` is the single place they are written down, and
-`crates/core/tests/manifest_guard.rs` holds CI and `scripts/gates.sh` to exactly those strings. The
+`crates/core/tests/manifest_guard.rs` holds `scripts/gates.sh` to exactly those strings while
+`crates/core/tests/blocking_gate_guard.rs` holds `.github/workflows/ci.yml` to the manifest's claim
+about which of them *block* (a gate the manifest grades a hard pass may not be `continue-on-error`
+in CI, and vice versa). The
 "Build / test workflow" section below is repo-specific *operating* advice — which crate to build,
 which directory to run from, which Windows gotcha bites — not a competing list.
 

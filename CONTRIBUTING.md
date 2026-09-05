@@ -181,6 +181,23 @@ check that no longer exists, or the Blocking column disagrees with the workflow'
 Add a job, add its row, in the same PR — and spell the check name exactly, because branch protection
 is configured from these strings.
 
+`crates/core/tests/blocking_gate_guard.rs` closes the third side of that triangle. The two older
+guards bind the manifest to `scripts/gates.sh` (the local rung) and this table to the workflow (two
+documents that can be edited together); nothing bound `.ai/manifest.yaml`'s `controls.ciHardPass` —
+the machine-readable claim about what stops a merge — to the workflow's `continue-on-error:`. So
+making `cargo fmt --check` advisory and flipping its row here in the same commit used to pass every
+check while the manifest went on calling it a hard pass. It now fails `cargo test --workspace`: every
+`ciHardPass` capability must name a real job that blocks, every `ciAdvisory` one a job that does not,
+and the gates whose command runs verbatim in CI (fmt and clippy among them) must actually be that
+command. This repository has seen the failure from the other side — a commit in its history reads
+"the formatting gate has been red on main", which is only possible when a gate everyone believed was
+blocking was not.
+
+**The one part no test in this tree can see** is whether these names are *marked required* in
+GitHub's branch-protection settings for `main`. A blocking job fails the run; only branch protection
+makes a failed run stop a merge. Paste the strings from the table above — exactly — into the required
+checks list when you change it.
+
 | Job (check name) | Blocking |
 | --- | --- |
 | `sqlite conformance (required)` | yes |

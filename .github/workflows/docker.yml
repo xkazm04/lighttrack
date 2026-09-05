@@ -12,15 +12,25 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# Least privilege at the top; `packages: write` is granted per JOB, to the two that push.
+#
+# The workflow-wide grant this replaces meant the whole of `cargo build` inside the image build —
+# build scripts and proc macros from the entire dependency graph — ran alongside a token that could
+# publish to this repository's GHCR namespace. Nothing outside the two push steps needs it.
+#
+# A job that declares `permissions:` gets EXACTLY that set (everything unnamed becomes `none`), so
+# each block below lists `contents: read` for checkout explicitly.
 permissions:
   contents: read
-  packages: write
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
   build:
+    permissions:
+      contents: read
+      packages: write # pushes the per-arch image by digest
     strategy:
       fail-fast: false
       matrix:

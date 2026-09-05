@@ -39,6 +39,20 @@ entry is written while the change is still fresh, not reconstructed at tag time.
 - **`CODEOWNERS`** (`.github/CODEOWNERS`), so GitHub requests a review by itself instead of relying
   on someone — or some agent — remembering to.
 - **This file.**
+- **`crates/core/tests/blocking_gate_guard.rs`** — `.ai/manifest.yaml`'s `controls.ciHardPass` /
+  `ciAdvisory` grades are now checked against `.github/workflows/ci.yml`'s `continue-on-error:`, so a
+  gate the manifest calls blocking cannot quietly become advisory (and the reverse). Runs inside
+  `cargo test --workspace`.
+- **`AGENTS.md`** — a pointer to the canonical `CLAUDE.md` for the tool ecosystems that read that
+  filename, plus `crates/core/tests/guidance_guard.rs`, which fails the build if a declared guidance
+  projection carries a command or stops naming the canonical file.
+
+### Security
+
+- **`release.yml` and `docker.yml` no longer grant write workflow-wide.** Both are `contents: read`
+  at the top now, with `contents: write` (attaching release assets, uploading signature bundles) and
+  `packages: write` (pushing to GHCR) granted only to the jobs that use them — so the token sitting
+  beside `cargo build`'s build scripts and proc macros can no longer publish or rewrite anything.
 
 ### Changed
 

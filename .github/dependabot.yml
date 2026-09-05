@@ -71,6 +71,14 @@ updates:
   # Actions are supply chain too: `actions/checkout`, `Swatinem/rust-cache`, `setup-java`,
   # `setup-gcloud`, `cargo-deny-action`, `action-gh-release` all execute with repository context.
   # A major tag can be re-pointed under us, so a bump PR is the only moment anyone reads what moved.
+  #
+  # STILL OPEN, and it needs a network-connected pair of hands: all 34 `uses:` refs in this repo are
+  # floating TAGS, not commit SHAs, so "read what moved" only holds for a tag that has not been
+  # silently re-pointed. Pinning is not a chore this list makes permanent — Dependabot rewrites a
+  # SHA pin (with the tag as a trailing comment) exactly as it rewrites a tag, so the burn-down is
+  # one-time. Two agent sessions have now been unable to do it offline: resolving a tag to a SHA is
+  # a question only GitHub can answer, and a guessed SHA breaks a workflow rather than pinning it.
+  # `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha` per ref is the whole procedure.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
