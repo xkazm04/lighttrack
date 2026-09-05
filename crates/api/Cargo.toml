@@ -21,7 +21,7 @@ chrono.workspace = true
 tokio = { version = "1", features = ["full"] }
 axum = "0.7"
 anyhow = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 # Derives the response schemas /openapi.json embeds. The derives themselves live on the DTOs in
 # `core`; this is the crate that turns one into a document.
 schemars = { version = "1", default-features = false, features = ["derive", "std", "chrono04"] }
