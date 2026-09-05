@@ -115,7 +115,7 @@ jobs:
       packages: write
       id-token: write # keyless signing: the OIDC token is the identity, so there is no key to leak
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
           pattern: digest-*
