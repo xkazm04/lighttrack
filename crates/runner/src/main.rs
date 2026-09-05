@@ -37,6 +37,7 @@ mod provenance;
 mod regression;
 mod rubric;
 mod runctl;
+mod sandbox;
 mod schedule;
 mod score;
 mod score_traces;
@@ -62,7 +63,15 @@ fn main() -> Result<()> {
         claude_bin: lighttrack_engine::resolve_claude_bin(&cli.claude_bin),
         model: cli.model.clone(),
         bare: cli.bare,
+        sandbox: sandbox::from_cli(&cli),
     };
+    // One probe, before any command runs, because both runners fail in ways that would otherwise
+    // repeat per case: Docker's CLI is installed while its daemon is not running, and `contree auth`
+    // is the only subcommand that reads NEBIUS_API_KEY / NEBIUS_AI_PROJECT from the environment
+    // (`contree run` reads the saved profile), so a keyed .env looks configured and is not.
+    if let Some(s) = &engine.sandbox {
+        s.preflight()?;
+    }
     let http = http::client()?;
 
     match &cli.cmd {
@@ -157,6 +166,8 @@ fn main() -> Result<()> {
                 claude_bin: engine.claude_bin.clone(),
                 model: judge.clone().unwrap_or_else(|| engine.model.clone()),
                 bare: engine.bare,
+                // The judge model is overridden; the run's sandbox is not.
+                sandbox: engine.sandbox.clone(),
             };
             let params = score_traces::Params {
                 project,

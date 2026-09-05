@@ -10,7 +10,10 @@ fn dim(v: serde_json::Value) -> RubricDimension {
 
 /// Score one dimension, surfacing the `Result` so misconfiguration can be asserted on.
 fn score(v: serde_json::Value, expected: Option<&str>, output: &str) -> Result<(f64, String)> {
-    evaluate(&dim(v), expected, output)
+    // Every kind exercised here is a local text check, which always yields a score; only `exec` can
+    // void, and it has its own tests beside the sandbox it needs.
+    let (s, reasoning) = evaluate(&dim(v), expected, output, None)?;
+    Ok((s.expect("a text kind always scores"), reasoning))
 }
 
 fn ok(v: serde_json::Value, expected: Option<&str>, output: &str) -> (f64, String) {
@@ -181,12 +184,12 @@ fn evaluate_all_covers_only_deterministic_dimensions_in_rubric_order() {
     }))
     .expect("rubric");
     assert!(has_llm_dims(&r));
-    let det = evaluate_all(&r, Some("{\"a\":1}"), "{\"a\":1}").expect("evaluate");
+    let det = evaluate_all(&r, Some("{\"a\":1}"), "{\"a\":1}", None).expect("evaluate");
     assert_eq!(
         det.iter().map(|d| d.key.as_str()).collect::<Vec<_>>(),
         ["answer", "json"]
     );
-    assert!(det.iter().all(|d| d.score == 1.0));
+    assert!(det.iter().all(|d| d.score == Some(1.0)));
 }
 
 #[test]

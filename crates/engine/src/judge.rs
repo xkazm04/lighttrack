@@ -221,7 +221,36 @@ pub fn run_rubric_judge(
     samples: u32,
     jobs: usize,
 ) -> Result<RubricOutcome> {
-    let det = scorers::evaluate_all(rubric, expected, output)?;
+    // The sandbox is run-scoped config, so an `exec` rubric works through the ordinary entry point
+    // once the operator has configured one; without it, `evaluate_all` refuses by name.
+    let sandbox = cfg
+        .sandbox
+        .as_deref()
+        .map(|r| r as &dyn crate::sandbox::SandboxRunner);
+    run_rubric_judge_sandboxed(
+        cfg, provider, model, rubric, input, expected, output, samples, jobs, sandbox,
+    )
+}
+
+/// [`run_rubric_judge`] with a sandbox available, so a rubric may carry `exec` dimensions.
+///
+/// Additive rather than a new parameter on the original: every existing caller judges rubrics that
+/// cannot need a sandbox, and `exec` is refused loudly when one is absent rather than skipped.
+/// Callers should run [`crate::sandbox::preflight`] **once per run** before the first case.
+#[allow(clippy::too_many_arguments)]
+pub fn run_rubric_judge_sandboxed(
+    cfg: &EngineConfig,
+    provider: &str,
+    model: &str,
+    rubric: &Rubric,
+    input: &str,
+    expected: Option<&str>,
+    output: &str,
+    samples: u32,
+    jobs: usize,
+    exec: Option<&dyn crate::sandbox::SandboxRunner>,
+) -> Result<RubricOutcome> {
+    let det = scorers::evaluate_all(rubric, expected, output, exec)?;
     // The prompt is built even for an all-deterministic rubric: it is where the fence inspects the
     // candidate, so "this content tried to imitate a judge boundary" stays a reportable fact whether
     // or not a model ends up seeing it. `judge_with` decides whether to send it.
@@ -368,10 +397,15 @@ fn aggregate(
             // the mean over the samples that parsed. Both land in the same weighting/floor math.
             let local = det.iter().find(|s| s.key == d.key);
             let v = per_dim.get(&d.key).cloned().unwrap_or_default();
-            let mean = match local {
-                Some(s) => s.score,
-                None if v.is_empty() => 0.0,
-                None => v.iter().sum::<f64>() / v.len() as f64,
+            // A voided dimension (an `exec` whose sandbox was unavailable) reports 0.0 as a
+            // placeholder and is excluded from the math below by `voided`, never by its score.
+            let (mean, voided) = match local {
+                Some(s) => match s.score {
+                    Some(x) => (x, false),
+                    None => (0.0, true),
+                },
+                None if v.is_empty() => (0.0, false),
+                None => (v.iter().sum::<f64>() / v.len() as f64, false),
             };
             DimScore {
                 key: d.key.clone(),
@@ -382,15 +416,38 @@ fn aggregate(
                 },
                 weight: d.weight,
                 floor: d.floor,
-                floor_hit: d.floor.is_some_and(|f| mean < f),
+                // A measurement that did not happen cannot breach a floor.
+                floor_hit: !voided && d.floor.is_some_and(|f| mean < f),
+                voided,
             }
         })
         .collect();
 
+    // Every dimension voided means the sandbox was down for this case, not that the candidate was
+    // bad. There is no verdict to report, and reporting 0.0/fail would be a confident-looking lie —
+    // the same refusal as the no-parseable-sample path above.
+    if !dimensions.is_empty() && dimensions.iter().all(|d| d.voided) {
+        return Err(EngineError::Other(
+            "every rubric dimension was voided (the sandbox was unavailable), so this case has no              verdict; see the run report's unavailable count"
+                .to_string(),
+        ));
+    }
+
     let overall = {
-        let den: f64 = dimensions.iter().map(|d| d.weight).sum();
+        // Voided dimensions leave the denominator as well as the numerator, so the dimensions that
+        // *were* measured keep their relative weights instead of being quietly re-based.
+        let den: f64 = dimensions
+            .iter()
+            .filter(|d| !d.voided)
+            .map(|d| d.weight)
+            .sum();
         if den > 0.0 {
-            dimensions.iter().map(|d| d.score * d.weight).sum::<f64>() / den
+            dimensions
+                .iter()
+                .filter(|d| !d.voided)
+                .map(|d| d.score * d.weight)
+                .sum::<f64>()
+                / den
         } else {
             0.0
         }

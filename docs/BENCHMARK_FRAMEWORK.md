@@ -242,7 +242,8 @@ level descriptions ("1.0 = fully correct & verifiable; 0.5 = minor error; 0 = wr
 
 **Dimension kinds — deterministic scorers in the same pipeline.** Not every dimension needs an
 opinion. A dimension carries a `kind`, defaulting to `llm`; every other kind is a **mechanical check
-the engine runs locally, at zero tokens and zero cost**, whose 1.0/0.0 verdict then flows through the
+run at zero tokens** — the five text kinds locally and for free, `exec` remotely and for wall clock
+(§3d) — whose 1.0/0.0 verdict then flows through the
 *same* weighting, floors, threshold and aggregation as an LLM dimension. The field is additive and
 defaulted, so a rubric written before kinds existed deserializes — and re-serializes — unchanged as
 all-`llm`.
@@ -255,6 +256,7 @@ all-`llm`.
 | `regex` | `pattern` matches anywhere in the output | `pattern` *(required)*, `case_sensitive`, `trim`, `path` |
 | `numeric` | the output's number is within `tolerance` of the target | `expect`, `tolerance` (absolute, default 0), `path` |
 | `json_valid` | the output parses as JSON (and, with `expect`, carries that value at `path`) | `expect`, `path`, `case_sensitive` |
+| `exec` | the command exits 0 in a sandbox holding the output ([§3d](#3d-exec-dimensions--grading-behaviour-instead-of-text-m25-design)) | `image`, `cmd`, `write`, `timeout_secs`, `path` |
 
 `check.path` is a JSON Pointer (e.g. `/data/city`) narrowing a JSON output before the check; `numeric`
 falls back to the first numeric token in the text, so *"The total is 41.95 dollars."* is comparable.
@@ -530,6 +532,182 @@ Rules that keep it honest:
   batch) while `latency_ms` stays the batch's real wall clock.
 - Queued runs (`lt-runner serve`) are pinned **unbatched** — they are the runs a gate compares against
   a stored baseline.
+
+### 3d. `exec` dimensions — grading behaviour instead of text (M25, design)
+
+Every deterministic `kind` in §3 is a **string or shape** assertion: `exact`, `contains` and `regex`
+compare characters, `numeric` compares one parsed number, `json_valid` compares a document's shape.
+None of them can ask the only question that matters for a code-shaped task — **does the thing the
+model wrote actually work** — and the reason is in §3's own sentence: those kinds are *"a mechanical
+check the engine runs **locally**, at zero tokens and zero cost"*. `lt-runner` runs on an operator's
+machine, so executing candidate output there is not a feature we declined to build; it is a
+containment boundary we are not allowed to cross.
+
+An `exec` dimension crosses it somewhere else. The candidate output is written into a **remote,
+VM-isolated sandbox** built from a pinned OCI image, one command is run, and the process **exit code**
+is the verdict: `0` → 1.0, non-zero → 0.0. That verdict then flows through the same weighting, floors,
+threshold and aggregation as every other kind, so a rubric can mix *"it compiles and passes the
+tests"* (weight 3, floor 1.0) with *"the code is idiomatic"* (an `llm` dimension, weight 1) and get
+one number in which the objective half cannot be talked around by the judge.
+
+**Why this is worth a remote dependency.** For code use cases the quality axis of §2's
+quality × latency × cost table is currently a judge's opinion carrying the judge's own `agreement`
+instability (§3). An exec dimension replaces opinion with a compiler and a test suite on that axis.
+That is what makes a price/quality frontier for those use cases *decidable* rather than merely
+reportable — and it is the one number in this system comparable across operators without sharing a
+judge model or a rubric, which is why §6 should publish it before it publishes anything else.
+
+**`exec` is honest about being the expensive kind.** It is the first non-`llm` kind that is neither
+local, free, nor instant. §3's line about mechanical checks is amended, not deleted: *`exact`,
+`contains`, `regex`, `numeric` and `json_valid` are local and free; `exec` is remote and costs wall
+clock.* A rubric author choosing `exec` is choosing to pay for it, and §5a's `--max-cost` governs.
+
+#### The transport: the `contree` CLI, not an SDK
+
+The sandbox is [Nebius Token Factory Sandboxes / ConTree](https://docs.tokenfactory.nebius.com/sandboxes/overview),
+reached by **shelling out to the `contree` CLI** — the same shape `lt-runner` already uses for
+`claude -p`, in the same place (`crates/engine/src/providers`). Three alternatives were considered and
+rejected:
+
+- **A Python sidecar** (the vendor's first-class SDK is Python). Rejected: a Python process in the
+  judge path is a new runtime, a new failure mode and a new CI job, in a Rust workspace whose working
+  agreement is one concern per module.
+- **A hand-rolled `reqwest` client** against `https://api.tokenfactory.nebius.com/sandboxes`. The REST
+  surface exists — it is what the SDK talks to — but it is **absent from the published OpenAPI spec**
+  at `api.tokenfactory.nebius.com/openapi.json` (39 paths, none of them sandbox paths), so there is no
+  contract to generate against and no promise about drift. Revisit if the spec gains those paths.
+- **The MCP server.** It is an agent-facing surface; `lt-runner` is not an agent.
+
+The CLI is a real dependency with a real absence story, so it takes the shape the manifest already
+uses for `gitleaks`: **not assumed present**. A missing `contree` binary is a loud, named startup
+error on any run whose rubric contains an `exec` dimension — never a silent skip and never a 0.
+
+#### The per-case invocation
+
+The important finding is that **branching is not needed per case.** `contree run` takes
+`-D`/`--disposable` ("drop filesystem changes after run"), so each case is a one-shot spawn from a
+pinned image that leaves nothing behind. Session branches exist for interactive exploration; a
+benchmark case is not exploring.
+
+```
+contree -o json run \
+  --use <pinned image>          # UUID, or tag:NAME (see determinism, below)
+  -D                            # disposable: no state survives, so cases cannot contaminate each other
+  -F <tmp>:/work/candidate.rs   # the candidate output, written to a host temp file by lt-runner
+  -C /work                      # working directory
+  -t <timeout_secs>             # default 120; a dimension may lower it, never raise it past the run cap
+  -T 65536                      # stdout/stderr cap, straight into detail.reasoning
+  -- cargo test --quiet
+```
+
+`run` *"returns command exit code when available"*, which is the whole verdict. `-o json` gives the
+structured operation metadata the outcome record needs.
+
+**Setup belongs in the image, not in the case.** Dependencies, toolchains and fixtures are baked once
+(`contree build` from a Dockerfile, then `contree tag`), and every case of every target spawns from
+that one tag. A case that installs its own dependencies is measuring the network.
+
+```json
+{ "name": "rust-codegen", "threshold": 0.8, "dimensions": [
+  { "key": "passes-tests", "description": "compiles and passes the fixture suite",
+    "weight": 3.0, "floor": 1.0,
+    "kind": "exec",
+    "check": { "image": "tag:lt-rust-fixtures:v3",
+               "write": "/work/src/lib.rs",
+               "cmd": "cargo test --quiet",
+               "timeout_secs": 180 } },
+  { "key": "idiomatic", "description": "no needless clones, errors propagate", "weight": 1.0 }
+] }
+```
+
+`check.write` is where the candidate lands; `check.path` (the JSON Pointer from §3) still applies
+first, so a model that returns `{"code": "..."}` can have the code extracted before it is written.
+
+#### Rules that make an `exec` dimension honest
+
+- **An infrastructure failure is not a zero.** This is the rule the whole kind stands on. A sandbox
+  timeout, an auth failure, an image that will not pull, a 5xx, or the 50-concurrent-operations
+  ceiling are facts about *us*, and scoring them 0.0 silently attributes our outage to the model —
+  the exact defect §2 refuses when it leaves a no-usage endpoint **unpriced** rather than assigning an
+  invented number. So `exec` has **three** outcomes, not two: `pass` (exit 0), `fail` (exit non-zero:
+  the code ran and was wrong), and **`unavailable`** — which voids the dimension for that case
+  (contributing to neither numerator nor denominator), is counted in the run report, and **fails the
+  run** past a disclosed threshold rather than quietly thinning the corpus. A case whose only gating
+  dimension is `unavailable` has no verdict, not a failing one.
+- **The command's exit code is the verdict; its output is never parsed for one.** A harness that
+  prints "FAILED" and exits 0 is a broken harness, and reading its stdout to rescue it would make the
+  dimension unfalsifiable. Exit code only.
+- **Determinism (D12) is pinned by image identity.** `--use <UUID>` records determinism `exact`;
+  `--use tag:NAME` records **`best-effort`**, because a tag is mutable and a re-run may not be the same
+  machine. Either way the **resolved image UUID is written into the outcome**, so a run months later
+  can say what it actually ran on. Vendor checkpoint retention is **180 days** — past that the pin
+  names something that no longer exists, and the outcome's reproducibility claim is `expired`, which is
+  a third state and not a synonym for `exact`.
+- **Never inject a provider credential into a sandbox.** The thing being executed is untrusted text a
+  language model wrote. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `LIGHTTRACK_ADMIN_KEY`
+  and every project key are forbidden in `-e`; the allowed env is a fixture allowlist declared on the
+  rubric. This extends the boundary `crates/api/src/credential_boundary.rs` already draws.
+- **Not narrated, not double-counted** (unchanged from §3): the judge prompt and its JSON schema list
+  only `llm` dimensions, so the model never re-scores what the compiler already decided.
+- **`agreement` stays an LLM-only statement** (unchanged from §3): an `exec` dimension is evaluated
+  once and — image pinned by UUID — is exactly reproducible, so folding it into cross-sample agreement
+  would drag every mixed rubric toward 1.0 and hide the judge's real instability.
+- **Auditable** (unchanged from §3): `detail.reasoning` carries the resolved image UUID, the command,
+  the exit code, and the truncated stdout/stderr — enough to re-run the case by hand.
+- **Operator errors are loud**: an `exec` with no `cmd`, no `image`, or a `write` path that is not
+  absolute is a hard error naming the dimension when the rubric is created, not a surprise inside the
+  run that was meant to gate a deploy.
+- **Cost is recorded, never invented.** Sandbox execution has no published price, so an `exec`
+  dimension is `cost_usd = null` on the existing **unpriced** path (§2, §5) and records its real wall
+  clock in `latency_ms`. When a price list appears it becomes a `model_prices` row like any other; a
+  guessed number in the meantime would corrupt the one table this product exists to be trusted about.
+
+#### Concurrency, and why sessions matter even though cases do not branch
+
+The CLI keeps session state in a **per-profile local SQLite database** (`sessions-NAME.db`), and a
+non-disposable run mutates the session image. Parallel benchmark workers sharing one session would
+serialise on that file and interleave each other's history. So: **one session per worker**, disposable
+runs, and an explicit `--use` on every invocation rather than reliance on ambient session state.
+
+The vendor ceiling is **50 simultaneous operations per account** — a cap on the whole account, not per
+run, so it belongs to §4's existing job-queue concurrency cap and to nothing else. A matrix of 6
+targets × 200 cases is 1,200 spawns and must be queued, which §4 already does.
+
+#### Authentication
+
+`contree auth` is the only command that reads `NEBIUS_API_KEY` / `NEBIUS_AI_PROJECT` (and
+`CONTREE_TOKEN` / `CONTREE_PROJECT`) from the environment; **`contree run` ignores them entirely** and
+reads the saved profile. So a keyed environment alone does not make exec dimensions work, and the
+failure would otherwise arrive per-case as an auth error that the `unavailable` rule would dutifully
+record 1,200 times. `lt-runner` therefore **verifies a usable profile once at run start** — via
+`contree -o json auth ls` — and refuses the run with a named error if none is active. `CONTREE_PROFILE`
+selects the profile, so a deployment can keep benchmark credentials separate from an operator's own.
+
+The token is a Nebius API key and follows the repo's standing rule: `.env`, git-ignored, never
+committed, and never forwarded into a sandbox (see the credential rule above).
+
+#### What this deliberately does not do
+
+- **It does not make LightTrack a code-execution service.** `exec` grades a benchmark candidate. It is
+  not exposed on the ingest path, not reachable from MCP write tools, and not a general `POST /v1/run`.
+- **It does not sandbox the judge.** The judge is our own prompt to our own provider; §3b governs it.
+- **It does not replace `llm` dimensions for prose tasks.** A support reply has no exit code.
+
+#### Open questions (unresolved at draft time)
+
+1. **Price.** None published for sandbox execution. Until there is one, exec runs are unpriced (above)
+   and `--max-cost` cannot bound them — only the case count and the timeout can. That is a real gap in
+   §5a's guarantee and it must be stated in the run report, not left implied.
+2. **Cold-start latency.** Undocumented. It lands in `latency_ms` and therefore in §2's p50/p95
+   columns, where it is *our* latency and not the model's — the report must separate generation latency
+   from exec latency or the comparison table becomes wrong in a way that favours slow models.
+3. **Network egress from inside the sandbox.** The product advertises network access; whether it can be
+   disabled per run is undocumented. Until verified, assume candidate code **can reach the internet** —
+   an argument for the credential rule above, and against fixtures that embed anything private.
+4. **Whether `contree build` requires a local Docker daemon.** Decides whether fixture images can be
+   built in CI or must be built once by an operator and pushed to a registry.
+5. **Regional placement and data residency** for operators who mine datasets from production events
+   (§1). A dataset is scrubbed, but it is still customer-derived text leaving the deployment.
 
 ## 4. Async benchmark queue (non-blocking)  (#4)
 Benchmark runs must never block ingestion. A **jobs** table + a worker loop in `lt-runner`:
@@ -1031,6 +1209,9 @@ missing" is a recorded fact rather than something an operator has to infer.
 - **3.6e — Multi-provider generation:** `Generator` trait + OpenAI/Gemini/Anthropic clients; target matrix;
   comparison report (quality × latency × cost). *(needs provider API keys)*
 
+- **3.6f — `exec` dimensions:** sandboxed behavioural scoring via the `contree` CLI; three-outcome
+  verdicts with `unavailable`; image-pinned determinism stamp. *(needs a Nebius API key + the CLI)* **design — §3d**
+
 ## Decisions (resolved 2026-05-31) & status
 1. **Generation mode** = Claude-now via `claude -p`; OpenAI/Gemini behind `engine::generate` and activate
    when keyed (return a clear error until then). ✅ shipped in 3.6e.
@@ -1047,6 +1228,8 @@ Remaining future work: BigQuery analytical sink + Pub/Sub queue (Phase 5/packagi
 - Anthropic API pricing — https://platform.claude.com/docs/en/about-claude/pricing
 - OpenAI API pricing — https://developers.openai.com/api/docs/pricing
 - Google Gemini API pricing — https://ai.google.dev/gemini-api/docs/pricing
+- Nebius Token Factory Sandboxes (ConTree) — https://docs.tokenfactory.nebius.com/sandboxes/overview ·
+  CLI command reference — https://docs.tokenfactory.nebius.com/sandboxes/cli/commands/index.md (read 2026-09-05)
 - LLM-as-judge best practices — https://futureagi.com/blog/llm-as-judge-best-practices-2026 ·
   https://www.comet.com/site/blog/llm-as-a-judge/ ·
   Rubric-based evals & position bias — https://arxiv.org/pdf/2602.02219

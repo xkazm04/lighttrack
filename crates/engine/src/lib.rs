@@ -29,6 +29,7 @@ mod pool;
 mod prompts;
 mod providers;
 mod retry;
+pub mod sandbox;
 mod scorers;
 
 use lighttrack_core::JudgeVerdict;
@@ -49,6 +50,10 @@ pub use prompts::{
     build_rubric_schema, Prompt,
 };
 pub use providers::{generate, generate_deterministic};
+pub use sandbox::{
+    run_exec, ContreeCli, DockerCli, ExecOutcome, ExecVerdict, SandboxJob, SandboxRunner,
+};
+pub use scorers::needs_sandbox;
 
 /// Errors from the scoring engine. Transport failures carry a typed classification (not string
 /// matches) so [`retry`](crate::retry) can retry only the transient ones and the judge can tell an
@@ -187,6 +192,15 @@ pub struct EngineConfig {
     /// Pass `--bare` to skip auto-loading hooks/skills/MCP/CLAUDE.md. Avoids re-caching ~40k tokens
     /// per call, but bypasses subscription OAuth, so it requires `ANTHROPIC_API_KEY` in the env.
     pub bare: bool,
+    /// The sandbox `exec` rubric dimensions run in, when this deployment has one.
+    ///
+    /// It lives on the config rather than on every judge signature because it is run-scoped, exactly
+    /// like `claude_bin`: one runner, decided once by the operator. `None` means exec dimensions are
+    /// refused by name (see [`crate::scorers`]) rather than skipped.
+    ///
+    /// Behind an `Arc<dyn _>` so the choice of isolation vendor — the least durable part of this
+    /// design — is a value rather than a type parameter threaded through every judge signature.
+    pub sandbox: Option<std::sync::Arc<dyn crate::sandbox::SandboxRunner>>,
 }
 
 impl EngineConfig {
@@ -202,6 +216,7 @@ impl Default for EngineConfig {
             claude_bin: "claude".to_string(),
             model: "haiku".to_string(),
             bare: false,
+            sandbox: None,
         }
     }
 }
@@ -245,8 +260,14 @@ pub struct DimScore {
     pub weight: f64,
     /// The rubric's gating floor for this dimension, when it has one.
     pub floor: Option<f64>,
-    /// `score` fell below `floor` — the reason a passing overall can still fail.
+    /// `score` fell below `floor` — the reason a passing overall can still fail. Never set on a
+    /// voided dimension: a measurement that did not happen cannot breach a floor.
     pub floor_hit: bool,
+    /// **Voided**: an `exec` dimension whose sandbox was unavailable (see [`crate::sandbox`]). It is
+    /// excluded from the weighted overall entirely — numerator *and* denominator — so the remaining
+    /// dimensions keep their relative weights instead of being silently re-based. `score` is 0.0 as
+    /// a placeholder and means nothing; read this flag before reading it.
+    pub voided: bool,
 }
 
 impl DimScore {
