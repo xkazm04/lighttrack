@@ -117,7 +117,9 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
   set and via `claude -p` otherwise (D12); when judging Claude outputs, prefer pairwise + randomized
   order, or a neutral judge.
 - **Output:** a comparison table — for each dimension and overall: score, pass-rate, **p50/p95 latency**,
-  **tokens**, **$ cost** — so "best" is a quality/latency/cost trade-off, not just quality.
+  **tokens**, **$ cost** — so "best" is a quality/latency/cost trade-off, not just quality. Since
+  §2b the table also *makes* that trade-off instead of only laying out its three columns: it marks
+  the non-dominated rows and names the cheapest target the run could not tell apart from the best.
 
 **Target vocabulary.** One row of the matrix is:
 
@@ -234,6 +236,72 @@ This is **deliberately weaker than the old rule in one direction**: a 0.001 dip 
 3-case run no longer blocks, because that was a false positive on the most expensive gate in the product.
 It is **not weaker for real regressions** — a drop larger than the run's own uncertainty still blocks, and
 so does a run the runner itself called regressed. `force=true` still overrides everything.
+
+### 2b. The cost–quality frontier, and the cheapest target you can get away with
+§2a earns the words "B beats A". It does not answer the question an operator actually spends money
+on: **"which is the cheapest target I can get away with?"** — a different question with a different
+answer whenever the cheap model sits inside the noise of the expensive one, which is the single most
+common real finding a benchmark produces. Compare mode measured quality, cost and latency correctly,
+on the same calls under the same pinning, and then printed them as three independent columns and left
+the trade-off to the reader's eye.
+
+The leaderboard summary now carries two more objects beside `best`:
+
+- **`frontier`** — the **non-dominated set** over (quality ↑, generation cost per case ↓, p50 ↓,
+  p95 ↓). A target is dominated when another is at least as good on every axis and strictly better
+  on one. The rendered table gains a `Front` column: `●` on the surface, `·` dominated, `—` not
+  placed at all. Both latency percentiles are axes, not one: a row with a good median and a terrible
+  tail is exactly the trade-off a single-latency surface hides, and it is the one you meet in
+  production.
+- **`recommendation`** — the **cheapest-sufficient** walk: the frontier ordered by cost ascending,
+  stopping at the first candidate the sufficiency test cannot separate from the best.
+
+**The cost axis is generation cost per judged case.** Two deliberate choices:
+- **Judge spend is excluded.** Judging is benchmark overhead you never pay in production. Folding it
+  into a *target-selection* decision would let a target that happens to be cheap to **grade** read as
+  cheap to **run** — and the judge is the same model for every row, so it is a constant that only
+  blurs the axis it is added to.
+- **Per case, not per run.** Targets judge different numbers of cases once errors and health
+  filtering (§4b) have had their say, so run totals are not comparable across rows.
+
+**Sufficiency is §2a's corrected test read in reverse.** There is one statistics path in this
+product, and a recommendation is the strongest sentence it prints, so it is the last place to invent
+a second, softer statistic. A candidate is *sufficient* iff `superiority(best, candidate, m)` comes
+back **not significant** — the run could not show the best target ahead of it — at the same
+Bonferroni-corrected α over all `m·(m−1)/2` pairs.
+
+**Four honesty properties, each of which is a way this feature could lie:**
+
+1. **An unpriced target is excluded by name, never priced at zero.** Every HTTP provider adapter
+   returns `cost_usd: None` and cost comes from the DB price book (§5), so an unpriced model is a
+   normal occurrence rather than an edge case. A null cost read as `$0` **dominates the cost axis and
+   becomes the recommendation precisely because nothing is known about it** — the exact inversion of
+   what the number means. Such a row is dropped from the surface with its label and the reason
+   printed under the table. It stays eligible to *be* the best: its quality was measured even where
+   its cost was not. Priced-ness is tracked per target for the **generation** call specifically —
+   the run's `price_warnings` set also carries the *judge's* unpriced model, and an unpriced judge
+   leaves a target's run cost perfectly known.
+2. **A partial or cancelled run recommends nothing, and says which stop condition fired.** A budget
+   halt (§5a), an operator cancellation (§4b) or a health-filtered target (§4b) all leave a
+   systematically incomplete sample — the *later* cases, not a random subset. Partial is contagious
+   here, and a recommendation is a stronger claim than a mean.
+3. **Power is disclosed.** "Not significantly worse" is an *absence* of evidence: at a small case
+   count everything is indistinguishable from everything, and this sentence would confidently name
+   the cheapest row in the matrix. The case count and the surviving α travel with the claim. When
+   **every** candidate passes the sufficiency test the line says so explicitly and loses its bold —
+   that is a fact about the run's power, not a finding about the models.
+4. **An unpairable candidate is undecidable, and says so.** Two targets not scored on the same cases
+   cannot be paired, so `superiority` returns `None`. That is neither sufficient nor insufficient; it
+   is untested, it is listed as such, and the walk steps past it rather than accepting it.
+
+**Stated limitation: the frontier is not persisted per run.** It lives only in the printed and
+rendered leaderboard summary. Compare mode posts **one benchmark run per target from inside the
+per-target loop**, as each target finishes, so a crash mid-matrix still records the targets that
+completed — and the frontier is only knowable once every target is done. Stamping it onto those run
+reports would mean deferring the posts, trading a real durability property for a reporting nicety.
+Persisting a matrix-level artefact needs new API surface and is a separate piece of work. A
+per-difficulty-tier frontier (§1b) is likewise out of scope: each tier has fewer cases, so the power
+disclosure above gets strictly harder, not easier.
 
 ### After promotion — the served-version canary
 

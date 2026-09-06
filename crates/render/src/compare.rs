@@ -4,13 +4,16 @@
 //! Input shape (built by the runner): `{ "n_cases": N, "targets": [ {label, mean, pass_rate,
 //! agreement, gen_cost_usd, judge_cost_usd, p50_latency_ms, errored} ], "best": {…} }`.
 //!
-//! `best` — when the caller supplies it — carries the runner's *tested* superiority claim. This
-//! layer never re-derives statistics (there is one statistics path, in the runner); it only refuses
-//! to print a stronger sentence than the claim it was given.
+//! `best` — when the caller supplies it — carries the runner's *tested* superiority claim, and
+//! `frontier`/`recommendation` its cost–quality surface and cheapest-sufficient pick. This layer
+//! never re-derives statistics (there is one statistics path, in the runner); it only refuses to
+//! print a stronger sentence than the claim it was given. Every one of those keys is optional: a
+//! stored table rendered by the CLI or MCP has none of them and keeps exactly the columns and lines
+//! it has always had.
 
 use serde_json::Value;
 
-use crate::md::{f, money, opt_u, pct, s, u, Align, Table};
+use crate::md::{f, money, opt_b, opt_f, opt_s, opt_u, pct, s, u, Align, Table};
 
 /// The winner line. With a tested claim we say "Best" only when the separation is real, and name the
 /// correction; without one we say "Highest mean" — true of the sample, and not a claim about models.
@@ -48,6 +51,95 @@ fn winner_line(best: Option<&Value>, fallback: Option<(&str, f64)>) -> Option<St
     ))
 }
 
+/// The frontier's per-row verdict, as two label lists: what is on the non-dominated set, and what
+/// could not be placed on it at all. Labels only — the membership decision is made in the runner,
+/// and this layer is not given the axes it was made on, so it cannot second-guess it.
+fn frontier_marks(frontier: Option<&Value>) -> (Vec<&str>, Vec<&str>) {
+    let arr = |key: &str| {
+        frontier
+            .and_then(|f| f.get(key))
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    };
+    let on = arr("non_dominated")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    let off = arr("excluded")
+        .iter()
+        .filter_map(|e| opt_s(e, "label"))
+        .collect();
+    (on, off)
+}
+
+/// The rows the frontier refused to place, named with the reason. An exclusion the reader cannot
+/// see is indistinguishable from a target that simply lost — and the excluded row is usually the
+/// one that looked cheapest.
+fn exclusion_note(frontier: &Value) -> Option<String> {
+    let ex = frontier
+        .get("excluded")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())?;
+    let items: Vec<String> = ex
+        .iter()
+        .map(|e| format!("{} ({})", s(e, "label"), s(e, "reason")))
+        .collect();
+    Some(format!(
+        "\n_Off the cost–quality frontier: {}._\n",
+        items.join("; ")
+    ))
+}
+
+/// The cheapest-sufficient sentence, printed from the object it was handed. Like [`winner_line`] it
+/// derives nothing — but unlike a winner, this claim rests on an *absence* of evidence, so the case
+/// count and the corrected α travel with it always, and a run that could separate nothing at all
+/// loses the bold.
+fn recommendation_line(rec: Option<&Value>) -> Option<String> {
+    let r = rec.filter(|r| r.is_object())?;
+    let n = u(r, "n_cases");
+    let note = s(r, "note");
+    let untested: Vec<&str> = r
+        .get("undecidable")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|x| opt_s(x, "label")).collect())
+        .unwrap_or_default();
+    // Neither sufficient nor insufficient: said, never dropped from the list of things considered.
+    let tail = if untested.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "_Untested against the best target (not scored on the same cases): {}._\n",
+            untested.join(", ")
+        )
+    };
+    let Some(label) = opt_s(r, "label") else {
+        return Some(format!(
+            "\nNo cheapest-sufficient recommendation — {note}.\n{tail}"
+        ));
+    };
+    let cost = opt_f(r, "cost_per_case_usd")
+        .map(|c| format!(" ({}/case)", money(c)))
+        .unwrap_or_default();
+    let power = format!(
+        "{}{}n={n} case(s)",
+        opt_f(r, "p_value")
+            .map(|p| format!("p={p:.4}, "))
+            .unwrap_or_default(),
+        opt_f(r, "alpha")
+            .map(|a| format!("α={a:.4}, "))
+            .unwrap_or_default(),
+    );
+    if opt_b(r, "all_candidates_indistinguishable") == Some(true) {
+        return Some(format!(
+            "\nCheapest sufficient: {label}{cost} — {note} ({power}).\n{tail}"
+        ));
+    }
+    Some(format!(
+        "\n**Cheapest sufficient: {label}{cost}** — {note} ({power}).\n{tail}"
+    ))
+}
+
 pub(crate) fn leaderboard(v: &Value) -> Option<String> {
     let targets = v.get("targets")?.as_array()?;
     if targets.is_empty() {
@@ -72,6 +164,13 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
         ("p50", Align::Right),
         ("Err", Align::Right),
     ]);
+    // Appended last, and only when the runner handed us a frontier: the column order every existing
+    // reader (and every stored table) knows stays exactly where it was.
+    let frontier = v.get("frontier").filter(|f| f.is_object());
+    let (on_frontier, excluded) = frontier_marks(frontier);
+    if frontier.is_some() {
+        cols.push(("Front", Align::Left));
+    }
     let mut t = Table::new(&cols);
     // Best = highest mean among targets that didn't error out every case (mirrors the runner's rule).
     let mut best: Option<(&str, f64)> = None;
@@ -104,6 +203,20 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
                 .unwrap_or_else(|| "—".into()),
             errored.to_string(),
         ]);
+        if frontier.is_some() {
+            // `—` is an exclusion, not a loss: the row was never placed on the surface, and the
+            // reason is spelled out under the table.
+            cells.push(
+                if excluded.contains(&label) {
+                    "—"
+                } else if on_frontier.contains(&label) {
+                    "●"
+                } else {
+                    "·"
+                }
+                .to_string(),
+            );
+        }
         t.row(cells);
     }
     let mut out = format!("### Comparison — {n_cases} case(s)\n\n{}", t.render());
@@ -137,13 +250,148 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
     if let Some(line) = winner_line(v.get("best"), best) {
         out.push_str(&line);
     }
+    // The second sentence: not "which target won" but "how cheap can I go", which is a different
+    // question with a different answer whenever the cheap row sits inside the noise of the dear one.
+    if let Some(line) = frontier.and_then(exclusion_note) {
+        out.push_str(&line);
+    }
+    if let Some(line) = recommendation_line(v.get("recommendation")) {
+        out.push_str(&line);
+    }
     Some(out)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{leaderboard, winner_line};
+    use super::{leaderboard, recommendation_line, winner_line};
     use serde_json::json;
+
+    /// **The compatibility gate.** A summary with no `frontier`/`recommendation` — every stored
+    /// table the CLI and MCP render, and every run made before this existed — must produce the
+    /// *bytes* it produced before, not merely something that looks similar. The literal below was
+    /// captured from the previous build.
+    #[test]
+    fn a_matrix_with_no_frontier_renders_byte_identically() {
+        let input = json!({
+            "n_cases": 4,
+            "targets": [
+                { "label": "cheap", "mean": 0.80, "pass_rate": 0.75, "agreement": 0.9,
+                  "gen_cost_usd": 0.004, "judge_cost_usd": 0.02, "p50_latency_ms": 300,
+                  "errored": 0 },
+                { "label": "dear", "mean": 0.84, "pass_rate": 0.75, "agreement": 0.9,
+                  "gen_cost_usd": 0.4, "judge_cost_usd": 0.02, "p50_latency_ms": 900,
+                  "errored": 0 }
+            ],
+            "status": "no_baseline",
+        });
+        const BEFORE: &str = concat!(
+            "### Comparison — 4 case(s)\n\n",
+            "| Target | Mean | Pass% | Agree |     Gen$ | Judge$ |   p50 | Err |\n",
+            "|--------|-----:|------:|------:|---------:|-------:|------:|----:|\n",
+            "| cheap  | 0.80 |   75% |  0.90 | $0.00400 |  $0.02 | 300ms |   0 |\n",
+            "| dear   | 0.84 |   75% |  0.90 |    $0.40 |  $0.02 | 900ms |   0 |\n",
+            "\n**Highest mean: dear (0.84)** — not tested for significance.\n",
+        );
+        assert_eq!(leaderboard(&input).unwrap(), BEFORE);
+    }
+
+    /// The marker column exists only to answer "which of these rows is even worth considering", so
+    /// a dominated row and an *excluded* row must not read the same: one lost the trade-off, the
+    /// other was never placed on it and the reason is printed underneath.
+    #[test]
+    fn frontier_rows_are_marked_and_exclusions_are_named() {
+        let md = leaderboard(&json!({
+            "n_cases": 6,
+            "targets": [
+                { "label": "cheap", "mean": 0.77, "errored": 0 },
+                { "label": "mid", "mean": 0.70, "errored": 0 },
+                { "label": "mystery", "mean": 0.95, "errored": 0 },
+            ],
+            "frontier": {
+                "non_dominated": ["cheap"],
+                "excluded": [{ "label": "mystery", "reason": "no price-book entry for its model" }],
+            },
+        }))
+        .unwrap();
+        assert!(md.contains("Front"), "the marker column appears: {md}");
+        // The last cell of each row, unpadded.
+        let mark = |l: &str| {
+            md.lines()
+                .find(|x| x.contains(l))
+                .unwrap_or_default()
+                .rsplit('|')
+                .nth(1)
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        };
+        assert_eq!(mark("| cheap"), "●", "{md}");
+        assert_eq!(mark("| mid"), "·", "dominated, not excluded: {md}");
+        assert_eq!(mark("| mystery"), "—", "excluded, not merely beaten: {md}");
+        assert!(
+            md.contains("Off the cost–quality frontier: mystery (no price-book entry"),
+            "the reason travels with the name: {md}"
+        );
+    }
+
+    /// The recommendation is printed verbatim from the object, with the power that produced it. It
+    /// is an absence of evidence, so the case count and corrected α are not optional decoration.
+    #[test]
+    fn the_recommendation_prints_its_power_and_derives_nothing() {
+        let line = recommendation_line(Some(&json!({
+            "label": "haiku", "best": "opus", "cost_per_case_usd": 0.00042,
+            "p_value": 0.3100, "alpha": 0.016667, "n_cases": 20,
+            "all_candidates_indistinguishable": false,
+            "note": "the run could not show opus ahead of it at the corrected α",
+            "undecidable": [{ "label": "flaky", "reason": "not scored on the same cases" }],
+        })))
+        .unwrap();
+        assert!(line.contains("**Cheapest sufficient: haiku ($0.00042/case)**"));
+        assert!(line.contains("could not show opus ahead of it"));
+        assert!(
+            line.contains("p=0.3100") && line.contains("α=0.0167") && line.contains("n=20"),
+            "power is disclosed on the claim: {line}"
+        );
+        assert!(
+            line.contains("Untested against the best target") && line.contains("flaky"),
+            "an unpairable candidate is reported, not skipped: {line}"
+        );
+    }
+
+    /// A run that could separate *nothing* has measured its own sample size, not the models — so
+    /// the sentence loses its bold, and says which of the two it is.
+    #[test]
+    fn a_run_that_separates_nothing_loses_the_bold() {
+        let line = recommendation_line(Some(&json!({
+            "label": "cheapest", "best": "dearest", "cost_per_case_usd": 0.0001,
+            "p_value": 0.9, "alpha": 0.05, "n_cases": 3,
+            "all_candidates_indistinguishable": true,
+            "note": "every candidate on the frontier was indistinguishable from dearest at n=3 — \
+                     that is a fact about this run's power, not a finding about the models",
+        })))
+        .unwrap();
+        assert!(
+            !line.contains("**"),
+            "no bold on an undiscriminating run: {line}"
+        );
+        assert!(line.contains("fact about this run's power"));
+    }
+
+    /// No recommendation prints the reason, never silence — and never a bold row.
+    #[test]
+    fn a_refused_recommendation_says_why() {
+        let line = recommendation_line(Some(&json!({
+            "label": serde_json::Value::Null, "n_cases": 4, "alpha": 0.05,
+            "note": "the run was halted at its spend ceiling and scored only part of its cases",
+            "undecidable": [],
+        })))
+        .unwrap();
+        assert!(line.contains("No cheapest-sufficient recommendation"));
+        assert!(line.contains("halted at its spend ceiling"));
+        assert!(!line.contains("**"));
+        // Nothing handed in at all → no line, exactly as `winner_line` behaves.
+        assert!(recommendation_line(None).is_none());
+    }
 
     #[test]
     fn a_halted_run_says_partial_and_names_the_unpriced_models() {

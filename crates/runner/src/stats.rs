@@ -6,12 +6,16 @@
 //! - [`normal`] — the standard-normal CDF/quantile and the Bonferroni critical value.
 //! - [`paired`] — the paired per-case test, the composed run verdict, and the superiority test
 //!   behind any "B beats A" claim.
+//! - [`frontier`] — the cost–quality non-dominated set and the cheapest-sufficient recommendation,
+//!   which reads [`paired`]'s superiority test in reverse rather than inventing a softer one.
 
+mod frontier;
 mod normal;
 pub(crate) mod paired;
 
 use serde_json::{json, Value};
 
+pub(crate) use frontier::{annotate_frontier, FrontierInput, FrontierRow};
 pub(crate) use paired::{annotate_verdict, paired_deltas, superiority, verdict};
 
 /// z for a ~95% two-sided normal confidence interval.

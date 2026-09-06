@@ -26,8 +26,8 @@ use crate::http::{get, post};
 use crate::provenance::{merge_details, weakest_reasoning};
 use crate::runctl::RunControl;
 use crate::stats::{
-    annotate_significance, annotate_verdict, paired_deltas, stability, superiority, verdict,
-    Summary,
+    annotate_frontier, annotate_significance, annotate_verdict, paired_deltas, stability,
+    superiority, verdict, FrontierInput, FrontierRow, Summary,
 };
 use crate::targets::ResolvedTarget;
 use crate::util::{
@@ -35,13 +35,35 @@ use crate::util::{
     percentiles, stamp_determinism,
 };
 
-/// One target's leaderboard row, in column order:
-/// `(label, effort, mean, pass_rate, gen_cost, judge_cost, p50_ms, errored, agreement)`.
+/// One target's leaderboard row. This was a nine-element tuple read positionally, which was already
+/// past what a tuple can carry legibly; the cost–quality frontier needs three more per-target facts
+/// (priced-ness, the tail latency, the judged-case count) that never reach the printed table, and
+/// `row.3` for a pass rate stopped being reviewable at that size.
 ///
 /// `effort` sits beside the label because it is part of *which target this is*, not a measurement
 /// of it: two rows of one model at two efforts are the same model, and a reader who cannot see the
 /// level cannot read the comparison the matrix was written to make.
-type LeaderboardCells = (String, Option<Effort>, f64, f64, f64, f64, u64, u32, f64);
+struct LeaderboardRow {
+    label: String,
+    effort: Option<Effort>,
+    mean: f64,
+    pass_rate: f64,
+    gen_cost: f64,
+    judge_cost: f64,
+    /// Both percentiles, kept as measured. The rendered table has always printed `p50.unwrap_or(0)`
+    /// and still does; the frontier gets the `None` instead, because a target whose latency was
+    /// never recorded must not enter a minimised axis at zero.
+    p50: Option<u64>,
+    p95: Option<u64>,
+    errored: u32,
+    agreement: f64,
+    /// Cases this target was actually judged on — the frontier's cost denominator. Targets judge
+    /// different counts once errors and health-filtering have had their say, so run totals are not
+    /// comparable across rows.
+    judged: u32,
+    /// True when this target's own generations fell through to the price book and found no entry.
+    gen_unpriced: bool,
+}
 
 /// One `(target, case)` cell's independent result: the candidate scores/agreements plus this cell's
 /// cost/latency/token contributions. Computed in parallel, then folded in case order so the per-target
@@ -65,6 +87,11 @@ struct Cell {
     gen_determinism: Option<Determinism>,
     /// Models with no price-book entry seen while pricing this cell (cost undercounted).
     price_warnings: BTreeSet<String>,
+    /// True when the **generation** call specifically had no price. Tracked apart from
+    /// `price_warnings`, which also collects the *judge's* unpriced model: an unpriced judge leaves
+    /// this target's run cost perfectly known, and letting it exclude the row from the cost–quality
+    /// frontier would be a refusal nothing earned.
+    gen_unpriced: bool,
     /// First generation/judge error hit while sampling this cell (printed in the sequential fold).
     error_msg: Option<String>,
     /// True when the cell was never run because the run's dollar ceiling was already reached. A
@@ -194,6 +221,7 @@ fn compute_cell(
         latencies: Vec::new(),
         gen_determinism: None,
         price_warnings: BTreeSet::new(),
+        gen_unpriced: false,
         error_msg: None,
         skipped: false,
         filtered: false,
@@ -260,6 +288,7 @@ fn compute_cell(
             gen.output_tokens,
         );
         if !gpriced {
+            cell.gen_unpriced = true;
             cell.price_warnings
                 .insert(format!("{}/{}", t.provider, t.model));
         }
@@ -455,7 +484,7 @@ pub(crate) fn run_compare(
     // error rate — not the per-test one — is what an operator actually experiences.
     let m = targets.len().max(1);
 
-    let mut rows: Vec<LeaderboardCells> = Vec::new();
+    let mut rows: Vec<LeaderboardRow> = Vec::new();
     // Per-target verdicts vs the benchmark baseline, rolled up into one honest run-level status below.
     let mut statuses: Vec<String> = Vec::new();
     // Per-target case scores, kept so the leaderboard's "best" claim can be tested — paired, on the
@@ -464,6 +493,11 @@ pub(crate) fn run_compare(
     // Every unpriced model seen anywhere in the matrix, so the run-level output can say the totals
     // are undercounted instead of hiding it in each target's nested `price_warnings` array.
     let mut all_price_warnings: BTreeSet<String> = estimate.unpriced.clone();
+    // Did ANY target score less than the whole dataset because the run stopped early? A budget halt
+    // and a cancellation are run-level and already tracked; a health filter is per target, and one
+    // pruned target is enough to make the matrix a non-random subset. The frontier's recommendation
+    // is withheld on any of the three.
+    let mut any_skipped = false;
 
     // Generate + judge the WHOLE (target, case) matrix with up to `jobs` concurrency. Targets used
     // to be an outer sequential loop with only cases parallelized inside, so wall-clock was
@@ -530,6 +564,7 @@ pub(crate) fn run_compare(
         let mut case_reports: Vec<Value> = Vec::new();
         let (mut gen_tokens, mut judge_tokens) = (0u64, 0u64);
         let mut price_warnings: BTreeSet<String> = BTreeSet::new();
+        let mut gen_unpriced = false;
         let mut case_scores: Vec<f64> = Vec::new();
         // Verdicts the API refused/couldn't take, and cases whose content imitated a judge-prompt
         // boundary. Both land in the run report instead of scrolling past on stderr.
@@ -582,6 +617,7 @@ pub(crate) fn run_compare(
                 println!("  case {}: {msg}", i + 1);
             }
             price_warnings.extend(cell.price_warnings);
+            gen_unpriced |= cell.gen_unpriced;
             if let Some(g) = cell.gen_determinism {
                 target_gen_determinism =
                     Some(target_gen_determinism.map_or(g, |prev| prev.weakest(g)));
@@ -708,17 +744,20 @@ pub(crate) fn run_compare(
             1.0
         };
         let (p50, p95) = percentiles(&mut latencies);
-        rows.push((
-            label.clone(),
-            t.resolved_effort(),
+        rows.push(LeaderboardRow {
+            label: label.clone(),
+            effort: t.resolved_effort(),
             mean,
             pass_rate,
             gen_cost,
             judge_cost,
-            p50.unwrap_or(0),
+            p50,
+            p95,
             errored,
-            mean_agree,
-        ));
+            agreement: mean_agree,
+            judged,
+            gen_unpriced,
+        });
 
         // Per-target verdict vs the benchmark baseline: the absolute-floor CI test (now at the
         // family-wise-corrected critical z) composed with a paired per-case test against this
@@ -782,6 +821,7 @@ pub(crate) fn run_compare(
             );
         }
         statuses.push(status.to_string());
+        any_skipped |= skipped > 0;
         per_target.push((label.clone(), mean, case_scores.clone()));
         if !price_warnings.is_empty() {
             println!(
@@ -888,21 +928,23 @@ pub(crate) fn run_compare(
     // Render the leaderboard via the shared render layer, so the runner, CLI, and MCP agree.
     let target_rows: Vec<Value> = rows
         .iter()
-        .map(|(label, effort, mean, pr, gc, jc, p50, err, agree)| {
+        .map(|r| {
             let mut row = json!({
-                "label": label, "mean": mean, "pass_rate": pr, "agreement": agree,
-                "gen_cost_usd": gc, "judge_cost_usd": jc, "p50_latency_ms": p50, "errored": err,
+                "label": r.label, "mean": r.mean, "pass_rate": r.pass_rate,
+                "agreement": r.agreement, "gen_cost_usd": r.gen_cost,
+                "judge_cost_usd": r.judge_cost, "p50_latency_ms": r.p50.unwrap_or(0),
+                "errored": r.errored,
             });
             // Only when the target declared one: a run of targets with no effort axis keeps the
             // exact row shape it had, and an absent key means "the provider's default", which is a
             // different fact from any named level.
-            if let Some(e) = effort {
+            if let Some(e) = r.effort {
                 row["effort"] = json!(e.as_str());
             }
             row
         })
         .collect();
-    let summary = json!({
+    let mut summary = json!({
         "n_cases": cases.len(), "targets": target_rows, "status": overall,
         "best": best_claim(&per_target),
         // Run-level spend facts, beside the leaderboard rather than buried per target.
@@ -914,6 +956,41 @@ pub(crate) fn run_compare(
         // the per-target `price_warnings` arrays, which no reader of the table ever opened.
         "price_warnings": all_price_warnings.iter().cloned().collect::<Vec<_>>(),
     });
+    // The cost–quality surface and the cheapest-sufficient recommendation, beside `best`. This is
+    // the ONLY place either lives: compare mode posts one run report per target from inside the
+    // per-target loop above, as each target finishes, so a crash mid-matrix still records the
+    // targets that completed — and the frontier is only knowable once every target is done. Stamping
+    // it on those reports would mean deferring the posts, trading a real durability property for a
+    // reporting nicety. See BENCHMARK_FRAMEWORK §2b.
+    annotate_frontier(
+        &mut summary,
+        &FrontierInput {
+            // Zipped by position, not matched by label: two targets may legitimately carry the same
+            // display label, and both vectors are pushed once per target in target order.
+            rows: &rows
+                .iter()
+                .zip(&per_target)
+                .map(|(r, (_, _, scores))| FrontierRow {
+                    label: r.label.clone(),
+                    mean: r.mean,
+                    gen_cost_usd: r.gen_cost,
+                    judged_cases: r.judged,
+                    gen_unpriced: r.gen_unpriced,
+                    p50_ms: r.p50,
+                    p95_ms: r.p95,
+                    scores: scores.clone(),
+                })
+                .collect::<Vec<_>>(),
+            partial: cancelled || budget.halted() || any_skipped,
+            partial_reason: if cancelled {
+                "cancelled by an operator"
+            } else if budget.halted() {
+                "halted at its spend ceiling"
+            } else {
+                "left with cases it never ran"
+            },
+        },
+    );
     match lighttrack_render::render("compare", &summary) {
         Some(md) => println!("\n{md}"),
         None => println!("\n{}", serde_json::to_string_pretty(&summary)?),
@@ -930,9 +1007,132 @@ pub(crate) fn run_compare(
 
 #[cfg(test)]
 mod tests {
-    use super::{r3, Admit, TargetHealth, OPEN_AFTER_FAILURES};
+    use super::{annotate_frontier, r3, Admit, FrontierInput, FrontierRow, TargetHealth};
+    use super::{Value, OPEN_AFTER_FAILURES};
     use crate::util::parallel_map;
+    use serde_json::json;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// The runner→render seam for the new keys, end to end. The frontier is computed in the runner
+    /// and *only* marked in the renderer, so a marker or a sentence that exists on one side of that
+    /// seam and not the other is worth nothing — and this is the seam the two crates' own unit tests
+    /// each mock away.
+    #[test]
+    fn the_frontier_and_recommendation_reach_the_rendered_leaderboard() {
+        let cheap = vec![0.80, 0.71, 0.90, 0.61, 0.84, 0.75];
+        let dear = vec![0.79, 0.72, 0.88, 0.63, 0.85, 0.77]; // marginally the higher mean
+        let rows = [
+            FrontierRow {
+                label: "cheap".into(),
+                mean: cheap.iter().sum::<f64>() / 6.0,
+                gen_cost_usd: 0.006,
+                judged_cases: 6,
+                gen_unpriced: false,
+                p50_ms: Some(100),
+                p95_ms: Some(150),
+                scores: cheap,
+            },
+            FrontierRow {
+                label: "dear".into(),
+                mean: dear.iter().sum::<f64>() / 6.0,
+                gen_cost_usd: 0.240,
+                judged_cases: 6,
+                gen_unpriced: false,
+                p50_ms: Some(400),
+                p95_ms: Some(800),
+                scores: dear.clone(),
+            },
+            // Cheapest and fastest of all, and 0.30 below on every case — so the run CAN separate
+            // it, the walk steps past it, and the run does not read as one that separated nothing.
+            FrontierRow {
+                label: "awful".into(),
+                mean: dear.iter().sum::<f64>() / 6.0 - 0.30,
+                gen_cost_usd: 0.0036,
+                judged_cases: 6,
+                gen_unpriced: false,
+                p50_ms: Some(50),
+                p95_ms: Some(60),
+                scores: dear.iter().map(|x| x - 0.30).collect(),
+            },
+        ];
+        let mut summary = json!({
+            "n_cases": 6, "status": "no_baseline",
+            "targets": [
+                { "label": "cheap", "mean": 0.768, "errored": 0 },
+                { "label": "dear", "mean": 0.773, "errored": 0 },
+                { "label": "awful", "mean": 0.473, "errored": 0 },
+            ],
+        });
+        annotate_frontier(
+            &mut summary,
+            &FrontierInput {
+                rows: &rows,
+                partial: false,
+                partial_reason: "",
+            },
+        );
+        assert_eq!(summary["recommendation"]["label"], json!("cheap"));
+        let md = lighttrack_render::render("compare", &summary).unwrap_or_default();
+        assert!(
+            md.contains("Front"),
+            "the marker column reaches the table: {md}"
+        );
+        assert!(
+            md.contains("**Cheapest sufficient: cheap ($0.00100/case)**"),
+            "the sentence reaches the reader, priced per case: {md}"
+        );
+        // …and the sentence is about a target that is NOT the highest mean, which is the whole
+        // reason the feature exists.
+        assert!(md.contains("Highest mean: dear"), "{md}");
+    }
+
+    /// A run that stopped early prints the table and refuses the recommendation, in the same breath.
+    #[test]
+    fn a_halted_run_renders_its_table_and_refuses_to_recommend() {
+        let rows = [
+            FrontierRow {
+                label: "a".into(),
+                mean: 0.8,
+                gen_cost_usd: 0.006,
+                judged_cases: 6,
+                gen_unpriced: false,
+                p50_ms: Some(100),
+                p95_ms: Some(150),
+                scores: vec![0.80, 0.71, 0.90, 0.61, 0.84, 0.75],
+            },
+            FrontierRow {
+                label: "b".into(),
+                mean: 0.79,
+                gen_cost_usd: 0.24,
+                judged_cases: 6,
+                gen_unpriced: false,
+                p50_ms: Some(400),
+                p95_ms: Some(800),
+                scores: vec![0.79, 0.72, 0.88, 0.63, 0.85, 0.77],
+            },
+        ];
+        let mut summary = json!({
+            "n_cases": 6, "budget_halted": true, "spend_usd": 1.0,
+            "targets": [{ "label": "a", "mean": 0.8, "errored": 0 },
+                        { "label": "b", "mean": 0.79, "errored": 0 }],
+        });
+        annotate_frontier(
+            &mut summary,
+            &FrontierInput {
+                rows: &rows,
+                partial: true,
+                partial_reason: "halted at its spend ceiling",
+            },
+        );
+        assert_eq!(summary["recommendation"]["label"], Value::Null);
+        let md = lighttrack_render::render("compare", &summary).unwrap_or_default();
+        assert!(md.contains("**PARTIAL"), "{md}");
+        assert!(
+            md.contains("No cheapest-sufficient recommendation")
+                && md.contains("halted at its spend ceiling"),
+            "the refusal names the stop condition: {md}"
+        );
+    }
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9

@@ -576,3 +576,53 @@ reported as the model being cut off.
 Anthropic path stays `best-effort` (no `seed` exists), `temperature: 0` is still requested, and the
 existing detect-and-retry for models that reject sampling parameters still fires. No stamp is
 upgraded because a run thought harder.
+
+## D22 — The cost axis of a recommendation is generation cost per case, and an unpriced target is excluded by name (2026-09-06)
+
+Compare mode measured quality, cost and latency correctly — on the same calls, under the same
+pinning — and then printed them as three independent columns and left the trade-off to the
+operator's eye. The leaderboard's tested `best` claim (BENCHMARK_FRAMEWORK §2a) answers *which
+target is best*, and answers it honestly. Nothing answered
+the question the money is actually spent on: **which is the cheapest target I can get away with**.
+That has a different answer whenever the cheap model sits inside the noise of the expensive one,
+which is the most common real finding a benchmark produces.
+
+**The cost axis is GENERATION cost per judged case.** Not total spend: judge spend is benchmark
+overhead the operator never pays in production, and folding it into a target-selection decision
+would let a target that happens to be cheap to *grade* read as cheap to *run* — while being the
+same model on every row, so it only blurs the axis it is added to. Not per run: targets judge
+different case counts once errors and the health filter have had their say, so run totals are not
+comparable across rows. The surface is the non-dominated set over quality ↑, that cost ↓, **and both
+latency percentiles ↓** — a row with a good median and a terrible tail is exactly the trade-off a
+single-latency surface hides.
+
+**Sufficiency is the existing corrected superiority test read in reverse**, not a new statistic. A
+candidate is sufficient iff `superiority(best, candidate, m)` comes back *not significant*, at the
+same Bonferroni-corrected α. A recommendation is the strongest sentence this tool prints, so it is
+the last place to introduce a second, softer test — the repo's one statistics path is load-bearing
+precisely because a tool whose α is a knob invites tuning until the answer is the desired one.
+
+**An unpriced target is excluded by name, never priced at zero.** This is the decision that makes the
+feature safe rather than dangerous. Every HTTP provider adapter returns `cost_usd: None` and cost
+comes from the DB price book (D9), so an unpriced model is ordinary, not an edge case. A null cost
+read as `$0` **dominates the cost axis and becomes the recommendation precisely because nothing is
+known about it** — the exact inversion of what the number means. It is dropped from the surface with
+its label and the reason, and stays eligible to *be* the best, because its quality was measured even
+where its cost was not. Priced-ness is tracked for the **generation** call specifically: the run's
+`price_warnings` set also collects the judge's unpriced model, and an unpriced judge leaves a
+target's own run cost perfectly known.
+
+**A partial run recommends nothing, and power is always disclosed.** A budget halt, a cancellation
+or a health-filtered target leaves the *later* cases, not a random subset, and a recommendation is a
+stronger claim than a mean. "Not significantly worse" is an absence of evidence: with few cases
+everything is indistinguishable from everything, so the case count and surviving α travel with the
+claim, and a run in which *every* candidate passes loses the bold and says that it measured its own
+sample size rather than the models. A candidate that cannot be paired with the best is reported
+untested — neither sufficient nor insufficient — rather than silently skipped or silently accepted.
+
+**It is not persisted per run.** Compare mode posts one run report per target from *inside* the
+per-target loop, so a crash mid-matrix still records the targets that finished; the frontier is only
+knowable once every target is done. Stamping it on those reports would mean deferring the posts —
+trading a real durability property for a reporting nicety. So it lives in the printed/rendered
+summary only, and that limitation is stated in `BENCHMARK_FRAMEWORK.md` §2b rather than left for a
+reader to discover by querying for a key that is not there.
