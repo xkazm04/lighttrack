@@ -629,10 +629,22 @@ CREATE INDEX IF NOT EXISTS idx_scores_kind ON scores(kind, created_at);
 -- The quality read joins scores to events by event_id and windows on the VERDICT's created_at;
 -- without this the join degrades to a scan of the scores table per window.
 CREATE INDEX IF NOT EXISTS idx_scores_created ON scores(created_at);
+-- `list_benchmarks` is `WHERE project_id = ? ORDER BY created_at DESC` and the table only ever
+-- grows; without this every project's listing scans every other project's benchmarks and then
+-- sorts them.
+CREATE INDEX IF NOT EXISTS idx_benchmarks_project ON benchmarks(project_id, created_at);
+-- `list_rubrics` is `WHERE project_id = ? ORDER BY created_at DESC`, and M9 made this table
+-- append-only: a rubric edit is a new row, never a mutation. So it grows with every revision
+-- rather than staying at one row per rubric, and the listing's scan grows with it.
+CREATE INDEX IF NOT EXISTS idx_rubrics_project ON rubrics(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_project_created ON jobs(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_prompts_project ON prompts(project_id, name);
 CREATE INDEX IF NOT EXISTS idx_prompt_versions_pid ON prompt_versions(prompt_id, version);
+-- Run history for one benchmark, already in the listing's order (`WHERE benchmark_id = ? ORDER
+-- BY started_at DESC`). This is the table a scheduled benchmark appends to forever, so it is
+-- the one place where "scan it all" gets worse every night.
+CREATE INDEX IF NOT EXISTS idx_benchmark_runs_bench ON benchmark_runs(benchmark_id, started_at);
 -- The version walk and the fork's "what is the highest version this name already has" read.
 CREATE INDEX IF NOT EXISTS idx_datasets_name_version ON datasets(project_id, name, version);
 CREATE INDEX IF NOT EXISTS idx_dataset_items_ds ON dataset_items(dataset_id);

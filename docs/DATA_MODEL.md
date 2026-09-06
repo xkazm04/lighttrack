@@ -262,12 +262,12 @@ Rendered from the declarative model in `crates/store/src/schema/tables/`, which 
 | `events` | 24 | 2 | 8 | `id` |
 | `limit_rules` | 15 | 8 | 0 | `id` |
 | `scores` | 16 | 5 | 6 | `id` |
-| `benchmarks` | 11 | 0 | 0 | `id` |
-| `rubrics` | 8 | 2 | 0 | `id` |
+| `benchmarks` | 11 | 0 | 1 | `id` |
+| `rubrics` | 8 | 2 | 1 | `id` |
 | `jobs` | 15 | 3 | 2 | `id` |
 | `prompts` | 9 | 2 | 1 | `id` |
 | `prompt_versions` | 7 | 0 | 1 | `id` |
-| `benchmark_runs` | 13 | 0 | 0 | `id` |
+| `benchmark_runs` | 13 | 0 | 1 | `id` |
 | `model_prices` | 9 | 0 | 0 | `provider, model, effective_from` |
 | `datasets` | 8 | 1 | 1 | `id` |
 | `dataset_items` | 10 | 1 | 2 | `id` |
@@ -284,6 +284,6 @@ Rendered from the declarative model in `crates/store/src/schema/tables/`, which 
 | `calibrations` | 14 | 0 | 1 | `id` |
 | `use_cases` | 12 | 0 | 1 | `id` |
 
-Totals: **26 tables**, **315 columns**, of which **43** were added after their table shipped (those are `ALTER TABLE … ADD COLUMN` on every dialect, never edits to a `CREATE TABLE`). Schema fingerprint: `sha256-3bf9c26485555c04` — the same value `GET /v1/capabilities` reports.
+Totals: **26 tables**, **315 columns**, of which **43** were added after their table shipped (those are `ALTER TABLE … ADD COLUMN` on every dialect, never edits to a `CREATE TABLE`). Schema fingerprint: `sha256-51fce579c7ce31f6` — the same value `GET /v1/capabilities` reports.
 
 <!-- END generated table index -->

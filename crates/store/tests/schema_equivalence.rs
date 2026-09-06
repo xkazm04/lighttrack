@@ -67,8 +67,20 @@ fn primary_key(c: &Connection, table: &str) -> Vec<String> {
 /// renamed or silently stopped being created still fails the moment it goes missing.
 const TABLES_ADDED_SINCE_FREEZE: &[&str] = &["use_cases"];
 
-/// Indexes belonging to [`TABLES_ADDED_SINCE_FREEZE`], for the same reason.
-const INDEXES_ADDED_SINCE_FREEZE: &[&str] = &["idx_use_cases_project"];
+/// Indexes the frozen path could not know about: those of [`TABLES_ADDED_SINCE_FREEZE`], and those
+/// added to a legacy table *since* the freeze.
+///
+/// The second kind is the reason this list is not simply the first. An index is a pure addition —
+/// it changes no column, no default and no key — so a legacy table gaining one is not the drift
+/// this file guards against. Naming each one here still costs a deliberate line, and an index that
+/// stops being created fails on the `remove` assertion below.
+const INDEXES_ADDED_SINCE_FREEZE: &[&str] = &[
+    "idx_use_cases_project",
+    // The benchmark listing reads, unindexed until they were noticed.
+    "idx_benchmarks_project",
+    "idx_benchmark_runs_bench",
+    "idx_rubrics_project",
+];
 
 /// The rendered tables, minus the ones the frozen path could not know about.
 fn tables_since_freeze(c: &Connection) -> BTreeSet<String> {

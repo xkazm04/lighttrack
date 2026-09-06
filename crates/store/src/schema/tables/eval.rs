@@ -72,7 +72,12 @@ pub static BENCHMARKS: Table = Table::new(
         C::new("baseline_score", Real),
         C::new("created_at", Ts).nn(),
     ],
-);
+)
+.indexes(&[I::new("idx_benchmarks_project", "project_id, created_at").doc(
+    "`list_benchmarks` is `WHERE project_id = ? ORDER BY created_at DESC` and the table only ever \
+     grows; without this every project's listing scans every other project's benchmarks and then \
+     sorts them.",
+)]);
 
 pub static RUBRICS: Table = Table::new(
     "rubrics",
@@ -92,7 +97,12 @@ pub static RUBRICS: Table = Table::new(
         C::new("supersedes", Text).added("M9"),
     ],
 )
-.doc("Weighted, anchored rubrics.");
+.doc("Weighted, anchored rubrics.")
+.indexes(&[I::new("idx_rubrics_project", "project_id, created_at").doc(
+    "`list_rubrics` is `WHERE project_id = ? ORDER BY created_at DESC`, and M9 made this table \
+     append-only: a rubric edit is a new row, never a mutation. So it grows with every revision \
+     rather than staying at one row per rubric, and the listing's scan grows with it.",
+)]);
 
 pub static BENCHMARK_RUNS: Table = Table::new(
     "benchmark_runs",
@@ -111,7 +121,14 @@ pub static BENCHMARK_RUNS: Table = Table::new(
         C::new("total_tokens", Int),
         C::new("report", Json),
     ],
-);
+)
+.indexes(&[
+    I::new("idx_benchmark_runs_bench", "benchmark_id, started_at").doc(
+        "Run history for one benchmark, already in the listing's order (`WHERE benchmark_id = ? \
+         ORDER BY started_at DESC`). This is the table a scheduled benchmark appends to forever, \
+         so it is the one place where \"scan it all\" gets worse every night.",
+    ),
+]);
 
 pub static DATASETS: Table = Table::new(
     "datasets",

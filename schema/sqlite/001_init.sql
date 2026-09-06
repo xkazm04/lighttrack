@@ -128,6 +128,10 @@ CREATE TABLE IF NOT EXISTS benchmarks (
   baseline_score REAL,
   created_at TEXT NOT NULL
 );
+-- `list_benchmarks` is `WHERE project_id = ? ORDER BY created_at DESC` and the table only ever
+-- grows; without this every project's listing scans every other project's benchmarks and then
+-- sorts them.
+CREATE INDEX IF NOT EXISTS idx_benchmarks_project ON benchmarks(project_id, created_at);
 
 -- Weighted, anchored rubrics.
 CREATE TABLE IF NOT EXISTS rubrics (
@@ -139,6 +143,10 @@ CREATE TABLE IF NOT EXISTS rubrics (
   threshold REAL NOT NULL DEFAULT 0.7,
   created_at TEXT NOT NULL
 );
+-- `list_rubrics` is `WHERE project_id = ? ORDER BY created_at DESC`, and M9 made this table
+-- append-only: a rubric edit is a new row, never a mutation. So it grows with every revision
+-- rather than staying at one row per rubric, and the listing's scan grows with it.
+CREATE INDEX IF NOT EXISTS idx_rubrics_project ON rubrics(project_id, created_at);
 
 -- Background job queue: enqueue returns immediately; lt-runner serve executes.
 CREATE TABLE IF NOT EXISTS jobs (
@@ -206,6 +214,10 @@ CREATE TABLE IF NOT EXISTS benchmark_runs (
   total_tokens INTEGER,
   report TEXT
 );
+-- Run history for one benchmark, already in the listing's order (`WHERE benchmark_id = ? ORDER
+-- BY started_at DESC`). This is the table a scheduled benchmark appends to forever, so it is
+-- the one place where "scan it all" gets worse every night.
+CREATE INDEX IF NOT EXISTS idx_benchmark_runs_bench ON benchmark_runs(benchmark_id, started_at);
 
 -- DB-backed price book (source of truth; config/pricing.json is the seed). M26 made it a dated,
 -- append-only timeline: the identity of a rate has to be (provider, model, effective_from), or
