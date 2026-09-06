@@ -122,6 +122,22 @@ pub(super) fn benchmarks(store: &dyn Store, pid: &str) -> Result<()> {
         json!({ "note": "ok" }),
         "run report round-trip"
     );
+
+    // Two runs sharing a start instant must both be listed. `benchmark_runs` has no insertion
+    // column, so `started_at` alone cannot order them — how each backend BREAKS that tie is a
+    // per-backend contract pinned where that backend's SQL lives (`sqlite::benchmarks`), because
+    // the tie-break is `id DESC` on the SQL backends and Firestore's single-key ordering cannot
+    // offer it. What every backend owes here is only that a tie loses neither row.
+    let tied_at = run.started_at;
+    for _ in 0..2 {
+        store.create_benchmark_run(&BenchmarkRun {
+            id: new_id(),
+            started_at: tied_at,
+            ..run.clone()
+        })?;
+    }
+    let runs = store.list_benchmark_runs(Scope::Operator, &b.id)?;
+    assert_eq!(runs.len(), 3, "a started_at tie drops no run");
     Ok(())
 }
 
