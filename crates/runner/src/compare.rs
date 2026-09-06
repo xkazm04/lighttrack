@@ -11,8 +11,8 @@ use chrono::Utc;
 use serde_json::{json, Map, Value};
 
 use lighttrack_core::{
-    family_of, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, ModelPriceRow, ProviderFamily,
-    Rubric, ScoreDetail, ScoreKind,
+    family_of, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, Effort, ModelPriceRow,
+    ProviderFamily, Rubric, ScoreDetail, ScoreKind,
 };
 use lighttrack_engine::{
     parse_judge_spec, probe_openai_base, same_family, Determinism, EngineConfig,
@@ -36,8 +36,12 @@ use crate::util::{
 };
 
 /// One target's leaderboard row, in column order:
-/// `(label, mean, pass_rate, gen_cost, judge_cost, p50_ms, errored, agreement)`.
-type LeaderboardCells = (String, f64, f64, f64, f64, u64, u32, f64);
+/// `(label, effort, mean, pass_rate, gen_cost, judge_cost, p50_ms, errored, agreement)`.
+///
+/// `effort` sits beside the label because it is part of *which target this is*, not a measurement
+/// of it: two rows of one model at two efforts are the same model, and a reader who cannot see the
+/// level cannot read the comparison the matrix was written to make.
+type LeaderboardCells = (String, Option<Effort>, f64, f64, f64, f64, u64, u32, f64);
 
 /// One `(target, case)` cell's independent result: the candidate scores/agreements plus this cell's
 /// cost/latency/token contributions. Computed in parallel, then folded in case order so the per-target
@@ -706,6 +710,7 @@ pub(crate) fn run_compare(
         let (p50, p95) = percentiles(&mut latencies);
         rows.push((
             label.clone(),
+            t.resolved_effort(),
             mean,
             pass_rate,
             gen_cost,
@@ -792,6 +797,10 @@ pub(crate) fn run_compare(
             .collect();
         let mut report = json!({
             "mode": "compare", "target": label, "provider": t.provider, "model": t.model,
+            // The level this target actually generated at, from the declared field or an `@effort`
+            // suffix — `null` where the provider's default applied. A promotion gate reading this
+            // report must be able to tell which of the two it certified.
+            "effort": t.resolved_effort().map(|e| e.as_str()),
             "prompt_label": t.label, "gen_cost_usd": gen_cost, "judge_cost_usd": judge_cost,
             "target_kind": if t.http_url().is_some() { "http" } else { "model" },
             "target_resolved_prompt_version": rt.resolved_version,
@@ -879,11 +888,18 @@ pub(crate) fn run_compare(
     // Render the leaderboard via the shared render layer, so the runner, CLI, and MCP agree.
     let target_rows: Vec<Value> = rows
         .iter()
-        .map(|(label, mean, pr, gc, jc, p50, err, agree)| {
-            json!({
+        .map(|(label, effort, mean, pr, gc, jc, p50, err, agree)| {
+            let mut row = json!({
                 "label": label, "mean": mean, "pass_rate": pr, "agreement": agree,
                 "gen_cost_usd": gc, "judge_cost_usd": jc, "p50_latency_ms": p50, "errored": err,
-            })
+            });
+            // Only when the target declared one: a run of targets with no effort axis keeps the
+            // exact row shape it had, and an absent key means "the provider's default", which is a
+            // different fact from any named level.
+            if let Some(e) = effort {
+                row["effort"] = json!(e.as_str());
+            }
+            row
         })
         .collect();
     let summary = json!({

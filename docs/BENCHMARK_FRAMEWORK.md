@@ -7,8 +7,18 @@ comparison, a rigorous LLM-as-judge with reports + remediation), since most team
 Status: **design** (extends the shipped Phase 3.5 benchmarks). Drives sub-phases 3.6a–3.6e below.
 
 ## 0. Concepts (vocabulary)
-- **Dataset** — a versioned set of **DatasetItems** `{input, expected?, context?, tags, source_event_id?}`.
+- **Dataset** — a versioned set of **DatasetItems**
+  `{input, expected?, context?, tags, difficulty?, source_event_id?}`.
   Built by hand, imported, or **sampled from real events** (with anonymization).
+- **Difficulty** (M27) — the **ordered** rung a case sits at: `easy < medium < hard`. Not a tag: a
+  tag can group cases and cannot rank them, so it cannot answer *"this model handles the easy and
+  medium variants; only the hard ones need the expensive config"* — which is the routing decision
+  this whole layer exists to inform. It also gives the corpus **discrimination**: a rung every
+  target passes carries no information, and neither does one every target fails.
+  **Absent means UNGRADED, never medium.** Nobody graded the case; imputing a middle rung would file
+  the entire pre-M27 corpus into the tier the routing decision reads closest. The tier filter
+  therefore excludes ungraded cases from *every* tier rather than folding them into the middle one.
+  See DECISIONS D20 for the ordered-enum-over-tag choice and the degrade rule for an unknown value.
 - **PromptVariant** — a named system/instruction prompt under test (`v1`, `v2`, …).
 - **Target** — a thing that produces an output: `{provider, model, prompt_variant}`. A benchmark compares
   many targets.
@@ -72,6 +82,29 @@ population**, which a caller that has already fetched a page has thrown away.
 - Backends: SQLite and Postgres serve `Surface::DatasetLineage`; Firestore refuses it with a
   documented 501 rather than an empty answer (`docs/PARITY.md`).
 
+### 1b. Difficulty tiers on a case (M27)
+
+A case may be graded on the ordered ladder in §0 (`easy < medium < hard`). The grade is a column
+(`dataset_items.difficulty`) on **all three** backends — no backend reads it and drops it on write —
+and it rides onto `BenchmarkCase`, so a run's stored corpus still says which cases were the hard
+ones after the dataset has moved on.
+
+- `POST /v1/datasets/:id/items` takes `difficulty`; omitting it leaves the case UNGRADED, and
+  nothing later fills it in.
+- `GET /v1/datasets/:id/items?difficulty=hard` narrows a listing to one rung. An unknown spelling is
+  a `400`, never a silent full listing — an operator who asked for `hard` and got a mixed corpus
+  would read it as the hard tier and conclude the cheap model handles the hard cases. Ungraded cases
+  are in no tier and appear under none.
+- Mined and promoted cases arrive **ungraded**: an import saw traffic, and a promoted label said the
+  output was good, not how hard the case was. Neither is a grade.
+- CLI: `lt datasets items <id> [--difficulty hard]` and `lt datasets add <id> --input … [--difficulty
+  hard]`. MCP: the tier is an argument of `add_dataset_item` and `list_dataset_items`.
+
+**Not yet done.** `runner/compare.rs` does not stratify a report by tier, so a benchmark still
+reports one mean over a mixed corpus. Per-tier reporting — *which* rungs a target clears, and which
+rungs are saturated and therefore carrying no information — is the payoff, and it is a later change.
+This milestone is the axis it needs: the tier exists, persists, round-trips and is queryable.
+
 ## 2. Multi-provider / multi-prompt comparison  (#2)
 A benchmark defines a **matrix** of targets = `{providers × models} × {prompt variants}`. For each
 DatasetItem × target, the framework **generates** an output, then **judges** it.
@@ -93,6 +126,7 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
   "system_prompt": "you are terse",                          // a literal, OR:
   "prompt_ref": { "name": "support-reply", "label": "production" },
   "label": "gpt4o-prod",
+  "effort": "high",
   "kind": { "type": "http", "url": "https://rag.acme.com/answer" } }
 ```
 
@@ -108,6 +142,26 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
   whose bugs would surface as quality regressions.
   A run that resolved a ref records **`resolved_prompt_version`** in its report, and that is the
   evidence the promotion gate requires (see `CI_GATE.md`).
+- **`effort`** — reasoning effort: `low | medium | high | xhigh | max`. This is what makes *"is
+  `gpt-5@high` worth 4× `gpt-5@low` on my cases?"* a question the matrix can ask: declare the same
+  model twice at two levels and they are two rows, with distinct default labels
+  (`provider/model@effort`), a distinct `effort` field on each run-report row, and an `Effort` column
+  in the rendered leaderboard. Omitting the key means **the provider's default**, which is a
+  different fact from any named level and is reported as `—`, never as a level.
+  The older spelling — the level suffixed onto the model spec, `"model": "opus@xhigh"`, which is what
+  the use-case registry's `expected_models` writes — still works and resolves identically; if both
+  are present the `effort` field wins, being the more specific declaration.
+  - **What each provider does with it**, because an effort we cannot honour must be a stated absence
+    rather than a quiet default:
+    | provider | wire mapping | levels |
+    |---|---|---|
+    | `anthropic` (Messages API, `ANTHROPIC_API_KEY` set) | `output_config.effort` | all five, 1:1. `xhigh`/`max` also raise `max_tokens` to 64000, which Anthropic's own guidance requires or the answer truncates mid-thought. Not `thinking.budget_tokens` — that shape is a 400 on every model this path resolves to. |
+    | `anthropic` (`claude -p`, no key) | `--effort <level>` | all five, 1:1 — the path that always honoured it. |
+    | `openai` | `reasoning_effort` | `low`/`medium`/`high` only. **`xhigh` and `max` are refused with an error naming the model and the level**: OpenAI's scale ends at `high`, and folding them onto it would send byte-identical requests for two differently-labelled rows. |
+    | `google` (Gemini) | **not implemented** | every level is refused with an error. Gemini's control is `generationConfig.thinkingConfig.thinkingBudget`, a *token count* whose valid range is per-model; this build has no verified level→budget table, and a guessed budget the API clamps or ignores would produce a leaderboard column that reads as measured and measures nothing. |
+    | `kind: http` | n/a | an endpoint we do not control has no knob to set; the declaration is carried on the row for provenance only. |
+  - A model that rejects the parameter (e.g. Haiku 4.5, which has no `effort`) fails the call with
+    the provider's own 400 rather than running at its default under an effort label.
 - **`kind`** — `{"type":"model"}` (the default) or `{"type":"http","url":…}`. An **HTTP target** is
   an endpoint you own: LightTrack POSTs `{input, expected?, system_prompt?}` and reads back
   `{output, usage?, latency_ms?, cost_usd?}`. This is how a benchmark reaches a RAG pipeline, a

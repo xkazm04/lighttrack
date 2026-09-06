@@ -16,6 +16,28 @@ use super::{
 };
 use crate::{Determinism, EngineError, GenOutcome, Result};
 
+/// Our effort level as a Chat Completions `reasoning_effort` value.
+///
+/// The OpenAI scale is `low | medium | high` and stops there; ours goes two rungs further. Those two
+/// are **refused**, not folded onto `high`: folding would make `gpt-5@xhigh` and `gpt-5@high` send
+/// byte-identical requests while the leaderboard printed them as two rows, and a scorecard column
+/// that measures the same thing twice under two names is worse than a missing one.
+fn reasoning_effort(model: &str, effort: Effort) -> Result<&'static str> {
+    match effort {
+        Effort::Low => Ok("low"),
+        Effort::Medium => Ok("medium"),
+        Effort::High => Ok("high"),
+        Effort::XHigh | Effort::Max => Err(effort_unsupported(
+            "openai",
+            model,
+            effort,
+            "OpenAI's `reasoning_effort` scale ends at 'high', so folding this level onto it would \
+             send byte-identical requests for two differently-labelled targets — declare '@high' if \
+             that is what you want measured",
+        )),
+    }
+}
+
 /// The request body for one Chat Completions call. `model` is the **resolved** model — the caller
 /// has already split any `@effort` suffix off it — so no `@`-suffixed string can reach the wire.
 fn body(
@@ -26,15 +48,15 @@ fn body(
     deterministic: bool,
     effort: Option<Effort>,
 ) -> Result<Value> {
-    if let Some(level) = effort {
-        return Err(effort_unsupported("openai", model, level));
-    }
     let mut messages = Vec::new();
     if let Some(sys) = system_prompt {
         messages.push(serde_json::json!({ "role": "system", "content": sys }));
     }
     messages.push(serde_json::json!({ "role": "user", "content": input }));
     let mut body = serde_json::json!({ "model": model, "messages": messages });
+    if let Some(level) = effort {
+        body["reasoning_effort"] = serde_json::json!(reasoning_effort(model, level)?);
+    }
     if let Some(sc) = schema {
         body["response_format"] = serde_json::json!({
             "type": "json_schema",
@@ -169,16 +191,34 @@ mod tests {
         );
     }
 
-    /// An effort this adapter has no knob for is an ERROR, never a dropped parameter: a run that
-    /// asked for `@high` and quietly got the default would publish a scorecard column measuring
-    /// something nobody requested.
+    /// **The effort knob.** The three levels OpenAI names travel verbatim as `reasoning_effort`.
     #[test]
-    fn an_unmappable_effort_errors_rather_than_being_dropped() {
-        let err = body("gpt-5", None, "hi", None, false, Some(Effort::High)).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("openai"), "names the adapter: {msg}");
-        assert!(msg.contains("gpt-5"), "names the model: {msg}");
-        assert!(msg.contains("high"), "names the level: {msg}");
+    fn the_three_mappable_levels_travel_as_reasoning_effort() {
+        for (level, wire) in [
+            (Effort::Low, "low"),
+            (Effort::Medium, "medium"),
+            (Effort::High, "high"),
+        ] {
+            let b = body("gpt-5", None, "hi", None, false, Some(level)).unwrap();
+            assert_eq!(b["reasoning_effort"], json!(wire));
+            assert_eq!(b["model"], json!("gpt-5"), "still the bare model id");
+        }
+        // No effort asked for: the parameter is absent, so an existing matrix's request is unchanged.
+        let plain = body("gpt-4o", None, "hi", None, false, None).unwrap();
+        assert!(plain.get("reasoning_effort").is_none());
+    }
+
+    /// A level this adapter cannot express is an ERROR, never a fold onto the nearest rung: `xhigh`
+    /// silently sent as `high` would give the leaderboard two rows whose requests were identical.
+    #[test]
+    fn a_level_above_openais_scale_errors_rather_than_folding_onto_high() {
+        for level in [Effort::XHigh, Effort::Max] {
+            let err = body("gpt-5", None, "hi", None, false, Some(level)).unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("openai"), "names the adapter: {msg}");
+            assert!(msg.contains("gpt-5"), "names the model: {msg}");
+            assert!(msg.contains(level.as_str()), "names the level: {msg}");
+        }
     }
 
     #[test]
@@ -188,6 +228,11 @@ mod tests {
         assert_eq!(b["seed"], json!(PINNED_SEED));
         assert_eq!(b["messages"][0]["role"], json!("system"));
         assert_eq!(b["messages"][1]["content"], json!("hi"));
+        // Asking for effort must not weaken the determinism request: the `Exact` stamp still rests
+        // on exactly the two parameters it always did.
+        let with_effort = body("gpt-5", None, "hi", None, true, Some(Effort::Low)).unwrap();
+        assert_eq!(with_effort["temperature"], json!(0.0));
+        assert_eq!(with_effort["seed"], json!(PINNED_SEED));
     }
 
     /// `length` with an EMPTY answer: a reasoning model that spent its whole cap on hidden thinking.

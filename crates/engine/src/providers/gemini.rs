@@ -33,6 +33,20 @@ fn strip_schema_key(v: &Value, key: &str) -> Value {
     }
 }
 
+/// **The gap, stated rather than guessed.** Gemini's thinking control is
+/// `generationConfig.thinkingConfig.thinkingBudget` — a *token count*, not a named level, whose
+/// valid range differs per model (and where `-1` means "let the model decide"). Turning `high` into
+/// a number therefore requires a per-model table this build does not have and could not verify from
+/// the code, and a budget that a model silently clamps or ignores produces the worst outcome
+/// available: a leaderboard column that reads as measured and measures nothing.
+///
+/// So the plumbing reaches here and stops here, loudly. Closing this gap means a verified
+/// level → budget table per Gemini model, not a constant.
+const GEMINI_EFFORT_GAP: &str = "Gemini's thinking control is \
+     `generationConfig.thinkingConfig.thinkingBudget`, a token count whose valid range is per-model, \
+     and this build has no verified level-to-budget table — a guessed budget the API clamps or \
+     ignores would produce a scorecard column that measures nothing";
+
 /// The `generateContent` request body.
 fn body(
     model: &str,
@@ -43,7 +57,12 @@ fn body(
     effort: Option<Effort>,
 ) -> Result<Value> {
     if let Some(level) = effort {
-        return Err(effort_unsupported("gemini", model, level));
+        return Err(effort_unsupported(
+            "gemini",
+            model,
+            level,
+            GEMINI_EFFORT_GAP,
+        ));
     }
     let mut body =
         serde_json::json!({ "contents": [{ "role": "user", "parts": [{ "text": input }] }] });
@@ -217,14 +236,19 @@ mod tests {
         );
     }
 
-    /// An effort this adapter has no knob for is an ERROR, never a dropped parameter.
+    /// **The stated absence.** Every level errors on this adapter, and the message names the gap —
+    /// a guessed `thinkingBudget` the API clamps or ignores is worse than a refusal, because it
+    /// yields a scorecard column that reads as measured and measures nothing.
     #[test]
-    fn an_unmappable_effort_errors_rather_than_being_dropped() {
-        let err = body("gemini-2.5-pro", None, "hi", None, false, Some(Effort::Low)).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("gemini"), "names the adapter: {msg}");
-        assert!(msg.contains("gemini-2.5-pro"), "names the model: {msg}");
-        assert!(msg.contains("low"), "names the level: {msg}");
+    fn every_effort_errors_and_the_message_names_the_missing_mapping() {
+        for level in Effort::ALL {
+            let err = body("gemini-2.5-pro", None, "hi", None, false, Some(level)).unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("gemini"), "names the adapter: {msg}");
+            assert!(msg.contains("gemini-2.5-pro"), "names the model: {msg}");
+            assert!(msg.contains(level.as_str()), "names the level: {msg}");
+            assert!(msg.contains("thinkingBudget"), "names the gap: {msg}");
+        }
     }
 
     #[test]

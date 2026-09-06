@@ -155,17 +155,19 @@ pub(crate) fn read_bounded(resp: reqwest::blocking::Response, who: &str) -> Resu
     })
 }
 
-/// The error an adapter returns when it is handed an effort level it has no wire parameter for.
+/// The error an adapter returns when it cannot honestly express an effort level. `why` is the
+/// concrete gap — a missing wire mapping, a provider scale that stops short of ours — because
+/// "unsupported" alone leaves the operator re-reading the matrix.
 ///
-/// Loud on purpose. The alternative — dropping the level and calling the provider anyway — is how a
-/// scorecard column ends up labelled `@xhigh` while measuring the model's default thinking, which is
-/// exactly the failure the `@effort` suffix produced for a year: parsed in one of four generation
-/// paths, ignored by the other three.
-pub(crate) fn effort_unsupported(who: &str, model: &str, effort: Effort) -> EngineError {
+/// Loud on purpose, and the two silent alternatives are both worse than this error. Dropping the
+/// level is how a scorecard column ends up labelled `@xhigh` while measuring default thinking —
+/// exactly the failure the `@effort` suffix produced for a year, parsed in one of four generation
+/// paths and ignored by the other three. Folding it onto the nearest rung the provider does have is
+/// the same failure wearing a plausible face: two rows, one request.
+pub(crate) fn effort_unsupported(who: &str, model: &str, effort: Effort, why: &str) -> EngineError {
     EngineError::Other(format!(
-        "the {who} adapter cannot request effort '{effort}' for model '{model}': this build has no \
-         mapping from an effort level to a {who} request parameter, and silently dropping it would \
-         report a default-effort run as an '{effort}' one"
+        "the {who} adapter cannot request effort '{effort}' for model '{model}': {why}. Sending the \
+         call anyway would report a run that was never made at '{effort}' as one that was"
     ))
 }
 
@@ -450,10 +452,17 @@ mod tests {
     /// The refusal names all three things an operator needs to act: which adapter, which model,
     /// which level. A message that said only "unsupported" would leave them re-reading the matrix.
     #[test]
-    fn an_unsupported_effort_names_the_adapter_model_and_level() {
-        let msg = effort_unsupported("gemini", "gemini-2.5-pro", Effort::XHigh).to_string();
+    fn an_unsupported_effort_names_the_adapter_model_level_and_reason() {
+        let msg = effort_unsupported(
+            "gemini",
+            "gemini-2.5-pro",
+            Effort::XHigh,
+            "no verified mapping",
+        )
+        .to_string();
         assert!(msg.contains("gemini"), "{msg}");
         assert!(msg.contains("gemini-2.5-pro"), "{msg}");
         assert!(msg.contains("xhigh"), "{msg}");
+        assert!(msg.contains("no verified mapping"), "{msg}");
     }
 }

@@ -18,6 +18,11 @@
 //! - **Some model/parameter combinations reject `temperature`** (a 400). We detect that response and
 //!   retry once without it rather than hard-failing or silently dropping the schema. The trigger is
 //!   the API's answer, never a hard-coded model list.
+//!
+//! Reasoning effort is `output_config.effort`, whose five levels are exactly ours, so a target
+//! declaring `@xhigh` gets `xhigh` and nothing is collapsed or invented. It is deliberately *not*
+//! `thinking: {type: "enabled", budget_tokens: N}`: that shape is rejected with a 400 by every model
+//! [`resolve_model`] can produce, so it would be a request that never succeeds.
 
 use std::time::Instant;
 
@@ -25,7 +30,6 @@ use serde_json::Value;
 
 use lighttrack_core::{split_effort, Effort};
 
-use crate::providers::effort_unsupported;
 use crate::{Determinism, EngineError, GenOutcome, Result, SchemaEnforcement};
 
 /// Env var that switches the `anthropic` provider onto this path.
@@ -35,6 +39,12 @@ const API_VERSION: &str = "2023-06-01";
 /// Output ceiling for a judge verdict. A verdict is a small JSON object; this is generous headroom,
 /// not a target.
 const MAX_TOKENS: u64 = 4096;
+/// Output ceiling once `effort` reaches `xhigh` or `max`. Anthropic's own migration guidance is
+/// explicit that those two levels need `max_tokens >= 64000` or the response truncates mid-thought:
+/// the cap governs thinking *and* answer, and at the top two levels the thinking alone can outrun
+/// 4096. Still a ceiling, not a target — a verdict stays a small object — but a ceiling set where
+/// the model can reach a normal stop instead of being cut off by ours.
+const MAX_TOKENS_HIGH_EFFORT: u64 = 64_000;
 /// The forced tool the judge answers through when a schema is supplied.
 const VERDICT_TOOL: &str = "verdict";
 
@@ -70,11 +80,6 @@ pub(crate) fn generate(
     effort: Option<Effort>,
 ) -> Result<GenOutcome> {
     let resolved = resolve_model(model);
-    // Refused before the key is even read: an unmappable effort is a request contradiction, not a
-    // credentials problem, and the operator should get the right sentence for it.
-    if let Some(level) = effort {
-        return Err(effort_unsupported("anthropic", resolved, level));
-    }
     let key = std::env::var(API_KEY_ENV)
         .map_err(|_| EngineError::Other(format!("no Anthropic API key (set {API_KEY_ENV})")))?;
 
@@ -86,6 +91,7 @@ pub(crate) fn generate(
         input,
         schema,
         deterministic,
+        effort,
     ) {
         // Some model/parameter combinations answer a `temperature` with a 400 (extended-thinking
         // configurations in particular). Detect it from the response rather than from a model
@@ -98,27 +104,56 @@ pub(crate) fn generate(
                 "[judge] anthropic model '{resolved}' rejects temperature (HTTP {status}); \
                  retrying without it — determinism is best-effort for this run"
             );
-            send(&key, resolved, model, system_prompt, input, schema, false)
+            send(
+                &key,
+                resolved,
+                model,
+                system_prompt,
+                input,
+                schema,
+                false,
+                effort,
+            )
         }
         other => other,
+    }
+}
+
+/// The output ceiling for a call at `effort`. See [`MAX_TOKENS_HIGH_EFFORT`] — the top two levels
+/// need real headroom or the model's own thinking hits *our* cap and the verdict is reported as
+/// [`EngineError::Truncated`] when nothing was wrong with the model.
+fn max_tokens_for(effort: Option<Effort>) -> u64 {
+    match effort {
+        Some(Effort::XHigh) | Some(Effort::Max) => MAX_TOKENS_HIGH_EFFORT,
+        _ => MAX_TOKENS,
     }
 }
 
 /// The `POST /v1/messages` request body. `resolved` is a real Messages API model id — the caller
 /// has already run it through [`resolve_model`], so no alias and no `@effort` suffix reaches
 /// `body["model"]`.
+///
+/// Effort is `output_config.effort`, and our five levels ARE the API's five levels (`low` … `max`),
+/// so the mapping is the identity — no invented rung, nothing collapsed. Note what this is *not*:
+/// `thinking: {type: "enabled", budget_tokens: N}` is rejected with a 400 by every model
+/// [`resolve_model`] produces (Opus 5 / Sonnet 5 / Haiku 4.5's siblings), so a token budget would
+/// have been a request that never succeeds. `output_config` is GA and takes no beta header.
 fn body(
     resolved: &str,
     system_prompt: Option<&str>,
     input: &str,
     schema: Option<&Value>,
     deterministic: bool,
+    effort: Option<Effort>,
 ) -> Value {
     let mut body = serde_json::json!({
         "model": resolved,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens_for(effort),
         "messages": [{ "role": "user", "content": input }],
     });
+    if let Some(level) = effort {
+        body["output_config"] = serde_json::json!({ "effort": level.as_str() });
+    }
     if let Some(sys) = system_prompt {
         body["system"] = serde_json::json!(sys);
     }
@@ -148,8 +183,16 @@ fn send(
     input: &str,
     schema: Option<&Value>,
     deterministic: bool,
+    effort: Option<Effort>,
 ) -> Result<GenOutcome> {
-    let body = body(resolved, system_prompt, input, schema, deterministic);
+    let body = body(
+        resolved,
+        system_prompt,
+        input,
+        schema,
+        deterministic,
+        effort,
+    );
 
     let started = Instant::now();
     let resp = crate::providers::http_client()?
@@ -285,7 +328,7 @@ mod tests {
     /// model id with no `@` in it.
     #[test]
     fn the_model_field_never_carries_an_effort_suffix() {
-        let b = body(resolve_model("opus@xhigh"), None, "hi", None, false);
+        let b = body(resolve_model("opus@xhigh"), None, "hi", None, false, None);
         assert_eq!(b["model"], json!("claude-opus-5"));
         assert!(
             !b["model"].as_str().unwrap().contains('@'),
@@ -295,18 +338,49 @@ mod tests {
         assert_eq!(b["max_tokens"], json!(MAX_TOKENS));
     }
 
-    /// Until an effort→thinking mapping exists on this path, an effort level is refused rather than
-    /// dropped: a judge run labelled `@xhigh` must never be a default-effort run wearing the label.
+    /// **The effort knob.** Our five levels are the API's five levels, so the body carries the level
+    /// verbatim under `output_config.effort` — the GA parameter — and nothing else changes.
     #[test]
-    fn an_unmappable_effort_errors_rather_than_being_dropped() {
-        // Deliberately no key in the environment: the refusal happens before credentials matter,
-        // so this test never touches process-wide env other tests in this binary read.
-        let err = generate("opus@xhigh", None, "hi", None, false, Some(Effort::XHigh))
-            .expect_err("an unmapped effort must not proceed to a call");
-        let msg = err.to_string();
-        assert!(msg.contains("anthropic"), "names the adapter: {msg}");
-        assert!(msg.contains("claude-opus-5"), "names the model: {msg}");
-        assert!(msg.contains("xhigh"), "names the level: {msg}");
+    fn effort_travels_as_output_config_effort() {
+        for level in Effort::ALL {
+            let b = body("claude-opus-5", None, "hi", None, false, Some(level));
+            assert_eq!(
+                b["output_config"]["effort"],
+                json!(level.as_str()),
+                "the level must reach the wire verbatim"
+            );
+            assert!(
+                b.get("thinking").is_none(),
+                "a budget_tokens thinking block is a 400 on every model this path resolves to"
+            );
+        }
+        // No effort asked for: no output_config at all, so a stored matrix's request is unchanged.
+        let plain = body("claude-opus-5", None, "hi", None, false, None);
+        assert!(plain.get("output_config").is_none());
+    }
+
+    /// The top two levels get real output headroom: at `xhigh`/`max` the model's own thinking can
+    /// outrun a 4096 ceiling, and a verdict cut off by OUR cap is reported as
+    /// [`EngineError::Truncated`] — a cap of ours blamed on the model.
+    #[test]
+    fn the_top_two_levels_raise_the_output_ceiling() {
+        assert_eq!(max_tokens_for(None), MAX_TOKENS);
+        assert_eq!(max_tokens_for(Some(Effort::High)), MAX_TOKENS);
+        assert_eq!(max_tokens_for(Some(Effort::XHigh)), MAX_TOKENS_HIGH_EFFORT);
+        assert_eq!(max_tokens_for(Some(Effort::Max)), MAX_TOKENS_HIGH_EFFORT);
+        let b = body("claude-opus-5", None, "hi", None, false, Some(Effort::Max));
+        assert_eq!(b["max_tokens"], json!(MAX_TOKENS_HIGH_EFFORT));
+    }
+
+    /// Effort must not touch the determinism surface: `temperature: 0` is still requested, so the
+    /// existing detect-and-retry (some models 400 on any sampling parameter) still fires and the
+    /// outcome is still stamped [`Determinism::BestEffort`] — never upgraded because we now think
+    /// harder.
+    #[test]
+    fn effort_leaves_the_determinism_request_alone() {
+        let b = body("claude-opus-5", None, "hi", None, true, Some(Effort::XHigh));
+        assert_eq!(b["temperature"], json!(0.0));
+        assert_eq!(b["output_config"]["effort"], json!("xhigh"));
     }
 
     #[test]

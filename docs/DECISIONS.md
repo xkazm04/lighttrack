@@ -499,3 +499,80 @@ three.
 `GET /v1/capabilities`. It is backend-agnostic on purpose — two deployments on different backends
 but the same build answer the same thing, so "is prod running the schema this SDK was written
 against" is one comparison rather than a version number somebody has to remember to bump.
+
+## D20 — A case's difficulty is an ordered enum, not a tag (2026-09-06)
+
+`DatasetItem` had `tags: Vec<String>` and nothing else categorical, so "hard" was expressible and
+`hard > medium` was not. That gap is the whole product question the benchmark layer exists to
+answer: *this model handles the easy and medium variants of my use case; only the hard ones need
+the expensive config* is a routing decision, and a routing decision needs an order. The second
+thing it buys is **discrimination** — a rung every target passes carries no information, and
+neither does one every target fails; a corpus that cannot rank its own rungs cannot see which of
+them is doing the separating, and is paying for cases that teach nothing.
+
+So `core::Difficulty` is a closed, totally-ordered ladder (`easy < medium < hard`), stored as its
+wire spelling in `dataset_items.difficulty` (M27) and carried onto `BenchmarkCase` so a run's stored
+corpus still says which cases were the hard ones.
+
+**Three rungs, not four.** A fourth rung is easy to add and hard to *use*: an operator who cannot
+tell two adjacent rungs apart consistently produces a grading that is noise on exactly the axis the
+routing decision reads. Add one when a corpus demonstrably saturates the top rung, not before.
+
+**`None` is ungraded, never medium.** This is the same law as `UseCase::declares` returning
+`Option<bool>` (D-nothing-imputed, `crates/core/src/use_case.rs`): an absent declaration and a
+neutral one are different states, and collapsing them makes a report cry wolf. Here it would be
+worse than a false alarm — the entire pre-M27 corpus would land in the middle tier, which is the
+tier the routing decision reads closest. Every layer keeps them apart: the column is nullable with
+no default, the filter excludes ungraded cases from *every* tier rather than putting them in the
+middle one, and the field is `skip_serializing_if = "Option::is_none"` so a pre-M27 case round-trips
+byte-identically.
+
+**An unknown wire value degrades to ungraded, not to a catch-all rung.** `UseCaseKind` degrades an
+unknown kind to `Other` rather than refusing the registration, and the same instinct applies — one
+unreadable field must not cost the corpus a case. The deliberate departure is the *target*:
+`Difficulty` has no `Other` variant and must never grow one, because a catch-all would have to sit
+somewhere on a total order and every placement is a claim nobody made. So it degrades to the
+absence the field already models.
+
+**Not yet done: per-tier reporting.** The tier exists, persists on all three backends, round-trips
+and is queryable (`GET /v1/datasets/:id/items?difficulty=hard`, `lt datasets items --difficulty`).
+`runner/compare.rs` does **not** stratify a report by it yet, so a benchmark still reports one mean
+over a mixed corpus. That is the payoff and it is a later change; this one is the axis it needs.
+
+## D21 — Reasoning effort is a target axis, and a level we cannot honour is an error (2026-09-06)
+
+`@effort` arrived as a suffix on a model spec, parsed by `split_effort` inside the `claude -p` argv
+builder. Grep found it exactly one caller. Every other generation path treated the suffix as part of
+the model id — so with `ANTHROPIC_API_KEY` set, the **default** judge spec `opus@xhigh` (D15) was
+POSTed to the Messages API as a model name, and any suffixed spec did the same to OpenAI's `model`
+field and Gemini's URL path. The declaration existed; the wire never saw it.
+
+The vocabulary is now `core::Effort`, a closed five-rung enum, and the split happens once at the
+provider boundary (`providers::generate_once`) above every adapter. `BenchTarget` carries an
+`effort` field, serde-defaulted so a stored matrix round-trips byte-identically, and the runner
+hands the engine `model_spec()` — `model@effort` — so the two halves travel through an API shape
+that predates the axis. Two targets differing only in effort get distinct labels, distinct
+run-report rows and their own leaderboard column.
+
+**An adapter that cannot express a level returns an error naming the adapter, the model, the level
+and the gap.** Two silent alternatives were available and both are worse. *Dropping* the level is
+the failure this decision exists to end — a column labelled `@xhigh` measuring default thinking.
+*Folding* it onto the nearest rung the provider does have (OpenAI's scale stops at `high`) is the
+same failure wearing a plausible face: two rows, one request, and a "4× the cost for +0.00" finding
+that is an artefact of our own mapping. So `openai` refuses `xhigh`/`max`, and **Gemini refuses every
+level**: its control is `thinkingConfig.thinkingBudget`, a token count with a per-model valid range,
+and a guessed number the API clamps or ignores yields a scorecard column that reads as measured and
+measures nothing. A stated gap is cheap to close; a fabricated measurement is not.
+
+**Anthropic is `output_config.effort`, not a thinking budget.** The obvious mapping —
+`thinking: {type: "enabled", budget_tokens: N}` — is rejected with a 400 by every model
+`resolve_model` produces, so it would have been plumbing for a request that never succeeds. The
+GA `output_config.effort` takes our five level names verbatim, which is why the mapping is the
+identity and nothing is invented. `xhigh`/`max` additionally raise `max_tokens` to 64000, per
+Anthropic's own guidance, or the model's thinking hits *our* 4096 ceiling and a cap of ours is
+reported as the model being cut off.
+
+**Determinism is not touched.** Effort changes what the model spends, not what we can pin: the
+Anthropic path stays `best-effort` (no `seed` exists), `temperature: 0` is still requested, and the
+existing detect-and-retry for models that reject sampling parameters still fires. No stamp is
+upgraded because a run thought harder.

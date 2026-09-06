@@ -55,8 +55,15 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
     }
     let n_cases = v.get("n_cases").and_then(Value::as_u64).unwrap_or(0);
 
-    let mut t = Table::new(&[
-        ("Target", Align::Left),
+    // The Effort column appears only when some target declared a level. A matrix with no effort axis
+    // keeps the table it always had; one that has the axis must never hide it, because two rows of
+    // one model at two efforts are otherwise indistinguishable in every column that follows.
+    let has_effort = targets.iter().any(|r| r.get("effort").is_some());
+    let mut cols = vec![("Target", Align::Left)];
+    if has_effort {
+        cols.push(("Effort", Align::Left));
+    }
+    cols.extend([
         ("Mean", Align::Right),
         ("Pass%", Align::Right),
         ("Agree", Align::Right),
@@ -65,6 +72,7 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
         ("p50", Align::Right),
         ("Err", Align::Right),
     ]);
+    let mut t = Table::new(&cols);
     // Best = highest mean among targets that didn't error out every case (mirrors the runner's rule).
     let mut best: Option<(&str, f64)> = None;
     for r in targets {
@@ -74,8 +82,18 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
         if errored < n_cases && best.is_none_or(|(_, bm)| mean > bm) {
             best = Some((label, mean));
         }
-        t.row(vec![
-            label.to_string(),
+        let mut cells = vec![label.to_string()];
+        if has_effort {
+            // A target with no level ran at the provider's default — an em dash, never a guessed
+            // level and never a blank that reads as the same as its neighbour.
+            cells.push(
+                r.get("effort")
+                    .and_then(Value::as_str)
+                    .unwrap_or("—")
+                    .to_string(),
+            );
+        }
+        cells.extend([
             format!("{mean:.2}"),
             pct(f(r, "pass_rate")),
             format!("{:.2}", f(r, "agreement")),
@@ -86,6 +104,7 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
                 .unwrap_or_else(|| "—".into()),
             errored.to_string(),
         ]);
+        t.row(cells);
     }
     let mut out = format!("### Comparison — {n_cases} case(s)\n\n{}", t.render());
     // A cost-halted comparison is announced ABOVE the winner line: the table is over whatever cases
@@ -144,6 +163,36 @@ mod tests {
             "spend and ceiling are both shown"
         );
         assert!(md.contains("zz/yy") && md.contains("lower bound"));
+    }
+
+    /// **The reason the effort axis exists, at the point an operator reads it.** One model at two
+    /// levels must be two visibly different rows — a table that printed `gpt-5` twice would make
+    /// "is xhigh worth 4× low" unanswerable from the artefact that is supposed to answer it.
+    #[test]
+    fn two_efforts_of_one_model_are_readable_as_two_rows() {
+        let md = leaderboard(&json!({
+            "n_cases": 10,
+            "targets": [
+                { "label": "openai/gpt-5@low", "effort": "low", "mean": 0.71, "errored": 0 },
+                { "label": "openai/gpt-5@high", "effort": "high", "mean": 0.88, "errored": 0 },
+                { "label": "openai/gpt-4o", "mean": 0.65, "errored": 0 },
+            ],
+        }))
+        .unwrap();
+        assert!(md.contains("Effort"), "the column is present: {md}");
+        assert!(md.contains("low") && md.contains("high"));
+        // A target that declared no level ran at the provider's default — said, not left blank.
+        assert!(md.contains('—'), "the default is stated, not implied: {md}");
+    }
+
+    /// A run with no effort axis keeps exactly the table it always had — no empty column.
+    #[test]
+    fn a_matrix_without_efforts_keeps_its_original_columns() {
+        let md = leaderboard(&json!({
+            "n_cases": 10, "targets": [{ "label": "a", "mean": 0.9, "errored": 0 }],
+        }))
+        .unwrap();
+        assert!(!md.contains("Effort"), "no column nobody can fill: {md}");
     }
 
     #[test]
