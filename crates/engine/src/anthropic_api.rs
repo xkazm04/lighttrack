@@ -23,6 +23,9 @@ use std::time::Instant;
 
 use serde_json::Value;
 
+use lighttrack_core::{split_effort, Effort};
+
+use crate::providers::effort_unsupported;
 use crate::{Determinism, EngineError, GenOutcome, Result, SchemaEnforcement};
 
 /// Env var that switches the `anthropic` provider onto this path.
@@ -43,8 +46,13 @@ pub(crate) fn available() -> bool {
 /// Resolve a CLI-style model alias to a Messages API model id. The `claude -p` aliases (`haiku`,
 /// `sonnet`, `opus`) don't exist on the API, so a judge spec written for the CLI would 404 here.
 /// Anything already looking like a model id passes through untouched.
+///
+/// Any `@effort` suffix is stripped **first**. The dispatch in `providers::generate_once` already
+/// splits it, and this is the belt to that braces: `resolve_model` is the last thing standing
+/// between a judge spec and `body["model"]`, and the default spec is `opus@xhigh` — the string that
+/// used to arrive here whole, miss every alias arm, and be POSTed as a model id.
 fn resolve_model(model: &str) -> &str {
-    match model {
+    match split_effort(model).0 {
         "haiku" => "claude-haiku-4-5",
         "sonnet" => "claude-sonnet-5",
         "opus" => "claude-opus-5",
@@ -59,10 +67,16 @@ pub(crate) fn generate(
     input: &str,
     schema: Option<&Value>,
     deterministic: bool,
+    effort: Option<Effort>,
 ) -> Result<GenOutcome> {
+    let resolved = resolve_model(model);
+    // Refused before the key is even read: an unmappable effort is a request contradiction, not a
+    // credentials problem, and the operator should get the right sentence for it.
+    if let Some(level) = effort {
+        return Err(effort_unsupported("anthropic", resolved, level));
+    }
     let key = std::env::var(API_KEY_ENV)
         .map_err(|_| EngineError::Other(format!("no Anthropic API key (set {API_KEY_ENV})")))?;
-    let resolved = resolve_model(model);
 
     match send(
         &key,
@@ -90,16 +104,16 @@ pub(crate) fn generate(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn send(
-    key: &str,
+/// The `POST /v1/messages` request body. `resolved` is a real Messages API model id — the caller
+/// has already run it through [`resolve_model`], so no alias and no `@effort` suffix reaches
+/// `body["model"]`.
+fn body(
     resolved: &str,
-    requested: &str,
     system_prompt: Option<&str>,
     input: &str,
     schema: Option<&Value>,
     deterministic: bool,
-) -> Result<GenOutcome> {
+) -> Value {
     let mut body = serde_json::json!({
         "model": resolved,
         "max_tokens": MAX_TOKENS,
@@ -122,6 +136,20 @@ fn send(
         // The Anthropic API has no `seed`; temperature is the whole sampling surface here.
         body["temperature"] = serde_json::json!(0.0);
     }
+    body
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send(
+    key: &str,
+    resolved: &str,
+    requested: &str,
+    system_prompt: Option<&str>,
+    input: &str,
+    schema: Option<&Value>,
+    deterministic: bool,
+) -> Result<GenOutcome> {
+    let body = body(resolved, system_prompt, input, schema, deterministic);
 
     let started = Instant::now();
     let resp = crate::providers::http_client()?
@@ -235,6 +263,50 @@ mod tests {
         assert_eq!(resolve_model("opus"), "claude-opus-5");
         // A real model id is passed through untouched.
         assert_eq!(resolve_model("claude-haiku-4-5"), "claude-haiku-4-5");
+    }
+
+    /// **The defect this path shipped with.** `opus@xhigh` is the DEFAULT judge spec, and with a key
+    /// present it came here whole: it matched no alias arm and was POSTed as `body["model"]`. An
+    /// effort suffix must resolve to exactly what the bare alias resolves to.
+    #[test]
+    fn an_effort_suffixed_alias_resolves_like_the_bare_alias() {
+        assert_eq!(resolve_model("opus@xhigh"), resolve_model("opus"));
+        assert_eq!(resolve_model("haiku@low"), "claude-haiku-4-5");
+        assert_eq!(
+            resolve_model("claude-opus-5@max"),
+            "claude-opus-5",
+            "a real id keeps its identity once the level is off it"
+        );
+        // A model id that merely contains an `@` is not a spec — it survives whole.
+        assert_eq!(resolve_model("weird@thing"), "weird@thing");
+    }
+
+    /// **The wire-body guarantee.** Whatever the caller wrote, `body["model"]` is a Messages API
+    /// model id with no `@` in it.
+    #[test]
+    fn the_model_field_never_carries_an_effort_suffix() {
+        let b = body(resolve_model("opus@xhigh"), None, "hi", None, false);
+        assert_eq!(b["model"], json!("claude-opus-5"));
+        assert!(
+            !b["model"].as_str().unwrap().contains('@'),
+            "{}",
+            b["model"]
+        );
+        assert_eq!(b["max_tokens"], json!(MAX_TOKENS));
+    }
+
+    /// Until an effort→thinking mapping exists on this path, an effort level is refused rather than
+    /// dropped: a judge run labelled `@xhigh` must never be a default-effort run wearing the label.
+    #[test]
+    fn an_unmappable_effort_errors_rather_than_being_dropped() {
+        // Deliberately no key in the environment: the refusal happens before credentials matter,
+        // so this test never touches process-wide env other tests in this binary read.
+        let err = generate("opus@xhigh", None, "hi", None, false, Some(Effort::XHigh))
+            .expect_err("an unmapped effort must not proceed to a call");
+        let msg = err.to_string();
+        assert!(msg.contains("anthropic"), "names the adapter: {msg}");
+        assert!(msg.contains("claude-opus-5"), "names the model: {msg}");
+        assert!(msg.contains("xhigh"), "names the level: {msg}");
     }
 
     #[test]

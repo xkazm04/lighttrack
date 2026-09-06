@@ -19,6 +19,7 @@ pub mod customer;
 pub mod dataset;
 pub mod dataset_lineage;
 pub mod device;
+pub mod effort;
 pub mod endpoint_identity;
 pub mod error;
 pub mod event;
@@ -77,6 +78,7 @@ pub use dataset_lineage::{
     MAX_IMPORT_N,
 };
 pub use device::{capability_matches, Device, DeviceEligibility, RelayAdmission};
+pub use effort::{split_effort, Effort};
 pub use endpoint_identity::{
     native_routes, resolve as resolve_endpoint, Endpoint, EndpointIdentity, Evidence, Observations,
     SELF_HOSTED_PREFIX,
