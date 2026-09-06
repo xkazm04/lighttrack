@@ -76,3 +76,6 @@ Thumbs.db
 
 # agent worktrees (Claude Code isolation)
 /.claude/worktrees/
+
+# /perfect loop state (not version-controlled; see .claude/perfect/config.md)
+/.perfect/
