@@ -37,8 +37,26 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// takes 45s timed out three times in a row — 90s spent, the sample lost, and the retry policy
 /// working exactly as designed against a call that was never going to fit.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// The same bound for a call that asked to think hard. 120s was measured against a model at its
+/// *default* effort; `xhigh` and `max` are a request for more deliberation, and the ceiling that
+/// permits it (`max_tokens` at 64k on the Anthropic path) is a wall-clock statement as much as a
+/// token one. Leaving the old bound in place would have turned "think harder" into "time out
+/// harder" — the 30s incident above, repeated one rung up, against a call that was never going to
+/// fit. Bounded, not unbounded: a black-holed endpoint still cannot hang a benchmark worker
+/// forever, which is why this constant exists at all.
+const REQUEST_TIMEOUT_HIGH_EFFORT: Duration = Duration::from_secs(900);
 /// Hard ceiling on a single provider response body (a completion is KBs; this stops a multi-GB body).
 const MAX_BODY_BYTES: u64 = 32 * 1024 * 1024;
+
+/// The per-call deadline for a request at `effort`. Applied on the request builder rather than the
+/// client: the client is process-wide and shared by every provider, so a per-call override is the
+/// only way one judge call's deliberation budget does not become everyone's.
+pub(crate) fn request_timeout(effort: Option<Effort>) -> Duration {
+    match effort {
+        Some(Effort::XHigh) | Some(Effort::Max) => REQUEST_TIMEOUT_HIGH_EFFORT,
+        _ => REQUEST_TIMEOUT,
+    }
+}
 
 /// Process-wide blocking client, built once with bounded connect/request timeouts. reqwest pools and
 /// reuses connections, so every provider call shares it.
@@ -381,7 +399,7 @@ fn generate_anthropic(
 
 #[cfg(test)]
 mod tests {
-    use super::{effort_unsupported, schema_state, stated_retry_after};
+    use super::{effort_unsupported, request_timeout, schema_state, stated_retry_after};
     use crate::SchemaEnforcement;
     use lighttrack_core::Effort;
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -464,5 +482,19 @@ mod tests {
         assert!(msg.contains("gemini-2.5-pro"), "{msg}");
         assert!(msg.contains("xhigh"), "{msg}");
         assert!(msg.contains("no verified mapping"), "{msg}");
+    }
+
+    /// The top two effort levels get a longer deadline than the shared client's. The Anthropic path
+    /// hands those levels a 64k `max_tokens`, and a bound measured against default-effort calls
+    /// would turn "think harder" into a timeout — the failure this mapping exists to prevent.
+    #[test]
+    fn asking_a_model_to_think_harder_also_buys_it_the_time() {
+        let base = request_timeout(None);
+        assert_eq!(request_timeout(Some(Effort::Low)), base);
+        assert_eq!(request_timeout(Some(Effort::High)), base);
+        assert!(request_timeout(Some(Effort::XHigh)) > base);
+        assert!(request_timeout(Some(Effort::Max)) > base);
+        // Bounded, never unbounded: a black-holed endpoint must still lose eventually.
+        assert!(request_timeout(Some(Effort::Max)) < Duration::from_secs(3600));
     }
 }

@@ -199,6 +199,9 @@ fn send(
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", key)
         .header("anthropic-version", API_VERSION)
+        // Per-call, because `max_tokens_for` just handed this request a 64k ceiling at the top two
+        // effort levels and the shared client's 120s was measured against default-effort calls.
+        .timeout(crate::providers::request_timeout(effort))
         .json(&body)
         .send()
         .map_err(|e| crate::providers::send_error("anthropic", e))?;
