@@ -93,6 +93,11 @@
       "reason": "Dated structural observations from the same campaign. Its facts are stamped 2026-07-16 and read as history, not as a current description."
     },
     {
+      "path": "docs/AI_HARNESS.md",
+      "kind": "not-in-this-pass",
+      "reason": "added 2026-09-05 by 60fef8c as an unfilled starter template - every 'Where things live' and 'Review gate' line is still a TODO placeholder, so there is nothing here yet to read against the code. It enters the denominator now so the next pass sees the debt rather than the file being invisible; it drains when the template is filled in or the file is removed"
+    },
+    {
       "path": "docs/CALIBRATION.md",
       "kind": "not-in-this-pass",
       "reason": "the persistence half was rewritten 2026-09-02 by the M11 build against the code it describes: the durable fact is now a CalibrationRecord keyed (project, rubric, judge) and the reserved-rubric score is derived from it, plus --dataset calibration, `lt labels`/`lt judges trust`, and the 409 require_trusted_judge blocks with. The one-shot/watch/batch sections around it are unchanged and still unread by a catch-up pass, so the file stays out-of-pass"
