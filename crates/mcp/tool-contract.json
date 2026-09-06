@@ -13,6 +13,7 @@
     "properties": {
       "context": "string",
       "dataset": "string",
+      "difficulty": "string",
       "expected": "string",
       "input": "string",
       "output": "string",
@@ -431,7 +432,8 @@
   },
   "list_dataset_items": {
     "properties": {
-      "dataset": "string"
+      "dataset": "string",
+      "difficulty": "string"
     },
     "readOnly": true,
     "required": [

@@ -285,6 +285,8 @@ pub(crate) async fn snapshot_dataset(
             // back to what was scored; the task id is the durable half of that pair.
             source_event_id: Some(t.id.clone()),
             anonymization: Value::Null,
+            // Captured device traffic, ungraded like every other mined case: nobody looked at it.
+            difficulty: None,
         };
         let store = st.store.clone();
         spawn_db(move || store.create_dataset_item(&item)).await?;

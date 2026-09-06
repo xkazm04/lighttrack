@@ -76,13 +76,14 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             b("expected", JsonTy::String, "golden reference answer"),
             b("context", JsonTy::String, ""),
             b("tags", JsonTy::Array, ""),
+            be("difficulty", &["easy", "medium", "hard"], "the ordered tier this case sits at; omit for UNGRADED, which is not the same as medium"),
         ],
         response: TypeRef::Named("DatasetItem"),
         mcp: Some(McpTool {
             name: "add_dataset_item",
-            description: "Append a case to a (non-frozen) dataset.",
+            description: "Append a case to a (non-frozen) dataset. `difficulty` grades it on an ORDERED ladder (easy < medium < hard) so a corpus can answer which rungs a target actually clears — a tag could group cases and never rank them. Omitting it leaves the case UNGRADED, which is a distinct state from medium and is never filled in.",
             read_only: false,
-            args: &["id", "input", "output", "expected", "context", "tags"],
+            args: &["id", "input", "output", "expected", "context", "tags", "difficulty"],
             ..McpTool::DEFAULT
         }),
         doc: "Append one case; 409 if the dataset is frozen.",
@@ -93,16 +94,19 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         method: Method::Get,
         path: "/v1/datasets/:id/items",
         access: Key(Read),
-        params: &[pm("id", "dataset", "dataset id")],
+        params: &[
+            pm("id", "dataset", "dataset id"),
+            qe("difficulty", &["easy", "medium", "hard"], "only cases graded at this tier; UNGRADED cases are in no tier, so they are excluded from every one. An unknown spelling is a 400, never a silent full listing."),
+        ],
         response: TypeRef::ArrayOf("DatasetItem"),
         mcp: Some(McpTool {
             name: "list_dataset_items",
-            description: "List the cases in a dataset.",
-            args: &["id"],
+            description: "List the cases in a dataset, optionally only those graded at one difficulty tier. Ungraded cases belong to no tier and are excluded from every one.",
+            args: &["id", "difficulty"],
             ..McpTool::DEFAULT
         }),
         render_kind: Some("list_dataset_items"),
-        doc: "The cases in one dataset.",
+        doc: "The cases in one dataset, optionally narrowed to one difficulty tier.",
         ..Endpoint::DEFAULT
     },
     Endpoint {

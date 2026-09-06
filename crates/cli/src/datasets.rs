@@ -73,7 +73,69 @@ pub(crate) fn run(cli: &Cli, action: &DatasetsCmd) -> Result<()> {
             None,
             "list_labels",
         ),
+        DatasetsCmd::Items { id, difficulty } => {
+            let q = match difficulty.as_deref() {
+                Some(d) => format!("?difficulty={}", enc(tier(d)?)),
+                None => String::new(),
+            };
+            call(
+                cli,
+                Method::GET,
+                &format!("/v1/datasets/{id}/items{q}"),
+                None,
+                "list_dataset_items",
+            )
+        }
+        DatasetsCmd::Add {
+            id,
+            input,
+            expected,
+            output,
+            difficulty,
+        } => {
+            let mut body = json!({ "input": input });
+            if let Some(e) = expected {
+                body["expected"] = json!(e);
+            }
+            if let Some(o) = output {
+                body["output"] = json!(o);
+            }
+            // Absent stays absent. Writing `"difficulty": null` would be the same thing on the wire
+            // today, but sending the key at all invites a future reader to treat "stated as null"
+            // as different from "not stated" — and the two must never diverge.
+            if let Some(d) = difficulty {
+                body["difficulty"] = json!(tier(d)?);
+            }
+            call(
+                cli,
+                Method::POST,
+                &format!("/v1/datasets/{id}/items"),
+                Some(body),
+                "",
+            )
+        }
     }
+}
+
+/// The three rungs, spelled as the wire spells them.
+///
+/// Restated here for the reason [`STRATEGIES`] is: `lt` depends on the render crate and a HTTP
+/// client, never on `lighttrack-core`, so it stays a thin operator tool that ships without the
+/// engine. The cost is this list; the server rejects anything it does not know.
+const TIERS: &[&str] = &["easy", "medium", "hard"];
+
+/// Normalise one tier spelling, refusing an unknown one here rather than sending it.
+///
+/// A silent fallback would be worse here than anywhere else in this file: an operator who typed
+/// `--difficulty hardd` and got the whole corpus back would read a mixed set as the hard tier and
+/// conclude the cheap model handles the hard cases.
+fn tier(s: &str) -> Result<&'static str> {
+    let want = s.trim().to_ascii_lowercase();
+    TIERS
+        .iter()
+        .copied()
+        .find(|t| *t == want)
+        .ok_or_else(|| anyhow::anyhow!("unknown --difficulty {s:?}: expected one of {TIERS:?}"))
 }
 
 /// The four sampling strategies and the two sources, spelled as the wire spells them.
@@ -186,6 +248,17 @@ mod tests {
         );
         assert_eq!(body["n"], 25);
         assert_eq!(body["dedupe"], true);
+    }
+
+    /// The tier reaches the wire in exactly one spelling, and a typo never becomes a full listing.
+    #[test]
+    fn a_tier_is_normalised_and_an_unknown_one_is_refused_before_the_request() {
+        assert_eq!(tier("Hard").expect("hard"), "hard");
+        assert_eq!(tier("  medium ").expect("medium"), "medium");
+        assert!(tier("hardd").is_err());
+        assert!(tier("").is_err());
+        // No fourth rung is silently accepted: the ladder the server enforces is the one `lt` sends.
+        assert!(tier("extreme").is_err());
     }
 
     #[test]

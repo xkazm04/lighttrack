@@ -343,6 +343,15 @@ pub struct BenchmarkCase {
     pub expected: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
+    /// The rung this case was graded at (M27), carried over from the `DatasetItem` it came from so
+    /// a run's stored `dataset` still says which cases were the hard ones. `None` is ungraded, not
+    /// medium — see [`crate::dataset::Difficulty`].
+    #[serde(
+        default,
+        deserialize_with = "crate::dataset::de_difficulty",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub difficulty: Option<crate::dataset::Difficulty>,
 }
 
 /// Reserved key under a benchmark's free-form `target` object carrying its opt-in recurrence
@@ -560,5 +569,30 @@ mod tests {
             );
             assert_eq!(k.is_run_case(), expect, "{k:?}");
         }
+    }
+
+    /// A benchmark stored before M27 has cases with no `difficulty` key, and a run that reads one
+    /// back and writes it again must not invent a grade for it.
+    #[test]
+    fn a_pre_m27_case_round_trips_byte_identically() {
+        let stored = r#"{"input":"2+2","expected":"4"}"#;
+        let case: BenchmarkCase = serde_json::from_str(stored).expect("parse");
+        assert_eq!(case.difficulty, None);
+        assert_eq!(serde_json::to_string(&case).expect("ser"), stored);
+    }
+
+    /// The grade a case carries is the one the dataset item was graded at, and an unreadable one
+    /// costs the field rather than the case.
+    #[test]
+    fn a_case_carries_its_rung_and_degrades_an_unknown_one() {
+        let graded: BenchmarkCase =
+            serde_json::from_value(json!({ "input": "i", "difficulty": "hard" })).expect("case");
+        assert_eq!(graded.difficulty, Some(crate::dataset::Difficulty::Hard));
+
+        let odd: BenchmarkCase =
+            serde_json::from_value(json!({ "input": "i", "difficulty": "brutal" }))
+                .expect("an unreadable grade must not take the case with it");
+        assert_eq!(odd.difficulty, None);
+        assert_eq!(odd.input, "i");
     }
 }

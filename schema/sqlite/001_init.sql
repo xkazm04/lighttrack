@@ -609,6 +609,7 @@ CREATE INDEX IF NOT EXISTS idx_use_cases_project ON use_cases(project_id, key);
 --   ALTER TABLE prompts ADD COLUMN label_history TEXT
 --   ALTER TABLE datasets ADD COLUMN parent_id TEXT
 --   ALTER TABLE dataset_items ADD COLUMN input_hash TEXT
+--   ALTER TABLE dataset_items ADD COLUMN difficulty TEXT
 --   ALTER TABLE revenue_events ADD COLUMN amount_minor INTEGER
 --   ALTER TABLE revenue_events ADD COLUMN fx_rate REAL
 --   ALTER TABLE revenue_events ADD COLUMN fx_book_version TEXT

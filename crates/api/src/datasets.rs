@@ -3,14 +3,14 @@
 //! records why an imported dataset and a traffic-sampled one age differently.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     Json,
 };
 use chrono::Utc;
 use serde::Deserialize;
 
-use lighttrack_core::{new_id, Dataset, DatasetItem};
+use lighttrack_core::{new_id, Dataset, DatasetItem, Difficulty};
 
 use crate::auth::Principal;
 use crate::error::ApiError;
@@ -103,17 +103,56 @@ pub(crate) async fn add_dataset_item(
     Ok(Json(item))
 }
 
+/// `?difficulty=` narrows a listing to one tier (M27).
+#[derive(Deserialize)]
+pub(crate) struct ItemsQuery {
+    #[serde(default)]
+    difficulty: Option<String>,
+}
+
 pub(crate) async fn list_dataset_items(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(q): Query<ItemsQuery>,
 ) -> Result<Json<Vec<DatasetItem>>, ApiError> {
     let p = authenticate(&st, &headers).await?;
+    // Parsed BEFORE the read, and refused rather than ignored: an operator who asked for `hard` and
+    // got the whole set back would read a mixed corpus as the hard tier. The same reason `lt
+    // datasets import` refuses an unknown --strategy instead of falling back to `recent`.
+    let tier = match q
+        .difficulty
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(s) => Some(Difficulty::parse(s).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "unknown difficulty {s:?}: expected one of {:?}",
+                Difficulty::ALL
+                    .iter()
+                    .map(|d| d.as_str())
+                    .collect::<Vec<_>>()
+            ))
+        })?),
+        None => None,
+    };
     load_dataset_authorized(&st, &p, &id).await?;
     let store = st.store.clone();
     let sc = p.scope_owned();
     let items = spawn_db(move || store.list_dataset_items(sc.as_deref().into(), &id)).await?;
-    Ok(Json(items))
+    // Filtered here rather than in the `Store` trait, deliberately. A dataset is a curated corpus
+    // that this method already returns whole and unpaginated, so pushing the predicate down would
+    // buy nothing and would add a filter argument three backends could each implement, forget, or
+    // quietly ignore — which is how a filter becomes advisory. One shared predicate cannot skew for
+    // one backend. Ungraded cases are excluded from every tier, because `None` is not a tier.
+    Ok(Json(match tier {
+        Some(t) => items
+            .into_iter()
+            .filter(|i| i.difficulty == Some(t))
+            .collect(),
+        None => items,
+    }))
 }
 
 pub(crate) async fn freeze_dataset(

@@ -270,7 +270,7 @@ Rendered from the declarative model in `crates/store/src/schema/tables/`, which 
 | `benchmark_runs` | 13 | 0 | 1 | `id` |
 | `model_prices` | 9 | 0 | 0 | `provider, model, effective_from` |
 | `datasets` | 8 | 1 | 1 | `id` |
-| `dataset_items` | 10 | 1 | 2 | `id` |
+| `dataset_items` | 11 | 2 | 2 | `id` |
 | `revenue_events` | 16 | 4 | 2 | `id` |
 | `collective_entries` | 18 | 6 | 2 | `contributor_id, provider, model, task_type` |
 | `relay_tasks` | 21 | 4 | 3 | `id` |
@@ -284,6 +284,6 @@ Rendered from the declarative model in `crates/store/src/schema/tables/`, which 
 | `calibrations` | 14 | 0 | 1 | `id` |
 | `use_cases` | 12 | 0 | 1 | `id` |
 
-Totals: **26 tables**, **315 columns**, of which **43** were added after their table shipped (those are `ALTER TABLE … ADD COLUMN` on every dialect, never edits to a `CREATE TABLE`). Schema fingerprint: `sha256-51fce579c7ce31f6` — the same value `GET /v1/capabilities` reports.
+Totals: **26 tables**, **316 columns**, of which **44** were added after their table shipped (those are `ALTER TABLE … ADD COLUMN` on every dialect, never edits to a `CREATE TABLE`). Schema fingerprint: `sha256-abe121849f4316e8` — the same value `GET /v1/capabilities` reports.
 
 <!-- END generated table index -->

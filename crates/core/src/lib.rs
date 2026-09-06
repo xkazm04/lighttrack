@@ -72,7 +72,7 @@ pub use collective::{
     DEFAULT_MIN_CASES, DETERMINISM_LEVELS, DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
 };
 pub use customer::{BillingProduct, Customer};
-pub use dataset::{Dataset, DatasetItem};
+pub use dataset::{Dataset, DatasetItem, Difficulty};
 pub use dataset_lineage::{
     input_fingerprint, normalize_input, ImportFilter, ImportSource, ImportSpec, SamplingStrategy,
     MAX_IMPORT_N,

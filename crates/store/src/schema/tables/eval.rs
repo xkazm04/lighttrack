@@ -167,6 +167,13 @@ pub static DATASET_ITEMS: Table = Table::new(
             "The normalised-input fingerprint near-duplicate collapse looks up instead of scanning \
              every stored case's text. Nullable, and dedupe treats NULL as \"no match\".",
         ),
+        C::new("difficulty", Text).added("M27").doc(
+            "The ordered tier this case was graded at (M27): `easy` | `medium` | `hard`, stored as \
+             the wire spelling core::Difficulty serializes. `tags` could group cases and never \
+             rank them, so nothing could ask which rungs a target actually clears. NULL is \
+             UNGRADED, never \"medium\" — every read keeps the two apart, because imputing a middle \
+             rung would file unexamined cases into the tier the routing decision reads closest.",
+        ),
     ],
 )
 .indexes(&[
