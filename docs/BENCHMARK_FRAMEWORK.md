@@ -289,7 +289,21 @@ Bonferroni-corrected α over all `m·(m−1)/2` pairs.
    count everything is indistinguishable from everything, and this sentence would confidently name
    the cheapest row in the matrix. The case count and the surviving α travel with the claim. When
    **every** candidate passes the sufficiency test the line says so explicitly and loses its bold —
-   that is a fact about the run's power, not a finding about the models.
+   that is a fact about the run's power, not a finding about the models. **A target is never its own
+   sufficiency candidate**, and this caveat is why: `superiority(best, best)` is all-zero deltas, so
+   it comes back "not significant", and counting that tautology as a test made the caveat fire
+   hardest on the *strongest* runs there are. A best target that dominates every other row is the
+   only row left on the frontier — the rows it obviously separated were removed by domination before
+   the walk saw them — and the run would announce that it could distinguish nothing, telling the
+   operator to distrust a result they should trust. So `candidates_tested` counts only genuine
+   candidates, and with none of them `all_candidates_indistinguishable` is `null` (not applicable)
+   rather than `true`.
+
+**When the best target is also the cheapest row on the frontier**, it *is* the recommendation, and
+that is a clean common outcome rather than a degenerate one: there is simply no trade-off left to
+make. It gets its own note saying nothing is given up by choosing it, and carries no `p_value` —
+there was no test. An operator who reads a bare "nothing found" concludes the tool learned nothing,
+when in fact it learned the best answer available.
 4. **An unpairable candidate is undecidable, and says so.** Two targets not scored on the same cases
    cannot be paired, so `superiority` returns `None`. That is neither sufficient nor insufficient; it
    is untested, it is listed as such, and the walk steps past it rather than accepting it.

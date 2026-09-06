@@ -67,6 +67,21 @@ struct Placed<'a> {
     p95: u64,
 }
 
+/// What the sufficiency test made of one frontier row. `IsBest` is deliberately *not* a test
+/// result: the best target is the thing candidates are measured against, so measuring it against
+/// itself is a tautology, and letting that tautology into the tally is how a run that separated
+/// everything cleanly ended up reporting that it could separate nothing.
+enum Verdict {
+    /// This row *is* the reference — no test was run, and none could be.
+    IsBest,
+    /// The run could not show the best target ahead of it, at the corrected α.
+    Sufficient(f64),
+    /// The best target is significantly ahead of it: a real difference, not a cheaper option.
+    Separated,
+    /// Not scored on the same cases, so the pair cannot be tested at all.
+    Untested,
+}
+
 /// Is `a` at least as good as `b` on every axis and strictly better on one? Quality is maximised;
 /// cost per case and **both** latency percentiles are minimised. The tail is an axis of its own
 /// because a target with a good median and a terrible p95 is exactly the trade-off a single-latency
@@ -183,37 +198,68 @@ fn analyze(input: &FrontierInput) -> (Value, Value) {
         return (frontier, no_recommendation(note, alpha, n_cases, vec![]));
     }
 
-    // The walk: cheapest frontier row first, stopping at the first the corrected test cannot
-    // separate from the best.
-    let mut undecidable: Vec<Value> = Vec::new();
-    let (mut tested, mut separated) = (0usize, 0usize);
-    let mut chosen: Option<(&Placed, f64)> = None;
-    for cand in &front {
-        match superiority(&best.scores, &cand.row.scores, n_targets) {
-            // Not "sufficient" and not "insufficient" — untested. Reported rather than skipped,
-            // because a candidate silently dropped from the walk reads as one that was considered.
-            None => undecidable.push(json!({
-                "label": cand.row.label,
+    // One verdict per frontier row, in cost order. **The best target is never its own candidate.**
+    // `superiority(best, best)` is all-zero deltas — p = 1, "not significant" — which is not
+    // evidence about anything; counting it as a test made the power caveat fire hardest on the
+    // *strongest* runs there are. When the best target dominates every other row it is the only row
+    // left on the frontier, so the self-comparison used to be the only "test" that ran, and the run
+    // announced that it could distinguish nothing — while the rows it obviously separated had been
+    // removed by domination before the walk ever saw them.
+    let verdicts: Vec<Verdict> = front
+        .iter()
+        .map(|c| {
+            if std::ptr::eq(c.row, best) {
+                return Verdict::IsBest;
+            }
+            match superiority(&best.scores, &c.row.scores, n_targets) {
+                // Not "sufficient" and not "insufficient" — untested.
+                None => Verdict::Untested,
+                Some((_, _, true)) => Verdict::Separated,
+                Some((_, p, false)) => Verdict::Sufficient(p),
+            }
+        })
+        .collect();
+    // Reported rather than skipped: a candidate silently dropped from the walk reads as one that
+    // was considered and passed.
+    let undecidable: Vec<Value> = front
+        .iter()
+        .zip(&verdicts)
+        .filter(|(_, v)| matches!(v, Verdict::Untested))
+        .map(|(c, _)| {
+            json!({
+                "label": c.row.label,
                 "reason": "not scored on the same cases as the best target, so the pair cannot be \
                            tested — untested, neither sufficient nor insufficient",
-            })),
-            Some((_, p, significant)) => {
-                tested += 1;
-                if significant {
-                    separated += 1;
-                } else if chosen.is_none() {
-                    chosen = Some((cand, p));
-                }
-            }
-        }
-    }
-    let all_indistinguishable = tested > 0 && separated == 0;
-    let Some((cand, p)) = chosen else {
-        let note = format!(
-            "no target on the frontier could be shown indistinguishable from {} — every priced \
-             candidate was either significantly worse or could not be paired with it",
-            best.label
-        );
+            })
+        })
+        .collect();
+    let tested = verdicts
+        .iter()
+        .filter(|v| matches!(v, Verdict::Sufficient(_) | Verdict::Separated))
+        .count();
+    let separated = verdicts
+        .iter()
+        .filter(|v| matches!(v, Verdict::Separated))
+        .count();
+
+    // The walk itself: cheapest row first, stopping at the first that ends it — a genuine candidate
+    // the test cannot separate, or the best target's own row, which nothing cheaper qualified ahead of.
+    let Some((cand, verdict)) = front
+        .iter()
+        .zip(&verdicts)
+        .find(|(_, v)| matches!(v, Verdict::Sufficient(_) | Verdict::IsBest))
+    else {
+        let note = if front.is_empty() {
+            "no target could be placed on the cost–quality frontier at all — every row was \
+             excluded, for the reasons listed beside it"
+                .to_string()
+        } else {
+            format!(
+                "no target on the frontier could be shown indistinguishable from {} — every priced \
+                 candidate was either significantly worse or could not be paired with it",
+                best.label
+            )
+        };
         return (
             frontier,
             no_recommendation(note, alpha, n_cases, undecidable),
@@ -221,35 +267,49 @@ fn analyze(input: &FrontierInput) -> (Value, Value) {
     };
     // "Not significantly worse" is an absence of evidence: at a small case count *everything* is
     // indistinguishable from everything, and this sentence would confidently name the cheapest row
-    // in the matrix. The count and the surviving α travel with the claim so a reader can see which
-    // of the two they are looking at.
-    let note = if all_indistinguishable {
-        format!(
+    // in the matrix. So the count and the surviving α travel with the claim — but the caveat is only
+    // a power statement when there were genuine candidates to have power *over*.
+    let all_indistinguishable = (tested > 0).then_some(separated == 0);
+    let note = match (verdict, all_indistinguishable) {
+        // The clean answer, and a common one: nothing cheaper on the surface, so there is no
+        // trade-off left to make. Said plainly, because an operator who reads a bare "nothing
+        // found" concludes the tool learned nothing, when it learned the best result available.
+        (Verdict::IsBest, _) => format!(
+            "{} is also the cheapest row on the frontier, so nothing is given up by choosing it \
+             and there is no cheaper target to trade quality against",
+            best.label
+        ),
+        (_, Some(true)) => format!(
             "every candidate on the frontier was indistinguishable from {} at n={n_cases} — that \
              is a fact about this run's power, not a finding about the models",
             best.label
-        )
-    } else {
-        format!(
+        ),
+        _ => format!(
             "the run could not show {} ahead of it at the corrected α",
             best.label
-        )
+        ),
     };
-    let rec = json!({
+    let mut rec = json!({
         "label": cand.row.label,
         "best": best.label,
         "mean": round3(cand.row.mean),
         "best_mean": round3(best.mean),
         "cost_per_case_usd": r8(cand.cost_per_case),
-        "p_value": (p * 1e6).round() / 1e6,
         "n_cases": n_cases,
         "alpha": (alpha * 1e6).round() / 1e6,
         "candidates_tested": tested,
+        // `null`, not `false`, when nothing was a genuine candidate: with none to test, "were they
+        // all indistinguishable?" has no answer rather than the answer "no".
         "all_candidates_indistinguishable": all_indistinguishable,
         "correction": format!("Bonferroni over {pairs} target pair(s), family-wise α={ALPHA}"),
         "undecidable": undecidable,
         "note": note,
     });
+    // Absent on the best's own row: there was no test, and a p of 1.0 from comparing a target with
+    // itself would read as a measured result.
+    if let Verdict::Sufficient(p) = verdict {
+        rec["p_value"] = json!((p * 1e6).round() / 1e6);
+    }
     (frontier, rec)
 }
 
@@ -466,19 +526,104 @@ mod tests {
         let (_, r) = run(&[
             row("c1", &a, 0.001, 100, 150),
             row("c2", &b, 0.002, 110, 160),
-            row("c3", &c, 0.003, 120, 170),
+            // Cheapest but slowest, so it is on the surface rather than dominated: TWO genuine
+            // candidates get tested here, which is what separates this case from the two-target one.
+            row("c3", &c, 0.0005, 300, 400),
         ]);
         assert_eq!(r["all_candidates_indistinguishable"], json!(true));
+        assert_eq!(
+            r["candidates_tested"],
+            json!(2),
+            "the two rows that are NOT the reference: {r}"
+        );
         assert!(r["note"]
             .as_str()
             .unwrap_or_default()
             .contains("fact about this run's power"));
+        assert!(
+            r["p_value"].is_number(),
+            "a genuine candidate was actually tested: {r}"
+        );
         // Three targets ⇒ 3 implicit pairs ⇒ α = 0.05/3, disclosed on the claim.
         assert_eq!(r["alpha"], json!(0.016667));
         assert!(r["correction"]
             .as_str()
             .unwrap_or_default()
             .contains("Bonferroni over 3 target pair(s)"));
+    }
+
+    /// **The strongest run there is, and the one the power caveat used to libel.** When the best
+    /// target is also the cheapest and fastest it dominates everything, so it is the *only* row left
+    /// on the frontier — and the rows it obviously separated were removed by domination before the
+    /// walk saw them. Comparing it with itself is a tautology (p = 1, "not significant"), and
+    /// counting that as a test made the run announce that it could distinguish nothing. It must
+    /// instead say the clean thing: nothing is given up by choosing the best.
+    #[test]
+    fn a_best_that_dominates_everything_is_recommended_with_no_trade_off_to_make() {
+        let (f, r) = run(&[
+            row(
+                "best-and-cheapest",
+                &[0.90, 0.92, 0.91, 0.93, 0.90, 0.92],
+                0.001,
+                100,
+                200,
+            ),
+            row(
+                "dear-and-worse",
+                &[0.60, 0.62, 0.61, 0.63, 0.60, 0.62],
+                0.010,
+                300,
+                900,
+            ),
+        ]);
+        assert_eq!(labels(&f, "non_dominated"), vec!["best-and-cheapest"]);
+        assert_eq!(r["label"], json!("best-and-cheapest"));
+        assert_eq!(r["best"], json!("best-and-cheapest"));
+        assert_eq!(
+            r["candidates_tested"],
+            json!(0),
+            "a target is never its own candidate: {r}"
+        );
+        assert_eq!(
+            r["all_candidates_indistinguishable"],
+            Value::Null,
+            "with no candidates the question has no answer, and certainly not `true`: {r}"
+        );
+        assert!(
+            r["p_value"].is_null(),
+            "a self-comparison is not a measured p: {r}"
+        );
+        let note = r["note"].as_str().unwrap_or_default();
+        assert!(
+            note.contains("nothing is given up by choosing it"),
+            "the clean answer is stated, not left as a bare absence: {note}"
+        );
+        assert!(
+            !note.contains("power"),
+            "this run had ample power — it separated the other row by domination: {note}"
+        );
+    }
+
+    /// The other side of the same rule, so the two cases cannot be satisfied by one behaviour: a
+    /// GENUINE candidate that the run cannot separate is still recommended over the best, and still
+    /// carries the real power caveat, because there really was a test that came back empty.
+    #[test]
+    fn a_genuine_indistinguishable_candidate_still_beats_the_best_on_cost() {
+        let best = [0.80, 0.71, 0.90, 0.61, 0.84, 0.75];
+        let near = [0.79, 0.72, 0.88, 0.63, 0.85, 0.77]; // marginally the higher mean
+        let (_, r) = run(&[
+            row("cheap", &best, 0.001, 100, 150),
+            row("dear", &near, 0.040, 400, 800),
+        ]);
+        assert_eq!(r["label"], json!("cheap"));
+        assert_eq!(r["best"], json!("dear"));
+        assert_eq!(r["candidates_tested"], json!(1));
+        assert_eq!(r["all_candidates_indistinguishable"], json!(true));
+        assert!(r["p_value"].is_number(), "a real test ran: {r}");
+        assert!(r["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("fact about this run's power"));
     }
 
     /// A tail-only difference is a real trade-off: `spiky` wins on p50 and loses badly on p95, so

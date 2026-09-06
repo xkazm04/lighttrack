@@ -620,6 +620,18 @@ claim, and a run in which *every* candidate passes loses the bold and says that 
 sample size rather than the models. A candidate that cannot be paired with the best is reported
 untested — neither sufficient nor insufficient — rather than silently skipped or silently accepted.
 
+**A target is never its own sufficiency candidate**, and the caveat above is exactly why. The first
+build let the walk test the best target against itself: all-zero deltas, p = 1, "not significant",
+counted as a test. That inverted the caveat's purpose. A best target that dominates every other row
+is the *only* row left on the frontier — the rows it obviously separated were removed by domination
+before the walk saw them — so the self-comparison was the only "test" that ran, and the tool told the
+operator that a run with ample power could distinguish nothing. `candidates_tested` now counts
+genuine candidates only, and with none of them `all_candidates_indistinguishable` is `null` (not
+applicable), never `true`. When the best target *is* the cheapest row on the surface it is still the
+recommendation, with its own note saying nothing is given up by choosing it and no `p_value`,
+because no test ran — a bare "nothing found" would read as a tool that learned nothing, when it
+learned the cleanest answer there is.
+
 **It is not persisted per run.** Compare mode posts one run report per target from *inside* the
 per-target loop, so a crash mid-matrix still records the targets that finished; the frontier is only
 knowable once every target is done. Stamping it on those reports would mean deferring the posts —
