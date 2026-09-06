@@ -80,7 +80,10 @@ fn flow_list(v: &str) -> Vec<String> {
 fn command_lines(md: &str) -> Vec<String> {
     fn is_command(line: &str) -> bool {
         let first = line.split_whitespace().next().unwrap_or("");
-        matches!(first, "npm" | "npx" | "pnpm" | "yarn" | "cargo" | "make" | "just" | "sh")
+        matches!(
+            first,
+            "npm" | "npx" | "pnpm" | "yarn" | "cargo" | "make" | "just" | "sh"
+        )
     }
     md.lines()
         .map(|l| l.trim().trim_start_matches("$ ").trim_start())
@@ -122,7 +125,10 @@ fn every_projection_exists_and_the_live_ones_are_pointers() {
 
     for p in &projections {
         let path = repo_root().join(p);
-        assert!(path.is_file(), "projection {p} does not exist in a fresh clone");
+        assert!(
+            path.is_file(),
+            "projection {p} does not exist in a fresh clone"
+        );
         if stale.contains(p) {
             continue; // quarantined, and asserted about below
         }
@@ -181,12 +187,18 @@ fn the_parsers_can_go_red() {
     let projections = flow_list(&guidance_value(yaml, "projections").unwrap());
     assert_eq!(projections, ["b.md", "c/d.md"]);
     assert_eq!(guidance_value(yaml, "staleProjections"), None);
-    assert!(guidance_value(yaml, "x").is_none(), "the block ends at next:");
+    assert!(
+        guidance_value(yaml, "x").is_none(),
+        "the block ends at next:"
+    );
 
     // The scaffold this whole file exists because of, in both the shapes it appears in.
     let fenced = command_lines("run it:\n```bash\nnpm run build\n```\n");
     assert_eq!(fenced, ["npm run build"]);
     assert_eq!(command_lines("- `cargo build -p x`"), Vec::<String>::new());
     assert!(command_lines("see `npm run build` for why not").is_empty());
-    assert_eq!(command_lines("$ cargo test --workspace"), ["cargo test --workspace"]);
+    assert_eq!(
+        command_lines("$ cargo test --workspace"),
+        ["cargo test --workspace"]
+    );
 }
