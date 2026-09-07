@@ -89,6 +89,21 @@ A case may be graded on the ordered ladder in §0 (`easy < medium < hard`). The 
 and it rides onto `BenchmarkCase`, so a run's stored corpus still says which cases were the hard
 ones after the dataset has moved on.
 
+**A tier is validated on write and degraded on read** (D24), and the two are deliberately different.
+
+- **Write — strict.** `POST /v1/datasets/:id/items` and each inline case of
+  `POST /v1/projects/:id/benchmarks` refuse a spelling this ladder does not name with a `400` that
+  lists the three rungs. The string was typed on purpose seconds ago, so silently storing the case
+  as ungraded produces a corpus that *reads* as graded and is not — which is exactly what happened
+  on 2026-09-07, when a live benchmark graded 8 of 18 cases `expert`, was accepted with a `200`, and
+  reported a per-tier breakdown over a corpus whose grading had been discarded. One bad rung refuses
+  the **whole** request: half a graded benchmark is the failure, not the fix. `easy`/`HARD`/`" hard "`
+  all normalise to one stored spelling; `null` and an absent key are both UNGRADED and both fine;
+  an empty string, a number and an object are refused.
+- **Read — tolerant.** A row already in storage whose tier this build does not recognise degrades to
+  UNGRADED and keeps the case (`core::dataset::de_difficulty`). A corpus exported from a system with
+  a four-rung ladder imports rather than fails, and a case nobody can read back is a case that has
+  left the corpus. Making this half strict would be a regression; a test pins both halves together.
 - `POST /v1/datasets/:id/items` takes `difficulty`; omitting it leaves the case UNGRADED, and
   nothing later fills it in.
 - `GET /v1/datasets/:id/items?difficulty=hard` narrows a listing to one rung. An unknown spelling is
@@ -355,6 +370,60 @@ reports would mean deferring the posts, trading a real durability property for a
 Persisting a matrix-level artefact needs new API surface and is a separate piece of work. A
 per-difficulty-tier frontier (§1b) is likewise out of scope: each tier has fewer cases, so the power
 disclosure above gets strictly harder, not easier.
+
+### 2c. The per-tier scorecard, and whether a tier discriminated at all
+
+The difficulty ladder (§1b) reached `BenchmarkCase` and then **nothing read it**. A live 6-target
+matrix (`{haiku,sonnet,opus}` × `{low,high}`, 2026-09-07) scored 1.00 on every `easy` and every
+`medium` case from all six targets: **36 of the run's 54 generation calls bought no information at
+all**, two thirds of its wall-clock and its spend. The framework could not say so — the scorecard
+printed six columns of aggregate means, and the finding came from a hand-written script hitting the
+API afterwards. An operator could not tell which part of their corpus was doing the work, so they
+kept paying for cases that measured nothing, and could not answer the question the tiers exist for:
+*is the cheap configuration sufficient for the easy majority of my traffic?*
+
+Two outputs, in two places, for the same reason the frontier sits where it does:
+
+- **Per target — persisted.** Each target's run report carries `tiers`: one row per non-empty
+  bucket, `{tier, mean, n_cases}`, in **ascending ladder order with `ungraded` last**. The count is
+  never optional — a mean over 2 cases and one over 40 are not the same evidence. Readable later via
+  `get_benchmark_runs`, a CI gate, and MCP.
+- **Across targets — printed only.** The matrix summary carries `tier_discrimination`: per bucket,
+  how many cases the corpus holds there, how many targets were scored on it, the low/high per-target
+  means with the targets that produced them, the **spread**, and one plain sentence. This is
+  inherently cross-target and therefore cannot live on a per-target run report; and compare mode
+  posts one run per target from *inside* its loop so a crash mid-matrix still records what finished,
+  so persisting a matrix artefact would defer those posts and trade a durability property for a
+  reporting nicety. Same trade, same answer, as §2b's stated limitation.
+
+The sentence that would have saved two thirds of that run is
+`easy: every target scored 1.00 (spread 0.00) — this tier separated no targets`. A tier every target
+**fails** is called out identically: the spread is 0 at the bottom rather than the top, and it buys
+just as little.
+
+**`ungraded` is its own bucket, never a rung.** `None` means ungraded, not medium (§1b, D20). The
+live run had 8 of its 18 cases silently ungraded, and a per-tier table that dropped them would look
+like it covered the corpus when it did not — the buckets sum to the judged case count, so a reader
+can see when the rungs alone do not. A corpus that is **entirely** ungraded produces **no table at
+all**, not an empty or zero-filled one: there is nothing to say, and a matrix with no tiers renders
+byte-identically to the way it always did.
+
+**Stated non-goal: there is no per-tier significance test and no per-tier recommendation.** The
+verdict is **descriptive** — "every target scored the same on this tier" is an observation about
+this run, not a statistical claim, and it is never dressed as one: no p-value, no α, no significance
+vocabulary. This repo has exactly one statistics path (§2a) and a second, softer statistic invented
+for a headline is where it would do the most damage. Per-tier power is dramatically worse than the
+run's: in that live matrix the tier that *did* discriminate had **three cases**, and a per-tier
+"cheapest sufficient" over three cases is precisely the confident-on-nothing failure §2b's power
+disclosure exists to prevent. What it would take: many more cases per tier — enough that each rung
+carries the case count §2a's test needs on its own, not the corpus's count divided by three. Until
+then the per-tier view tells you *where to spend your next case*, and §2a/§2b tell you *which target
+to run*.
+
+Two further honesty rules. A tier only one target reached reports `separates: null`, never `false`:
+"did it separate them?" has no answer rather than the answer "no". And where a target errored inside
+a tier, its mean covers fewer cases than the tier holds — the row carries `uneven_coverage` and the
+sentence says so, rather than leaving a complete-looking count to imply otherwise.
 
 ### After promotion — the served-version canary
 

@@ -191,6 +191,7 @@ mod costs_unpriced;
 mod credential_boundary;
 mod datasets;
 mod datasets_lineage;
+mod difficulty_input;
 mod error;
 mod events;
 mod events_admission;

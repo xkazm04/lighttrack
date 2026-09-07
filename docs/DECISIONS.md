@@ -663,3 +663,33 @@ will stop being able to** — that line was an artefact of the offset. `ALPHA`, 
 and the mode/target/`dataset_version` strictness are untouched. The position-pairing helper survives for
 `calibrate --compare-batch`, whose two vectors are built from one collection and are therefore aligned by
 construction, with a doc that now states it checks length only and names the hazard.
+
+## D24 — A difficulty tier is refused on write and degraded on read (2026-09-07)
+D20 made the tier a closed, totally ordered ladder and gave `Difficulty::ALL` the job of being "the list
+a CLI or API validates a spelling against". The listing filter did that; the write paths did not. `POST`
+a dataset item or an inline benchmark case whose `difficulty` was `expert` and the API answered **200**
+and stored `None` — the same closed vocabulary, enforced on the query string and unenforced on the body.
+Found by running, not by reading: a live model×effort benchmark on 2026-09-07 graded 8 of its 18 cases
+`expert`, all 8 were silently stored ungraded, and the per-tier analysis reported a phantom bucket —
+noticed only because a script divided by zero. Without that accident the run would have reported per-tier
+results over a corpus whose grading had been quietly discarded, which is worse than reporting nothing.
+The obvious fix — make `core::dataset::de_difficulty` strict — is wrong, and D20 already argued why:
+degrading an unknown rung to `None` is *correct for reading a stored row*, so a corpus exported from a
+system with a four-rung ladder imports rather than fails, and a case nobody can read back is a case that
+leaves the corpus. One function was doing two jobs. *Decision:* the jobs are split by **surface**, not by
+type. Reading a stored row stays tolerant, unchanged. Accepting an operator's grade is strict and lives
+at the API boundary (`crates/api/src/difficulty_input.rs`), beside `validate_target_matrix`, which
+already validates raw request JSON there for the same reason. The request shapes keep the tier as raw
+`serde_json::Value` and carry the core type through `#[serde(flatten)]`, so the refusal is an
+`ApiError::bad_request` (a 400 in the standard envelope) rather than axum's bare 422 from a failed
+deserializer, and no field is restated where it could drift. *Implication:* an unrecognised rung on
+`POST /v1/datasets/:id/items` or on any inline case of `POST /v1/projects/:id/benchmarks` is a 400 whose
+message names the three rungs from `Difficulty::ALL` — the same sentence the listing filter returns,
+because both now call `parse_stated_tier`. One bad case refuses the **whole** benchmark: dropping just
+that case would recreate the incident with a smaller blast radius. `null` and an absent key are both
+UNGRADED (`lt datasets add` already refused to let those two diverge); `"HARD"` and `" hard "` normalise,
+as the filter and the CLI already normalise them; an empty string, a number, a boolean, an array and an
+object are refused. The import and label-promotion paths accept no tier at all — mined traffic and a
+promoted verdict arrive ungraded by construction — so they needed no change. A single test pins the
+strict half and the tolerant half together, so a future change cannot collapse them into one behaviour
+without going red.

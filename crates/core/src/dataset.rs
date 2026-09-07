@@ -113,6 +113,13 @@ impl Difficulty {
 /// order and every placement is a claim nobody made. So the degrade target is the absence the
 /// field already models. That is not a coercion to the middle: `None` means *ungraded*, never
 /// *medium*, everywhere in this codebase — an absent grade is not a middling grade.
+///
+/// **This is the READ half, and making it strict would be a defect.** Accepting an operator's grade
+/// is the other job, and it is strict: a tier typed seconds ago and silently dropped produces a
+/// corpus that reads as graded and is not (an 18-case benchmark shipped 8 of them on a fourth rung
+/// that way). That refusal lives at the API boundary — `lighttrack-api`'s `difficulty_input` — so
+/// this function can stay tolerant for the case it exists for: reading back a row a *different*
+/// build wrote. A test there pins both halves together.
 pub(crate) fn de_difficulty<'de, D>(d: D) -> Result<Option<Difficulty>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -141,7 +148,8 @@ pub struct DatasetItem {
     pub tags: Vec<String>,
     /// How hard this case is meant to be (M27). `None` is **ungraded**, never "medium": nobody
     /// graded it, and imputing a middle rung would put unexamined cases into the tier the routing
-    /// decision reads most closely.
+    /// decision reads most closely. A rung an operator *states* on a write is refused when this
+    /// ladder does not name it; one read back from storage degrades — see [`de_difficulty`].
     #[serde(
         default,
         deserialize_with = "de_difficulty",

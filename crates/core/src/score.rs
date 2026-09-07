@@ -346,6 +346,11 @@ pub struct BenchmarkCase {
     /// The rung this case was graded at (M27), carried over from the `DatasetItem` it came from so
     /// a run's stored `dataset` still says which cases were the hard ones. `None` is ungraded, not
     /// medium — see [`crate::dataset::Difficulty`].
+    ///
+    /// Tolerant on the way in from storage, strict on the way in from an operator: an inline case
+    /// posted to `create_benchmark` with a rung this ladder does not name refuses the whole request
+    /// (`lighttrack-api`'s `difficulty_input`), because that is where the 8-of-18 silently-ungraded
+    /// benchmark came from. Reading the stored `dataset` column back still degrades.
     #[serde(
         default,
         deserialize_with = "crate::dataset::de_difficulty",

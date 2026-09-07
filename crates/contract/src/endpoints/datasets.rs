@@ -76,12 +76,12 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             b("expected", JsonTy::String, "golden reference answer"),
             b("context", JsonTy::String, ""),
             b("tags", JsonTy::Array, ""),
-            be("difficulty", &["easy", "medium", "hard"], "the ordered tier this case sits at; omit for UNGRADED, which is not the same as medium"),
+            be("difficulty", &["easy", "medium", "hard"], "the ordered tier this case sits at; omit for UNGRADED, which is not the same as medium. Any other spelling is a 400, never a silently ungraded case."),
         ],
         response: TypeRef::Named("DatasetItem"),
         mcp: Some(McpTool {
             name: "add_dataset_item",
-            description: "Append a case to a (non-frozen) dataset. `difficulty` grades it on an ORDERED ladder (easy < medium < hard) so a corpus can answer which rungs a target actually clears — a tag could group cases and never rank them. Omitting it leaves the case UNGRADED, which is a distinct state from medium and is never filled in.",
+            description: "Append a case to a (non-frozen) dataset. `difficulty` grades it on an ORDERED ladder (easy < medium < hard) so a corpus can answer which rungs a target actually clears — a tag could group cases and never rank them. Omitting it leaves the case UNGRADED, which is a distinct state from medium and is never filled in. A fourth rung is not invented for you: an unrecognised spelling is refused with a 400 rather than stored as ungraded.",
             read_only: false,
             args: &["id", "input", "output", "expected", "context", "tags", "difficulty"],
             ..McpTool::DEFAULT
