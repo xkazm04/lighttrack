@@ -369,7 +369,9 @@ completed — and the frontier is only knowable once every target is done. Stamp
 reports would mean deferring the posts, trading a real durability property for a reporting nicety.
 Persisting a matrix-level artefact needs new API surface and is a separate piece of work. A
 per-difficulty-tier frontier (§1b) is likewise out of scope: each tier has fewer cases, so the power
-disclosure above gets strictly harder, not easier.
+disclosure above gets strictly harder, not easier. §2c reports the tiers **descriptively** for the
+same reason — it says what the targets scored per tier and whether those numbers differed, and tests
+nothing.
 
 ### 2c. The per-tier scorecard, and whether a tier discriminated at all
 

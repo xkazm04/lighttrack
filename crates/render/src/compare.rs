@@ -4,8 +4,9 @@
 //! Input shape (built by the runner): `{ "n_cases": N, "targets": [ {label, mean, pass_rate,
 //! agreement, gen_cost_usd, judge_cost_usd, p50_latency_ms, errored} ], "best": {…} }`.
 //!
-//! `best` — when the caller supplies it — carries the runner's *tested* superiority claim, and
-//! `frontier`/`recommendation` its cost–quality surface and cheapest-sufficient pick. This layer
+//! `best` — when the caller supplies it — carries the runner's *tested* superiority claim,
+//! `frontier`/`recommendation` its cost–quality surface and cheapest-sufficient pick, and
+//! `tier_discrimination` its per-difficulty verdict (descriptive, never a test). This layer
 //! never re-derives statistics (there is one statistics path, in the runner); it only refuses to
 //! print a stronger sentence than the claim it was given. Every one of those keys is optional: a
 //! stored table rendered by the CLI or MCP has none of them and keeps exactly the columns and lines
@@ -160,6 +161,32 @@ fn recommendation_line(rec: Option<&Value>) -> Option<String> {
     ))
 }
 
+/// The per-tier discrimination verdict, printed **verbatim** from the object the runner handed us.
+///
+/// It answers a question the aggregate columns above cannot: which part of the corpus separated
+/// anything. A live 6-target run scored 1.00 on every easy and medium case from every target — two
+/// thirds of its generation calls bought no information — and the table said nothing, because the
+/// per-case difficulty never reached any statistic. This layer derives none of it: the sentence, the
+/// spread and the counts are all the runner's, and a summary without the key prints nothing at all.
+fn discrimination_block(td: Option<&Value>) -> Option<String> {
+    let td = td.filter(|t| t.is_object())?;
+    let tiers = td
+        .get("tiers")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())?;
+    let mut out = format!("\n_Per-tier discrimination — {}:_\n\n", s(td, "note"));
+    for t in tiers {
+        out.push_str(&format!(
+            "- **{}** ({} case(s), {} target(s)): {}.\n",
+            s(t, "tier"),
+            u(t, "cases"),
+            u(t, "targets"),
+            s(t, "verdict"),
+        ));
+    }
+    Some(out)
+}
+
 pub(crate) fn leaderboard(v: &Value) -> Option<String> {
     let targets = v.get("targets")?.as_array()?;
     if targets.is_empty() {
@@ -278,13 +305,60 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
     if let Some(line) = recommendation_line(v.get("recommendation")) {
         out.push_str(&line);
     }
+    // Last, and only when the run carried tiers: "which of these cases was worth running" is the
+    // question an operator asks *after* deciding which target to run, and a corpus with no grades
+    // prints exactly the table it always did.
+    if let Some(block) = discrimination_block(v.get("tier_discrimination")) {
+        out.push_str(&block);
+    }
     Some(out)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{leaderboard, recommendation_line, winner_line};
+    use super::{discrimination_block, leaderboard, recommendation_line, winner_line};
     use serde_json::json;
+
+    /// **The tier verdict is printed, in the order it was handed over, and derived from nothing.**
+    /// The renderer is given the sentence; if it ever recomputed one, a claim could differ between
+    /// the runner's stdout and the CLI/MCP rendering of the same stored summary.
+    #[test]
+    fn the_tier_verdict_is_printed_verbatim_in_the_order_given() {
+        let block = discrimination_block(Some(&json!({
+            "note": "descriptive, across targets",
+            "tiers": [
+                { "tier": "easy", "cases": 3, "targets": 6, "spread": 0.0, "separates": false,
+                  "verdict": "every target scored 1.00 (spread 0.00) — this tier separated no targets" },
+                { "tier": "hard", "cases": 3, "targets": 6, "spread": 0.5, "separates": true,
+                  "verdict": "targets ranged 0.50 (a) to 1.00 (b), spread 0.50 — this tier separated targets" },
+                { "tier": "ungraded", "cases": 8, "targets": 6, "spread": 0.0, "separates": false,
+                  "verdict": "every target scored 0.90 (spread 0.00) — the ungraded bucket separated no targets" },
+            ],
+        })))
+        .expect("a verdict renders");
+        assert!(
+            block.contains("**easy** (3 case(s), 6 target(s)): every target scored 1.00 (spread 0.00) — this tier separated no targets."),
+            "the sentence and its counts reach the reader: {block}"
+        );
+        assert!(block.contains("**hard**") && block.contains("separated targets"));
+        assert!(
+            block.contains("**ungraded** (8 case(s)"),
+            "the ungraded bucket is shown, never folded away: {block}"
+        );
+        // Ladder order, ungraded last — as handed over, never re-sorted here.
+        let order: Vec<usize> = ["**easy**", "**hard**", "**ungraded**"]
+            .iter()
+            .map(|k| block.find(k).unwrap_or(usize::MAX))
+            .collect();
+        assert!(order[0] < order[1] && order[1] < order[2], "{block}");
+        assert!(
+            block.contains("descriptive, across targets"),
+            "the descriptive framing travels with the block: {block}"
+        );
+        // Nothing at all to say → no block, exactly as `winner_line` behaves.
+        assert!(discrimination_block(None).is_none());
+        assert!(discrimination_block(Some(&json!({ "note": "x", "tiers": [] }))).is_none());
+    }
 
     /// **A tested `best` that rests on a subset must say so in the rendered line.**
     ///

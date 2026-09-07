@@ -693,3 +693,38 @@ object are refused. The import and label-promotion paths accept no tier at all �
 promoted verdict arrive ungraded by construction — so they needed no change. A single test pins the
 strict half and the tolerant half together, so a future change cannot collapse them into one behaviour
 without going red.
+
+## D25 — The per-tier verdict is descriptive, and there is no per-tier significance test (2026-09-07)
+D20 made a case's difficulty an ordered ladder and M27 carried it onto `BenchmarkCase`. Nothing then
+read it: `compare.rs` mentioned `difficulty` only inside a test fixture's comments. A live 6-target
+matrix on 2026-09-07 scored 1.00 on every `easy` and every `medium` case from all six targets — **36
+of its 54 generation calls bought no information at all**, two thirds of the run's wall-clock and
+spend — and the tool could not say so; the finding came from a hand-written script hitting the API
+afterwards. The operator's question ("is the cheap configuration sufficient for the easy majority of
+my traffic?") is the question the tiers exist for, and the scorecard answered it with six columns of
+aggregate means. *Decision:* the runner aggregates per tier and reports **two different things in two
+different places**. Per target — the mean and the **case count** per bucket, layered onto that
+target's run report, which is POSTed and therefore persisted for `get_benchmark_runs`, a CI gate and
+MCP. Across targets — the **discrimination verdict**: the spread of the per-target means on each
+bucket and a plain sentence saying whether it separated anything, on the printed matrix summary only.
+The split is not an oversight: the verdict is inherently cross-target, and compare mode posts one run
+per target from *inside* its loop so a crash mid-matrix still records what finished — deferring those
+posts to gain a persisted matrix artefact would trade a real durability property for a reporting
+nicety, exactly as D22's frontier decided. *The verdict is DESCRIPTIVE and must stay so.* "Every
+target scored 1.00 on this tier" is an observation about this run, not a statistical claim, and it
+carries no p, no α and no significance vocabulary; there is deliberately **no per-tier significance
+test and no per-tier recommendation**. This repo has one statistics path (D23, D22) and a second,
+softer statistic invented for a headline is where it would do the most damage — and per-tier power is
+dramatically worse than the run's: the tier that *did* discriminate in that live matrix had **three
+cases**, so a per-tier "cheapest sufficient" would be the confident-on-nothing failure D22's power
+disclosure exists to prevent. Lifting the non-goal needs many more cases per rung, not a softer test.
+*Implication:* `ungraded` is its own bucket, always shown when non-empty and never folded into a rung
+(D24's read-tolerance means ungraded cases are ordinary — the live run had 8 of 18), so the buckets
+sum to the judged count and a table can never imply coverage it lacks; a corpus with **no** grades
+produces no table at all rather than an empty one, and such a matrix renders byte-identically to
+before; rows are emitted in ascending ladder order with `ungraded` last, never hash order, so two
+runs of one matrix agree; a bucket only one target reached reports `separates: null`, not `false`; a
+tier every target *fails* is called out identically to one they all pass, because a spread of 0 at
+the bottom buys as little as one at the top; and the render layer prints the verdict object it is
+handed and derives nothing, so the runner's stdout and the CLI/MCP rendering of a stored summary can
+never disagree.

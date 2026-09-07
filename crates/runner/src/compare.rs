@@ -11,8 +11,8 @@ use chrono::Utc;
 use serde_json::{json, Map, Value};
 
 use lighttrack_core::{
-    family_of, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, Effort, ModelPriceRow,
-    ProviderFamily, Rubric, ScoreDetail, ScoreKind,
+    family_of, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, Difficulty, Effort,
+    ModelPriceRow, ProviderFamily, Rubric, ScoreDetail, ScoreKind,
 };
 use lighttrack_engine::{
     parse_judge_spec, probe_openai_base, same_family, Determinism, EngineConfig,
@@ -26,8 +26,9 @@ use crate::http::{get, post};
 use crate::provenance::{merge_details, weakest_reasoning};
 use crate::runctl::RunControl;
 use crate::stats::{
-    annotate_frontier, annotate_significance, annotate_verdict, paired_deltas_by_case, stability,
-    superiority, values, verdict, CaseScore, FrontierInput, FrontierRow, PairedEvidence, Summary,
+    annotate_discrimination, annotate_frontier, annotate_significance, annotate_tiers,
+    annotate_verdict, paired_deltas_by_case, stability, superiority, values, verdict, CaseScore,
+    FrontierInput, FrontierRow, PairedEvidence, Summary,
 };
 use crate::targets::ResolvedTarget;
 use crate::util::{
@@ -569,6 +570,12 @@ pub(crate) fn run_compare(
         .then(|| probe_openai_base(&Utc::now().date_naive().to_string()))
         .flatten();
 
+    // The corpus's difficulty ladder, indexed by `case id − 1` — the same 1-based identity every
+    // logged case and every `CaseScore` carries. `BenchmarkCase::difficulty` reached this function
+    // and was dropped on the floor until now, which is how a live 6-target run spent two thirds of
+    // its calls on two tiers that separated nothing and could not say so. See `stats::tiers`.
+    let case_tiers: Vec<Option<Difficulty>> = cases.iter().map(|c| c.difficulty).collect();
+
     for rt in targets {
         let t = &rt.target;
         let label = t.display_label();
@@ -948,6 +955,11 @@ pub(crate) fn run_compare(
         crate::bench::attach_cases(&mut report, "cases", case_reports);
         annotate_significance(&mut report, &summary, scalar_fallback);
         annotate_verdict(&mut report, &sig);
+        // Per-tier means and counts go on the PERSISTED run report, so a CI gate, `get_benchmark_runs`
+        // and MCP can all read later which part of the corpus this target was actually measured on.
+        // The cross-target verdict cannot live here — it is not a fact about one target — and is
+        // annotated onto the printed matrix summary below.
+        annotate_tiers(&mut report, &case_scores, &case_tiers);
         add_price_warnings(&mut report, &price_warnings);
         crate::bench::stamp_pins(&mut report, bench, report_extra);
         let run = json!({
@@ -1071,6 +1083,19 @@ pub(crate) fn run_compare(
             },
         },
     );
+    // Which tiers of the corpus actually did any work, across targets. Printed rather than persisted,
+    // for the same reason the frontier is: it is inherently cross-target, and the per-target run
+    // reports are posted from inside the loop above so a crash mid-matrix still records what
+    // finished. Descriptive — it reports the spread of the per-tier means and says whether they
+    // differed; it does not test anything, and there is deliberately no per-tier recommendation.
+    annotate_discrimination(
+        &mut summary,
+        &per_target
+            .iter()
+            .map(|(label, _, scores)| (label.as_str(), scores.as_slice()))
+            .collect::<Vec<_>>(),
+        &case_tiers,
+    );
     match lighttrack_render::render("compare", &summary) {
         Some(md) => println!("\n{md}"),
         None => println!("\n{}", serde_json::to_string_pretty(&summary)?),
@@ -1088,7 +1113,8 @@ pub(crate) fn run_compare(
 #[cfg(test)]
 mod tests {
     use super::{
-        annotate_frontier, best_claim, r3, Admit, FrontierInput, FrontierRow, TargetHealth,
+        annotate_discrimination, annotate_frontier, best_claim, r3, Admit, Difficulty,
+        FrontierInput, FrontierRow, TargetHealth,
     };
     use super::{CaseScore, Value, OPEN_AFTER_FAILURES};
     use crate::util::parallel_map;
@@ -1309,6 +1335,122 @@ mod tests {
                 && md.contains("halted at its spend ceiling"),
             "the refusal names the stop condition: {md}"
         );
+    }
+
+    /// A summary of `n` bare leaderboard rows — enough for the render layer, which is all these two
+    /// tests need beside the tier block.
+    fn plain_summary(labels: &[&str]) -> Value {
+        json!({
+            "n_cases": 6, "status": "no_baseline",
+            "targets": labels.iter().map(|l| json!({ "label": l, "mean": 0.9, "errored": 0 }))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    /// **THE LIVE RUN, through the whole seam.** Round 1 of the 2026-09-07 matrix: six targets, an
+    /// `easy` tier every one of them scored 1.00 on, a `hard` tier they differed on. 36 of that
+    /// run's 54 generation calls bought no information and the rendered table could not say so —
+    /// the difficulty reached the runner and no statistic ever read it.
+    ///
+    /// The verdict is computed in the runner and only *printed* by the renderer, so a sentence that
+    /// exists on one side of that seam and not the other is worth nothing — and it is the seam each
+    /// crate's own unit tests mock away.
+    #[test]
+    fn the_tier_verdict_reaches_the_rendered_matrix_summary() {
+        let tiers: Vec<Option<Difficulty>> = ["easy", "easy", "easy", "hard", "hard", "hard"]
+            .iter()
+            .map(|s| Difficulty::parse(s))
+            .collect();
+        let labels = [
+            "haiku@low",
+            "haiku@high",
+            "sonnet@low",
+            "sonnet@high",
+            "opus@low",
+            "opus@high",
+        ];
+        let hard = [
+            [0.5, 0.5, 0.5],
+            [1.0, 0.5, 0.5],
+            [1.0, 1.0, 0.5],
+            [1.0, 1.0, 1.0],
+            [0.5, 1.0, 0.5],
+            [0.5, 0.5, 1.0],
+        ];
+        let scored: Vec<(&str, Vec<CaseScore>)> = labels
+            .iter()
+            .zip(hard)
+            .map(|(l, h)| {
+                let mut s = vec![1.0, 1.0, 1.0];
+                s.extend(h);
+                (*l, seq(&s))
+            })
+            .collect();
+        let mut summary = plain_summary(&labels);
+        annotate_discrimination(
+            &mut summary,
+            &scored
+                .iter()
+                .map(|(l, s)| (*l, s.as_slice()))
+                .collect::<Vec<_>>(),
+            &tiers,
+        );
+        let md = lighttrack_render::render("compare", &summary).unwrap_or_default();
+        assert!(
+            md.contains(
+                "**easy** (3 case(s), 6 target(s)): every target scored 1.00 (spread 0.00) \
+                         — this tier separated no targets."
+            ),
+            "the sentence that would have saved two thirds of the run must reach the reader: {md}"
+        );
+        assert!(
+            md.contains("**hard**") && md.contains("this tier separated targets"),
+            "and the tier that DID discriminate must be named as such: {md}"
+        );
+        // Descriptive, not inferential: no significance vocabulary anywhere in the block.
+        let block = md
+            .split("Per-tier discrimination")
+            .nth(1)
+            .unwrap_or_default();
+        for banned in ["p=", "α", "significant"] {
+            assert!(
+                !block.contains(banned),
+                "'{banned}' dressed a descriptive verdict as a test: {block}"
+            );
+        }
+    }
+
+    /// **The compatibility gate at the seam.** A matrix whose cases carry no grades at all must
+    /// render the *bytes* it rendered before this existed — no block, no empty table, no zero-filled
+    /// ungraded row. Half the real corpora out there have no difficulty column.
+    #[test]
+    fn an_ungraded_matrix_renders_byte_identically() {
+        let labels = ["a", "b"];
+        let before =
+            lighttrack_render::render("compare", &plain_summary(&labels)).unwrap_or_default();
+        let scored: Vec<(&str, Vec<CaseScore>)> = labels
+            .iter()
+            .map(|l| (*l, seq(&[0.9, 0.8, 0.7, 0.6, 0.5, 0.4])))
+            .collect();
+        let mut summary = plain_summary(&labels);
+        annotate_discrimination(
+            &mut summary,
+            &scored
+                .iter()
+                .map(|(l, s)| (*l, s.as_slice()))
+                .collect::<Vec<_>>(),
+            &[None; 6],
+        );
+        assert!(
+            summary.get("tier_discrimination").is_none(),
+            "an ungraded corpus earns no block: {summary}"
+        );
+        assert_eq!(
+            lighttrack_render::render("compare", &summary).unwrap_or_default(),
+            before,
+            "an ungraded run must render exactly what it rendered before"
+        );
+        assert!(!before.is_empty() && !before.contains("Per-tier"));
     }
 
     fn approx(a: f64, b: f64) -> bool {

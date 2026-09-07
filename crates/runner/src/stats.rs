@@ -9,17 +9,22 @@
 //!   behind any "B beats A" claim.
 //! - [`frontier`] — the cost–quality non-dominated set and the cheapest-sufficient recommendation,
 //!   which reads [`paired`]'s superiority test in reverse rather than inventing a softer one.
+//! - [`tiers`] — the per-difficulty scorecard and the cross-target discrimination verdict. The one
+//!   member of this module that is **descriptive**: it reports what the run's targets scored per
+//!   tier and whether those numbers differed, and never tests it. See its module doc for why.
 
 pub(crate) mod cases;
 mod frontier;
 mod normal;
 pub(crate) mod paired;
+mod tiers;
 
 use serde_json::{json, Value};
 
 pub(crate) use cases::{paired_deltas_by_case, values, CaseScore};
 pub(crate) use frontier::{annotate_frontier, FrontierInput, FrontierRow};
 pub(crate) use paired::{annotate_verdict, superiority, verdict, PairedEvidence};
+pub(crate) use tiers::{annotate_discrimination, annotate_tiers};
 
 /// z for a ~95% two-sided normal confidence interval.
 pub(crate) const Z_95: f64 = 1.959_963_984_540_054;
