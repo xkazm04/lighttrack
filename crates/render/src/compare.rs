@@ -15,6 +15,25 @@ use serde_json::Value;
 
 use crate::md::{f, money, opt_b, opt_f, opt_s, opt_u, pct, s, u, Align, Table};
 
+/// The caveats a claim carries, as one trailing sentence — or nothing when it carries none.
+///
+/// Printed on **both** branches, and the significant one is why this exists. A `best` that rests on
+/// a subset of the cases (the targets errored on different ones, so the paired test ran over their
+/// intersection) is still a real, tested claim — and rendering it as a bare "significantly ahead"
+/// would hide the one fact a reader needs to weigh it. This layer derives nothing: the runner
+/// decides what the caveats are, and an empty list prints nothing at all.
+fn caveat_txt(b: &Value) -> String {
+    let cs: Vec<&str> = b
+        .get("caveats")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if cs.is_empty() {
+        return String::new();
+    }
+    format!(" Caveat: {}.", cs.join("; "))
+}
+
 /// The winner line. With a tested claim we say "Best" only when the separation is real, and name the
 /// correction; without one we say "Highest mean" — true of the sample, and not a claim about models.
 fn winner_line(best: Option<&Value>, fallback: Option<(&str, f64)>) -> Option<String> {
@@ -31,12 +50,13 @@ fn winner_line(best: Option<&Value>, fallback: Option<(&str, f64)>) -> Option<St
         .and_then(Value::as_str)
         .unwrap_or("uncorrected");
     let p = b.get("p_value").and_then(Value::as_f64);
+    let caveats = caveat_txt(b);
     if b.get("significant").and_then(Value::as_bool) == Some(true) {
         let runner_up = s(b, "runner_up");
         let p_txt = p.map(|p| format!(", p={p:.4}")).unwrap_or_default();
         return Some(format!(
             "\n**Best: {label} ({mean:.2})** — significantly ahead of {runner_up}{p_txt}; \
-             {correction}.\n"
+             {correction}.{caveats}\n"
         ));
     }
     let note = b
@@ -47,7 +67,7 @@ fn winner_line(best: Option<&Value>, fallback: Option<(&str, f64)>) -> Option<St
         .map(|p| format!(" (p={p:.4}; {correction})"))
         .unwrap_or_default();
     Some(format!(
-        "\nHighest mean: {label} ({mean:.2}) — {note}{p_txt}.\n"
+        "\nHighest mean: {label} ({mean:.2}) — {note}{p_txt}.{caveats}\n"
     ))
 }
 
@@ -265,6 +285,79 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
 mod tests {
     use super::{leaderboard, recommendation_line, winner_line};
     use serde_json::json;
+
+    /// **A tested `best` that rests on a subset must say so in the rendered line.**
+    ///
+    /// The significant branch used to return early with a bare "significantly ahead", so a claim
+    /// whose targets errored on different cases — paired over their intersection, with cases
+    /// dropped — rendered as an unqualified winner. The runner printed the caveat to its own stdout,
+    /// which does not help the two other consumers of this table: the CLI and MCP render from here.
+    #[test]
+    fn a_significant_best_still_prints_the_caveat_it_carries() {
+        let line = winner_line(
+            Some(&json!({
+                "label": "a", "mean": 0.85, "runner_up": "b", "significant": true,
+                "p_value": 0.0012, "n_cases": 4, "cases_dropped": 2,
+                "correction": "Bonferroni over 1 target pair(s)",
+                "caveats": ["2 case(s) were judged by only one of the two targets"],
+            })),
+            None,
+        )
+        .expect("a claim renders");
+        assert!(line.contains("**Best: a (0.85)**"), "{line}");
+        assert!(
+            line.contains("Caveat: 2 case(s) were judged by only one of the two targets."),
+            "the subset reaches the RENDERED line, not just the runner's stdout: {line}"
+        );
+    }
+
+    /// The same on the weaker branch, and both caveats when there are two.
+    #[test]
+    fn an_untested_claim_prints_its_caveats_too() {
+        let line = winner_line(
+            Some(&json!({
+                "label": "a", "mean": 0.5, "significant": false,
+                "note": "no significant difference from the runner-up",
+                "caveats": ["first thing", "second thing"],
+            })),
+            None,
+        )
+        .expect("a claim renders");
+        assert!(
+            line.contains("Caveat: first thing; second thing."),
+            "{line}"
+        );
+    }
+
+    /// And a claim with no caveats gains no punctuation and no empty "Caveat:" — the compatibility
+    /// half, which is what stops this being a cosmetic change to every table that already existed.
+    #[test]
+    fn a_claim_without_caveats_is_unchanged() {
+        let clean = winner_line(
+            Some(&json!({
+                "label": "a", "mean": 0.85, "runner_up": "b", "significant": true,
+                "p_value": 0.0012, "correction": "Bonferroni over 1 target pair(s)",
+            })),
+            None,
+        )
+        .expect("a claim renders");
+        assert!(!clean.contains("Caveat"), "{clean}");
+        assert!(
+            clean.ends_with("Bonferroni over 1 target pair(s).\n"),
+            "{clean}"
+        );
+        // An empty array is the same as an absent one.
+        let empty = winner_line(
+            Some(&json!({
+                "label": "a", "mean": 0.85, "runner_up": "b", "significant": true,
+                "p_value": 0.0012, "correction": "Bonferroni over 1 target pair(s)",
+                "caveats": [],
+            })),
+            None,
+        )
+        .expect("a claim renders");
+        assert_eq!(clean, empty, "an empty caveat list changes nothing");
+    }
 
     /// **The compatibility gate.** A summary with no `frontier`/`recommendation` — every stored
     /// table the CLI and MCP render, and every run made before this existed — must produce the
