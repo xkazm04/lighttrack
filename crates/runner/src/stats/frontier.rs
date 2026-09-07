@@ -22,8 +22,9 @@
 
 use serde_json::{json, Value};
 
+use super::cases::{CaseScore, Unpairable};
 use super::normal::bonferroni_alpha;
-use super::paired::{superiority, ALPHA};
+use super::paired::{superiority, Superiority, ALPHA};
 use super::{round3, EPS};
 
 /// One target as the frontier sees it: the axes, plus the raw facts that decide whether it may be
@@ -44,8 +45,10 @@ pub(crate) struct FrontierRow {
     pub(crate) gen_unpriced: bool,
     pub(crate) p50_ms: Option<u64>,
     pub(crate) p95_ms: Option<u64>,
-    /// Per-case scores in case order — what the paired sufficiency test needs.
-    pub(crate) scores: Vec<f64>,
+    /// Per-case scores, each carrying the case it measured. Identified rather than bare, because the
+    /// sufficiency test pairs them against the best target's — and two targets that errored on
+    /// different cases arrive here the same length and one position out.
+    pub(crate) scores: Vec<CaseScore>,
 }
 
 /// What the frontier needs from the run that is not a per-target fact.
@@ -74,12 +77,15 @@ struct Placed<'a> {
 enum Verdict {
     /// This row *is* the reference — no test was run, and none could be.
     IsBest,
-    /// The run could not show the best target ahead of it, at the corrected α.
-    Sufficient(f64),
+    /// The run could not show the best target ahead of it, at the corrected α. Carries the whole
+    /// test, because the n it ran over is the intersection of two case sets and not either row's
+    /// case count — and that n is the power the recommendation rests on.
+    Sufficient(Superiority),
     /// The best target is significantly ahead of it: a real difference, not a cheaper option.
     Separated,
-    /// Not scored on the same cases, so the pair cannot be tested at all.
-    Untested,
+    /// Not pairable with the best target, with the reason: disjoint case sets, a single shared case,
+    /// or a report that names one case twice are three different things to tell an operator.
+    Untested(Unpairable),
 }
 
 /// Is `a` at least as good as `b` on every axis and strictly better on one? Quality is maximised;
@@ -212,10 +218,10 @@ fn analyze(input: &FrontierInput) -> (Value, Value) {
                 return Verdict::IsBest;
             }
             match superiority(&best.scores, &c.row.scores, n_targets) {
-                // Not "sufficient" and not "insufficient" — untested.
-                None => Verdict::Untested,
-                Some((_, _, true)) => Verdict::Separated,
-                Some((_, p, false)) => Verdict::Sufficient(p),
+                // Not "sufficient" and not "insufficient" — untested, and the reason is kept.
+                Err(e) => Verdict::Untested(e),
+                Ok(s) if s.significant => Verdict::Separated,
+                Ok(s) => Verdict::Sufficient(s),
             }
         })
         .collect();
@@ -224,13 +230,12 @@ fn analyze(input: &FrontierInput) -> (Value, Value) {
     let undecidable: Vec<Value> = front
         .iter()
         .zip(&verdicts)
-        .filter(|(_, v)| matches!(v, Verdict::Untested))
-        .map(|(c, _)| {
-            json!({
+        .filter_map(|(c, v)| match v {
+            Verdict::Untested(e) => Some(json!({
                 "label": c.row.label,
-                "reason": "not scored on the same cases as the best target, so the pair cannot be \
-                           tested — untested, neither sufficient nor insufficient",
-            })
+                "reason": format!("cannot be paired with the best target — {}", e.reason()),
+            })),
+            _ => None,
         })
         .collect();
     let tested = verdicts
@@ -270,6 +275,14 @@ fn analyze(input: &FrontierInput) -> (Value, Value) {
     // in the matrix. So the count and the surviving α travel with the claim — but the caveat is only
     // a power statement when there were genuine candidates to have power *over*.
     let all_indistinguishable = (tested > 0).then_some(separated == 0);
+    // The n behind *this* claim is the cases the recommended row and the best target were BOTH
+    // judged on — not the best target's own case count, which is the same number only when nothing
+    // errored. A recommendation rests on an absence of evidence, so overstating the sample that
+    // produced the absence is the one direction this must never quietly go.
+    let (tested_n, dropped) = match verdict {
+        Verdict::Sufficient(s) => (s.retained, s.dropped),
+        _ => (n_cases, 0),
+    };
     let note = match (verdict, all_indistinguishable) {
         // The clean answer, and a common one: nothing cheaper on the surface, so there is no
         // trade-off left to make. Said plainly, because an operator who reads a bare "nothing
@@ -280,7 +293,7 @@ fn analyze(input: &FrontierInput) -> (Value, Value) {
             best.label
         ),
         (_, Some(true)) => format!(
-            "every candidate on the frontier was indistinguishable from {} at n={n_cases} — that \
+            "every candidate on the frontier was indistinguishable from {} at n={tested_n} — that \
              is a fact about this run's power, not a finding about the models",
             best.label
         ),
@@ -289,13 +302,28 @@ fn analyze(input: &FrontierInput) -> (Value, Value) {
             best.label
         ),
     };
+    // A subset pairing is a valid test over fewer cases, so it recommends — and says how much of the
+    // run it left out. A target that errors on the hard cases leaves an easier intersection, which
+    // makes "indistinguishable from the best" generalise less than the bare sentence suggests.
+    let note = if dropped > 0 {
+        format!(
+            "{note}. Paired on the {tested_n} case(s) both were judged on; {dropped} case(s) were \
+             judged by only one of them and are not in this test"
+        )
+    } else {
+        note
+    };
     let mut rec = json!({
         "label": cand.row.label,
         "best": best.label,
         "mean": round3(cand.row.mean),
         "best_mean": round3(best.mean),
         "cost_per_case_usd": r8(cand.cost_per_case),
-        "n_cases": n_cases,
+        "n_cases": tested_n,
+        // How many of the union of the two case sets the pairing had to leave out. 0 on a clean run,
+        // and on the best target's own row, where no test ran at all.
+        "cases_dropped": dropped,
+        "best_judged_cases": n_cases,
         "alpha": (alpha * 1e6).round() / 1e6,
         "candidates_tested": tested,
         // `null`, not `false`, when nothing was a genuine candidate: with none to test, "were they
@@ -307,8 +335,8 @@ fn analyze(input: &FrontierInput) -> (Value, Value) {
     });
     // Absent on the best's own row: there was no test, and a p of 1.0 from comparing a target with
     // itself would read as a measured result.
-    if let Verdict::Sufficient(p) = verdict {
-        rec["p_value"] = json!((p * 1e6).round() / 1e6);
+    if let Verdict::Sufficient(s) = verdict {
+        rec["p_value"] = json!((s.p * 1e6).round() / 1e6);
     }
     (frontier, rec)
 }
@@ -329,8 +357,22 @@ mod tests {
     use super::*;
 
     /// A row with everything known: quality, per-case cost (as a total over `n` cases), both
-    /// latencies, and per-case scores.
+    /// latencies, and per-case scores over cases 1..n (the shape a target with no errored cell has).
     fn row(label: &str, scores: &[f64], cost_per_case: f64, p50: u64, p95: u64) -> FrontierRow {
+        let cases: Vec<u32> = (1..=scores.len() as u32).collect();
+        at_cases(label, &cases, scores, cost_per_case, p50, p95)
+    }
+
+    /// The same row, over an explicit set of case ids — for the targets that errored on some.
+    fn at_cases(
+        label: &str,
+        cases: &[u32],
+        scores: &[f64],
+        cost_per_case: f64,
+        p50: u64,
+        p95: u64,
+    ) -> FrontierRow {
+        assert_eq!(cases.len(), scores.len());
         let n = scores.len().max(1) as u32;
         FrontierRow {
             label: label.into(),
@@ -340,7 +382,11 @@ mod tests {
             gen_unpriced: false,
             p50_ms: Some(p50),
             p95_ms: Some(p95),
-            scores: scores.to_vec(),
+            scores: cases
+                .iter()
+                .zip(scores)
+                .map(|(c, s)| CaseScore::new(*c, *s))
+                .collect(),
         }
     }
 
@@ -490,28 +536,96 @@ mod tests {
             .contains("nothing to be cheaper than"));
     }
 
-    /// A candidate scored on a different number of cases cannot be paired with the best, so it is
-    /// neither accepted nor quietly dropped: it is reported untested, and the walk continues past it.
+    /// A candidate that shares no case with the best cannot be paired with it, so it is neither
+    /// accepted nor quietly dropped: it is reported untested, and the walk continues past it.
+    ///
+    /// *(This test used to make `short` unpairable by giving it a shorter **vector** — two scores
+    /// against six. Under by-case alignment that is cases 1 and 2 of the same dataset and pairs
+    /// perfectly well, which is the whole point of the change; the unpairable case is now a genuine
+    /// difference of case identity. It pins something the old version could not: that "unpairable"
+    /// is decided by which cases were judged, not by how many.)*
     #[test]
     fn an_unpairable_candidate_is_reported_untested() {
         let near = [0.79, 0.72, 0.88, 0.63, 0.85, 0.77];
         let dear = [0.80, 0.71, 0.90, 0.61, 0.84, 0.75];
-        // `short` errored out of four of its six cases, so it is cheapest and fastest — on the
-        // frontier — and cannot be paired with anything.
+        // `stray` scored only cases 7 and 8 — no case in common with the six-case rows — so it is
+        // cheapest and fastest, on the frontier, and cannot be paired with anything.
         let (_, r) = run(&[
-            row("short", &[0.50, 0.52], 0.0005, 50, 60),
+            at_cases("stray", &[7, 8], &[0.50, 0.52], 0.0005, 50, 60),
             row("cheap", &near, 0.001, 100, 150),
             row("dear", &dear, 0.040, 400, 800),
         ]);
-        assert_eq!(labels(&r, "undecidable"), vec!["short"]);
-        assert!(r["undecidable"][0]["reason"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("untested"));
+        assert_eq!(labels(&r, "undecidable"), vec!["stray"]);
+        let reason = r["undecidable"][0]["reason"].as_str().unwrap_or_default();
+        assert!(
+            reason.contains("untested") && reason.contains("no case was judged in both"),
+            "the refusal names WHICH refusal it is: {reason}"
+        );
         assert_eq!(
             r["label"],
             json!("cheap"),
             "the walk steps past an untested row rather than accepting it: {r}"
+        );
+    }
+
+    /// **The partial-overlap cell, at the level that spends money on the answer.** `patchy` errored
+    /// on cases 5 and 6 — where the best target happens to be strong — so a naive positional pairing
+    /// would difference its case-1..4 scores against the best's case-3..6 scores. It is neither
+    /// refused nor paired blind: it is tested over the four cases both judged, recommended on that
+    /// evidence, and the recommendation carries the REDUCED n and the drop count.
+    #[test]
+    fn a_partial_overlap_is_tested_over_the_intersection_with_its_n_disclosed() {
+        let best = [0.70, 0.72, 0.71, 0.73, 0.95, 0.96];
+        let patchy = [0.71, 0.71, 0.72, 0.72];
+        let (_, r) = run(&[
+            at_cases("patchy", &[1, 2, 3, 4], &patchy, 0.001, 100, 150),
+            row("dear", &best, 0.040, 400, 800),
+        ]);
+        assert_eq!(r["label"], json!("patchy"), "{r}");
+        assert_eq!(r["best"], json!("dear"));
+        assert_eq!(
+            r["n_cases"],
+            json!(4),
+            "the power disclosure is the PAIRED n, not the best target's six: {r}"
+        );
+        assert_eq!(r["cases_dropped"], json!(2), "{r}");
+        assert_eq!(r["best_judged_cases"], json!(6));
+        let note = r["note"].as_str().unwrap_or_default();
+        assert!(
+            note.contains("4 case(s) both were judged on") && note.contains("2 case(s)"),
+            "the subset is disclosed in the sentence a reader actually sees: {note}"
+        );
+        assert!(r["p_value"].is_number(), "a real test ran: {r}");
+        // A complete run over the same rows keeps a clean sentence — otherwise this test would pass
+        // on code that always claims a subset.
+        let (_, clean) = run(&[
+            row("patchy", &best, 0.001, 100, 150),
+            row("dear", &best, 0.040, 400, 800),
+        ]);
+        assert_eq!(clean["cases_dropped"], json!(0));
+        assert!(!clean["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("judged by only one"));
+    }
+
+    /// Two rows that share exactly one case are not "the same cases" and not "different cases" —
+    /// they are untestable, and the refusal says which of the two it is rather than collapsing both
+    /// into one anonymous absence.
+    #[test]
+    fn a_single_shared_case_is_its_own_refusal() {
+        let best = [0.90, 0.85, 0.92, 0.88, 0.91, 0.87];
+        let (_, r) = run(&[
+            at_cases("touching", &[6, 9], &[0.50, 0.52], 0.0005, 50, 60),
+            row("dear", &best, 0.040, 400, 800),
+        ]);
+        assert_eq!(labels(&r, "undecidable"), vec!["touching"]);
+        assert!(
+            r["undecidable"][0]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("only 1 case was judged in both"),
+            "a one-case overlap is not the same fact as no overlap: {r}"
         );
     }
 

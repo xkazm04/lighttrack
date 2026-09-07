@@ -638,3 +638,28 @@ knowable once every target is done. Stamping it on those reports would mean defe
 trading a real durability property for a reporting nicety. So it lives in the printed/rendered
 summary only, and that limitation is stated in `BENCHMARK_FRAMEWORK.md` §2b rather than left for a
 reader to discover by querying for a key that is not there.
+
+## D23 — Paired tests align on case identity, and a differing case set is intersected, not ignored (2026-09-07)
+Every paired claim the runner made — the regression verdict, the leaderboard's `best`, and the
+frontier's cheapest-sufficient recommendation — paired two score vectors **by position**, having
+verified only that they were the same **length**. That is not the same check, and the difference is not
+theoretical: a compare run's per-case vector is compacted past errored cells, so a vector index is a
+position among *judged* cases rather than a case number, and the per-target circuit breaker makes
+differing case sets routine. Two targets that each failed a different case arrived with equal lengths
+and misaligned positions. Pairing the wrong cases is worse than not pairing: it **adds** between-case
+variance to the deltas while the paired stderr still claims it was removed, so the verdict is wrong
+*and* overconfident — the failure mode the paired design exists to prevent, arriving through the guard
+meant to prevent it. *Decision:* per-case scores carry the 1-based case index the run report already
+persisted (`{"case": i + 1, …}`, written since `962e04a`) and pairing aligns on it; where the two case
+sets differ the test runs over their **intersection**, because refusing on any single lost case would
+delete the tested `best` line from most real matrices and buy no correctness. *Implication:* the reduced
+n is the n disclosed beside every p (`paired_cases`, `best.n_cases`, `recommendation.n_cases`) and the
+dropped count travels with it; a subset pairing is caveated (an easier intersection generalises less);
+an unpairable pair names *which* refusal it is rather than returning an anonymous absence; a
+preview-limited baseline (`cases_truncated`) is now usable over its prefix and flagged as a systematic
+subset, where the old count match yielded no baseline at all; and a report predating per-case identity
+is refused as a baseline rather than paired by position. **Some runs that used to print a tested `best`
+will stop being able to** — that line was an artefact of the offset. `ALPHA`, the Bonferroni correction
+and the mode/target/`dataset_version` strictness are untouched. The position-pairing helper survives for
+`calibrate --compare-batch`, whose two vectors are built from one collection and are therefore aligned by
+construction, with a doc that now states it checks length only and names the hazard.

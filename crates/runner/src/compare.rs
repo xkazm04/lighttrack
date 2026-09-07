@@ -26,8 +26,8 @@ use crate::http::{get, post};
 use crate::provenance::{merge_details, weakest_reasoning};
 use crate::runctl::RunControl;
 use crate::stats::{
-    annotate_frontier, annotate_significance, annotate_verdict, paired_deltas, stability,
-    superiority, verdict, FrontierInput, FrontierRow, Summary,
+    annotate_frontier, annotate_significance, annotate_verdict, paired_deltas_by_case, stability,
+    superiority, values, verdict, CaseScore, FrontierInput, FrontierRow, PairedEvidence, Summary,
 };
 use crate::targets::ResolvedTarget;
 use crate::util::{
@@ -359,12 +359,13 @@ fn r3(x: f64) -> f64 {
 ///
 /// A bare argmax over means is not a finding: two targets 0.01 apart with wide overlapping intervals
 /// used to get a bold "Best mean" line. The top target is tested against the runner-up **paired**, on
-/// the cases both were scored on, at α corrected across every pair a "best" claim implicitly chose
-/// between (`m·(m−1)/2`, since the pair was picked *after* seeing the means). When the separation
-/// isn't real the claim is downgraded to "highest mean, not significantly ahead" — a fact about the
-/// sample, not about the models.
-fn best_claim(per_target: &[(String, f64, Vec<f64>)]) -> Value {
-    let mut ranked: Vec<&(String, f64, Vec<f64>)> = per_target
+/// the cases both were scored on — matched by case id, because the two vectors are compacted past
+/// each target's own errored cells and so line up by count long before they line up by case — at α
+/// corrected across every pair a "best" claim implicitly chose between (`m·(m−1)/2`, since the pair
+/// was picked *after* seeing the means). When the separation isn't real the claim is downgraded to
+/// "highest mean, not significantly ahead" — a fact about the sample, not about the models.
+fn best_claim(per_target: &[(String, f64, Vec<CaseScore>)]) -> Value {
+    let mut ranked: Vec<&(String, f64, Vec<CaseScore>)> = per_target
         .iter()
         .filter(|(_, _, cs)| !cs.is_empty())
         .collect();
@@ -388,22 +389,39 @@ fn best_claim(per_target: &[(String, f64, Vec<f64>)]) -> Value {
             claim["runner_up"] = json!(second.0);
             claim["runner_up_mean"] = json!(r3(second.1));
             match superiority(&top.2, &second.2, n) {
-                Some((delta, p, significant)) => {
-                    claim["mean_delta"] = json!(r3(delta));
-                    claim["p_value"] = json!((p * 1e6).round() / 1e6);
-                    claim["significant"] = json!(significant);
-                    if !significant {
+                Ok(s) => {
+                    claim["mean_delta"] = json!(r3(s.mean_delta));
+                    claim["p_value"] = json!((s.p * 1e6).round() / 1e6);
+                    claim["significant"] = json!(s.significant);
+                    // The n behind the claim is the cases BOTH targets judged — never either
+                    // target's own count, and never the run's. A `best` line whose p came from four
+                    // cases must not be read against the twelve in the table above it.
+                    claim["n_cases"] = json!(s.retained);
+                    claim["cases_dropped"] = json!(s.dropped);
+                    if s.dropped > 0 {
+                        claim["caveats"] = json!([format!(
+                            "paired on the {} case(s) {} and {} were both judged on; {} case(s) \
+                             were judged by only one of them and are not in this test. A target \
+                             that errors on the hard cases leaves an easier intersection, so this \
+                             gap generalises less than the table's case count suggests",
+                            s.retained, top.0, second.0, s.dropped
+                        )]);
+                    }
+                    if !s.significant {
                         claim["note"] = json!(
                             "no significant difference from the runner-up at the corrected α — the \
                              ranking is not decidable at this sample size"
                         );
                     }
                 }
-                None => {
-                    claim["note"] = json!(
-                        "the top two targets were not scored on the same cases, so their gap cannot \
-                         be tested"
-                    );
+                Err(e) => {
+                    // No test ran, so there is no n — `0`, not the run's case count, which would
+                    // read as a test that found nothing over a full sample.
+                    claim["n_cases"] = json!(0);
+                    claim["note"] = json!(format!(
+                        "the top two targets' gap cannot be tested — {}",
+                        e.reason()
+                    ));
                 }
             }
         }
@@ -488,8 +506,10 @@ pub(crate) fn run_compare(
     // Per-target verdicts vs the benchmark baseline, rolled up into one honest run-level status below.
     let mut statuses: Vec<String> = Vec::new();
     // Per-target case scores, kept so the leaderboard's "best" claim can be tested — paired, on the
-    // cases both targets were actually scored on — instead of asserted by argmax.
-    let mut per_target: Vec<(String, f64, Vec<f64>)> = Vec::new();
+    // cases both targets were actually scored on — instead of asserted by argmax. Case-identified,
+    // because these vectors are compacted past each target's errored cells: two targets that failed
+    // different cases have equal-length vectors describing different case sets.
+    let mut per_target: Vec<(String, f64, Vec<CaseScore>)> = Vec::new();
     // Every unpriced model seen anywhere in the matrix, so the run-level output can say the totals
     // are undercounted instead of hiding it in each target's nested `price_warnings` array.
     let mut all_price_warnings: BTreeSet<String> = estimate.unpriced.clone();
@@ -565,7 +585,10 @@ pub(crate) fn run_compare(
         let (mut gen_tokens, mut judge_tokens) = (0u64, 0u64);
         let mut price_warnings: BTreeSet<String> = BTreeSet::new();
         let mut gen_unpriced = false;
-        let mut case_scores: Vec<f64> = Vec::new();
+        // Carries the case index, not just a position in this vector: the `continue` above skips
+        // errored cells, so index `k` here is the k-th *judged* case and says nothing about which
+        // case it was. `i + 1` is the same identity the report writes on each logged case.
+        let mut case_scores: Vec<CaseScore> = Vec::new();
         // Verdicts the API refused/couldn't take, and cases whose content imitated a judge-prompt
         // boundary. Both land in the run report instead of scrolling past on stderr.
         let (mut score_post_failures, mut injected) = (0u32, 0u32);
@@ -643,7 +666,7 @@ pub(crate) fn run_compare(
             let case_agree = if ng > 1 { gen_agree } else { judge_agree };
 
             overall_sum += case_score;
-            case_scores.push(case_score);
+            case_scores.push(CaseScore::new(i as u32 + 1, case_score));
             agree_sum += case_agree;
             if case_pass {
                 passes += 1;
@@ -763,19 +786,40 @@ pub(crate) fn run_compare(
         // family-wise-corrected critical z) composed with a paired per-case test against this
         // target's previous comparable run. Either firing means `regressed`, so the correction can
         // only trade a false alarm for a real detection — never disarm the gate.
-        let summary = Summary::of(&case_scores);
-        let prev = previous_case_scores(&history, &label, case_scores.len(), dsv);
-        let deltas = prev.as_ref().and_then(|p| paired_deltas(&case_scores, p));
-        let sig = verdict(
+        let summary = Summary::of(&values(&case_scores));
+        let prev = previous_case_scores(&history, &label, &case_scores, dsv);
+        // Aligned on the case id and intersected, never zipped by position: the baseline is another
+        // run's compacted vector, and "same length" was never evidence that it described the same
+        // cases. What comes back carries how many cases the test actually ran over.
+        let pairing = prev
+            .as_ref()
+            .map(|p| paired_deltas_by_case(&case_scores, &p.scores));
+        let evidence = pairing
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .map(|pairing| PairedEvidence {
+                pairing,
+                preview_limited: prev.as_ref().is_some_and(|p| p.preview_limited),
+            });
+        let mut sig = verdict(
             if judged > 0 {
                 bench.baseline_score
             } else {
                 None
             },
             &summary,
-            deltas.as_deref(),
+            evidence.as_ref(),
             m,
         );
+        // A baseline that WAS found and then could not be paired is a different fact from no
+        // baseline at all, and the generic "no comparable previous run" caveat would report the
+        // second when the first happened. Say which refusal it was.
+        if let Some(Err(e)) = &pairing {
+            sig.caveats.push(format!(
+                "a previous comparable run was found but could not be paired with this one — {}",
+                e.reason()
+            ));
+        }
         let scalar_fallback = sig.scalar_fallback;
         // A budget-halted target judged only part of its cases, so its mean is a mean over whatever
         // the money reached — it must never be published under a verdict vocabulary that reads as a
@@ -814,11 +858,31 @@ pub(crate) fn run_compare(
             );
         }
         if let (Some(d), Some(p)) = (sig.mean_delta, sig.p_value) {
+            // `n` here is the PAIRED n — the cases both runs judged — not `summary.n`, this run's
+            // own case count. The two are the same number only when neither run lost a case, and
+            // printing the larger one beside a paired p overstates exactly the evidence the p rests
+            // on. Anything dropped is named on the next line rather than left as a smaller number.
             println!(
                 "  vs previous run (paired, n={}): mean Δ={d:+.3}, p={p:.4} (α={:.4} after {} \
                  -target correction)",
-                summary.n, sig.alpha, m
+                sig.paired_cases.unwrap_or(summary.n),
+                sig.alpha,
+                m
             );
+            if sig.paired_dropped.unwrap_or(0) > 0 {
+                println!(
+                    "    SUBSET PAIRING: {} case(s) were judged by only one of the two runs and \
+                     are not in this test. The delta holds for the cases that remain.",
+                    sig.paired_dropped.unwrap_or(0)
+                );
+            }
+            if prev.as_ref().is_some_and(|p| p.preview_limited) {
+                println!(
+                    "    PREVIEW-LIMITED BASELINE: the previous run's report logged only the first \
+                     of its cases, so this pairing covers that prefix — the same cases in both \
+                     runs, but a systematic subset rather than a random one."
+                );
+            }
         }
         statuses.push(status.to_string());
         any_skipped |= skipped > 0;
@@ -944,9 +1008,25 @@ pub(crate) fn run_compare(
             row
         })
         .collect();
+    // Hoisted out of the `json!` below so the subset fact can also be *printed*: the render layer's
+    // winner line has no slot for a caveat on a claim it calls significant, and an operator whose
+    // `best` rests on four of twelve cases must not have to open the JSON to find that out.
+    let best = best_claim(&per_target);
+    if let Some(caveats) = best.get("caveats").and_then(Value::as_array) {
+        for c in caveats.iter().filter_map(Value::as_str) {
+            println!("\nBEST CLAIM — {c}.");
+        }
+    }
+    if let Some(note) = best
+        .get("note")
+        .and_then(Value::as_str)
+        .filter(|n| n.contains("cannot be tested"))
+    {
+        println!("\nBEST CLAIM — {note}.");
+    }
     let mut summary = json!({
         "n_cases": cases.len(), "targets": target_rows, "status": overall,
-        "best": best_claim(&per_target),
+        "best": best,
         // Run-level spend facts, beside the leaderboard rather than buried per target.
         "budget_halted": budget.halted(),
         "cancelled": cancelled,
@@ -1007,11 +1087,108 @@ pub(crate) fn run_compare(
 
 #[cfg(test)]
 mod tests {
-    use super::{annotate_frontier, r3, Admit, FrontierInput, FrontierRow, TargetHealth};
-    use super::{Value, OPEN_AFTER_FAILURES};
+    use super::{
+        annotate_frontier, best_claim, r3, Admit, FrontierInput, FrontierRow, TargetHealth,
+    };
+    use super::{CaseScore, Value, OPEN_AFTER_FAILURES};
     use crate::util::parallel_map;
     use serde_json::json;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Per-case scores over cases 1..n — a target that judged every case.
+    fn seq(scores: &[f64]) -> Vec<CaseScore> {
+        scores
+            .iter()
+            .enumerate()
+            .map(|(i, s)| CaseScore::new(i as u32 + 1, *s))
+            .collect()
+    }
+
+    /// Per-case scores over an explicit set of case ids — a target that errored on the rest.
+    fn at(cases: &[u32], scores: &[f64]) -> Vec<CaseScore> {
+        cases
+            .iter()
+            .zip(scores)
+            .map(|(c, s)| CaseScore::new(*c, *s))
+            .collect()
+    }
+
+    fn target(label: &str, scores: Vec<CaseScore>) -> (String, f64, Vec<CaseScore>) {
+        let mean = scores.iter().map(|c| c.score).sum::<f64>() / scores.len().max(1) as f64;
+        (label.to_string(), mean, scores)
+    }
+
+    /// **THE HEADLINE.** Two targets that each errored on a *different* case and finished with
+    /// *equal counts*. Both score the case's difficulty exactly, so on every case they both judged
+    /// they are identical and there is nothing to separate.
+    ///
+    /// Against the unfixed code this printed
+    /// `{"label":"a","mean":0.55,"mean_delta":0.15,"p_value":0.0,"significant":true,…}` — a
+    /// *certain* win (zero stderr, p exactly 0) built entirely out of the one-case offset, because
+    /// the guard checked `run.len() != baseline.len()` and the vectors were both length 5.
+    #[test]
+    fn two_targets_erroring_on_different_cases_are_never_paired_misaligned() {
+        let d = [0.10, 0.25, 0.40, 0.55, 0.70, 0.85]; // a difficulty ladder
+        let a = at(&[2, 3, 4, 5, 6], &d[1..6]); // errored case 1
+        let b = at(&[1, 2, 3, 4, 5], &d[0..5]); // errored case 6
+        assert_eq!(a.len(), b.len(), "the count check would have passed");
+        let claim = best_claim(&[target("a", a), target("b", b)]);
+        assert_eq!(
+            claim["significant"],
+            json!(false),
+            "identical on every shared case — there is no gap to be significant: {claim}"
+        );
+        assert_eq!(claim["mean_delta"], json!(0.0), "{claim}");
+        assert_eq!(
+            claim["n_cases"],
+            json!(4),
+            "the claim's n is the intersection (cases 2..5), not either vector's length: {claim}"
+        );
+        assert_eq!(claim["cases_dropped"], json!(2), "{claim}");
+        assert!(
+            claim["caveats"][0]
+                .as_str()
+                .unwrap_or_default()
+                .contains("judged by only one"),
+            "the subset is disclosed on the claim: {claim}"
+        );
+        // The mean-based ranking is untouched — `a` is still the highest mean, it just cannot be
+        // called a winner. This is the behaviour change stated out loud, not a hidden refusal.
+        assert_eq!(claim["label"], json!("a"));
+        assert_eq!(claim["runner_up"], json!("b"));
+    }
+
+    /// The other half, so the fix cannot be satisfied by never claiming anything: two targets over
+    /// the SAME cases with a real, consistent gap still get a tested `best`, with a clean n.
+    #[test]
+    fn a_real_gap_over_the_same_cases_is_still_a_tested_best() {
+        let b = [0.60, 0.62, 0.61, 0.63, 0.60, 0.62];
+        let a: Vec<f64> = b.iter().map(|x| x + 0.20).collect();
+        let claim = best_claim(&[target("a", seq(&a)), target("b", seq(&b))]);
+        assert_eq!(claim["significant"], json!(true), "{claim}");
+        assert_eq!(claim["n_cases"], json!(6));
+        assert_eq!(claim["cases_dropped"], json!(0));
+        assert!(claim.get("caveats").is_none(), "nothing to caveat: {claim}");
+    }
+
+    /// Two targets that share no case at all cannot be tested, and the claim says which refusal it
+    /// is rather than reporting an untested argmax as a winner.
+    #[test]
+    fn two_targets_over_disjoint_cases_cannot_be_tested() {
+        let claim = best_claim(&[
+            target("a", at(&[1, 2, 3], &[0.9, 0.9, 0.9])),
+            target("b", at(&[7, 8, 9], &[0.5, 0.5, 0.5])),
+        ]);
+        assert_eq!(claim["significant"], json!(false));
+        assert_eq!(claim["n_cases"], json!(0), "no test ran: {claim}");
+        assert!(
+            claim["note"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("no case was judged in both"),
+            "{claim}"
+        );
+    }
 
     /// The runner→render seam for the new keys, end to end. The frontier is computed in the runner
     /// and *only* marked in the renderer, so a marker or a sentence that exists on one side of that
@@ -1030,7 +1207,7 @@ mod tests {
                 gen_unpriced: false,
                 p50_ms: Some(100),
                 p95_ms: Some(150),
-                scores: cheap,
+                scores: seq(&cheap),
             },
             FrontierRow {
                 label: "dear".into(),
@@ -1040,7 +1217,7 @@ mod tests {
                 gen_unpriced: false,
                 p50_ms: Some(400),
                 p95_ms: Some(800),
-                scores: dear.clone(),
+                scores: seq(&dear),
             },
             // Cheapest and fastest of all, and 0.30 below on every case — so the run CAN separate
             // it, the walk steps past it, and the run does not read as one that separated nothing.
@@ -1052,7 +1229,7 @@ mod tests {
                 gen_unpriced: false,
                 p50_ms: Some(50),
                 p95_ms: Some(60),
-                scores: dear.iter().map(|x| x - 0.30).collect(),
+                scores: seq(&dear.iter().map(|x| x - 0.30).collect::<Vec<_>>()),
             },
         ];
         let mut summary = json!({
@@ -1098,7 +1275,7 @@ mod tests {
                 gen_unpriced: false,
                 p50_ms: Some(100),
                 p95_ms: Some(150),
-                scores: vec![0.80, 0.71, 0.90, 0.61, 0.84, 0.75],
+                scores: seq(&[0.80, 0.71, 0.90, 0.61, 0.84, 0.75]),
             },
             FrontierRow {
                 label: "b".into(),
@@ -1108,7 +1285,7 @@ mod tests {
                 gen_unpriced: false,
                 p50_ms: Some(400),
                 p95_ms: Some(800),
-                scores: vec![0.79, 0.72, 0.88, 0.63, 0.85, 0.77],
+                scores: seq(&[0.79, 0.72, 0.88, 0.63, 0.85, 0.77]),
             },
         ];
         let mut summary = json!({

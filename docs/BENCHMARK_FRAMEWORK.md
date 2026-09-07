@@ -189,9 +189,48 @@ test, and every test that could not be run is disclosed. Four rules:
 **1. Paired, per case.** The same cases are judged in both runs, so the per-case *difference* removes
 between-case variance entirely — an unpaired comparison of two means over hard-and-easy cases mostly
 measures how hard the cases are. Each target's verdict pairs this run's per-case scores against **its own
-previous comparable run** (same mode, same target, same case count and — when both recorded it — same
-`dataset_version`), and reports `mean_delta_vs_previous` with a two-sided p. Where no comparable run
+previous comparable run** (same mode, same target and — when both recorded it — same `dataset_version`),
+and reports `mean_delta_vs_previous` with a two-sided p. Where no comparable run
 exists the report says so and falls back to the unpaired CI test, flagged `method: "unpaired-ci"`.
+
+**Pairing is by case identity, not by vector length.** "The same cases" is a claim about *which* cases,
+and it is checked as one: every per-case score carries the 1-based case index the run report already
+writes beside it (`{"case": i + 1, "score": …}`), and two vectors are aligned on that id. This is not a
+nicety. A compare run's per-case vector is **compacted** — an errored cell is skipped before its score is
+recorded — so a vector index is a position among *judged* cases, not a case number, and two targets that
+each failed a different case finish with **equal lengths and misaligned positions**. The circuit breaker
+(3 consecutive generation failures opens a target) makes that ordinary rather than exotic. Differencing
+two *different* cases is worse than not pairing at all: it **adds** between-case variance to the deltas
+while the paired standard error still reports that it was removed, so the answer comes back wrong *and*
+overconfident. The guard used to be `run.len() != baseline.len()`, which is a count and never established
+this.
+
+**When the case sets differ, the test runs over their intersection — and says so.** Refusing outright
+whenever any target lost a single case would delete the tested `best` line from most real matrices and
+buy no correctness: the retained cases are genuinely matched, so the test is valid, just over fewer of
+them. So the reduced n is the n that travels with the claim (`significance.paired_cases`,
+`best.n_cases`, `recommendation.n_cases`) and what was left out travels beside it
+(`significance.paired_cases_dropped`, `best.cases_dropped`, `recommendation.cases_dropped`), with a
+caveat in the report's `caveats` array and a `SUBSET PAIRING` line in the runner's own output. A target
+that errors on the hard cases leaves an *easier* intersection: the delta holds for the cases that remain
+and generalises less, which is a caveat to state, never a reason to hide the result. Where nothing at all
+can be paired the refusal **names itself** — disjoint case sets, a single shared case (no spread to test),
+a report naming one case twice, or one side with no scored case — rather than arriving as one anonymous
+absence.
+
+**Two consequences an operator will actually see, stated rather than discovered.** Some runs that used to
+print a tested `best` will stop being able to, because their targets genuinely did not share a case set —
+the old line was an artefact of the offset. Others gain a baseline they did not have: a run whose report
+`cases` array was clipped to the bounded preview (`attach_cases` keeps the FIRST 200) used to fail the
+count match and yield *no* baseline; it now pairs over that prefix — the same cases in both runs, so a
+valid paired test, but a systematic subset rather than a random one, disclosed as preview-limited on the
+verdict and printed as `PREVIEW-LIMITED BASELINE`. A report that predates per-case identity (before
+`962e04a`, 2026-05-31) records no `case` field and is refused as a baseline rather than paired by
+position.
+
+The position-pairing helper still exists for the one caller that is aligned *by construction* —
+`calibrate --compare-batch`, whose `single` and `batched` vectors are both mapped out of one `pairs`
+vector — and its doc now states that it checks length only, and names the hazard.
 
 **2. Family-wise correction, disclosed by name.** Compare mode runs one test per target against the same
 baseline. At six targets, an uncorrected 95% test has a `1 − 0.95⁶ ≈ 26%` chance of showing at least one

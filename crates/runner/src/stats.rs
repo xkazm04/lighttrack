@@ -4,19 +4,22 @@
 //! quality gate rests on math that can't silently drift.
 //!
 //! - [`normal`] — the standard-normal CDF/quantile and the Bonferroni critical value.
+//! - [`cases`] — case identity, and pairing two score vectors by it rather than by position.
 //! - [`paired`] — the paired per-case test, the composed run verdict, and the superiority test
 //!   behind any "B beats A" claim.
 //! - [`frontier`] — the cost–quality non-dominated set and the cheapest-sufficient recommendation,
 //!   which reads [`paired`]'s superiority test in reverse rather than inventing a softer one.
 
+pub(crate) mod cases;
 mod frontier;
 mod normal;
 pub(crate) mod paired;
 
 use serde_json::{json, Value};
 
+pub(crate) use cases::{paired_deltas_by_case, values, CaseScore};
 pub(crate) use frontier::{annotate_frontier, FrontierInput, FrontierRow};
-pub(crate) use paired::{annotate_verdict, paired_deltas, superiority, verdict};
+pub(crate) use paired::{annotate_verdict, superiority, verdict, PairedEvidence};
 
 /// z for a ~95% two-sided normal confidence interval.
 pub(crate) const Z_95: f64 = 1.959_963_984_540_054;
