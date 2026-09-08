@@ -153,8 +153,9 @@ export class SpanJournal {
 
   /**
    * Sweep the journal directory for OTHER processes' abandoned files and return their unsettled
-   * open records, removing each file so a record is reported once. Never rejects: an unreadable or
-   * half-written file yields whatever parsed.
+   * open records, removing each file so a record is reported once. An unreadable or half-written
+   * FILE yields whatever parsed; a directory that cannot be listed at all rejects, because "could not
+   * look" must not read as "looked and found nothing".
    */
   async recover(): Promise<JournalRecord[]> {
     if (!this.enabled) return [];
@@ -164,8 +165,12 @@ export class SpanJournal {
     let names: string[];
     try {
       names = fs.readdirSync(this.dir);
-    } catch {
-      return [];
+    } catch (err) {
+      // A directory that does not exist is genuinely empty. Anything else (a file at the path, a
+      // permission wall) means recovery could not LOOK, and the caller spells that as a failure
+      // rather than as a clean zero — see recoverUnsettledSpans.
+      if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") return [];
+      throw err;
     }
     const out: JournalRecord[] = [];
     const now = Date.now();

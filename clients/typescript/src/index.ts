@@ -394,7 +394,13 @@ export class LightTrack {
     let records: Awaited<ReturnType<SpanJournal["recover"]>>;
     try {
       records = await this.journal.recover();
-    } catch {
+    } catch (err) {
+      // Recovery could not run at all. The count is honestly 0, but 0 must not read as "nothing was
+      // abandoned": one rate-limited line says the journal directory could not be read.
+      this.diag.warn(
+        "journal-recover",
+        `could not read the span journal directory, so abandoned calls from a crashed process (if any) were not recovered: ${truncate(String((err as Error)?.message ?? err))}`,
+      );
       return 0;
     }
     for (const rec of records) {
