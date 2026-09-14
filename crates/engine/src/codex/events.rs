@@ -66,7 +66,18 @@ pub(crate) fn read(stdout: &str) -> Turn {
                 }
             }
             Some("turn.completed") => turn.usage = Some(usage_of(&v["usage"])),
-            Some("error") => record_error(&mut turn, v.get("message")),
+            Some("error") => {
+                // `Reconnecting... 2/5 (stream disconnected before completion ...)` is Codex narrating
+                // its own retry, not a failure: the turn usually goes on to complete. Treating it as
+                // fatal errored 3 of 40 calls in the first tool-free pilot.
+                let narration = v
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|m| m.starts_with("Reconnecting"));
+                if !narration {
+                    record_error(&mut turn, v.get("message"));
+                }
+            }
             Some("turn.failed") => record_error(&mut turn, v.pointer("/error/message")),
             _ => {}
         }
@@ -186,6 +197,22 @@ mod tests {
              {\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"42\"}}\n",
         );
         assert_eq!(t.text.as_deref(), Some("42"));
+    }
+
+    /// **Found by the first tool-free pilot.** Codex reports its own reconnect attempts as `error`
+    /// events and then completes the turn; the message is the real one it printed.
+    #[test]
+    fn a_reconnect_notice_is_narration_not_a_failure() {
+        let t = read(
+            r#"{"type":"thread.started","thread_id":"t1"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 2/5 (stream disconnected before completion: WebSocket protocol error: Connection reset without closing handshake)"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"8976"}}
+{"type":"turn.completed","usage":{"input_tokens":7000,"output_tokens":900,"reasoning_output_tokens":880}}"#,
+        );
+        assert!(t.error.is_none(), "{:?}", t.error);
+        assert_eq!(t.text.as_deref(), Some("8976"));
+        assert!(t.usage.is_some());
     }
 
     #[test]

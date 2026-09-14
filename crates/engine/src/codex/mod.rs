@@ -122,6 +122,10 @@ fn classify(status: Option<u16>, message: String) -> EngineError {
                 retry_after: None,
             }
         }
+        // Codex gave up reconnecting a dropped stream: a transport failure, and worth another try.
+        None if lower.contains("stream disconnected") || lower.contains("reconnecting") => {
+            EngineError::Timeout { who }
+        }
         None => EngineError::Other(format!("{WHO}: {message}")),
     }
 }
@@ -160,9 +164,13 @@ pub(crate) fn generate(
     // The CLI's own report of what went wrong outranks its exit code: it is the only place the API's
     // message ("requires a newer version of Codex") survives. A failed turn answered nothing, so its
     // log is discarded rather than audited.
-    if let Some(message) = turn.error {
-        audit::discard(turn.thread_id.as_deref());
-        return Err(classify(turn.status, message));
+    // Only a turn that never completed reports its error: one that completed answered, whatever it
+    // narrated on the way there.
+    if turn.usage.is_none() {
+        if let Some(message) = turn.error {
+            audit::discard(turn.thread_id.as_deref());
+            return Err(classify(turn.status, message));
+        }
     }
     if !status.success() {
         audit::discard(turn.thread_id.as_deref());
@@ -225,6 +233,13 @@ mod tests {
         assert!(matches!(
             classify(None, "You've hit your usage limit.".into()),
             EngineError::RateLimited { .. }
+        ));
+        assert!(matches!(
+            classify(
+                None,
+                "stream disconnected before completion: WebSocket protocol error".into()
+            ),
+            EngineError::Timeout { .. }
         ));
         assert!(matches!(
             classify(None, "something odd".into()),
