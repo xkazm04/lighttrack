@@ -1103,6 +1103,15 @@ a **shared, real-world model leaderboard** — quality × cost × latency per `(
 so model selection rests on collective field data, not vendor marketing benchmarks. The more teams run
 LightTrack, the better the data for everyone (the moat).
 
+**The model half of a bucket carries the reasoning effort it ran at** — `claude-opus-5@xhigh` is not
+`claude-opus-5@low`. Two efforts of one model are two different products (different thinking,
+different price), which is precisely what the matrix in §2 exists to compare; contributing both under
+one `model` averaged a cheap configuration's quality into an expensive one's and published a number
+for neither. A **pricing** lane (`@batch`, `@flex`, `@in>200000`) still folds away, because that is
+one model billed differently rather than two amounts of thinking. A target that declared no effort
+ran at the provider's default and keeps the bare model identity — an absent level is never rendered
+as a named one.
+
 - **Privacy-safe by construction** (`core::collective`, pure + unit-tested):
   - *Aggregate-only inputs.* A digest is built from benchmark **run scorecards**, which already carry no
     prompt/response text — the builder never touches `events`. No project ids, customer ids, or free text

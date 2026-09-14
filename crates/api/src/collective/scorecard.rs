@@ -9,7 +9,7 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use lighttrack_core::{task_type_from, Benchmark, BenchmarkRun, RunStat};
+use lighttrack_core::{split_effort, task_type_from, Benchmark, BenchmarkRun, Effort, RunStat};
 
 /// Reduce one `(Benchmark, run)` to a [`RunStat`], or `None` when it can't contribute (no known
 /// provider/model, no quality, or no cases).
@@ -145,10 +145,30 @@ fn provider_model(bench: &Benchmark, run: &BenchmarkRun) -> Option<(String, Stri
             .trim()
             .to_string();
         let m = v.get("model").and_then(Value::as_str)?.trim().to_string();
-        (!p.is_empty() && !m.is_empty()).then_some((p, m))
+        // The level this row generated at — compare mode writes `effort` on the run report, and the
+        // older spelling carries it as an `@effort` suffix on the model spec.
+        let e = v
+            .get("effort")
+            .and_then(Value::as_str)
+            .and_then(Effort::parse);
+        (!p.is_empty() && !m.is_empty()).then(|| (p, with_effort(m, e)))
     };
     let (provider, model) = from(&run.report).or_else(|| from(&bench.target))?;
     Some((endpoint_provider(&run.report).unwrap_or(provider), model))
+}
+
+/// The model identity a run contributes under, carrying the reasoning effort it ran at.
+///
+/// Two efforts of one model are two different products — different thinking, different price — and
+/// the matrix exists to compare them (D21). A digest that published both under one `model` would
+/// average a cheap configuration's quality into an expensive one's, and the merge key has no other
+/// field to tell them apart. A model spec that already carries the suffix is left alone rather than
+/// doubled.
+fn with_effort(model: String, effort: Option<Effort>) -> String {
+    match effort {
+        Some(e) if split_effort(&model).1.is_none() => format!("{model}@{}", e.as_str()),
+        _ => model,
+    }
 }
 
 /// The provider id a probed endpoint contributes under, read off the run report the runner stamped.
@@ -349,6 +369,39 @@ mod tests {
             "openai"
         );
         assert_eq!(stamped(json!({ "garbage": true })), "openai");
+    }
+
+    /// **The effort axis reaches the leaderboard.** A matrix's whole question is whether the
+    /// expensive level is worth it; before this, both rows contributed as the same `model` and the
+    /// hub averaged the answer away.
+    #[test]
+    fn two_efforts_of_one_model_contribute_as_two_rows() {
+        let b = bench("QA bench", Value::Null);
+        let stat = |effort: Value| {
+            let mut report = json!({ "provider": "anthropic", "model": "claude-opus-5" });
+            report["effort"] = effort;
+            run_stat(&b, &run(report, Some(0.8), 10, 0.1), None)
+                .unwrap()
+                .model
+        };
+        assert_eq!(stat(json!("low")), "claude-opus-5@low");
+        assert_eq!(stat(json!("xhigh")), "claude-opus-5@xhigh");
+        assert_ne!(stat(json!("low")), stat(json!("xhigh")));
+        // A target that declared no level ran at the provider's default — a different fact from any
+        // named level, and it keeps the bare model identity it always had.
+        assert_eq!(stat(Value::Null), "claude-opus-5");
+        // A level this ladder does not name is not smuggled onto the key.
+        assert_eq!(stat(json!("turbo")), "claude-opus-5");
+    }
+
+    /// The older spelling — the level suffixed onto the model spec — is already on the key and must
+    /// not be doubled.
+    #[test]
+    fn an_effort_already_on_the_model_spec_is_not_doubled() {
+        let b = bench("QA bench", Value::Null);
+        let report = json!({ "provider": "anthropic", "model": "opus@xhigh", "effort": "xhigh" });
+        let s = run_stat(&b, &run(report, Some(0.8), 10, 0.1), None).unwrap();
+        assert_eq!(s.model, "opus@xhigh");
     }
 
     #[test]
