@@ -71,6 +71,14 @@ pub(crate) const BENCHMARK_TARGETS: &str = r#"{
                     "label": {"type":"string","description":"resolve through a label, e.g. production"}
                 }
             },
+            "limits": {
+                "type": "object",
+                "description": "per-case service ceilings this target must hold to BESIDES scoring well. A case whose generation exceeds one FAILS, however well the judge scored it - which is the part a rubric cannot express: the same answer at 8s and 4c a case is not the same product as one at 1s and a tenth of a cent. A ceiling that could not be checked (an unpriced model has no cost) is reported as unchecked, never as a pass. Compare mode only (optional).",
+                "properties": {
+                    "max_cost_usd": {"type":"number","description":"most one case's generation may cost, USD per candidate - so a --gen-samples 3 run is held to the same per-call bar, not three times it"},
+                    "max_latency_ms": {"type":"integer","description":"longest one case's generation may take, milliseconds per candidate"}
+                }
+            },
             "kind": {
                 "type": "object",
                 "description": "how this target produces output. Omit for a model call.",
@@ -158,6 +166,22 @@ mod tests {
         assert!(
             !item_required(BENCHMARK_TARGETS).contains(&"effort".to_string()),
             "an absent effort means the provider default, which is a real and different choice"
+        );
+    }
+
+    /// The third axis an agent cannot use if it cannot see it: a quality bar with no cost or latency
+    /// bar beside it is how a benchmark certifies a configuration nobody could afford to run.
+    #[test]
+    fn benchmark_targets_name_the_per_case_limits() {
+        let s: Value = serde_json::from_str(BENCHMARK_TARGETS).expect("valid JSON");
+        let l = &s["items"]["properties"]["limits"];
+        assert!(!l.is_null(), "an agent is never told limits exist");
+        for f in ["max_cost_usd", "max_latency_ms"] {
+            assert!(l["properties"].get(f).is_some(), "limits.{f}");
+        }
+        assert!(
+            !item_required(BENCHMARK_TARGETS).contains(&"limits".to_string()),
+            "limits stay opt-in"
         );
     }
 

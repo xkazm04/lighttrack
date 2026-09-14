@@ -28,6 +28,15 @@ pub struct GenerationFacts {
     /// Generation cost per candidate, USD.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Per-case limits this case exceeded (`cost`, `latency`) — the reason a well-scored case can
+    /// still be a failure. See [`crate::case_limits`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limit_breaches: Vec<String>,
+    /// Limits that were set but could not be checked here — an unpriced model has no cost to
+    /// compare. Recorded, because a limit that silently stopped gating is worth more to know about
+    /// than one that passed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limits_unchecked: Vec<String>,
 }
 
 #[cfg(test)]

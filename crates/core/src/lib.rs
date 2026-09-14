@@ -14,6 +14,7 @@ pub mod alias_table;
 pub mod bench_target;
 pub mod calibration;
 pub mod calibration_record;
+pub mod case_limits;
 pub mod collective;
 pub mod customer;
 pub mod dataset;
@@ -65,6 +66,7 @@ pub use bench_target::{
 };
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use calibration_record::{CalibrationRecord, JudgeTrust, JudgeTrustVerdict};
+pub use case_limits::{CaseLimits, LimitCheck};
 pub use collective::{
     bucket_cost, build_digest, build_digest_counted, canon_determinism, digest_sha256,
     hub_url_hash, merge_leaderboard, normalize_hub_url, task_type_from, CollectiveDigest,

@@ -112,6 +112,11 @@ pub struct BenchTarget {
     pub effort: Option<Effort>,
     #[serde(default, skip_serializing_if = "TargetKind::is_model")]
     pub kind: TargetKind,
+    /// Per-case cost/latency ceilings this target must hold to, beside the rubric's quality bar. A
+    /// case that breaches one **fails**, however well it scored — see [`crate::case_limits`].
+    /// Compare mode only; serde-defaulted, so a stored matrix without it is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<crate::case_limits::CaseLimits>,
 }
 
 impl BenchTarget {

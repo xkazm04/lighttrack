@@ -615,6 +615,9 @@ pub(crate) fn run_compare(
         // Verdicts the API refused/couldn't take, and cases whose content imitated a judge-prompt
         // boundary. Both land in the run report instead of scrolling past on stderr.
         let (mut score_post_failures, mut injected) = (0u32, 0u32);
+        // Cases this target's own service limits failed, and cases where a limit was set but had
+        // nothing to compare against. The second is never folded into "passed".
+        let (mut limit_breach_cases, mut limits_unchecked_cases) = (0u32, 0u32);
         // Weakest determinism stamp across this target's judged cells. `None` until something was
         // actually judged — a target with no verdicts claims nothing. Generation and judging are
         // tracked SEPARATELY: a pinned judge over a redrawn candidate is not a reproducible run, and
@@ -683,7 +686,39 @@ pub(crate) fn run_compare(
 
             let n = cell.cand_scores.len() as f64;
             let case_score = cell.cand_scores.iter().sum::<f64>() / n;
-            let case_pass = (cell.cand_passes as f64 / n) >= 0.5; // majority of candidates pass
+            // A case passes when the majority of its candidates did.
+            let mut case_pass = (cell.cand_passes as f64 / n) >= 0.5;
+            // The rubric has had its say; now this target's service limits do. A case that answered
+            // well but cost or took more than the configuration is allowed to is a failure of the
+            // configuration — and the *score* is deliberately left alone, so quality in every report
+            // that reads it stays readable as quality.
+            let mut facts = cell.spend.facts();
+            if let (Some(limits), Some(f)) = (t.limits.as_ref(), facts.as_mut()) {
+                let check = limits.check(f.cost_usd, f.latency_ms);
+                if !check.passed() {
+                    case_pass = false;
+                    limit_breach_cases += 1;
+                    println!(
+                        "  case {}: LIMIT BREACH ({}) — scored {:.2} and still fails: this is the \
+                         configuration being unaffordable, not the answer being wrong",
+                        i + 1,
+                        check.breached.join(", "),
+                        case_score,
+                    );
+                }
+                if !check.unchecked.is_empty() {
+                    limits_unchecked_cases += 1;
+                    eprintln!(
+                        "  case {}: limit(s) {} NOT CHECKED — nothing to compare against (an \
+                         unpriced model reports no cost; a target may report no latency). The case \
+                         was not admitted by the limit, it was never tested by it",
+                        i + 1,
+                        check.unchecked.join(", "),
+                    );
+                }
+                f.limit_breaches = check.breached.iter().map(|s| s.to_string()).collect();
+                f.limits_unchecked = check.unchecked.iter().map(|s| s.to_string()).collect();
+            }
             let gen_agree = stability(&cell.cand_scores);
             let judge_agree = cell.judge_agrees.iter().sum::<f64>() / n;
             // Headline agreement: generation stability when sampling, else the judge's own agreement.
@@ -713,7 +748,6 @@ pub(crate) fn run_compare(
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
-            let facts = cell.spend.facts();
             case_spends.push(CaseSpend {
                 case: i as u32 + 1,
                 score: case_score,
@@ -968,6 +1002,13 @@ pub(crate) fn run_compare(
         // What this target's generations spent in tokens, and which count stands for its thinking:
         // `reasoning_tokens` only where every call reported the split, `output_tokens` otherwise.
         let (out_tokens, reasoning_tokens, thinking_basis) = target_spend.totals();
+        // The target's own service bar, and how the run fared against it. Only when one was set, so
+        // every existing report keeps the exact shape it had.
+        if let Some(l) = &t.limits {
+            report["limits"] = json!(l);
+            report["limit_breach_cases"] = json!(limit_breach_cases);
+            report["limits_unchecked_cases"] = json!(limits_unchecked_cases);
+        }
         report["gen_output_tokens"] = json!(out_tokens);
         report["reasoning_tokens"] = json!(reasoning_tokens);
         report["thinking_basis"] = json!(thinking_basis.map(|b| b.as_str()));

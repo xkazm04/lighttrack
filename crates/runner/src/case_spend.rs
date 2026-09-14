@@ -94,6 +94,10 @@ impl GenSpend {
             reasoning_tokens: self.mean(self.reasoning),
             latency_ms: self.mean(self.latency),
             cost_usd: self.mean(self.cost),
+            // Filled by the caller once the target's limits have judged these figures — this module
+            // measures, it does not decide.
+            limit_breaches: Vec::new(),
+            limits_unchecked: Vec::new(),
         })
     }
 
