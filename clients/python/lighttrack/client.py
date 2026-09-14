@@ -95,7 +95,11 @@ def _extract_anthropic(resp: Any):
 def _extract_gemini(resp: Any):
     um = _get(resp, "usage_metadata", "usageMetadata")
     inp = _get(um, "prompt_token_count", "promptTokenCount") or 0
-    out = _get(um, "candidates_token_count", "candidatesTokenCount") or 0
+    # Answer + thoughts: a thinking model's thoughts are billed as output, and the answer count alone
+    # priced a long-thinking call as a short one.
+    out = (_get(um, "candidates_token_count", "candidatesTokenCount") or 0) + (
+        _get(um, "thoughts_token_count", "thoughtsTokenCount") or 0
+    )
     cached = _get(um, "cached_content_token_count", "cachedContentTokenCount")
     return (_get(resp, "model_version", "modelVersion"), int(inp), int(out), cached)
 

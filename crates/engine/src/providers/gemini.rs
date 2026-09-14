@@ -159,9 +159,7 @@ pub(super) fn generate(
         input_tokens: usage
             .and_then(|u| u.get("promptTokenCount"))
             .and_then(Value::as_u64),
-        output_tokens: usage
-            .and_then(|u| u.get("candidatesTokenCount"))
-            .and_then(Value::as_u64),
+        output_tokens: billed_output_tokens(usage),
         // temperature 0 + a fixed seed were both accepted: reproducible by contract.
         schema: schema_state(schema),
         determinism: if deterministic {
@@ -170,6 +168,20 @@ pub(super) fn generate(
             Determinism::BestEffort
         },
     })
+}
+
+/// The output tokens Gemini **bills**: the answer (`candidatesTokenCount`) plus the hidden reasoning
+/// (`thoughtsTokenCount`). The first alone is the visible answer only, and a thinking model's thoughts
+/// are charged at the output rate — so pricing a call from the book on `candidatesTokenCount` priced
+/// a 40-token answer that thought for 1,500 as a 40-token call. `None` only when neither is reported.
+pub(super) fn billed_output_tokens(usage: Option<&Value>) -> Option<u64> {
+    let u = usage?;
+    let answer = u.get("candidatesTokenCount").and_then(Value::as_u64);
+    let thoughts = u.get("thoughtsTokenCount").and_then(Value::as_u64);
+    if answer.is_none() && thoughts.is_none() {
+        return None;
+    }
+    Some(answer.unwrap_or(0) + thoughts.unwrap_or(0))
 }
 
 /// Whether a `generateContent` response was cut off by `maxOutputTokens`, and if so, the cap that
@@ -294,6 +306,25 @@ mod tests {
             "usageMetadata": { "candidatesTokenCount": 16000 }
         });
         assert_eq!(truncation(&v), Some((16000, None)));
+    }
+
+    /// **The undercount.** A thinking model's billed output is its answer plus its thoughts; the
+    /// book priced only the answer, so a call that thought for 1,500 tokens cost what 40 would.
+    #[test]
+    fn billed_output_includes_the_thoughts_a_thinking_model_spent() {
+        let thinking = json!({ "candidatesTokenCount": 40, "thoughtsTokenCount": 1500 });
+        assert_eq!(billed_output_tokens(Some(&thinking)), Some(1540));
+        // A non-thinking response is unchanged.
+        let plain = json!({ "candidatesTokenCount": 40 });
+        assert_eq!(billed_output_tokens(Some(&plain)), Some(40));
+        // Thoughts with no answer count (a capped-out thinker) still bill.
+        assert_eq!(
+            billed_output_tokens(Some(&json!({ "thoughtsTokenCount": 900 }))),
+            Some(900)
+        );
+        // Unreported is unknown, never zero.
+        assert_eq!(billed_output_tokens(Some(&json!({}))), None);
+        assert_eq!(billed_output_tokens(None), None);
     }
 
     /// A normal stop with an empty answer is NOT truncation.
