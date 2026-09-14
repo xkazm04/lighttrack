@@ -310,8 +310,15 @@ fn generate_once(
     // for bias control is whichever one the *model name* names (`anthropic/claude-sonnet-5`). It is
     // also the one adapter that can honour every level of the effort ladder, which is much of why a
     // matrix reaches for it.
-    if lighttrack_core::ProviderId::new(provider).as_str() == openrouter::PROVIDER_ID {
+    let provider_id = lighttrack_core::ProviderId::new(provider);
+    if provider_id.as_str() == openrouter::PROVIDER_ID {
         return openrouter::generate(model, system_prompt, input, schema, deterministic, effort);
+    }
+    // The Codex CLI, likewise matched on its id: a subscription CLI in front of GPT models, the
+    // counterpart of the `claude -p` path. It has no sampling knobs, so `deterministic` has nothing
+    // to pin and the outcome says so.
+    if provider_id.as_str() == crate::codex::PROVIDER_ID {
+        return crate::codex::generate(model, system_prompt, input, schema, effort);
     }
 
     // Route on the provider's **family**, not its literal id: a judge spec may name any provider
@@ -337,7 +344,7 @@ fn generate_once(
         }
         other => Err(EngineError::Other(format!(
             "no generation adapter for provider '{provider}' (family {other}); this build can \
-             generate with anthropic, google, openai and openrouter endpoints only — observability \
+             generate with anthropic, google, openai, openrouter and codex only — observability \
              and pricing accept any provider, generation does not"
         ))),
     }

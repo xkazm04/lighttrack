@@ -8,6 +8,7 @@
 //! - `parse`      — JSON extraction + the one-shot repair re-ask around a single judge sample.
 //! - `fence`      — per-call nonce delimiters around untrusted content (judge-prompt injection defense).
 //! - `anthropic_api` — the bare Messages API judge path (used when `ANTHROPIC_API_KEY` is set).
+//! - [`codex`]    — the Codex CLI (`codex exec`): GPT models on a ChatGPT seat, isolated and read-only.
 //! - [`http_target`] — generation from an operator-owned HTTP endpoint (a RAG pipeline, an agent).
 //! - [`endpoint_probe`] — what is answering at a re-pointed OpenAI-compatible base, before a run
 //!   is attributed to a provider.
@@ -17,6 +18,7 @@
 //! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_text`], [`parse_judge_spec`].
 
 mod anthropic_api;
+pub mod codex;
 pub mod endpoint_probe;
 mod family;
 mod fence;
