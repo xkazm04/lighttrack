@@ -99,6 +99,27 @@ fn strip_api_keys(cmd: &mut Command) {
     });
 }
 
+/// The wall clock for one call. `LIGHTTRACK_CODEX_TIMEOUT_SECS` overrides both defaults.
+///
+/// Tool-free reasoning at scale is slow: a low-effort gpt-6-astra call counting primes in a
+/// 3000-wide interval ran past 600s in the v3 pilot. A timed-out cell is a *generation failure* to the
+/// compare runner, and three in a row open that target's breaker — so on a corpus whose hard cases run
+/// back to back, a ceiling set for easy work would silently prune a max-effort target's hard tier.
+/// An operator running such a corpus raises the ceiling; a value that does not parse to a positive
+/// number of seconds is ignored rather than trusted.
+fn timeout_for(effort: Option<Effort>, override_secs: Option<String>) -> Duration {
+    if let Some(secs) = override_secs
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+    {
+        return Duration::from_secs(secs);
+    }
+    match effort {
+        Some(Effort::XHigh) | Some(Effort::Max) => TIMEOUT_HIGH_EFFORT,
+        _ => TIMEOUT,
+    }
+}
+
 /// Turn a failure the CLI reported into a typed error, so the retry policy retries only what is
 /// worth retrying.
 fn classify(status: Option<u16>, message: String) -> EngineError {
@@ -147,10 +168,7 @@ pub(crate) fn generate(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     strip_api_keys(&mut cmd);
-    let timeout = match effort {
-        Some(Effort::XHigh) | Some(Effort::Max) => TIMEOUT_HIGH_EFFORT,
-        _ => TIMEOUT,
-    };
+    let timeout = timeout_for(effort, std::env::var("LIGHTTRACK_CODEX_TIMEOUT_SECS").ok());
 
     let started = Instant::now();
     let spawned = spawn_bounded(cmd, input, timeout, bin(), WHO);
@@ -209,6 +227,29 @@ pub(crate) fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_timeout_scales_with_effort_and_the_override_wins_when_it_parses() {
+        assert_eq!(timeout_for(Some(Effort::Low), None), TIMEOUT);
+        assert_eq!(timeout_for(Some(Effort::Max), None), TIMEOUT_HIGH_EFFORT);
+        assert_eq!(timeout_for(None, None), TIMEOUT);
+        assert_eq!(
+            timeout_for(Some(Effort::Low), Some("2400".into())),
+            Duration::from_secs(2400),
+            "the override covers every level"
+        );
+        assert_eq!(
+            timeout_for(Some(Effort::Max), Some(" 3600 ".into())),
+            Duration::from_secs(3600)
+        );
+        for junk in ["", "0", "-5", "forever"] {
+            assert_eq!(
+                timeout_for(Some(Effort::Low), Some(junk.into())),
+                TIMEOUT,
+                "{junk:?} is not a ceiling"
+            );
+        }
+    }
 
     /// Only what is worth retrying is retried: a rate limit and a server error are; a refused model
     /// and a bad login are not.
