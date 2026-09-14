@@ -42,6 +42,29 @@ fn codex_generates_through_the_engine_with_effort_and_a_reasoning_split() {
     assert!(out.cost_usd.is_none(), "a seat call reports no dollars");
 }
 
+/// **The case a model would script.** gpt-6-astra first answered this with a JavaScript loop and 0
+/// reasoning tokens, and gpt-5.5 with a web search. With tools disabled and the session log audited,
+/// it either reasons its way to an answer or the adapter refuses to score it — an `Ok` here is the
+/// proof the answer did not come from a tool.
+#[test]
+#[ignore = "spends Codex seat usage; run with --ignored"]
+fn a_computation_the_model_would_script_is_answered_without_any_tool() {
+    let out = generate(
+        &EngineConfig::default(),
+        "codex",
+        "gpt-6-astra@low",
+        Some("Reply with only the final answer: a single integer, no words."),
+        "What is the sum of all prime numbers between 10000 and 10500?",
+        None,
+    )
+    .expect("answered, and the audit found no tool that ran");
+    eprintln!("{out:#?}");
+    assert!(
+        out.reasoning_tokens.unwrap_or(0) > 0,
+        "an answer to this with no reasoning at all is what a tool call looks like"
+    );
+}
+
 /// A model the seat cannot use fails loudly with the API's own words, not an empty completion.
 #[test]
 #[ignore = "spends Codex seat usage; run with --ignored"]

@@ -5,23 +5,29 @@
 //! `codex`, matched on the id like OpenRouter's, because a CLI is not a lab — the model name
 //! (`gpt-5.5`) is what the self-preference control reads, and that says OpenAI.
 //!
-//! **Isolation is the posture.** A bare `codex exec` loads the operator's `config.toml` (their
-//! default model and effort), their execpolicy rules, their `AGENTS.md` and their saved sessions —
-//! any of which would silently join the prompt and make the same case mean different things on two
-//! machines. So every call is `--ignore-user-config --ignore-rules --ephemeral`, runs in a neutral
-//! directory with no `AGENTS.md`, and is sandboxed `read-only`: a generation has no business
-//! touching a disk. `OPENAI_API_KEY` / `CODEX_API_KEY` are stripped from the child for the same
-//! reason `ANTHROPIC_API_KEY` is on the Claude path — a seat run must not quietly become metered.
+//! **Isolation is the posture** ([`posture`]). A bare `codex exec` loads the operator's `config.toml`
+//! (their default model and effort), their execpolicy rules and their `AGENTS.md`, any of which would
+//! silently join the prompt. So every call is `--ignore-user-config --ignore-rules`, runs in a neutral
+//! directory, is sandboxed `read-only`, and `OPENAI_API_KEY` / `CODEX_API_KEY` are stripped from the
+//! child so a seat run cannot quietly become metered.
+//!
+//! **And tool-less, proven** ([`audit`]). A read-only sandbox still lets a model run code and search
+//! the web, and on a reasoning benchmark that measures the wrong thing: gpt-6-astra summed a range of
+//! primes with a JavaScript loop and 0 reasoning tokens, and gpt-5.5 searched the web for the list.
+//! Every tool is disabled, and each turn's session log is audited afterwards; an answer a tool
+//! produced is an error, never a score.
 //!
 //! **What it cannot give, stated:** no dollar cost (a seat call has none to report), so these targets
 //! are unpriced and sit off the cost–quality frontier by name; and no sampling knobs, so `best-effort`
-//! determinism. Every call also carries a ~13k-token input floor — the Codex harness's own
-//! instructions — which is visible in `input_tokens` and is the same for every rung of a ladder.
+//! determinism. With tools off a call carries roughly 6–9k input tokens of Codex's own instructions —
+//! the ~13k first measured was mostly tool definitions.
 
+mod audit;
 mod events;
+mod posture;
 mod resolve;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Once, OnceLock};
@@ -47,65 +53,9 @@ const WHO: &str = "codex exec";
 const TIMEOUT: Duration = Duration::from_secs(600);
 const TIMEOUT_HIGH_EFFORT: Duration = Duration::from_secs(1500);
 
-/// Longest system prompt passed through argv. It travels as a `-c developer_instructions=` value,
-/// and Windows caps a whole command line near 32k characters; a longer prompt is refused by name
-/// rather than truncated by the OS into a different prompt.
-const MAX_INSTRUCTIONS_CHARS: usize = 16_000;
-
 fn bin() -> &'static str {
     static BIN: OnceLock<String> = OnceLock::new();
     BIN.get_or_init(resolve_codex_bin)
-}
-
-/// The argv for one isolated, tool-less turn. The prompt is not here: it travels over stdin (`-`).
-fn argv(
-    model: &str,
-    system_prompt: Option<&str>,
-    effort: Option<Effort>,
-    schema_file: Option<&Path>,
-) -> Result<Vec<String>> {
-    let mut a: Vec<String> = [
-        "exec",
-        "--json",
-        "--skip-git-repo-check",
-        "--ephemeral",
-        "--ignore-user-config",
-        "--ignore-rules",
-        "--sandbox",
-        "read-only",
-        "--model",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
-    a.push(model.to_string());
-    if let Some(level) = effort {
-        // Quoted, so it is parsed as a TOML string rather than falling back to a bare literal.
-        a.push("-c".into());
-        a.push(format!("model_reasoning_effort=\"{}\"", level.as_str()));
-    }
-    if let Some(sys) = system_prompt {
-        if sys.chars().count() > MAX_INSTRUCTIONS_CHARS {
-            return Err(EngineError::Other(format!(
-                "the codex adapter passes a system prompt on the command line and caps it at \
-                 {MAX_INSTRUCTIONS_CHARS} characters; this one is {} — a longer one would be \
-                 truncated by the OS into a different prompt",
-                sys.chars().count()
-            )));
-        }
-        // A JSON string literal is a valid TOML basic string, so quotes and newlines survive intact.
-        a.push("-c".into());
-        a.push(format!(
-            "developer_instructions={}",
-            serde_json::to_string(sys)?
-        ));
-    }
-    if let Some(path) = schema_file {
-        a.push("--output-schema".into());
-        a.push(path.display().to_string());
-    }
-    a.push("-".into());
-    Ok(a)
 }
 
 /// A directory with no `AGENTS.md` and no repository, apart from the Claude path's own.
@@ -185,7 +135,7 @@ pub(crate) fn generate(
     effort: Option<Effort>,
 ) -> Result<GenOutcome> {
     let schema_file = schema.map(write_schema).transpose()?;
-    let args = argv(model, system_prompt, effort, schema_file.as_deref())?;
+    let args = posture::argv(model, system_prompt, effort, schema_file.as_deref())?;
     let mut cmd = Command::new(bin());
     cmd.args(&args)
         .current_dir(neutral_cwd()?)
@@ -208,16 +158,21 @@ pub(crate) fn generate(
 
     let turn = events::read(&String::from_utf8_lossy(&stdout));
     // The CLI's own report of what went wrong outranks its exit code: it is the only place the API's
-    // message ("requires a newer version of Codex") survives.
+    // message ("requires a newer version of Codex") survives. A failed turn answered nothing, so its
+    // log is discarded rather than audited.
     if let Some(message) = turn.error {
+        audit::discard(turn.thread_id.as_deref());
         return Err(classify(turn.status, message));
     }
     if !status.success() {
+        audit::discard(turn.thread_id.as_deref());
         return Err(EngineError::NonZero {
             code: status.code().unwrap_or(-1),
             stderr: String::from_utf8_lossy(&stderr).trim().to_string(),
         });
     }
+    // Before the answer is believed: prove no tool produced it.
+    audit::verify_and_discard(turn.thread_id.as_deref())?;
     let output = turn.text.unwrap_or_default();
     if output.trim().is_empty() {
         return Err(EngineError::EmptyCompletion { who: WHO.into() });
@@ -246,83 +201,6 @@ pub(crate) fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn has_pair(a: &[String], flag: &str, value: &str) -> bool {
-        a.windows(2).any(|w| w[0] == flag && w[1] == value)
-    }
-
-    /// **The isolation posture, asserted where it is written.** Every one of these keeps something
-    /// of the operator's out of the measurement: their config (default model and effort), their
-    /// rules, their saved sessions, write access to a disk.
-    #[test]
-    fn every_call_is_isolated_read_only_and_reads_its_prompt_from_stdin() {
-        let a = argv("gpt-5.5", None, None, None).unwrap();
-        assert_eq!(a[0], "exec");
-        for flag in [
-            "--json",
-            "--skip-git-repo-check",
-            "--ephemeral",
-            "--ignore-user-config",
-            "--ignore-rules",
-        ] {
-            assert!(a.iter().any(|x| x == flag), "missing {flag}: {a:?}");
-        }
-        assert!(has_pair(&a, "--sandbox", "read-only"));
-        assert!(has_pair(&a, "--model", "gpt-5.5"));
-        assert_eq!(a.last().map(String::as_str), Some("-"), "prompt over stdin");
-        // No effort asked for: the key is absent, so the model's default applies and is not reported
-        // as a level.
-        assert!(!a.iter().any(|x| x.starts_with("model_reasoning_effort")));
-    }
-
-    #[test]
-    fn every_level_travels_as_a_quoted_toml_string() {
-        for level in Effort::ALL {
-            let a = argv("gpt-5.5", None, Some(level), None).unwrap();
-            assert!(
-                has_pair(
-                    &a,
-                    "-c",
-                    &format!("model_reasoning_effort=\"{}\"", level.as_str())
-                ),
-                "{a:?}"
-            );
-        }
-    }
-
-    /// A system prompt with quotes and newlines arrives intact: the value is a JSON string literal,
-    /// which TOML reads as the same string.
-    #[test]
-    fn a_system_prompt_survives_quotes_and_newlines() {
-        let sys = "Answer \"tersely\".\nNo preamble.\tEver.";
-        let a = argv("gpt-5.5", Some(sys), None, None).unwrap();
-        let v = a
-            .iter()
-            .find_map(|x| x.strip_prefix("developer_instructions="))
-            .expect("instructions passed");
-        assert_eq!(serde_json::from_str::<String>(v).unwrap(), sys);
-    }
-
-    #[test]
-    fn an_oversized_system_prompt_is_refused_by_name() {
-        let huge = "x".repeat(MAX_INSTRUCTIONS_CHARS + 1);
-        let err = argv("gpt-5.5", Some(&huge), None, None).unwrap_err();
-        assert!(err.to_string().contains("caps it at"), "{err}");
-        assert!(argv(
-            "gpt-5.5",
-            Some(&"x".repeat(MAX_INSTRUCTIONS_CHARS)),
-            None,
-            None
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn a_schema_is_passed_by_file_before_the_stdin_marker() {
-        let a = argv("gpt-5.5", None, None, Some(Path::new("s.json"))).unwrap();
-        assert!(has_pair(&a, "--output-schema", "s.json"));
-        assert_eq!(a.last().map(String::as_str), Some("-"));
-    }
 
     /// Only what is worth retrying is retried: a rate limit and a server error are; a refused model
     /// and a bad login are not.

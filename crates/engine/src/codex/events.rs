@@ -27,6 +27,9 @@ pub(crate) struct Usage {
 /// What one `codex exec` turn produced.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Turn {
+    /// From `thread.started`: the id that names the turn's session log, which is the only record of
+    /// the tools it called.
+    pub(crate) thread_id: Option<String>,
     /// The **last** `agent_message` of the turn. A tool-less turn emits one; if a release ever emits
     /// a preamble before the answer, the answer is the one that closed the turn.
     pub(crate) text: Option<String>,
@@ -48,6 +51,12 @@ pub(crate) fn read(stdout: &str) -> Turn {
             continue;
         };
         match v.get("type").and_then(Value::as_str) {
+            Some("thread.started") => {
+                turn.thread_id = v
+                    .get("thread_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }
             Some("item.completed") => {
                 let item = &v["item"];
                 if item["type"] == "agent_message" {
@@ -122,6 +131,11 @@ mod tests {
     #[test]
     fn a_real_turn_yields_the_answer_and_the_reasoning_split() {
         let t = read(OK_0154);
+        assert_eq!(
+            t.thread_id.as_deref(),
+            Some("01a0a0b1-ad62-7cc0-8884-2911b047756c"),
+            "the audit finds the session log by this id"
+        );
         assert_eq!(t.text.as_deref(), Some("0.05"));
         assert_eq!(
             t.usage,
