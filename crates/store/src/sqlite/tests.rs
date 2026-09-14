@@ -2486,6 +2486,17 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
         coverage: None,
         // The judged evidence carried an ingest scrub stamp of 2 spans.
         evidence_redacted_spans: Some(2),
+        // What generating this case's candidates spent, and the limit it breached doing so — read
+        // back through the same whole-detail equality as everything else here.
+        generation: Some(lighttrack_core::GenerationFacts {
+            candidates: 2,
+            output_tokens: Some(812.5),
+            reasoning_tokens: Some(700.0),
+            latency_ms: Some(3000.0),
+            cost_usd: Some(0.004),
+            limit_breaches: vec!["cost".into()],
+            limits_unchecked: Vec::new(),
+        }),
     };
     let score = Score {
         id: new_id(),
