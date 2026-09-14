@@ -124,8 +124,9 @@ This milestone is the axis it needs: the tier exists, persists, round-trips and 
 A benchmark defines a **matrix** of targets = `{providers × models} × {prompt variants}`. For each
 DatasetItem × target, the framework **generates** an output, then **judges** it.
 
-- **Provider abstraction** (`Generator` trait): `anthropic` (via `claude -p` or API), `openai`, `google`.
-  Each needs credentials; see *Open decisions*.
+- **Provider abstraction** (`Generator` trait): `anthropic` (via `claude -p` or API), `openai`,
+  `google`, and `openrouter` — a **gateway**, matched on its provider id rather than a lab family,
+  which reaches any lab's models through one key. Each needs credentials; see *Open decisions*.
 - **Generation vs judging are separated.** The judge model should differ in family from the generator to
   avoid **self-preference bias** (§3) — now detected and recorded per run, not just advised. Default
   judge = **`opus@xhigh`** (§3b, D15), via the bare Anthropic Messages API when `ANTHROPIC_API_KEY` is
@@ -175,6 +176,7 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
     | `anthropic` (Messages API, `ANTHROPIC_API_KEY` set) | `output_config.effort` | all five, 1:1. `xhigh`/`max` also raise `max_tokens` to 64000, which Anthropic's own guidance requires or the answer truncates mid-thought. Not `thinking.budget_tokens` — that shape is a 400 on every model this path resolves to. |
     | `anthropic` (`claude -p`, no key) | `--effort <level>` | all five, 1:1 — the path that always honoured it. |
     | `openai` | `reasoning_effort` | `low`/`medium`/`high` only. **`xhigh` and `max` are refused with an error naming the model and the level**: OpenAI's scale ends at `high`, and folding them onto it would send byte-identical requests for two differently-labelled rows. |
+    | `openrouter` | `reasoning: {effort: <level>}` | **all five, 1:1 — the only adapter with no gap in the ladder**, because the gateway normalizes the level across every upstream it serves. So a model whose own API stops at `high` is still measurable at `xhigh`/`max` through it. It additionally reports the hidden-reasoning token split for upstreams whose native API reports none, and returns a **$ cost** per call, so such a target is priced without a price-book entry. Determinism is `best-effort` even when pinning is asked for: which upstream serves a request is the gateway's choice, and they do not all honour a seed. |
     | `google` (Gemini) | **not implemented** | every level is refused with an error. Gemini's control is `generationConfig.thinkingConfig.thinkingBudget`, a *token count* whose valid range is per-model; this build has no verified level→budget table, and a guessed budget the API clamps or ignores would produce a leaderboard column that reads as measured and measures nothing. |
     | `kind: http` | n/a | an endpoint we do not control has no knob to set; the declaration is carried on the row for provenance only. |
   - A model that rejects the parameter (e.g. Haiku 4.5, which has no `effort`) fails the call with

@@ -476,8 +476,9 @@ pub(crate) fn run_compare(
     println!("  {}", estimate.line());
     if !estimate.unpriced.is_empty() {
         println!(
-            "  warning: no price book entry for {} — the estimate below excludes them and the \
-             run's recorded cost will be undercounted",
+            "  warning: no price book entry for {} — the estimate below excludes them. The run's \
+             recorded cost is undercounted too, unless the provider returns its own $ (the \
+             OpenRouter and HTTP-target adapters do)",
             join_csv(&estimate.unpriced)
         );
     }

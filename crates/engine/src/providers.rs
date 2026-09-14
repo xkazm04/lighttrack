@@ -1,5 +1,6 @@
 //! Candidate-output generation across providers. `anthropic` runs via `claude -p` (or the bare
-//! Messages API when a key is present); `google` and `openai` call their HTTPS APIs (keys from env).
+//! Messages API when a key is present); `google`, `openai` and `openrouter` call their HTTPS APIs
+//! (keys from env).
 //! Dollar cost is left `None` for the HTTP providers (the caller prices it from the DB price book by
 //! tokens); the APIs don't return a cost.
 //!
@@ -15,6 +16,7 @@
 
 mod gemini;
 mod openai;
+mod openrouter;
 
 use std::io::Read;
 use std::sync::OnceLock;
@@ -303,6 +305,15 @@ fn generate_once(
     // the level travels as a typed [`Effort`] the adapter must either honour or refuse.
     let (model, effort) = split_effort(model);
 
+    // **The gateway is matched on its id, before any family routing.** OpenRouter serves every
+    // lab's models behind one API, so `family_of("openrouter")` is `Other` and the lab that matters
+    // for bias control is whichever one the *model name* names (`anthropic/claude-sonnet-5`). It is
+    // also the one adapter that can honour every level of the effort ladder, which is much of why a
+    // matrix reaches for it.
+    if lighttrack_core::ProviderId::new(provider).as_str() == openrouter::PROVIDER_ID {
+        return openrouter::generate(model, system_prompt, input, schema, deterministic, effort);
+    }
+
     // Route on the provider's **family**, not its literal id: a judge spec may name any provider
     // (M8), and `azure-openai` / `az.ai.openai` are OpenAI endpoints in every way that matters here.
     // A provider we cannot classify gets a message that says what is missing — an adapter — rather
@@ -326,8 +337,8 @@ fn generate_once(
         }
         other => Err(EngineError::Other(format!(
             "no generation adapter for provider '{provider}' (family {other}); this build can \
-             generate with anthropic, google and openai endpoints only — observability and pricing \
-             accept any provider, generation does not"
+             generate with anthropic, google, openai and openrouter endpoints only — observability \
+             and pricing accept any provider, generation does not"
         ))),
     }
 }
