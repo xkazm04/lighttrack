@@ -253,6 +253,8 @@ fn send(
         output_tokens: usage
             .and_then(|u| u.get("output_tokens"))
             .and_then(Value::as_u64),
+        // `usage` has no thinking/answer split; thinking is inside `output_tokens`.
+        reasoning_tokens: None,
         // Temperature-pinned, but Anthropic exposes no seed — reproducible by convention only.
         determinism: Determinism::BestEffort,
         schema: SchemaEnforcement::NotRequested,

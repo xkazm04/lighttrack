@@ -20,6 +20,7 @@ use lighttrack_engine::{
 
 use crate::bench::judge_output;
 use crate::budget::{estimate_compare, Budget};
+use crate::case_spend::GenSpend;
 use crate::cli::Cli;
 use crate::history::previous_case_scores;
 use crate::http::{get, post};
@@ -83,6 +84,9 @@ struct Cell {
     judge_cost: f64,
     judge_tokens: u64,
     latencies: Vec<u64>,
+    /// What this cell's generations spent, per candidate — the per-case record of tokens, the
+    /// reasoning share, latency and cost that the sums above fold away.
+    spend: GenSpend,
     /// Weakest reproducibility stamp across this cell's *generation* calls. `None` when nothing
     /// generated (the cell errored before its first candidate).
     gen_determinism: Option<Determinism>,
@@ -220,6 +224,7 @@ fn compute_cell(
         judge_cost: 0.0,
         judge_tokens: 0,
         latencies: Vec::new(),
+        spend: GenSpend::default(),
         gen_determinism: None,
         price_warnings: BTreeSet::new(),
         gen_unpriced: false,
@@ -293,6 +298,7 @@ fn compute_cell(
             cell.price_warnings
                 .insert(format!("{}/{}", t.provider, t.model));
         }
+        cell.spend.record(&gen, gc, gpriced);
         cell.gen_cost += gc;
         cell.gen_tokens += gen.input_tokens.unwrap_or(0) + gen.output_tokens.unwrap_or(0);
         if let Some(l) = gen.latency_ms {
@@ -592,6 +598,7 @@ pub(crate) fn run_compare(
         let (mut gen_tokens, mut judge_tokens) = (0u64, 0u64);
         let mut price_warnings: BTreeSet<String> = BTreeSet::new();
         let mut gen_unpriced = false;
+        let mut target_spend = GenSpend::default();
         // Carries the case index, not just a position in this vector: the `continue` above skips
         // errored cells, so index `k` here is the k-th *judged* case and says nothing about which
         // case it was. `i + 1` is the same identity the report writes on each logged case.
@@ -659,6 +666,7 @@ pub(crate) fn run_compare(
             judge_cost += cell.judge_cost;
             judge_tokens += cell.judge_tokens;
             latencies.extend(cell.latencies);
+            target_spend.absorb(&cell.spend);
             if cell.cand_scores.is_empty() {
                 errored += 1;
                 continue;
@@ -700,6 +708,7 @@ pub(crate) fn run_compare(
                 "case": i + 1, "score": r3(case_score), "pass": case_pass,
                 "gen_agreement": r3(gen_agree), "judge_agreement": r3(judge_agree),
                 "n_candidates": cell.cand_scores.len(), "dimensions": Value::Object(dims_obj),
+                "generation": cell.spend.facts(),
             }));
             println!(
                 "  case {}: score={:.2} pass={} gen_agree={:.2} judge_agree={:.2} (n_gen={})  {dim_str}",
@@ -713,7 +722,8 @@ pub(crate) fn run_compare(
             // Per-case judge verdict → /v1/scores (queryable per case, not just the run aggregate),
             // carrying the merged provenance of every candidate judged for this cell rather than a
             // free-text "k=0.82 …" restatement of numbers already in `value`.
-            let detail = merge_details(&cell.cand_details);
+            let mut detail = merge_details(&cell.cand_details);
+            detail.generation = cell.spend.facts();
             if let Some(d) = detail.determinism.as_deref() {
                 let stamp = if d == "exact" {
                     Determinism::Exact
@@ -937,6 +947,12 @@ pub(crate) fn run_compare(
             "budget_spent_usd": budget.spent_usd(),
             "estimated_cost_usd": estimate.usd,
         });
+        // What this target's generations spent in tokens, and which count stands for its thinking:
+        // `reasoning_tokens` only where every call reported the split, `output_tokens` otherwise.
+        let (out_tokens, reasoning_tokens, thinking_basis) = target_spend.totals();
+        report["gen_output_tokens"] = json!(out_tokens);
+        report["reasoning_tokens"] = json!(reasoning_tokens);
+        report["thinking_basis"] = json!(thinking_basis.map(|b| b.as_str()));
         // Stamped only on the rows that actually went through the probed endpoint: a matrix that
         // compares a local runtime against Anthropic must not label the Anthropic row with the
         // local endpoint's identity. Absent key = operator-asserted, which is what every row

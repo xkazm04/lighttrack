@@ -385,6 +385,14 @@ pub struct GenOutcome {
     pub latency_ms: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    /// Tokens spent on hidden reasoning, where the provider reports them apart from the answer
+    /// (OpenAI `completion_tokens_details.reasoning_tokens`, Gemini `thoughtsTokenCount`, OpenRouter's
+    /// normalized usage). Already **inside** `output_tokens` — informational, never added to it.
+    ///
+    /// `None` is an honest gap, not zero: the Anthropic Messages API and `claude -p` report no
+    /// split, and an HTTP target is a black box. A caller measuring how hard a model thought falls
+    /// back to `output_tokens` there and says that it did.
+    pub reasoning_tokens: Option<u64>,
     /// How reproducible this call was — see [`Determinism`]. Candidate *generation* is judged, so
     /// it is pinned like the judge is ([`generate_deterministic`]) whenever the caller wants one
     /// candidate per case; a plain [`generate`] reports `BestEffort` (or `Sampled`, when the caller

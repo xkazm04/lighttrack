@@ -25,6 +25,7 @@ pub mod error;
 pub mod event;
 pub mod forecast;
 pub mod forecast_gate;
+pub mod gen_spend;
 pub mod job;
 pub mod job_kinds;
 pub mod label;
@@ -89,6 +90,7 @@ pub use event::{
 };
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
 pub use forecast_gate::{Refusal, FLAT_BAND, MIN_OBSERVED_DAYS, MIN_SPAN_DAYS};
+pub use gen_spend::GenerationFacts;
 pub use job::{
     job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_PREFIX_FAILURE,
     JOB_ERROR_WORKER_LOST,

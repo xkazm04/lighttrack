@@ -64,6 +64,7 @@ fn gen_outcome(output: String) -> GenOutcome {
         latency_ms: Some(1),
         input_tokens: Some(0),
         output_tokens: Some(0),
+        reasoning_tokens: None,
         determinism: Determinism::Exact,
         schema: SchemaEnforcement::NotRequested,
     }

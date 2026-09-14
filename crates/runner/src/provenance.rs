@@ -43,6 +43,8 @@ pub(crate) fn rubric_detail(o: &RubricOutcome) -> ScoreDetail {
         // Filled by [`stamp_evidence`] once the caller knows which event was judged; a benchmark
         // case judges dataset text that never went through ingest, so it legitimately stays `None`.
         evidence_redacted_spans: None,
+        // Stamped by compare mode, which is the only caller that generated the candidate it judges.
+        generation: None,
     }
     .capped()
 }

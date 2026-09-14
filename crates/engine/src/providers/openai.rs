@@ -141,6 +141,7 @@ pub(super) fn generate(
         output_tokens: usage
             .and_then(|u| u.get("completion_tokens"))
             .and_then(Value::as_u64),
+        reasoning_tokens: reasoning_tokens(usage),
         schema: schema_state(schema),
         determinism: if deterministic {
             Determinism::Exact
@@ -166,10 +167,16 @@ pub(super) fn truncation(v: &Value) -> Option<(u64, Option<u64>)> {
         .and_then(|u| u.get("completion_tokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let reasoning_tokens = usage
-        .and_then(|u| u.pointer("/completion_tokens_details/reasoning_tokens"))
-        .and_then(Value::as_u64);
-    Some((cap, reasoning_tokens))
+    Some((cap, reasoning_tokens(usage)))
+}
+
+/// The hidden-reasoning share of a Chat Completions call (`completion_tokens_details.reasoning_tokens`),
+/// already counted inside `completion_tokens`. `None` when the response reports no split. Shared with
+/// the OpenRouter adapter, which normalizes every upstream onto this shape.
+pub(super) fn reasoning_tokens(usage: Option<&Value>) -> Option<u64> {
+    usage?
+        .pointer("/completion_tokens_details/reasoning_tokens")
+        .and_then(Value::as_u64)
 }
 
 #[cfg(test)]
@@ -258,6 +265,20 @@ mod tests {
             "usage": { "completion_tokens": 16000 }
         });
         assert_eq!(truncation(&v), Some((16000, None)));
+    }
+
+    /// A reasoning model's hidden share is read off the usage details on a NORMAL stop too — not only
+    /// inside a truncation error, which used to be the one place this number was ever looked at.
+    #[test]
+    fn reasoning_tokens_are_read_on_a_normal_stop() {
+        let usage = json!({ "completion_tokens": 900, "completion_tokens_details": { "reasoning_tokens": 850 } });
+        assert_eq!(reasoning_tokens(Some(&usage)), Some(850));
+        assert_eq!(
+            reasoning_tokens(Some(&json!({ "completion_tokens": 12 }))),
+            None,
+            "no split reported is unknown, never zero"
+        );
+        assert_eq!(reasoning_tokens(None), None);
     }
 
     /// A normal stop with an empty answer is NOT truncation, leaving the existing empty-completion

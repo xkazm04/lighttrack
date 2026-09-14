@@ -390,6 +390,8 @@ fn generate_anthropic(
         latency_ms: out.latency_ms,
         input_tokens: out.input_tokens,
         output_tokens: out.output_tokens,
+        // The envelope's `usage` has no thinking/answer split; thinking is inside `output_tokens`.
+        reasoning_tokens: None,
         // The CLI exposes neither temperature nor seed — this is the residual the bare API path
         // exists to shrink, and it is now stamped on the outcome instead of living in a comment.
         determinism: Determinism::BestEffort,

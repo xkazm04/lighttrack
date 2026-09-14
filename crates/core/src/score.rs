@@ -124,6 +124,11 @@ pub struct ScoreDetail {
     /// carried no stamp at all, which is a weaker statement and kept distinct from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_redacted_spans: Option<u32>,
+    /// For a compare cell: what generating the judged candidates spent — tokens, the reasoning
+    /// share, latency, cost. Persisted here, per case, so a run's thinking can be read back case by
+    /// case past the report's bounded preview. `None` on every verdict that generated nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<crate::gen_spend::GenerationFacts>,
 }
 
 /// Truncate on a char boundary, marking that it happened.

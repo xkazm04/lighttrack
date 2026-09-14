@@ -160,6 +160,9 @@ pub(super) fn generate(
             .and_then(|u| u.get("promptTokenCount"))
             .and_then(Value::as_u64),
         output_tokens: billed_output_tokens(usage),
+        reasoning_tokens: usage
+            .and_then(|u| u.get("thoughtsTokenCount"))
+            .and_then(Value::as_u64),
         // temperature 0 + a fixed seed were both accepted: reproducible by contract.
         schema: schema_state(schema),
         determinism: if deterministic {
