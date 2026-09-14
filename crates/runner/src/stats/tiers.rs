@@ -38,13 +38,19 @@ use super::{round3, EPS};
 /// codebase, and a per-tier table that quietly dropped these cases would imply a coverage it does not
 /// have — the live run had 8 of its 18 cases ungraded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tier {
+pub(super) enum Tier {
     Graded(Difficulty),
     Ungraded,
 }
 
 impl Tier {
-    fn as_str(self) -> &'static str {
+    /// Whether a case with grade `g` belongs in this bucket. Shared with the thinking measures, so
+    /// "which rung is this case on" is answered once for every per-tier table in the runner.
+    pub(super) fn holds(self, g: Option<Difficulty>) -> bool {
+        in_tier(self, g)
+    }
+
+    pub(super) fn as_str(self) -> &'static str {
         match self {
             Tier::Graded(d) => d.as_str(),
             Tier::Ungraded => "ungraded",
@@ -64,7 +70,7 @@ impl Tier {
 /// Every bucket in ascending ladder order, ungraded last. The ONLY order any of this is emitted in:
 /// `Difficulty` is an ordered three-rung ladder and ordering is the whole reason it is an enum rather
 /// than a tag, so a table in hash order would throw away the one property the type carries.
-fn ladder() -> Vec<Tier> {
+pub(super) fn ladder() -> Vec<Tier> {
     Difficulty::ALL
         .iter()
         .copied()
@@ -76,7 +82,7 @@ fn ladder() -> Vec<Tier> {
 /// The grade of the case a score was measured on. Case ids are 1-based (`i + 1`, the same identity
 /// the run report writes on every logged case); an id outside the corpus reads as ungraded rather
 /// than panicking, because a report is not a place to discover an off-by-one.
-fn grade_of(tiers: &[Option<Difficulty>], case: u32) -> Option<Difficulty> {
+pub(super) fn grade_of(tiers: &[Option<Difficulty>], case: u32) -> Option<Difficulty> {
     case.checked_sub(1)
         .and_then(|i| tiers.get(i as usize))
         .copied()

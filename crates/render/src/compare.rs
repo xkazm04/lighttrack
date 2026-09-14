@@ -311,6 +311,11 @@ pub(crate) fn leaderboard(v: &Value) -> Option<String> {
     if let Some(block) = discrimination_block(v.get("tier_discrimination")) {
         out.push_str(&block);
     }
+    // And last of all, the question the Effort column poses but cannot answer: what did the higher
+    // rung actually buy? Printed only when the matrix ran one model at two or more levels.
+    if let Some(block) = crate::effort_curve::block(v.get("effort_curve")) {
+        out.push_str(&block);
+    }
     Some(out)
 }
 
