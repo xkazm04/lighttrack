@@ -51,6 +51,36 @@ fn unscoped_ranks_top_three_models_with_shares_and_usecase_annotation() {
 }
 
 #[test]
+fn provider_scope_does_not_annotate_from_another_provider() {
+    let costs = vec![cost("openai", "shared-model", 10.0)];
+    let ucs = vec![
+        uc(Some("openai-task"), "openai", "shared-model", 1.0),
+        uc(Some("foreign-task"), "openrouter", "shared-model", 99.0),
+    ];
+
+    let a = compose(&costs, &ucs, Some(&LimitScope::Provider("openai".into())));
+
+    assert_eq!(a.contributors[0].label, "shared-model (openai-task)");
+}
+
+#[test]
+fn dominant_usecase_is_the_aggregate_across_matching_providers() {
+    let costs = vec![
+        cost("openai", "shared-model", 10.0),
+        cost("openrouter", "shared-model", 10.0),
+    ];
+    let ucs = vec![
+        uc(Some("aggregate-winner"), "openai", "shared-model", 4.0),
+        uc(Some("aggregate-winner"), "openrouter", "shared-model", 4.0),
+        uc(Some("single-winner"), "openai", "shared-model", 6.0),
+    ];
+
+    let a = compose(&costs, &ucs, None);
+
+    assert_eq!(a.contributors[0].label, "shared-model (aggregate-winner)");
+}
+
+#[test]
 fn model_scope_attributes_within_the_model_by_usecase() {
     let ucs = vec![
         uc(Some("summarize"), "openai", "gpt-4o", 7.0),

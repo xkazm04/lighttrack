@@ -168,25 +168,38 @@ fn group_models<'a>(
     rows: impl Iterator<Item = &'a CostRow>,
     usecase_rows: &[UseCaseCostRow],
 ) -> Vec<(String, f64)> {
-    let grouped = group_by(rows.map(|r| (r.model.clone(), r.cost_usd)));
-    grouped
+    let mut totals = std::collections::BTreeMap::<&str, f64>::new();
+    let mut members = std::collections::BTreeSet::<(&str, &str)>::new();
+    for row in rows {
+        *totals.entry(&row.model).or_default() += row.cost_usd;
+        members.insert((&row.provider, &row.model));
+    }
+
+    let mut usecases =
+        std::collections::BTreeMap::<&str, std::collections::BTreeMap<&str, f64>>::new();
+    for row in usecase_rows {
+        if members.contains(&(row.provider.as_str(), row.model.as_str())) {
+            if let Some(name) = row.name.as_deref() {
+                *usecases
+                    .entry(&row.model)
+                    .or_default()
+                    .entry(name)
+                    .or_default() += row.cost_usd;
+            }
+        }
+    }
+
+    totals
         .into_iter()
-        .map(|(model, cost)| (annotate(&model, usecase_rows), cost))
+        .map(|(model, cost)| (annotate(model, usecases.get(model)), cost))
         .collect()
 }
 
 /// The model's dominant named use-case, if any, appended as `model (use-case)`.
-fn annotate(model: &str, usecase_rows: &[UseCaseCostRow]) -> String {
-    let top = usecase_rows
-        .iter()
-        .filter(|r| r.model == model && r.name.is_some())
-        .max_by(|a, b| {
-            a.cost_usd
-                .partial_cmp(&b.cost_usd)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    match top.and_then(|r| r.name.as_deref()) {
-        Some(name) => format!("{model} ({name})"),
+fn annotate(model: &str, usecases: Option<&std::collections::BTreeMap<&str, f64>>) -> String {
+    let top = usecases.and_then(|rows| rows.iter().max_by(|a, b| a.1.total_cmp(b.1)));
+    match top {
+        Some((name, _)) => format!("{model} ({name})"),
         None => model.to_string(),
     }
 }
