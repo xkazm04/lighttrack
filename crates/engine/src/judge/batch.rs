@@ -128,6 +128,8 @@ pub(crate) fn batch_with(
     samples: u32,
     jobs: usize,
 ) -> Result<Vec<Result<RubricOutcome>>> {
+    // A batched case carries no evidence, so a `grounding` dimension is refused, never scored 0.
+    super::grounding::grounding_dim(rubric, false)?;
     let n = cases.len();
     let ids: Vec<String> = (0..n).map(case_id).collect();
 

@@ -30,6 +30,11 @@ entry is written while the change is still fresh, not reconstructed at tag time.
 
 ### Added
 
+- Rubric dimension kind **`grounding`** (`docs/BENCHMARK_FRAMEWORK.md` §3e): claims cut from the
+  output, each verified against the case's evidence passages, scored supported over claims issued;
+  zero claims leaves the dimension unscored. Engine entry point `run_rubric_judge_with_evidence`;
+  any path without evidence refuses it by name. `ScoreDetail.dimensions[]` gains `voided` and
+  `grounding` (per-claim verdicts, `missing_verdicts`, `stray_verdicts`, instrument `version`).
 - **`lt-gateway`** (`crates/gateway`, `docs/GATEWAY.md`): an OpenAI-compatible
   `POST /v1/chat/completions` on loopback for local apps, routing a use case (from `gateway.toml`)
   or a literal `provider/model[@effort]` through the engine's provider dispatch — `claude -p` and

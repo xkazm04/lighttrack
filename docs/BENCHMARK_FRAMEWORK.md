@@ -584,6 +584,7 @@ all-`llm`.
 | `numeric` | the output's number is within `tolerance` of the target | `expect`, `tolerance` (absolute, default 0), `path` |
 | `json_valid` | the output parses as JSON (and, with `expect`, carries that value at `path`) | `expect`, `path`, `case_sensitive` |
 | `exec` | the command exits 0 in a sandbox holding the output ([§3d](#3d-exec-dimensions--grading-behaviour-instead-of-text-m25-design)) | `image`, `cmd`, `write`, `timeout_secs`, `path` |
+| `grounding` | *(not pass/fail)* scores supported claims over claims issued, against the case's evidence passages; model-judged ([§3e](#3e-grounding-dimensions--support-by-evidence-claim-by-claim)) | — |
 
 `check.path` is a JSON Pointer (e.g. `/data/city`) narrowing a JSON output before the check; `numeric`
 falls back to the first numeric token in the text, so *"The total is 41.95 dollars."* is comparable.
@@ -1042,6 +1043,54 @@ committed, and never forwarded into a sandbox (see the credential rule above).
    built in CI or must be built once by an operator and pushed to a registry.
 5. **Regional placement and data residency** for operators who mine datasets from production events
    (§1). A dataset is scrubbed, but it is still customer-derived text leaving the deployment.
+
+### 3e. `grounding` dimensions — support by evidence, claim by claim
+
+A "faithfulness" `llm` dimension is holistic: one judge reads the whole answer and picks an anchor,
+so it cannot say which sentence was invented, gives no partial credit, and lets one fluent true
+paragraph carry an invented sentence. A `grounding` dimension replaces it with a pipeline of narrow
+verdicts, and it needs something a case never had: **the evidence**, the passages the system under
+test was given to answer from.
+
+```json
+{ "key": "supported", "description": "claims backed by the retrieved passages", "weight": 3.0,
+  "floor": 0.8, "kind": "grounding" }
+```
+
+The procedure, per judge sample:
+
+1. **Cut.** The judge model rewrites the output as standalone claims (JSON: a list of strings). It
+   sees the output alone, never the question, so it cannot quietly drop claims it judges off topic.
+2. **Check.** The judge model gives every claim one supported/unsupported verdict against the
+   evidence (JSON: one entry per claim, each echoing the claim's **number**). "Not mentioned" is
+   unsupported, exactly like "contradicted". Each passage and each claim is nonce-fenced separately.
+3. **Score.** Supported over claims **issued**.
+
+Rules that keep the fraction honest:
+- **Evidence is required.** The engine entry point is `run_rubric_judge_with_evidence` (additive, like
+  `run_rubric_judge_sandboxed`). A `grounding` dimension judged anywhere else, including a batched call,
+  is refused by name before any call is made. An empty evidence list is legitimate (retrieval found
+  nothing), and every claim is then unsupported.
+- **The denominator is claims issued.** A claim with no verdict counts unsupported; a verdict naming a
+  claim nobody issued (or naming one twice) is ignored. Both are counted in `detail.grounding`
+  (`missing_verdicts`, `stray_verdicts`), so a verifier that returns fewer verdicts cannot raise a score.
+- **Zero claims is unscored.** A refusal, a greeting, a clarifying question: the dimension is voided for
+  that sample (never 1.0, never 0.0), leaves the overall's numerator and denominator, and cannot breach
+  its floor. A rubric whose every dimension voided has no verdict and says why.
+- **Same math as `llm`.** The cut and check fold into each sample, so the dimension is sampled, weighted,
+  floored and spread into `agreement` like any `llm` dimension. It is not narrated in the rubric prompt,
+  and a grounding-only rubric makes no rubric-prompt call. A rubric may carry at most one.
+- **The cutter is part of the instrument.** Every grounding verdict stores `detail.grounding.version`,
+  a pin of the procedure revision plus a fingerprint of the cut and check instructions (a test holds it
+  still). A different pin is a different instrument: one compound claim judged unsupported is 0/1, the
+  same content cut into four claims is 3/4. Never trend scores across a pin change.
+- **Auditable.** `detail.dimensions[].grounding.claims` keeps each claim, its verdict, its reason and the
+  sample that produced it, bounded at `MAX_CLAIMS_PER_DIM`.
+
+What it deliberately does not do yet: claim precision/recall against a reference answer (a second kind),
+per-passage attribution (claims × passages calls, a sampled diagnosis), and retrieval ranking metrics.
+The cutter has no calibration row of its own yet; verdict agreement with humans (docs/CALIBRATION.md)
+says nothing about whether the claims covered the answer.
 
 ## 4. Async benchmark queue (non-blocking)  (#4)
 Benchmark runs must never block ingestion. A **jobs** table + a worker loop in `lt-runner`:

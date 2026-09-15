@@ -16,7 +16,8 @@
 //! - `family`     — coarse model families, for the self-preference bias control.
 //! - `retry`      — bounded exponential backoff for transient (429/5xx/timeout) provider failures.
 //! - `scorers`   — deterministic (non-LLM) rubric dimensions: exact/regex/numeric/json_valid/contains.
-//! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_text`], [`parse_judge_spec`].
+//! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_rubric_judge_with_evidence`] (the
+//!   `grounding` kind), [`run_text`], [`parse_judge_spec`].
 
 mod anthropic_api;
 pub mod chat;
@@ -48,7 +49,9 @@ pub use invocation::{
     READONLY_BASE_TOOLS,
 };
 pub use judge::batch::{run_rubric_batch, BatchCase};
-pub use judge::{parse_judge_spec, run_judge, run_rubric_judge, run_text};
+pub use judge::{
+    parse_judge_spec, run_judge, run_rubric_judge, run_rubric_judge_with_evidence, run_text,
+};
 pub use pairwise::{run_pairwise, PairwiseOutcome, PairwiseVerdict, PairwiseWinner};
 pub use prompts::{
     build_eval_prompt, build_judge_prompt, build_pairwise_prompt, build_rubric_prompt,
@@ -302,6 +305,8 @@ pub struct DimScore {
     /// dimensions keep their relative weights instead of being silently re-based. `score` is 0.0 as
     /// a placeholder and means nothing; read this flag before reading it.
     pub voided: bool,
+    /// `grounding` only: the per-claim verdicts, counters and instrument pin behind `score`.
+    pub grounding: Option<lighttrack_core::GroundingDetail>,
 }
 
 impl DimScore {
