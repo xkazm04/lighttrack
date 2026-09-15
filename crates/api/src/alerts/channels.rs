@@ -133,16 +133,32 @@ async fn capped_body(mut resp: reqwest::Response) -> String {
     let mut buf: Vec<u8> = Vec::new();
     while buf.len() < MAX_RESPONSE_BYTES {
         match resp.chunk().await {
-            Ok(Some(c)) => buf.extend_from_slice(&c),
+            Ok(Some(c)) => {
+                let remaining = MAX_RESPONSE_BYTES - buf.len();
+                buf.extend_from_slice(&c[..c.len().min(remaining)]);
+            }
             _ => break,
         }
     }
-    buf.truncate(MAX_RESPONSE_BYTES);
-    String::from_utf8_lossy(&buf).trim().replace('\n', " ")
+    response_detail(&buf)
+}
+
+fn response_detail(buf: &[u8]) -> String {
+    let decoded = String::from_utf8_lossy(buf);
+    let mut out = String::with_capacity(decoded.len().min(MAX_RESPONSE_BYTES));
+    for ch in decoded.trim().chars() {
+        let ch = if ch.is_control() { ' ' } else { ch };
+        if out.len() + ch.len_utf8() > MAX_RESPONSE_BYTES {
+            break;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     use super::*;
@@ -165,6 +181,57 @@ mod tests {
         assert!(
             !error.contains(secret),
             "transport error leaked URL: {error}"
+        );
+    }
+
+    async fn failed_response(body: Vec<u8>) -> reqwest::Response {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 512];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut chunk).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..n]);
+            }
+            let head = format!(
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).await.unwrap();
+            socket.write_all(&body).await.unwrap();
+        });
+        reqwest::Client::new()
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn receiver_detail_is_one_control_free_line() {
+        let response = failed_response(b"first\rsecond\t\x1b[31m\nthird".to_vec()).await;
+        let detail = capped_body(response).await;
+
+        assert!(
+            !detail.chars().any(char::is_control),
+            "receiver controls reached the delivery record: {detail:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn receiver_detail_stays_within_the_byte_cap_after_utf8_repair() {
+        let response = failed_response(vec![0xff; MAX_RESPONSE_BYTES]).await;
+        let detail = capped_body(response).await;
+
+        assert!(
+            detail.len() <= MAX_RESPONSE_BYTES,
+            "{}-byte detail exceeded the {MAX_RESPONSE_BYTES}-byte cap",
+            detail.len()
         );
     }
 }
