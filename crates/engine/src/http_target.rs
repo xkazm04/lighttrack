@@ -149,6 +149,7 @@ fn call_once(url: &str, body: &[u8], signature: Option<&str>) -> Result<GenOutco
             .or_else(|| Some(started.elapsed().as_millis() as u64)),
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
+        reasoning_tokens: None,
         determinism: Determinism::BestEffort,
         schema: SchemaEnforcement::NotRequested,
     })

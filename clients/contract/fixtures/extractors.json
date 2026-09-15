@@ -123,6 +123,37 @@
       "expect": { "model": "gemini-2.5-pro", "input_tokens": 100, "output_tokens": 50, "cached_input_tokens": null }
     },
     {
+      "name": "gemini-thinking",
+      "provider": "gemini",
+      "why": "A thinking model reports its hidden reasoning as thoughtsTokenCount, apart from candidatesTokenCount (the visible answer). Both are billed at the output rate. All three SDKs read the answer count alone, so a call that thought for 1500 tokens and answered in 40 was priced as a 40-token call.",
+      "response": {
+        "candidates": [{ "finishReason": "STOP" }],
+        "modelVersion": "gemini-2.5-pro",
+        "usageMetadata": {
+          "promptTokenCount": 120,
+          "candidatesTokenCount": 40,
+          "thoughtsTokenCount": 1500,
+          "totalTokenCount": 1660
+        }
+      },
+      "expect": { "model": "gemini-2.5-pro", "input_tokens": 120, "output_tokens": 1540, "cached_input_tokens": null }
+    },
+    {
+      "name": "gemini-thinking-snake-case",
+      "provider": "gemini",
+      "why": "The same thinking split in the google-genai snake_case form: thoughts_token_count must be read in both casings, like every other Gemini counter.",
+      "response": {
+        "model_version": "gemini-2.5-flash",
+        "usage_metadata": {
+          "prompt_token_count": 60,
+          "candidates_token_count": 12,
+          "thoughts_token_count": 700,
+          "total_token_count": 772
+        }
+      },
+      "expect": { "model": "gemini-2.5-flash", "input_tokens": 60, "output_tokens": 712, "cached_input_tokens": null }
+    },
+    {
       "name": "gemini-no-usage",
       "provider": "gemini",
       "why": "A blocked/filtered generation carries a modelVersion and no usage.",

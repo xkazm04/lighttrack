@@ -50,6 +50,7 @@ pub(crate) async fn insert(pool: &PgPool, ev: &RevenueEvent) -> Result<()> {
     .bind(ev.kind.as_str())
     .bind(ev.period_start.map(fmt_ts))
     .bind(ev.period_end.map(fmt_ts))
+    .bind(fmt_ts(ev.ts))
     .bind(ev.amount_minor)
     .bind(ev.fx_rate)
     .bind(ev.fx_book_version.clone())

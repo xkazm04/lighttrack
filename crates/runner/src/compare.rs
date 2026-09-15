@@ -20,15 +20,17 @@ use lighttrack_engine::{
 
 use crate::bench::judge_output;
 use crate::budget::{estimate_compare, Budget};
+use crate::case_spend::GenSpend;
 use crate::cli::Cli;
 use crate::history::previous_case_scores;
 use crate::http::{get, post};
 use crate::provenance::{merge_details, weakest_reasoning};
 use crate::runctl::RunControl;
 use crate::stats::{
-    annotate_discrimination, annotate_frontier, annotate_significance, annotate_tiers,
-    annotate_verdict, paired_deltas_by_case, stability, superiority, values, verdict, CaseScore,
-    FrontierInput, FrontierRow, PairedEvidence, Summary,
+    annotate_discrimination, annotate_effort_curve, annotate_frontier, annotate_significance,
+    annotate_thinking_tiers, annotate_tiers, annotate_verdict, paired_deltas_by_case, stability,
+    superiority, values, verdict, CaseScore, CaseSpend, FrontierInput, FrontierRow, LadderRow,
+    PairedEvidence, Summary,
 };
 use crate::targets::ResolvedTarget;
 use crate::util::{
@@ -83,6 +85,9 @@ struct Cell {
     judge_cost: f64,
     judge_tokens: u64,
     latencies: Vec<u64>,
+    /// What this cell's generations spent, per candidate — the per-case record of tokens, the
+    /// reasoning share, latency and cost that the sums above fold away.
+    spend: GenSpend,
     /// Weakest reproducibility stamp across this cell's *generation* calls. `None` when nothing
     /// generated (the cell errored before its first candidate).
     gen_determinism: Option<Determinism>,
@@ -220,6 +225,7 @@ fn compute_cell(
         judge_cost: 0.0,
         judge_tokens: 0,
         latencies: Vec::new(),
+        spend: GenSpend::default(),
         gen_determinism: None,
         price_warnings: BTreeSet::new(),
         gen_unpriced: false,
@@ -293,6 +299,7 @@ fn compute_cell(
             cell.price_warnings
                 .insert(format!("{}/{}", t.provider, t.model));
         }
+        cell.spend.record(&gen, gc, gpriced);
         cell.gen_cost += gc;
         cell.gen_tokens += gen.input_tokens.unwrap_or(0) + gen.output_tokens.unwrap_or(0);
         if let Some(l) = gen.latency_ms {
@@ -469,8 +476,9 @@ pub(crate) fn run_compare(
     println!("  {}", estimate.line());
     if !estimate.unpriced.is_empty() {
         println!(
-            "  warning: no price book entry for {} — the estimate below excludes them and the \
-             run's recorded cost will be undercounted",
+            "  warning: no price book entry for {} — the estimate below excludes them. The run's \
+             recorded cost is undercounted too, unless the provider returns its own $ (the \
+             OpenRouter and HTTP-target adapters do)",
             join_csv(&estimate.unpriced)
         );
     }
@@ -576,6 +584,11 @@ pub(crate) fn run_compare(
     // its calls on two tiers that separated nothing and could not say so. See `stats::tiers`.
     let case_tiers: Vec<Option<Difficulty>> = cases.iter().map(|c| c.difficulty).collect();
 
+    // The effort ladder, filled as each target finishes: `(label, group key, display model, level,
+    // per-case spend)`. Only model targets that declared a level take part — an absent effort is the
+    // provider's default, which is not a rung, and an HTTP endpoint has no knob to have turned.
+    let mut ladder: Vec<(String, String, String, Effort, Vec<CaseSpend>)> = Vec::new();
+
     for rt in targets {
         let t = &rt.target;
         let label = t.display_label();
@@ -592,13 +605,19 @@ pub(crate) fn run_compare(
         let (mut gen_tokens, mut judge_tokens) = (0u64, 0u64);
         let mut price_warnings: BTreeSet<String> = BTreeSet::new();
         let mut gen_unpriced = false;
+        let mut target_spend = GenSpend::default();
         // Carries the case index, not just a position in this vector: the `continue` above skips
         // errored cells, so index `k` here is the k-th *judged* case and says nothing about which
         // case it was. `i + 1` is the same identity the report writes on each logged case.
         let mut case_scores: Vec<CaseScore> = Vec::new();
+        // What each judged case's generation spent — the per-case half of the thinking measures.
+        let mut case_spends: Vec<CaseSpend> = Vec::new();
         // Verdicts the API refused/couldn't take, and cases whose content imitated a judge-prompt
         // boundary. Both land in the run report instead of scrolling past on stderr.
         let (mut score_post_failures, mut injected) = (0u32, 0u32);
+        // Cases this target's own service limits failed, and cases where a limit was set but had
+        // nothing to compare against. The second is never folded into "passed".
+        let (mut limit_breach_cases, mut limits_unchecked_cases) = (0u32, 0u32);
         // Weakest determinism stamp across this target's judged cells. `None` until something was
         // actually judged — a target with no verdicts claims nothing. Generation and judging are
         // tracked SEPARATELY: a pinned judge over a redrawn candidate is not a reproducible run, and
@@ -659,6 +678,7 @@ pub(crate) fn run_compare(
             judge_cost += cell.judge_cost;
             judge_tokens += cell.judge_tokens;
             latencies.extend(cell.latencies);
+            target_spend.absorb(&cell.spend);
             if cell.cand_scores.is_empty() {
                 errored += 1;
                 continue;
@@ -666,7 +686,39 @@ pub(crate) fn run_compare(
 
             let n = cell.cand_scores.len() as f64;
             let case_score = cell.cand_scores.iter().sum::<f64>() / n;
-            let case_pass = (cell.cand_passes as f64 / n) >= 0.5; // majority of candidates pass
+            // A case passes when the majority of its candidates did.
+            let mut case_pass = (cell.cand_passes as f64 / n) >= 0.5;
+            // The rubric has had its say; now this target's service limits do. A case that answered
+            // well but cost or took more than the configuration is allowed to is a failure of the
+            // configuration — and the *score* is deliberately left alone, so quality in every report
+            // that reads it stays readable as quality.
+            let mut facts = cell.spend.facts();
+            if let (Some(limits), Some(f)) = (t.limits.as_ref(), facts.as_mut()) {
+                let check = limits.check(f.cost_usd, f.latency_ms);
+                if !check.passed() {
+                    case_pass = false;
+                    limit_breach_cases += 1;
+                    println!(
+                        "  case {}: LIMIT BREACH ({}) — scored {:.2} and still fails: this is the \
+                         configuration being unaffordable, not the answer being wrong",
+                        i + 1,
+                        check.breached.join(", "),
+                        case_score,
+                    );
+                }
+                if !check.unchecked.is_empty() {
+                    limits_unchecked_cases += 1;
+                    eprintln!(
+                        "  case {}: limit(s) {} NOT CHECKED — nothing to compare against (an \
+                         unpriced model reports no cost; a target may report no latency). The case \
+                         was not admitted by the limit, it was never tested by it",
+                        i + 1,
+                        check.unchecked.join(", "),
+                    );
+                }
+                f.limit_breaches = check.breached.iter().map(|s| s.to_string()).collect();
+                f.limits_unchecked = check.unchecked.iter().map(|s| s.to_string()).collect();
+            }
             let gen_agree = stability(&cell.cand_scores);
             let judge_agree = cell.judge_agrees.iter().sum::<f64>() / n;
             // Headline agreement: generation stability when sampling, else the judge's own agreement.
@@ -696,10 +748,19 @@ pub(crate) fn run_compare(
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
+            case_spends.push(CaseSpend {
+                case: i as u32 + 1,
+                score: case_score,
+                pass: case_pass,
+                output_tokens: facts.as_ref().and_then(|f| f.output_tokens),
+                reasoning_tokens: facts.as_ref().and_then(|f| f.reasoning_tokens),
+                cost_usd: facts.as_ref().and_then(|f| f.cost_usd),
+            });
             case_reports.push(json!({
                 "case": i + 1, "score": r3(case_score), "pass": case_pass,
                 "gen_agreement": r3(gen_agree), "judge_agreement": r3(judge_agree),
                 "n_candidates": cell.cand_scores.len(), "dimensions": Value::Object(dims_obj),
+                "generation": facts,
             }));
             println!(
                 "  case {}: score={:.2} pass={} gen_agree={:.2} judge_agree={:.2} (n_gen={})  {dim_str}",
@@ -713,7 +774,8 @@ pub(crate) fn run_compare(
             // Per-case judge verdict → /v1/scores (queryable per case, not just the run aggregate),
             // carrying the merged provenance of every candidate judged for this cell rather than a
             // free-text "k=0.82 …" restatement of numbers already in `value`.
-            let detail = merge_details(&cell.cand_details);
+            let mut detail = merge_details(&cell.cand_details);
+            detail.generation = facts;
             if let Some(d) = detail.determinism.as_deref() {
                 let stamp = if d == "exact" {
                     Determinism::Exact
@@ -937,6 +999,19 @@ pub(crate) fn run_compare(
             "budget_spent_usd": budget.spent_usd(),
             "estimated_cost_usd": estimate.usd,
         });
+        // What this target's generations spent in tokens, and which count stands for its thinking:
+        // `reasoning_tokens` only where every call reported the split, `output_tokens` otherwise.
+        let (out_tokens, reasoning_tokens, thinking_basis) = target_spend.totals();
+        // The target's own service bar, and how the run fared against it. Only when one was set, so
+        // every existing report keeps the exact shape it had.
+        if let Some(l) = &t.limits {
+            report["limits"] = json!(l);
+            report["limit_breach_cases"] = json!(limit_breach_cases);
+            report["limits_unchecked_cases"] = json!(limits_unchecked_cases);
+        }
+        report["gen_output_tokens"] = json!(out_tokens);
+        report["reasoning_tokens"] = json!(reasoning_tokens);
+        report["thinking_basis"] = json!(thinking_basis.map(|b| b.as_str()));
         // Stamped only on the rows that actually went through the probed endpoint: a matrix that
         // compares a local runtime against Anthropic must not label the Anthropic row with the
         // local endpoint's identity. Absent key = operator-asserted, which is what every row
@@ -960,6 +1035,24 @@ pub(crate) fn run_compare(
         // The cross-target verdict cannot live here — it is not a fact about one target — and is
         // annotated onto the printed matrix summary below.
         annotate_tiers(&mut report, &case_scores, &case_tiers);
+        // Where this target found work to do, in its own tokens rather than in the operator's
+        // grades — persisted beside the per-tier means for the same readers.
+        annotate_thinking_tiers(&mut report, &case_spends, &case_tiers, thinking_basis);
+        // This target's rung of the ladder, if it declared one.
+        if let (true, Some(effort)) = (t.kind.is_model(), t.resolved_effort()) {
+            let prompt = rt
+                .content
+                .as_deref()
+                .or(t.system_prompt.as_deref())
+                .unwrap_or("");
+            ladder.push((
+                label.clone(),
+                format!("{}/{}|{prompt}", t.provider, t.bare_model()),
+                format!("{}/{}", t.provider, t.bare_model()),
+                effort,
+                case_spends,
+            ));
+        }
         add_price_warnings(&mut report, &price_warnings);
         crate::bench::stamp_pins(&mut report, bench, report_extra);
         let run = json!({
@@ -1096,6 +1189,24 @@ pub(crate) fn run_compare(
             .collect::<Vec<_>>(),
         &case_tiers,
     );
+    // What a higher rung bought over the one below it: whether the dial moved the thinking at all,
+    // which cases flipped, and what the extra thinking cost. Printed beside the discrimination
+    // verdict and, like it, descriptive — see `stats::effort_curve`.
+    annotate_effort_curve(
+        &mut summary,
+        &ladder
+            .iter()
+            .map(|(label, key, model, effort, cases)| LadderRow {
+                label,
+                key: key.clone(),
+                model: model.clone(),
+                effort: *effort,
+                cases,
+            })
+            .collect::<Vec<_>>(),
+        &case_tiers,
+        ng,
+    );
     match lighttrack_render::render("compare", &summary) {
         Some(md) => println!("\n{md}"),
         None => println!("\n{}", serde_json::to_string_pretty(&summary)?),
@@ -1113,10 +1224,10 @@ pub(crate) fn run_compare(
 #[cfg(test)]
 mod tests {
     use super::{
-        annotate_discrimination, annotate_frontier, best_claim, r3, Admit, Difficulty,
-        FrontierInput, FrontierRow, TargetHealth,
+        annotate_discrimination, annotate_effort_curve, annotate_frontier, best_claim, r3, Admit,
+        Difficulty, Effort, FrontierInput, FrontierRow, LadderRow, TargetHealth,
     };
-    use super::{CaseScore, Value, OPEN_AFTER_FAILURES};
+    use super::{CaseScore, CaseSpend, Value, OPEN_AFTER_FAILURES};
     use crate::util::parallel_map;
     use serde_json::json;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -1451,6 +1562,83 @@ mod tests {
             "an ungraded run must render exactly what it rendered before"
         );
         assert!(!before.is_empty() && !before.contains("Per-tier"));
+    }
+
+    /// **THE LIVE FINDING, through the whole seam.** The 2026-09-07 run measured sonnet's thinking
+    /// rising ~10× from `low` to `high` with correctness flat — by hand, afterwards, because nothing
+    /// in the framework recorded it. The verdict is computed in the runner and only *printed* by the
+    /// renderer, so a sentence that exists on one side of that seam and not the other is worth
+    /// nothing — and it is the seam each crate's own unit tests mock away.
+    #[test]
+    fn the_effort_curve_reaches_the_rendered_matrix_summary() {
+        let spend = |case: u32, score: f64, tokens: f64| CaseSpend {
+            case,
+            score,
+            pass: score >= 0.5,
+            output_tokens: Some(tokens),
+            reasoning_tokens: None,
+            cost_usd: Some(0.001),
+        };
+        let low: Vec<CaseSpend> = (1..=4).map(|i| spend(i, 1.0, 360.0)).collect();
+        let high: Vec<CaseSpend> = (1..=4).map(|i| spend(i, 1.0, 3472.0)).collect();
+        let rows = [
+            LadderRow {
+                label: "anthropic/sonnet@low",
+                key: "anthropic/sonnet|".into(),
+                model: "anthropic/sonnet".into(),
+                effort: Effort::Low,
+                cases: &low,
+            },
+            LadderRow {
+                label: "anthropic/sonnet@high",
+                key: "anthropic/sonnet|".into(),
+                model: "anthropic/sonnet".into(),
+                effort: Effort::High,
+                cases: &high,
+            },
+        ];
+        let mut summary = plain_summary(&["anthropic/sonnet@low", "anthropic/sonnet@high"]);
+        annotate_effort_curve(&mut summary, &rows, &[None; 4], 1);
+        let md = lighttrack_render::render("compare", &summary).unwrap_or_default();
+        assert!(
+            md.contains("**anthropic/sonnet low→high** (4 shared case(s))"),
+            "the step reaches the reader: {md}"
+        );
+        assert!(
+            md.contains("thinking ×9.6 (median 360→3472 output tokens)"),
+            "the number the live run had to measure by hand: {md}"
+        );
+        assert!(
+            md.contains("nothing about the verdicts changed"),
+            "a live dial that bought nothing is named: {md}"
+        );
+        assert!(
+            md.contains("Caveat: one draw per case"),
+            "a single-draw run discloses that a flip could be noise: {md}"
+        );
+        // Descriptive: the block must not borrow the vocabulary of the tested claims above it.
+        let block = md.split("Effort curve").nth(1).unwrap_or_default();
+        for banned in ["p=", "α", "significant"] {
+            assert!(
+                !block.contains(banned),
+                "'{banned}' dressed a descriptive verdict as a test: {block}"
+            );
+        }
+    }
+
+    /// A matrix with no effort ladder renders exactly what it rendered before — the compatibility
+    /// half, which is what keeps this from being a cosmetic change to every existing table.
+    #[test]
+    fn a_matrix_without_an_effort_ladder_renders_byte_identically() {
+        let before =
+            lighttrack_render::render("compare", &plain_summary(&["a", "b"])).unwrap_or_default();
+        let mut summary = plain_summary(&["a", "b"]);
+        annotate_effort_curve(&mut summary, &[], &[None; 4], 3);
+        assert!(summary.get("effort_curve").is_none(), "{summary}");
+        assert_eq!(
+            lighttrack_render::render("compare", &summary).unwrap_or_default(),
+            before
+        );
     }
 
     fn approx(a: f64, b: f64) -> bool {

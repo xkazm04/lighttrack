@@ -124,8 +124,9 @@ This milestone is the axis it needs: the tier exists, persists, round-trips and 
 A benchmark defines a **matrix** of targets = `{providers × models} × {prompt variants}`. For each
 DatasetItem × target, the framework **generates** an output, then **judges** it.
 
-- **Provider abstraction** (`Generator` trait): `anthropic` (via `claude -p` or API), `openai`, `google`.
-  Each needs credentials; see *Open decisions*.
+- **Provider abstraction** (`Generator` trait): `anthropic` (via `claude -p` or API), `openai`,
+  `google`, and `openrouter` — a **gateway**, matched on its provider id rather than a lab family,
+  which reaches any lab's models through one key. Each needs credentials; see *Open decisions*.
 - **Generation vs judging are separated.** The judge model should differ in family from the generator to
   avoid **self-preference bias** (§3) — now detected and recorded per run, not just advised. Default
   judge = **`opus@xhigh`** (§3b, D15), via the bare Anthropic Messages API when `ANTHROPIC_API_KEY` is
@@ -144,6 +145,7 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
   "prompt_ref": { "name": "support-reply", "label": "production" },
   "label": "gpt4o-prod",
   "effort": "high",
+  "limits": { "max_cost_usd": 0.01, "max_latency_ms": 2000 },
   "kind": { "type": "http", "url": "https://rag.acme.com/answer" } }
 ```
 
@@ -175,10 +177,23 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
     | `anthropic` (Messages API, `ANTHROPIC_API_KEY` set) | `output_config.effort` | all five, 1:1. `xhigh`/`max` also raise `max_tokens` to 64000, which Anthropic's own guidance requires or the answer truncates mid-thought. Not `thinking.budget_tokens` — that shape is a 400 on every model this path resolves to. |
     | `anthropic` (`claude -p`, no key) | `--effort <level>` | all five, 1:1 — the path that always honoured it. |
     | `openai` | `reasoning_effort` | `low`/`medium`/`high` only. **`xhigh` and `max` are refused with an error naming the model and the level**: OpenAI's scale ends at `high`, and folding them onto it would send byte-identical requests for two differently-labelled rows. |
+    | `openrouter` | `reasoning: {effort: <level>}` | **all five, 1:1 — the only adapter with no gap in the ladder**, because the gateway normalizes the level across every upstream it serves. So a model whose own API stops at `high` is still measurable at `xhigh`/`max` through it. It additionally reports the hidden-reasoning token split for upstreams whose native API reports none, and returns a **$ cost** per call, so such a target is priced without a price-book entry. Determinism is `best-effort` even when pinning is asked for: which upstream serves a request is the gateway's choice, and they do not all honour a seed. |
     | `google` (Gemini) | **not implemented** | every level is refused with an error. Gemini's control is `generationConfig.thinkingConfig.thinkingBudget`, a *token count* whose valid range is per-model; this build has no verified level→budget table, and a guessed budget the API clamps or ignores would produce a leaderboard column that reads as measured and measures nothing. |
     | `kind: http` | n/a | an endpoint we do not control has no knob to set; the declaration is carried on the row for provenance only. |
   - A model that rejects the parameter (e.g. Haiku 4.5, which has no `effort`) fails the call with
     the provider's own 400 rather than running at its default under an effort label.
+- **`limits`** — per-case **service ceilings** this target must hold to besides scoring well:
+  `max_cost_usd` and `max_latency_ms`, both per candidate (so a `--gen-samples 3` run is held to the
+  same per-call bar rather than three times it). A case whose generation exceeds one **fails**,
+  however well the judge scored it. A rubric grades the answer; it cannot say that the same answer at
+  8s and 4¢ a case is a different product from one at 1s and a tenth of a cent — and §2b's frontier
+  *ranks* that trade-off without gating on it, so a target can sit on the frontier and still be
+  unusable for the job. The **score is left untouched**: quality stays readable as quality, and only
+  `pass` (and therefore the pass rate) carries the breach. A limit that could not be checked — an
+  unpriced model reports no cost — is counted and named as `limits_unchecked_cases`, never admitted
+  as a pass: a limit that silently stopped gating is worth more to know about than one that passed.
+  A non-positive ceiling is a 400 at write time, because it would fail every case by construction.
+  Compare mode only.
 - **`kind`** — `{"type":"model"}` (the default) or `{"type":"http","url":…}`. An **HTTP target** is
   an endpoint you own: LightTrack POSTs `{input, expected?, system_prompt?}` and reads back
   `{output, usage?, latency_ms?, cost_usd?}`. This is how a benchmark reaches a RAG pipeline, a
@@ -426,6 +441,64 @@ Two further honesty rules. A tier only one target reached reports `separates: nu
 "did it separate them?" has no answer rather than the answer "no". And where a target errored inside
 a tier, its mean covers fewer cases than the tier holds — the row carries `uneven_coverage` and the
 sentence says so, rather than leaving a complete-looking count to imply otherwise.
+
+### 2d. Why a rung of the effort ladder helped — thinking, flips and yield
+
+§2 made effort an axis, so a matrix can put `model@low` beside `model@high`. A reader then sees that
+the means differ by 0.03 and has **no way to tell which of three things happened**, though they are
+three different decisions:
+
+1. the model thought much harder and the corpus could not tell (the cases are too easy);
+2. the model thought much harder and lost cases it previously got right (**overthinking**);
+3. the dial did nothing at all and the two rows are one call at two prices.
+
+The live 2026-09-07 run hit (1) and (3) and could not distinguish them: sonnet's thinking rose ~10×
+from `low` to `high` with correctness flat, haiku's `low` burned 15k thinking tokens on a puzzle
+`opus@high` dispatched in 11s — and every one of those numbers was measured *afterwards, by hand*,
+because the framework recorded no reasoning tokens at all.
+
+**What is recorded now.** `GenOutcome` carries `reasoning_tokens` where the provider reports the
+split (OpenAI `completion_tokens_details.reasoning_tokens`, Gemini `thoughtsTokenCount`, OpenRouter
+for every upstream); it is informational and already inside `output_tokens`. Compare mode accumulates
+each cell's generation spend per candidate and writes `GenerationFacts` — tokens, the reasoning
+share, latency, cost — onto the verdict's `ScoreDetail`, which is **persisted per case** and so
+survives the run report's 200-case preview. Each target's report gains `gen_output_tokens`,
+`reasoning_tokens`, `thinking_basis` and `thinking_by_tier`.
+
+**`thinking_basis` is the honest half.** The Anthropic Messages API and `claude -p` report no
+reasoning/answer split, so where none is reported the measure falls back to **output tokens** — on a
+short-answer task those are nearly all thinking — and every figure derived from it is labelled
+`output_tokens`, never `reasoning tokens`. An unknown is never a zero: one candidate without a split
+makes the cell's reasoning figure unknown rather than an average that counts it as a call that did
+not think, and an unpriced call is not a free one.
+
+**`effort_curve`** on the matrix summary walks each model's rungs in order and, for every adjacent
+pair over the cases **both** judged (paired by case id, D23), reports:
+
+- **Is the dial alive** — the ratio of median thinking tokens. Below ~1.2× the rung bought no more
+  deliberation, so every rung above it is the same call at a higher price. Medians, not means: one
+  case that spiralled to the cap would drag a mean past what the model typically spends.
+- **Which cases flipped** — wrong→right and right→wrong counted *separately*. A mean delta of +0.00
+  hides three improvements and three regressions, and the second number is the measurable form of
+  overthinking.
+- **What the thinking bought** — mean score delta, extra $ per case, and score per 1k extra thinking
+  tokens, broken down per difficulty tier where the corpus is graded.
+
+**Descriptive, and it must stay so** — no p, no α, no significance vocabulary, for D25's reason and a
+second one: the steps are chosen *after* seeing which targets the matrix happened to contain, and
+§2a's claims are already corrected across a family of target pairs. A second, differently-shaped
+family with its own α would make the corrected claims in the same report incomparable with each
+other. A flip count is an observation about this corpus; the tool for testing it is more cases and
+the paired test that already exists. A run drawing one candidate per case also carries the caveat
+that a flip may be sampling noise — most generation paths expose no seed, so one draw is one sample
+of a distribution.
+
+**`thinking_by_tier` is a second opinion on the operator's grades, never a replacement.** Difficulty
+is assigned by a human and the live run showed how far that can miss — a `medium` tier of famous
+cognitive-reflection traps was scored 1.00 by every target at every effort. Thinking tokens are the
+run's *own* measure of where a model found work: a tier where thinking does not rise is a tier this
+corpus did not make harder for this model. It is never derived from the scores, which is the
+circularity D24/D25 refused.
 
 ### After promotion — the served-version canary
 
@@ -1102,6 +1175,15 @@ Every instance benchmarks models on *its own real tasks*. The network turns thos
 a **shared, real-world model leaderboard** — quality × cost × latency per `(provider, model, task_type)` —
 so model selection rests on collective field data, not vendor marketing benchmarks. The more teams run
 LightTrack, the better the data for everyone (the moat).
+
+**The model half of a bucket carries the reasoning effort it ran at** — `claude-opus-5@xhigh` is not
+`claude-opus-5@low`. Two efforts of one model are two different products (different thinking,
+different price), which is precisely what the matrix in §2 exists to compare; contributing both under
+one `model` averaged a cheap configuration's quality into an expensive one's and published a number
+for neither. A **pricing** lane (`@batch`, `@flex`, `@in>200000`) still folds away, because that is
+one model billed differently rather than two amounts of thinking. A target that declared no effort
+ran at the provider's default and keeps the bare model identity — an absent level is never rendered
+as a named one.
 
 - **Privacy-safe by construction** (`core::collective`, pure + unit-tested):
   - *Aggregate-only inputs.* A digest is built from benchmark **run scorecards**, which already carry no

@@ -9,12 +9,12 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { LightTrack, BLOCKED_TAG } from "./index.ts";
+import { LightTrack, BLOCKED_TAG, type LightTrackConfig } from "./index.ts";
 import { LightTrackBudgetExceeded } from "./admission.ts";
 import { parseLimitView } from "./limits.ts";
 
 /** A client whose cached view says the project is at its cap. */
-function atCap(cfg: Parameters<typeof LightTrack.prototype.constructor>[0] = {}): LightTrack {
+function atCap(cfg: LightTrackConfig = {}): LightTrack {
   const lt = new LightTrack({ journal: false, quiet: true, ...cfg });
   lt.limits.observe(parseLimitView(200, {}, { usage_ratio: 1.0 }));
   return lt;

@@ -12,18 +12,28 @@
 //! - [`tiers`] — the per-difficulty scorecard and the cross-target discrimination verdict. The one
 //!   member of this module that is **descriptive**: it reports what the run's targets scored per
 //!   tier and whether those numbers differed, and never tests it. See its module doc for why.
+//! - [`thinking`] — per-target thinking tokens per difficulty tier (descriptive, like [`tiers`]).
+//! - [`effort_curve`] — what one rung of the effort ladder bought over the rung below it: whether
+//!   the dial moved the thinking at all, which cases flipped, and what the extra thinking cost.
+//!   Descriptive for the same reason [`tiers`] is, and for a second one: the per-step comparisons
+//!   are chosen after seeing the matrix, and correcting them would need a family this module has no
+//!   honest way to define.
 
 pub(crate) mod cases;
+mod effort_curve;
 mod frontier;
 mod normal;
 pub(crate) mod paired;
+pub(crate) mod thinking;
 mod tiers;
 
 use serde_json::{json, Value};
 
 pub(crate) use cases::{paired_deltas_by_case, values, CaseScore};
+pub(crate) use effort_curve::{annotate_effort_curve, LadderRow};
 pub(crate) use frontier::{annotate_frontier, FrontierInput, FrontierRow};
 pub(crate) use paired::{annotate_verdict, superiority, verdict, PairedEvidence};
+pub(crate) use thinking::{annotate_thinking_tiers, CaseSpend};
 pub(crate) use tiers::{annotate_discrimination, annotate_tiers};
 
 /// z for a ~95% two-sided normal confidence interval.

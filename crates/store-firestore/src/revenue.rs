@@ -19,8 +19,27 @@ use crate::rest::Rest;
 const COLL: &str = "revenue_events";
 
 pub(crate) fn insert(rest: &Rest, ev: &RevenueEvent) -> Result<()> {
-    // Create-or-replace by id, so a webhook redelivery (same id) is an idempotent upsert.
-    rest.put_doc(COLL, &ev.id, &to_fields(ev))
+    // Create-or-replace by id, so a webhook redelivery (same id) is an idempotent upsert — but a
+    // redelivery whose minor-unit figure is unchanged must not restate the money, or a webhook
+    // retried against a later FX table would silently move historical revenue with nothing recording
+    // it. This mirrors the SQL backends' `RESTATE_MONEY` guard (see
+    // `store-pg/src/revenue.rs::RESTATE_MONEY`); Firestore has no server-side upsert-with-CASE, so
+    // the decision is made client-side against the doc as it stood before this write.
+    let mut fields = to_fields(ev);
+    if let Some(existing) = rest.get_doc(COLL, &ev.id)? {
+        let restate = match (fi64(&existing, "amount_minor"), ev.amount_minor) {
+            (Some(old), Some(new)) => old != new,
+            _ => true,
+        };
+        if !restate {
+            for key in ["amount_usd", "fx_rate", "fx_book_version", "converted"] {
+                if let Some(v) = existing.get(key) {
+                    fields.insert(key.to_string(), v.clone());
+                }
+            }
+        }
+    }
+    rest.put_doc(COLL, &ev.id, &fields)
 }
 
 /// Revenue records recognizable within `[since, until)`, optionally scoped to a project. Mirrors the

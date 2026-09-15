@@ -14,6 +14,7 @@ pub mod alias_table;
 pub mod bench_target;
 pub mod calibration;
 pub mod calibration_record;
+pub mod case_limits;
 pub mod collective;
 pub mod customer;
 pub mod dataset;
@@ -25,6 +26,7 @@ pub mod error;
 pub mod event;
 pub mod forecast;
 pub mod forecast_gate;
+pub mod gen_spend;
 pub mod job;
 pub mod job_kinds;
 pub mod label;
@@ -64,6 +66,7 @@ pub use bench_target::{
 };
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use calibration_record::{CalibrationRecord, JudgeTrust, JudgeTrustVerdict};
+pub use case_limits::{CaseLimits, LimitCheck};
 pub use collective::{
     bucket_cost, build_digest, build_digest_counted, canon_determinism, digest_sha256,
     hub_url_hash, merge_leaderboard, normalize_hub_url, task_type_from, CollectiveDigest,
@@ -89,6 +92,7 @@ pub use event::{
 };
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
 pub use forecast_gate::{Refusal, FLAT_BAND, MIN_OBSERVED_DAYS, MIN_SPAN_DAYS};
+pub use gen_spend::GenerationFacts;
 pub use job::{
     job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_PREFIX_FAILURE,
     JOB_ERROR_WORKER_LOST,

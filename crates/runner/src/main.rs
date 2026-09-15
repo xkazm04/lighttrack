@@ -21,6 +21,7 @@ mod calibrate;
 mod calibrate_batch;
 mod calibrate_watch;
 mod calibration_post;
+mod case_spend;
 mod cli;
 mod compare;
 mod dataset;

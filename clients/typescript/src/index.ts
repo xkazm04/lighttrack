@@ -132,7 +132,11 @@ export function extractAnthropic(resp: any): [string | undefined, number, number
 export function extractGemini(resp: any): [string | undefined, number, number, number | undefined] {
   const u = resp?.usageMetadata ?? resp?.usage_metadata ?? {};
   const input = num(u.promptTokenCount) ?? num(u.prompt_token_count) ?? 0;
-  const output = num(u.candidatesTokenCount) ?? num(u.candidates_token_count) ?? 0;
+  // Answer + thoughts: a thinking model's thoughts are billed as output, and the answer count alone
+  // priced a long-thinking call as a short one.
+  const output =
+    (num(u.candidatesTokenCount) ?? num(u.candidates_token_count) ?? 0) +
+    (num(u.thoughtsTokenCount) ?? num(u.thoughts_token_count) ?? 0);
   const cached = num(u.cachedContentTokenCount) ?? num(u.cached_content_token_count);
   return [resp?.modelVersion ?? resp?.model_version, input, output, cached];
 }

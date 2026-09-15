@@ -728,3 +728,60 @@ tier every target *fails* is called out identically to one they all pass, becaus
 the bottom buys as little as one at the top; and the render layer prints the verdict object it is
 handed and derives nothing, so the runner's stdout and the CLI/MCP rendering of a stored summary can
 never disagree.
+
+## D26 — Thinking is measured, and what a rung of the effort ladder bought is descriptive (2026-09-14)
+D21 made reasoning effort a target axis, so a matrix could put `model@low` beside `model@high`. It
+could not say **why** their means differed, and the three explanations are three different decisions:
+the model thought much harder and the corpus could not tell; it thought harder and lost cases it had
+right (overthinking); or the dial did nothing and the two rows are one call at two prices. The live
+2026-09-07 run hit the first and the third and could not distinguish them — sonnet's ~10x thinking
+rise and haiku@low's 15k-token puzzle were both measured by hand, afterwards, because nothing in the
+framework recorded reasoning tokens: they were parsed in exactly one place, inside a truncation
+error, and discarded on every successful call. *Decision:* `GenOutcome` carries `reasoning_tokens`
+where the provider reports the split (informational, already inside `output_tokens`), compare mode
+persists per-case `GenerationFacts` on the verdict's `ScoreDetail` — so the record survives the run
+report's 200-case preview — and the matrix summary carries `effort_curve`: per adjacent pair of
+rungs, over the cases both judged, whether the dial is alive (ratio of median thinking tokens),
+which cases flipped wrong->right and right->wrong counted separately, the mean score delta, the extra
+$ per case, and the score per 1k extra thinking tokens, per difficulty tier where the corpus is
+graded. *Two rules that keep it honest.* **An unknown is never a zero**: one candidate without a
+reasoning split makes the cell's figure unknown rather than an average that counts it as a call that
+did not think, and an unpriced call is not a free one. And where no provider reports a split — the
+Anthropic Messages API and `claude -p`, i.e. most of this repo's own runs — the measure falls back to
+**output tokens** and every figure derived from it is labelled `output_tokens`, never "reasoning":
+on a short-answer task output tokens are nearly all thinking, which makes them a usable proxy and
+never a licence to mislabel one. *The verdict is DESCRIPTIVE*, for D25's reason and a second one: the
+steps are chosen after seeing which targets the matrix contained, and D23's claims are already
+corrected across a family of target pairs, so a second differently-shaped family with its own alpha
+would make the corrected claims in the same report incomparable with each other. No p, no alpha, no
+significance vocabulary; a single-draw run additionally says a flip may be sampling noise, because
+most generation paths expose no seed.
+
+## D27 — The collective leaderboard key keeps the reasoning effort (2026-09-14)
+The collective bucket is `(provider, model, task_type)`, and the model half went through
+`canonicalize`, which splits any `@lane` off. That is right for a **pricing** lane (`@batch`,
+`@flex`, `@in>200000`): one model billed differently, whose results belong in one row. It is wrong
+for a reasoning effort. *Decision:* an effort lane stays on the merge key (`claude-opus-5@xhigh`),
+contributed from the compare run report's own `effort` field or from a suffix already on the model
+spec (never doubled), and hub-side normalization preserves it while still folding pricing lanes away.
+*Why it matters:* `opus@low` and `opus@xhigh` are different amounts of thinking at different prices —
+the exact question D21's axis exists to ask — so pooling them published one quality number for a
+configuration nobody ran, averaging a cheap row's score into an expensive row's, in the one surface
+built to compare like with like. A target that declared no effort ran at the provider's default and
+keeps its bare identity: an absent level is never rendered as a named one, and a word off the ladder
+is not smuggled onto the key.
+
+## D28 — A per-case limit is a pass/fail assertion, and an unmeasurable one is not a pass (2026-09-14)
+A rubric grades the answer. Nothing graded the *configuration*: the same answer at 8s and 4c a case
+is not the same product as one at 1s and a tenth of a cent, and D22's frontier **ranks** that
+trade-off without gating on it — a target can sit on the frontier and still be unusable for the job.
+OpenRouter's Ori Eval spells the same idea `toCostAtMost` / `toFinishWithin` per test. *Decision:* a
+target may declare per-case `limits` (`max_cost_usd`, `max_latency_ms`, both per candidate so a
+`--gen-samples 3` run is held to the same per-call bar rather than three times it), and a case whose
+generation exceeds one **fails**, however well it scored. *Three consequences, each deliberate.* The
+**score is untouched** — only `pass` and therefore the pass rate carry the breach, so quality stays
+readable as quality in every report that reads the number. A limit that **could not be checked** (an
+unpriced model reports no cost) is counted and named as unchecked rather than admitted, because a
+gate that silently stopped gating is worth more to know about than one that passed. And a
+non-positive ceiling is a **400 at write time**, not a target that goes red forever: it fails every
+case by construction, so it is a typo, and this benchmark may be what gates a deploy.

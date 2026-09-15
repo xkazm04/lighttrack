@@ -193,7 +193,9 @@ fn render_node(node: &Value, depth: usize, out: &mut String) {
     let lat = opt_u(node, "latency_ms")
         .or_else(|| opt_u(ev, "latency_ms"))
         .map(|m| format!("+{m}ms"))
-        .unwrap_or_else(|| "+—".into());
+        // The "+" belongs to the measurement, not to the column: an absent latency
+        // renders the same bare sentinel as every other absent value on the row.
+        .unwrap_or_else(|| "—".into());
     let model = {
         let provider = s(ev, "provider");
         let m = s(ev, "model");
@@ -290,6 +292,37 @@ mod tests {
         );
         assert!(md.contains("1.50s"));
         assert!(md.contains("1,234"));
+    }
+
+    // A span whose latency is absent everywhere renders "no measurement" — and that
+    // is one token, not one per column. The waterfall's "+" is an ornament of the
+    // value, so it must not survive onto the sentinel; the sibling cost field two
+    // lines away in the same function already gets this right.
+    #[test]
+    fn absent_latency_renders_the_bare_sentinel_not_an_ornamented_one() {
+        let v = json!({
+            "trace_id": "tr-2", "status": "success",
+            "started_at": "2026-06-21T12:34:56.000000000Z", "duration_ms": 0,
+            "models": ["m1"],
+            "totals": { "spans": 1, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
+                        "errors": 0, "total_latency_ms": 0 },
+            "spans": [{
+                "offset_ms": 0,
+                "event": { "provider": "anthropic", "model": "m1", "status": "success",
+                           "usage": { "input": 0, "output": 0 } },
+                "children": []
+            }],
+            "scores": []
+        });
+        let md = tree(&v).unwrap();
+        assert!(
+            md.contains('—'),
+            "absent cost and absent latency both render the sentinel: {md}"
+        );
+        assert!(
+            !md.contains("+—"),
+            "the sentinel must not carry the column's ornament: {md}"
+        );
     }
 
     #[test]
