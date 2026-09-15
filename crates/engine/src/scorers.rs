@@ -23,6 +23,8 @@ use lighttrack_core::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
 use crate::sandbox::SandboxRunner;
 use crate::{EngineError, Result};
 
+mod numeric;
+
 /// One deterministic dimension's verdict: its score plus why it got it.
 #[derive(Debug, Clone)]
 pub(crate) struct DetScore {
@@ -144,26 +146,7 @@ fn evaluate(
         }
         DimensionKind::Numeric => {
             let raw = target(d, expected)?;
-            let want: f64 = raw.parse().map_err(|_| {
-                EngineError::Other(format!(
-                    "rubric dimension '{}' (numeric) target `{raw}` is not a number",
-                    d.key
-                ))
-            })?;
-            let tol = c.tolerance.unwrap_or(0.0).abs();
-            match first_number(&subject) {
-                None => (
-                    Some(0.0),
-                    format!(
-                        "numeric: expected `{want}`, no number in `{}` → fail",
-                        snip(&subject)
-                    ),
-                ),
-                Some(got) => verdict(
-                    (got - want).abs() <= tol,
-                    format!("numeric: expected `{want}`, got `{got}`, tolerance {tol}"),
-                ),
-            }
+            numeric::evaluate(d, &raw, &subject, c.tolerance.unwrap_or(0.0).abs())?
         }
         DimensionKind::JsonValid => {
             // A path that resolved already proved the output is JSON; without one, parse it here.
@@ -275,18 +258,6 @@ fn folded(a: &str, b: &str, case_sensitive: bool) -> (String, String) {
     } else {
         (a.to_lowercase(), b.to_lowercase())
     }
-}
-
-/// The output's number: the whole (trimmed) subject if it parses, else the first numeric token in it —
-/// so `"41.6"`, `"The answer is 41.6."` and `"1.2e3"` all yield a number to compare.
-fn first_number(s: &str) -> Option<f64> {
-    if let Ok(v) = s.trim().parse::<f64>() {
-        return Some(v);
-    }
-    let re = RegexBuilder::new(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
-        .build()
-        .ok()?;
-    re.find(s).and_then(|m| m.as_str().parse::<f64>().ok())
 }
 
 #[cfg(test)]
