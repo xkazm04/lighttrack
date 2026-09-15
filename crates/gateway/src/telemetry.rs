@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use lighttrack_core::{new_id, split_effort, FAILURE_CLASS_KEY};
 
 use crate::failover::{AttemptKind, ChainResult};
-use crate::wire::Prompt;
+use crate::wire::Prepared;
 
 /// Where events go. `key` is a project key (`Authorization: Bearer`); without one, `project`
 /// scopes the write in a dev-mode API.
@@ -100,9 +100,10 @@ pub fn events_for(
     request_id: &str,
     route: Option<&str>,
     name: Option<&str>,
-    prompt: &Prompt,
+    prepared: &Prepared,
     chain: &ChainResult,
 ) -> Vec<Value> {
+    let prompt = &prepared.req;
     let ts = Utc::now();
     let skipped: Vec<String> = chain
         .attempts
@@ -118,13 +119,16 @@ pub fn events_for(
                 "success",
                 None,
                 json!({
-                    "input": o.input_tokens.unwrap_or(0),
-                    "output": o.output_tokens.unwrap_or(0),
-                    "reasoning": o.reasoning_tokens,
+                    "input": o.gen.input_tokens.unwrap_or(0),
+                    "output": o.gen.output_tokens.unwrap_or(0),
+                    "reasoning": o.gen.reasoning_tokens,
                 }),
-                o.cost_usd,
-                o.model.clone(),
-                Some(o.output.clone()),
+                o.gen.cost_usd,
+                o.gen.model.clone(),
+                Some(match &o.tool_calls {
+                    Some(calls) => json!({ "content": o.gen.output, "tool_calls": calls }),
+                    None => Value::String(o.gen.output.clone()),
+                }),
                 if i > 0 {
                     vec!["gateway", "fell_back"]
                 } else {
@@ -151,7 +155,8 @@ pub fn events_for(
                 "target": a.target.spec(),
                 "verdict": verdict,
                 "skipped_cooling": skipped,
-                "transcript": prompt.transcript,
+                "transcript": prepared.transcript,
+                "tools": prompt.has_tools(),
             }
         });
         if status == "error" {
@@ -190,9 +195,12 @@ pub fn events_for(
             ev["project_id"] = Value::String(p.clone());
         }
         if tel.record_content {
-            ev["input"] = json!({ "system": prompt.system, "input": prompt.input });
+            // The input as the engine saw it: the system prompt and every turn, so a rendered
+            // conversation and a native one read the same in the store.
+            ev["input"] = json!({ "system": prompt.system, "messages": prompt.openai_messages()
+                .into_iter().filter(|m| m["role"] != "system").collect::<Vec<_>>() });
             if let Some(o) = output {
-                ev["output"] = Value::String(o);
+                ev["output"] = o;
             }
         }
         out.push(ev);
@@ -205,7 +213,7 @@ mod tests {
     use super::*;
     use crate::failover::{Attempt, Verdict};
     use crate::target::Target;
-    use lighttrack_engine::{Determinism, GenOutcome, SchemaEnforcement};
+    use lighttrack_engine::{ChatOutcome, ChatRequest, Determinism, GenOutcome, SchemaEnforcement};
 
     fn tel(record: bool) -> Telemetry {
         Telemetry {
@@ -231,7 +239,7 @@ mod tests {
                 Attempt {
                     target: Target::parse("codex/gpt-5.5").unwrap(),
                     latency_ms: 900,
-                    kind: AttemptKind::Served(GenOutcome {
+                    kind: AttemptKind::Served(ChatOutcome::text(GenOutcome {
                         output: "answer".into(),
                         cost_usd: None,
                         model: "gpt-5.5".into(),
@@ -241,7 +249,7 @@ mod tests {
                         reasoning_tokens: Some(5),
                         determinism: Determinism::BestEffort,
                         schema: SchemaEnforcement::NotRequested,
-                    }),
+                    })),
                 },
             ],
             served: Some(1),
@@ -250,10 +258,8 @@ mod tests {
 
     #[test]
     fn a_failed_primary_is_an_error_row_and_the_fallback_a_tagged_success_on_one_trace() {
-        let p = Prompt {
-            system: Some("s".into()),
-            input: "i".into(),
-            schema: None,
+        let p = Prepared {
+            req: ChatRequest::single(Some("s"), "i", None),
             transcript: false,
         };
         let evs = events_for(
@@ -286,10 +292,8 @@ mod tests {
 
     #[test]
     fn content_stays_home_when_asked() {
-        let p = Prompt {
-            system: None,
-            input: "secret".into(),
-            schema: None,
+        let p = Prepared {
+            req: ChatRequest::single(None, "secret", None),
             transcript: false,
         };
         let evs = events_for(&tel(false), "r", None, None, &p, &chain());

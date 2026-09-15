@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::chat::{ChatOutcome, ChatRequest};
 use crate::invocation::{self, Invocation};
 use crate::retry::with_retry;
 use lighttrack_core::{split_effort, Effort, ProviderFamily};
@@ -202,20 +203,35 @@ pub fn generate(
     input: &str,
     schema: Option<&Value>,
 ) -> Result<GenOutcome> {
-    match generate_retrying(cfg, provider, model, system_prompt, input, schema, false) {
-        Err(EngineError::BadRequest { who, status, body }) if schema.is_some() => {
+    let req = ChatRequest::single(system_prompt, input, schema);
+    generate_chat(cfg, provider, model, &req).map(|o| o.gen)
+}
+
+/// [`generate`] over a whole conversation, with tools where the provider takes them — the
+/// gateway's path. Same retry policy and the same schema-shed fallback; what differs is only
+/// that the input is a [`ChatRequest`] and the answer may be a tool call instead of text.
+pub fn generate_chat(
+    cfg: &EngineConfig,
+    provider: &str,
+    model: &str,
+    req: &ChatRequest,
+) -> Result<ChatOutcome> {
+    match generate_retrying(cfg, provider, model, req, false) {
+        Err(EngineError::BadRequest { who, status, body }) if req.schema.is_some() => {
             eprintln!(
                 "[judge] {who} rejected the JSON schema (HTTP {status}: {}); retrying schema-less",
                 body.chars().take(200).collect::<String>()
             );
-            generate_retrying(cfg, provider, model, system_prompt, input, None, false).map(
-                |mut o| {
-                    // The caller asked for a schema and is not getting one. Say so in the value, not
-                    // only on stderr: downstream parses the output believing syntax was enforced.
-                    o.schema = SchemaEnforcement::Shed;
-                    o
-                },
-            )
+            let shed = ChatRequest {
+                schema: None,
+                ..req.clone()
+            };
+            generate_retrying(cfg, provider, model, &shed, false).map(|mut o| {
+                // The caller asked for a schema and is not getting one. Say so in the value, not
+                // only on stderr: downstream parses the output believing syntax was enforced.
+                o.gen.schema = SchemaEnforcement::Shed;
+                o
+            })
         }
         other => other,
     }
@@ -253,17 +269,20 @@ pub fn generate_deterministic(
     input: &str,
     schema: Option<&Value>,
 ) -> Result<GenOutcome> {
-    match generate_retrying(cfg, provider, model, system_prompt, input, schema, true) {
+    let req = ChatRequest::single(system_prompt, input, schema);
+    match generate_retrying(cfg, provider, model, &req, true) {
         Err(EngineError::BadRequest { who, status, body }) => {
             eprintln!(
                 "[engine] {who} rejected the pinned request (HTTP {status}: {}); retrying \
                  schema-less and non-deterministic",
                 body.chars().take(200).collect::<String>()
             );
-            generate_retrying(cfg, provider, model, system_prompt, input, None, false)
+            let loose = ChatRequest::single(system_prompt, input, None);
+            generate_retrying(cfg, provider, model, &loose, false)
         }
         other => other,
     }
+    .map(|o| o.gen)
 }
 
 /// One dispatch under the transient-failure retry policy.
@@ -271,33 +290,19 @@ fn generate_retrying(
     cfg: &EngineConfig,
     provider: &str,
     model: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
+    req: &ChatRequest,
     deterministic: bool,
-) -> Result<GenOutcome> {
-    with_retry(|| {
-        generate_once(
-            cfg,
-            provider,
-            model,
-            system_prompt,
-            input,
-            schema,
-            deterministic,
-        )
-    })
+) -> Result<ChatOutcome> {
+    with_retry(|| generate_once(cfg, provider, model, req, deterministic))
 }
 
 fn generate_once(
     cfg: &EngineConfig,
     provider: &str,
     model: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
+    req: &ChatRequest,
     deterministic: bool,
-) -> Result<GenOutcome> {
+) -> Result<ChatOutcome> {
     // **The `@effort` suffix dies here**, at the one point every generation path passes through.
     // It used to be split inside the `claude -p` argv builder only, so with `ANTHROPIC_API_KEY` set
     // the default judge spec `opus@xhigh` was POSTed to the Messages API as a *model id*; Gemini and
@@ -312,13 +317,23 @@ fn generate_once(
     // matrix reaches for it.
     let provider_id = lighttrack_core::ProviderId::new(provider);
     if provider_id.as_str() == openrouter::PROVIDER_ID {
-        return openrouter::generate(model, system_prompt, input, schema, deterministic, effort);
+        return openrouter::generate(model, req, deterministic, effort);
     }
     // The Codex CLI, likewise matched on its id: a subscription CLI in front of GPT models, the
     // counterpart of the `claude -p` path. It has no sampling knobs, so `deterministic` has nothing
     // to pin and the outcome says so.
+    // A CLI takes one prompt: the conversation is rendered (a single user turn verbatim), and a
+    // tool-using request is refused there rather than silently flattened.
     if provider_id.as_str() == crate::codex::PROVIDER_ID {
-        return crate::codex::generate(model, system_prompt, input, schema, effort);
+        let rendered = req.render()?;
+        return crate::codex::generate(
+            model,
+            req.system.as_deref(),
+            &rendered,
+            req.schema.as_ref(),
+            effort,
+        )
+        .map(ChatOutcome::text);
     }
 
     // Route on the provider's **family**, not its literal id: a judge spec may name any provider
@@ -330,18 +345,23 @@ fn generate_once(
         // (DECISIONS D9) and `temperature: 0` is at least askable. Without a key the only way in is
         // the CLI's subscription OAuth, and that path has no sampling knobs at all.
         ProviderFamily::Anthropic if anthropic_api::available() => {
-            anthropic_api::generate(model, system_prompt, input, schema, deterministic, effort)
+            anthropic_api::generate(model, req, deterministic, effort)
         }
         // The Claude CLI has no sampling knobs to pass; the deterministic request is best-effort.
         ProviderFamily::Anthropic => {
-            generate_anthropic(cfg, model, system_prompt, input, schema, effort)
+            let rendered = req.render()?;
+            generate_anthropic(
+                cfg,
+                model,
+                req.system.as_deref(),
+                &rendered,
+                req.schema.as_ref(),
+                effort,
+            )
+            .map(ChatOutcome::text)
         }
-        ProviderFamily::Google => {
-            gemini::generate(model, system_prompt, input, schema, deterministic, effort)
-        }
-        ProviderFamily::OpenAi => {
-            openai::generate(model, system_prompt, input, schema, deterministic, effort)
-        }
+        ProviderFamily::Google => gemini::generate(model, req, deterministic, effort),
+        ProviderFamily::OpenAi => openai::generate(model, req, deterministic, effort),
         other => Err(EngineError::Other(format!(
             "no generation adapter for provider '{provider}' (family {other}); this build can \
              generate with anthropic, google, openai, openrouter and codex only — observability \

@@ -204,5 +204,8 @@ next model change (`GET /v1/benchmarks/:id/gate`).
   A model name the CLI refuses is a stale install or a wrong id.
 - **The primary clears hard but the other seat clears nothing** — ship without a fallback and say
   the app stops on a limit. Do not lower the bar to manufacture one.
-- **The use case is multi-turn or uses tools** — the gateway renders turns into one prompt and
-  refuses tools. Say so; that call site is not a candidate yet.
+- **The use case is multi-turn or uses tools** — on the two seat CLIs the turns are rendered into
+  one prompt (the response flags `transcript`) and tools are refused; only the OpenAI-shaped
+  HTTP providers (`openai`, `openrouter`) take tools. A tool-using call site can be routed, but
+  every target in its chain must be one of those, so it is a route between API keys rather than
+  seats — say so, and benchmark those targets instead.

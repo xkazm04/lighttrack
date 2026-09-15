@@ -131,22 +131,98 @@ async fn the_simulate_header_only_works_in_dev_mode() {
 }
 
 #[tokio::test]
-async fn unknown_models_and_unsupported_features_are_refused_before_any_seat_is_spent() {
+async fn unknown_models_and_tools_on_a_cli_route_are_refused_before_any_seat_is_spent() {
     let app = app(Script::new(vec![]), false);
     let (status, body, _) = post(&app, ask("gpt-4o"), &[]).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["error"]["code"], "model_not_found");
 
-    let mut streaming = ask("summarize");
-    streaming["stream"] = json!(true);
-    let (status, body, _) = post(&app, streaming, &[]).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"]["code"], "unsupported");
-
+    // The route's primary is a CLI: tools cannot pass through, and the refusal names it.
     let mut tools = ask("summarize");
-    tools["tools"] = json!([{ "type": "function" }]);
-    let (status, _, _) = post(&app, tools, &[]).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    tools["tools"] = json!([{ "type": "function", "function": { "name": "now" } }]);
+    let (status, body, _) = post(&app, tools, &[]).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "unsupported");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("anthropic/claude-sonnet-5@medium"));
+}
+
+#[tokio::test]
+async fn tools_pass_through_an_openai_shaped_target_and_come_back_as_tool_calls() {
+    let app = app(Script::new(vec![("openai", Ok("TOOL:now"))]), false);
+    let mut req = ask("openai/gpt-5.5");
+    req["tools"] = json!([{ "type": "function", "function": { "name": "now" } }]);
+    let (status, body, _) = post(&app, req, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["choices"][0]["finish_reason"], "tool_calls");
+    assert_eq!(body["choices"][0]["message"]["content"], Value::Null);
+    assert_eq!(
+        body["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+        "now"
+    );
+}
+
+#[tokio::test]
+async fn a_conversation_reaches_the_provider_as_turns() {
+    let script = Script::new(vec![("anthropic", Ok("ok"))]);
+    let app = app(script, false);
+    let req = json!({ "model": "summarize", "messages": [
+        { "role": "system", "content": "s" },
+        { "role": "user", "content": "a" },
+        { "role": "assistant", "content": "b" },
+        { "role": "user", "content": "c" }
+    ]});
+    let (status, body, _) = post(&app, req, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["lighttrack"]["transcript"], true);
+}
+
+#[tokio::test]
+async fn stream_true_delivers_the_answer_as_sse_chunks() {
+    let app = app(
+        Script::new(vec![("anthropic", Ok("alpha beta gamma delta"))]),
+        false,
+    );
+    let mut req = ask("summarize");
+    req["stream"] = json!(true);
+    let resp = app
+        .oneshot(
+            Request::post("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(req.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["content-type"], "text/event-stream");
+    let text = String::from_utf8(
+        to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(text.ends_with("data: [DONE]\n\n"));
+    let chunks: Vec<Value> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("data: "))
+        .filter(|l| *l != "[DONE]")
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(chunks[0]["choices"][0]["delta"]["role"], "assistant");
+    let content: String = chunks
+        .iter()
+        .filter_map(|c| c["choices"][0]["delta"]["content"].as_str())
+        .collect();
+    assert_eq!(content, "alpha beta gamma delta");
+    assert_eq!(
+        chunks[chunks.len() - 2]["choices"][0]["finish_reason"],
+        "stop"
+    );
+    assert_eq!(chunks.last().unwrap()["usage"]["total_tokens"], 13);
 }
 
 #[tokio::test]

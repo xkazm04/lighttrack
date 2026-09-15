@@ -16,12 +16,11 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use lighttrack_engine::{EngineError, GenOutcome};
+use lighttrack_engine::{ChatOutcome, ChatRequest, EngineError};
 
 use crate::cooldown::Cooldowns;
 use crate::generator::Generator;
 use crate::target::Target;
-use crate::wire::Prompt;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Verdict {
@@ -84,7 +83,7 @@ pub fn classify(err: &EngineError, default_hold: Duration) -> Verdict {
 
 #[derive(Debug, Clone)]
 pub enum AttemptKind {
-    Served(GenOutcome),
+    Served(ChatOutcome),
     Failed { error: String, verdict: Verdict },
     SkippedCooling { remaining_secs: u64 },
 }
@@ -105,7 +104,7 @@ pub struct ChainResult {
 }
 
 impl ChainResult {
-    pub fn outcome(&self) -> Option<(&Target, &GenOutcome)> {
+    pub fn outcome(&self) -> Option<(&Target, &ChatOutcome)> {
         let a = &self.attempts[self.served?];
         match &a.kind {
             AttemptKind::Served(o) => Some((&a.target, o)),
@@ -128,7 +127,7 @@ pub struct ChainRun<'a> {
 }
 
 impl ChainRun<'_> {
-    pub fn run(&self, chain: &[Target], prompt: &Prompt) -> ChainResult {
+    pub fn run(&self, chain: &[Target], req: &ChatRequest) -> ChainResult {
         let mut attempts = Vec::with_capacity(chain.len());
         for target in chain {
             if let Some(remaining_secs) = self.cooldowns.remaining(&target.provider) {
@@ -146,12 +145,7 @@ impl ChainRun<'_> {
                     retry_after: None,
                 })
             } else {
-                self.gen.generate(
-                    target,
-                    prompt.system.as_deref(),
-                    &prompt.input,
-                    prompt.schema.as_ref(),
-                )
+                self.gen.generate(target, req)
             };
             let latency_ms = started.elapsed().as_millis() as u64;
             match result {

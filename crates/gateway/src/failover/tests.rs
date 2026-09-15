@@ -1,22 +1,26 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use serde_json::Value;
-
-use lighttrack_engine::{Determinism, EngineError, GenOutcome, SchemaEnforcement};
+use lighttrack_engine::{
+    ChatOutcome, ChatRequest, Determinism, EngineError, GenOutcome, SchemaEnforcement,
+};
 
 use super::*;
 
-/// A scripted generator: each provider answers with the next result in its queue.
+/// A scripted generator: each provider answers with the next result in its queue. A scripted
+/// answer starting with `TOOL:` is returned as a tool call named by the rest of the line.
 pub(crate) struct Script {
     pub calls: Mutex<Vec<String>>,
     pub script: Mutex<Vec<(String, Result<String, EngineError>)>>,
+    /// Every request seen, so a test can assert what reached the "provider".
+    pub seen: Mutex<Vec<ChatRequest>>,
 }
 
 impl Script {
     pub(crate) fn new(script: Vec<(&str, Result<&str, EngineError>)>) -> Script {
         Script {
             calls: Mutex::new(Vec::new()),
+            seen: Mutex::new(Vec::new()),
             script: Mutex::new(
                 script
                     .into_iter()
@@ -45,18 +49,25 @@ impl Generator for Script {
     fn generate(
         &self,
         target: &Target,
-        _system: Option<&str>,
-        _input: &str,
-        _schema: Option<&Value>,
-    ) -> lighttrack_engine::Result<GenOutcome> {
+        req: &ChatRequest,
+    ) -> lighttrack_engine::Result<ChatOutcome> {
         self.calls.lock().unwrap().push(target.spec());
+        self.seen.lock().unwrap().push(req.clone());
         let mut script = self.script.lock().unwrap();
         let pos = script
             .iter()
             .position(|(p, _)| *p == target.provider)
             .unwrap_or_else(|| panic!("no scripted answer for {}", target.provider));
         let (_, r) = script.remove(pos);
-        r.map(|t| outcome(&t, &target.model))
+        r.map(|t| match t.strip_prefix("TOOL:") {
+            Some(name) => ChatOutcome {
+                gen: outcome("", &target.model),
+                tool_calls: Some(serde_json::json!([{ "id": "call_1", "type": "function",
+                    "function": { "name": name, "arguments": "{}" } }])),
+                finish_reason: Some("tool_calls".into()),
+            },
+            None => ChatOutcome::text(outcome(&t, &target.model)),
+        })
     }
 }
 
@@ -67,13 +78,8 @@ fn chain() -> Vec<Target> {
     ]
 }
 
-fn prompt() -> Prompt {
-    Prompt {
-        system: None,
-        input: "hi".into(),
-        schema: None,
-        transcript: false,
-    }
+fn prompt() -> ChatRequest {
+    ChatRequest::single(None, "hi", None)
 }
 
 fn limit() -> EngineError {
@@ -138,7 +144,7 @@ fn a_usage_limit_falls_over_and_holds_the_seat_for_the_next_call() {
     };
     let r = run.run(&chain(), &prompt());
     assert!(r.fell_back());
-    assert_eq!(r.outcome().unwrap().1.output, "from codex");
+    assert_eq!(r.outcome().unwrap().1.gen.output, "from codex");
     assert_eq!(r.attempts.len(), 2);
 
     // Second call: the primary is not even tried.
@@ -147,7 +153,7 @@ fn a_usage_limit_falls_over_and_holds_the_seat_for_the_next_call() {
         r.attempts[0].kind,
         AttemptKind::SkippedCooling { .. }
     ));
-    assert_eq!(r.outcome().unwrap().1.output, "again");
+    assert_eq!(r.outcome().unwrap().1.gen.output, "again");
     assert_eq!(gen.calls.lock().unwrap().len(), 3);
 }
 

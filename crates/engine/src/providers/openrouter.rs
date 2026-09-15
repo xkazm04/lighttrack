@@ -23,6 +23,7 @@ use super::{
     api_base, http_client, http_error, read_bounded, request_timeout, schema_state, send_error,
     PINNED_SEED,
 };
+use crate::chat::{ChatOutcome, ChatRequest};
 use crate::{Determinism, EngineError, GenOutcome, Result};
 
 /// The provider id that routes here. Matched as an **id**, never a family: OpenRouter is a gateway,
@@ -32,22 +33,10 @@ pub(super) const PROVIDER_ID: &str = "openrouter";
 /// The request body for one chat completion. `model` is the resolved spec — the caller has already
 /// split any `@effort` suffix off it — and keeps its `lab/model` shape, which is how OpenRouter names
 /// a model and must not be mistaken for a prefix to strip.
-fn body(
-    model: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
-    deterministic: bool,
-    effort: Option<Effort>,
-) -> Value {
-    let mut messages = Vec::new();
-    if let Some(sys) = system_prompt {
-        messages.push(serde_json::json!({ "role": "system", "content": sys }));
-    }
-    messages.push(serde_json::json!({ "role": "user", "content": input }));
+fn body(model: &str, req: &ChatRequest, deterministic: bool, effort: Option<Effort>) -> Value {
     let mut body = serde_json::json!({
         "model": model,
-        "messages": messages,
+        "messages": req.openai_messages(),
         // Ask for the accounting explicitly: without it the response carries no cost and no
         // reasoning split, which are the two things this adapter exists to collect.
         "usage": { "include": true },
@@ -56,7 +45,13 @@ fn body(
         // All five levels travel verbatim. This is the only adapter with no gap in the ladder.
         body["reasoning"] = serde_json::json!({ "effort": level.as_str() });
     }
-    if let Some(sc) = schema {
+    if let Some(tools) = &req.tools {
+        body["tools"] = tools.clone();
+        if let Some(choice) = &req.tool_choice {
+            body["tool_choice"] = choice.clone();
+        }
+    }
+    if let Some(sc) = &req.schema {
         body["response_format"] = serde_json::json!({
             "type": "json_schema",
             "json_schema": { "name": "verdict", "strict": true, "schema": sc },
@@ -86,15 +81,13 @@ fn cost_usd(v: &Value) -> Option<f64> {
 /// stamp is the honest one, and it is what a run's reproducibility is folded from.
 pub(super) fn generate(
     model: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
+    req: &ChatRequest,
     deterministic: bool,
     effort: Option<Effort>,
-) -> Result<GenOutcome> {
+) -> Result<ChatOutcome> {
     let key = std::env::var("OPENROUTER_API_KEY")
         .map_err(|_| EngineError::Other("no OpenRouter API key (set OPENROUTER_API_KEY)".into()))?;
-    let body = body(model, system_prompt, input, schema, deterministic, effort);
+    let body = body(model, req, deterministic, effort);
 
     let started = Instant::now();
     let resp = http_client()?
@@ -128,17 +121,13 @@ pub(super) fn generate(
             reasoning_tokens,
         });
     }
-    let output = v
-        .pointer("/choices/0/message/content")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    if output.is_empty() {
+    let (output, tool_calls, finish_reason) = super::openai::message_parts(&v);
+    if output.is_empty() && tool_calls.is_none() {
         return Err(EngineError::EmptyCompletion {
             who: PROVIDER_ID.into(),
         });
     }
-    Ok(GenOutcome {
+    let gen = GenOutcome {
         output,
         cost_usd: cost_usd(&v),
         // What actually served the call, which may name a lab the caller did not: the routed model
@@ -157,7 +146,12 @@ pub(super) fn generate(
             .and_then(Value::as_u64),
         reasoning_tokens: super::openai::reasoning_tokens(usage),
         determinism: Determinism::BestEffort,
-        schema: schema_state(schema),
+        schema: schema_state(req.schema.as_ref()),
+    };
+    Ok(ChatOutcome {
+        gen,
+        tool_calls,
+        finish_reason,
     })
 }
 
@@ -166,24 +160,21 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn one(input: &str) -> ChatRequest {
+        ChatRequest::single(None, input, None)
+    }
+
     /// **The reason this adapter exists.** Every level of our ladder travels, including the two the
     /// OpenAI adapter must refuse — so `model@max` is a row a matrix can actually measure.
     #[test]
     fn all_five_effort_levels_travel_verbatim() {
         for level in Effort::ALL {
-            let b = body(
-                "anthropic/claude-opus-5",
-                None,
-                "hi",
-                None,
-                false,
-                Some(level),
-            );
+            let b = body("anthropic/claude-opus-5", &one("hi"), false, Some(level));
             assert_eq!(b["reasoning"]["effort"], json!(level.as_str()));
         }
         // No effort asked for: the key is absent, so the provider's default applies and is not
         // reported as a level.
-        let plain = body("openai/gpt-4o", None, "hi", None, false, None);
+        let plain = body("openai/gpt-4o", &one("hi"), false, None);
         assert!(plain.get("reasoning").is_none());
     }
 
@@ -193,9 +184,7 @@ mod tests {
     fn the_model_keeps_its_slash_and_usage_is_always_requested() {
         let b = body(
             "anthropic/claude-sonnet-5",
-            Some("terse"),
-            "hi",
-            None,
+            &ChatRequest::single(Some("terse"), "hi", None),
             false,
             None,
         );
@@ -207,19 +196,24 @@ mod tests {
 
     #[test]
     fn deterministic_pins_temperature_and_seed() {
-        let b = body("openai/gpt-4o", None, "hi", None, true, Some(Effort::Low));
+        let b = body("openai/gpt-4o", &one("hi"), true, Some(Effort::Low));
         assert_eq!(b["temperature"], json!(0.0));
         assert_eq!(b["seed"], json!(PINNED_SEED));
         // …and asking for effort does not disturb either.
         assert_eq!(b["reasoning"]["effort"], json!("low"));
-        let loose = body("openai/gpt-4o", None, "hi", None, false, None);
+        let loose = body("openai/gpt-4o", &one("hi"), false, None);
         assert!(loose.get("temperature").is_none() && loose.get("seed").is_none());
     }
 
     #[test]
     fn a_schema_is_sent_as_a_strict_json_schema() {
         let sc = json!({ "type": "object" });
-        let b = body("openai/gpt-4o", None, "hi", Some(&sc), false, None);
+        let b = body(
+            "openai/gpt-4o",
+            &ChatRequest::single(None, "hi", Some(&sc)),
+            false,
+            None,
+        );
         assert_eq!(b["response_format"]["type"], json!("json_schema"));
         assert_eq!(b["response_format"]["json_schema"]["strict"], json!(true));
         assert_eq!(b["response_format"]["json_schema"]["schema"], sc);

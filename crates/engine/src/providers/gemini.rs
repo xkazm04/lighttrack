@@ -14,6 +14,7 @@ use super::{
     api_base, effort_unsupported, http_client, http_error, read_bounded, schema_state, send_error,
     PINNED_SEED,
 };
+use crate::chat::{ChatOutcome, ChatRequest};
 use crate::{Determinism, EngineError, GenOutcome, Result};
 
 /// Recursively drop a JSON-schema key the provider's schema subset doesn't accept (Gemini's
@@ -50,9 +51,7 @@ const GEMINI_EFFORT_GAP: &str = "Gemini's thinking control is \
 /// The `generateContent` request body.
 fn body(
     model: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
+    req: &ChatRequest,
     deterministic: bool,
     effort: Option<Effort>,
 ) -> Result<Value> {
@@ -64,13 +63,12 @@ fn body(
             GEMINI_EFFORT_GAP,
         ));
     }
-    let mut body =
-        serde_json::json!({ "contents": [{ "role": "user", "parts": [{ "text": input }] }] });
-    if let Some(sys) = system_prompt {
+    let mut body = serde_json::json!({ "contents": req.gemini_contents()? });
+    if let Some(sys) = &req.system {
         body["system_instruction"] = serde_json::json!({ "parts": [{ "text": sys }] });
     }
     let mut gen_config = serde_json::Map::new();
-    if let Some(sc) = schema {
+    if let Some(sc) = &req.schema {
         gen_config.insert(
             "responseMimeType".into(),
             serde_json::json!("application/json"),
@@ -105,17 +103,15 @@ fn url(model: &str) -> String {
 /// Google Gemini `generateContent`. Key from GEMINI_API_KEY (or GOOGLE_* fallbacks).
 pub(super) fn generate(
     model: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
+    req: &ChatRequest,
     deterministic: bool,
     effort: Option<Effort>,
-) -> Result<GenOutcome> {
+) -> Result<ChatOutcome> {
     let key = std::env::var("GEMINI_API_KEY")
         .or_else(|_| std::env::var("GOOGLE_API_KEY"))
         .or_else(|_| std::env::var("GOOGLE_GENERATIVE_AI_API_KEY"))
         .map_err(|_| EngineError::Other("no Gemini API key (set GEMINI_API_KEY)".into()))?;
-    let body = body(model, system_prompt, input, schema, deterministic, effort)?;
+    let body = body(model, req, deterministic, effort)?;
 
     let started = Instant::now();
     let resp = http_client()?
@@ -151,7 +147,7 @@ pub(super) fn generate(
             who: "gemini".into(),
         });
     }
-    Ok(GenOutcome {
+    Ok(ChatOutcome::text(GenOutcome {
         output,
         cost_usd: None,
         model: model.to_string(),
@@ -164,13 +160,13 @@ pub(super) fn generate(
             .and_then(|u| u.get("thoughtsTokenCount"))
             .and_then(Value::as_u64),
         // temperature 0 + a fixed seed were both accepted: reproducible by contract.
-        schema: schema_state(schema),
+        schema: schema_state(req.schema.as_ref()),
         determinism: if deterministic {
             Determinism::Exact
         } else {
             Determinism::BestEffort
         },
-    })
+    }))
 }
 
 /// The output tokens Gemini **bills**: the answer (`candidatesTokenCount`) plus the hidden reasoning
@@ -236,6 +232,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn one(input: &str) -> ChatRequest {
+        ChatRequest::single(None, input, None)
+    }
+
     /// **The wire guarantee for a path-carried model.** `gemini-2.5-pro@low` reaches this adapter
     /// already split, so the request URL names a model that exists.
     #[test]
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn every_effort_errors_and_the_message_names_the_missing_mapping() {
         for level in Effort::ALL {
-            let err = body("gemini-2.5-pro", None, "hi", None, false, Some(level)).unwrap_err();
+            let err = body("gemini-2.5-pro", &one("hi"), false, Some(level)).unwrap_err();
             let msg = err.to_string();
             assert!(msg.contains("gemini"), "names the adapter: {msg}");
             assert!(msg.contains("gemini-2.5-pro"), "names the model: {msg}");
@@ -268,12 +268,18 @@ mod tests {
 
     #[test]
     fn deterministic_pins_temperature_and_seed_in_the_generation_config() {
-        let b = body("gemini-2.5-pro", Some("terse"), "hi", None, true, None).unwrap();
+        let b = body(
+            "gemini-2.5-pro",
+            &ChatRequest::single(Some("terse"), "hi", None),
+            true,
+            None,
+        )
+        .unwrap();
         assert_eq!(b["generationConfig"]["temperature"], json!(0.0));
         assert_eq!(b["generationConfig"]["seed"], json!(PINNED_SEED));
         assert_eq!(b["system_instruction"]["parts"][0]["text"], json!("terse"));
         // Without a schema or pinning there is no generationConfig at all — unchanged behaviour.
-        let plain = body("gemini-2.5-pro", None, "hi", None, false, None).unwrap();
+        let plain = body("gemini-2.5-pro", &one("hi"), false, None).unwrap();
         assert!(plain.get("generationConfig").is_none());
     }
 

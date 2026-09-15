@@ -27,6 +27,7 @@ mod generator;
 mod router;
 mod routes;
 mod state;
+mod stream;
 mod target;
 mod telemetry;
 mod wire;
