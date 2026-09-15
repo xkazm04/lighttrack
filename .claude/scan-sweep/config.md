@@ -55,3 +55,6 @@ Stage nothing with `-A`/`.`/`-u`; commit with `git commit -m "..." -- <paths>` a
 ## Skill improvement log
 - 2026-09-01: adopted; first run was the moonshot round above. No stabilize round yet - the
   coverage ledger is 0/34; `coverage.mjs --next` says `alert-delivery`.
+- 2026-09-15: this harness exports one `CARGO_TARGET_DIR` across parallel checkouts, which can
+  replay a sibling checkout's test binary. Sweep gates must use a checkout-local target directory
+  before trusting test names or counts.
