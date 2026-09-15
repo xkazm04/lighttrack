@@ -206,12 +206,24 @@ pub(crate) async fn compute_forecast(
         .rules
         .iter()
         .filter(|r| {
+            if let Some(scope) = &r.scope {
+                refused.push(Refused {
+                    subject: r.id.clone(),
+                    reason: format!(
+                        "scoped rule ({}) requires scoped daily series; not forecast from the \
+                         project's daily series",
+                        scope.label()
+                    ),
+                });
+                return false;
+            }
             if r.threshold.fixed().is_some() {
                 return true;
             }
             refused.push(Refused {
                 subject: r.id.clone(),
-                reason: "revenue-share threshold resolves per customer; not forecast from the                          project's daily series"
+                reason: "revenue-share threshold resolves per customer; not forecast from the \
+                         project's daily series"
                     .into(),
             });
             false

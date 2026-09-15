@@ -14,8 +14,8 @@ use serde_json::{json, Value};
 use tower::ServiceExt; // oneshot
 
 use lighttrack_core::{
-    new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, RevenueEvent, RevenueKind, Threshold,
-    ThresholdDimension,
+    new_id, LimitAction, LimitMetric, LimitRule, LimitScope, LimitWindow, RevenueEvent,
+    RevenueKind, Threshold, ThresholdDimension,
 };
 use lighttrack_store::Store;
 
@@ -332,6 +332,67 @@ async fn a_revenue_share_budget_is_refused_by_name_not_forecast_against_infinity
         r["reason"].as_str().unwrap().contains("revenue-share"),
         "{r}"
     );
+}
+
+#[tokio::test]
+async fn a_scoped_budget_is_refused_not_forecast_from_the_project_series() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let rule_id = new_id();
+    store
+        .create_limit_rule(&LimitRule {
+            id: rule_id.clone(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::CostUsd,
+            window: LimitWindow::Day,
+            threshold: Threshold::Fixed(15.0),
+            action: LimitAction::Alert,
+            enabled: true,
+            warn_at: None,
+            scope: Some(LimitScope::Model("gpt-4o".into())),
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
+        })
+        .unwrap();
+
+    let now = Utc::now();
+    for i in 0..10u32 {
+        let day = now - Duration::days((9 - i) as i64);
+        let mut e: lighttrack_core::LlmEvent = serde_json::from_value(json!({
+            "id": new_id(),
+            "project_id": "proj-a",
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 },
+            "cost_usd": (i + 1) as f64,
+            "ts": day.to_rfc3339(),
+            "metadata": { "customer_id": "acme" }
+        }))
+        .unwrap();
+        e.received_at = day;
+        store.insert_event(&e).unwrap();
+    }
+
+    let app = crate::build_router(state);
+    let (status, f) = get(
+        &app,
+        &key,
+        "/v1/forecast?project=proj-a&lookback=10&horizon=14",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{f}");
+    assert!(
+        f["budgets"].as_array().unwrap().is_empty(),
+        "the model-scoped rule must not be forecast from project-wide spend: {f}"
+    );
+    let refused = f["refused"].as_array().unwrap();
+    let r = refused
+        .iter()
+        .find(|r| r["subject"] == rule_id.as_str())
+        .expect("the scoped rule names itself in refused[]");
+    assert!(r["reason"].as_str().unwrap().contains("scoped rule"), "{r}");
 }
 
 #[tokio::test]
