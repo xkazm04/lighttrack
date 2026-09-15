@@ -33,7 +33,7 @@ use lighttrack_core::{
     LabelFilter, LeaseHeld, LimitMetric, LimitRule, LimitScope, LimitStatus, LimitWindow, LlmEvent,
     MarginPolicy, ModelPriceRow, Project, Prompt, PromptVersion, RedactionStamp, RelayCancel,
     RelayOutcome, RelaySettle, RelayTask, RevenueEvent, RollupQuery, RollupRow, Rubric, Schedule,
-    Score, ThresholdBasis, TokensByDimension, Trace, TraceSummary, UnpricedRow,
+    Score, ThresholdBasis, TokensByDimension, Trace, TraceSummary, UnpricedRow, UseCase,
 };
 
 pub use capabilities::{Capabilities, Surface};
@@ -1369,6 +1369,36 @@ pub trait Store: Send + Sync {
     fn create_rubric(&self, r: &Rubric) -> Result<()>;
     fn get_rubric(&self, scope: Scope<'_>, id: &str) -> Result<Option<Rubric>>;
     fn list_rubrics(&self, project: &str) -> Result<Vec<Rubric>>;
+
+    // --- use-case registry ---
+    /// Register a call site, or correct one already registered. Identity is `(project_id, key)`.
+    fn upsert_use_case(&self, _u: &UseCase) -> Result<()> {
+        Err(StoreError::Unsupported("the use-case registry"))
+    }
+    fn get_use_case(&self, _project: &str, _key: &str) -> Result<Option<UseCase>> {
+        Err(StoreError::Unsupported("the use-case registry"))
+    }
+    fn list_use_cases(&self, _project: &str) -> Result<Vec<UseCase>> {
+        Err(StoreError::Unsupported("the use-case registry"))
+    }
+    /// `true` when a row was removed.
+    fn delete_use_case(&self, _project: &str, _key: &str) -> Result<bool> {
+        Err(StoreError::Unsupported("the use-case registry"))
+    }
+    /// Distinct `events.name` values this project has emitted, with call counts and the models seen
+    /// under each — newest-heavy first. `since` is an RFC3339 lower bound on `ts`.
+    ///
+    /// The registry says what is supposed to exist; this says what does. Their difference is the
+    /// whole product: names with no registered use case are **shadow usage**, registered use cases
+    /// with no traffic have gone quiet, and a model here that the use case never declared is drift.
+    /// None of the three is visible from either side alone.
+    fn observed_use_case_names(
+        &self,
+        _project: &str,
+        _since: Option<&str>,
+    ) -> Result<Vec<(String, u64, Vec<String>)>> {
+        Err(StoreError::Unsupported("the use-case registry"))
+    }
 
     // --- job queue (Phase 3.6d) ---
     fn create_job(&self, j: &Job) -> Result<()>;

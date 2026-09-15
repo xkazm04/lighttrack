@@ -290,7 +290,13 @@ CREATE TABLE IF NOT EXISTS `${DATASET}.dataset_items` (
   anonymization STRING,
   -- The normalised-input fingerprint near-duplicate collapse looks up instead of scanning every
   -- stored case's text. Nullable, and dedupe treats NULL as "no match".
-  input_hash STRING
+  input_hash STRING,
+  -- The ordered tier this case was graded at (M27): `easy` | `medium` | `hard`, stored as the
+  -- wire spelling core::Difficulty serializes. `tags` could group cases and never rank them, so
+  -- nothing could ask which rungs a target actually clears. NULL is UNGRADED, never "medium"
+  -- — every read keeps the two apart, because imputing a middle rung would file unexamined
+  -- cases into the tier the routing decision reads closest.
+  difficulty STRING
 );
 
 -- Normalized revenue: the revenue analog of events' cost. Synced from a billing provider
@@ -574,4 +580,31 @@ CREATE TABLE IF NOT EXISTS `${DATASET}.calibrations` (
   kappa_bar FLOAT64 NOT NULL,
   trusted BOOL NOT NULL,
   created_at STRING NOT NULL
+);
+
+-- The declared inventory of places this project calls an LLM. Deliberately NOT a foreign key on
+-- `events`: ingest must never drop an observation because its use case is unregistered, and the
+-- unmatched rows are the most useful thing here - an event name with no row is shadow usage or
+-- a typo splitting one use case's cost in two. `key` joins `events.name` by convention, and the
+-- gap between declared and observed is a report rather than a constraint.
+CREATE TABLE IF NOT EXISTS `${DATASET}.use_cases` (
+  id STRING NOT NULL,
+  project_id STRING NOT NULL,
+  -- stable identifier events attribute to via events.name; unique per project
+  key STRING NOT NULL,
+  -- human title for a dashboard row
+  name STRING NOT NULL,
+  description STRING,
+  -- generation|classification|extraction|summarization|judge|agent|embedding|rerank|other
+  kind STRING NOT NULL DEFAULT 'generation',
+  -- active|planned|deprecated - decides whether silence or traffic is the finding
+  status STRING NOT NULL DEFAULT 'active',
+  -- where in the application this call site lives
+  component STRING,
+  -- JSON array of [provider/]model ids; absent means NO declaration, which is not the same as
+  -- 'any model is fine'
+  expected_models STRING,
+  owner STRING,
+  created_at STRING NOT NULL,
+  updated_at STRING NOT NULL
 );

@@ -58,7 +58,10 @@ const JOB_FOR: &[(&str, &str)] = &[
     ("test-client-python", "python suite (python sdk)"),
     ("test-client-typescript", "npm test (typescript sdk)"),
     ("audit-advisories", "cargo deny (advisories, advisory)"),
-    ("audit-secrets-latest-rules", "gitleaks (latest rules, advisory)"),
+    (
+        "audit-secrets-latest-rules",
+        "gitleaks (latest rules, advisory)",
+    ),
 ];
 
 /// The capabilities whose manifest command must appear VERBATIM in their job. The rest run through

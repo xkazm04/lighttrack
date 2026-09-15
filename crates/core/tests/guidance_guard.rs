@@ -1,10 +1,11 @@
 //! Hold the agent-guidance documents to `.ai/manifest.yaml`'s `guidance:` declaration.
 //!
 //! This repository ships more than one file an agent might open first, and for a while they
-//! disagreed: the root `CLAUDE.md` is a Rust working agreement, while `.claude/CLAUDE.md` still
-//! carries the generator's scaffold telling a reader to run `npm run build` on a workspace that has
-//! no npm build. "How do I build this" was answered by whichever file was opened first — and the
-//! answer that loses is the one nobody knows they lost.
+//! disagreed: the root `CLAUDE.md` is a Rust working agreement, while `.claude/CLAUDE.md` carried
+//! the generator's scaffold telling a reader to build this workspace with a JavaScript toolchain it
+//! does not have. "How do I build this" was answered by whichever file was opened first — and the
+//! answer that loses is the one nobody knows they lost. Both are pointers to the canonical document
+//! now (2026-09-14), which is what this test keeps true of the next one somebody adds.
 //!
 //! The manifest already names the winner (`guidance.canonical`) and lists the losers
 //! (`guidance.projections`), with the ones known to contradict it quarantined in
@@ -80,7 +81,10 @@ fn flow_list(v: &str) -> Vec<String> {
 fn command_lines(md: &str) -> Vec<String> {
     fn is_command(line: &str) -> bool {
         let first = line.split_whitespace().next().unwrap_or("");
-        matches!(first, "npm" | "npx" | "pnpm" | "yarn" | "cargo" | "make" | "just" | "sh")
+        matches!(
+            first,
+            "npm" | "npx" | "pnpm" | "yarn" | "cargo" | "make" | "just" | "sh"
+        )
     }
     md.lines()
         .map(|l| l.trim().trim_start_matches("$ ").trim_start())
@@ -122,7 +126,10 @@ fn every_projection_exists_and_the_live_ones_are_pointers() {
 
     for p in &projections {
         let path = repo_root().join(p);
-        assert!(path.is_file(), "projection {p} does not exist in a fresh clone");
+        assert!(
+            path.is_file(),
+            "projection {p} does not exist in a fresh clone"
+        );
         if stale.contains(p) {
             continue; // quarantined, and asserted about below
         }
@@ -158,10 +165,11 @@ fn every_projection_exists_and_the_live_ones_are_pointers() {
 
 #[test]
 fn a_stale_projection_is_named_in_the_document_that_supersedes_it() {
-    // The one thing that can be done about a contradiction you cannot delete: make sure the reader
-    // who opened the RIGHT file is told the wrong one exists. (`.claude/CLAUDE.md` has outlasted two
-    // attempts to rewrite it — the agent harness refuses writes under `.claude/`, so it needs a
-    // human. Until then, this is the mitigation, and it is checked rather than hoped for.)
+    // The one thing that can be done about a contradiction you cannot delete *yet*: make sure the
+    // reader who opened the RIGHT file is told the wrong one exists. `staleProjections` is empty as
+    // of 2026-09-14 — `.claude/CLAUDE.md` is a pointer now — so this currently asserts over nothing,
+    // and that is the point: it is the rule waiting for the next quarantined document, checked
+    // rather than hoped for.
     let canonical = canonical();
     let text = std::fs::read_to_string(repo_root().join(&canonical)).expect("read the canonical");
     for s in flow_list(&guidance_value(MANIFEST, "staleProjections").unwrap_or_default()) {
@@ -181,12 +189,18 @@ fn the_parsers_can_go_red() {
     let projections = flow_list(&guidance_value(yaml, "projections").unwrap());
     assert_eq!(projections, ["b.md", "c/d.md"]);
     assert_eq!(guidance_value(yaml, "staleProjections"), None);
-    assert!(guidance_value(yaml, "x").is_none(), "the block ends at next:");
+    assert!(
+        guidance_value(yaml, "x").is_none(),
+        "the block ends at next:"
+    );
 
     // The scaffold this whole file exists because of, in both the shapes it appears in.
     let fenced = command_lines("run it:\n```bash\nnpm run build\n```\n");
     assert_eq!(fenced, ["npm run build"]);
     assert_eq!(command_lines("- `cargo build -p x`"), Vec::<String>::new());
     assert!(command_lines("see `npm run build` for why not").is_empty());
-    assert_eq!(command_lines("$ cargo test --workspace"), ["cargo test --workspace"]);
+    assert_eq!(
+        command_lines("$ cargo test --workspace"),
+        ["cargo test --workspace"]
+    );
 }

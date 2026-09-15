@@ -474,6 +474,34 @@ CREATE TABLE IF NOT EXISTS calibrations (
   created_at TEXT NOT NULL
 );
 
+-- The declared inventory of places this project calls an LLM. Deliberately NOT a foreign key on
+-- `events`: ingest must never drop an observation because its use case is unregistered, and the
+-- unmatched rows are the most useful thing here - an event name with no row is shadow usage or
+-- a typo splitting one use case's cost in two. `key` joins `events.name` by convention, and the
+-- gap between declared and observed is a report rather than a constraint.
+CREATE TABLE IF NOT EXISTS use_cases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  -- stable identifier events attribute to via events.name; unique per project
+  key TEXT NOT NULL,
+  -- human title for a dashboard row
+  name TEXT NOT NULL,
+  description TEXT,
+  -- generation|classification|extraction|summarization|judge|agent|embedding|rerank|other
+  kind TEXT NOT NULL DEFAULT 'generation',
+  -- active|planned|deprecated - decides whether silence or traffic is the finding
+  status TEXT NOT NULL DEFAULT 'active',
+  -- where in the application this call site lives
+  component TEXT,
+  -- JSON array of [provider/]model ids; absent means NO declaration, which is not the same as
+  -- 'any model is fine'
+  expected_models TEXT,
+  owner TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (project_id, key)
+);
+
 -- 2. Post-ship columns. Every widening precedes every index below, so an index over a
 -- column an older deployment does not have yet can never be attempted first.
 
@@ -506,6 +534,7 @@ ALTER TABLE prompts ADD COLUMN IF NOT EXISTS canary TEXT;
 ALTER TABLE prompts ADD COLUMN IF NOT EXISTS label_history TEXT;
 ALTER TABLE datasets ADD COLUMN IF NOT EXISTS parent_id TEXT;
 ALTER TABLE dataset_items ADD COLUMN IF NOT EXISTS input_hash TEXT;
+ALTER TABLE dataset_items ADD COLUMN IF NOT EXISTS difficulty TEXT;
 ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS amount_minor BIGINT;
 ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS fx_rate DOUBLE PRECISION;
 ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS fx_book_version TEXT;
@@ -601,10 +630,22 @@ CREATE INDEX IF NOT EXISTS idx_scores_kind ON scores(kind, created_at);
 -- The quality read joins scores to events by event_id and windows on the VERDICT's created_at;
 -- without this the join degrades to a scan of the scores table per window.
 CREATE INDEX IF NOT EXISTS idx_scores_created ON scores(created_at);
+-- `list_benchmarks` is `WHERE project_id = ? ORDER BY created_at DESC` and the table only ever
+-- grows; without this every project's listing scans every other project's benchmarks and then
+-- sorts them.
+CREATE INDEX IF NOT EXISTS idx_benchmarks_project ON benchmarks(project_id, created_at);
+-- `list_rubrics` is `WHERE project_id = ? ORDER BY created_at DESC`, and M9 made this table
+-- append-only: a rubric edit is a new row, never a mutation. So it grows with every revision
+-- rather than staying at one row per rubric, and the listing's scan grows with it.
+CREATE INDEX IF NOT EXISTS idx_rubrics_project ON rubrics(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_project_created ON jobs(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_prompts_project ON prompts(project_id, name);
 CREATE INDEX IF NOT EXISTS idx_prompt_versions_pid ON prompt_versions(prompt_id, version);
+-- Run history for one benchmark, already in the listing's order (`WHERE benchmark_id = ? ORDER
+-- BY started_at DESC`). This is the table a scheduled benchmark appends to forever, so it is
+-- the one place where "scan it all" gets worse every night.
+CREATE INDEX IF NOT EXISTS idx_benchmark_runs_bench ON benchmark_runs(benchmark_id, started_at);
 -- The version walk and the fork's "what is the highest version this name already has" read.
 CREATE INDEX IF NOT EXISTS idx_datasets_name_version ON datasets(project_id, name, version);
 CREATE INDEX IF NOT EXISTS idx_dataset_items_ds ON dataset_items(dataset_id);
@@ -636,3 +677,4 @@ CREATE INDEX IF NOT EXISTS idx_labels_project ON labels(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_labels_rubric ON labels(rubric_id, created_at);
 -- The lookup every gate makes: exactly one (project, judge, rubric) pair, newest first.
 CREATE INDEX IF NOT EXISTS idx_calibrations_key ON calibrations(project_id, judge, rubric_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_use_cases_project ON use_cases(project_id, key);

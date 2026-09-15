@@ -2,6 +2,7 @@
 //! driven through the [`Generator`] seam with a deterministic fake (no live API calls).
 
 use super::*;
+use crate::SchemaEnforcement;
 
 #[test]
 fn verdict_from_judge_text() {
@@ -63,7 +64,9 @@ fn gen_outcome(output: String) -> GenOutcome {
         latency_ms: Some(1),
         input_tokens: Some(0),
         output_tokens: Some(0),
+        reasoning_tokens: None,
         determinism: Determinism::Exact,
+        schema: SchemaEnforcement::NotRequested,
     }
 }
 

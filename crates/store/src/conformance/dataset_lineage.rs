@@ -100,6 +100,7 @@ fn seed_v1(store: &dyn Store, pid: &str, name: &str) -> Result<Dataset> {
         source_event_id: None,
         anonymization: json!({ "method": "regex", "redactions": 0 }),
         input_hash: None,
+        difficulty: None,
     };
     store.create_dataset_item(&item)?;
     let mut l = sample_label(pid, LabelSubject::DatasetItem(item.id.clone()), 0.9);
