@@ -114,7 +114,7 @@ async fn post_resend(alerter: &Alerter, c: &AlertChannel, a: &Alert) -> Result<S
 /// capped snippet of the body — enough for an operator to see "401 invalid token" in the ledger,
 /// which is the detail that used to live only in stderr.
 async fn send(req: reqwest::RequestBuilder) -> Result<String, String> {
-    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let resp = req.send().await.map_err(|e| e.without_url().to_string())?;
     let code = resp.status();
     if code.is_success() {
         return Ok(code.as_u16().to_string());
@@ -139,4 +139,32 @@ async fn capped_body(mut resp: reqwest::Response) -> String {
     }
     buf.truncate(MAX_RESPONSE_BYTES);
     String::from_utf8_lossy(&buf).trim().replace('\n', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn transport_errors_do_not_expose_destination_secrets() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            drop(socket);
+        });
+
+        let secret = "query-secret-must-not-enter-the-ledger";
+        let request = reqwest::Client::new()
+            .post(format!("http://{addr}/hook?token={secret}"))
+            .body("alert");
+        let error = send(request).await.unwrap_err();
+
+        assert!(
+            !error.contains(secret),
+            "transport error leaked URL: {error}"
+        );
+    }
 }
