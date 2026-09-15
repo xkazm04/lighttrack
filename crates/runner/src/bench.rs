@@ -156,6 +156,9 @@ pub(crate) fn run_benchmark(
             input: it.input,
             expected: it.expected,
             output: it.output,
+            // The grade travels with the case into the run's stored dataset (M27). Dropping it here
+            // is how a corpus that knows which cases were hard produces a report that does not.
+            difficulty: it.difficulty,
         }));
     }
     let report_extra = extra_owned.as_ref().or(report_extra);

@@ -262,15 +262,15 @@ Rendered from the declarative model in `crates/store/src/schema/tables/`, which 
 | `events` | 24 | 2 | 8 | `id` |
 | `limit_rules` | 15 | 8 | 0 | `id` |
 | `scores` | 16 | 5 | 6 | `id` |
-| `benchmarks` | 11 | 0 | 0 | `id` |
-| `rubrics` | 8 | 2 | 0 | `id` |
+| `benchmarks` | 11 | 0 | 1 | `id` |
+| `rubrics` | 8 | 2 | 1 | `id` |
 | `jobs` | 15 | 3 | 2 | `id` |
 | `prompts` | 9 | 2 | 1 | `id` |
 | `prompt_versions` | 7 | 0 | 1 | `id` |
-| `benchmark_runs` | 13 | 0 | 0 | `id` |
+| `benchmark_runs` | 13 | 0 | 1 | `id` |
 | `model_prices` | 9 | 0 | 0 | `provider, model, effective_from` |
 | `datasets` | 8 | 1 | 1 | `id` |
-| `dataset_items` | 10 | 1 | 2 | `id` |
+| `dataset_items` | 11 | 2 | 2 | `id` |
 | `revenue_events` | 16 | 4 | 2 | `id` |
 | `collective_entries` | 18 | 6 | 2 | `contributor_id, provider, model, task_type` |
 | `relay_tasks` | 21 | 4 | 3 | `id` |
@@ -282,7 +282,8 @@ Rendered from the declarative model in `crates/store/src/schema/tables/`, which 
 | `collective_contributions` | 12 | 0 | 2 | `id` |
 | `labels` | 11 | 0 | 3 | `id` |
 | `calibrations` | 14 | 0 | 1 | `id` |
+| `use_cases` | 12 | 0 | 1 | `id` |
 
-Totals: **25 tables**, **303 columns**, of which **43** were added after their table shipped (those are `ALTER TABLE … ADD COLUMN` on every dialect, never edits to a `CREATE TABLE`). Schema fingerprint: `sha256-d329cc1689cdc517` — the same value `GET /v1/capabilities` reports.
+Totals: **26 tables**, **316 columns**, of which **44** were added after their table shipped (those are `ALTER TABLE … ADD COLUMN` on every dialect, never edits to a `CREATE TABLE`). Schema fingerprint: `sha256-abe121849f4316e8` — the same value `GET /v1/capabilities` reports.
 
 <!-- END generated table index -->

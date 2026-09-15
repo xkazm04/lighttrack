@@ -27,7 +27,11 @@ fn channel_fields(c: &AlertChannel) -> Result<Fields> {
     m.insert("prev_secret_hash".into(), json!(c.prev_secret_hash));
     m.insert("min_severity".into(), json!(c.min_severity.as_str()));
     m.insert("kinds".into(), json!(serde_json::to_string(&c.kinds)?));
-    m.insert("enabled".into(), json!(c.enabled));
+    // `fbool` reads a stored integer 0/1 (see `datasets`/`labels`/`limits`/`margin_policies`/
+    // `projects`), not a Firestore boolean value — a real `json!(c.enabled)` here round-trips
+    // through the emulator as a `booleanValue` that `fbool`'s `fi64` never matches, so every channel
+    // silently came back disabled.
+    m.insert("enabled".into(), json!(c.enabled as i64));
     m.insert("created_at".into(), json!(fmt_ts(c.created_at)));
     Ok(m)
 }

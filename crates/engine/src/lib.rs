@@ -29,6 +29,7 @@ mod pool;
 mod prompts;
 mod providers;
 mod retry;
+pub mod sandbox;
 mod scorers;
 
 use lighttrack_core::JudgeVerdict;
@@ -49,6 +50,10 @@ pub use prompts::{
     build_rubric_schema, Prompt,
 };
 pub use providers::{generate, generate_deterministic};
+pub use sandbox::{
+    run_exec, ContreeCli, DockerCli, ExecOutcome, ExecVerdict, SandboxJob, SandboxRunner,
+};
+pub use scorers::needs_sandbox;
 
 /// Errors from the scoring engine. Transport failures carry a typed classification (not string
 /// matches) so [`retry`](crate::retry) can retry only the transient ones and the judge can tell an
@@ -100,9 +105,38 @@ pub enum EngineError {
     /// HTTP 401/403 — a credentials problem; not retryable.
     #[error("{who} authentication failed (HTTP {status})")]
     Auth { who: String, status: u16 },
-    /// The provider returned no completion text (distinct from unparseable output).
+    /// The provider returned no completion text (distinct from unparseable output). This is a
+    /// **normal** stop that said nothing — never conflate it with [`EngineError::Truncated`], an
+    /// **abnormal** stop that never got the chance to say anything (or to finish saying it).
     #[error("{who} returned an empty completion")]
     EmptyCompletion { who: String },
+    /// The completion was cut off by the token cap before the model reached a normal stop — a fact
+    /// about the caller's cap, not about the model's competence. Read from the provider's own stop
+    /// condition (`stop_reason: "max_tokens"` / `finish_reason: "length"` / `finishReason:
+    /// "MAX_TOKENS"`) *before* the payload is interpreted, so a truncated body is never salvaged
+    /// into a fragment and blamed on the model for failing to answer, and a truncated *empty* body
+    /// is never folded into [`EngineError::EmptyCompletion`]'s "stopped normally, said nothing".
+    ///
+    /// `cap` is the token ceiling that applied, read back from the provider's own usage accounting
+    /// (the completion is cut at exactly that many tokens, by construction). `reasoning_tokens`,
+    /// where the provider reports reasoning separately from the answer (OpenAI's
+    /// `completion_tokens_details.reasoning_tokens`, Gemini's `thoughtsTokenCount`), is the number
+    /// that tells "raise the cap" apart from "this model spends the whole budget thinking and never
+    /// gets to the answer" — `None` when the provider does not separate the two (e.g. the bare
+    /// Anthropic Messages API, whose `usage` has no such split).
+    #[error(
+        "{who} completion hit its {cap}-token cap before finishing{}",
+        reasoning_tokens
+            .map(|r| format!(
+                " ({r} of those tokens went to reasoning, not to the answer)"
+            ))
+            .unwrap_or_default()
+    )]
+    Truncated {
+        who: String,
+        cap: u64,
+        reasoning_tokens: Option<u64>,
+    },
     /// A non-transient transport error (DNS, TLS, malformed response, …).
     #[error("{who} request failed: {detail}")]
     Http { who: String, detail: String },
@@ -187,6 +221,15 @@ pub struct EngineConfig {
     /// Pass `--bare` to skip auto-loading hooks/skills/MCP/CLAUDE.md. Avoids re-caching ~40k tokens
     /// per call, but bypasses subscription OAuth, so it requires `ANTHROPIC_API_KEY` in the env.
     pub bare: bool,
+    /// The sandbox `exec` rubric dimensions run in, when this deployment has one.
+    ///
+    /// It lives on the config rather than on every judge signature because it is run-scoped, exactly
+    /// like `claude_bin`: one runner, decided once by the operator. `None` means exec dimensions are
+    /// refused by name (see [`crate::scorers`]) rather than skipped.
+    ///
+    /// Behind an `Arc<dyn _>` so the choice of isolation vendor — the least durable part of this
+    /// design — is a value rather than a type parameter threaded through every judge signature.
+    pub sandbox: Option<std::sync::Arc<dyn crate::sandbox::SandboxRunner>>,
 }
 
 impl EngineConfig {
@@ -202,6 +245,7 @@ impl Default for EngineConfig {
             claude_bin: "claude".to_string(),
             model: "haiku".to_string(),
             bare: false,
+            sandbox: None,
         }
     }
 }
@@ -245,8 +289,14 @@ pub struct DimScore {
     pub weight: f64,
     /// The rubric's gating floor for this dimension, when it has one.
     pub floor: Option<f64>,
-    /// `score` fell below `floor` — the reason a passing overall can still fail.
+    /// `score` fell below `floor` — the reason a passing overall can still fail. Never set on a
+    /// voided dimension: a measurement that did not happen cannot breach a floor.
     pub floor_hit: bool,
+    /// **Voided**: an `exec` dimension whose sandbox was unavailable (see [`crate::sandbox`]). It is
+    /// excluded from the weighted overall entirely — numerator *and* denominator — so the remaining
+    /// dimensions keep their relative weights instead of being silently re-based. `score` is 0.0 as
+    /// a placeholder and means nothing; read this flag before reading it.
+    pub voided: bool,
 }
 
 impl DimScore {
@@ -298,6 +348,34 @@ pub struct RubricOutcome {
     pub batch_size: Option<u32>,
 }
 
+/// Whether the structured-output constraint the caller asked for actually reached the model.
+///
+/// A schema is a *guarantee about syntax*, and like [`Determinism`] it can silently degrade: a
+/// provider that rejects the schema is retried schema-less so a strict-schema model never hard-fails
+/// a run. Before this field existed that degradation was reported on stderr only, so a caller
+/// holding a [`GenOutcome`] could not tell an enforced result from a prose fallback and would parse
+/// the second believing the first. Report the weaker guarantee as a *value*, the way determinism is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaEnforcement {
+    /// A schema was sent and the provider accepted it — syntax is enforced by the provider.
+    Enforced,
+    /// A schema was requested but **shed**: the provider rejected it (4xx) and the call was retried
+    /// without it. The output is prose that merely *looks* structured; parse it defensively.
+    Shed,
+    /// No schema was requested by the caller. Not a degradation.
+    NotRequested,
+}
+
+impl SchemaEnforcement {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SchemaEnforcement::Enforced => "enforced",
+            SchemaEnforcement::Shed => "shed",
+            SchemaEnforcement::NotRequested => "not-requested",
+        }
+    }
+}
+
 /// The result of generating one candidate output from a target.
 #[derive(Debug, Clone)]
 pub struct GenOutcome {
@@ -307,9 +385,21 @@ pub struct GenOutcome {
     pub latency_ms: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    /// Tokens spent on hidden reasoning, where the provider reports them apart from the answer
+    /// (OpenAI `completion_tokens_details.reasoning_tokens`, Gemini `thoughtsTokenCount`, OpenRouter's
+    /// normalized usage). Already **inside** `output_tokens` — informational, never added to it.
+    ///
+    /// `None` is an honest gap, not zero: the Anthropic Messages API and `claude -p` report no
+    /// split, and an HTTP target is a black box. A caller measuring how hard a model thought falls
+    /// back to `output_tokens` there and says that it did.
+    pub reasoning_tokens: Option<u64>,
     /// How reproducible this call was — see [`Determinism`]. Candidate *generation* is judged, so
     /// it is pinned like the judge is ([`generate_deterministic`]) whenever the caller wants one
     /// candidate per case; a plain [`generate`] reports `BestEffort` (or `Sampled`, when the caller
     /// is deliberately drawing several candidates).
     pub determinism: Determinism,
+    /// Whether the caller's structured-output constraint actually reached the model — see
+    /// [`SchemaEnforcement`]. `Shed` means a schema was asked for and dropped after a provider
+    /// rejection, so the output is unconstrained prose.
+    pub schema: SchemaEnforcement,
 }

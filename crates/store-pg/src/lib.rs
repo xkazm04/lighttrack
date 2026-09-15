@@ -10,6 +10,22 @@
 //! `scores`, `projects`, `prices`, `benchmarks`, `datasets`, `rubrics`, `jobs`, `revenue`,
 //! `relay`, `traces`), mirroring the SQLite backend's layout. `claim_job` and the relay `lease` use
 //! `FOR UPDATE SKIP LOCKED … RETURNING` for concurrency-safe atomic dequeues.
+//!
+//! **Two consume shapes, and one question picks between them: does every effect of this
+//! operation land in this database?** Where it does — admission, delivery marking, price
+//! fills, the collective replace — one transaction takes the row, does the work and commits,
+//! so a crash rolls back the effect *and* the claim together and leaves nothing to reclaim.
+//! Those paths carry no claim column, no lease, no fence and no reaper, and they are correct
+//! without them; the row lock is the claim and the connection's death is the release. Where
+//! it does not — `jobs` runs a benchmark against external judges, `relay` hands an action to
+//! a device — the effect outlives any transaction we can hold, so those paths pay the full
+//! apparatus: a persisted claim, a `claimed_at` / `lease_fence` the holder renews, and a
+//! completion write conditioned on still holding it.
+//!
+//! The split is currently exact and **nothing enforces it**. Adding one external effect to a
+//! local path moves it across the line silently: the transaction stops covering the effect,
+//! and the path has none of the machinery that case needs. A function here that grows a
+//! network call, an email or a file write changes posture first.
 
 mod admission;
 mod alert_channels;

@@ -1,10 +1,12 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// How a dimension is evaluated. `Llm` (the default) asks the judge model; every other kind is a
-/// mechanical check the engine runs locally at zero tokens and zero cost, scored into the same
-/// weighting / floor / aggregation pipeline. Additive and defaulted: a rubric written before kinds
-/// existed deserializes as all-`Llm` and re-serializes byte-identically.
+/// mechanical check scored into the same weighting / floor / aggregation pipeline at zero tokens —
+/// the five text kinds locally and for free, [`Exec`](DimensionKind::Exec) remotely and for wall
+/// clock. Additive and defaulted: a rubric written before kinds existed deserializes as all-`Llm`
+/// and re-serializes byte-identically.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -23,6 +25,15 @@ pub enum DimensionKind {
     JsonValid,
     /// The output must contain the target as a substring.
     Contains,
+    /// The candidate output is written into a sandbox built from a pinned image and
+    /// `check.cmd` is run there; the command's **exit code** is the verdict (0 → 1.0).
+    ///
+    /// The only kind that is neither local nor free, and the only one with a third outcome: a
+    /// sandbox that could not run the command at all (timeout, auth, image pull, capacity) is
+    /// **unavailable**, which voids the dimension for that case rather than scoring the candidate
+    /// 0.0 — attributing our own outage to the model is the defect this kind exists to avoid.
+    /// See `docs/BENCHMARK_FRAMEWORK.md` §3d.
+    Exec,
 }
 
 impl DimensionKind {
@@ -34,12 +45,20 @@ impl DimensionKind {
             DimensionKind::Numeric => "numeric",
             DimensionKind::JsonValid => "json_valid",
             DimensionKind::Contains => "contains",
+            DimensionKind::Exec => "exec",
         }
     }
 
     /// True for the LLM-judged default — the only kind that costs a model call.
     pub fn is_llm(&self) -> bool {
         matches!(self, DimensionKind::Llm)
+    }
+
+    /// True for the sandboxed kind — the only deterministic kind that leaves this machine, can be
+    /// `unavailable`, and costs wall clock. Callers that must not make a network call (a rubric
+    /// validator, a dry run, an offline test) branch on this rather than on `!is_llm()`.
+    pub fn is_exec(&self) -> bool {
+        matches!(self, DimensionKind::Exec)
     }
 }
 
@@ -67,6 +86,34 @@ pub struct DimensionCheck {
     /// Trim surrounding whitespace from both sides before comparing (default: true).
     #[serde(default = "default_true")]
     pub trim: bool,
+    /// `exec` only: the sandbox image the case runs in — an image UUID, or `tag:NAME`.
+    ///
+    /// A UUID pins the exact machine and stamps the outcome `exact`; a tag is mutable, so it stamps
+    /// `best-effort`. Dependencies and fixtures belong in this image, baked once — a case that
+    /// installs its own dependencies is measuring the network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// `exec` only: the command run inside the sandbox. Its exit code is the whole verdict; its
+    /// stdout is never parsed for one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cmd: Option<String>,
+    /// `exec` only: absolute path inside the sandbox where the candidate output is written before
+    /// `cmd` runs (e.g. `/work/src/lib.rs`). `path` still applies first, so a model that answers
+    /// `{"code": "..."}` can have the code extracted before it is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write: Option<String>,
+    /// `exec` only: wall-clock ceiling for the command, in seconds. Unset uses the engine default.
+    /// A timeout is `unavailable`, not a fail: we do not know what the code would have done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    /// `exec` only: literal fixture environment variables set inside the sandbox.
+    ///
+    /// **Literal values only — never read from this host's environment.** The thing being executed
+    /// is untrusted text a language model wrote, so there is no mechanism here by which a provider
+    /// key, an admin key or a project key can reach it; credential-shaped names are refused by
+    /// [`DimensionCheck::validate_exec`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
 }
 
 impl Default for DimensionCheck {
@@ -78,14 +125,70 @@ impl Default for DimensionCheck {
             path: None,
             case_sensitive: false,
             trim: true,
+            image: None,
+            cmd: None,
+            write: None,
+            timeout_secs: None,
+            env: BTreeMap::new(),
         }
     }
 }
+
+/// Environment names an `exec` fixture may never set. Not a guess at every secret in the world — it
+/// is the set this product itself hands around, plus the two generic shapes that are always a
+/// mistake to put in front of model-written code. The real guarantee is structural (fixture env is
+/// literal, and the host environment is never forwarded); this list is the loud second rung, so an
+/// operator who pastes a key into a rubric is told rather than obeyed.
+const FORBIDDEN_ENV_SUBSTRINGS: [&str; 6] =
+    ["KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "COOKIE"];
 
 impl DimensionCheck {
     /// Nothing configured — so an `llm` dimension can omit the whole object when serializing.
     pub fn is_default(&self) -> bool {
         *self == DimensionCheck::default()
+    }
+
+    /// Validate an `exec` dimension's configuration, naming the dimension in every error.
+    ///
+    /// Called when a rubric is **created**, so a misconfigured `exec` is a 400 at authoring time
+    /// rather than a surprise inside the run that was meant to gate a deploy — the same "operator
+    /// errors are loud" rule the text kinds already follow, moved earlier because this kind's
+    /// failures cost wall clock and a remote round trip to discover.
+    pub fn validate_exec(&self, key: &str) -> Result<(), String> {
+        let need = |v: &Option<String>, field: &str| -> Result<String, String> {
+            match v.as_deref().map(str::trim) {
+                Some(s) if !s.is_empty() => Ok(s.to_string()),
+                _ => Err(format!(
+                    "rubric dimension '{key}' (exec) has no `check.{field}`"
+                )),
+            }
+        };
+        need(&self.image, "image")?;
+        need(&self.cmd, "cmd")?;
+        let write = need(&self.write, "write")?;
+        if !write.starts_with('/') {
+            return Err(format!(
+                "rubric dimension '{key}' (exec) has `check.write` = `{write}`, which is not an \
+                 absolute path inside the sandbox"
+            ));
+        }
+        if self.timeout_secs == Some(0) {
+            return Err(format!(
+                "rubric dimension '{key}' (exec) has `check.timeout_secs` = 0"
+            ));
+        }
+        for name in self.env.keys() {
+            let upper = name.to_uppercase();
+            if FORBIDDEN_ENV_SUBSTRINGS.iter().any(|f| upper.contains(f)) {
+                return Err(format!(
+                    "rubric dimension '{key}' (exec) sets `check.env.{name}`, whose name looks like \
+                     a credential. A sandbox runs untrusted model-written code and never receives \
+                     one; use a fixture value with a different name, or serve the secret from \
+                     inside the image."
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -234,6 +337,48 @@ mod tests {
     }
 
     #[test]
+    fn exec_dimension_round_trips_its_config() {
+        let src = json!({
+            "key": "passes", "description": "compiles and passes", "weight": 3.0, "floor": 1.0,
+            "kind": "exec",
+            // `case_sensitive` and `trim` always serialize on a non-default check — the same
+            // shape the text-kind round-trip above asserts.
+            "check": { "case_sensitive": false, "trim": true,
+                       "image": "tag:lt-py:v1", "cmd": "pytest -q", "write": "/work/s.py",
+                       "timeout_secs": 180, "env": { "FIXTURE_SEED": "7" } }
+        });
+        let d: RubricDimension = serde_json::from_value(src.clone()).expect("dimension");
+        assert_eq!(d.kind, DimensionKind::Exec);
+        assert!(d.kind.is_exec() && !d.kind.is_llm());
+        assert_eq!(d.check.timeout_secs, Some(180));
+        d.check.validate_exec(&d.key).expect("valid");
+        assert_eq!(serde_json::to_value(&d).expect("re-serialize"), src);
+    }
+
+    /// The exec fields are additive: a rubric that never heard of them is untouched on the wire.
+    #[test]
+    fn exec_fields_are_invisible_to_rubrics_that_do_not_use_them() {
+        let d: RubricDimension =
+            serde_json::from_value(json!({ "key": "a", "description": "", "weight": 1.0 }))
+                .expect("dimension");
+        let back = serde_json::to_value(&d).expect("re-serialize");
+        for absent in [
+            "image",
+            "cmd",
+            "write",
+            "timeout_secs",
+            "env",
+            "kind",
+            "check",
+        ] {
+            assert!(
+                back.get(absent).is_none(),
+                "{absent} must not appear: {back}"
+            );
+        }
+    }
+
+    #[test]
     fn kind_names_are_stable() {
         for (k, s) in [
             (DimensionKind::Llm, "llm"),
@@ -242,6 +387,7 @@ mod tests {
             (DimensionKind::Numeric, "numeric"),
             (DimensionKind::JsonValid, "json_valid"),
             (DimensionKind::Contains, "contains"),
+            (DimensionKind::Exec, "exec"),
         ] {
             assert_eq!(k.as_str(), s);
             assert_eq!(serde_json::to_value(k).expect("kind"), json!(s));

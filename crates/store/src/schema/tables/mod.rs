@@ -22,7 +22,9 @@ pub use ingest::{API_KEYS, EVENTS, JOBS, LIMIT_RULES, PROJECTS, SCHEDULES};
 pub use ops::{
     ALERTS, ALERT_CHANNELS, COLLECTIVE_CONTRIBUTIONS, COLLECTIVE_ENTRIES, DEVICES, RELAY_TASKS,
 };
-pub use registry::{MARGIN_POLICIES, MODEL_PRICES, PROMPTS, PROMPT_VERSIONS, REVENUE_EVENTS};
+pub use registry::{
+    MARGIN_POLICIES, MODEL_PRICES, PROMPTS, PROMPT_VERSIONS, REVENUE_EVENTS, USE_CASES,
+};
 
 /// The whole logical schema, in creation order.
 pub fn all() -> &'static [&'static Table] {
@@ -56,6 +58,7 @@ pub static ALL: &[&Table] = &[
     &COLLECTIVE_CONTRIBUTIONS,
     &LABELS,
     &CALIBRATIONS,
+    &USE_CASES,
 ];
 
 /// The table with this name, if the model declares one.

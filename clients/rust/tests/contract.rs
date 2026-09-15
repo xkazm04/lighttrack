@@ -17,8 +17,7 @@ use std::path::PathBuf;
 
 use lighttrack_client::{
     diagnostic_kind, extract_anthropic, extract_gemini, extract_openai, guard, parse_limit_view,
-    shed_ticket, AdmissionCache,
-    send_failure_message, Extracted, FailureContext, GuardRules,
+    send_failure_message, shed_ticket, AdmissionCache, Extracted, FailureContext, GuardRules,
 };
 use serde_json::Value;
 
@@ -31,10 +30,14 @@ fn clients_dir() -> PathBuf {
 }
 
 fn fixture(name: &str) -> Value {
-    let path = clients_dir().join("contract").join("fixtures").join(format!("{name}.json"));
+    let path = clients_dir()
+        .join("contract")
+        .join("fixtures")
+        .join(format!("{name}.json"));
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{} is not valid JSON: {e}", path.display()))
+    serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("{} is not valid JSON: {e}", path.display()))
 }
 
 fn manifest() -> Value {
@@ -102,7 +105,11 @@ fn provider_extractors() {
 fn to_rules(r: &Value) -> GuardRules {
     let strings = |v: &Value| {
         v.as_array()
-            .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default()
     };
     GuardRules {
@@ -136,9 +143,17 @@ fn guard_verdicts() {
             .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
         assert_eq!(failed, want, "{name}: {}", why(&case));
-        assert_eq!(result.ok, case["expect"]["ok"].as_bool().unwrap(), "{name}: ok");
+        assert_eq!(
+            result.ok,
+            case["expect"]["ok"].as_bool().unwrap(),
+            "{name}: ok"
+        );
         // `ok` is defined as "nothing failed" — the two must never disagree.
-        assert_eq!(result.ok, result.violations.is_empty(), "{name}: ok tracks violations");
+        assert_eq!(
+            result.ok,
+            result.violations.is_empty(),
+            "{name}: ok tracks violations"
+        );
     }
 }
 
@@ -177,11 +192,31 @@ fn ingest_limit_signals() {
         let v = parse_limit_view(status, &headers, body);
         let e = &case["expect"];
 
-        assert_eq!(v.accepted, e["accepted"].as_bool().unwrap(), "{name}: accepted");
-        assert_eq!(v.rate_limited, e["rate_limited"].as_bool().unwrap(), "{name}: rate_limited");
-        assert_eq!(v.usage_ratio, e["usage_ratio"].as_f64(), "{name}: usage_ratio");
-        assert_eq!(v.shed_fraction, e["shed_fraction"].as_f64(), "{name}: shed_fraction");
-        assert_eq!(v.retry_after_secs, e["retry_after_secs"].as_u64(), "{name}: retry_after_secs");
+        assert_eq!(
+            v.accepted,
+            e["accepted"].as_bool().unwrap(),
+            "{name}: accepted"
+        );
+        assert_eq!(
+            v.rate_limited,
+            e["rate_limited"].as_bool().unwrap(),
+            "{name}: rate_limited"
+        );
+        assert_eq!(
+            v.usage_ratio,
+            e["usage_ratio"].as_f64(),
+            "{name}: usage_ratio"
+        );
+        assert_eq!(
+            v.shed_fraction,
+            e["shed_fraction"].as_f64(),
+            "{name}: shed_fraction"
+        );
+        assert_eq!(
+            v.retry_after_secs,
+            e["retry_after_secs"].as_u64(),
+            "{name}: retry_after_secs"
+        );
         assert_eq!(
             v.error_code.as_deref(),
             e["error_code"].as_str(),
@@ -248,7 +283,12 @@ fn pre_spend_admission_verdicts() {
             q["at_ms"].as_i64().unwrap(),
         );
         let e = &case["expect"];
-        assert_eq!(v.ok, e["ok"].as_bool().unwrap(), "{name}: ok — {}", why(&case));
+        assert_eq!(
+            v.ok,
+            e["ok"].as_bool().unwrap(),
+            "{name}: ok — {}",
+            why(&case)
+        );
         assert_eq!(
             v.reason.map(|r| r.as_str()),
             e["reason"].as_str(),
@@ -291,7 +331,10 @@ fn failure_diagnostics() {
         );
         for needle in case["hint_contains"].as_array().into_iter().flatten() {
             let needle = needle.as_str().unwrap();
-            assert!(msg.contains(needle), "{name}: message is missing \"{needle}\".\nGot: {msg}");
+            assert!(
+                msg.contains(needle),
+                "{name}: message is missing \"{needle}\".\nGot: {msg}"
+            );
         }
         // ASCII only. These lines land in whatever console the host app has, and a cp1252 Windows
         // terminal turns a stray em dash into mojibake.

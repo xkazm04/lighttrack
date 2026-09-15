@@ -7,11 +7,13 @@ those for *what* and *why*; this file is *how we write the code*.
 
 **This file is the canonical agent guidance** — declared as `guidance.canonical` in
 `.ai/manifest.yaml`. If any other guidance document disagrees with it, this one wins and the other is
-the bug. `.claude/CLAUDE.md` is currently exactly that bug: it still carries the generator's npm
-scaffold for a workspace with no npm build, and is listed under `guidance.staleProjections` until
-someone replaces its body with a pointer here. **Ignore it — and note that fixing it needs a human**:
-two agent sessions have tried, and the agent harness refuses to write anything under `.claude/`
-(sensitive path). `AGENTS.md` at the root is the same pointer for the other tool ecosystems, and
+the bug. `.claude/CLAUDE.md` used to be exactly that bug — the generator's JavaScript-build scaffold
+for a workspace that has none — and was quarantined under `guidance.staleProjections` with a warning
+here telling readers to disbelieve it. Fixed on 2026-09-14: its body is a pointer to this file,
+`staleProjections` is empty, and the note claiming the edit "needs a human because the harness
+refuses writes under `.claude/`" was simply wrong — the path is writable, and repeating that claim
+had turned two failed attempts into a reason not to try.
+`AGENTS.md` at the root is the same pointer for the other tool ecosystems, and
 `crates/core/tests/guidance_guard.rs` fails the build if a projection that is *not* declared stale
 carries a command or stops naming this file — so the list cannot grow a second contradiction quietly.
 
@@ -97,6 +99,10 @@ which directory to run from, which Windows gotcha bites — not a competing list
   client only: never give it direct DB access.
 
 <!-- personas:context-map:start -->
+## Git policy (harness-enforced)
+
+**Commit on the current branch; never push.** The owner pushes after reading the log. Do not push, force-push, or open a pull request unless this session's prompt asks for it. This line exists because the harness's own default for an unattended session is to push and open a draft PR when the file says nothing (measured 2026-09-08: without such a line the agent pushed; with it the agent stopped at the commit). The gate bypass is denied to agents at the permission layer (`.claude/settings.json` `permissions.deny`: `--no-verify`, force-push, `LIGHTTRACK_SKIP_GATES=1`) - do not work around it; if a gate is red, fix the tree.
+
 ## Project Context Map
 
 This project is organized into **34 contexts** across **8 groups**. The full machine-readable map lives in `context-map.json` at the project root — read it at task start to scope your edits to the relevant context's files.

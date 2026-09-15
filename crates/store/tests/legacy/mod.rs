@@ -117,6 +117,12 @@ pub const LEGACY_ADDED_COLUMNS_LATE: &[&str] = &[
     // enqueued before this column existed), which `Scope::Operator` sees and no project scope does.
     "ALTER TABLE jobs ADD COLUMN project_id TEXT",
     "CREATE INDEX IF NOT EXISTS idx_jobs_project_created ON jobs(project_id, created_at DESC)",
+    // M27 — the ordered difficulty tier on a case. Text, holding the wire spelling
+    // (`easy`/`medium`/`hard`) so the column reads identically on all three backends. Nullable, and
+    // NULL is UNGRADED rather than "medium": every case that exists today was written before anyone
+    // could grade it, and a default would file the whole pre-M27 corpus into the middle rung the
+    // routing decision reads closest.
+    "ALTER TABLE dataset_items ADD COLUMN difficulty TEXT",
 ];
 
 pub const LEGACY_ADD_RECEIVED_AT: &str = "ALTER TABLE events ADD COLUMN received_at TEXT";
