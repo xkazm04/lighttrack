@@ -151,6 +151,39 @@ fn classify(status: Option<u16>, message: String) -> EngineError {
     }
 }
 
+/// A system prompt too long for the argv path, folded into the user turn instead.
+///
+/// `developer_instructions` travels on the command line, and Windows caps that near 32k
+/// characters, so [`posture::MAX_INSTRUCTIONS_CHARS`] is a hard limit of the transport, not a
+/// preference. Refusing the call was the first answer, and it turned every Codex attempt on an
+/// app with a 22k-character system prompt into a failed row (ascent, 0/21). Folding is what an
+/// operator does by hand in that case; doing it here means the same prompt reaches the model
+/// either way — as instructions when it fits, as the head of the user turn when it does not —
+/// and the outcome is a measured answer rather than a transport error. The fold is announced on
+/// stderr because it *is* a different shape, and a matrix comparing Codex rows against rows that
+/// took the prompt as a system turn should know.
+fn fold_oversized_system<'a>(
+    system_prompt: Option<&'a str>,
+    input: &'a str,
+) -> (Option<&'a str>, std::borrow::Cow<'a, str>) {
+    match system_prompt {
+        Some(sys) if sys.chars().count() > posture::MAX_INSTRUCTIONS_CHARS => {
+            eprintln!(
+                "[engine] codex: system prompt is {} chars, over the {}-char argv cap; folded \
+                 into the user turn",
+                sys.chars().count(),
+                posture::MAX_INSTRUCTIONS_CHARS
+            );
+            let folded = format!(
+                "<instructions>\n{sys}\n</instructions>\n\nFollow the instructions above for the \
+                 request below.\n\n{input}"
+            );
+            (None, std::borrow::Cow::Owned(folded))
+        }
+        other => (other, std::borrow::Cow::Borrowed(input)),
+    }
+}
+
 /// Generate one candidate through `codex exec`.
 pub(crate) fn generate(
     model: &str,
@@ -159,6 +192,8 @@ pub(crate) fn generate(
     schema: Option<&Value>,
     effort: Option<Effort>,
 ) -> Result<GenOutcome> {
+    let (system_prompt, input) = fold_oversized_system(system_prompt, input);
+    let input: &str = &input;
     let schema_file = schema.map(write_schema).transpose()?;
     let args = posture::argv(model, system_prompt, effort, schema_file.as_deref())?;
     let mut cmd = Command::new(bin());
@@ -227,6 +262,24 @@ pub(crate) fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_oversized_system_prompt_is_folded_into_the_user_turn_and_a_fitting_one_is_not() {
+        let huge = "x".repeat(posture::MAX_INSTRUCTIONS_CHARS + 1);
+        let (sys, input) = fold_oversized_system(Some(&huge), "the case");
+        assert!(sys.is_none());
+        assert!(input.starts_with("<instructions>\n"));
+        assert!(input.ends_with("the case"));
+        assert!(input.contains(&huge));
+
+        let (sys, input) = fold_oversized_system(Some("terse"), "the case");
+        assert_eq!(sys, Some("terse"));
+        assert_eq!(&*input, "the case");
+
+        let (sys, input) = fold_oversized_system(None, "the case");
+        assert!(sys.is_none());
+        assert_eq!(&*input, "the case");
+    }
 
     #[test]
     fn the_timeout_scales_with_effort_and_the_override_wins_when_it_parses() {

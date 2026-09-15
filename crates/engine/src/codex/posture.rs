@@ -16,7 +16,9 @@ use crate::{EngineError, Result};
 
 /// Longest system prompt passed through argv. It travels as a `-c developer_instructions=` value,
 /// and Windows caps a whole command line near 32k characters; a longer prompt is refused by name
-/// rather than truncated by the OS into a different prompt.
+/// here rather than truncated by the OS into a different prompt — and the generation path folds
+/// it into the user turn *before* reaching this check (see `fold_oversized_system`), so the
+/// refusal is the guard for a caller that builds argv directly, not the outcome an app sees.
 pub(super) const MAX_INSTRUCTIONS_CHARS: usize = 16_000;
 
 /// Every Codex feature (0.154.0, `codex features list`) that hands the model a tool. Disabling a

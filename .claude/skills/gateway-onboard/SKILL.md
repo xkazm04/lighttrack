@@ -202,6 +202,10 @@ next model change (`GET /v1/benchmarks/:id/gate`).
 ## When it does not go to plan
 - **Every row at 100% on every tier** — the corpus is at the ceiling. Scale the hard tier's inputs
   and rerun before choosing; a choice made on a flat corpus is a coin flip with a scorecard.
+- **The app's system prompt is over ~16k characters** — the Codex CLI takes instructions on the
+  command line, so the engine folds a longer system prompt into the head of the user turn
+  (announced on stderr). Codex rows then measure a folded shape while Claude rows take a system
+  turn; say so beside the numbers, or fold the prompt on every target for a like-for-like matrix.
 - **A seat row has `errored > 0`** — read the run's error text. A usage limit *during the
   benchmark* is a measurement gap, not a quality signal; rerun that row when the window resets.
   A model name the CLI refuses is a stale install or a wrong id.
