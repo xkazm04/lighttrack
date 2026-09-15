@@ -5,7 +5,7 @@ raised_by: intake intake-ragas
 source: librarian/sources/2026-09-15-ragas.md
 stage: the rubric judge, between a case's input/expected/output and the per-dimension verdict
 size: 5 files / ~350 lines / M
-status: proposed
+status: accepted
 ---
 
 ## Why the scope implies it
