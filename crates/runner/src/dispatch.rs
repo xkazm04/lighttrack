@@ -154,6 +154,8 @@ fn score_traces(
             .clone()
             .unwrap_or_else(|| engine.model.clone()),
         bare: engine.bare,
+        // The judge model is overridden; the run's sandbox is not.
+        sandbox: engine.sandbox.clone(),
     };
     ctl.note(&format!("scoring traces for {}", p.project));
     let params = score_traces::Params {

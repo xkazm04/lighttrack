@@ -56,6 +56,7 @@ pub(super) fn assert_all_refuse(store: &dyn Store, surface: Surface) -> Result<(
         Surface::Forecast => forecast(store),
         Surface::MarginBreakdowns => margin(store),
         Surface::Prompts => prompts(store),
+        Surface::UseCases => use_cases(store),
         Surface::Relay => relay(store),
         Surface::Collective => collective(store),
         Surface::ProjectAdmin => project_admin(store),
@@ -292,6 +293,25 @@ fn margin(store: &dyn Store) -> Vec<&'static str> {
         "tokens_by_dimension",
         "customer_cost_by_model",
         "customer_cost_by_name",
+    ]
+}
+
+fn use_cases(store: &dyn Store) -> Vec<&'static str> {
+    let u = super::use_cases::sample("p", "k", &[]);
+    refused("upsert_use_case", store.upsert_use_case(&u));
+    refused("get_use_case", store.get_use_case("p", "k"));
+    refused("list_use_cases", store.list_use_cases("p"));
+    refused("delete_use_case", store.delete_use_case("p", "k"));
+    refused(
+        "observed_use_case_names",
+        store.observed_use_case_names("p", None),
+    );
+    vec![
+        "upsert_use_case",
+        "get_use_case",
+        "list_use_cases",
+        "delete_use_case",
+        "observed_use_case_names",
     ]
 }
 

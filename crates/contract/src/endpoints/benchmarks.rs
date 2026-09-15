@@ -43,7 +43,9 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
                 name: "dataset",
                 kind: ParamKind::Body,
                 ty: JsonTy::Array,
-                doc: "inline cases",
+                doc: "inline cases; a case's optional `difficulty` is easy|medium|hard, and any \
+                      other spelling refuses the whole request rather than storing that case \
+                      ungraded",
                 schema: Some(crate::nested::BENCHMARK_DATASET),
                 ..Param::DEFAULT
             },

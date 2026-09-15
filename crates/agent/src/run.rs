@@ -34,6 +34,8 @@ pub(crate) fn run(cfg: &AgentConfig, once: bool) -> Result<()> {
         claude_bin: resolve_claude_bin(&cfg.claude_bin),
         model: String::new(), // per-action models; the engine default is never used
         bare: false,          // subscription OAuth — the whole point of the relay
+        // The relay runs actions, not rubrics; nothing here judges an `exec` dimension.
+        sandbox: None,
     };
     let clients = cfg
         .sources

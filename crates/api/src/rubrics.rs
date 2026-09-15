@@ -77,6 +77,14 @@ fn validate_rubric(
         if d.kind == DimensionKind::Regex && d.check.pattern.as_deref().unwrap_or("").is_empty() {
             return bad(format!("dimension {key:?}: kind regex needs check.pattern"));
         }
+        // An `exec` dimension's mistakes cost a remote round trip and wall clock to discover, so
+        // they are refused here — when the rubric is written — rather than inside the run that was
+        // meant to gate a deploy. The engine re-checks before spawning; this is the early rung.
+        if d.kind == DimensionKind::Exec {
+            if let Err(m) = d.check.validate_exec(key) {
+                return bad(m);
+            }
+        }
         if let Some(t) = d.check.tolerance {
             if !(t.is_finite() && t >= 0.0) {
                 return bad(format!(
@@ -254,6 +262,31 @@ mod tests {
         );
         re.check.pattern = Some("^ok$".into());
         assert!(validate_rubric("q", &[re], 0.7).is_ok());
+
+        // An `exec` dimension is validated when the rubric is written, not when the run spends
+        // wall clock discovering it.
+        let mut ex = dim("code", 1.0);
+        ex.kind = DimensionKind::Exec;
+        assert!(
+            validate_rubric("q", &[ex.clone()], 0.7).is_err(),
+            "exec with no image/cmd/write"
+        );
+        ex.check.image = Some("tag:lt-py:v1".into());
+        ex.check.cmd = Some("pytest -q".into());
+        ex.check.write = Some("work/s.py".into());
+        assert!(
+            validate_rubric("q", &[ex.clone()], 0.7).is_err(),
+            "check.write must be absolute inside the sandbox"
+        );
+        ex.check.write = Some("/work/s.py".into());
+        assert!(validate_rubric("q", &[ex.clone()], 0.7).is_ok());
+
+        // A sandbox runs untrusted model-written code and never receives a credential.
+        ex.check.env.insert("OPENAI_API_KEY".into(), "sk-x".into());
+        assert!(
+            validate_rubric("q", &[ex], 0.7).is_err(),
+            "credential-shaped fixture env"
+        );
     }
 
     /// The whole point of `active`: a new rubric version is a new id and starts unmeasured, however

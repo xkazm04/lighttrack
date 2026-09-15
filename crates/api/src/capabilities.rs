@@ -170,6 +170,9 @@ fn consequence(s: Surface) -> &'static str {
             "GET /v1/scores?rubric_id=&kind= is unavailable — verdicts here can only be listed \
              newest-first, not narrowed to one rubric or one kind of verdict."
         }
+        Surface::UseCases => {
+            "The /v1/projects/:id/use-cases registry is unavailable — this deployment can group              calls by `events.name` but cannot say which call sites are SUPPOSED to exist, so              shadow usage (traffic nobody declared) and model drift are not reportable here."
+        }
         Surface::Labels => {
             "POST/GET /v1/labels and GET /v1/scores?needs_review=1 are unavailable — human \
              verdicts cannot be stored here, so a calibration can only be run from a file on the \

@@ -132,7 +132,11 @@ export function extractAnthropic(resp: any): [string | undefined, number, number
 export function extractGemini(resp: any): [string | undefined, number, number, number | undefined] {
   const u = resp?.usageMetadata ?? resp?.usage_metadata ?? {};
   const input = num(u.promptTokenCount) ?? num(u.prompt_token_count) ?? 0;
-  const output = num(u.candidatesTokenCount) ?? num(u.candidates_token_count) ?? 0;
+  // Answer + thoughts: a thinking model's thoughts are billed as output, and the answer count alone
+  // priced a long-thinking call as a short one.
+  const output =
+    (num(u.candidatesTokenCount) ?? num(u.candidates_token_count) ?? 0) +
+    (num(u.thoughtsTokenCount) ?? num(u.thoughts_token_count) ?? 0);
   const cached = num(u.cachedContentTokenCount) ?? num(u.cached_content_token_count);
   return [resp?.modelVersion ?? resp?.model_version, input, output, cached];
 }
@@ -394,7 +398,13 @@ export class LightTrack {
     let records: Awaited<ReturnType<SpanJournal["recover"]>>;
     try {
       records = await this.journal.recover();
-    } catch {
+    } catch (err) {
+      // Recovery could not run at all. The count is honestly 0, but 0 must not read as "nothing was
+      // abandoned": one rate-limited line says the journal directory could not be read.
+      this.diag.warn(
+        "journal-recover",
+        `could not read the span journal directory, so abandoned calls from a crashed process (if any) were not recovered: ${truncate(String((err as Error)?.message ?? err))}`,
+      );
       return 0;
     }
     for (const rec of records) {

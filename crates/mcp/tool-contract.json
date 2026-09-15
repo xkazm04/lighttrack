@@ -13,6 +13,7 @@
     "properties": {
       "context": "string",
       "dataset": "string",
+      "difficulty": "string",
       "expected": "string",
       "input": "string",
       "output": "string",
@@ -360,6 +361,17 @@
       "trace"
     ]
   },
+  "get_use_case": {
+    "properties": {
+      "project": "string",
+      "use_case": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project",
+      "use_case"
+    ]
+  },
   "get_usecases": {
     "properties": {
       "project": "string",
@@ -420,7 +432,8 @@
   },
   "list_dataset_items": {
     "properties": {
-      "dataset": "string"
+      "dataset": "string",
+      "difficulty": "string"
     },
     "readOnly": true,
     "required": [
@@ -566,6 +579,15 @@
     "readOnly": true,
     "required": []
   },
+  "list_use_cases": {
+    "properties": {
+      "project": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
+    ]
+  },
   "promote_prompt": {
     "properties": {
       "force": "boolean",
@@ -697,6 +719,35 @@
       "metric",
       "threshold",
       "window"
+    ]
+  },
+  "upsert_use_case": {
+    "properties": {
+      "component": "string",
+      "description": "string",
+      "expected_models": "array",
+      "key": "string",
+      "kind": "string",
+      "name": "string",
+      "owner": "string",
+      "project": "string",
+      "status": "string"
+    },
+    "readOnly": false,
+    "required": [
+      "key",
+      "name",
+      "project"
+    ]
+  },
+  "use_case_coverage": {
+    "properties": {
+      "project": "string",
+      "since": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project"
     ]
   }
 }

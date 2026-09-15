@@ -1,24 +1,36 @@
-//! Candidate-output generation across providers. `anthropic` runs via `claude -p`; `google` and
-//! `openai` call their HTTPS APIs (keys from env). Dollar cost is left `None` for the HTTP providers
-//! (the caller prices it from the DB price book by tokens); the APIs don't return a cost.
+//! Candidate-output generation across providers. `anthropic` runs via `claude -p` (or the bare
+//! Messages API when a key is present); `google`, `openai` and `openrouter` call their HTTPS APIs
+//! (keys from env).
+//! Dollar cost is left `None` for the HTTP providers (the caller prices it from the DB price book by
+//! tokens); the APIs don't return a cost.
 //!
 //! Structured output is enforced when a `schema` is supplied: `--json-schema` for the claude CLI,
 //! `response_format:{type:"json_schema",…}` for OpenAI, and `generationConfig.responseSchema` (+ JSON
 //! MIME type) for Gemini. Transient failures (429/5xx/timeout) are retried with backoff; a provider
 //! that *rejects* the schema (4xx) falls back once to a schema-less prose call so a strict-schema
 //! model never hard-fails a run.
+//!
+//! Layout: this file owns the shared HTTP plumbing (client, error classification, bounded reads) and
+//! the dispatch; the per-provider request bodies live in `providers/openai.rs` and
+//! `providers/gemini.rs`, beside the tests that assert what goes on their wire.
+
+mod gemini;
+mod openai;
+mod openrouter;
 
 use std::io::Read;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::Value;
 
 use crate::invocation::{self, Invocation};
 use crate::retry::with_retry;
-use lighttrack_core::ProviderFamily;
+use lighttrack_core::{split_effort, Effort, ProviderFamily};
 
-use crate::{anthropic_api, Determinism, EngineConfig, EngineError, GenOutcome, Result};
+use crate::{
+    anthropic_api, Determinism, EngineConfig, EngineError, GenOutcome, Result, SchemaEnforcement,
+};
 
 /// Outbound provider calls are bounded so a black-holed/overloaded endpoint can't hang an
 /// (unbudgeted) benchmark worker forever, and a pathological body can't be buffered into memory.
@@ -27,8 +39,26 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// takes 45s timed out three times in a row — 90s spent, the sample lost, and the retry policy
 /// working exactly as designed against a call that was never going to fit.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// The same bound for a call that asked to think hard. 120s was measured against a model at its
+/// *default* effort; `xhigh` and `max` are a request for more deliberation, and the ceiling that
+/// permits it (`max_tokens` at 64k on the Anthropic path) is a wall-clock statement as much as a
+/// token one. Leaving the old bound in place would have turned "think harder" into "time out
+/// harder" — the 30s incident above, repeated one rung up, against a call that was never going to
+/// fit. Bounded, not unbounded: a black-holed endpoint still cannot hang a benchmark worker
+/// forever, which is why this constant exists at all.
+const REQUEST_TIMEOUT_HIGH_EFFORT: Duration = Duration::from_secs(900);
 /// Hard ceiling on a single provider response body (a completion is KBs; this stops a multi-GB body).
 const MAX_BODY_BYTES: u64 = 32 * 1024 * 1024;
+
+/// The per-call deadline for a request at `effort`. Applied on the request builder rather than the
+/// client: the client is process-wide and shared by every provider, so a per-call override is the
+/// only way one judge call's deliberation budget does not become everyone's.
+pub(crate) fn request_timeout(effort: Option<Effort>) -> Duration {
+    match effort {
+        Some(Effort::XHigh) | Some(Effort::Max) => REQUEST_TIMEOUT_HIGH_EFFORT,
+        _ => REQUEST_TIMEOUT,
+    }
+}
 
 /// Process-wide blocking client, built once with bounded connect/request timeouts. reqwest pools and
 /// reuses connections, so every provider call shares it.
@@ -145,6 +175,22 @@ pub(crate) fn read_bounded(resp: reqwest::blocking::Response, who: &str) -> Resu
     })
 }
 
+/// The error an adapter returns when it cannot honestly express an effort level. `why` is the
+/// concrete gap — a missing wire mapping, a provider scale that stops short of ours — because
+/// "unsupported" alone leaves the operator re-reading the matrix.
+///
+/// Loud on purpose, and the two silent alternatives are both worse than this error. Dropping the
+/// level is how a scorecard column ends up labelled `@xhigh` while measuring default thinking —
+/// exactly the failure the `@effort` suffix produced for a year, parsed in one of four generation
+/// paths and ignored by the other three. Folding it onto the nearest rung the provider does have is
+/// the same failure wearing a plausible face: two rows, one request.
+pub(crate) fn effort_unsupported(who: &str, model: &str, effort: Effort, why: &str) -> EngineError {
+    EngineError::Other(format!(
+        "the {who} adapter cannot request effort '{effort}' for model '{model}': {why}. Sending the \
+         call anyway would report a run that was never made at '{effort}' as one that was"
+    ))
+}
+
 /// Generate a candidate output from a target (provider + model + optional system-prompt variant).
 /// When `schema` is set, structured output is enforced; a provider that *rejects* the schema (a 4xx)
 /// is retried once schema-less (a logged prose fallback) so strict-schema models never hard-fail.
@@ -162,7 +208,14 @@ pub fn generate(
                 "[judge] {who} rejected the JSON schema (HTTP {status}: {}); retrying schema-less",
                 body.chars().take(200).collect::<String>()
             );
-            generate_retrying(cfg, provider, model, system_prompt, input, None, false)
+            generate_retrying(cfg, provider, model, system_prompt, input, None, false).map(
+                |mut o| {
+                    // The caller asked for a schema and is not getting one. Say so in the value, not
+                    // only on stderr: downstream parses the output believing syntax was enforced.
+                    o.schema = SchemaEnforcement::Shed;
+                    o
+                },
+            )
         }
         other => other,
     }
@@ -245,6 +298,22 @@ fn generate_once(
     schema: Option<&Value>,
     deterministic: bool,
 ) -> Result<GenOutcome> {
+    // **The `@effort` suffix dies here**, at the one point every generation path passes through.
+    // It used to be split inside the `claude -p` argv builder only, so with `ANTHROPIC_API_KEY` set
+    // the default judge spec `opus@xhigh` was POSTed to the Messages API as a *model id*; Gemini and
+    // OpenAI had the same hole for any suffixed spec. Below this line `model` is a real model id and
+    // the level travels as a typed [`Effort`] the adapter must either honour or refuse.
+    let (model, effort) = split_effort(model);
+
+    // **The gateway is matched on its id, before any family routing.** OpenRouter serves every
+    // lab's models behind one API, so `family_of("openrouter")` is `Other` and the lab that matters
+    // for bias control is whichever one the *model name* names (`anthropic/claude-sonnet-5`). It is
+    // also the one adapter that can honour every level of the effort ladder, which is much of why a
+    // matrix reaches for it.
+    if lighttrack_core::ProviderId::new(provider).as_str() == openrouter::PROVIDER_ID {
+        return openrouter::generate(model, system_prompt, input, schema, deterministic, effort);
+    }
+
     // Route on the provider's **family**, not its literal id: a judge spec may name any provider
     // (M8), and `azure-openai` / `az.ai.openai` are OpenAI endpoints in every way that matters here.
     // A provider we cannot classify gets a message that says what is missing — an adapter — rather
@@ -254,28 +323,42 @@ fn generate_once(
         // (DECISIONS D9) and `temperature: 0` is at least askable. Without a key the only way in is
         // the CLI's subscription OAuth, and that path has no sampling knobs at all.
         ProviderFamily::Anthropic if anthropic_api::available() => {
-            anthropic_api::generate(model, system_prompt, input, schema, deterministic)
+            anthropic_api::generate(model, system_prompt, input, schema, deterministic, effort)
         }
         // The Claude CLI has no sampling knobs to pass; the deterministic request is best-effort.
-        ProviderFamily::Anthropic => generate_anthropic(cfg, model, system_prompt, input, schema),
+        ProviderFamily::Anthropic => {
+            generate_anthropic(cfg, model, system_prompt, input, schema, effort)
+        }
         ProviderFamily::Google => {
-            generate_gemini(model, system_prompt, input, schema, deterministic)
+            gemini::generate(model, system_prompt, input, schema, deterministic, effort)
         }
         ProviderFamily::OpenAi => {
-            generate_openai(model, system_prompt, input, schema, deterministic)
+            openai::generate(model, system_prompt, input, schema, deterministic, effort)
         }
         other => Err(EngineError::Other(format!(
             "no generation adapter for provider '{provider}' (family {other}); this build can \
-             generate with anthropic, google and openai endpoints only — observability and pricing \
-             accept any provider, generation does not"
+             generate with anthropic, google, openai and openrouter endpoints only — observability \
+             and pricing accept any provider, generation does not"
         ))),
+    }
+}
+
+/// The schema guarantee a provider call *asked for*. A caller that supplied no schema gets
+/// `NotRequested`; one that supplied a schema the provider accepted gets `Enforced`. The third
+/// state, `Shed`, is not knowable here — it is stamped by [`generate`], which owns the
+/// reject-and-retry-schema-less fallback and is the only place that knows the retry happened.
+fn schema_state(schema: Option<&Value>) -> SchemaEnforcement {
+    if schema.is_some() {
+        SchemaEnforcement::Enforced
+    } else {
+        SchemaEnforcement::NotRequested
     }
 }
 
 /// The API origin for a provider, overridable by env. Two callers need this: the provider-boundary
 /// suite, which points the *real* call path at a local stub rather than mocking the path away, and
 /// anyone routing these calls through a gateway. Empty is treated as unset.
-fn api_base(var: &str, default: &str) -> String {
+pub(crate) fn api_base(var: &str, default: &str) -> String {
     std::env::var(var)
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -286,13 +369,16 @@ fn api_base(var: &str, default: &str) -> String {
 /// matters is that it never varies, so two runs of the same benchmark ask for the same draw.
 pub const PINNED_SEED: u64 = 42;
 
-/// Anthropic via `claude -p`, passing the schema through `--json-schema` (serialized).
+/// Anthropic via `claude -p`, passing the schema through `--json-schema` (serialized). This is the
+/// one adapter that has always honoured effort — `--effort <level>` — and it now receives the level
+/// from the dispatch rather than re-parsing the model spec itself.
 fn generate_anthropic(
     cfg: &EngineConfig,
     model: &str,
     system_prompt: Option<&str>,
     input: &str,
     schema: Option<&Value>,
+    effort: Option<Effort>,
 ) -> Result<GenOutcome> {
     let schema_str = schema.map(|s| s.to_string());
     let out = invocation::run(
@@ -300,6 +386,7 @@ fn generate_anthropic(
         &Invocation::generate(input, model)
             .with_system(system_prompt)
             .with_schema(schema_str.as_deref())
+            .with_effort(effort.map(|e| e.as_str()))
             .with_bare(cfg.bare),
     )?;
     if out.text.is_empty() {
@@ -314,222 +401,21 @@ fn generate_anthropic(
         latency_ms: out.latency_ms,
         input_tokens: out.input_tokens,
         output_tokens: out.output_tokens,
+        // The envelope's `usage` has no thinking/answer split; thinking is inside `output_tokens`.
+        reasoning_tokens: None,
         // The CLI exposes neither temperature nor seed — this is the residual the bare API path
         // exists to shrink, and it is now stamped on the outcome instead of living in a comment.
         determinism: Determinism::BestEffort,
-    })
-}
-
-/// Recursively drop a JSON-schema key the provider's schema subset doesn't accept (Gemini's
-/// `responseSchema` rejects `additionalProperties`).
-fn strip_schema_key(v: &Value, key: &str) -> Value {
-    match v {
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .filter(|(k, _)| k.as_str() != key)
-                .map(|(k, val)| (k.clone(), strip_schema_key(val, key)))
-                .collect(),
-        ),
-        Value::Array(items) => {
-            Value::Array(items.iter().map(|i| strip_schema_key(i, key)).collect())
-        }
-        other => other.clone(),
-    }
-}
-
-/// Google Gemini `generateContent`. Key from GEMINI_API_KEY (or GOOGLE_* fallbacks).
-fn generate_gemini(
-    model: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
-    deterministic: bool,
-) -> Result<GenOutcome> {
-    let key = std::env::var("GEMINI_API_KEY")
-        .or_else(|_| std::env::var("GOOGLE_API_KEY"))
-        .or_else(|_| std::env::var("GOOGLE_GENERATIVE_AI_API_KEY"))
-        .map_err(|_| EngineError::Other("no Gemini API key (set GEMINI_API_KEY)".into()))?;
-    let url = format!(
-        "{}/v1beta/models/{model}:generateContent",
-        api_base(
-            "LIGHTTRACK_GEMINI_BASE",
-            "https://generativelanguage.googleapis.com"
-        )
-    );
-    let mut body =
-        serde_json::json!({ "contents": [{ "role": "user", "parts": [{ "text": input }] }] });
-    if let Some(sys) = system_prompt {
-        body["system_instruction"] = serde_json::json!({ "parts": [{ "text": sys }] });
-    }
-    let mut gen_config = serde_json::Map::new();
-    if let Some(sc) = schema {
-        gen_config.insert(
-            "responseMimeType".into(),
-            serde_json::json!("application/json"),
-        );
-        gen_config.insert(
-            "responseSchema".into(),
-            strip_schema_key(sc, "additionalProperties"),
-        );
-    }
-    if deterministic {
-        gen_config.insert("temperature".into(), serde_json::json!(0.0));
-        gen_config.insert("seed".into(), serde_json::json!(PINNED_SEED));
-    }
-    if !gen_config.is_empty() {
-        body["generationConfig"] = Value::Object(gen_config);
-    }
-
-    let started = Instant::now();
-    let resp = http_client()?
-        .post(&url)
-        .header("x-goog-api-key", &key)
-        .json(&body)
-        .send()
-        .map_err(|e| send_error("gemini", e))?;
-    let latency_ms = Some(started.elapsed().as_millis() as u64);
-    let status = resp.status();
-    // Cloned BEFORE the body is read: `read_bounded` consumes the response, and the stated retry
-    // schedule lives in the headers it takes with it.
-    let headers = resp.headers().clone();
-    let text = read_bounded(resp, "gemini")?;
-    if !status.is_success() {
-        return Err(http_error("gemini", status, &headers, text));
-    }
-    let v: Value = serde_json::from_str(&text)?;
-    let output = gemini_text(&v);
-    if output.is_empty() {
-        return Err(EngineError::EmptyCompletion {
-            who: "gemini".into(),
-        });
-    }
-    let usage = v.get("usageMetadata");
-    Ok(GenOutcome {
-        output,
-        cost_usd: None,
-        model: model.to_string(),
-        latency_ms,
-        input_tokens: usage
-            .and_then(|u| u.get("promptTokenCount"))
-            .and_then(Value::as_u64),
-        output_tokens: usage
-            .and_then(|u| u.get("candidatesTokenCount"))
-            .and_then(Value::as_u64),
-        // temperature 0 + a fixed seed were both accepted: reproducible by contract.
-        determinism: if deterministic {
-            Determinism::Exact
-        } else {
-            Determinism::BestEffort
-        },
-    })
-}
-
-/// The answer text of a Gemini `generateContent` response: every text part of the first candidate,
-/// skipping thought parts. The reader used to take `parts[0].text` only, and a thinking model puts
-/// its `thought: true` part first — so its every verdict read as an empty completion, and a
-/// multi-part answer lost everything after the first part.
-fn gemini_text(v: &Value) -> String {
-    v.pointer("/candidates/0/content/parts")
-        .and_then(Value::as_array)
-        .map(|parts| {
-            parts
-                .iter()
-                .filter(|p| !p.get("thought").and_then(Value::as_bool).unwrap_or(false))
-                .filter_map(|p| p.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .concat()
-        })
-        .unwrap_or_default()
-}
-
-/// OpenAI Chat Completions. Key from OPENAI_API_KEY.
-fn generate_openai(
-    model: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
-    deterministic: bool,
-) -> Result<GenOutcome> {
-    let key = std::env::var("OPENAI_API_KEY")
-        .map_err(|_| EngineError::Other("no OpenAI API key (set OPENAI_API_KEY)".into()))?;
-    let mut messages = Vec::new();
-    if let Some(sys) = system_prompt {
-        messages.push(serde_json::json!({ "role": "system", "content": sys }));
-    }
-    messages.push(serde_json::json!({ "role": "user", "content": input }));
-    let mut body = serde_json::json!({ "model": model, "messages": messages });
-    if let Some(sc) = schema {
-        body["response_format"] = serde_json::json!({
-            "type": "json_schema",
-            "json_schema": { "name": "verdict", "strict": true, "schema": sc },
-        });
-    }
-    if deterministic {
-        // Some reasoning models reject `temperature`; generate_deterministic's fallback strips it.
-        body["temperature"] = serde_json::json!(0.0);
-        body["seed"] = serde_json::json!(PINNED_SEED);
-    }
-
-    let started = Instant::now();
-    let resp = http_client()?
-        .post(format!(
-            "{}/v1/chat/completions",
-            api_base("LIGHTTRACK_OPENAI_BASE", "https://api.openai.com")
-        ))
-        .bearer_auth(&key)
-        .json(&body)
-        .send()
-        .map_err(|e| send_error("openai", e))?;
-    let latency_ms = Some(started.elapsed().as_millis() as u64);
-    let status = resp.status();
-    let headers = resp.headers().clone();
-    let text = read_bounded(resp, "openai")?;
-    if !status.is_success() {
-        return Err(http_error("openai", status, &headers, text));
-    }
-    let v: Value = serde_json::from_str(&text)?;
-    let output = v
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    if output.is_empty() {
-        return Err(EngineError::EmptyCompletion {
-            who: "openai".into(),
-        });
-    }
-    let usage = v.get("usage");
-    Ok(GenOutcome {
-        output,
-        cost_usd: None,
-        model: v
-            .get("model")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| model.to_string()),
-        latency_ms,
-        input_tokens: usage
-            .and_then(|u| u.get("prompt_tokens"))
-            .and_then(Value::as_u64),
-        output_tokens: usage
-            .and_then(|u| u.get("completion_tokens"))
-            .and_then(Value::as_u64),
-        determinism: if deterministic {
-            Determinism::Exact
-        } else {
-            Determinism::BestEffort
-        },
+        schema: schema_state(schema),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{gemini_text, stated_retry_after, strip_schema_key};
+    use super::{effort_unsupported, request_timeout, schema_state, stated_retry_after};
+    use crate::SchemaEnforcement;
+    use lighttrack_core::Effort;
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-    use serde_json::json;
     use std::time::Duration;
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
@@ -578,38 +464,50 @@ mod tests {
         assert_eq!(stated_retry_after(&headers(&[("retry-after", "-3")])), None);
     }
 
-    /// A thinking model's first part is its thought; the verdict is the text part after it.
+    /// A caller must be able to tell an enforced schema from a prose fallback **from the value it
+    /// holds**. Before `GenOutcome::schema` existed, the reject-and-retry-schema-less path in
+    /// [`super::generate`] reported the degradation on stderr only, so these three cases were
+    /// indistinguishable downstream and the third was parsed as though syntax were guaranteed.
     #[test]
-    fn gemini_answer_skips_thought_parts_and_joins_the_rest() {
-        let thinking = json!({ "candidates": [{ "content": { "parts": [
-            { "thought": true, "text": "let me think" },
-            { "text": "{\"score\":" }, { "text": "0.5}" }
-        ] } }] });
-        assert_eq!(gemini_text(&thinking), "{\"score\":0.5}");
-        let plain = json!({ "candidates": [{ "content": { "parts": [{ "text": "hi" }] } }] });
-        assert_eq!(gemini_text(&plain), "hi");
-        assert_eq!(gemini_text(&json!({ "candidates": [] })), "");
-        assert_eq!(gemini_text(&json!({})), "");
+    fn schema_state_distinguishes_requested_from_absent() {
+        let sc = serde_json::json!({"type": "object"});
+        assert_eq!(schema_state(Some(&sc)), SchemaEnforcement::Enforced);
+        assert_eq!(schema_state(None), SchemaEnforcement::NotRequested);
+        // The shed state is not derivable from the request alone — it is stamped by `generate`
+        // after a provider rejection, and it must not collapse into either of the other two.
+        assert_ne!(SchemaEnforcement::Shed, SchemaEnforcement::Enforced);
+        assert_ne!(SchemaEnforcement::Shed, SchemaEnforcement::NotRequested);
+        assert_eq!(SchemaEnforcement::Shed.as_str(), "shed");
     }
 
+    /// The refusal names all three things an operator needs to act: which adapter, which model,
+    /// which level. A message that said only "unsupported" would leave them re-reading the matrix.
     #[test]
-    fn strips_additional_properties_recursively() {
-        let schema = json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "dim": { "type": "object", "additionalProperties": false, "properties": { "score": { "type": "number" } } }
-            }
-        });
-        let cleaned = strip_schema_key(&schema, "additionalProperties");
-        assert!(cleaned.get("additionalProperties").is_none());
-        assert!(cleaned["properties"]["dim"]
-            .get("additionalProperties")
-            .is_none());
-        // Untouched keys survive.
-        assert_eq!(
-            cleaned["properties"]["dim"]["properties"]["score"]["type"],
-            "number"
-        );
+    fn an_unsupported_effort_names_the_adapter_model_level_and_reason() {
+        let msg = effort_unsupported(
+            "gemini",
+            "gemini-2.5-pro",
+            Effort::XHigh,
+            "no verified mapping",
+        )
+        .to_string();
+        assert!(msg.contains("gemini"), "{msg}");
+        assert!(msg.contains("gemini-2.5-pro"), "{msg}");
+        assert!(msg.contains("xhigh"), "{msg}");
+        assert!(msg.contains("no verified mapping"), "{msg}");
+    }
+
+    /// The top two effort levels get a longer deadline than the shared client's. The Anthropic path
+    /// hands those levels a 64k `max_tokens`, and a bound measured against default-effort calls
+    /// would turn "think harder" into a timeout — the failure this mapping exists to prevent.
+    #[test]
+    fn asking_a_model_to_think_harder_also_buys_it_the_time() {
+        let base = request_timeout(None);
+        assert_eq!(request_timeout(Some(Effort::Low)), base);
+        assert_eq!(request_timeout(Some(Effort::High)), base);
+        assert!(request_timeout(Some(Effort::XHigh)) > base);
+        assert!(request_timeout(Some(Effort::Max)) > base);
+        // Bounded, never unbounded: a black-holed endpoint must still lose eventually.
+        assert!(request_timeout(Some(Effort::Max)) < Duration::from_secs(3600));
     }
 }

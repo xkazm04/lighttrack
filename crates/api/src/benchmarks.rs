@@ -8,13 +8,12 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{
-    new_id, BenchTarget, Benchmark, BenchmarkCase, BenchmarkRun, JudgeTrustVerdict,
-};
+use lighttrack_core::{new_id, BenchTarget, Benchmark, BenchmarkRun, JudgeTrustVerdict};
 
 use crate::alerts::BenchRunAlert;
 use crate::auth::Principal;
 use crate::benchmarks_target::{ensure_prompt_refs_exist, validate_target_matrix};
+use crate::difficulty_input::StatedCase;
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
 use crate::judges;
@@ -33,8 +32,10 @@ pub(crate) struct CreateBenchmarkReq {
     /// Comparison matrix: generate candidate outputs from each of these targets (Phase 3.6e).
     #[serde(default)]
     targets: Vec<BenchTarget>,
+    /// Inline cases. Each case's `difficulty` stays raw until [`create_benchmark`] has had the
+    /// chance to refuse a rung this ladder does not name — see [`crate::difficulty_input`].
     #[serde(default)]
-    dataset: Vec<BenchmarkCase>,
+    dataset: Vec<StatedCase>,
     /// Reference a stored dataset by id instead of (or in addition to) an inline dataset.
     #[serde(default)]
     dataset_ref: Option<String>,
@@ -101,6 +102,19 @@ pub(crate) async fn create_benchmark(
             )));
         }
     }
+    // Every inline case is graded before anything is written, and one bad rung refuses the whole
+    // request. Dropping just the offending case would be worse than the bug it replaces: the
+    // benchmark would exist, 8 of its 18 cases would be silently ungraded, and the per-tier report
+    // would divide by a bucket nobody put anything in. The index is named because "which one" is
+    // the operator's next question when a dataset has eighteen cases in it.
+    let mut dataset = Vec::with_capacity(req.dataset.len());
+    for (i, stated) in req.dataset.into_iter().enumerate() {
+        dataset.push(
+            stated
+                .into_case()
+                .map_err(|e| ApiError::bad_request(format!("dataset case {i}: {e}")))?,
+        );
+    }
     // The target matrix (if any) is stored in the `target` field as a JSON array. A typed `targets`
     // deserialized, but that is not the same as being *runnable*: an `Http` target's URL and a
     // `prompt_ref`'s name are both refusable facts, and both go through the same door.
@@ -125,7 +139,7 @@ pub(crate) async fn create_benchmark(
         judge_model: req.judge_model,
         target,
         dataset_ref: req.dataset_ref,
-        dataset: req.dataset,
+        dataset,
         rubric_id: req.rubric_id,
         baseline_score: req.baseline_score,
         created_at: Utc::now(),

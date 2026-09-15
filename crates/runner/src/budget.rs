@@ -168,6 +168,41 @@ mod tests {
         serde_json::from_value(json!({ "provider": provider, "model": model })).unwrap()
     }
 
+    /// A target that spells its effort into the model string is still priced from the book.
+    ///
+    /// This holds today without the estimator doing anything: `model_id::canonicalize` splits a
+    /// trailing `@lane` off before `PriceBook::candidates` looks the family up, so `opus@xhigh`
+    /// finds the `opus` row. It is pinned here because nothing else states it, the effort axis made
+    /// the suffixed spelling common, and the failure mode is the expensive kind — an unpriced target
+    /// reports 0 rather than an error, and free wins every cost comparison it appears in.
+    #[test]
+    fn an_effort_suffixed_model_is_still_priced_from_the_book() {
+        let prices = vec![price("anthropic", "opus", 1.0, 1.0)];
+        let plain = estimate_compare(&prices, &[target("anthropic", "opus")], 1, 1, 1, "o", "j");
+        let suffixed = estimate_compare(
+            &prices,
+            &[target("anthropic", "opus@xhigh")],
+            1,
+            1,
+            1,
+            "o",
+            "j",
+        );
+        assert!(
+            plain.usd > 0.0,
+            "the fixture prices the bare model, or this test proves nothing"
+        );
+        assert_eq!(
+            suffixed.usd, plain.usd,
+            "the effort suffix changes how hard the model thinks, not what a token costs"
+        );
+        assert!(
+            !suffixed.unpriced.iter().any(|u| u.contains("opus")),
+            "a priced model must not be reported unpriced: {:?}",
+            suffixed.unpriced
+        );
+    }
+
     #[test]
     fn estimate_counts_every_paid_call_in_the_matrix() {
         let e = estimate_compare(

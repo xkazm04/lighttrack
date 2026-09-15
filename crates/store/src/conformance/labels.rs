@@ -160,6 +160,7 @@ fn dataset_join(store: &dyn Store, pid: &str) -> Result<()> {
         source_event_id: None,
         anonymization: serde_json::Value::Null,
         input_hash: None,
+        difficulty: None,
     };
     store.create_dataset_item(&item)?;
     let l = sample_label(pid, LabelSubject::DatasetItem(item.id.clone()), 0.95);

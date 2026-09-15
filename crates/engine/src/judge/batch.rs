@@ -136,7 +136,7 @@ pub(crate) fn batch_with(
     // and it is a fact about the rubric, so it fails the batch loudly rather than one case quietly.
     let det: Vec<Vec<scorers::DetScore>> = cases
         .iter()
-        .map(|c| scorers::evaluate_all(rubric, c.expected, c.output))
+        .map(|c| scorers::evaluate_all(rubric, c.expected, c.output, None))
         .collect::<Result<Vec<_>>>()?;
 
     let k = if scorers::has_llm_dims(rubric) {

@@ -165,6 +165,7 @@ lt.track_openai(resp, latency_ms=120)          # model + usage → /v1/events; c
 | Anthropic (`claude -p`) | judge engine + generation (default) | subscription OAuth or `ANTHROPIC_API_KEY` |
 | OpenAI | candidate generation | `OPENAI_API_KEY` |
 | Google Gemini | candidate generation | `GEMINI_API_KEY` |
+| OpenRouter (gateway) | candidate generation + judging, any lab's model; the only adapter that honours all five effort levels, reports the reasoning-token split, and returns its own $ cost | `OPENROUTER_API_KEY` |
 
 ### Billing providers — net revenue against cost
 Wire a billing provider to turn cost into **margin**. A signed webhook

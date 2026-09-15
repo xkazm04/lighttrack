@@ -22,6 +22,7 @@ mod relay;
 mod revenue;
 mod rubrics;
 mod scores;
+mod use_cases;
 
 /// Every group, in router order. A `&[&[Endpoint]]` rather than one flat `const` because a const
 /// slice cannot be concatenated at compile time and a 130-row table in one file would break the
@@ -34,6 +35,7 @@ pub(crate) const GROUPS: &[&[Endpoint]] = &[
     datasets::ENDPOINTS,
     labels::ENDPOINTS,
     rubrics::ENDPOINTS,
+    use_cases::ENDPOINTS,
     benchmarks::ENDPOINTS,
     prompts::ENDPOINTS,
     jobs::ENDPOINTS,

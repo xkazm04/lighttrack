@@ -25,7 +25,7 @@ use sha2::Sha256;
 
 use crate::providers::{http_client, http_error, read_bounded, send_error};
 use crate::retry::with_retry;
-use crate::{Determinism, EngineError, GenOutcome, Result};
+use crate::{Determinism, EngineError, GenOutcome, Result, SchemaEnforcement};
 
 /// Env var holding the shared secret the request body is signed with.
 pub const SECRET_ENV: &str = "LIGHTTRACK_HTTP_TARGET_SECRET";
@@ -149,7 +149,9 @@ fn call_once(url: &str, body: &[u8], signature: Option<&str>) -> Result<GenOutco
             .or_else(|| Some(started.elapsed().as_millis() as u64)),
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
+        reasoning_tokens: None,
         determinism: Determinism::BestEffort,
+        schema: SchemaEnforcement::NotRequested,
     })
 }
 

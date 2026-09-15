@@ -58,6 +58,55 @@ fn primary_key(c: &Connection, table: &str) -> Vec<String> {
     rows.into_iter().map(|(_, n)| n).collect()
 }
 
+/// Tables that did not exist when the pre-M14 path was frozen.
+///
+/// The legacy path in `tests/legacy/` is a snapshot and must never grow, so a table added since
+/// cannot appear on that side of the comparison. Naming post-freeze additions here — rather than
+/// relaxing the assertion to a subset check — keeps the guarantee this file exists for exactly as
+/// strong as it was: a NEW table costs one deliberate line, while a legacy table that was dropped,
+/// renamed or silently stopped being created still fails the moment it goes missing.
+const TABLES_ADDED_SINCE_FREEZE: &[&str] = &["use_cases"];
+
+/// Indexes the frozen path could not know about: those of [`TABLES_ADDED_SINCE_FREEZE`], and those
+/// added to a legacy table *since* the freeze.
+///
+/// The second kind is the reason this list is not simply the first. An index is a pure addition —
+/// it changes no column, no default and no key — so a legacy table gaining one is not the drift
+/// this file guards against. Naming each one here still costs a deliberate line, and an index that
+/// stops being created fails on the `remove` assertion below.
+const INDEXES_ADDED_SINCE_FREEZE: &[&str] = &[
+    "idx_use_cases_project",
+    // The benchmark listing reads, unindexed until they were noticed.
+    "idx_benchmarks_project",
+    "idx_benchmark_runs_bench",
+    "idx_rubrics_project",
+];
+
+/// The rendered tables, minus the ones the frozen path could not know about.
+fn tables_since_freeze(c: &Connection) -> BTreeSet<String> {
+    let mut t = tables(c);
+    for name in TABLES_ADDED_SINCE_FREEZE {
+        assert!(
+            t.remove(*name),
+            "{name} is listed as added since the freeze but the model no longer creates it - \
+             remove it from TABLES_ADDED_SINCE_FREEZE in the same change that dropped the table"
+        );
+    }
+    t
+}
+
+/// The rendered indexes, minus those of post-freeze tables.
+fn indexes_since_freeze(c: &Connection) -> BTreeMap<String, (i64, i64, Vec<String>)> {
+    let mut i = indexes(c);
+    for name in INDEXES_ADDED_SINCE_FREEZE {
+        assert!(
+            i.remove(*name).is_some(),
+            "{name} is listed as added since the freeze but is no longer created"
+        );
+    }
+    i
+}
+
 fn tables(c: &Connection) -> BTreeSet<String> {
     let mut stmt = c
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
@@ -161,7 +210,7 @@ fn rendered_db() -> Connection {
 #[test]
 fn the_rendered_schema_creates_the_same_tables() {
     assert_eq!(
-        tables(&rendered_db()),
+        tables_since_freeze(&rendered_db()),
         tables(&legacy_db()),
         "the model must declare exactly the tables the shipped schema created"
     );
@@ -187,7 +236,7 @@ fn the_rendered_schema_creates_the_same_columns() {
 #[test]
 fn the_rendered_schema_creates_the_same_indexes() {
     assert_eq!(
-        indexes(&rendered_db()),
+        indexes_since_freeze(&rendered_db()),
         indexes(&legacy_db()),
         "an index was gained, lost or redefined"
     );
@@ -215,9 +264,9 @@ fn opening_a_store_applies_the_same_schema() {
     drop(store);
     let opened = Connection::open(&path).expect("reopen");
     let old = legacy_db();
-    assert_eq!(tables(&opened), tables(&old));
+    assert_eq!(tables_since_freeze(&opened), tables(&old));
     for t in tables(&old) {
         assert_eq!(columns(&opened, &t), columns(&old, &t), "table `{t}`");
     }
-    assert_eq!(indexes(&opened), indexes(&old));
+    assert_eq!(indexes_since_freeze(&opened), indexes(&old));
 }
