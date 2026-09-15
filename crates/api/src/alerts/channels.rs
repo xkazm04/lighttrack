@@ -95,7 +95,7 @@ async fn post_resend(alerter: &Alerter, c: &AlertChannel, a: &Alert) -> Result<S
     let Some(r) = &alerter.config.resend else {
         return Err("email channel configured but LIGHTTRACK_ALERT_RESEND_KEY is not set".into());
     };
-    let to: Vec<&str> = c.target.split(',').map(str::trim).collect();
+    let to = recipients(&c.target);
     let body = json!({
         "from": r.from,
         "to": to,
@@ -108,6 +108,14 @@ async fn post_resend(alerter: &Alerter, c: &AlertChannel, a: &Alert) -> Result<S
         .bearer_auth(&r.key)
         .json(&body);
     send(req).await
+}
+
+fn recipients(target: &str) -> Vec<&str> {
+    target
+        .split(',')
+        .map(str::trim)
+        .filter(|address| !address.is_empty())
+        .collect()
 }
 
 /// Send, and reduce the answer to a short status string. A non-2xx is a failure with the code and a
@@ -232,6 +240,14 @@ mod tests {
             detail.len() <= MAX_RESPONSE_BYTES,
             "{}-byte detail exceeded the {MAX_RESPONSE_BYTES}-byte cap",
             detail.len()
+        );
+    }
+
+    #[test]
+    fn stored_email_targets_drop_blank_entries_like_env_targets() {
+        assert_eq!(
+            recipients("one@example.com, , two@example.com,"),
+            ["one@example.com", "two@example.com"]
         );
     }
 }
