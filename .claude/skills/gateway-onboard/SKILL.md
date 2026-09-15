@@ -62,8 +62,10 @@ POST /v1/projects/:id/use-cases
   "component": "<file or module>", "expected_models": ["<current provider/model>"] }
 ```
 
-`kind` decides the rubric shape in step 3. Note the schema, if any: it becomes the benchmark's
-`response_format` and the `json_valid` dimension.
+`kind` decides the rubric shape in step 3. Note the schema, if any: it goes on every benchmark
+target as `schema` (the engine's enforcement path — the same one the gateway uses for the app's
+`response_format`) and drives the `json_valid` dimension. A schema only pasted into the system
+prompt measures a transport the app will never ship.
 
 ## Step 2 — Build the corpus, graded
 Prefer real traffic. If the use case has events in LightTrack:
@@ -107,17 +109,18 @@ POST /v1/projects/:id/benchmarks
 { "name": "<use-case-key> seats", "rubric_id": "<rubric>", "dataset_ref": "<dataset>",
   "judge_model": "<cross-family judge, see guardrails>",
   "targets": [
-    { "provider": "anthropic", "model": "haiku",   "effort": "low",    "label": "haiku@low",   "system_prompt": "..." },
+    { "provider": "anthropic", "model": "haiku",   "effort": "low",    "label": "haiku@low",   "system_prompt": "...", "schema": { ...the app's output schema... } },
     { "provider": "anthropic", "model": "sonnet",  "effort": "medium", "label": "sonnet@med",  "system_prompt": "..." },
     { "provider": "codex",     "model": "gpt-5.5", "effort": "low",    "label": "gpt-5.5@low", "system_prompt": "..." },
     { "provider": "codex",     "model": "gpt-5.5", "effort": "medium", "label": "gpt-5.5@med", "system_prompt": "..." }
   ] }
 ```
 
-Run from the LightTrack repo root (the runner reads `.env` from the cwd):
+Run from the LightTrack repo root (the runner reads `.env` from the cwd). `--jobs` is a
+top-level flag, before the subcommand:
 
 ```
-lt-runner bench --benchmark <id>
+lt-runner --jobs 3 bench --benchmark <id>
 ```
 
 Escalate (`opus@high`, `gpt-5.6-*@high`) only if no row clears the hard tier; add rows to a

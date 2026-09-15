@@ -145,6 +145,7 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
   "prompt_ref": { "name": "support-reply", "label": "production" },
   "label": "gpt4o-prod",
   "effort": "high",
+  "schema": { "type": "object", "properties": { "likelyCause": { "enum": ["spam", "ok"] } } },
   "limits": { "max_cost_usd": 0.01, "max_latency_ms": 2000 },
   "kind": { "type": "http", "url": "https://rag.acme.com/answer" } }
 ```
@@ -161,6 +162,12 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
   whose bugs would surface as quality regressions.
   A run that resolved a ref records **`resolved_prompt_version`** in its report, and that is the
   evidence the promotion gate requires (see `CI_GATE.md`).
+- **`schema`** — a JSON schema the answer must satisfy, sent through the engine's
+  structured-output enforcement (the same path `lt-gateway` uses for an app's `response_format`).
+  Without it a schema can only be *described* in the system prompt, and a model that answers a
+  description with fenced prose (haiku, 21/21 on the first systedo run) fails `json_valid` on a
+  transport the app never ships. A provider that rejects the schema falls back once to a
+  schema-less call and the outcome says `schema: shed`. Ignored by an `http` target.
 - **`effort`** — reasoning effort: `low | medium | high | xhigh | max`. This is what makes *"is
   `gpt-5@high` worth 4× `gpt-5@low` on my cases?"* a question the matrix can ask: declare the same
   model twice at two levels and they are two rows, with distinct default labels
