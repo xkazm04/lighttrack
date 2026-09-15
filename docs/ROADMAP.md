@@ -120,6 +120,24 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
       generator family). Judge cost priced from the DB book when the provider returns no $.
       *Verified live:* same answer judged by Gemini and by OpenAI (both 1.0/pass, judge cost priced).
 
+## Gateway — one wrapper for local apps ✅ (2026-09-15, design: docs/GATEWAY.md)
+- [x] `lt-gateway` (`crates/gateway`): OpenAI-compatible `POST /v1/chat/completions` on loopback,
+      over the engine's provider dispatch (so `claude -p` and `codex exec` on subscription seats, plus the
+      HTTP providers). `model` is a **use-case route** from `gateway.toml` or a literal
+      `provider/model[@effort]`. JSON schemas travel through the engine's enforcement path.
+- [x] **Seat failover**: each failure is classified as exhausted / transient / terminal; an exhausted
+      seat is held out (`cooldown_secs` or the provider's retry-after) so following calls skip straight to
+      the fallback — the seamless-resume case. A fallback on the same seat is refused at config load.
+- [x] **Honest telemetry**: one event per attempt, all on one `trace_id` — the failed primary as an
+      `error` row (`provider_failed`, `failure_class: transient`), the answer tagged `fell_back`.
+- [x] **Pre-spend admission** from `/v1/limits/status` (cached 10s, fail-open).
+- [x] `/gateway-onboard <app> <use-case>` skill: difficulty-graded corpus → a ladder per seat →
+      cheapest config per seat that clears the hard tier → route + fallback written from the scorecard →
+      failover drill via `X-LightTrack-Simulate` (dev flag only).
+- [ ] Tool calls (passthrough for the HTTP providers; the CLIs cannot take them).
+- [ ] Streaming (SSE) — the CLIs answer whole, so this is chunked delivery of a finished answer at best.
+- [ ] Native multi-turn for the HTTP providers (today every provider gets one rendered prompt).
+
 ## Judge calibration (post-3.6) ✅
 - [x] `core::calibration` — pure agreement math (Cohen's κ on pass/fail, Pearson, MAE/RMSE, judge-vs-human
       bias, trust verdict vs a κ bar); unit-tested (perfect/total-disagreement/bias/empty).

@@ -30,6 +30,18 @@ entry is written while the change is still fresh, not reconstructed at tag time.
 
 ### Added
 
+- **`lt-gateway`** (`crates/gateway`, `docs/GATEWAY.md`): an OpenAI-compatible
+  `POST /v1/chat/completions` on loopback for local apps, routing a use case (from `gateway.toml`)
+  or a literal `provider/model[@effort]` through the engine's provider dispatch — `claude -p` and
+  `codex exec` on subscription seats, or the HTTP providers. Fails over to the next seat on a usage
+  limit and holds the exhausted seat out for `cooldown_secs`; records every attempt as an event on
+  one `trace_id` (failed primary = `error` + `provider_failed`, the answer = `fell_back`); refuses
+  with 429 before any spend when `/v1/limits/status` says the project is enforcing. `stream` and
+  `tools` are 400 for now. Responses carry `lighttrack.attempts`, `x-lighttrack-served-by` and
+  `x-lighttrack-fell-back`.
+- `/gateway-onboard` skill: benchmark both seats on a difficulty-graded corpus for one use case and
+  write the route (and its fallback, when measured fit) from the scorecard.
+
 - **Judge eval corpus.** `crates/engine/evals/judge/corpus.json` records whole verdicts — overall,
   pass, per-dimension scores and floor hits, agreement, parse accounting — for known cases, replayed
   through the real prompt/scorer/aggregate path with the provider call canned. It runs inside

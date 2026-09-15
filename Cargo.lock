@@ -1372,6 +1372,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lighttrack-gateway"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "dotenvy",
+ "lighttrack-core",
+ "lighttrack-engine",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tower",
+]
+
+[[package]]
 name = "lighttrack-mcp"
 version = "0.0.1"
 dependencies = [
