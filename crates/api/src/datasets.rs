@@ -3,7 +3,7 @@
 //! records why an imported dataset and a traffic-sampled one age differently.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     Json,
 };
@@ -13,6 +13,7 @@ use serde::Deserialize;
 use lighttrack_core::{new_id, Dataset, DatasetItem};
 
 use crate::auth::Principal;
+use crate::difficulty_input::{parse_stated_tier, StatedItem};
 use crate::error::ApiError;
 use crate::guards::{authenticate, ensure_can_admin, resolve_read_project};
 use crate::state::{spawn_db, AppState};
@@ -88,10 +89,15 @@ pub(crate) async fn add_dataset_item(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(mut item): Json<DatasetItem>,
+    Json(stated): Json<StatedItem>,
 ) -> Result<Json<DatasetItem>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     ensure_can_admin(&p)?;
+    // Graded here, before the store is touched, and refused rather than degraded: the operator
+    // typed this rung seconds ago, so accepting `expert` with a 200 and storing NULL writes a case
+    // that reads as ungraded into a corpus whose per-tier report will not say so. The *read* path
+    // keeps degrading — see `crate::difficulty_input`.
+    let mut item = stated.into_item().map_err(ApiError::bad_request)?;
     let ds = load_dataset_authorized(&st, &p, &id).await?;
     if ds.frozen {
         return Err(ApiError::conflict("dataset is frozen"));
@@ -103,17 +109,51 @@ pub(crate) async fn add_dataset_item(
     Ok(Json(item))
 }
 
+/// `?difficulty=` narrows a listing to one tier (M27).
+#[derive(Deserialize)]
+pub(crate) struct ItemsQuery {
+    #[serde(default)]
+    difficulty: Option<String>,
+}
+
 pub(crate) async fn list_dataset_items(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(q): Query<ItemsQuery>,
 ) -> Result<Json<Vec<DatasetItem>>, ApiError> {
     let p = authenticate(&st, &headers).await?;
+    // Parsed BEFORE the read, and refused rather than ignored: an operator who asked for `hard` and
+    // got the whole set back would read a mixed corpus as the hard tier. The same reason `lt
+    // datasets import` refuses an unknown --strategy instead of falling back to `recent`.
+    //
+    // Shares `parse_stated_tier` with the write path, so the two surfaces cannot answer the same
+    // typo with two different messages — which is how the asymmetry this replaced went unnoticed.
+    let tier = match q
+        .difficulty
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(s) => Some(parse_stated_tier(s).map_err(ApiError::bad_request)?),
+        None => None,
+    };
     load_dataset_authorized(&st, &p, &id).await?;
     let store = st.store.clone();
     let sc = p.scope_owned();
     let items = spawn_db(move || store.list_dataset_items(sc.as_deref().into(), &id)).await?;
-    Ok(Json(items))
+    // Filtered here rather than in the `Store` trait, deliberately. A dataset is a curated corpus
+    // that this method already returns whole and unpaginated, so pushing the predicate down would
+    // buy nothing and would add a filter argument three backends could each implement, forget, or
+    // quietly ignore — which is how a filter becomes advisory. One shared predicate cannot skew for
+    // one backend. Ungraded cases are excluded from every tier, because `None` is not a tier.
+    Ok(Json(match tier {
+        Some(t) => items
+            .into_iter()
+            .filter(|i| i.difficulty == Some(t))
+            .collect(),
+        None => items,
+    }))
 }
 
 pub(crate) async fn freeze_dataset(

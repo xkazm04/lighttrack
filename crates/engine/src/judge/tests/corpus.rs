@@ -65,13 +65,14 @@ fn run(case: &Value) -> (RubricOutcome, Prompt) {
     let input = s(case, "input");
     let output = s(case, "output");
     let expected = case["expected"].as_str();
-    let det = crate::scorers::evaluate_all(&r, expected, output)
+    let det = crate::scorers::evaluate_all(&r, expected, output, None)
         .unwrap_or_else(|e| panic!("case `{id}`: deterministic dimensions failed: {e:?}"));
     let prompt = build_rubric_prompt(&r, input, expected, output);
     let outputs = strings(&case["judge_outputs"]);
     let samples = case["samples"]
         .as_u64()
-        .unwrap_or_else(|| panic!("case `{id}`: `samples` must be a number")) as u32;
+        .unwrap_or_else(|| panic!("case `{id}`: `samples` must be a number"))
+        as u32;
     let outcome = judge_with(
         &FakeGen::new(&outputs),
         &r,

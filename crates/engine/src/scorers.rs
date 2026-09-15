@@ -9,18 +9,27 @@
 //!
 //! Each deterministic dimension is evaluated once: it is exactly reproducible, so re-running cannot
 //! move it. That is why it stays out of the cross-sample `agreement` number (see [`crate::judge`]).
+//!
+//! The `exec` kind ([`crate::sandbox`]) is the one that breaks the "locally, for free" half of that
+//! sentence, and it adds a **third** outcome the text kinds do not have: a sandbox that could not run
+//! the command at all yields `score: None`, which voids the dimension for that case. That is not a
+//! rounding of 0.0 — it is the refusal to report our own outage as the candidate's failure.
 
 use regex::RegexBuilder;
 use serde_json::Value;
 
 use lighttrack_core::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
 
+use crate::sandbox::SandboxRunner;
 use crate::{EngineError, Result};
 
 /// One deterministic dimension's verdict: its score plus why it got it.
+#[derive(Debug, Clone)]
 pub(crate) struct DetScore {
     pub(crate) key: String,
-    pub(crate) score: f64,
+    /// `None` = **voided**: an `exec` dimension whose sandbox was unavailable. It contributes to
+    /// neither the numerator nor the denominator of the overall, and can never trip a floor.
+    pub(crate) score: Option<f64>,
     pub(crate) reasoning: String,
 }
 
@@ -42,19 +51,26 @@ pub(crate) fn has_llm_dims(rubric: &Rubric) -> bool {
     rubric.dimensions.iter().any(|d| d.kind.is_llm())
 }
 
+/// True when scoring this rubric requires a sandbox — the caller must supply one, and should run
+/// [`crate::sandbox::preflight`] once before the run rather than discovering it per case.
+pub fn needs_sandbox(rubric: &Rubric) -> bool {
+    rubric.dimensions.iter().any(|d| d.kind.is_exec())
+}
+
 /// Evaluate every deterministic dimension of `rubric` against the candidate `output` (and the case's
 /// `expected` reference), in rubric order. An all-`llm` rubric yields an empty vec and costs nothing.
 pub(crate) fn evaluate_all(
     rubric: &Rubric,
     expected: Option<&str>,
     output: &str,
+    exec: Option<&dyn SandboxRunner>,
 ) -> Result<Vec<DetScore>> {
     rubric
         .dimensions
         .iter()
         .filter(|d| !d.kind.is_llm())
         .map(|d| {
-            let (score, reasoning) = evaluate(d, expected, output)?;
+            let (score, reasoning) = evaluate(d, expected, output, exec)?;
             Ok(DetScore {
                 key: d.key.clone(),
                 score,
@@ -66,14 +82,19 @@ pub(crate) fn evaluate_all(
 
 /// Score one deterministic dimension. `Ok((score, reasoning))` covers both pass and fail; `Err` is
 /// reserved for a rubric that cannot be evaluated at all.
-fn evaluate(d: &RubricDimension, expected: Option<&str>, output: &str) -> Result<(f64, String)> {
+fn evaluate(
+    d: &RubricDimension,
+    expected: Option<&str>,
+    output: &str,
+    exec: Option<&dyn SandboxRunner>,
+) -> Result<(Option<f64>, String)> {
     let c = &d.check;
     let kind = d.kind.as_str();
     // The part of the output under test: the whole thing, or the value at a JSON Pointer. A path that
     // does not resolve is the *candidate's* failure, not the operator's.
     let subject = match select(c, output) {
         Ok(s) => s,
-        Err(why) => return Ok((0.0, format!("{kind}: {why} → fail"))),
+        Err(why) => return Ok((Some(0.0), format!("{kind}: {why} → fail"))),
     };
 
     Ok(match d.kind {
@@ -132,7 +153,7 @@ fn evaluate(d: &RubricDimension, expected: Option<&str>, output: &str) -> Result
             let tol = c.tolerance.unwrap_or(0.0).abs();
             match first_number(&subject) {
                 None => (
-                    0.0,
+                    Some(0.0),
                     format!(
                         "numeric: expected `{want}`, no number in `{}` → fail",
                         snip(&subject)
@@ -149,10 +170,13 @@ fn evaluate(d: &RubricDimension, expected: Option<&str>, output: &str) -> Result
             let parses = c.path.is_some() || serde_json::from_str::<Value>(&subject).is_ok();
             match (parses, c.expect.as_deref()) {
                 (false, _) => (
-                    0.0,
+                    Some(0.0),
                     format!("json_valid: `{}` is not valid JSON → fail", snip(&subject)),
                 ),
-                (true, None) => (1.0, "json_valid: output parses as JSON → pass".to_string()),
+                (true, None) => (
+                    Some(1.0),
+                    "json_valid: output parses as JSON → pass".to_string(),
+                ),
                 (true, Some(want)) => {
                     let want = if c.trim { want.trim() } else { want };
                     verdict(
@@ -167,6 +191,20 @@ fn evaluate(d: &RubricDimension, expected: Option<&str>, output: &str) -> Result
                 }
             }
         }
+        DimensionKind::Exec => {
+            // A caller with no sandbox must not quietly skip the dimension: that would publish a
+            // score whose most heavily weighted term silently vanished.
+            let cli = exec.ok_or_else(|| {
+                EngineError::Other(format!(
+                    "rubric dimension '{}' is `exec` but this run has no sandbox configured",
+                    d.key
+                ))
+            })?;
+            // `check.path` already narrowed the output, so a model that answers `{{\"code\": ...}}`
+            // has its code written, not its envelope.
+            let o = crate::sandbox::run_exec(cli, &d.key, c, &subject)?;
+            return Ok((o.verdict.score(), o.reasoning()));
+        }
         // Unreachable: `evaluate_all` filters LLM dimensions out. Defensive rather than silent.
         DimensionKind::Llm => {
             return Err(EngineError::Other(format!(
@@ -178,9 +216,12 @@ fn evaluate(d: &RubricDimension, expected: Option<&str>, output: &str) -> Result
 }
 
 /// Attach a pass/fail tail to a check's description, so every mechanical verdict reads the same way.
-fn verdict(pass: bool, detail: String) -> (f64, String) {
+fn verdict(pass: bool, detail: String) -> (Option<f64>, String) {
     let mark = if pass { "pass" } else { "fail" };
-    (if pass { 1.0 } else { 0.0 }, format!("{detail} → {mark}"))
+    (
+        Some(if pass { 1.0 } else { 0.0 }),
+        format!("{detail} → {mark}"),
+    )
 }
 
 /// The literal this dimension compares against: `check.expect`, else the case's reference answer.

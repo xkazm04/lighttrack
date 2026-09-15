@@ -244,7 +244,7 @@ Each SDK extracts model + token usage from the native response object:
 |-----------|------------------|--------------------------------------|----------------------------------------|--------|
 | OpenAI    | `model`          | `usage.prompt_tokens` / `input_tokens` | `usage.completion_tokens` / `output_tokens` | `usage.prompt_tokens_details.cached_tokens` / `input_tokens_details.cached_tokens` (Responses API) |
 | Anthropic | `model`          | `usage.input_tokens`                 | `usage.output_tokens`                  | `usage.cache_read_input_tokens` (not `cache_creation_…`) |
-| Gemini    | `modelVersion` / `model_version` | `usageMetadata.promptTokenCount` / `usage_metadata.prompt_token_count` | `…candidatesTokenCount` / `…candidates_token_count` | `…cachedContentTokenCount` / `…cached_content_token_count` |
+| Gemini    | `modelVersion` / `model_version` | `usageMetadata.promptTokenCount` / `usage_metadata.prompt_token_count` | `…candidatesTokenCount` **+** `…thoughtsTokenCount` (and the snake_case duals) — thoughts are billed as output | `…cachedContentTokenCount` / `…cached_content_token_count` |
 
 Both casings, everywhere they occur: the REST/JS shapes are camelCase and the google-genai Python
 objects are snake_case for the same fields. A missing token count is `0`; a *cached* count that was

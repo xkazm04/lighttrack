@@ -61,6 +61,10 @@ pub fn extract_anthropic(resp: &Value) -> Extracted {
 /// their `to_json_dict()` are snake_case for exactly the same fields. This reader took only the
 /// camelCase form, so every Rust user feeding it a google-genai dict recorded `unknown` and zeroes —
 /// a silent hole in the usage ledger, not an error anyone would see.
+///
+/// Output is `candidatesTokenCount + thoughtsTokenCount`: the first is the visible answer only, and a
+/// thinking model's thoughts are billed at the output rate, so reading the answer alone priced a
+/// call that thought for thousands of tokens as a short one.
 pub fn extract_gemini(resp: &Value) -> Extracted {
     let u = if resp["usageMetadata"].is_object() {
         &resp["usageMetadata"]
@@ -71,7 +75,8 @@ pub fn extract_gemini(resp: &Value) -> Extracted {
     Extracted {
         model: s(&resp["modelVersion"]).or_else(|| s(&resp["model_version"])),
         input_tokens: dual("promptTokenCount", "prompt_token_count").unwrap_or(0),
-        output_tokens: dual("candidatesTokenCount", "candidates_token_count").unwrap_or(0),
+        output_tokens: dual("candidatesTokenCount", "candidates_token_count").unwrap_or(0)
+            + dual("thoughtsTokenCount", "thoughts_token_count").unwrap_or(0),
         cached_input_tokens: dual("cachedContentTokenCount", "cached_content_token_count"),
     }
 }

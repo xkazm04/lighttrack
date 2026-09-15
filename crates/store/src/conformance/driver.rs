@@ -11,6 +11,7 @@ use super::{
     admission, alerts, catalog, collective, contributions, dataset_lineage, devices, events,
     forecast, job_leases, jobs, labels, maintenance, margin, margin_policy, pricing, projects,
     prompts, refusals, relay, revenue, rollup, schedules, score_summary, scores, tenancy, traces,
+    use_cases,
 };
 use crate::{Result, Store, Surface};
 
@@ -65,6 +66,7 @@ fn section(store: &dyn Store, pid: &str, surface: Surface) -> Result<()> {
         Surface::Forecast => forecast::forecast(store)?,
         Surface::MarginBreakdowns => margin::margin(store)?,
         Surface::Prompts => prompts::prompts(store)?,
+        Surface::UseCases => use_cases::use_cases(store, pid)?,
         Surface::Relay => relay::relay(store, pid)?,
         Surface::Collective => collective::collective(store)?,
         Surface::ProjectAdmin => projects::project_admin(store)?,

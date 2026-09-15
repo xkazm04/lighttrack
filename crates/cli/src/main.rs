@@ -57,6 +57,7 @@ mod revenue;
 mod rubrics;
 mod schedules;
 mod usage;
+mod use_cases;
 
 use anyhow::Result;
 use clap::Parser;
@@ -77,6 +78,7 @@ fn main() -> Result<()> {
         Cmd::MarginPolicies { action } => revenue::run_policies(&cli, action),
         Cmd::Alerts { action } => alerts::run(&cli, action),
         Cmd::Rubrics { action } => rubrics::run(&cli, action),
+        Cmd::UseCases { action } => use_cases::run(&cli, action),
         Cmd::Datasets { action } => datasets::run(&cli, action),
         Cmd::Labels { action } => labels::run(&cli, action),
         Cmd::Judges { action } => labels::run_judges(&cli, action),

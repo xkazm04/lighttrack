@@ -246,6 +246,7 @@ mod tests {
             input: "x".repeat(size),
             expected: None,
             output: output.map(|o| o.to_string()),
+            difficulty: None,
         }
     }
 

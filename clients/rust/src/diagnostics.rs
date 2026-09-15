@@ -24,7 +24,12 @@ const SILENCE_HINT: &str = "silence these warnings with LIGHTTRACK_QUIET=1 or Cl
 
 fn env_quiet() -> bool {
     std::env::var("LIGHTTRACK_QUIET")
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -53,12 +58,20 @@ pub(crate) struct Diagnostics {
 
 impl Diagnostics {
     pub(crate) fn from_env() -> Self {
-        Self { quiet: AtomicBool::new(env_quiet()), cooldown: COOLDOWN, seen: Mutex::new(Seen::default()) }
+        Self {
+            quiet: AtomicBool::new(env_quiet()),
+            cooldown: COOLDOWN,
+            seen: Mutex::new(Seen::default()),
+        }
     }
 
     #[cfg(test)]
     fn with_cooldown(cooldown: Duration) -> Self {
-        Self { quiet: AtomicBool::new(false), cooldown, seen: Mutex::new(Seen::default()) }
+        Self {
+            quiet: AtomicBool::new(false),
+            cooldown,
+            seen: Mutex::new(Seen::default()),
+        }
     }
 
     /// Toggle silence after construction — the worker thread already holds a clone of the `Arc`, so
@@ -75,7 +88,9 @@ impl Diagnostics {
         }
         let now = Instant::now();
         let (held, first_line) = {
-            let Ok(mut seen) = self.seen.lock() else { return };
+            let Ok(mut seen) = self.seen.lock() else {
+                return;
+            };
             if let Some((last, held)) = seen.kinds.get_mut(kind) {
                 if now.duration_since(*last) < self.cooldown {
                     *held += 1;
@@ -83,16 +98,27 @@ impl Diagnostics {
                     return;
                 }
             }
-            let held = seen.kinds.insert(kind.to_string(), (now, 0)).map(|(_, h)| h).unwrap_or(0);
+            let held = seen
+                .kinds
+                .insert(kind.to_string(), (now, 0))
+                .map(|(_, h)| h)
+                .unwrap_or(0);
             seen.emitted += 1;
             (held, seen.emitted == 1)
         };
         let repeat = if held > 0 {
-            format!(" [{held} more suppressed in the last {}s]", self.cooldown.as_secs())
+            format!(
+                " [{held} more suppressed in the last {}s]",
+                self.cooldown.as_secs()
+            )
         } else {
             String::new()
         };
-        let hint = if first_line { format!("\n  {PREFIX} {SILENCE_HINT}") } else { String::new() };
+        let hint = if first_line {
+            format!("\n  {PREFIX} {SILENCE_HINT}")
+        } else {
+            String::new()
+        };
         eprintln!("{PREFIX} {message}{repeat}{hint}");
     }
 
@@ -175,11 +201,18 @@ fn failure_hint(base_url: &str, ctx: FailureContext) -> String {
             "The key was rejected. Set LIGHTTRACK_KEY to a valid project or admin key.".to_string()
         }
         401 | 403 => {
-            "This server requires authentication. Set LIGHTTRACK_KEY to a project API key.".to_string()
+            "This server requires authentication. Set LIGHTTRACK_KEY to a project API key."
+                .to_string()
         }
-        404 => format!("No such endpoint - is LIGHTTRACK_URL ({base_url}) pointing at a LightTrack API?"),
-        429 => "The project is over a configured usage limit, so ingest is being refused.".to_string(),
-        s if s >= 500 => "The LightTrack server errored; events are dropped until it recovers.".to_string(),
+        404 => format!(
+            "No such endpoint - is LIGHTTRACK_URL ({base_url}) pointing at a LightTrack API?"
+        ),
+        429 => {
+            "The project is over a configured usage limit, so ingest is being refused.".to_string()
+        }
+        s if s >= 500 => {
+            "The LightTrack server errored; events are dropped until it recovers.".to_string()
+        }
         _ => String::new(),
     }
 }
@@ -194,7 +227,11 @@ mod tests {
         for _ in 0..1000 {
             d.warn("network", "boom");
         }
-        assert_eq!(d.counts(), (1, 999), "a tight loop must not flood the console");
+        assert_eq!(
+            d.counts(),
+            (1, 999),
+            "a tight loop must not flood the console"
+        );
     }
 
     #[test]
@@ -235,7 +272,11 @@ mod tests {
             "http://h",
             "/v1/events",
             "HTTP 400 project_id is required",
-            FailureContext { status: Some(400), has_project: false, has_key: true },
+            FailureContext {
+                status: Some(400),
+                has_project: false,
+                has_key: true,
+            },
         );
         assert!(m.contains("LIGHTTRACK_PROJECT"), "{m}");
         assert!(m.contains("project_id is required"), "{m}");
@@ -243,8 +284,12 @@ mod tests {
 
     #[test]
     fn an_unreachable_server_points_at_the_url_setting() {
-        let m = send_failure_message("http://127.0.0.1:1", "/v1/events", "connection refused",
-                                     FailureContext::default());
+        let m = send_failure_message(
+            "http://127.0.0.1:1",
+            "/v1/events",
+            "connection refused",
+            FailureContext::default(),
+        );
         assert!(m.contains("LIGHTTRACK_URL"), "{m}");
     }
 
@@ -253,10 +298,24 @@ mod tests {
         // They land in whatever console the host app has; a cp1252 terminal mangles anything else.
         for m in [
             no_project_message("http://h"),
-            send_failure_message("http://h", "/v1/events", "x",
-                                 FailureContext { status: Some(429), ..Default::default() }),
-            send_failure_message("http://h", "/v1/events", "x",
-                                 FailureContext { status: Some(503), ..Default::default() }),
+            send_failure_message(
+                "http://h",
+                "/v1/events",
+                "x",
+                FailureContext {
+                    status: Some(429),
+                    ..Default::default()
+                },
+            ),
+            send_failure_message(
+                "http://h",
+                "/v1/events",
+                "x",
+                FailureContext {
+                    status: Some(503),
+                    ..Default::default()
+                },
+            ),
         ] {
             assert!(m.is_ascii(), "non-ASCII in: {m}");
         }

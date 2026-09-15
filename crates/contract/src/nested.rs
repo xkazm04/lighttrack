@@ -40,7 +40,8 @@ pub(crate) const BENCHMARK_DATASET: &str = r#"{
         "properties": {
             "input": {"type":"string","description":"the case prompt / input"},
             "expected": {"type":"string","description":"golden reference answer the judge can compare against (optional)"},
-            "output": {"type":"string","description":"a pre-captured candidate response to judge; omit to generate from targets (optional)"}
+            "output": {"type":"string","description":"a pre-captured candidate response to judge; omit to generate from targets (optional)"},
+            "difficulty": {"type":"string","enum":["easy","medium","hard"],"description":"how hard this case is meant to be, on a closed ordered ladder. Omit for ungraded - ungraded is a state of its own, never 'medium'. A spelling off this ladder is a 400, not a silent downgrade, so grade deliberately or leave it out. Grading is what lets a run report which tier actually separated the targets: a tier every target passes measured nothing and is money spent to learn nothing (optional)"}
         }
     }
 }"#;
@@ -58,7 +59,8 @@ pub(crate) const BENCHMARK_TARGETS: &str = r#"{
             "provider": {"type":"string","description":"e.g. anthropic, openai; for an http target, a label for whatever answers there"},
             "model": {"type":"string"},
             "system_prompt": {"type":"string","description":"literal system/instruction prompt variant under test"},
-            "label": {"type":"string","description":"display label; defaults to provider/model"},
+            "label": {"type":"string","description":"display label; defaults to provider/model, or provider/model@effort when an effort is set"},
+            "effort": {"type":"string","enum":["low","medium","high","xhigh","max"],"description":"reasoning effort for this target. THIS IS AN AXIS: the same model at two efforts is two commensurable rows, which is how you ask whether the expensive setting buys anything on your cases. Omit for the provider's default - an absent effort is a different fact from any named level. Not every adapter can honour every level; one that cannot refuses loudly rather than silently sending the default (optional)"},
             "prompt_ref": {
                 "type": "object",
                 "description": "resolve this target's prompt from the registry at run start instead of using the literal system_prompt. Required for the promotion gate to certify the version it ran: a run only reports resolved_prompt_version when it fetched the content. Pass at most one of version/label.",
@@ -67,6 +69,14 @@ pub(crate) const BENCHMARK_TARGETS: &str = r#"{
                     "name": {"type":"string","description":"registry name, must already exist in this project"},
                     "version": {"type":"integer","description":"pin an exact version"},
                     "label": {"type":"string","description":"resolve through a label, e.g. production"}
+                }
+            },
+            "limits": {
+                "type": "object",
+                "description": "per-case service ceilings this target must hold to BESIDES scoring well. A case whose generation exceeds one FAILS, however well the judge scored it - which is the part a rubric cannot express: the same answer at 8s and 4c a case is not the same product as one at 1s and a tenth of a cent. A ceiling that could not be checked (an unpriced model has no cost) is reported as unchecked, never as a pass. Compare mode only (optional).",
+                "properties": {
+                    "max_cost_usd": {"type":"number","description":"most one case's generation may cost, USD per candidate - so a --gen-samples 3 run is held to the same per-call bar, not three times it"},
+                    "max_latency_ms": {"type":"integer","description":"longest one case's generation may take, milliseconds per candidate"}
                 }
             },
             "kind": {
@@ -117,6 +127,62 @@ mod tests {
         for f in ["input", "expected", "output"] {
             assert!(s["items"]["properties"].get(f).is_some(), "missing {f}");
         }
+    }
+
+    /// **An axis an agent cannot see is an axis nobody uses.** A live benchmark on 2026-09-07 graded
+    /// 8 of its 18 cases `expert` - a rung that does not exist - because nothing in the contract said
+    /// what the ladder was. Those 8 were silently stored ungraded (that silence is now a 400), and
+    /// the per-tier report covered a corpus whose grading had been discarded. The enum has to be IN
+    /// the schema, not merely enforced behind it.
+    #[test]
+    fn benchmark_dataset_names_the_difficulty_ladder() {
+        let s: Value = serde_json::from_str(BENCHMARK_DATASET).expect("valid JSON");
+        let d = &s["items"]["properties"]["difficulty"];
+        assert!(!d.is_null(), "an agent is never told the field exists");
+        assert_eq!(
+            d["enum"],
+            serde_json::json!(["easy", "medium", "hard"]),
+            "the closed ladder is spelled out, in ascending order"
+        );
+        assert!(
+            !item_required(BENCHMARK_DATASET).contains(&"difficulty".to_string()),
+            "ungraded stays legal - grading is opt-in"
+        );
+    }
+
+    /// The same gap on the other wave-1 axis: `effort` was shipped, works, and appeared nowhere an
+    /// agent could read it, so the matrix an agent builds could never vary the knob the benchmark
+    /// exists to compare.
+    #[test]
+    fn benchmark_targets_name_the_effort_axis() {
+        let s: Value = serde_json::from_str(BENCHMARK_TARGETS).expect("valid JSON");
+        let e = &s["items"]["properties"]["effort"];
+        assert!(!e.is_null(), "an agent is never told the axis exists");
+        assert_eq!(
+            e["enum"],
+            serde_json::json!(["low", "medium", "high", "xhigh", "max"]),
+            "every level the engine parses, in ascending order"
+        );
+        assert!(
+            !item_required(BENCHMARK_TARGETS).contains(&"effort".to_string()),
+            "an absent effort means the provider default, which is a real and different choice"
+        );
+    }
+
+    /// The third axis an agent cannot use if it cannot see it: a quality bar with no cost or latency
+    /// bar beside it is how a benchmark certifies a configuration nobody could afford to run.
+    #[test]
+    fn benchmark_targets_name_the_per_case_limits() {
+        let s: Value = serde_json::from_str(BENCHMARK_TARGETS).expect("valid JSON");
+        let l = &s["items"]["properties"]["limits"];
+        assert!(!l.is_null(), "an agent is never told limits exist");
+        for f in ["max_cost_usd", "max_latency_ms"] {
+            assert!(l["properties"].get(f).is_some(), "limits.{f}");
+        }
+        assert!(
+            !item_required(BENCHMARK_TARGETS).contains(&"limits".to_string()),
+            "limits stay opt-in"
+        );
     }
 
     #[test]

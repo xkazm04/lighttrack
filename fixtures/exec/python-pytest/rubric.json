@@ -1,0 +1,36 @@
+{
+  "name": "python-codegen",
+  "threshold": 0.8,
+  "dimensions": [
+    {
+      "key": "passes",
+      "description": "The generated module passes the task's baked-in pytest suite.",
+      "weight": 3.0,
+      "floor": 1.0,
+      "kind": "exec",
+      "check": {
+        "image": "tag:lt-py-pytest:v1",
+        "write": "/work/solution.py",
+        "cmd": "pytest -q",
+        "timeout_secs": 120,
+        "path": "/code"
+      }
+    },
+    {
+      "key": "idiomatic",
+      "description": "Readable, idiomatic Python: no dead branches, no needless work, errors raised rather than returned as sentinels.",
+      "weight": 1.0,
+      "anchors": [
+        "1.0 = a reviewer would merge it unchanged",
+        "0.5 = correct but awkward (repeated work, unclear names)",
+        "0 = hard to follow, or fights the language"
+      ]
+    }
+  ],
+  "_notes": {
+    "why_floor_1": "The exec dimension gates: code that does not pass its tests cannot be rescued by style. The judge's opinion moves the score within 'it works', never across it.",
+    "why_path_code": "check.path is a JSON Pointer applied BEFORE check.write, so a target whose prompt asks for {\"code\": \"...\"} has the code written and not the envelope. Drop `path` if the target returns bare source.",
+    "image_pinning": "tag: is mutable and stamps the verdict best-effort. After the first build, replace with the image UUID from `contree images` to stamp it exact.",
+    "no_env": "check.env is deliberately absent. The sandbox runs untrusted model-written code; credential-shaped names are refused at authoring time, and the host environment is never forwarded."
+  }
+}
