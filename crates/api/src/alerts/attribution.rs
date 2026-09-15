@@ -75,12 +75,24 @@ pub(crate) fn fetch(
     scope: Option<&LimitScope>,
 ) -> Attribution {
     let since = window.since(now);
-    let cost_rows = store
-        .cost_summary_windowed(TenantScope::Project(project), Some(since), None)
-        .unwrap_or_default();
-    let usecase_rows = store
-        .usecase_costs(TenantScope::Project(project), Some(since))
-        .unwrap_or_default();
+    let cost_rows = match store.cost_summary_windowed(
+        TenantScope::Project(project),
+        Some(since),
+        None,
+    ) {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(project_id = project, %error, rollup = "cost", "breach attribution rollup failed");
+            Vec::new()
+        }
+    };
+    let usecase_rows = match store.usecase_costs(TenantScope::Project(project), Some(since)) {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(project_id = project, %error, rollup = "use_case", "breach attribution rollup failed");
+            Vec::new()
+        }
+    };
     compose(&cost_rows, &usecase_rows, scope)
 }
 
