@@ -114,7 +114,7 @@ pub fn run_rubric_batch(
     jobs: usize,
 ) -> Result<Vec<Result<RubricOutcome>>> {
     let schema = crate::prompts::build_batch_rubric_schema(rubric);
-    let gen = super::provider_gen(cfg, provider, model, schema);
+    let gen = super::provider_gen(cfg, provider, model, schema, samples);
     batch_with(&gen, rubric, cases, model, samples, jobs)
 }
 

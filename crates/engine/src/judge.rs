@@ -33,6 +33,8 @@ struct ProviderGen<'a> {
     provider: &'a str,
     model: &'a str,
     schema: Option<Value>,
+    /// More than one sample was asked for: draw each one unpinned and stamp it `sampled`.
+    sampled: bool,
 }
 
 /// Build the production generator for a schema-enforced judge call. Shared with [`batch`], whose
@@ -42,20 +44,37 @@ pub(crate) fn provider_gen<'a>(
     provider: &'a str,
     model: &'a str,
     schema: Value,
+    samples: u32,
 ) -> impl Generator + 'a {
     ProviderGen {
         cfg,
         provider,
         model,
         schema: Some(schema),
+        sampled: samples > 1,
     }
 }
 
 impl Generator for ProviderGen<'_> {
     fn generate(&self, _index: usize, prompt: &str) -> Result<GenOutcome> {
-        // A verdict is a measurement: judge calls request deterministic sampling (temperature 0 +
-        // fixed seed where the provider takes one), so re-running an eval reproduces its scores and
-        // self-consistency disagreement signals ambiguity rather than sampling noise.
+        // Self-consistency is a distribution, and a pinned request has none: N draws at temperature
+        // 0 and one seed over one prompt are one draw billed N times, so `agreement` would read 1.0
+        // however ambiguous the case. Several samples are therefore drawn unpinned and say so —
+        // the same rule `--gen-samples > 1` follows on the generation half.
+        if self.sampled {
+            let mut out = crate::providers::generate(
+                self.cfg,
+                self.provider,
+                self.model,
+                None,
+                prompt,
+                self.schema.as_ref(),
+            )?;
+            out.determinism = Determinism::Sampled;
+            return Ok(out);
+        }
+        // A single verdict is a measurement: request deterministic sampling (temperature 0 + fixed
+        // seed where the provider takes one), so re-running an eval reproduces its score.
         crate::providers::generate_deterministic(
             self.cfg,
             self.provider,
@@ -261,6 +280,7 @@ pub fn run_rubric_judge_sandboxed(
         provider,
         model,
         schema: Some(schema),
+        sampled: samples > 1,
     };
     judge_with(&gen, rubric, &prompt, model, samples, jobs, &det)
 }

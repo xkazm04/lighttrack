@@ -781,6 +781,13 @@ report carries **two facts instead of one**:
   draw onto one output and silently delete the feature, so we sample — and say so — rather than claim
   reproducibility. A `--gen-samples 1` run over a seeded provider reads `exact` on both halves and does
   reproduce its candidates.
+- The judging half follows the same rule. A rubric judged with `samples > 1` draws each sample unpinned
+  and reads `sampled`: self-consistency `agreement` is a spread, and N draws at temperature 0 on one seed
+  over one prompt have none. Measured on a local seeded model (`crates/engine/tests/judge_samples_live.rs`,
+  4 ambiguous grounding cases × 5 samples, 3 runs per arm): pinned samples split on 3 of 12 case-runs,
+  all of them the same case at the same values, and stamped `exact`; unpinned samples split on 7 of 12,
+  across 3 cases. The price is stated rather than hidden: a sampled `overall` moves between runs. A
+  `samples 1` verdict stays pinned and reproducible.
 - No provider regresses: one with no sampling knobs (`claude -p`) still runs, degraded to `best-effort`,
   and is stamped as such rather than silently included in an `exact` claim.
 
