@@ -153,9 +153,11 @@ pub(crate) async fn post_result(
         // that routinely echoes the task payload it failed on — so the PII scrub every other door
         // applies has to be applied here explicitly, or `docs/RELAY.md`'s claim that "ingest
         // redaction applies" is false exactly where a failure dumps the payload into the DB.
-        let redacted = st
-            .redact
-            .redact_event(&mut ev, lighttrack_core::Redaction::None);
+        // The project's persistence class, applied through the one function every door shares —
+        // never a literal here. The action's `report_io` opt-in decides whether the device *sends*
+        // content; it does not decide whether this instance *stores* it, and a door that passed
+        // `Redaction::None` was answering the second question with the first one's answer.
+        let redacted = crate::redact::apply_class(&st.redact, &mut ev, policy.redaction);
         if redacted > 0 {
             tracing::debug!(
                 project_id = %ev.project_id,
