@@ -72,10 +72,16 @@ population**, which a caller that has already fetched a page has thrown away.
   Importing into a frozen dataset is a `409`, and the answer to it is a fork.
 - `GET /v1/projects/:id/datasets/versions?name=…` walks the lineage, newest version first — the read
   that resolves a run's `dataset_version` pin back to the corpus it names.
-- A benchmark may declare `regression_dataset` in its `target` object (a reserved key, like
-  `schedule_interval_secs`). `lt-runner score` then appends each failing verdict's event to the
+- A benchmark may declare a `regression_dataset` at creation — a `create_benchmark` field, like
+  `schedule_interval_secs`. `lt-runner score` then appends each failing verdict's event to the
   current unfrozen version of that name, deduped and best-effort: mining is a side effect of scoring,
   and a pass that died because a corpus was unreachable would trade the verdict for the sample.
+  The value rides inside the benchmark's `target` object under a **reserved key** the service
+  writes; a caller that sends `target.regression_dataset` (or `target.schedule_interval_secs`)
+  itself is refused with the field to send instead. `target` is otherwise the caller's to fill, and
+  a reserved key a caller may write is not reserved: the runner reads it as policy whoever wrote
+  it, and the next key this product carves out of `target` would capture whatever callers already
+  keep under that name.
 - CLI: `lt datasets versions|fork|import`, `lt-runner dataset build --strategy --from --below
   --dedupe` and `lt-runner dataset import|versions|fork`. MCP: `fork_dataset` and
   `import_dataset_items`, both write-gated behind `LIGHTTRACK_MCP_ALLOW_WRITES`.

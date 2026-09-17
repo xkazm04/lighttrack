@@ -146,8 +146,9 @@ pub use schedule::{Schedule, MIN_INTERVAL_SECS as SCHEDULE_MIN_INTERVAL_SECS};
 pub use score::{
     judge_verdict_schema, Benchmark, BenchmarkCase, BenchmarkRun, JudgeVerdict, Score, ScoreDetail,
     ScoreDim, ScoreKind, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM, MAX_REASONING_CHARS,
-    RECURRENCE_KEY, REGRESSION_DATASET_KEY,
+    RECURRENCE_KEY, REGRESSION_DATASET_KEY, RESERVED_TARGET_KEYS,
 };
+pub use score::reserved_target_keys_in;
 pub use trace::{
     normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,
     TraceTotals,

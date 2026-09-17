@@ -61,6 +61,14 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
                 JsonTy::Integer,
                 "opt-in recurrence; rejected for a comparison-matrix target",
             ),
+            b(
+                "regression_dataset",
+                JsonTy::String,
+                "opt-in failure mining: the dataset NAME each failing verdict appends to. The \
+                 service writes it into the reserved `target.regression_dataset` key; a caller \
+                 that sends that key inside `target` itself is refused, because the key is read \
+                 as policy and `target` is otherwise the caller's to fill",
+            ),
         ],
         response: TypeRef::Named("Benchmark"),
         mcp: Some(McpTool {

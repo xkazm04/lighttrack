@@ -49,6 +49,12 @@ pub(crate) struct CreateBenchmarkReq {
     /// on manual enqueue or a prompt-version cut). Carried inside `target` — see [`embed_recurrence`].
     #[serde(default)]
     schedule_interval_secs: Option<u64>,
+    /// Opt-in failure mining: the dataset **name** failing verdicts under this benchmark append to
+    /// (M24). Carried inside `target` under [`lighttrack_core::REGRESSION_DATASET_KEY`], which the
+    /// host writes — a caller that sends the key itself is refused, because a policy the product
+    /// reads out of caller-authored free-form JSON is a policy anyone can set by accident.
+    #[serde(default)]
+    regression_dataset: Option<String>,
 }
 
 /// Judging is the one call in this product whose quality *is* the product, and it is deliberately
@@ -64,25 +70,75 @@ fn default_judge_model() -> String {
     "opus@xhigh".to_string()
 }
 
-use lighttrack_core::RECURRENCE_KEY;
+use lighttrack_core::{reserved_target_keys_in, RECURRENCE_KEY, REGRESSION_DATASET_KEY};
 
-/// Fold an opt-in recurrence interval into the stored `target`. Recurrence needs an object (or empty)
-/// target; a comparison-matrix target is a JSON array with no room for a sibling key, so that
-/// combination is a hard 400 rather than a silent drop (a matrix benchmark simply can't recur in v1).
-fn embed_recurrence(target: serde_json::Value, secs: u64) -> Result<serde_json::Value, String> {
+/// Refuse a caller-supplied key this product has reserved inside `target`, and name the field to
+/// send instead.
+///
+/// `target` is documented free-form, so every name in it is a caller's until the product takes
+/// one. Two are taken already ([`lighttrack_core::RESERVED_TARGET_KEYS`]) and both are read as
+/// *policy*: a number under the recurrence key becomes a schedule row on the next boot, and the
+/// regression key redirects every failing verdict into a dataset by name. Neither reading asks who
+/// wrote the key, so before this door a caller's own note under one of those names bought them a
+/// policy they never requested — and a caller who had been keeping notes under a name the product
+/// had not taken yet was captured by the release that took it. The refusal is the reservation: an
+/// accepted key is a released key, whatever the field's documentation calls it.
+fn reject_reserved_target_keys(target: &serde_json::Value) -> Result<(), String> {
+    let taken = reserved_target_keys_in(target);
+    if taken.is_empty() {
+        return Ok(());
+    }
+    let names = taken
+        .iter()
+        .map(|k| format!("`{k}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let fields = taken
+        .iter()
+        .map(|k| match *k {
+            RECURRENCE_KEY => "`schedule_interval_secs`",
+            REGRESSION_DATASET_KEY => "`regression_dataset`",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let is_are = if taken.len() == 1 {
+        "that key is"
+    } else {
+        "those keys are"
+    };
+    Err(format!(
+        "`target` may not carry {names}: {is_are} reserved to the benchmark itself. Send the \
+         matching request field instead ({fields}), and keep your own keys under any other name."
+    ))
+}
+
+/// Fold a host-owned reserved key into the stored `target`. A reserved key needs an object (or
+/// empty) target; a comparison-matrix target is a JSON array with no room for a sibling key, so
+/// that combination is a hard 400 rather than a silent drop (a matrix benchmark simply can't
+/// recur, or mine its failures, in v1).
+fn embed_reserved(
+    target: serde_json::Value,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     match target {
-        serde_json::Value::Null => Ok(serde_json::json!({ RECURRENCE_KEY: secs })),
+        serde_json::Value::Null => Ok(serde_json::json!({ key: value })),
         serde_json::Value::Object(mut m) => {
-            m.insert(RECURRENCE_KEY.to_string(), serde_json::json!(secs));
+            m.insert(key.to_string(), value);
             Ok(serde_json::Value::Object(m))
         }
-        serde_json::Value::Array(_) => Err(
-            "schedule_interval_secs is not supported for a comparison-matrix benchmark (an array \
-             `target`/`targets`); use a single-target, rubric, or simple benchmark for recurrence"
-                .into(),
-        ),
-        _ => Err("schedule_interval_secs requires an object or empty `target`".into()),
+        serde_json::Value::Array(_) => Err(format!(
+            "{key} is not supported for a comparison-matrix benchmark (an array \
+             `target`/`targets`); use a single-target, rubric, or simple benchmark"
+        )),
+        _ => Err(format!("{key} requires an object or empty `target`")),
     }
+}
+
+/// Fold an opt-in recurrence interval into the stored `target`.
+fn embed_recurrence(target: serde_json::Value, secs: u64) -> Result<serde_json::Value, String> {
+    embed_reserved(target, RECURRENCE_KEY, serde_json::json!(secs))
 }
 
 pub(crate) async fn create_benchmark(
@@ -125,10 +181,26 @@ pub(crate) async fn create_benchmark(
     };
     let parsed = validate_target_matrix(&target).map_err(ApiError::bad_request)?;
     ensure_prompt_refs_exist(&st, &pid, &parsed).await?;
+    // The keys this product has taken out of `target` are refused here, before anything reads them
+    // as policy: a reserved name a caller may write is a released name, and the product's next
+    // reservation would capture whatever callers keep under it.
+    reject_reserved_target_keys(&target).map_err(ApiError::bad_request)?;
     // Opt-in recurrence rides inside `target` (no schema/column change); reject the one combination
     // it can't carry (a comparison matrix) up front.
     let target = match req.schedule_interval_secs.filter(|s| *s > 0) {
         Some(secs) => embed_recurrence(target, secs).map_err(ApiError::bad_request)?,
+        None => target,
+    };
+    // Failure mining rides in `target` the same way, and is written by the host for the same
+    // reason: the runner reads this name as the dataset it appends failing verdicts to.
+    let target = match req
+        .regression_dataset
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
+        Some(name) => embed_reserved(target, REGRESSION_DATASET_KEY, serde_json::json!(name))
+            .map_err(ApiError::bad_request)?,
         None => target,
     };
     let b = Benchmark {
@@ -388,7 +460,9 @@ pub(crate) async fn benchmark_gate(
 
 #[cfg(test)]
 mod tests {
-    use super::{embed_recurrence, validate_target_matrix};
+    use super::{
+        embed_recurrence, embed_reserved, reject_reserved_target_keys, validate_target_matrix,
+    };
 
     /// The judge-trust annotation is exercised through the handler and `judges::policy_block`;
     /// these cases are about the *evidence* verdict, so they pass none.
@@ -646,5 +720,59 @@ mod tests {
             embed_recurrence(json!([{ "provider": "openai", "model": "gpt-4o" }]), 60).is_err()
         );
         assert!(embed_recurrence(json!("legacy-string"), 60).is_err());
+    }
+
+    /// The reservation is only a reservation where a caller cannot write the name, and the refusal
+    /// has to name the field that replaces it — a 400 that says "reserved" and stops leaves the
+    /// caller with a capability the documentation told them to reach for.
+    #[test]
+    fn a_caller_supplied_reserved_key_is_refused_with_the_repair_named() {
+        let e = reject_reserved_target_keys(&json!({
+            "endpoint": "https://x",
+            "regression_dataset": "my-own-note"
+        }))
+        .expect_err("a reserved key a caller wrote is refused");
+        assert!(e.contains("regression_dataset"), "{e}");
+        assert!(e.contains("Send the matching request field"), "{e}");
+
+        let both = reject_reserved_target_keys(&json!({
+            "schedule_interval_secs": 60,
+            "regression_dataset": "d"
+        }))
+        .expect_err("both reserved keys are refused");
+        assert!(both.contains("those keys are"), "{both}");
+
+        // The control, and the whole point of the design: every other name in this object still
+        // belongs to the caller. A door that refused unknown keys would have broken the free-form
+        // contract instead of reserving anything.
+        reject_reserved_target_keys(&json!({
+            "endpoint": "https://x",
+            "regression_notes": "mine",
+            "schedule": { "interval": 60 }
+        }))
+        .expect("an unreserved name is the caller's");
+        // Shapes that cannot carry a sibling key have nothing to refuse.
+        reject_reserved_target_keys(&json!([{ "provider": "openai", "model": "gpt-4o" }]))
+            .expect("a matrix target");
+        reject_reserved_target_keys(&json!(null)).expect("an absent target");
+    }
+
+    #[test]
+    fn the_host_writes_the_reserved_key_the_caller_may_not() {
+        assert_eq!(
+            embed_reserved(
+                json!({ "endpoint": "https://x" }),
+                "regression_dataset",
+                json!("support-failures")
+            )
+            .unwrap(),
+            json!({ "endpoint": "https://x", "regression_dataset": "support-failures" })
+        );
+        assert!(embed_reserved(
+            json!([{ "provider": "openai" }]),
+            "regression_dataset",
+            json!("d")
+        )
+        .is_err());
     }
 }
