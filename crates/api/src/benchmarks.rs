@@ -335,8 +335,9 @@ pub(crate) struct GateResponse {
 /// A baseline is not a constant — it is a measurement, and it carries the conditions it was taken
 /// under. `stamp_pins` records those conditions on every *run* (`judge_model`, `dataset_ref`, and
 /// the dataset's frozen state and version); the baseline is a bare scalar in the benchmark row and
-/// records none of them. So the strongest statement this gate can make is the one condition it can
-/// actually read off the run: **the case set was allowed to move.**
+/// records none of them. So this gate may only rest a floor verdict on conditions it can actually
+/// read off the run, and there are **two** of them: the case set was allowed to move, and the
+/// instrument that produced the score was allowed to move.
 ///
 /// An unfrozen dataset means the cases could have changed between the moment the baseline was
 /// established and the moment this run was scored. The two numbers are then means over different
@@ -344,7 +345,10 @@ pub(crate) struct GateResponse {
 /// regression and it is not a pass; it is the *unverified* lane the exit-code contract already
 /// carries (`EXIT_NO_BASELINE`, deliberately distinct from `EXIT_REGRESSED` so CI can warn rather
 /// than hard-fail).
-fn baseline_not_comparable(run: &BenchmarkRun) -> Option<String> {
+///
+/// A moved judge or rubric is the same defect reached through the instrument instead of through
+/// the population, and it is the one this predicate used to miss: see [`instrument_moved`].
+fn baseline_not_comparable(run: &BenchmarkRun, bench: &Benchmark) -> Option<String> {
     match run.report.get("dataset_frozen") {
         Some(serde_json::Value::Bool(false)) => {
             let v = run
@@ -359,6 +363,38 @@ fn baseline_not_comparable(run: &BenchmarkRun) -> Option<String> {
                     .into(),
             })
         }
+        _ => instrument_moved(run, bench),
+    }
+}
+
+/// The second condition a floor verdict rests on: the run was scored by the instrument the
+/// benchmark still names.
+///
+/// `stamp_pins` freezes the judge model and the rubric that produced a run's score **into that
+/// run's report**. The benchmark row carries the ones it uses *now*, and switching either leaves
+/// the stored baseline untouched — so the next gate read subtracts a number one judge produced
+/// from a number a different judge produced and calls the difference a regression, or, worse,
+/// calls it a pass. The run and the baseline are then two configurations, and the verdict belongs
+/// to neither.
+///
+/// **Absence is not disagreement.** A run from before the pin existed records no judge and no
+/// rubric; reading that silence as drift would retire every legacy verdict at once, which is the
+/// same over-refusal the unfrozen-dataset predicate avoids by treating a missing flag as "nothing
+/// says the cases moved".
+fn instrument_moved(run: &BenchmarkRun, bench: &Benchmark) -> Option<String> {
+    let pinned = |k: &str| run.report.get(k).and_then(serde_json::Value::as_str);
+    if let Some(judge) = pinned("judge_model") {
+        if judge != bench.judge_model {
+            return Some(format!(
+                "baseline not comparable: this run was scored by judge '{judge}', and the benchmark now judges with '{}', so its mean and the stored baseline came out of different instruments; re-establish the baseline under the current judge",
+                bench.judge_model
+            ));
+        }
+    }
+    match (pinned("rubric_id"), bench.rubric_id.as_deref()) {
+        (Some(r), Some(current)) if r != current => Some(format!(
+            "baseline not comparable: this run was scored under rubric '{r}', and the benchmark now scores under '{current}', so its mean and the stored baseline were measured on different dimensions; re-establish the baseline under the current rubric"
+        )),
         _ => None,
     }
 }
@@ -407,7 +443,7 @@ pub(crate) fn decide_gate(
     // `no_runs` and `partial` never consulted it, so there is nothing to refuse and no caveat to
     // add — re-labelling them would replace one honest unverified state with another and lose why.
     let (status, caveat) = match status {
-        "pass" | "regressed" => match baseline.and_then(|_| baseline_not_comparable(run)) {
+        "pass" | "regressed" => match baseline.and_then(|_| baseline_not_comparable(run, bench)) {
             Some(why) => ("no_baseline", Some(why)),
             None => (status, None),
         },
@@ -630,6 +666,63 @@ mod tests {
         );
         assert_eq!(g.status, "no_baseline");
         assert!(g.caveat.is_some());
+    }
+
+    #[test]
+    fn gate_refuses_the_floor_when_the_judge_moved() {
+        // `stamp_pins` freezes the judge (and the rubric) that produced a run's score into that
+        // run's report. The benchmark row carries the judge it uses *now*. When the two disagree,
+        // the run's mean and the benchmark's baseline came out of different instruments, so
+        // subtracting them is arithmetic with no claim behind it — the same defect the
+        // unfrozen-dataset predicate already refuses, arriving through the judge instead of
+        // through the case set.
+        let moved = json!({ "judge_model": "sonnet", "dataset_frozen": true });
+
+        // The dangerous direction first: a run that would have passed.
+        let g = decide_gate(
+            &[run("passed", true, Some(0.9), moved.clone())],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "no_baseline");
+        let caveat = g.caveat.expect("the refused floor names its condition");
+        assert!(
+            caveat.contains("sonnet"),
+            "the judge that scored the run is named: {caveat}"
+        );
+        assert!(
+            caveat.contains("haiku"),
+            "the judge the benchmark uses now is named: {caveat}"
+        );
+
+        // And a `regressed` verdict resting on the same incomparable pair is not a regression.
+        let g = decide_gate(
+            &[run("regressed", true, Some(0.5), moved)],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "no_baseline");
+        assert!(g.caveat.is_some());
+
+        // Agreement is the comparable case: the verdict stands and no caveat is invented.
+        let g = decide_gate(
+            &[run(
+                "passed",
+                true,
+                Some(0.9),
+                json!({ "judge_model": "haiku" }),
+            )],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "pass");
+        assert_eq!(g.caveat, None);
+
+        // Absence is not disagreement. A run that predates the pin stamps no judge, and reading
+        // that silence as drift would retire every legacy run's verdict at once.
+        let g = decide_gate(
+            &[run("passed", true, Some(0.9), json!({ "n": 30 }))],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "pass");
+        assert_eq!(g.caveat, None);
     }
 
     #[test]
