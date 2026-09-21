@@ -26,7 +26,7 @@ use lighttrack_core::{
 use lighttrack_store::{DailyDimCost, DailyUsage, StoreError, Usage};
 
 use crate::error::ApiError;
-use crate::forecast_alerts::{build_alerts, ForecastAlert};
+use crate::forecast_alerts::{attach_guardrails, build_alerts, ForecastAlert};
 use crate::guards::{authenticate, resolve_read_project};
 use crate::state::{spawn_db, AppState};
 use lighttrack_store::Scope as TenantScope;
@@ -298,7 +298,12 @@ pub(crate) async fn compute_forecast(
         }
     }
 
-    let alerts = build_alerts(&project, &budgets, &margins);
+    let mut alerts = build_alerts(&project, &budgets, &margins);
+    // Stamp the guardrail already standing for each eroding customer here, on the shared path, so
+    // `GET /v1/forecast` and the scheduled sweep cannot disagree about what is being done about a
+    // margin alert. `until` — the instant the whole forecast was captured at — is what decides
+    // "standing", the same instant `gather` used to drop inert rules.
+    attach_guardrails(&mut alerts, &raw.rules, until);
 
     Ok(ForecastResponse {
         project_id: project,
@@ -329,7 +334,13 @@ async fn gather(
     spawn_db(move || {
         let project = store.get_project(&proj)?;
         let daily = store.daily_usage(&proj, since, until)?;
-        let rules = store.list_limit_rules(&proj, true)?;
+        // `only_enabled` filters the switch, not the clock: an enabled rule whose policy-set
+        // `expires_at` has passed is already inert at admission (`evaluate_admission_at` skips it),
+        // so forecasting it publishes a breach ETA and a pre-emptive alert for a cap that can no
+        // longer reject anything. Drop it at `until`, the forecast's captured instant, before the
+        // window totals are read — one clock for the whole response.
+        let mut rules = store.list_limit_rules(&proj, true)?;
+        rules.retain(|r| r.is_active_at(until));
         let mut window_usage: HashMap<LimitWindow, Usage> = HashMap::new();
         for r in &rules {
             // Vacant-entry form rather than `or_insert_with`: the value is a fallible store call and
