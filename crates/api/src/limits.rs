@@ -66,8 +66,8 @@ pub(crate) async fn evaluate_project_limits(
             // Same evaluator the ingest admission path uses, so the status surface and the 429 can
             // never disagree — including the cost-provenance qualification of a `cost_usd` cap.
             let (threshold, basis) = resolve(r);
-            out.push(lighttrack_store::evaluate_rule_resolved(
-                r, &u, threshold, basis,
+            out.push(lighttrack_store::evaluate_rule_resolved_at(
+                r, &u, threshold, basis, now,
             ));
         }
         Ok::<_, StoreError>(out)

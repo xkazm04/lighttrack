@@ -199,7 +199,9 @@ fn compose(
                 })
                 .map(|rule| {
                     let (threshold, basis) = resolve(rule);
-                    lighttrack_store::evaluate_rule_resolved(rule, &r.usage, threshold, basis)
+                    lighttrack_store::evaluate_rule_resolved_at(
+                        rule, &r.usage, threshold, basis, now,
+                    )
                 })
                 .collect();
             ScopeEntry {

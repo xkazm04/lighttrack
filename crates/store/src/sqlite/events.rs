@@ -14,7 +14,7 @@ use lighttrack_core::{
 use super::usage_cache::UsageCache;
 use crate::codec::{decode_event_cursor, encode_event_cursor, fmt_ts, parse_enum, parse_ts};
 use crate::{
-    evaluate_admission, event_contribution, Admission, CostRow, EventFilter, EventPage, Result,
+    evaluate_admission_at, event_contribution, Admission, CostRow, EventFilter, EventPage, Result,
     ScopeUsage, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
@@ -132,10 +132,11 @@ pub(super) fn insert_checked_with_rules(
         super::revenue::list(conn, Some(&ev.project_id), since, until)
     })?;
     let resolve = crate::threshold::resolver(&resolved);
-    let admission = evaluate_admission(
+    let admission = evaluate_admission_at(
         rules,
         ev,
         event_contribution(ev),
+        now,
         |w, scope| cache.usage(conn, &ev.project_id, w, scope, now),
         resolve,
     )?;

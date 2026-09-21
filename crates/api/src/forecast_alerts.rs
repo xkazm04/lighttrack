@@ -5,6 +5,7 @@
 //! scheduled sweep ([`crate::forecast_sweep`]) and the `GET /v1/forecast` handler provably build
 //! their alerts from one function rather than two that could drift.
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use lighttrack_core::forecast::{BudgetForecast, MarginForecast, Trend};
@@ -141,14 +142,21 @@ pub(crate) fn build_alerts(
 /// guardrail standing. Applied after [`build_alerts`] because only the caller has read the rules;
 /// keeping the mapping pure is what lets it be tested without a store.
 ///
-/// Only an **enabled** rule stands: the sweep reads every rule so the stamp sees ones it just
-/// raised, and a guardrail an operator switched off is not "what is already being done".
+/// Only an **active** rule stands, at the caller's `now`: the sweep reads every rule so the stamp
+/// sees ones it just raised, but a guardrail an operator switched off — or one whose policy-set
+/// `expires_at` has passed — is not "what is already being done". `now` is a parameter rather than
+/// a fresh `Utc::now()` so the whole forecast (series window, budget filter, guardrail stamp) is
+/// decided at one instant and a rule cannot be inert for the budgets and standing for the alerts.
 pub(crate) fn attach_guardrails(
     alerts: &mut [ForecastAlert],
     rules: &[lighttrack_core::LimitRule],
+    now: DateTime<Utc>,
 ) {
-    let standing: Vec<lighttrack_core::LimitRule> =
-        rules.iter().filter(|r| r.enabled).cloned().collect();
+    let standing: Vec<lighttrack_core::LimitRule> = rules
+        .iter()
+        .filter(|r| r.is_active_at(now))
+        .cloned()
+        .collect();
     for a in alerts.iter_mut().filter(|a| a.kind == "margin_erosion") {
         a.policy_applied =
             crate::margin_guardrails::guardrail_for(&standing, &a.subject).map(str::to_string);
@@ -197,6 +205,7 @@ fn round2(x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
     use lighttrack_core::forecast::forecast_budget;
     use lighttrack_core::{LimitAction, LimitRule, Threshold};
 
@@ -252,7 +261,8 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_guardrail_is_not_reported_as_the_policy_in_force() {
+    fn an_inactive_guardrail_is_not_reported_as_the_policy_in_force() {
+        let now = Utc::now();
         let mut alerts = vec![ForecastAlert {
             kind: "margin_erosion",
             severity: "warning",
@@ -265,14 +275,31 @@ mod tests {
         let mut guard = rule();
         guard.id = "g1".into();
         guard.origin = Some("margin-policy:pol-1:acme".into());
-        attach_guardrails(&mut alerts, std::slice::from_ref(&guard));
+        attach_guardrails(&mut alerts, std::slice::from_ref(&guard), now);
         assert_eq!(alerts[0].policy_applied.as_deref(), Some("g1"));
-        guard.enabled = false;
-        attach_guardrails(&mut alerts, std::slice::from_ref(&guard));
-        assert!(
-            alerts[0].policy_applied.is_none(),
-            "a switched-off guardrail is a warning again, not a report"
-        );
+
+        // A guardrail stops standing for either reason, and the boundary is exclusive: a rule whose
+        // `expires_at` is exactly the forecast instant has already stopped enforcing at admission
+        // (`is_active_at` requires `expires_at > now`), so the stamp must agree.
+        for (label, enabled, expires_at) in [
+            ("switched off", false, None),
+            ("expired an hour ago", true, Some(now - Duration::hours(1))),
+            ("expiring at this instant", true, Some(now)),
+        ] {
+            guard.enabled = enabled;
+            guard.expires_at = expires_at;
+            attach_guardrails(&mut alerts, std::slice::from_ref(&guard), now);
+            assert!(
+                alerts[0].policy_applied.is_none(),
+                "a guardrail {label} is a warning again, not a report: {guard:?}"
+            );
+        }
+
+        // Still standing a second later: the filter is expiry, not an accident of ordering.
+        guard.enabled = true;
+        guard.expires_at = Some(now + Duration::seconds(1));
+        attach_guardrails(&mut alerts, std::slice::from_ref(&guard), now);
+        assert_eq!(alerts[0].policy_applied.as_deref(), Some("g1"));
     }
 
     #[test]
