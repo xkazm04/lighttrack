@@ -68,7 +68,7 @@ pub(crate) fn evaluate_all(
     rubric
         .dimensions
         .iter()
-        .filter(|d| !d.kind.is_llm())
+        .filter(|d| d.kind.is_mechanical())
         .map(|d| {
             let (score, reasoning) = evaluate(d, expected, output, exec)?;
             Ok(DetScore {
@@ -205,10 +205,10 @@ fn evaluate(
             let o = crate::sandbox::run_exec(cli, &d.key, c, &subject)?;
             return Ok((o.verdict.score(), o.reasoning()));
         }
-        // Unreachable: `evaluate_all` filters LLM dimensions out. Defensive rather than silent.
-        DimensionKind::Llm => {
+        // Unreachable: `evaluate_all` filters model-judged dimensions out. Defensive, not silent.
+        DimensionKind::Llm | DimensionKind::Grounding => {
             return Err(EngineError::Other(format!(
-                "rubric dimension '{}' is LLM-judged and has no deterministic check",
+                "rubric dimension '{}' is model-judged and has no deterministic check",
                 d.key
             )))
         }

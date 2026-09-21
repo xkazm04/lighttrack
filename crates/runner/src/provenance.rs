@@ -28,6 +28,8 @@ pub(crate) fn rubric_detail(o: &RubricOutcome) -> ScoreDetail {
                 floor_hits: d.floor.map(|_| u32::from(d.floor_hit)),
                 floor_of: d.floor.map(|_| 1),
                 reasoning: d.reasonings.clone(),
+                voided: d.voided,
+                grounding: d.grounding.clone(),
             })
             .collect(),
         agreement: Some(o.agreement),
@@ -247,6 +249,7 @@ mod tests {
             floor_hits: Some(u32::from(hit)),
             floor_of: Some(1),
             reasoning: vec![],
+            ..Default::default()
         };
 
         // Always below the floor.

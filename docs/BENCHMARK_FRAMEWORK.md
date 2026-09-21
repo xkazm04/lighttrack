@@ -145,6 +145,7 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
   "prompt_ref": { "name": "support-reply", "label": "production" },
   "label": "gpt4o-prod",
   "effort": "high",
+  "schema": { "type": "object", "properties": { "likelyCause": { "enum": ["spam", "ok"] } } },
   "limits": { "max_cost_usd": 0.01, "max_latency_ms": 2000 },
   "kind": { "type": "http", "url": "https://rag.acme.com/answer" } }
 ```
@@ -161,6 +162,12 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
   whose bugs would surface as quality regressions.
   A run that resolved a ref records **`resolved_prompt_version`** in its report, and that is the
   evidence the promotion gate requires (see `CI_GATE.md`).
+- **`schema`** — a JSON schema the answer must satisfy, sent through the engine's
+  structured-output enforcement (the same path `lt-gateway` uses for an app's `response_format`).
+  Without it a schema can only be *described* in the system prompt, and a model that answers a
+  description with fenced prose (haiku, 21/21 on the first systedo run) fails `json_valid` on a
+  transport the app never ships. A provider that rejects the schema falls back once to a
+  schema-less call and the outcome says `schema: shed`. Ignored by an `http` target.
 - **`effort`** — reasoning effort: `low | medium | high | xhigh | max`. This is what makes *"is
   `gpt-5@high` worth 4× `gpt-5@low` on my cases?"* a question the matrix can ask: declare the same
   model twice at two levels and they are two rows, with distinct default labels
@@ -178,6 +185,7 @@ DatasetItem × target, the framework **generates** an output, then **judges** it
     | `anthropic` (`claude -p`, no key) | `--effort <level>` | all five, 1:1 — the path that always honoured it. |
     | `openai` | `reasoning_effort` | `low`/`medium`/`high` only. **`xhigh` and `max` are refused with an error naming the model and the level**: OpenAI's scale ends at `high`, and folding them onto it would send byte-identical requests for two differently-labelled rows. |
     | `openrouter` | `reasoning: {effort: <level>}` | **all five, 1:1 — the only adapter with no gap in the ladder**, because the gateway normalizes the level across every upstream it serves. So a model whose own API stops at `high` is still measurable at `xhigh`/`max` through it. It additionally reports the hidden-reasoning token split for upstreams whose native API reports none, and returns a **$ cost** per call, so such a target is priced without a price-book entry. Determinism is `best-effort` even when pinning is asked for: which upstream serves a request is the gateway's choice, and they do not all honour a seed. |
+    | `codex` (Codex CLI, ChatGPT seat) | `-c model_reasoning_effort="<level>"` on `codex exec` | all five words pass through 1:1, and **the model decides which it accepts** — a level a model does not support comes back as the API's own 400, never folded. The GPT counterpart of the `claude -p` path: subscription-metered, so a whole ladder costs no API money. Every call is isolated (`--ignore-user-config --ignore-rules`, a neutral directory, `--sandbox read-only`) so the operator's own config, rules and default model never join the measurement; the system prompt travels as `developer_instructions`. **Every tool is off, and proven off.** A read-only sandbox still lets a model run code and search the web: gpt-6-astra answered "sum the primes between 10000 and 10500" with a JavaScript loop and 0 reasoning tokens, and gpt-5.5 with a web search — neither visible on the `--json` stream. So every tool feature Codex exposes is disabled (plus web search, in config), and each turn's session log is read, audited and deleted after the call: an answer a tool produced is an **error**, never a score, and a log that cannot be found fails closed. A tool the model attempted and Codex refused is fine — the answer still came from reasoning. It reports the reasoning-token split. It reports **no $ cost**, so its targets are unpriced and sit off the frontier by name; `best-effort` determinism (no sampling knobs); and with tools off a call carries roughly 6–9k input tokens of Codex's own instructions. On Windows the binary resolves through **PATH order** — a machine can hold a current and a stale install, and the stale one refuses newer models. |
     | `google` (Gemini) | **not implemented** | every level is refused with an error. Gemini's control is `generationConfig.thinkingConfig.thinkingBudget`, a *token count* whose valid range is per-model; this build has no verified level→budget table, and a guessed budget the API clamps or ignores would produce a leaderboard column that reads as measured and measures nothing. |
     | `kind: http` | n/a | an endpoint we do not control has no knob to set; the declaration is carried on the row for provenance only. |
   - A model that rejects the parameter (e.g. Haiku 4.5, which has no `effort`) fails the call with
@@ -576,6 +584,7 @@ all-`llm`.
 | `numeric` | the output's number is within `tolerance` of the target | `expect`, `tolerance` (absolute, default 0), `path` |
 | `json_valid` | the output parses as JSON (and, with `expect`, carries that value at `path`) | `expect`, `path`, `case_sensitive` |
 | `exec` | the command exits 0 in a sandbox holding the output ([§3d](#3d-exec-dimensions--grading-behaviour-instead-of-text-m25-design)) | `image`, `cmd`, `write`, `timeout_secs`, `path` |
+| `grounding` | *(not pass/fail)* scores supported claims over claims issued, against the case's evidence passages; model-judged ([§3e](#3e-grounding-dimensions--support-by-evidence-claim-by-claim)) | — |
 
 `check.path` is a JSON Pointer (e.g. `/data/city`) narrowing a JSON output before the check; `numeric`
 falls back to the first numeric token in the text, so *"The total is 41.95 dollars."* is comparable.
@@ -773,6 +782,13 @@ report carries **two facts instead of one**:
   draw onto one output and silently delete the feature, so we sample — and say so — rather than claim
   reproducibility. A `--gen-samples 1` run over a seeded provider reads `exact` on both halves and does
   reproduce its candidates.
+- The judging half follows the same rule. A rubric judged with `samples > 1` draws each sample unpinned
+  and reads `sampled`: self-consistency `agreement` is a spread, and N draws at temperature 0 on one seed
+  over one prompt have none. Measured on a local seeded model (`crates/engine/tests/judge_samples_live.rs`,
+  4 ambiguous grounding cases × 5 samples, 3 runs per arm): pinned samples split on 3 of 12 case-runs,
+  all of them the same case at the same values, and stamped `exact`; unpinned samples split on 7 of 12,
+  across 3 cases. The price is stated rather than hidden: a sampled `overall` moves between runs. A
+  `samples 1` verdict stays pinned and reproducible.
 - No provider regresses: one with no sampling knobs (`claude -p`) still runs, degraded to `best-effort`,
   and is stamped as such rather than silently included in an `exact` claim.
 
@@ -1027,6 +1043,54 @@ committed, and never forwarded into a sandbox (see the credential rule above).
    built in CI or must be built once by an operator and pushed to a registry.
 5. **Regional placement and data residency** for operators who mine datasets from production events
    (§1). A dataset is scrubbed, but it is still customer-derived text leaving the deployment.
+
+### 3e. `grounding` dimensions — support by evidence, claim by claim
+
+A "faithfulness" `llm` dimension is holistic: one judge reads the whole answer and picks an anchor,
+so it cannot say which sentence was invented, gives no partial credit, and lets one fluent true
+paragraph carry an invented sentence. A `grounding` dimension replaces it with a pipeline of narrow
+verdicts, and it needs something a case never had: **the evidence**, the passages the system under
+test was given to answer from.
+
+```json
+{ "key": "supported", "description": "claims backed by the retrieved passages", "weight": 3.0,
+  "floor": 0.8, "kind": "grounding" }
+```
+
+The procedure, per judge sample:
+
+1. **Cut.** The judge model rewrites the output as standalone claims (JSON: a list of strings). It
+   sees the output alone, never the question, so it cannot quietly drop claims it judges off topic.
+2. **Check.** The judge model gives every claim one supported/unsupported verdict against the
+   evidence (JSON: one entry per claim, each echoing the claim's **number**). "Not mentioned" is
+   unsupported, exactly like "contradicted". Each passage and each claim is nonce-fenced separately.
+3. **Score.** Supported over claims **issued**.
+
+Rules that keep the fraction honest:
+- **Evidence is required.** The engine entry point is `run_rubric_judge_with_evidence` (additive, like
+  `run_rubric_judge_sandboxed`). A `grounding` dimension judged anywhere else, including a batched call,
+  is refused by name before any call is made. An empty evidence list is legitimate (retrieval found
+  nothing), and every claim is then unsupported.
+- **The denominator is claims issued.** A claim with no verdict counts unsupported; a verdict naming a
+  claim nobody issued (or naming one twice) is ignored. Both are counted in `detail.grounding`
+  (`missing_verdicts`, `stray_verdicts`), so a verifier that returns fewer verdicts cannot raise a score.
+- **Zero claims is unscored.** A refusal, a greeting, a clarifying question: the dimension is voided for
+  that sample (never 1.0, never 0.0), leaves the overall's numerator and denominator, and cannot breach
+  its floor. A rubric whose every dimension voided has no verdict and says why.
+- **Same math as `llm`.** The cut and check fold into each sample, so the dimension is sampled, weighted,
+  floored and spread into `agreement` like any `llm` dimension. It is not narrated in the rubric prompt,
+  and a grounding-only rubric makes no rubric-prompt call. A rubric may carry at most one.
+- **The cutter is part of the instrument.** Every grounding verdict stores `detail.grounding.version`,
+  a pin of the procedure revision plus a fingerprint of the cut and check instructions (a test holds it
+  still). A different pin is a different instrument: one compound claim judged unsupported is 0/1, the
+  same content cut into four claims is 3/4. Never trend scores across a pin change.
+- **Auditable.** `detail.dimensions[].grounding.claims` keeps each claim, its verdict, its reason and the
+  sample that produced it, bounded at `MAX_CLAIMS_PER_DIM`.
+
+What it deliberately does not do yet: claim precision/recall against a reference answer (a second kind),
+per-passage attribution (claims × passages calls, a sampled diagnosis), and retrieval ranking metrics.
+The cutter has no calibration row of its own yet; verdict agreement with humans (docs/CALIBRATION.md)
+says nothing about whether the claims covered the answer.
 
 ## 4. Async benchmark queue (non-blocking)  (#4)
 Benchmark runs must never block ingestion. A **jobs** table + a worker loop in `lt-runner`:

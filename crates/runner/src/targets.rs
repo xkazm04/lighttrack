@@ -95,7 +95,7 @@ impl ResolvedTarget {
                     &self.target.model_spec(),
                     system_prompt.as_deref(),
                     &user_input,
-                    None,
+                    self.target.schema.as_ref(),
                 )
             }
         }

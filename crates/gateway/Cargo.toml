@@ -1,0 +1,27 @@
+[package]
+name = "lighttrack-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightTrack gateway (`lt-gateway`) — one OpenAI-compatible localhost endpoint in front of the seat-metered CLIs (claude -p, codex exec), with use-case routing, usage-limit failover and honest telemetry."
+
+[[bin]]
+name = "lt-gateway"
+path = "src/main.rs"
+
+[dependencies]
+lighttrack-core.workspace = true
+lighttrack-engine = { path = "../engine" }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+anyhow = "1"
+toml = "1.1"
+dotenvy = "0.15"
+# Telemetry + admission calls to the LightTrack API (plain http locally; rustls for a cloud API).
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "query"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

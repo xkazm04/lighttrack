@@ -165,6 +165,7 @@ lt.track_openai(resp, latency_ms=120)          # model + usage → /v1/events; c
 | Anthropic (`claude -p`) | judge engine + generation (default) | subscription OAuth or `ANTHROPIC_API_KEY` |
 | OpenAI | candidate generation | `OPENAI_API_KEY` |
 | Google Gemini | candidate generation | `GEMINI_API_KEY` |
+| Codex CLI (`codex exec`) | candidate generation on GPT models, every effort level the model accepts, via a ChatGPT seat — no API spend; isolated from your Codex config, sandboxed read-only, with code execution, shell and web search disabled and each call audited so no answer comes from a tool | ChatGPT login (`codex login`) |
 | OpenRouter (gateway) | candidate generation + judging, any lab's model; the only adapter that honours all five effort levels, reports the reasoning-token split, and returns its own $ cost | `OPENROUTER_API_KEY` |
 
 ### Billing providers — net revenue against cost

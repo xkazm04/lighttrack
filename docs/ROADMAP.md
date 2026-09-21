@@ -120,6 +120,32 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
       generator family). Judge cost priced from the DB book when the provider returns no $.
       *Verified live:* same answer judged by Gemini and by OpenAI (both 1.0/pass, judge cost priced).
 
+## Gateway — one wrapper for local apps ✅ (2026-09-15, design: docs/GATEWAY.md)
+- [x] `lt-gateway` (`crates/gateway`): OpenAI-compatible `POST /v1/chat/completions` on loopback,
+      over the engine's provider dispatch (so `claude -p` and `codex exec` on subscription seats, plus the
+      HTTP providers). `model` is a **use-case route** from `gateway.toml` or a literal
+      `provider/model[@effort]`. JSON schemas travel through the engine's enforcement path.
+- [x] **Seat failover**: each failure is classified as exhausted / transient / terminal; an exhausted
+      seat is held out (`cooldown_secs` or the provider's retry-after) so following calls skip straight to
+      the fallback — the seamless-resume case. A fallback on the same seat is refused at config load.
+- [x] **Honest telemetry**: one event per attempt, all on one `trace_id` — the failed primary as an
+      `error` row (`provider_failed`, `failure_class: transient`), the answer tagged `fell_back`.
+- [x] **Pre-spend admission** from `/v1/limits/status` (cached 10s, fail-open).
+- [x] `/gateway-onboard <app> <use-case>` skill: difficulty-graded corpus → a ladder per seat →
+      cheapest config per seat that clears the hard tier → route + fallback written from the scorecard →
+      failover drill via `X-LightTrack-Simulate` (dev flag only).
+- [x] **Native multi-turn + tool passthrough** (2026-09-15): the engine's input is now a `ChatRequest`
+      (system + turns + tools; `engine::generate_chat`). OpenAI-shaped providers (`openai`, `openrouter`)
+      take the message array and caller tools verbatim and answer with `tool_calls`; Gemini and the
+      Anthropic API take plain turns natively; the CLIs get one rendered prompt and refuse tools — an
+      error before the request, never a silent flatten. A tool request on a route is checked against
+      every target in the chain up front. Verified live: a two-round `get_weather` tool conversation
+      through OpenRouter, a rendered three-turn conversation through `claude -p`.
+- [x] **Streaming** (2026-09-15): `stream: true` delivers the finished answer as `chat.completion.chunk`
+      SSE events (role, whitespace-split content, finish, a trailing usage chunk with the `lighttrack`
+      block). Delivery only — nothing arrives before the model is done.
+- [ ] Upstream streaming for the HTTP providers (token-by-token), and Gemini/Anthropic tool translation.
+
 ## Judge calibration (post-3.6) ✅
 - [x] `core::calibration` — pure agreement math (Cohen's κ on pass/fail, Pearson, MAE/RMSE, judge-vs-human
       bias, trust verdict vs a κ bar); unit-tested (perfect/total-disagreement/bias/empty).

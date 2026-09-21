@@ -16,6 +16,7 @@ members = [
     "crates/mcp",
     "crates/cli",
     "crates/responder",
+    "crates/gateway",
 ]
 
 [workspace.package]

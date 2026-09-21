@@ -75,6 +75,13 @@ pub struct ScoreDim {
     /// its reasoning tokens were paid for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning: Vec<String>,
+    /// The dimension was not measured for this verdict (an `exec` sandbox that could not run, a
+    /// `grounding` output with zero claims). `value` is a placeholder; it left the overall entirely.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub voided: bool,
+    /// `grounding` only: the per-claim verdicts and counters behind `value`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grounding: Option<crate::grounding::GroundingDetail>,
 }
 
 /// Structured provenance for a judged verdict: the per-dimension breakdown plus the reliability
@@ -132,7 +139,7 @@ pub struct ScoreDetail {
 }
 
 /// Truncate on a char boundary, marking that it happened.
-fn cap_str(s: &str) -> String {
+pub(crate) fn cap_str(s: &str) -> String {
     if s.chars().count() <= MAX_REASONING_CHARS {
         return s.to_string();
     }
@@ -151,6 +158,7 @@ impl ScoreDetail {
             for r in &mut d.reasoning {
                 *r = cap_str(r);
             }
+            d.grounding = d.grounding.take().map(|g| g.capped());
         }
         self.notes.truncate(MAX_NOTES);
         for n in &mut self.notes {

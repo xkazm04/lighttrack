@@ -1,0 +1,28 @@
+# lt-gateway routes — copy to `gateway.toml` beside the app that calls the gateway.
+#
+# Committable: this file names models and routes, never keys. The API URL and key, and the CLI
+# binaries, come from the environment (see `docs/GATEWAY.md`).
+#
+# A request's `model` is either a route name below or a literal `provider/model[@effort]`.
+# Providers the engine can generate with: anthropic (claude -p on a seat, or the Messages API when
+# ANTHROPIC_API_KEY is set), codex (the Codex CLI on a ChatGPT seat), openai, google, openrouter.
+
+# Seconds a seat is skipped after it reports a usage limit and names no retry-after. Every call in
+# that window goes straight to the fallback instead of paying a failed attempt first.
+cooldown_secs = 300
+
+[defaults]
+# Tried, in order, behind a literal `provider/model` request — minus anything on the same seat as
+# the literal, since a limit on one is a limit on both.
+fallback = ["codex/gpt-5.5@medium"]
+
+# One route per use case. `/gateway-onboard <app> <use-case>` measures both seats on a
+# difficulty-graded corpus and writes this block from the scorecard; the comments carry the
+# evidence so the next reader knows what the choice rests on.
+[routes.summarize-email]
+primary  = "anthropic/sonnet@medium"   # hard-tier 0.93, p50 6.1s, 0 errors
+fallback = ["codex/gpt-5.5@medium"]    # hard-tier 0.90 — clears the bar, stands in on a Claude limit
+
+[routes.classify-ticket]
+primary  = "codex/gpt-5.5@low"         # hard-tier 0.97, p50 4.0s
+fallback = ["anthropic/haiku@low"]     # hard-tier 0.95
