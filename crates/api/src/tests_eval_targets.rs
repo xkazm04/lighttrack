@@ -96,7 +96,18 @@ async fn prompt_id(app: &axum::Router) -> String {
 
 /// Record a finished, green run of `bench` tagged as having scored v2 of `pid`, merging `extra`
 /// into its report.
+///
+/// Every call gets its own minute. The gate picks "the latest run that scored this version", so a
+/// test asserting *which* run it picked has to give the runs an order — and this helper used to
+/// stamp every run with the same hardcoded instant, which meant the only test that records two of
+/// them was asserting an order the data never established. It passed on whatever sequence the
+/// storage engine happened to return, and stopped passing the day `benchmark_runs` grew an index.
+/// A monotonic stamp says what the scenario always meant: the second run happened afterwards.
 async fn record_run(app: &axum::Router, bench: &str, pid: &str, extra: Value) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NTH: AtomicU32 = AtomicU32::new(0);
+    let n = NTH.fetch_add(1, Ordering::Relaxed);
+
     let mut report = json!({ "prompt_id": pid, "prompt_version": 2 });
     for (k, v) in extra.as_object().cloned().unwrap_or_default() {
         report[k] = v;
@@ -107,8 +118,8 @@ async fn record_run(app: &axum::Router, bench: &str, pid: &str, extra: Value) {
         "/v1/benchmark-runs",
         json!({
             "benchmark_id": bench,
-            "started_at": "2026-01-01T00:00:00.000000000Z",
-            "finished_at": "2026-01-01T00:05:00.000000000Z",
+            "started_at": format!("2026-01-01T00:{n:02}:00.000000000Z"),
+            "finished_at": format!("2026-01-01T00:{:02}:00.000000000Z", n + 1),
             "n_cases": 20, "mean_score": 0.95, "status": "passed",
             "report": report
         }),

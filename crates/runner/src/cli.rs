@@ -42,6 +42,30 @@ pub(crate) struct Cli {
     /// finished run. `0` disables both. Defaults to $25.
     #[arg(long, default_value_t = 25.0)]
     pub(crate) max_cost: f64,
+    /// Run sandboxed `exec` rubric dimensions in this isolation runner
+    /// (docs/BENCHMARK_FRAMEWORK.md §3d).
+    ///
+    /// Absent by default because `exec` is the one dimension kind that executes anything. With it
+    /// absent, a rubric carrying an `exec` dimension is refused by name rather than judged with
+    /// that dimension silently missing. Whichever runner is named is checked once, before the first
+    /// case, rather than failing per case.
+    ///
+    /// `docker` is the local container runner: no account, no beta gate, `--network=none`, and a
+    /// digest pin that stamps verdicts `exact`. `contree` is the remote VM-isolated one — stronger
+    /// isolation for inputs that are not hand-authored, and it needs Sandboxes enabled on the
+    /// Nebius project.
+    #[arg(long, value_enum)]
+    pub(crate) sandbox: Option<crate::sandbox::SandboxKind>,
+    /// Path to the `docker` executable. Not assumed present: a missing binary is a named error on
+    /// any run whose rubric needs one, never a silent skip.
+    #[arg(long, env = "LIGHTTRACK_DOCKER_BIN", default_value = "docker")]
+    pub(crate) docker_bin: String,
+    /// Path to the `contree` executable. Same rule.
+    #[arg(long, env = "LIGHTTRACK_CONTREE_BIN", default_value = "contree")]
+    pub(crate) contree_bin: String,
+    /// `contree` profile to use, so benchmark credentials can be kept apart from an operator's own.
+    #[arg(long, env = "CONTREE_PROFILE")]
+    pub(crate) contree_profile: Option<String>,
     #[command(subcommand)]
     pub(crate) cmd: Cmd,
 }

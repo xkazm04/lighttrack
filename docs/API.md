@@ -10,10 +10,10 @@ describe a route that does not exist, or miss one that does.
 
 | | |
 |---|---|
-| Endpoints (method × path) | 125 |
-| Distinct `/v1` routes | 99 |
-| MCP tools | 64 (43 read, 21 write) |
-| CLI verbs | 88 |
+| Endpoints (method × path) | 130 |
+| Distinct `/v1` routes | 102 |
+| MCP tools | 68 (46 read, 22 write) |
+| CLI verbs | 93 |
 | Endpoints with a Markdown renderer | 46 |
 | Machine doors (SDK / device / provider) | 15 |
 | Paged reads | 6 |
@@ -73,6 +73,11 @@ those are machine doors (an SDK's ingest, a device agent's lease, a provider's w
 | GET | `/v1/projects/:id/rubrics` | `read` | `list_rubrics` | `lt rubrics list` | `list_rubrics` |
 | GET | `/v1/rubrics/:id` | `read` | `get_rubric` | `lt rubrics show` | `get_rubric` |
 | POST | `/v1/rubrics/:id/versions` | admin |  | `lt rubrics version` |  |
+| POST | `/v1/projects/:id/use-cases` | admin | `upsert_use_case` | `lt use-cases register` |  |
+| GET | `/v1/projects/:id/use-cases` | `read` | `list_use_cases` | `lt use-cases list` |  |
+| GET | `/v1/projects/:id/use-cases/coverage` | `read` | `use_case_coverage` | `lt use-cases coverage` |  |
+| GET | `/v1/projects/:id/use-cases/:key` | `read` | `get_use_case` | `lt use-cases show` |  |
+| DELETE | `/v1/projects/:id/use-cases/:key` | admin |  | `lt use-cases delete` |  |
 | POST | `/v1/projects/:id/benchmarks` | admin | `create_benchmark` |  |  |
 | GET | `/v1/projects/:id/benchmarks` | `read` | `list_benchmarks` |  | `list_benchmarks` |
 | GET | `/v1/benchmarks/:id` | `read` | `get_benchmark` |  | `get_benchmark` |
@@ -156,8 +161,8 @@ those are machine doors (an SDK's ingest, a device agent's lease, a provider's w
 
 ## Response types
 
-61 of 125 endpoints return a named type that derives `schemars::JsonSchema`, so
-`/openapi.json` describes their fields. The other 63 build their body with
+64 of 130 endpoints return a named type that derives `schemars::JsonSchema`, so
+`/openapi.json` describes their fields. The other 65 build their body with
 `serde_json::json!` and have no struct to point at; the contract describes each in prose and
 the generated document carries that prose instead of a field list. Turning one into a named
 type is a strict improvement that needs no coordination — add the struct, derive

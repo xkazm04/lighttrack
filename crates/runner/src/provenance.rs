@@ -28,6 +28,8 @@ pub(crate) fn rubric_detail(o: &RubricOutcome) -> ScoreDetail {
                 floor_hits: d.floor.map(|_| u32::from(d.floor_hit)),
                 floor_of: d.floor.map(|_| 1),
                 reasoning: d.reasonings.clone(),
+                voided: d.voided,
+                grounding: d.grounding.clone(),
             })
             .collect(),
         agreement: Some(o.agreement),
@@ -43,6 +45,8 @@ pub(crate) fn rubric_detail(o: &RubricOutcome) -> ScoreDetail {
         // Filled by [`stamp_evidence`] once the caller knows which event was judged; a benchmark
         // case judges dataset text that never went through ingest, so it legitimately stays `None`.
         evidence_redacted_spans: None,
+        // Stamped by compare mode, which is the only caller that generated the candidate it judges.
+        generation: None,
     }
     .capped()
 }
@@ -245,6 +249,7 @@ mod tests {
             floor_hits: Some(u32::from(hit)),
             floor_of: Some(1),
             reasoning: vec![],
+            ..Default::default()
         };
 
         // Always below the floor.

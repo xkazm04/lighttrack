@@ -75,6 +75,13 @@ pub struct ScoreDim {
     /// its reasoning tokens were paid for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning: Vec<String>,
+    /// The dimension was not measured for this verdict (an `exec` sandbox that could not run, a
+    /// `grounding` output with zero claims). `value` is a placeholder; it left the overall entirely.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub voided: bool,
+    /// `grounding` only: the per-claim verdicts and counters behind `value`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grounding: Option<crate::grounding::GroundingDetail>,
 }
 
 /// Structured provenance for a judged verdict: the per-dimension breakdown plus the reliability
@@ -124,10 +131,15 @@ pub struct ScoreDetail {
     /// carried no stamp at all, which is a weaker statement and kept distinct from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_redacted_spans: Option<u32>,
+    /// For a compare cell: what generating the judged candidates spent — tokens, the reasoning
+    /// share, latency, cost. Persisted here, per case, so a run's thinking can be read back case by
+    /// case past the report's bounded preview. `None` on every verdict that generated nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<crate::gen_spend::GenerationFacts>,
 }
 
 /// Truncate on a char boundary, marking that it happened.
-fn cap_str(s: &str) -> String {
+pub(crate) fn cap_str(s: &str) -> String {
     if s.chars().count() <= MAX_REASONING_CHARS {
         return s.to_string();
     }
@@ -146,6 +158,7 @@ impl ScoreDetail {
             for r in &mut d.reasoning {
                 *r = cap_str(r);
             }
+            d.grounding = d.grounding.take().map(|g| g.capped());
         }
         self.notes.truncate(MAX_NOTES);
         for n in &mut self.notes {
@@ -343,6 +356,20 @@ pub struct BenchmarkCase {
     pub expected: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
+    /// The rung this case was graded at (M27), carried over from the `DatasetItem` it came from so
+    /// a run's stored `dataset` still says which cases were the hard ones. `None` is ungraded, not
+    /// medium — see [`crate::dataset::Difficulty`].
+    ///
+    /// Tolerant on the way in from storage, strict on the way in from an operator: an inline case
+    /// posted to `create_benchmark` with a rung this ladder does not name refuses the whole request
+    /// (`lighttrack-api`'s `difficulty_input`), because that is where the 8-of-18 silently-ungraded
+    /// benchmark came from. Reading the stored `dataset` column back still degrades.
+    #[serde(
+        default,
+        deserialize_with = "crate::dataset::de_difficulty",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub difficulty: Option<crate::dataset::Difficulty>,
 }
 
 /// Reserved key under a benchmark's free-form `target` object carrying its opt-in recurrence
@@ -560,5 +587,30 @@ mod tests {
             );
             assert_eq!(k.is_run_case(), expect, "{k:?}");
         }
+    }
+
+    /// A benchmark stored before M27 has cases with no `difficulty` key, and a run that reads one
+    /// back and writes it again must not invent a grade for it.
+    #[test]
+    fn a_pre_m27_case_round_trips_byte_identically() {
+        let stored = r#"{"input":"2+2","expected":"4"}"#;
+        let case: BenchmarkCase = serde_json::from_str(stored).expect("parse");
+        assert_eq!(case.difficulty, None);
+        assert_eq!(serde_json::to_string(&case).expect("ser"), stored);
+    }
+
+    /// The grade a case carries is the one the dataset item was graded at, and an unreadable one
+    /// costs the field rather than the case.
+    #[test]
+    fn a_case_carries_its_rung_and_degrades_an_unknown_one() {
+        let graded: BenchmarkCase =
+            serde_json::from_value(json!({ "input": "i", "difficulty": "hard" })).expect("case");
+        assert_eq!(graded.difficulty, Some(crate::dataset::Difficulty::Hard));
+
+        let odd: BenchmarkCase =
+            serde_json::from_value(json!({ "input": "i", "difficulty": "brutal" }))
+                .expect("an unreadable grade must not take the case with it");
+        assert_eq!(odd.difficulty, None);
+        assert_eq!(odd.input, "i");
     }
 }

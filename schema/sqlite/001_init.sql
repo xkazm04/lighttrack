@@ -128,6 +128,10 @@ CREATE TABLE IF NOT EXISTS benchmarks (
   baseline_score REAL,
   created_at TEXT NOT NULL
 );
+-- `list_benchmarks` is `WHERE project_id = ? ORDER BY created_at DESC` and the table only ever
+-- grows; without this every project's listing scans every other project's benchmarks and then
+-- sorts them.
+CREATE INDEX IF NOT EXISTS idx_benchmarks_project ON benchmarks(project_id, created_at);
 
 -- Weighted, anchored rubrics.
 CREATE TABLE IF NOT EXISTS rubrics (
@@ -139,6 +143,10 @@ CREATE TABLE IF NOT EXISTS rubrics (
   threshold REAL NOT NULL DEFAULT 0.7,
   created_at TEXT NOT NULL
 );
+-- `list_rubrics` is `WHERE project_id = ? ORDER BY created_at DESC`, and M9 made this table
+-- append-only: a rubric edit is a new row, never a mutation. So it grows with every revision
+-- rather than staying at one row per rubric, and the listing's scan grows with it.
+CREATE INDEX IF NOT EXISTS idx_rubrics_project ON rubrics(project_id, created_at);
 
 -- Background job queue: enqueue returns immediately; lt-runner serve executes.
 CREATE TABLE IF NOT EXISTS jobs (
@@ -206,6 +214,10 @@ CREATE TABLE IF NOT EXISTS benchmark_runs (
   total_tokens INTEGER,
   report TEXT
 );
+-- Run history for one benchmark, already in the listing's order (`WHERE benchmark_id = ? ORDER
+-- BY started_at DESC`). This is the table a scheduled benchmark appends to forever, so it is
+-- the one place where "scan it all" gets worse every night.
+CREATE INDEX IF NOT EXISTS idx_benchmark_runs_bench ON benchmark_runs(benchmark_id, started_at);
 
 -- DB-backed price book (source of truth; config/pricing.json is the seed). M26 made it a dated,
 -- append-only timeline: the identity of a rate has to be (provider, model, effective_from), or
@@ -538,6 +550,35 @@ CREATE TABLE IF NOT EXISTS calibrations (
 -- The lookup every gate makes: exactly one (project, judge, rubric) pair, newest first.
 CREATE INDEX IF NOT EXISTS idx_calibrations_key ON calibrations(project_id, judge, rubric_id, created_at);
 
+-- The declared inventory of places this project calls an LLM. Deliberately NOT a foreign key on
+-- `events`: ingest must never drop an observation because its use case is unregistered, and the
+-- unmatched rows are the most useful thing here - an event name with no row is shadow usage or
+-- a typo splitting one use case's cost in two. `key` joins `events.name` by convention, and the
+-- gap between declared and observed is a report rather than a constraint.
+CREATE TABLE IF NOT EXISTS use_cases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  -- stable identifier events attribute to via events.name; unique per project
+  key TEXT NOT NULL,
+  -- human title for a dashboard row
+  name TEXT NOT NULL,
+  description TEXT,
+  -- generation|classification|extraction|summarization|judge|agent|embedding|rerank|other
+  kind TEXT NOT NULL DEFAULT 'generation',
+  -- active|planned|deprecated - decides whether silence or traffic is the finding
+  status TEXT NOT NULL DEFAULT 'active',
+  -- where in the application this call site lives
+  component TEXT,
+  -- JSON array of [provider/]model ids; absent means NO declaration, which is not the same as
+  -- 'any model is fine'
+  expected_models TEXT,
+  owner TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (project_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_use_cases_project ON use_cases(project_id, key);
+
 -- Post-ship columns, applied by crate::sqlite::schema::apply in this order:
 --   ALTER TABLE projects ADD COLUMN collective_opt_in INTEGER NOT NULL DEFAULT 0
 --   ALTER TABLE projects ADD COLUMN archived_at TEXT
@@ -568,6 +609,7 @@ CREATE INDEX IF NOT EXISTS idx_calibrations_key ON calibrations(project_id, judg
 --   ALTER TABLE prompts ADD COLUMN label_history TEXT
 --   ALTER TABLE datasets ADD COLUMN parent_id TEXT
 --   ALTER TABLE dataset_items ADD COLUMN input_hash TEXT
+--   ALTER TABLE dataset_items ADD COLUMN difficulty TEXT
 --   ALTER TABLE revenue_events ADD COLUMN amount_minor INTEGER
 --   ALTER TABLE revenue_events ADD COLUMN fx_rate REAL
 --   ALTER TABLE revenue_events ADD COLUMN fx_book_version TEXT

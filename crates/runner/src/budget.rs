@@ -53,18 +53,27 @@ impl CostEstimate {
 }
 
 /// Estimate a compare run's cost BEFORE the first paid call: every target generates `ng` candidates
-/// per case, and each candidate is judged `samples` times.
+/// per case, and each candidate is judged `samples` times — when a model judges it at all.
+///
+/// `model_judged` is false for a rubric with no `llm` dimension, which is scored mechanically and
+/// makes **no** judge call. Before this existed an 810-generation run over such a rubric printed "810
+/// judge call(s)" and listed the unused judge as unpriced, a pre-flight describing spend that could
+/// not happen.
 pub(crate) fn estimate_compare(
     prices: &[ModelPriceRow],
     targets: &[BenchTarget],
     n_cases: usize,
     ng: u32,
     samples: u32,
-    jp: &str,
-    jm: &str,
+    (jp, jm): (&str, &str),
+    model_judged: bool,
 ) -> CostEstimate {
     let per_target_gen = n_cases * ng.max(1) as usize;
-    let judge_calls = per_target_gen * targets.len() * samples.max(1) as usize;
+    let judge_calls = if model_judged {
+        per_target_gen * targets.len() * samples.max(1) as usize
+    } else {
+        0
+    };
     let mut unpriced: BTreeSet<String> = BTreeSet::new();
     let mut usd = 0.0;
     for t in targets {
@@ -80,12 +89,15 @@ pub(crate) fn estimate_compare(
         }
         usd += c * per_target_gen as f64;
     }
-    let (jc, judge_priced) =
-        price_gen_cost_checked(prices, jp, jm, Some(EST_JUDGE_IN), Some(EST_JUDGE_OUT));
-    if !judge_priced {
-        unpriced.insert(format!("{jp}/{jm}"));
+    // A judge that is never called has no price to be missing.
+    if judge_calls > 0 {
+        let (jc, judge_priced) =
+            price_gen_cost_checked(prices, jp, jm, Some(EST_JUDGE_IN), Some(EST_JUDGE_OUT));
+        if !judge_priced {
+            unpriced.insert(format!("{jp}/{jm}"));
+        }
+        usd += jc * judge_calls as f64;
     }
-    usd += jc * judge_calls as f64;
     CostEstimate {
         gen_calls: per_target_gen * targets.len(),
         judge_calls,
@@ -168,6 +180,49 @@ mod tests {
         serde_json::from_value(json!({ "provider": provider, "model": model })).unwrap()
     }
 
+    /// A target that spells its effort into the model string is still priced from the book.
+    ///
+    /// This holds today without the estimator doing anything: `model_id::canonicalize` splits a
+    /// trailing `@lane` off before `PriceBook::candidates` looks the family up, so `opus@xhigh`
+    /// finds the `opus` row. It is pinned here because nothing else states it, the effort axis made
+    /// the suffixed spelling common, and the failure mode is the expensive kind — an unpriced target
+    /// reports 0 rather than an error, and free wins every cost comparison it appears in.
+    #[test]
+    fn an_effort_suffixed_model_is_still_priced_from_the_book() {
+        let prices = vec![price("anthropic", "opus", 1.0, 1.0)];
+        let plain = estimate_compare(
+            &prices,
+            &[target("anthropic", "opus")],
+            1,
+            1,
+            1,
+            ("o", "j"),
+            true,
+        );
+        let suffixed = estimate_compare(
+            &prices,
+            &[target("anthropic", "opus@xhigh")],
+            1,
+            1,
+            1,
+            ("o", "j"),
+            true,
+        );
+        assert!(
+            plain.usd > 0.0,
+            "the fixture prices the bare model, or this test proves nothing"
+        );
+        assert_eq!(
+            suffixed.usd, plain.usd,
+            "the effort suffix changes how hard the model thinks, not what a token costs"
+        );
+        assert!(
+            !suffixed.unpriced.iter().any(|u| u.contains("opus")),
+            "a priced model must not be reported unpriced: {:?}",
+            suffixed.unpriced
+        );
+    }
+
     #[test]
     fn estimate_counts_every_paid_call_in_the_matrix() {
         let e = estimate_compare(
@@ -176,13 +231,43 @@ mod tests {
             200,
             10,
             2,
-            "o",
-            "j",
+            ("o", "j"),
+            true,
         );
         // 2 targets × 200 cases × 10 candidates = 4000 generations…
         assert_eq!(e.gen_calls, 4000);
         // …each judged twice = 8000 judge calls. This is the fat-finger case the gate exists for.
         assert_eq!(e.judge_calls, 8000);
+    }
+
+    /// **Found by the first live Codex run.** A rubric scored entirely by mechanical checks never
+    /// calls the judge, and its pre-flight printed "810 judge call(s)" anyway — and listed the unused
+    /// judge as an unpriced model, a warning about spend that could not happen.
+    #[test]
+    fn a_rubric_no_model_judges_estimates_no_judge_calls_and_no_judge_warning() {
+        let prices = vec![price("openai", "m", 1_000.0, 1_000.0)];
+        let e = estimate_compare(
+            &prices,
+            &[target("openai", "m")],
+            30,
+            3,
+            1,
+            ("anthropic", "opus@xhigh"),
+            false,
+        );
+        assert_eq!(e.gen_calls, 90);
+        assert_eq!(e.judge_calls, 0);
+        assert!(
+            e.unpriced.is_empty(),
+            "an uncalled judge is not an unpriced model: {:?}",
+            e.unpriced
+        );
+        assert!(
+            (e.usd - 90.0 * 1.5).abs() < 1e-9,
+            "generation only: {}",
+            e.usd
+        );
+        assert!(e.line().contains("0 judge call(s)"), "{}", e.line());
     }
 
     #[test]
@@ -196,7 +281,15 @@ mod tests {
             price("anthropic", "j", 1_000.0, 1_000.0),
         ];
         // $1000/Mtok both ways ⇒ a 1k-in/0.5k-out generation is $1.5; a 1.5k/0.4k judge call $1.9.
-        let e = estimate_compare(&prices, &[target("openai", "m")], 2, 1, 1, "anthropic", "j");
+        let e = estimate_compare(
+            &prices,
+            &[target("openai", "m")],
+            2,
+            1,
+            1,
+            ("anthropic", "j"),
+            true,
+        );
         assert!(
             (e.usd - (2.0 * 1.5 + 2.0 * 1.9)).abs() < 1e-9,
             "got {}",
@@ -210,8 +303,8 @@ mod tests {
             2,
             1,
             1,
-            "anthropic",
-            "j",
+            ("anthropic", "j"),
+            true,
         );
         assert_eq!(
             e.unpriced.iter().cloned().collect::<Vec<_>>(),

@@ -22,6 +22,10 @@
   },
   "covered": [
     {
+      "path": "docs/GATEWAY.md",
+      "note": "written 2026-09-15 with the crate it describes (crates/gateway): the OpenAI-compatible loopback endpoint, the route/fallback config, the exhausted/transient/terminal failover classification and seat cooldown, pre-spend admission, and the per-attempt event shape. Verified against a live claude -p and codex exec call and a dev-mode API before writing."
+    },
+    {
       "path": "docs/ARCHITECTURE.md",
       "note": "§12 written this pass (disk accounting, the dated unbounded-retention decision, the quiet-window maintenance ladder); §5 and §11 re-read against the code while writing it. 2026-09-02, M5 (pre-spend admission) extended §7c against crates/api/src/ingest_proximity.rs: the X-LightTrack-Usage-Ratio / -Shed-Fraction / -Retry-After headers now on all three ingest doors and on the 429, the binding_scope/binding_rule fields on IngestResponse, and the SDK-side admission loop the headers exist to feed. The rest of §7c was re-read against the code while writing it; the §5 flag below is untouched and still stands. 2026-09-02, M17 (scope on every store read) added a §9 bullet: tenant scope is a typed `Scope` parameter on every project-bearing `Store` read, so reading another project's row is 404 rather than 403 on benchmarks / datasets / rubrics / relay tasks (a behavior change, listed endpoint by endpoint), the price book stays operator-global, and `jobs` gained a nullable `project_id`. Written against crates/store/src/scope.rs, crates/api/src/auth.rs and the handlers; no other section re-read."
     },
@@ -91,6 +95,11 @@
       "path": "docs/harness/harness-learnings.md",
       "kind": "frozen-archive",
       "reason": "Dated structural observations from the same campaign. Its facts are stamped 2026-07-16 and read as history, not as a current description."
+    },
+    {
+      "path": "docs/AI_HARNESS.md",
+      "kind": "not-in-this-pass",
+      "reason": "added 2026-09-05 by 60fef8c as an unfilled starter template - every 'Where things live' and 'Review gate' line is still a TODO placeholder, so there is nothing here yet to read against the code. It enters the denominator now so the next pass sees the debt rather than the file being invisible; it drains when the template is filled in or the file is removed"
     },
     {
       "path": "docs/CALIBRATION.md",

@@ -14,16 +14,20 @@ pub mod alias_table;
 pub mod bench_target;
 pub mod calibration;
 pub mod calibration_record;
+pub mod case_limits;
 pub mod collective;
 pub mod customer;
 pub mod dataset;
 pub mod dataset_lineage;
 pub mod device;
+pub mod effort;
 pub mod endpoint_identity;
 pub mod error;
 pub mod event;
 pub mod forecast;
 pub mod forecast_gate;
+pub mod gen_spend;
+pub mod grounding;
 pub mod job;
 pub mod job_kinds;
 pub mod label;
@@ -49,6 +53,7 @@ pub mod schedule;
 pub mod score;
 pub mod trace;
 pub mod unpriced;
+pub mod use_case;
 
 pub use alert::{Alert, AlertKind, Delivery, Severity};
 pub use alert_channel::{AlertChannel, ChannelKind};
@@ -62,6 +67,7 @@ pub use bench_target::{
 };
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use calibration_record::{CalibrationRecord, JudgeTrust, JudgeTrustVerdict};
+pub use case_limits::{CaseLimits, LimitCheck};
 pub use collective::{
     bucket_cost, build_digest, build_digest_counted, canon_determinism, digest_sha256,
     hub_url_hash, merge_leaderboard, normalize_hub_url, task_type_from, CollectiveDigest,
@@ -70,12 +76,13 @@ pub use collective::{
     DEFAULT_MIN_CASES, DETERMINISM_LEVELS, DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
 };
 pub use customer::{BillingProduct, Customer};
-pub use dataset::{Dataset, DatasetItem};
+pub use dataset::{Dataset, DatasetItem, Difficulty};
 pub use dataset_lineage::{
     input_fingerprint, normalize_input, ImportFilter, ImportSource, ImportSpec, SamplingStrategy,
     MAX_IMPORT_N,
 };
 pub use device::{capability_matches, Device, DeviceEligibility, RelayAdmission};
+pub use effort::{split_effort, Effort};
 pub use endpoint_identity::{
     native_routes, resolve as resolve_endpoint, Endpoint, EndpointIdentity, Evidence, Observations,
     SELF_HOSTED_PREFIX,
@@ -86,6 +93,8 @@ pub use event::{
 };
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
 pub use forecast_gate::{Refusal, FLAT_BAND, MIN_OBSERVED_DAYS, MIN_SPAN_DAYS};
+pub use gen_spend::GenerationFacts;
+pub use grounding::{ClaimVerdict, GroundingDetail, MAX_CLAIMS_PER_DIM};
 pub use job::{
     job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_PREFIX_FAILURE,
     JOB_ERROR_WORKER_LOST,
@@ -144,6 +153,7 @@ pub use trace::{
     TraceTotals,
 };
 pub use unpriced::{UnpricedLedger, UnpricedRow, UNPRICED_NOTES};
+pub use use_case::{UseCase, UseCaseKind, UseCaseStatus};
 
 /// Convenience: a fresh UUIDv4 as a `String` (our canonical id form).
 pub fn new_id() -> String {

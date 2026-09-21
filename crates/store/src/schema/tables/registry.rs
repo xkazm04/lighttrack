@@ -32,6 +32,38 @@ pub static PROMPTS: Table = Table::new(
 .unique(&["project_id, name"])
 .indexes(&[I::new("idx_prompts_project", "project_id, name")]);
 
+pub static USE_CASES: Table = Table::new(
+    "use_cases",
+    &[
+        C::new("id", Text).pk(),
+        C::new("project_id", Text).nn(),
+        C::new("key", Text)
+            .nn()
+            .doc("stable identifier events attribute to via events.name; unique per project"),
+        C::new("name", Text).nn().doc("human title for a dashboard row"),
+        C::new("description", Text),
+        C::new("kind", Text)
+            .nn()
+            .def("'generation'")
+            .doc("generation|classification|extraction|summarization|judge|agent|embedding|rerank|other"),
+        C::new("status", Text)
+            .nn()
+            .def("'active'")
+            .doc("active|planned|deprecated - decides whether silence or traffic is the finding"),
+        C::new("component", Text).doc("where in the application this call site lives"),
+        C::new("expected_models", Json)
+            .doc("JSON array of [provider/]model ids; absent means NO declaration, which is not the same as 'any model is fine'"),
+        C::new("owner", Text),
+        C::new("created_at", Ts).nn(),
+        C::new("updated_at", Ts).nn(),
+    ],
+)
+.doc(
+    "The declared inventory of places this project calls an LLM. Deliberately NOT a foreign key on      `events`: ingest must never drop an observation because its use case is unregistered, and the      unmatched rows are the most useful thing here - an event name with no row is shadow usage or a      typo splitting one use case's cost in two. `key` joins `events.name` by convention, and the      gap between declared and observed is a report rather than a constraint.",
+)
+.unique(&["project_id, key"])
+.indexes(&[I::new("idx_use_cases_project", "project_id, key")]);
+
 pub static PROMPT_VERSIONS: Table = Table::new(
     "prompt_versions",
     &[

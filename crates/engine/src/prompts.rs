@@ -346,5 +346,7 @@ fn narrate_dims(rubric: &Rubric) -> String {
         .join("\n")
 }
 
+pub(crate) mod grounding;
+
 #[cfg(test)]
 mod tests;

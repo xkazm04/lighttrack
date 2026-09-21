@@ -191,6 +191,7 @@ mod costs_unpriced;
 mod credential_boundary;
 mod datasets;
 mod datasets_lineage;
+mod difficulty_input;
 mod error;
 mod events;
 mod events_admission;
@@ -249,6 +250,7 @@ mod shed;
 mod state;
 mod storage;
 mod traces;
+mod use_cases;
 
 #[cfg(test)]
 mod tests_auth_throttle;
@@ -641,6 +643,20 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route(
             "/v1/projects/:id/rubrics",
             post(rubrics::create_rubric).get(rubrics::list_rubrics),
+        )
+        // The use-case registry: what this project SAYS it uses an LLM for. `coverage` is declared
+        // before `:key` so the literal path segment is not swallowed by the parameter.
+        .route(
+            "/v1/projects/:id/use-cases",
+            post(use_cases::upsert_use_case).get(use_cases::list_use_cases),
+        )
+        .route(
+            "/v1/projects/:id/use-cases/coverage",
+            get(use_cases::coverage),
+        )
+        .route(
+            "/v1/projects/:id/use-cases/:key",
+            get(use_cases::get_use_case).delete(use_cases::delete_use_case),
         )
         .route("/v1/rubrics/:id", get(rubrics::get_rubric))
         .route(

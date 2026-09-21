@@ -80,7 +80,7 @@ pub(crate) struct Parsed<T> {
 }
 
 impl<T> Parsed<T> {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Parsed {
             value: None,
             raw_failure: None,

@@ -24,7 +24,7 @@
 //! During a rotation a channel carries both the current and previous key and the header carries a
 //! `v1=` for each, so a receiver that has not yet picked up the new secret still verifies.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;

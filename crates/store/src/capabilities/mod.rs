@@ -157,6 +157,9 @@ pub enum Surface {
     /// `version` pinned at 1 forever, which is precisely the state M24 exists to end — and a
     /// paired-test guard comparing 1 with 1 reports "comparable" about two different corpora.
     DatasetLineage,
+    /// The declared inventory of a project's LLM call sites, and the observed-name read that makes
+    /// the declared-vs-actual difference reportable.
+    UseCases,
 }
 
 impl Surface {
@@ -191,6 +194,7 @@ impl Surface {
         Surface::Labels,
         Surface::Calibrations,
         Surface::DatasetLineage,
+        Surface::UseCases,
     ];
 
     /// Stable wire/doc name (`snake_case`, matching the `Serialize` impl).
@@ -206,6 +210,7 @@ impl Surface {
             Surface::Forecast => "forecast",
             Surface::MarginBreakdowns => "margin_breakdowns",
             Surface::Prompts => "prompts",
+            Surface::UseCases => "use_cases",
             Surface::Relay => "relay",
             Surface::Collective => "collective",
             Surface::ProjectAdmin => "project_admin",
@@ -513,6 +518,16 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
             "fork_dataset",
             "import_dataset_items",
             "list_dataset_versions",
+        ],
+    ),
+    (
+        Surface::UseCases,
+        &[
+            "upsert_use_case",
+            "get_use_case",
+            "list_use_cases",
+            "delete_use_case",
+            "observed_use_case_names",
         ],
     ),
 ];

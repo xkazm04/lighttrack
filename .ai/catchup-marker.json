@@ -39,6 +39,10 @@
     },
     { "path": ".ai/catchup-marker.json", "note": "this file" },
     {
+      "path": ".ai/use-cases.json",
+      "note": "authored 2026-09-05 by the use-case-registry build against the call sites it names: every entry cites a file and function in this tree (crates/engine/src/judge.rs, crates/engine/src/providers/*), and its records_own_events field states which of those sites spend without emitting an event. It is that change's own output, read against the code as it was written."
+    },
+    {
       "path": "README.md",
       "note": "M15 (typed API contract registry) rewrote the MCP tool counts in 'Use from Claude Code (MCP)'. They said 28 read + 15 write against an actual 43 + 21, which is the argument the section now makes: the catalog and its counts are generated from crates/contract into docs/API.md, a test fails when that file is stale, and the prose points at it instead of restating it. That one section is what this covers - the rest of the front page (the feature list the skip entry warned about) was still not read against the code, and the next pass still owes it."
     }

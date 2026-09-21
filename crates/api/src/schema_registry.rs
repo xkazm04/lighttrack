@@ -51,6 +51,7 @@ pub(crate) fn schema_for_name(name: &str) -> Option<Value> {
         "RevenueEvent" => core::RevenueEvent,
         "Rubric" => core::Rubric,
         "Schedule" => core::Schedule,
+        "UseCase" => core::UseCase,
         "Score" => core::Score,
     }
 }

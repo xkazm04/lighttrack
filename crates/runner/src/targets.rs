@@ -68,6 +68,11 @@ impl ResolvedTarget {
 
     /// Generate one candidate for `input`. `pin` asks for deterministic sampling (one candidate per
     /// case); an `Http` target ignores it, having no knobs, and says so via its `Determinism`.
+    ///
+    /// The model handed to the engine is [`BenchTarget::model_spec`], not the bare `model` field:
+    /// it carries the target's declared reasoning effort, which the engine splits back off at the
+    /// provider boundary and turns into that provider's own knob. A target with no effort produces
+    /// exactly the string this always passed.
     pub(crate) fn generate(
         &self,
         engine: &EngineConfig,
@@ -87,10 +92,10 @@ impl ResolvedTarget {
                 call(
                     engine,
                     &self.target.provider,
-                    &self.target.model,
+                    &self.target.model_spec(),
                     system_prompt.as_deref(),
                     &user_input,
-                    None,
+                    self.target.schema.as_ref(),
                 )
             }
         }
@@ -199,6 +204,17 @@ mod tests {
             content: content.map(str::to_string),
             resolved_version: version,
         }
+    }
+
+    /// The engine is handed the effort-carrying spec, so a matrix declaring two efforts of one
+    /// model actually issues two different provider requests rather than the same one twice.
+    #[test]
+    fn the_engine_receives_the_targets_effort_in_its_model_spec() {
+        let mut t = target(None);
+        assert_eq!(t.model_spec(), "gpt-4o", "unchanged without an effort");
+        t.effort = Some(lighttrack_core::Effort::Low);
+        assert_eq!(t.model_spec(), "gpt-4o@low");
+        assert_eq!(t.display_label(), "openai/gpt-4o@low");
     }
 
     #[test]

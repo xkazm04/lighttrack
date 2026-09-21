@@ -53,6 +53,10 @@ pub fn to_item(dataset_id: &str, c: &Candidate) -> DatasetItem {
         tags: c.tags.clone(),
         source_event_id: Some(c.event_id.clone()),
         anonymization: json!({ "method": "regex", "redactions": redactions }),
+        // Mined traffic arrives ungraded and stays that way. Nobody looked at these cases, and a
+        // tier the import invented would be indistinguishable downstream from one an operator
+        // chose — which is the whole reason NULL means ungraded rather than "medium".
+        difficulty: None,
     }
 }
 

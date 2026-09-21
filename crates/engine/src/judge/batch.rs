@@ -114,7 +114,7 @@ pub fn run_rubric_batch(
     jobs: usize,
 ) -> Result<Vec<Result<RubricOutcome>>> {
     let schema = crate::prompts::build_batch_rubric_schema(rubric);
-    let gen = super::provider_gen(cfg, provider, model, schema);
+    let gen = super::provider_gen(cfg, provider, model, schema, samples);
     batch_with(&gen, rubric, cases, model, samples, jobs)
 }
 
@@ -128,6 +128,8 @@ pub(crate) fn batch_with(
     samples: u32,
     jobs: usize,
 ) -> Result<Vec<Result<RubricOutcome>>> {
+    // A batched case carries no evidence, so a `grounding` dimension is refused, never scored 0.
+    super::grounding::grounding_dim(rubric, false)?;
     let n = cases.len();
     let ids: Vec<String> = (0..n).map(case_id).collect();
 
@@ -136,7 +138,7 @@ pub(crate) fn batch_with(
     // and it is a fact about the rubric, so it fails the batch loudly rather than one case quietly.
     let det: Vec<Vec<scorers::DetScore>> = cases
         .iter()
-        .map(|c| scorers::evaluate_all(rubric, c.expected, c.output))
+        .map(|c| scorers::evaluate_all(rubric, c.expected, c.output, None))
         .collect::<Result<Vec<_>>>()?;
 
     let k = if scorers::has_llm_dims(rubric) {

@@ -131,9 +131,10 @@ mod tests {
             "collective_contributions",
             "labels",
             "calibrations",
+            "use_cases",
         ] {
             assert!(names.contains(&want), "{want} is missing from the model");
         }
-        assert_eq!(names.len(), 25, "a table was added or removed: {names:?}");
+        assert_eq!(names.len(), 26, "a table was added or removed: {names:?}");
     }
 }

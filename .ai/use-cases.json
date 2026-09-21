@@ -1,0 +1,228 @@
+{
+  "schema": "lighttrack-use-cases/1",
+  "project": "tracklight",
+  "generated_at": "2026-09-05",
+  "note": "This project's OWN LLM call sites. It is the fleet's observability sink and also a caller; several of these sites spend without recording an event, which this declaration makes visible as a gap rather than leaving invisible.",
+  "use_cases": [
+    {
+      "key": "judge.freeform",
+      "name": "Freeform judge verdict",
+      "description": "Runs a schema-enforced pass/fail-style verdict against a single free-form prompt, with one repair re-ask before an unparseable verdict is a hard error.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/engine/src/judge.rs (run_judge, judge.rs:146)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "judge.text_gen",
+      "name": "Free-form text generation",
+      "description": "Generates free-form text on Claude for anonymization rewrites and healing-pass paragraphs, shared by dataset scrubbing and benchmark healing.",
+      "kind": "generation",
+      "status": "active",
+      "component": "crates/engine/src/judge.rs (run_text, judge.rs:191)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "judge.rubric",
+      "name": "Rubric-weighted judge",
+      "description": "Judges one case against a structured rubric, averaging over self-consistency samples, with weighted dimensions and gating floors computed locally rather than trusted to the model.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/engine/src/judge.rs (run_rubric_judge, judge.rs:213)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "judge.pairwise",
+      "name": "Pairwise A/B judge",
+      "description": "Judges which of two answers is better (or a tie), debiased by swapping the A/B order and requiring both orders to agree.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/engine/src/pairwise.rs (run_pairwise, pairwise.rs:151)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "bench.simple_judge",
+      "name": "Simple benchmark judge",
+      "description": "Judges each provided candidate output with a freeform rubric and a single overall score, in a benchmark run's simple mode.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/runner/src/bench.rs (run_simple, bench.rs:228)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "bench.rubric",
+      "name": "Rubric benchmark",
+      "description": "Runs per-dimension rubric judging (with self-consistency) across a benchmark's cases, aggregated into a report.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/runner/src/rubric.rs (run_rubric_benchmark, rubric.rs:33)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "bench.rubric_batch",
+      "name": "Batched rubric judge",
+      "description": "Judges multiple cases in a single call (batching), amortizing per-call context, with a batch-wide failure retried unbatched so no case is lost.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/runner/src/batch.rs (judge_batched, batch.rs:117)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "bench.compare",
+      "name": "Multi-target compare benchmark",
+      "description": "Generates candidate outputs across multiple targets and judges them against the benchmark's cases to produce a comparative ranking.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/runner/src/compare.rs (run_compare, compare.rs:379)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "bench.pairwise_matrix",
+      "name": "Pairwise round-robin matrix",
+      "description": "Runs the round-robin pairwise phase across benchmark targets and prints the resulting comparison matrix and ranking.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/runner/src/pairwise.rs (run_pairwise_matrix, pairwise.rs:72)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "calibrate.rejudge",
+      "name": "Calibration re-judge",
+      "description": "Re-judges a human-labeled calibration set with the structured rubric or freeform criteria to measure judge/human agreement (Cohen's kappa).",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/runner/src/calibrate.rs (judge_item / judge_set, calibrate.rs:292)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "calibrate.watch",
+      "name": "Calibration drift sentinel",
+      "description": "Periodically re-judges the golden calibration set to detect judge drift against the previous measured kappa, feeding the API's score-drop alerting.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/runner/src/calibrate_watch.rs (run_cycle)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "calibrate.batch_compare",
+      "name": "Batch-vs-single calibration compare",
+      "description": "Judges the same calibration items both singly and in batches to measure how batching shifts scores before an operator trusts batched judging for a rubric.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/runner/src/calibrate_batch.rs (compare, calibrate_batch.rs:61)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": false
+    },
+    {
+      "key": "score.online",
+      "name": "Online scoring",
+      "description": "Judges live outputs as they arrive (online scoring path) and persists per-case scores.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/runner/src/score.rs (score.rs:68)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "score.ad_hoc",
+      "name": "Ad-hoc scoring",
+      "description": "Judges an operator-supplied input/output pair on demand outside of a benchmark run, storing the resulting score.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/runner/src/score.rs (score.rs:214)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "score.traces",
+      "name": "Trace scoring",
+      "description": "Judges recorded traces that have not already been scored, so replayed production traffic gets a quality score.",
+      "kind": "judge",
+      "status": "active",
+      "component": "crates/runner/src/score_traces.rs (score_traces.rs:104)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "dataset.scrub",
+      "name": "LLM PII scrub pass",
+      "description": "After a deterministic regex scrub, optionally rewrites dataset text with an LLM pass to catch remaining PII (names, orgs, locations, account/order numbers) that the regex pass missed.",
+      "kind": "other",
+      "status": "active",
+      "component": "crates/runner/src/dataset.rs (scrub_text, dataset.rs:232)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": false
+    },
+    {
+      "key": "bench.heal",
+      "name": "Benchmark healing recommendations",
+      "description": "After a rubric benchmark run, asks the model to recommend concrete fixes (prompt, model, rubric changes) targeting the weakest-scoring dimensions.",
+      "kind": "summarization",
+      "status": "active",
+      "component": "crates/runner/src/rubric.rs (rubric.rs:346)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": false
+    },
+    {
+      "key": "agent.exec",
+      "name": "Relay task execution",
+      "description": "Executes one leased task by rendering its action's prompt and running the Claude Code CLI, then settles the outcome back to the relay.",
+      "kind": "agent",
+      "status": "active",
+      "component": "crates/agent/src/exec.rs (run, exec.rs:41)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "responder.investigate",
+      "name": "Alert investigation",
+      "description": "Runs a read-only Claude Code scan against a project's repo to diagnose the cause of an incoming alert/spike.",
+      "kind": "agent",
+      "status": "active",
+      "component": "crates/responder/src/invoke.rs (run, invoke.rs:26)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    },
+    {
+      "key": "responder.act",
+      "name": "Auto-fix act",
+      "description": "Runs an edit-mode Claude Code session against a project's repo to attempt an automatic fix for a diagnosed issue.",
+      "kind": "agent",
+      "status": "active",
+      "component": "crates/responder/src/act.rs (run_act, act.rs:40)",
+      "expected_models": ["opus@xhigh"],
+      "owner": "tracklight",
+      "records_own_events": true
+    }
+  ]
+}
