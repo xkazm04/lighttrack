@@ -295,7 +295,7 @@ jobs:
         working-directory: clients/typescript
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # tsx and esbuild both declare `engines: node >=18`; 20 is the LTS we prove against.
           node-version: "20"
@@ -347,7 +347,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
