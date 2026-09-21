@@ -1,563 +1,1158 @@
 {
   "contexts": [
     {
-      "api_surface": "Outbound: POST to configured webhook URL / ntfy endpoint",
-      "business_feature": "Alert Delivery",
+      "api_surface": "GET /v1/alerts, POST /v1/alerts/:id/ack, POST /v1/alerts/:id/resolution, GET/PUT /v1/projects/:id/alert-channels, POST /v1/alert-channels/:id/test",
+      "business_feature": "Alert Routing & Breach Attribution",
       "category": "api",
       "cross_refs": [
-        "limit-enforcement",
-        "predictive-forecast",
-        "relay-queue"
+        "cost-and-revenue-governance",
+        "device-relay",
+        "evaluation-pipeline",
+        "api-platform"
       ],
-      "db_tables": [],
-      "description": "Delivers breach, warning, error-spike, and relay-dead-letter notifications over webhook (generic HTTP POST) and ntfy channels. Includes rejection-count attribution so alerts identify which models/operations are consuming the most quota. Dedup and per-channel cooldowns prevent alert storms.",
+      "db_tables": [
+        "alerts",
+        "alert_channels"
+      ],
+      "description": "Implements the multi-channel alerting subsystem: detects breach conditions (budget, margin, relay unroutable), composes alert payloads, routes them to webhook or ntfy channels with per-project overrides, tracks breach attribution across time windows, and maintains the alert ledger with acknowledge and resolution flows. The canary module watches per-prompt variant metrics and fires alerts on quality regressions. Rejection counts are periodically flushed from in-process RAM into durable alert rows.",
       "entry_points": [
-        "crates/api/src/alerts.rs"
+        "crates/api/src/alerts/mod.rs",
+        "crates/api/src/alerts/detectors.rs",
+        "crates/api/src/alerts/routing.rs"
       ],
       "file_paths": [
-        "crates/api/src/alerts.rs",
+        "crates/api/src/alerts/mod.rs",
         "crates/api/src/alerts/attribution.rs",
-        "crates/api/src/alerts/channels.rs"
+        "crates/api/src/alerts/attribution/tests.rs",
+        "crates/api/src/alerts/channels.rs",
+        "crates/api/src/alerts/compose.rs",
+        "crates/api/src/alerts/detectors.rs",
+        "crates/api/src/alerts/flush.rs",
+        "crates/api/src/alerts/ledger.rs",
+        "crates/api/src/alerts/read.rs",
+        "crates/api/src/alerts/routing.rs",
+        "crates/api/src/alerts/sign.rs",
+        "crates/api/src/alerts/tests.rs",
+        "crates/api/src/alerts/vet.rs",
+        "crates/api/src/alerts_canary.rs"
       ],
-      "group": "Usage Governance",
-      "group_id": "ed6eab63-a4bf-4e3e-9b23-3baba606597a",
-      "id": "3542774e-ec90-4d3d-a8e1-9b8a785bd833",
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "a89f25a3-bf61-4f19-a72a-357db8fcdefe",
       "keywords": [
         "alert",
         "webhook",
         "ntfy",
         "breach",
-        "warning",
-        "error_spike",
-        "cooldown",
-        "dedup",
         "attribution",
-        "relay_dead"
+        "channel",
+        "ledger",
+        "canary",
+        "cooldown",
+        "notification",
+        "ack",
+        "resolution"
       ],
-      "last_written_at": "2026-08-03T19:08:52.786029700+00:00",
-      "name": "alert-delivery",
+      "last_written_at": "2026-09-21T20:01:44.993833500+00:00",
+      "name": "alerts-system",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "reqwest 0.12",
-        "tokio"
+        "Rust",
+        "axum 0.7",
+        "reqwest 0.13",
+        "lighttrack-store"
       ]
     },
     {
-      "api_surface": "POST /webhook, GET /health (served); calls GET /v1/events, GET /v1/scores (outbound to LightTrack API), Resend email API",
-      "business_feature": "Automated Alert Responder",
+      "api_surface": "Generates /openapi.json; provides MCP tool catalog; drives CLI verb tree",
+      "business_feature": "API Contract Type System",
       "category": "lib",
       "cross_refs": [
-        "alert-delivery",
-        "event-ingest",
-        "scoring"
+        "api-endpoint-table"
       ],
       "db_tables": [],
-      "description": "The lt-responder binary — an autonomous daemon that receives LightTrack alert webhooks, classifies them as transient vs. code-side, fetches failing events for context, runs Claude Code in read-only mode to diagnose the root cause, optionally attempts a gated auto-fix, writes a Markdown report, and emails it via Resend. A circuit breaker caps concurrent investigations and per-project frequency to prevent runaway costs.",
+      "description": "The type system and surface-generation machinery for the LightTrack HTTP API contract. Defines the core vocabulary (Endpoint, Param, McpTool, Method, Access, TypeRef) that every endpoint row is written in, plus the DSL helpers, nested-route utilities, and the renderers that convert the single endpoint table into an OpenAPI document and an MCP tool catalog. Everything downstream — the axum router, the CLI, the MCP server — is held to this table by bijection tests.",
       "entry_points": [
-        "crates/responder/src/main.rs",
-        "crates/responder/src/pipeline.rs"
+        "crates/contract/src/lib.rs",
+        "crates/contract/src/types.rs"
       ],
       "file_paths": [
-        "crates/responder/src/main.rs",
-        "crates/responder/src/pipeline.rs",
-        "crates/responder/src/classify.rs",
-        "crates/responder/src/config.rs",
-        "crates/responder/src/webhook.rs",
-        "crates/responder/src/enrich.rs",
-        "crates/responder/src/investigate.rs",
-        "crates/responder/src/report.rs",
-        "crates/responder/src/email.rs",
-        "crates/responder/src/act.rs",
-        "crates/responder/src/breaker.rs",
-        "crates/responder/src/claude.rs",
-        "crates/responder/src/git.rs",
-        "crates/responder/src/state.rs"
+        "crates/contract/src/lib.rs",
+        "crates/contract/src/types.rs",
+        "crates/contract/src/dsl.rs",
+        "crates/contract/src/nested.rs",
+        "crates/contract/src/matrix.rs",
+        "crates/contract/src/mcp.rs",
+        "crates/contract/src/openapi/mod.rs",
+        "crates/contract/src/openapi/operation.rs"
       ],
       "group": "Platform Infrastructure",
-      "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
-      "id": "26332610-2b9d-41c5-9443-94e6435add8e",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "664d493f-717e-4161-8f17-f667cc0cfdb9",
       "keywords": [
-        "responder",
-        "alert",
-        "diagnose",
-        "auto-fix",
-        "classify",
-        "enrich",
-        "circuit-breaker",
-        "Resend",
-        "email",
-        "report",
-        "investigation"
+        "endpoint",
+        "contract",
+        "openapi",
+        "mcp",
+        "dsl",
+        "access",
+        "param",
+        "schema",
+        "type-system",
+        "surface-generation"
       ],
-      "last_written_at": "2026-08-03T19:08:52.788766300+00:00",
-      "name": "alert-responder",
+      "last_written_at": "2026-09-21T20:09:36.920280600+00:00",
+      "name": "api-contract-core",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "reqwest 0.12",
-        "tokio",
-        "pulldown-cmark"
-      ]
-    },
-    {
-      "api_surface": "GET /health, GET /health/live, GET /health/ready",
-      "business_feature": "API Server",
-      "category": "api",
-      "cross_refs": [
-        "store-sqlite-core",
-        "store-postgres",
-        "store-firestore",
-        "project-management",
-        "pii-scrubbing"
-      ],
-      "db_tables": [],
-      "description": "The lt-api binary entry point: wires together store selection (SQLite/Postgres/Firestore from DSN), price book seeding, router construction, and Axum server startup. Also provides AppState, the redaction policy cache warmed on the blocking startup thread, and all auth middleware (Bearer key extraction, dev vs. enforced mode, admin vs. project-key principal resolution).",
-      "entry_points": [
-        "crates/api/src/main.rs",
-        "crates/api/src/state.rs"
-      ],
-      "file_paths": [
-        "crates/api/src/main.rs",
-        "crates/api/src/state.rs",
-        "crates/api/src/auth.rs",
-        "crates/api/src/guards.rs",
-        "crates/api/src/error.rs",
-        "crates/api/src/idempotency.rs",
-        "crates/api/src/redact.rs",
-        "crates/api/src/auth_scopes.rs",
-        "crates/api/src/openapi.rs",
-        "crates/api/src/schema_registry.rs"
-      ],
-      "group": "Platform Infrastructure",
-      "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
-      "id": "5173a403-7b47-473c-8a11-e81aecbf60e4",
-      "keywords": [
-        "AppState",
-        "auth",
-        "bearer",
-        "admin",
-        "redact",
-        "idempotency",
-        "router",
-        "spawn_db",
-        "store_selection",
-        "ApiError"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.787888800+00:00",
-      "name": "api-server",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "tokio",
+        "Rust",
         "serde_json"
       ]
     },
     {
-      "api_surface": "POST /v1/projects/:id/benchmarks, GET /v1/projects/:id/benchmarks, GET /v1/benchmarks/:id, GET /v1/benchmarks/:id/runs, GET /v1/benchmarks/:id/gate, POST /v1/benchmark-runs, POST /v1/benchmarks/:id/enqueue, GET/POST/PUT /v1/jobs",
-      "business_feature": "Benchmark Evaluation",
-      "category": "api",
+      "api_surface": "Declares all /v1/* routes with their HTTP methods, auth scopes, parameters, and multi-surface coverage",
+      "business_feature": "API Endpoint Declarations",
+      "category": "lib",
       "cross_refs": [
-        "judge-engine",
-        "rubric-system",
-        "dataset-management",
-        "prompt-registry",
-        "store-sqlite-eval"
+        "api-contract-core"
       ],
-      "db_tables": [
+      "db_tables": [],
+      "description": "The canonical list of every LightTrack HTTP endpoint, split into domain modules that mirror the axum router order. Each module declares a static ENDPOINTS slice using the contract DSL, recording the method, path, parameters, access rule, MCP tool coverage, CLI verb path, and render kind for each route. This table is the single source of truth that the router bijection test, the MCP server, and the CLI are all held to.",
+      "entry_points": [
+        "crates/contract/src/endpoints/mod.rs"
+      ],
+      "file_paths": [
+        "crates/contract/src/endpoints/mod.rs",
+        "crates/contract/src/endpoints/platform.rs",
+        "crates/contract/src/endpoints/observability.rs",
+        "crates/contract/src/endpoints/costs.rs",
+        "crates/contract/src/endpoints/scores.rs",
+        "crates/contract/src/endpoints/datasets.rs",
+        "crates/contract/src/endpoints/labels.rs",
+        "crates/contract/src/endpoints/rubrics.rs",
+        "crates/contract/src/endpoints/use_cases.rs",
+        "crates/contract/src/endpoints/benchmarks.rs",
+        "crates/contract/src/endpoints/prompts.rs",
+        "crates/contract/src/endpoints/jobs.rs",
+        "crates/contract/src/endpoints/projects.rs",
+        "crates/contract/src/endpoints/limits.rs",
+        "crates/contract/src/endpoints/relay.rs",
+        "crates/contract/src/endpoints/revenue.rs",
+        "crates/contract/src/endpoints/collective.rs",
+        "crates/contract/src/endpoints/alerts.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "7db38bb1-3ffe-4798-b7a7-bc8e3c4cf34d",
+      "keywords": [
+        "endpoint",
+        "route",
+        "access",
+        "mcp-tool",
+        "cli-verb",
+        "observability",
         "benchmarks",
-        "benchmark_runs",
-        "jobs"
-      ],
-      "description": "Defines, runs, and gates benchmark evaluations against versioned datasets. Supports simple-score, multi-dimension rubric, and compare/pairwise modes. The CI gate endpoint maps benchmark verdict against a baseline to a pass/regressed/no_baseline/no_runs result with a corresponding exit code for CI pipelines. Jobs serve as the async dispatch mechanism for benchmark runs.",
-      "entry_points": [
-        "crates/api/src/benchmarks.rs",
-        "crates/runner/src/bench.rs"
-      ],
-      "file_paths": [
-        "crates/api/src/benchmarks.rs",
-        "crates/api/src/jobs.rs",
-        "crates/runner/src/bench.rs",
-        "crates/runner/src/compare.rs",
-        "crates/runner/src/pairwise.rs",
-        "crates/runner/src/gate.rs",
-        "crates/runner/src/stats.rs",
-        "crates/core/src/job.rs"
-      ],
-      "group": "Evaluation & Benchmarking",
-      "group_id": "491ba1f4-9342-4eaf-a420-c5df8bb95021",
-      "id": "662e62fb-df6c-45c9-9f3d-cdc98cb44cf8",
-      "keywords": [
-        "benchmark",
-        "BenchmarkRun",
-        "gate",
-        "baseline",
-        "compare",
-        "pairwise",
-        "job",
-        "enqueue",
-        "pass_rate",
-        "mean_score",
-        "dataset",
-        "CI"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.785254600+00:00",
-      "name": "benchmark-management",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "serde_json",
-        "tokio"
-      ]
-    },
-    {
-      "api_surface": "POST /v1/billing/:provider/webhook (consumed by margin-analytics)",
-      "business_feature": "Billing Webhook Integration",
-      "category": "lib",
-      "cross_refs": [
-        "margin-analytics"
-      ],
-      "db_tables": [],
-      "description": "Normalises revenue from Stripe and Polar billing providers into canonical RevenueEvent records. Verifies cryptographically signed webhooks (HMAC-SHA256 for Stripe, Standard Webhooks for Polar), converts foreign-currency amounts to USD using a static FX rate book with ISO-4217 minor-unit awareness, and collapses duplicate refund deliveries via idempotency keys.",
-      "entry_points": [
-        "crates/billing/src/lib.rs",
-        "crates/billing/src/registry.rs"
-      ],
-      "file_paths": [
-        "crates/billing/src/lib.rs",
-        "crates/billing/src/stripe.rs",
-        "crates/billing/src/polar.rs",
-        "crates/billing/src/fx.rs",
-        "crates/billing/src/registry.rs",
-        "crates/billing/src/error.rs"
-      ],
-      "group": "Revenue & Profit",
-      "group_id": "9ba34dfc-d80d-4831-bffe-ecb8c8377401",
-      "id": "c9e6e7b9-29d7-4628-80e8-afc65a3c12a6",
-      "keywords": [
-        "Stripe",
-        "Polar",
-        "webhook",
-        "HMAC",
-        "RevenueEvent",
-        "FX",
-        "currency",
-        "refund",
-        "invoice",
-        "BillingSource"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.786294800+00:00",
-      "name": "billing-integration",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "hmac",
-        "sha2",
-        "serde_json"
-      ]
-    },
-    {
-      "api_surface": "Calls: GET/POST /v1/projects, /v1/costs, /v1/events, /v1/traces, /v1/limits, /v1/margin, /v1/collective",
-      "business_feature": "Operator CLI",
-      "category": "api",
-      "cross_refs": [
-        "rendering-core",
-        "rendering-analytics",
-        "api-server"
-      ],
-      "db_tables": [],
-      "description": "The lt operator CLI — a thin HTTP client over the API for everyday administrative tasks: project/key management, usage limit CRUD (with dimension scoping and soft-warning thresholds), cost queries, event and trace browsing, profit margin inspection, and collective leaderboard participation including the two-hop contribute flow. Renders Markdown tables on TTY; raw JSON when piped.",
-      "entry_points": [
-        "crates/cli/src/main.rs"
-      ],
-      "file_paths": [
-        "crates/cli/src/main.rs",
-        "crates/cli/src/cli/mod.rs",
-        "crates/cli/src/contract.rs",
-        "crates/cli/src/http.rs",
-        "crates/cli/src/query.rs"
-      ],
-      "group": "Platform Infrastructure",
-      "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
-      "id": "e6150058-e31c-4f18-b2be-12694fee00a4",
-      "keywords": [
-        "CLI",
-        "lt",
-        "operator",
         "limits",
-        "costs",
-        "events",
-        "traces",
-        "margin",
-        "collective",
-        "contribute",
-        "TTY",
-        "JSON"
+        "relay",
+        "revenue"
       ],
-      "last_written_at": "2026-08-03T19:08:52.788238900+00:00",
-      "name": "cli-tool",
+      "last_written_at": "2026-09-21T20:09:36.946162+00:00",
+      "name": "api-endpoint-table",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "clap 4",
-        "reqwest 0.12",
+        "Rust",
         "serde_json"
-      ]
-    },
-    {
-      "api_surface": "Calls: POST /v1/events on the LightTrack API",
-      "business_feature": "Ingest Client SDKs",
-      "category": "lib",
-      "cross_refs": [
-        "event-ingest"
-      ],
-      "db_tables": [],
-      "description": "Fire-and-forget ingest SDKs for monitored applications written in Python and Rust. Both use a background worker thread/channel so tracking never blocks the application. Provide OpenAI/Anthropic/Gemini field-mapping helpers, a span context manager for trace propagation, and SDK-level auto-patching for zero-code instrumentation. Best-effort design — never throws into the application.",
-      "entry_points": [
-        "clients/python/lighttrack/client.py",
-        "clients/rust/src/lib.rs"
-      ],
-      "file_paths": [
-        "clients/python/example.py",
-        "clients/python/lighttrack/__init__.py",
-        "clients/python/lighttrack/client.py",
-        "clients/python/lighttrack/instrument.py",
-        "clients/python/lighttrack/auto.py",
-        "clients/python/tests/test_instrument.py",
-        "clients/rust/src/lib.rs",
-        "clients/rust/examples/quickstart.rs"
-      ],
-      "group": "Platform Infrastructure",
-      "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
-      "id": "15a8bcc4-4e8a-4ce2-8e09-3316c84c8a46",
-      "keywords": [
-        "SDK",
-        "track",
-        "instrument",
-        "openai",
-        "anthropic",
-        "gemini",
-        "span",
-        "trace",
-        "background",
-        "auto-patch",
-        "fire-and-forget"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.788633300+00:00",
-      "name": "client-sdks",
-      "pinned": false,
-      "tech_stack": [
-        "Python 3",
-        "Rust 2021",
-        "reqwest",
-        "threading",
-        "contextvars"
       ]
     },
     {
       "api_surface": "",
-      "business_feature": "Shared Domain Types",
-      "category": "lib",
-      "cross_refs": [],
+      "business_feature": "API Integration Test Suite",
+      "category": "test",
+      "cross_refs": [
+        "event-ingest",
+        "evaluation-pipeline",
+        "cost-and-revenue-governance",
+        "collective-leaderboard",
+        "device-relay",
+        "api-platform",
+        "storage-and-jobs",
+        "alerts-system"
+      ],
       "db_tables": [],
-      "description": "The pure, I/O-free shared domain model for the entire workspace. Every other crate imports types from here; this crate has no dependencies on network, disk, or other workspace crates. Contains the canonical data structures, the shared LtError type, and the new_id() UUIDv4 generator.",
+      "description": "End-to-end integration test suite for the API, wiring the full axum Router via tower `oneshot` calls against in-process SQLite. Covers auth throttling, collective federation, dataset lineage, forecast projections, ingest flows, label management, limit scoping, margin policies, prompt gating, redaction, relay workflows, rollup queries, schedule execution, storage accounting, multi-tenancy isolation, trace ingestion, unpriced cost detection, and judge-verdict identity. Each test module targets a specific domain handler path.",
       "entry_points": [
-        "crates/core/src/lib.rs"
+        "crates/api/src/tests_ingest.rs",
+        "crates/api/src/tests_traces.rs",
+        "crates/api/src/tests_relay.rs"
       ],
       "file_paths": [
-        "crates/core/src/lib.rs",
-        "crates/core/src/error.rs"
+        "crates/api/src/tests_auth_throttle.rs",
+        "crates/api/src/tests_capabilities.rs",
+        "crates/api/src/tests_collective.rs",
+        "crates/api/src/tests_contribute.rs",
+        "crates/api/src/tests_dataset_lineage.rs",
+        "crates/api/src/tests_dev_mode.rs",
+        "crates/api/src/tests_difficulty_write.rs",
+        "crates/api/src/tests_eval_targets.rs",
+        "crates/api/src/tests_forecast.rs",
+        "crates/api/src/tests_health.rs",
+        "crates/api/src/tests_ingest.rs",
+        "crates/api/src/tests_labels.rs",
+        "crates/api/src/tests_limit_scope.rs",
+        "crates/api/src/tests_margin_policy.rs",
+        "crates/api/src/tests_persistence_class.rs",
+        "crates/api/src/tests_prompt_gate.rs",
+        "crates/api/src/tests_redaction.rs",
+        "crates/api/src/tests_relay.rs",
+        "crates/api/src/tests_rollup.rs",
+        "crates/api/src/tests_schedules.rs",
+        "crates/api/src/tests_scope.rs",
+        "crates/api/src/tests_storage.rs",
+        "crates/api/src/tests_tenancy.rs",
+        "crates/api/src/tests_traces.rs",
+        "crates/api/src/tests_unpriced.rs",
+        "crates/api/src/tests_verdict_identity.rs"
       ],
-      "group": "Data & Persistence",
-      "group_id": "e2935806-cfdd-493f-8f55-06ee5db7ce5f",
-      "id": "3219b190-d89b-4fd1-acb3-345d2ff57da8",
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "2ed37e25-1a0a-44b7-85e7-70a1822f84aa",
       "keywords": [
-        "LtError",
-        "new_id",
-        "types",
-        "shared",
-        "domain",
-        "model",
-        "serde",
-        "uuid"
+        "integration-test",
+        "axum",
+        "oneshot",
+        "test",
+        "router",
+        "in-process",
+        "sqlite",
+        "auth",
+        "ingest",
+        "relay"
       ],
-      "last_written_at": "2026-08-03T19:08:52.786917900+00:00",
-      "name": "core-types",
+      "last_written_at": "2026-09-21T20:01:42.078400400+00:00",
+      "name": "api-integration-tests",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "serde",
+        "Rust",
+        "axum 0.7",
+        "tower 0.5",
+        "lighttrack-store",
+        "tokio 1"
+      ]
+    },
+    {
+      "api_surface": "GET /health, GET /health/live, GET /health/ready, GET /openapi.json, GET /v1/capabilities, POST/GET /v1/projects, PUT/DELETE /v1/projects/:id, POST/GET /v1/projects/:id/keys",
+      "business_feature": "API Platform & Authentication",
+      "category": "api",
+      "cross_refs": [
+        "event-ingest",
+        "evaluation-pipeline",
+        "cost-and-revenue-governance",
+        "alerts-system",
+        "storage-and-jobs"
+      ],
+      "db_tables": [
+        "projects",
+        "api_keys"
+      ],
+      "description": "Core API wiring: router construction, shared application state, authentication (dev/enforced mode, admin key, per-project API keys), auth-failure throttling, credential boundary boot check, request guards, health endpoints, OpenAPI document generation, HTTP client, idempotency for billing webhooks, request logging, project and key management, and schema registry. This is the entry point and the glue that all domain handlers plug into.",
+      "entry_points": [
+        "crates/api/src/main.rs",
+        "crates/api/src/state.rs",
+        "crates/api/src/guards.rs"
+      ],
+      "file_paths": [
+        "crates/api/src/main.rs",
+        "crates/api/src/state.rs",
+        "crates/api/src/error.rs",
+        "crates/api/src/guards.rs",
+        "crates/api/src/auth.rs",
+        "crates/api/src/auth_scopes.rs",
+        "crates/api/src/auth_throttle/mod.rs",
+        "crates/api/src/auth_throttle/budget.rs",
+        "crates/api/src/auth_throttle/source.rs",
+        "crates/api/src/credential_boundary.rs",
+        "crates/api/src/health.rs",
+        "crates/api/src/http.rs",
+        "crates/api/src/idempotency.rs",
+        "crates/api/src/logging.rs",
+        "crates/api/src/openapi.rs",
+        "crates/api/src/schema_registry.rs",
+        "crates/api/src/capabilities.rs",
+        "crates/api/src/rejections.rs",
+        "crates/api/src/projects.rs",
+        "crates/api/src/projects_keys.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "06329049-432d-4a4b-91c0-f1967d7c9e99",
+      "keywords": [
+        "auth",
+        "api-key",
+        "admin",
+        "health",
+        "router",
+        "state",
+        "openapi",
+        "project",
+        "throttle",
+        "credential",
+        "capabilities",
+        "logging"
+      ],
+      "last_written_at": "2026-09-21T20:01:42.074272500+00:00",
+      "name": "api-platform",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "axum 0.7",
+        "tokio 1",
+        "tracing 0.1",
+        "subtle 2",
+        "lighttrack-store",
+        "lighttrack-core"
+      ]
+    },
+    {
+      "api_surface": "POST /billing/webhook/{provider} (consumed by API crate; this crate is a library)",
+      "business_feature": "Billing Provider Adapters",
+      "category": "lib",
+      "cross_refs": [],
+      "db_tables": [
+        "revenue_events"
+      ],
+      "description": "Verifies signed webhooks from Stripe and Polar and normalizes them into canonical RevenueEvent records for profit and margin tracking. Each provider adapter implements a framework-agnostic BillingSource trait that accepts raw request bytes and headers, performs HMAC-based signature verification with replay-tolerance, and maps paid/refunded events to a shared revenue schema. Currency amounts are converted to USD through a config-seeded FxTable that handles per-currency decimal places (zero-decimal JPY, three-decimal KWD, etc.) and flags unconverted currencies rather than silently applying a 1:1 fallback.",
+      "entry_points": [
+        "crates/billing/src/lib.rs",
+        "crates/billing/src/fx.rs"
+      ],
+      "file_paths": [
+        "crates/billing/Cargo.toml",
+        "crates/billing/src/lib.rs",
+        "crates/billing/src/error.rs",
+        "crates/billing/src/fx.rs",
+        "crates/billing/src/polar.rs",
+        "crates/billing/src/registry.rs",
+        "crates/billing/src/stripe.rs"
+      ],
+      "group": "Usage Governance",
+      "group_id": "28066606-86df-45f1-870c-1cedafb0389f",
+      "id": "00e9cbd9-1f34-4dbb-91be-6ad436bce75b",
+      "keywords": [
+        "stripe",
+        "polar",
+        "webhook",
+        "revenue",
+        "billing",
+        "fx",
+        "currency",
+        "hmac",
+        "refund",
+        "subscription"
+      ],
+      "last_written_at": "2026-09-21T20:11:04.174577600+00:00",
+      "name": "billing-provider-adapters",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "hmac 0.13",
+        "sha2 0.11",
+        "base64 0.23",
         "serde_json",
-        "uuid",
         "chrono",
         "thiserror"
       ]
     },
     {
-      "api_surface": "GET /v1/prices, PUT /v1/prices/:provider/:model, GET /v1/costs, GET /v1/costs/prompts, GET /v1/usecases",
-      "business_feature": "Model Cost Pricing",
+      "api_surface": "run_claude, probe, resolve_claude_bin, run_exec (library API)",
+      "business_feature": "Claude & Codex CLI Invocation",
+      "category": "lib",
+      "cross_refs": [
+        "provider-generation",
+        "judge-and-scoring"
+      ],
+      "db_tables": [],
+      "description": "The single seam for all headless-Claude subprocess spawning: `invocation/` enforces posture rules (mode → argv shape, cwd policy, tool allowlist, auth policy) before any child is spawned, so contradictions become errors rather than wasted paid calls. `codex/` adapts the Codex CLI (`codex exec`) for GPT models behind a ChatGPT seat, applying the same posture and audit model. `sandbox/` wraps Docker and Contree isolation runtimes for `exec` rubric dimensions that run untrusted candidate code, exposing a `SandboxRunner` trait behind an `Arc<dyn _>` on `EngineConfig`.",
+      "entry_points": [
+        "crates/engine/src/invocation/mod.rs",
+        "crates/engine/src/codex/mod.rs",
+        "crates/engine/src/sandbox/docker.rs"
+      ],
+      "file_paths": [
+        "crates/engine/src/invocation/mod.rs",
+        "crates/engine/src/invocation/envelope.rs",
+        "crates/engine/src/invocation/mode.rs",
+        "crates/engine/src/invocation/posture.rs",
+        "crates/engine/src/invocation/posture/tests.rs",
+        "crates/engine/src/invocation/probe.rs",
+        "crates/engine/src/invocation/resolve.rs",
+        "crates/engine/src/invocation/run.rs",
+        "crates/engine/src/invocation/tools.rs",
+        "crates/engine/src/codex/mod.rs",
+        "crates/engine/src/codex/audit.rs",
+        "crates/engine/src/codex/events.rs",
+        "crates/engine/src/codex/posture.rs",
+        "crates/engine/src/codex/resolve.rs",
+        "crates/engine/src/sandbox/contree.rs",
+        "crates/engine/src/sandbox/docker.rs",
+        "crates/engine/src/sandbox/tests.rs",
+        "crates/engine/tests/codex_live.rs",
+        "crates/engine/tests/docker_exec.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "1c799276-3129-490e-b740-b5c16c49e59f",
+      "keywords": [
+        "invocation",
+        "claude-cli",
+        "codex",
+        "sandbox",
+        "docker",
+        "posture",
+        "subprocess",
+        "headless",
+        "exec",
+        "isolation"
+      ],
+      "last_written_at": "2026-09-21T20:05:21.657229700+00:00",
+      "name": "claude-invocation-and-execution",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "lighttrack-core",
+        "serde_json"
+      ]
+    },
+    {
+      "api_surface": "lt costs, lt rollup, lt forecast, lt margin, lt revenue, lt prices, lt prompts, lt rubrics, lt labels, lt datasets, lt use-cases, lt collective, lt relay, lt events, lt traces",
+      "business_feature": "CLI Domain Commands",
+      "category": "api",
+      "cross_refs": [
+        "cli-infrastructure"
+      ],
+      "db_tables": [],
+      "description": "Implements the `lt` CLI subcommands for all observability, evaluation, and intelligence domains: cost/event/trace/rollup/forecast queries, margin and revenue reporting, price-book inspection, prompt registry queries, rubric/label/dataset/use-case management, collective model leaderboard, and the device relay fleet. Each domain module pairs a `cli/` arg-definition file with a sibling handler module that calls the HTTP client and renders the response.",
+      "entry_points": [
+        "crates/cli/src/usage.rs",
+        "crates/cli/src/margin.rs",
+        "crates/cli/src/collective.rs"
+      ],
+      "file_paths": [
+        "crates/cli/src/usage.rs",
+        "crates/cli/src/prices.rs",
+        "crates/cli/src/revenue.rs",
+        "crates/cli/src/margin.rs",
+        "crates/cli/src/prompts.rs",
+        "crates/cli/src/rubrics.rs",
+        "crates/cli/src/labels.rs",
+        "crates/cli/src/datasets.rs",
+        "crates/cli/src/use_cases.rs",
+        "crates/cli/src/collective.rs",
+        "crates/cli/src/relay.rs",
+        "crates/cli/src/cli/usage.rs",
+        "crates/cli/src/cli/prompts.rs",
+        "crates/cli/src/cli/evals.rs",
+        "crates/cli/src/cli/use_cases.rs",
+        "crates/cli/src/cli/collective.rs",
+        "crates/cli/src/cli/relay.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "339713bf-9cc2-4995-84bc-1be3139b2a50",
+      "keywords": [
+        "costs",
+        "rollup",
+        "forecast",
+        "margin",
+        "revenue",
+        "prices",
+        "prompts",
+        "rubrics",
+        "labels",
+        "datasets",
+        "use-cases",
+        "collective",
+        "relay",
+        "events",
+        "traces"
+      ],
+      "last_written_at": "2026-09-21T20:07:28.150574300+00:00",
+      "name": "cli-domain-commands",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "clap 4",
+        "reqwest 0.13",
+        "anyhow 1"
+      ]
+    },
+    {
+      "api_surface": "lt health, lt capabilities, lt projects, lt keys, lt limits, lt alerts, lt schedules, lt jobs",
+      "business_feature": "CLI Infrastructure & Management",
+      "category": "api",
+      "cross_refs": [
+        "cli-domain-commands"
+      ],
+      "db_tables": [],
+      "description": "Implements the `lt` operator CLI's core plumbing and management subcommands: argument parsing (clap), the blocking HTTP client, query-string building, and the commands that manage projects, API keys, usage limits, alert rules, alert delivery channels, and recurring schedules/jobs. A developer reads `main.rs` to see the full verb dispatch, `cli/mod.rs` for the clap enum tree, and `http.rs` for how every domain module talks to the API.",
+      "entry_points": [
+        "crates/cli/src/main.rs",
+        "crates/cli/src/cli/mod.rs",
+        "crates/cli/src/http.rs"
+      ],
+      "file_paths": [
+        "crates/cli/src/main.rs",
+        "crates/cli/src/http.rs",
+        "crates/cli/src/query.rs",
+        "crates/cli/src/contract.rs",
+        "crates/cli/src/platform.rs",
+        "crates/cli/src/projects.rs",
+        "crates/cli/src/schedules.rs",
+        "crates/cli/src/alerts.rs",
+        "crates/cli/src/alert_channels.rs",
+        "crates/cli/src/limits.rs",
+        "crates/cli/src/cli/mod.rs",
+        "crates/cli/src/cli/alerts.rs",
+        "crates/cli/src/cli/limits.rs",
+        "crates/cli/src/cli/projects.rs",
+        "crates/cli/src/cli/work.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "3b5a951b-68d6-447c-b995-aca691db5036",
+      "keywords": [
+        "cli",
+        "operator",
+        "projects",
+        "api-keys",
+        "limits",
+        "alerts",
+        "schedules",
+        "jobs",
+        "clap",
+        "http-client"
+      ],
+      "last_written_at": "2026-09-21T20:07:28.147832800+00:00",
+      "name": "cli-infrastructure",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "clap 4",
+        "reqwest 0.13",
+        "anyhow 1"
+      ]
+    },
+    {
+      "api_surface": "GET /api/collective/digest, GET /api/collective/leaderboard, POST /api/collective/contribute",
+      "business_feature": "Federated Benchmark Sharing",
+      "category": "lib",
+      "cross_refs": [
+        "evaluation-scoring-types",
+        "core-observability-types"
+      ],
+      "db_tables": [
+        "collective_contributions"
+      ],
+      "description": "Implements the federated benchmark-sharing data model: digest building and versioning, leaderboard merging, model alias resolution, contribution privacy controls, rigor classification, coverage spread computation, and contribution record lifecycle. These types power the collective digest protocol by which multiple operators share anonymized benchmark results without exposing raw traces.",
+      "entry_points": [
+        "crates/core/src/collective/mod.rs",
+        "crates/core/src/collective/types.rs"
+      ],
+      "file_paths": [
+        "crates/core/src/collective/mod.rs",
+        "crates/core/src/collective/types.rs",
+        "crates/core/src/collective/aliases.rs",
+        "crates/core/src/collective/classify.rs",
+        "crates/core/src/collective/contribution.rs",
+        "crates/core/src/collective/merge.rs",
+        "crates/core/src/collective/privacy.rs",
+        "crates/core/src/collective/rigor.rs",
+        "crates/core/src/collective/spread.rs"
+      ],
+      "group": "Collective Intelligence",
+      "group_id": "2a5fc966-eb53-4da7-b750-d8c286316f6a",
+      "id": "e7dfb13f-7424-4030-89b2-4f6101d3f08b",
+      "keywords": [
+        "CollectiveDigest",
+        "LeaderboardRow",
+        "ContributionRecord",
+        "ModelAliases",
+        "RowRigor",
+        "Coverage",
+        "privacy",
+        "digest",
+        "federated"
+      ],
+      "last_written_at": "2026-09-21T20:06:06.347857500+00:00",
+      "name": "collective-intelligence-types",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "serde",
+        "schemars 1",
+        "sha2"
+      ]
+    },
+    {
+      "api_surface": "GET /v1/collective/digest, POST /v1/collective/ingest, GET /v1/collective/leaderboard, POST /v1/collective/contribute, GET /v1/collective/contributions, DELETE /v1/collective/contribution",
+      "business_feature": "Collective Model Leaderboard",
+      "category": "api",
+      "cross_refs": [
+        "evaluation-pipeline",
+        "api-platform"
+      ],
+      "db_tables": [
+        "collective_contributions"
+      ],
+      "description": "Implements a privacy-safe federated model leaderboard where instances can share anonymised benchmark digests with a hub and receive merged real-world performance data in return. Handles digest construction (k-anonymity enforced), contribution ledger, hub-side ingestion and sanitisation, leaderboard merging, and withdraw/withdraw-all flows. The auto-contribute module fires on a schedule to push updates without manual admin action.",
+      "entry_points": [
+        "crates/api/src/collective.rs",
+        "crates/api/src/collective/digest.rs",
+        "crates/api/src/collective/leaderboard.rs"
+      ],
+      "file_paths": [
+        "crates/api/src/collective.rs",
+        "crates/api/src/collective/config.rs",
+        "crates/api/src/collective/contribute.rs",
+        "crates/api/src/collective/digest.rs",
+        "crates/api/src/collective/identity.rs",
+        "crates/api/src/collective/ingest.rs",
+        "crates/api/src/collective/leaderboard.rs",
+        "crates/api/src/collective/ledger.rs",
+        "crates/api/src/collective/sanitize.rs",
+        "crates/api/src/collective/scorecard.rs",
+        "crates/api/src/collective/withdraw.rs",
+        "crates/api/src/collective/withdraw_all.rs",
+        "crates/api/src/collective_auto.rs"
+      ],
+      "group": "Collective Intelligence",
+      "group_id": "2a5fc966-eb53-4da7-b750-d8c286316f6a",
+      "id": "3ac06f6e-2d1a-4285-8ea3-1ce4a5f0bdca",
+      "keywords": [
+        "collective",
+        "leaderboard",
+        "digest",
+        "contribute",
+        "federated",
+        "anonymity",
+        "hub",
+        "benchmark",
+        "scorecard",
+        "withdraw"
+      ],
+      "last_written_at": "2026-09-21T20:01:44.994406100+00:00",
+      "name": "collective-leaderboard",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "axum 0.7",
+        "reqwest 0.13",
+        "lighttrack-store"
+      ]
+    },
+    {
+      "api_surface": "Wire types consumed by POST /api/events, GET /api/traces, GET /api/rollup",
+      "business_feature": "LLM Event & Trace Model",
+      "category": "lib",
+      "cross_refs": [
+        "core-observability-types",
+        "evaluation-scoring-types",
+        "usage-governance-limits"
+      ],
+      "db_tables": [
+        "events",
+        "projects",
+        "prompts",
+        "relay_tasks",
+        "devices"
+      ],
+      "description": "Defines the normalized wire types that every LightTrack crate shares: the LlmEvent ingest record, Trace/Span tree, rollup query/row shapes, project API-key and redaction model, provider/model canonicalization, prompt versioning, and relay task lifecycle. These pure data types are I/O-free; all other crates depend on this module to avoid payload drift between the API and the Rust client SDK.",
+      "entry_points": [
+        "crates/core/src/lib.rs",
+        "crates/core/src/event.rs",
+        "crates/core/src/trace.rs"
+      ],
+      "file_paths": [
+        "crates/core/src/lib.rs",
+        "crates/core/src/event.rs",
+        "crates/core/src/trace.rs",
+        "crates/core/src/model_id.rs",
+        "crates/core/src/provider.rs",
+        "crates/core/src/error.rs",
+        "crates/core/src/label.rs",
+        "crates/core/src/project.rs",
+        "crates/core/src/customer.rs",
+        "crates/core/src/endpoint_identity.rs",
+        "crates/core/src/rollup/mod.rs",
+        "crates/core/src/rollup/dimension.rs",
+        "crates/core/src/prompt.rs",
+        "crates/core/src/prompt_canary.rs",
+        "crates/core/src/alias_table.rs",
+        "crates/core/src/relay.rs",
+        "crates/core/src/relay_verdict.rs",
+        "crates/core/src/device.rs"
+      ],
+      "group": "LLM Observability",
+      "group_id": "12239d64-cf9d-4d05-b3de-5f01a3208d78",
+      "id": "f9429abc-1dbe-4992-bb3a-e3626b963cb1",
+      "keywords": [
+        "LlmEvent",
+        "Trace",
+        "TraceSpan",
+        "rollup",
+        "project",
+        "provider",
+        "model_id",
+        "prompt",
+        "relay",
+        "ApiKey"
+      ],
+      "last_written_at": "2026-09-21T20:06:06.348168200+00:00",
+      "name": "core-observability-types",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "serde",
+        "schemars 1",
+        "chrono",
+        "uuid"
+      ]
+    },
+    {
+      "api_surface": "POST/GET /v1/projects/:id/limits, GET /v1/limits/status, GET /v1/limits/usage, GET /v1/forecast, GET /v1/margin, POST /v1/revenue, PUT /v1/prices/:provider/:model, POST /v1/billing/:provider/webhook",
+      "business_feature": "Usage Limits & Revenue Governance",
       "category": "api",
       "cross_refs": [
         "event-ingest",
-        "store-sqlite-core",
-        "store-postgres"
+        "alerts-system",
+        "api-platform"
+      ],
+      "db_tables": [
+        "margin_policies",
+        "model_prices"
+      ],
+      "description": "Controls LLM spend governance (per-project caps, usage rollups by scope, margin guardrails) and revenue tracking (billing webhooks, model prices, revenue recording, margin simulation and trend analysis). Forecast module projects future spend and margin erosion and emits pre-emptive alerts. Bridges operator-facing revenue data with LLM cost rollups to produce net-margin views by customer or product.",
+      "entry_points": [
+        "crates/api/src/limits.rs",
+        "crates/api/src/forecast.rs",
+        "crates/api/src/revenue.rs"
+      ],
+      "file_paths": [
+        "crates/api/src/limits.rs",
+        "crates/api/src/limits_usage.rs",
+        "crates/api/src/margin_policies.rs",
+        "crates/api/src/margin_guardrails.rs",
+        "crates/api/src/forecast.rs",
+        "crates/api/src/forecast_alerts.rs",
+        "crates/api/src/forecast_sweep.rs",
+        "crates/api/src/revenue.rs",
+        "crates/api/src/revenue_reprice.rs",
+        "crates/api/src/billing.rs",
+        "crates/api/src/prices.rs",
+        "crates/api/src/prices_fill.rs"
+      ],
+      "group": "Usage Governance",
+      "group_id": "28066606-86df-45f1-870c-1cedafb0389f",
+      "id": "22a431dc-2c4e-441c-9ecb-ee84020685be",
+      "keywords": [
+        "limit",
+        "cap",
+        "margin",
+        "forecast",
+        "revenue",
+        "billing",
+        "price",
+        "cost",
+        "guardrail",
+        "stripe",
+        "polar",
+        "reprice"
+      ],
+      "last_written_at": "2026-09-21T20:01:44.994673700+00:00",
+      "name": "cost-and-revenue-governance",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "axum 0.7",
+        "lighttrack-billing",
+        "lighttrack-store",
+        "lighttrack-core"
+      ]
+    },
+    {
+      "api_surface": "POST/GET /v1/relay/tasks, POST /v1/relay/lease, POST /v1/relay/tasks/:id/result, POST /v1/relay/tasks/:id/renew, POST/GET /v1/relay/devices, DELETE /v1/relay/devices/:id, GET /v1/relay/actions",
+      "business_feature": "Device Task Relay",
+      "category": "api",
+      "cross_refs": [
+        "alerts-system",
+        "evaluation-pipeline",
+        "storage-and-jobs"
+      ],
+      "db_tables": [
+        "relay_tasks"
+      ],
+      "description": "Provides a task relay system for dispatching work to enrolled edge devices (e.g. running Claude CLI locally). Devices lease queued tasks, heartbeat progress, and report results; the API side enqueues tasks, polls status, and records the action fingerprint ledger. Includes device enrolment/revocation, fenced lease renewal, unroutable-task alerting, and a snapshot route that promotes relay run outputs into evaluation datasets.",
+      "entry_points": [
+        "crates/api/src/relay.rs",
+        "crates/api/src/relay_devices.rs",
+        "crates/api/src/relay_lease.rs"
+      ],
+      "file_paths": [
+        "crates/api/src/relay.rs",
+        "crates/api/src/relay_actions.rs",
+        "crates/api/src/relay_devices.rs",
+        "crates/api/src/relay_lease.rs",
+        "crates/api/src/relay_result.rs",
+        "crates/api/src/relay_unroutable.rs",
+        "crates/api/src/alerts_relay.rs",
+        "crates/api/tests/relay_device_key_constant_time_guard.rs"
+      ],
+      "group": "Device Relay",
+      "group_id": "b70c24eb-d122-4343-8f1b-94bd4da8edd2",
+      "id": "fda00e91-37c0-416a-b72b-a5a94a991c4e",
+      "keywords": [
+        "relay",
+        "device",
+        "task",
+        "lease",
+        "heartbeat",
+        "enrol",
+        "action",
+        "fingerprint",
+        "fenced",
+        "unroutable"
+      ],
+      "last_written_at": "2026-09-21T20:01:44.994941+00:00",
+      "name": "device-relay",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "axum 0.7",
+        "lighttrack-store",
+        "subtle 2"
+      ]
+    },
+    {
+      "api_surface": "POST /api/relay/lease (consumes), POST /api/relay/settle (consumes), POST /api/relay/renew (consumes), configurable per-action HTTP connector (produces)",
+      "business_feature": "Device Relay Agent",
+      "category": "api",
+      "cross_refs": [],
+      "db_tables": [],
+      "description": "Implements the `lt-agent` binary — the device-side half of the relay protocol. It polls one or more cloud LightTrack sources over outbound HTTPS, leases due tasks filtered by its local action inventory, executes each with the local Claude Code CLI, delivers results via per-action HTTP connectors, and settles every task back to the originating cloud with a fenced heartbeat that detects lease takeovers mid-run. The agent is entirely pull-based so it runs behind a NAT with no inbound ports; all credentials stay on the device.",
+      "entry_points": [
+        "crates/agent/src/main.rs",
+        "crates/agent/src/run.rs",
+        "crates/agent/src/actions.rs"
+      ],
+      "file_paths": [
+        "crates/agent/Cargo.toml",
+        "crates/agent/src/main.rs",
+        "crates/agent/src/run.rs",
+        "crates/agent/src/actions.rs",
+        "crates/agent/src/cloud.rs",
+        "crates/agent/src/config.rs",
+        "crates/agent/src/connect.rs",
+        "crates/agent/src/exec.rs",
+        "crates/agent/src/inventory.rs",
+        "crates/agent/src/report.rs"
+      ],
+      "group": "Device Relay",
+      "group_id": "b70c24eb-d122-4343-8f1b-94bd4da8edd2",
+      "id": "66f623cb-5fd8-4622-b63e-6ff7313706dd",
+      "keywords": [
+        "relay",
+        "lease",
+        "settle",
+        "action-library",
+        "claude-cli",
+        "device-agent",
+        "connector",
+        "heartbeat",
+        "inventory",
+        "lt-agent"
+      ],
+      "last_written_at": "2026-09-21T20:11:06.091139200+00:00",
+      "name": "device-relay-agent",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "reqwest 0.13",
+        "clap 4",
+        "lighttrack-core",
+        "lighttrack-engine",
+        "serde_json",
+        "chrono",
+        "dotenvy"
+      ]
+    },
+    {
+      "api_surface": "GET /api/prices, GET /api/margin, GET /api/forecast, GET /api/cost-summary",
+      "business_feature": "Cost & Margin Analytics",
+      "category": "lib",
+      "cross_refs": [
+        "core-observability-types",
+        "usage-governance-limits"
       ],
       "db_tables": [
         "model_prices",
-        "events"
+        "margin_policies",
+        "revenue_events"
       ],
-      "description": "Maintains a DB-backed model price book seeded from config/pricing.json and supports live hot-swap via PUT. Cost attribution runs at ingest time using provider+model lookup with prompt-length tier, batch, and flex-pricing variant support. Exposes cost summary and per-prompt/use-case breakdown endpoints.",
+      "description": "Implements LightTrack's cost and revenue model: the PriceBook that maps model tokens to dollar cost, margin computation across dimensions, policy-triggered actions when margin drops, simulation of assumptions, trend series, budget forecasting, revenue event tracking, and unpriced-model ledgering. Together these types answer 'is this deployment profitable?' and drive automated cost controls.",
       "entry_points": [
         "crates/core/src/pricing.rs",
-        "crates/api/src/prices.rs"
+        "crates/core/src/margin.rs",
+        "crates/core/src/margin_policy.rs"
       ],
       "file_paths": [
-        "crates/api/src/prices.rs",
-        "crates/core/src/pricing.rs"
+        "crates/core/src/pricing.rs",
+        "crates/core/src/price_row.rs",
+        "crates/core/src/margin.rs",
+        "crates/core/src/margin_policy.rs",
+        "crates/core/src/margin_sim.rs",
+        "crates/core/src/margin_trend.rs",
+        "crates/core/src/revenue.rs",
+        "crates/core/src/forecast.rs",
+        "crates/core/src/forecast_gate.rs",
+        "crates/core/src/gen_spend.rs",
+        "crates/core/src/unpriced.rs"
       ],
-      "group": "LLM Observability",
-      "group_id": "89b3e20c-79b5-4a3b-ae5f-38ddfbcbcb13",
-      "id": "799c8080-67b8-4a70-b6c4-0dcbf4e42bc2",
+      "group": "Usage Governance",
+      "group_id": "28066606-86df-45f1-870c-1cedafb0389f",
+      "id": "e2e94385-c146-47f1-8018-92afdf565ab7",
       "keywords": [
-        "ModelPrice",
         "PriceBook",
-        "cost_usd",
-        "input_per_mtok",
-        "output_per_mtok",
-        "pricing",
-        "tier",
-        "batch",
-        "flex",
-        "PricingMode"
+        "ModelPrice",
+        "MarginRow",
+        "MarginPolicy",
+        "forecast",
+        "revenue",
+        "gen_spend",
+        "unpriced",
+        "cost",
+        "budget"
       ],
-      "last_written_at": "2026-08-03T19:08:52.784703+00:00",
-      "name": "cost-pricing",
+      "last_written_at": "2026-09-21T20:06:06.348376500+00:00",
+      "name": "economics-margin-pricing",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "serde_json"
+        "Rust",
+        "serde",
+        "schemars 1",
+        "chrono"
       ]
     },
     {
-      "api_surface": "POST /v1/projects/:id/datasets, GET /v1/projects/:id/datasets, GET /v1/datasets/:id, POST /v1/datasets/:id/items, GET /v1/datasets/:id/items, POST /v1/datasets/:id/freeze",
-      "business_feature": "Eval Dataset Management",
+      "api_surface": "POST/GET /v1/projects/:id/benchmarks, GET /v1/benchmarks/:id/gate, POST /v1/scores, GET /v1/scores, POST/GET /v1/labels, GET /v1/judges/trust, POST/GET /v1/datasets/:id/items, POST/GET /v1/projects/:id/prompts, POST /v1/projects/:id/prompts/:name/promote",
+      "business_feature": "Evaluation & Benchmark Pipeline",
       "category": "api",
       "cross_refs": [
-        "pii-scrubbing",
         "event-ingest",
-        "benchmark-management",
-        "store-sqlite-eval"
+        "storage-and-jobs",
+        "api-platform"
       ],
       "db_tables": [
+        "benchmarks",
+        "benchmark_runs",
+        "scores",
+        "rubrics",
+        "labels",
+        "calibrations",
         "datasets",
-        "dataset_items"
+        "dataset_items",
+        "prompts",
+        "prompt_versions"
       ],
-      "description": "Manages versioned evaluation datasets of input/output/expected triples sourced from real events or manual curation. Supports item-level append, freeze (making a dataset immutable for reproducible benchmarks), and an automated sampling pipeline in lt-runner that strips PII from live events before freezing.",
+      "description": "Manages the full LLM quality evaluation pipeline: datasets (create, freeze, fork, import), scoring and labels, rubrics, judge trust, human calibration, prompt registry with versioning and canary promotion, and benchmark runs with CI gate verdicts. Implements a regression-gated promote flow where a prompt version must pass its linked benchmark before a label can advance to production. Depends on the job queue for async benchmark execution.",
       "entry_points": [
-        "crates/api/src/datasets.rs",
-        "crates/core/src/dataset.rs"
+        "crates/api/src/benchmarks.rs",
+        "crates/api/src/prompts.rs",
+        "crates/api/src/scores.rs"
       ],
       "file_paths": [
         "crates/api/src/datasets.rs",
-        "crates/runner/src/dataset.rs",
-        "crates/core/src/dataset.rs"
+        "crates/api/src/datasets_lineage.rs",
+        "crates/api/src/scores.rs",
+        "crates/api/src/scores_review.rs",
+        "crates/api/src/rubrics.rs",
+        "crates/api/src/labels.rs",
+        "crates/api/src/labels_promote.rs",
+        "crates/api/src/judges.rs",
+        "crates/api/src/quality.rs",
+        "crates/api/src/difficulty_input.rs",
+        "crates/api/src/benchmarks.rs",
+        "crates/api/src/benchmarks_target.rs",
+        "crates/api/src/prompts.rs",
+        "crates/api/src/prompts_canary.rs",
+        "crates/api/src/prompts_gate.rs",
+        "crates/api/src/prompt_canary_sweep.rs",
+        "crates/api/src/prompt_canary_sweep/tests.rs"
       ],
       "group": "Evaluation & Benchmarking",
-      "group_id": "491ba1f4-9342-4eaf-a420-c5df8bb95021",
-      "id": "2ce36955-d3a8-4ea7-8e07-f963e021e948",
+      "group_id": "448577e9-0a40-46f4-a6b7-1ba0696d3c09",
+      "id": "430d498e-2077-4dde-b0c6-2735cb9ddfc4",
       "keywords": [
-        "Dataset",
-        "DatasetItem",
-        "freeze",
-        "version",
-        "sample",
-        "anonymize",
-        "source_event_id",
-        "input",
-        "expected",
-        "context"
+        "benchmark",
+        "score",
+        "rubric",
+        "label",
+        "judge",
+        "calibration",
+        "dataset",
+        "prompt",
+        "canary",
+        "gate",
+        "regression",
+        "evaluation"
       ],
-      "last_written_at": "2026-08-03T19:08:52.785554100+00:00",
-      "name": "dataset-management",
+      "last_written_at": "2026-09-21T20:01:42.069315800+00:00",
+      "name": "evaluation-pipeline",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
+        "Rust",
+        "axum 0.7",
+        "lighttrack-store",
+        "lighttrack-core"
+      ]
+    },
+    {
+      "api_surface": "render(kind, value) -> Option<String> — kinds: list_benchmarks, get_benchmark, get_benchmark_runs, check_benchmark_gate, list_jobs, list_schedules, get_job, list_datasets, get_dataset, list_dataset_items, list_rubrics, get_rubric, list_prompts, get_prompt, get_prompt_quality, compare, get_margin, list_margin_policies, get_limit_status, list_limits, list_prices, list_price_history, list_unpriced_models",
+      "business_feature": "Evaluation & Governance Response Rendering",
+      "category": "lib",
+      "cross_refs": [
+        "observability-rendering"
+      ],
+      "db_tables": [],
+      "description": "Renders evaluation, governance, and pricing API responses into Markdown tables for the `lt` CLI and `lt-mcp` server. Covers benchmark listings and detail/gate views, job and schedule lists, dataset and item tables, rubric and prompt detail, prompt-quality tables, compare leaderboards, effort-curve views, usage-limit status, margin reports and simulations, margin-policy lists, price books, and unpriced-model ledgers. Shares the `lighttrack-render` crate's dispatch table and `md` helper; the integration tests in `tests/render.rs` verify two-directional bijection between this crate and `lighttrack-contract`.",
+      "entry_points": [
+        "crates/render/src/benchmarks.rs",
+        "crates/render/tests/render.rs"
+      ],
+      "file_paths": [
+        "crates/render/src/benchmarks.rs",
+        "crates/render/src/jobs.rs",
+        "crates/render/src/schedules.rs",
+        "crates/render/src/datasets.rs",
+        "crates/render/src/rubrics.rs",
+        "crates/render/src/prompts.rs",
+        "crates/render/src/quality.rs",
+        "crates/render/src/compare.rs",
+        "crates/render/src/effort_curve.rs",
+        "crates/render/src/limits.rs",
+        "crates/render/src/margin.rs",
+        "crates/render/src/margin_policies.rs",
+        "crates/render/src/prices.rs",
+        "crates/render/src/unpriced.rs",
+        "crates/render/tests/render.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "9dc97639-bd28-43ef-bb53-96fb8ef10967",
+      "keywords": [
+        "benchmarks",
+        "jobs",
+        "datasets",
+        "rubrics",
+        "prompts",
+        "prices",
+        "margin",
+        "limits",
+        "compare",
+        "leaderboard"
+      ],
+      "last_written_at": "2026-09-21T20:08:07.105506600+00:00",
+      "name": "evaluation-rendering",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
         "serde_json"
       ]
     },
     {
-      "api_surface": "Calls: POST /v1/relay/lease, POST /v1/relay/tasks/:id/result on configured cloud sources",
-      "business_feature": "Device Agent Runner",
+      "api_surface": "GET /api/benchmarks, POST /api/benchmarks/run, GET /api/scores, GET /api/rubrics, GET /api/datasets",
+      "business_feature": "Benchmark & Scoring Engine Types",
       "category": "lib",
       "cross_refs": [
-        "relay-queue",
-        "judge-engine"
+        "core-observability-types",
+        "collective-intelligence-types"
       ],
-      "db_tables": [],
-      "description": "The lt-agent binary that runs on-device and executes cloud-dispatched tasks. It long-polls for leased RelayTasks, loads the matching action from a local library (prompt template + model config + optional JSON schema), invokes Claude Code, and delivers the structured result back to the cloud via the relay API or a connector (HTTP POST or subprocess pipe). Path-traversal validation prevents action-library escapes.",
+      "db_tables": [
+        "benchmarks",
+        "benchmark_runs",
+        "scores",
+        "rubrics",
+        "datasets",
+        "dataset_items",
+        "calibrations",
+        "jobs",
+        "schedules",
+        "use_cases"
+      ],
+      "description": "Defines the full evaluation pipeline data model: datasets and lineage, rubrics and dimension checks, benchmark runs and judge verdicts, calibration items and trust scores, use-case registry, grounding claim verification, job scheduling and lease fencing for async benchmark execution, and benchmark target resolution. These types are shared by the engine, runner, and store crates that execute and persist evaluation results.",
       "entry_points": [
-        "crates/agent/src/main.rs",
-        "crates/agent/src/run.rs"
+        "crates/core/src/score.rs",
+        "crates/core/src/rubric.rs",
+        "crates/core/src/bench_target.rs"
       ],
       "file_paths": [
-        "crates/agent/src/main.rs",
-        "crates/agent/src/config.rs",
-        "crates/agent/src/actions.rs",
-        "crates/agent/src/exec.rs",
-        "crates/agent/src/run.rs",
-        "crates/agent/src/cloud.rs",
-        "crates/agent/src/connect.rs"
+        "crates/core/src/score.rs",
+        "crates/core/src/rubric.rs",
+        "crates/core/src/calibration.rs",
+        "crates/core/src/calibration_record.rs",
+        "crates/core/src/dataset.rs",
+        "crates/core/src/dataset_lineage.rs",
+        "crates/core/src/grounding.rs",
+        "crates/core/src/use_case.rs",
+        "crates/core/src/bench_target.rs",
+        "crates/core/src/job.rs",
+        "crates/core/src/job_kinds.rs",
+        "crates/core/src/schedule.rs",
+        "crates/core/src/lease.rs",
+        "crates/core/src/effort.rs"
       ],
-      "group": "Device Relay",
-      "group_id": "3f828e11-fcd9-4118-8619-4c189fc0a3ac",
-      "id": "1c2f14e1-2584-4f97-959a-785e67a38b2d",
+      "group": "Evaluation & Benchmarking",
+      "group_id": "448577e9-0a40-46f4-a6b7-1ba0696d3c09",
+      "id": "060b7649-5405-4f72-ac96-572409e6039d",
       "keywords": [
-        "agent",
-        "relay",
-        "action",
-        "device",
-        "long_poll",
-        "lease",
-        "ActionSpec",
-        "ConnectorSpec",
-        "AgentConfig",
-        "execute",
-        "template",
-        "claude"
+        "Benchmark",
+        "BenchmarkRun",
+        "JudgeVerdict",
+        "Rubric",
+        "Score",
+        "Dataset",
+        "CalibrationItem",
+        "UseCase",
+        "Job",
+        "grounding"
       ],
-      "last_written_at": "2026-08-03T19:08:52.786806100+00:00",
-      "name": "device-agent",
+      "last_written_at": "2026-09-21T20:06:05.850433200+00:00",
+      "name": "evaluation-scoring-types",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "reqwest 0.12",
-        "serde_json",
-        "toml"
+        "Rust",
+        "serde",
+        "schemars 1",
+        "chrono",
+        "uuid"
       ]
     },
     {
-      "api_surface": "POST /v1/events, POST /v1/events/batch, GET /v1/events, GET /v1/events/:id",
-      "business_feature": "LLM Event Ingestion",
+      "api_surface": "POST /v1/events, POST /v1/events/batch, POST /v1/traces (OTLP), GET /v1/events, GET /v1/events/:id, GET /v1/traces, GET /v1/traces/:id, GET /v1/costs, GET /v1/usecases, GET /v1/rollup, GET /v1/ingest/status",
+      "business_feature": "LLM Event Ingest & Query",
       "category": "api",
       "cross_refs": [
-        "limit-enforcement",
-        "pii-scrubbing",
-        "cost-pricing",
-        "trace-analytics",
-        "store-sqlite-core"
+        "api-platform",
+        "alerts-system",
+        "cost-and-revenue-governance"
       ],
       "db_tables": [
-        "events"
+        "events",
+        "use_cases"
       ],
-      "description": "Captures every LLM call event flowing into a monitored application. Single and batch ingest endpoints validate timestamps and body sizes, attribute costs from the price book, enforce usage limits, apply PII redaction, and persist to the store with per-item accepted/rejected/invalid outcomes. Depends on limit-enforcement for admission control and pii-scrubbing for payload sanitisation.",
+      "description": "Handles ingestion and querying of LLM call events, the core telemetry pipeline. Single-event POST, batch ingest, OTLP/OpenTelemetry trace import, and keyset-paginated query with cost, rollup, trace, and use-case views. Enforces body limits, load-shedding admission, timestamp skew, and ingest proximity checks; connects to the store for durable event persistence.",
       "entry_points": [
         "crates/api/src/events.rs",
-        "crates/core/src/event.rs"
+        "crates/api/src/otlp/mod.rs",
+        "crates/api/src/events_query.rs"
       ],
       "file_paths": [
         "crates/api/src/events.rs",
@@ -565,1262 +1160,1748 @@
         "crates/api/src/events_batch.rs",
         "crates/api/src/events_query.rs",
         "crates/api/src/events_validate.rs",
-        "crates/core/src/event.rs"
+        "crates/api/src/ingest_proximity.rs",
+        "crates/api/src/shed.rs",
+        "crates/api/src/rollup.rs",
+        "crates/api/src/traces.rs",
+        "crates/api/src/use_cases.rs",
+        "crates/api/src/costs_unpriced.rs",
+        "crates/api/src/otlp/mod.rs",
+        "crates/api/src/otlp/linkage.rs",
+        "crates/api/src/otlp/proto.rs",
+        "crates/api/src/otlp/semconv.rs",
+        "crates/api/src/otlp/tests.rs"
       ],
       "group": "LLM Observability",
-      "group_id": "89b3e20c-79b5-4a3b-ae5f-38ddfbcbcb13",
-      "id": "2efe3e2b-fc60-4669-a32a-6f1bc4196913",
+      "group_id": "12239d64-cf9d-4d05-b3de-5f01a3208d78",
+      "id": "ae7d2e99-8b0f-49f5-83c9-138d65df5241",
       "keywords": [
         "ingest",
-        "LlmEvent",
+        "event",
         "batch",
-        "admission",
-        "cost",
-        "provider",
-        "model",
-        "TokenUsage",
-        "trace_id",
-        "idempotency"
+        "otlp",
+        "trace",
+        "rollup",
+        "load-shedding",
+        "telemetry",
+        "use-case",
+        "cost"
       ],
-      "last_written_at": "2026-08-03T19:08:52.782888900+00:00",
+      "last_written_at": "2026-09-21T20:01:44.995177800+00:00",
       "name": "event-ingest",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "serde_json",
-        "tokio"
+        "Rust",
+        "axum 0.7",
+        "tokio 1",
+        "lighttrack-store",
+        "lighttrack-core"
       ]
     },
     {
-      "api_surface": "POST /v1/scores (writes calibration scores)",
-      "business_feature": "Judge Calibration",
-      "category": "lib",
+      "api_surface": "Implements lighttrack_store::Store; connects via firestore://<project-id> URL",
+      "business_feature": "Firestore Core Data Plane",
+      "category": "data",
       "cross_refs": [
-        "judge-engine",
-        "scoring"
-      ],
-      "db_tables": [],
-      "description": "Measures the reliability of the LLM judge by comparing its scores against human labels using Cohen's κ, Pearson correlation, MAE, and RMSE. A drift sentinel mode runs periodically and raises alerts when κ degrades below the trust threshold. Calibration data lives in a JSONL golden set.",
-      "entry_points": [
-        "crates/runner/src/calibrate.rs",
-        "crates/core/src/calibration.rs"
-      ],
-      "file_paths": [
-        "crates/runner/src/calibrate.rs",
-        "crates/runner/src/calibrate_watch.rs",
-        "crates/core/src/calibration.rs"
-      ],
-      "group": "Evaluation & Benchmarking",
-      "group_id": "491ba1f4-9342-4eaf-a420-c5df8bb95021",
-      "id": "8702fe0e-f66b-4541-9dcc-514a41033990",
-      "keywords": [
-        "calibration",
-        "kappa",
-        "Cohen",
-        "Pearson",
-        "MAE",
-        "RMSE",
-        "agreement",
-        "drift",
-        "golden",
-        "trust",
-        "CalibrationItem",
-        "Agreement"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.785685500+00:00",
-      "name": "judge-calibration",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "serde_json"
-      ]
-    },
-    {
-      "api_surface": "Calls: Anthropic claude -p subprocess, POST generativelanguage.googleapis.com (Gemini), POST api.openai.com/v1/chat/completions",
-      "business_feature": "LLM Judge Engine",
-      "category": "lib",
-      "cross_refs": [
-        "scoring",
-        "benchmark-management",
-        "rubric-system",
-        "device-agent"
-      ],
-      "db_tables": [],
-      "description": "Core LLM-as-judge execution engine that drives Anthropic Claude (via subprocess), Google Gemini, and OpenAI REST APIs to generate candidate outputs and produce structured evaluation verdicts. Implements retry/backoff on 429/5xx, JSON extraction with one-shot repair, deterministic sampling, pairwise A-vs-B comparison, and multi-sample rubric judging with k-sample averaging and agreement metrics.",
-      "entry_points": [
-        "crates/engine/src/lib.rs",
-        "crates/engine/src/judge.rs"
-      ],
-      "file_paths": [
-        "crates/engine/src/lib.rs",
-        "crates/engine/src/providers.rs",
-        "crates/engine/src/claude.rs",
-        "crates/engine/src/judge.rs",
-        "crates/engine/src/judge/tests.rs",
-        "crates/engine/src/pairwise.rs",
-        "crates/engine/src/prompts.rs",
-        "crates/engine/src/parse.rs",
-        "crates/engine/src/pool.rs",
-        "crates/engine/src/retry.rs"
-      ],
-      "group": "Evaluation & Benchmarking",
-      "group_id": "491ba1f4-9342-4eaf-a420-c5df8bb95021",
-      "id": "4bf6dd2e-64b8-4ff8-a702-7fd289bd8c77",
-      "keywords": [
-        "judge",
-        "verdict",
-        "rubric",
-        "pairwise",
-        "generate",
-        "claude",
-        "gemini",
-        "openai",
-        "retry",
-        "EngineError",
-        "JudgeOutcome",
-        "structured",
-        "schema"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.784986900+00:00",
-      "name": "judge-engine",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "reqwest 0.12",
-        "serde_json",
-        "tokio"
-      ]
-    },
-    {
-      "api_surface": "POST /v1/projects/:id/limits, GET /v1/projects/:id/limits, PUT /v1/limits/:id, DELETE /v1/limits/:id, GET /v1/limits/status, GET /v1/limits/usage",
-      "business_feature": "Usage Limit Enforcement",
-      "category": "api",
-      "cross_refs": [
-        "event-ingest",
-        "alert-delivery",
-        "store-sqlite-core",
-        "store-firestore"
+        "firestore-eval-collective"
       ],
       "db_tables": [
+        "events",
+        "projects",
+        "api_keys",
+        "scores",
+        "model_prices",
         "limit_rules",
-        "events"
+        "margin_policies",
+        "prompts",
+        "prompt_versions",
+        "revenue_events"
       ],
-      "description": "Per-project usage caps that can throttle or block ingest traffic when cost, call-count, or token thresholds are exceeded within configurable rolling windows (hour/day/month). Rules support fine-grained scoping by provider, model, operation name, API key, or billing customer — so ten keys of one project can carry ten different budgets. An in-memory usage cache makes admission O(1) and TOCTOU-safe. GET /v1/limits/usage breaks rolling usage down by one scope dimension (who is spending) both before and after a cap trips. Rejected ingest attempts are tracked in-memory for attribution reporting.",
+      "description": "Implements the LightTrack `Store` trait over the Firestore REST API for the core observability and governance data plane: LLM event ingestion, cost aggregation, rollup/forecast, project and API-key management, usage limits, margin policies, pricing, prompt registry, and revenue tracking. Uses blocking `reqwest` with rustls; auth via emulator or `GOOGLE_OAUTH_TOKEN`. The `rest` and `codec` modules form the HTTP transport and Firestore document serialization layer that all domain modules share.",
       "entry_points": [
-        "crates/api/src/limits.rs",
-        "crates/core/src/limits/mod.rs"
+        "crates/store-firestore/src/lib.rs",
+        "crates/store-firestore/src/rest.rs",
+        "crates/store-firestore/src/events.rs"
       ],
       "file_paths": [
-        "crates/api/src/limits.rs",
-        "crates/api/src/limits_usage.rs",
-        "crates/api/src/rejections.rs",
-        "crates/core/src/limits/mod.rs",
-        "crates/core/src/limits/rule.rs",
-        "crates/core/src/limits/scope.rs",
-        "crates/core/src/limits/status.rs",
-        "crates/core/src/limits/tests.rs"
-      ],
-      "group": "Usage Governance",
-      "group_id": "ed6eab63-a4bf-4e3e-9b23-3baba606597a",
-      "id": "ee85ce7f-3056-476b-bcba-471bdc902238",
-      "keywords": [
-        "LimitRule",
-        "LimitStatus",
-        "LimitScope",
-        "LimitMetric",
-        "LimitWindow",
-        "LimitAction",
-        "throttle",
-        "block",
-        "alert",
-        "admission",
-        "scope",
-        "warn_at",
-        "api_key",
-        "customer",
-        "per-key budget"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.785898800+00:00",
-      "name": "limit-enforcement",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "serde_json"
-      ]
-    },
-    {
-      "api_surface": "POST /v1/revenue, GET /v1/margin, GET /v1/margin/trend, GET /v1/margin/customer/:id, GET /v1/margin/simulate, POST /v1/billing/:provider/webhook",
-      "business_feature": "Margin Analytics",
-      "category": "api",
-      "cross_refs": [
-        "billing-integration",
-        "cost-pricing",
-        "predictive-forecast",
-        "store-sqlite-extended"
-      ],
-      "db_tables": [
-        "revenue_events",
-        "events"
-      ],
-      "description": "Ingests revenue events from billing providers and computes profit margin (revenue minus LLM cost) sliced by project, customer, product, model, or use-case. Exposes trend series, per-customer breakdowns, and a pricing what-if simulator that projects margin under hypothetical token price changes. Revenue events are stored with period_start/period_end for subscription proration.",
-      "entry_points": [
-        "crates/api/src/revenue.rs",
-        "crates/core/src/margin.rs"
-      ],
-      "file_paths": [
-        "crates/api/src/revenue.rs",
-        "crates/api/src/billing.rs",
-        "crates/core/src/revenue.rs",
-        "crates/core/src/margin.rs",
-        "crates/core/src/margin_sim.rs",
-        "crates/core/src/margin_trend.rs",
-        "crates/core/src/customer.rs"
-      ],
-      "group": "Revenue & Profit",
-      "group_id": "9ba34dfc-d80d-4831-bffe-ecb8c8377401",
-      "id": "a3e30536-af56-4501-b536-7752b93b69d0",
-      "keywords": [
-        "margin",
-        "revenue",
-        "profit",
-        "RevenueEvent",
-        "MarginRow",
-        "simulate",
-        "trend",
-        "customer_id",
-        "product_id",
-        "cost_usd",
-        "amount_usd"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.786428500+00:00",
-      "name": "margin-analytics",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "serde_json"
-      ]
-    },
-    {
-      "api_surface": "MCP stdio JSON-RPC 2.0; calls all GET + selected POST/PUT/DELETE endpoints of the LightTrack API",
-      "business_feature": "MCP Server",
-      "category": "api",
-      "cross_refs": [
-        "rendering-core",
-        "rendering-analytics",
-        "api-server"
-      ],
-      "db_tables": [],
-      "description": "The lt-mcp binary — a Model Context Protocol server exposing LightTrack observability data to Claude Code and other MCP-aware agents over stdio JSON-RPC 2.0. Provides 25 read-only tools and 11 write tools (gated behind LIGHTTRACK_MCP_ALLOW_WRITES). It is a thin HTTP client of the API; it never touches the database and cannot crash the API process. Write tools on the MCP surface intentionally exclude secret-minting operations.",
-      "entry_points": [
-        "crates/mcp/src/main.rs",
-        "crates/mcp/src/read.rs"
-      ],
-      "file_paths": [
-        "crates/mcp/src/main.rs",
-        "crates/mcp/src/client.rs",
-        "crates/mcp/src/rpc.rs",
-        "crates/mcp/src/tools.rs",
-        "crates/mcp/src/read.rs",
-        "crates/mcp/src/write.rs",
-        "crates/mcp/src/schemas.rs",
-        "crates/mcp/src/resources.rs",
-        "crates/mcp/src/prompts.rs",
-        "crates/mcp/src/prompts_tools.rs",
-        "crates/mcp/src/errors.rs",
-        "crates/mcp/src/relay_tools.rs",
-        "crates/mcp/src/tool_contract.rs"
+        "crates/store-firestore/src/lib.rs",
+        "crates/store-firestore/src/rest.rs",
+        "crates/store-firestore/src/codec.rs",
+        "crates/store-firestore/src/scope.rs",
+        "crates/store-firestore/src/events.rs",
+        "crates/store-firestore/src/scores.rs",
+        "crates/store-firestore/src/projects.rs",
+        "crates/store-firestore/src/prices.rs",
+        "crates/store-firestore/src/price_fill.rs",
+        "crates/store-firestore/src/rollup.rs",
+        "crates/store-firestore/src/revenue.rs",
+        "crates/store-firestore/src/limits.rs",
+        "crates/store-firestore/src/margin_policies.rs",
+        "crates/store-firestore/src/prompts.rs"
       ],
       "group": "Platform Infrastructure",
-      "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
-      "id": "03ce5fc7-df88-468d-9698-61d2f640e751",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "f715b154-0057-44d0-bb0a-80f4caee36ba",
       "keywords": [
-        "MCP",
-        "JSON-RPC",
-        "stdio",
-        "tools",
-        "resources",
+        "firestore",
+        "store",
+        "events",
+        "ingestion",
+        "cost",
+        "rollup",
+        "pricing",
+        "limits",
         "prompts",
-        "read-only",
-        "LIGHTTRACK_MCP_ALLOW_WRITES",
-        "Claude Code",
-        "readOnlyHint"
+        "REST"
       ],
-      "last_written_at": "2026-08-03T19:08:52.788136900+00:00",
-      "name": "mcp-server",
+      "last_written_at": "2026-09-21T20:07:59.158223500+00:00",
+      "name": "firestore-core-dataplane",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "reqwest 0.12 (blocking)",
-        "serde_json"
+        "Rust",
+        "reqwest 0.13",
+        "serde_json",
+        "chrono",
+        "rustls"
       ]
     },
     {
-      "api_surface": "GET /v1/collective/digest, POST /v1/collective/ingest, GET /v1/collective/leaderboard",
-      "business_feature": "Collective Model Leaderboard",
-      "category": "api",
+      "api_surface": "Implements Store benchmark/dataset/rubric/job/label/collective/alert surfaces; conformance suite via Firestore emulator",
+      "business_feature": "Firestore Eval & Collective Storage",
+      "category": "data",
       "cross_refs": [
-        "benchmark-management",
-        "store-sqlite-extended"
+        "firestore-core-dataplane"
       ],
       "db_tables": [
-        "collective_entries"
+        "benchmarks",
+        "benchmark_runs",
+        "datasets",
+        "dataset_items",
+        "rubrics",
+        "jobs",
+        "labels",
+        "collective_entries",
+        "alerts",
+        "alert_channels"
       ],
-      "description": "Opt-in privacy-safe model performance network where participating LightTrack instances contribute k-anonymised benchmark digests to a shared hub. Digests aggregate quality, cost, and latency per model-task-judge triple without exposing raw prompt data. Merged leaderboard enables cross-organisation model comparison with rubric-fingerprint alignment.",
+      "description": "Implements the Store trait's evaluation, benchmarking, collective intelligence, and alerting surfaces over Firestore REST. Covers benchmark definitions and runs, dataset/item management, rubric storage, async job leases, human verdict labels with calibration history, collective leaderboard entries and contributor ledger, and the alert ledger with dedup, delivery tracking, and routing channels. The conformance test suite asserts correct `Unsupported` refusals (e.g. traces) and surface-level parity against the backend capability manifest.",
       "entry_points": [
-        "crates/api/src/collective.rs",
-        "crates/core/src/collective/mod.rs"
+        "crates/store-firestore/src/benchmarks.rs",
+        "crates/store-firestore/src/collective.rs",
+        "crates/store-firestore/tests/conformance.rs"
       ],
       "file_paths": [
-        "crates/api/src/collective.rs",
-        "crates/api/src/tests_collective.rs",
-        "crates/core/src/collective/mod.rs",
-        "crates/core/src/collective/types.rs",
-        "crates/core/src/collective/aliases.rs",
-        "crates/core/src/collective/classify.rs",
-        "crates/core/src/collective/merge.rs"
+        "crates/store-firestore/src/benchmarks.rs",
+        "crates/store-firestore/src/datasets.rs",
+        "crates/store-firestore/src/rubrics.rs",
+        "crates/store-firestore/src/jobs.rs",
+        "crates/store-firestore/src/labels.rs",
+        "crates/store-firestore/src/collective.rs",
+        "crates/store-firestore/src/contributions.rs",
+        "crates/store-firestore/src/alerts.rs",
+        "crates/store-firestore/src/alert_channels.rs",
+        "crates/store-firestore/tests/conformance.rs"
       ],
-      "group": "Collective Intelligence",
-      "group_id": "98492dae-9c12-436b-8fa4-2a6e3479c434",
-      "id": "4c1e6639-0d00-434c-b965-37e8b2de3a1d",
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "32c31d6e-f9fb-4806-855a-b6056d920f34",
       "keywords": [
+        "benchmarks",
+        "datasets",
+        "rubrics",
+        "jobs",
+        "labels",
+        "calibration",
         "collective",
-        "leaderboard",
-        "digest",
-        "k-anonymized",
-        "model",
-        "quality",
-        "task_type",
-        "rubric_fingerprint",
-        "provider",
-        "merge",
-        "aliases"
+        "contributions",
+        "alerts",
+        "conformance"
       ],
-      "last_written_at": "2026-08-03T19:08:52.786576600+00:00",
-      "name": "model-leaderboard",
+      "last_written_at": "2026-09-21T20:08:01.242724+00:00",
+      "name": "firestore-eval-collective",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "serde_json"
+        "Rust",
+        "reqwest 0.13",
+        "serde_json",
+        "chrono"
       ]
     },
     {
-      "api_surface": "",
-      "business_feature": "PII Anonymisation",
-      "category": "lib",
-      "cross_refs": [
-        "event-ingest",
-        "dataset-management"
-      ],
+      "api_surface": "POST /v1/chat/completions (OpenAI-compatible); GET /v1/limits/status (consumed from LightTrack API for admission); POST /v1/events/batch (emitted to LightTrack API for telemetry)",
+      "business_feature": "Multi-Provider Gateway with Failover",
+      "category": "api",
+      "cross_refs": [],
       "db_tables": [],
-      "description": "Regex-based PII scrubber that is the fast structured-PII phase of the anonymisation pipeline. Redacts emails, IBANs, US SSNs, API secrets (sk-… / AKIA…), hex secrets, credit cards, IPs, and phone numbers with typed placeholders in a single deterministic pass. Applied at ingest time for payload redaction and in the dataset builder before freezing.",
+      "description": "Provides a single loopback OpenAI-compatible HTTP endpoint (`lt-gateway`) that apps point their OpenAI SDK at, resolving a use-case route name or literal `provider/model` to an ordered chain of seat-metered CLI backends (claude -p, codex exec, or HTTP providers). It walks the chain on failure, classifying each error as exhausted/transient/terminal, holding spent seats out via a cooldown timer, and gate-checking the project's usage limits via the LightTrack admission API before any seat is spent. Every attempt — success or failure — is recorded as a structured event to the LightTrack API with shared trace IDs so failover appears as one story in the trace view.",
       "entry_points": [
-        "crates/anon/src/lib.rs"
+        "crates/gateway/src/main.rs",
+        "crates/gateway/src/chat.rs",
+        "crates/gateway/src/failover.rs"
       ],
       "file_paths": [
-        "crates/anon/src/lib.rs",
-        "crates/anon/src/tests.rs"
+        "crates/gateway/Cargo.toml",
+        "crates/gateway/src/main.rs",
+        "crates/gateway/src/chat.rs",
+        "crates/gateway/src/router.rs",
+        "crates/gateway/src/wire.rs",
+        "crates/gateway/src/stream.rs",
+        "crates/gateway/src/error.rs",
+        "crates/gateway/src/state.rs",
+        "crates/gateway/src/failover.rs",
+        "crates/gateway/src/failover/tests.rs",
+        "crates/gateway/src/cooldown.rs",
+        "crates/gateway/src/routes.rs",
+        "crates/gateway/src/admission.rs",
+        "crates/gateway/src/target.rs",
+        "crates/gateway/src/telemetry.rs",
+        "crates/gateway/src/config.rs",
+        "crates/gateway/src/generator.rs",
+        "crates/gateway/src/tests.rs"
       ],
-      "group": "Data & Persistence",
-      "group_id": "e2935806-cfdd-493f-8f55-06ee5db7ce5f",
-      "id": "e0819b3d-74f5-4d8c-ac50-fc386bd92797",
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "cb7bbb5f-02f2-48d9-90f3-cea5b3d14b47",
       "keywords": [
-        "scrub",
-        "redact",
-        "PII",
-        "email",
-        "SSN",
-        "IBAN",
-        "secret",
-        "regex",
-        "ScrubResult",
-        "anonymize"
+        "gateway",
+        "failover",
+        "seat-metered",
+        "openai-compatible",
+        "admission",
+        "cooldown",
+        "use-case-routing",
+        "telemetry",
+        "multi-provider",
+        "loopback"
       ],
-      "last_written_at": "2026-08-03T19:08:52.787023900+00:00",
-      "name": "pii-scrubbing",
+      "last_written_at": "2026-09-21T20:09:54.519525100+00:00",
+      "name": "gateway-proxy",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
+        "Rust",
+        "axum 0.7",
+        "tokio 1",
+        "reqwest 0.13",
+        "lighttrack-core",
+        "lighttrack-engine"
+      ]
+    },
+    {
+      "api_surface": "run_judge, run_rubric_judge, run_rubric_judge_with_evidence, run_pairwise, run_rubric_batch (library API)",
+      "business_feature": "LLM-as-Judge Scoring",
+      "category": "lib",
+      "cross_refs": [
+        "provider-generation",
+        "claude-invocation-and-execution"
+      ],
+      "db_tables": [],
+      "description": "Implements LLM-as-judge scoring for benchmark runs: executes rubric dimensions (LLM, grounding, deterministic), batches judge calls, computes weighted overall scores with per-dimension floors, and detects prompt-injection attempts via nonce fencing. Prompt builders in `prompts/` assemble the judge/eval/rubric/pairwise schemas; `scorers/` handles non-LLM dimensions (exact, regex, numeric, json_valid, contains); `parse` does JSON extraction with one-shot repair re-ask; `pairwise` drives head-to-head comparisons. Outputs `RubricOutcome` / `JudgeOutcome` / `PairwiseOutcome` consumed by the runner and API layers.",
+      "entry_points": [
+        "crates/engine/src/judge.rs",
+        "crates/engine/src/prompts.rs",
+        "crates/engine/src/scorers.rs"
+      ],
+      "file_paths": [
+        "crates/engine/src/judge.rs",
+        "crates/engine/src/judge/batch.rs",
+        "crates/engine/src/judge/batch/tests.rs",
+        "crates/engine/src/judge/grounding.rs",
+        "crates/engine/src/judge/grounding/tests.rs",
+        "crates/engine/src/judge/tests.rs",
+        "crates/engine/src/judge/tests/corpus.rs",
+        "crates/engine/src/judge/tests/deterministic.rs",
+        "crates/engine/src/prompts.rs",
+        "crates/engine/src/prompts/grounding.rs",
+        "crates/engine/src/prompts/tests.rs",
+        "crates/engine/src/scorers.rs",
+        "crates/engine/src/scorers/numeric.rs",
+        "crates/engine/src/scorers/tests.rs",
+        "crates/engine/src/pairwise.rs",
+        "crates/engine/src/parse.rs",
+        "crates/engine/src/fence.rs",
+        "crates/engine/tests/judge_samples_live.rs"
+      ],
+      "group": "Evaluation & Benchmarking",
+      "group_id": "448577e9-0a40-46f4-a6b7-1ba0696d3c09",
+      "id": "70358003-cc4e-4553-ba3c-e864f30850d1",
+      "keywords": [
+        "judge",
+        "rubric",
+        "scoring",
+        "grounding",
+        "pairwise",
+        "fence",
+        "injection",
+        "deterministic",
+        "LLM-as-judge",
+        "benchmark"
+      ],
+      "last_written_at": "2026-09-21T20:05:21.650718200+00:00",
+      "name": "judge-and-scoring",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "lighttrack-core",
+        "serde_json",
         "regex"
       ]
     },
     {
-      "api_surface": "GET /v1/forecast",
-      "business_feature": "Predictive Forecasting",
+      "api_surface": "MCP stdio JSON-RPC 2.0: tools/list, tools/call, prompts/list, prompts/get, resources/list, resources/templates/list, resources/read; proxies to LIGHTTRACK_URL REST API",
+      "business_feature": "MCP Agent Interface",
       "category": "api",
-      "cross_refs": [
-        "alert-delivery",
-        "margin-analytics",
-        "store-sqlite-core"
-      ],
-      "db_tables": [
-        "events",
-        "revenue_events"
-      ],
-      "description": "Projects future spend and margin using EWMA and linear trend models over daily counter series. Emits pre-emptive budget-breach and margin-erosion alerts before limits are actually hit. Configurable horizon and lookback window; daily usage bucketing requires no extra schema columns. Budget-ETA and margin-erosion alerts also fire on a schedule from a detached sweep in the API process (LIGHTTRACK_FORECAST_SWEEP_SECS, off by default), sharing the request path's cooldown keys.",
-      "entry_points": [
-        "crates/api/src/forecast.rs",
-        "crates/core/src/forecast.rs"
-      ],
-      "file_paths": [
-        "crates/api/src/forecast.rs",
-        "crates/api/src/tests_forecast.rs",
-        "crates/core/src/forecast.rs",
-        "crates/api/src/forecast_alerts.rs",
-        "crates/api/src/forecast_sweep.rs"
-      ],
-      "group": "Usage Governance",
-      "group_id": "ed6eab63-a4bf-4e3e-9b23-3baba606597a",
-      "id": "ea5d57cd-59c2-4989-8347-c51ce8af50ac",
-      "keywords": [
-        "forecast",
-        "EWMA",
-        "trend",
-        "budget",
-        "horizon",
-        "lookback",
-        "BudgetForecast",
-        "MarginForecast",
-        "Trend",
-        "daily",
-        "projection"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.786190700+00:00",
-      "name": "predictive-forecast",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "serde_json"
-      ]
-    },
-    {
-      "api_surface": "POST /v1/projects, GET /v1/projects, POST /v1/projects/:id/keys, GET /v1/projects/:id/keys, DELETE /v1/projects/:id/keys/:kid",
-      "business_feature": "Project Management",
-      "category": "api",
-      "cross_refs": [
-        "api-server",
-        "store-sqlite-core"
-      ],
-      "db_tables": [
-        "projects",
-        "api_keys"
-      ],
-      "description": "Multi-tenant project and API key lifecycle management. Projects are the top-level tenancy boundary; each has a redaction policy (none/hash/drop) and a collective opt-in flag. API keys are prefix-hashed bearer tokens with revocation support and last-used tracking.",
-      "entry_points": [
-        "crates/api/src/projects.rs",
-        "crates/core/src/project.rs"
-      ],
-      "file_paths": [
-        "crates/api/src/projects.rs",
-        "crates/core/src/project.rs"
-      ],
-      "group": "LLM Observability",
-      "group_id": "89b3e20c-79b5-4a3b-ae5f-38ddfbcbcb13",
-      "id": "a7ce5ba5-b50e-4e4d-a2be-a80c7d38c7aa",
-      "keywords": [
-        "Project",
-        "ApiKey",
-        "project_id",
-        "key_hash",
-        "prefix",
-        "redaction",
-        "revoked",
-        "auth",
-        "tenant"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.784841+00:00",
-      "name": "project-management",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "serde_json"
-      ]
-    },
-    {
-      "api_surface": "POST /v1/projects/:id/prompts, GET /v1/projects/:id/prompts, GET /v1/projects/:id/prompts/:name, POST /v1/projects/:id/prompts/:name/versions, GET /v1/projects/:id/prompts/:name/versions, POST /v1/projects/:id/prompts/:name/promote",
-      "business_feature": "Prompt Registry",
-      "category": "api",
-      "cross_refs": [
-        "benchmark-management",
-        "store-sqlite-eval",
-        "store-firestore"
-      ],
-      "db_tables": [
-        "prompts",
-        "prompt_versions"
-      ],
-      "description": "Stores and versions prompts by name with label-based aliasing (e.g. 'production', 'canary'). Promoting a label to a new version auto-enqueues a benchmark run and is blocked if the run regresses against the baseline — making the registry a quality-gated deployment mechanism for prompts.",
-      "entry_points": [
-        "crates/api/src/prompts.rs",
-        "crates/core/src/prompt.rs"
-      ],
-      "file_paths": [
-        "crates/api/src/prompts.rs",
-        "crates/core/src/prompt.rs"
-      ],
-      "group": "Evaluation & Benchmarking",
-      "group_id": "491ba1f4-9342-4eaf-a420-c5df8bb95021",
-      "id": "53d786e1-c6c2-4434-99b0-e38c97db6480",
-      "keywords": [
-        "Prompt",
-        "PromptVersion",
-        "label",
-        "promote",
-        "version",
-        "benchmark_id",
-        "regression",
-        "gate",
-        "registry",
-        "content"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.785791600+00:00",
-      "name": "prompt-registry",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "serde_json"
-      ]
-    },
-    {
-      "api_surface": "POST /v1/relay/tasks, GET /v1/relay/tasks, GET /v1/relay/tasks/:id, POST /v1/relay/tasks/:id/result, POST /v1/relay/lease",
-      "business_feature": "Cloud-to-Device Relay",
-      "category": "api",
-      "cross_refs": [
-        "device-agent",
-        "alert-delivery",
-        "store-sqlite-extended",
-        "store-postgres"
-      ],
-      "db_tables": [
-        "relay_tasks"
-      ],
-      "description": "Cloud-to-device task queue enabling on-device Claude Code runs triggered from a cloud dashboard without requiring inbound connections to the device. Tasks move through queued→leased→succeeded/dead lifecycle with retry logic, idempotency keys, and lease deadlines. A flat-cost revenue event is recorded on successful settlement.",
-      "entry_points": [
-        "crates/api/src/relay.rs",
-        "crates/core/src/relay.rs"
-      ],
-      "file_paths": [
-        "crates/api/src/relay.rs",
-        "crates/api/src/tests_relay.rs",
-        "crates/core/src/relay.rs"
-      ],
-      "group": "Device Relay",
-      "group_id": "3f828e11-fcd9-4118-8619-4c189fc0a3ac",
-      "id": "ae1ba427-f6cd-4661-83e9-4fec34c20f04",
-      "keywords": [
-        "relay",
-        "RelayTask",
-        "lease",
-        "settle",
-        "device",
-        "idempotency_key",
-        "action_type",
-        "lease_deadline",
-        "long_poll",
-        "queued",
-        "dead_letter"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.786679600+00:00",
-      "name": "relay-queue",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "serde_json"
-      ]
-    },
-    {
-      "api_surface": "",
-      "business_feature": "Analytics Rendering",
-      "category": "lib",
-      "cross_refs": [
-        "rendering-core",
-        "cli-tool",
-        "mcp-server"
-      ],
+      "cross_refs": [],
       "db_tables": [],
-      "description": "Markdown rendering for analytics and evaluation entities: benchmarks, datasets, rubrics, comparison leaderboards, forecast reports, collective digests, prompt listings, and margin analytics. Shares the common table helpers from rendering-core. Populated by both the CLI and MCP server.",
+      "description": "The `lt-mcp` binary implements a Model Context Protocol server that exposes LightTrack's full observability, benchmarking, and governance data to Claude Code and AI agents via stdio JSON-RPC 2.0. It is a thin, stateless HTTP client of the LightTrack API — it never touches the database directly, so a misbehaving tool call can at worst produce a 4xx and cannot corrupt state. The server dispatches 50+ read/write tools across four sub-catalogs (core reads, prompt-registry tools, relay inspection, and gated writes), exposes `lighttrack://` resource URI templates for attaching traces/events/benchmarks, and serves seven pre-built slash-command prompts (cost-report, limit-check, benchmark-leaderboard, etc.); the tool surface is pinned in `tool-contract.json` so agent configurations are protected from silent renames.",
       "entry_points": [
-        "crates/render/src/lib.rs"
+        "crates/mcp/src/main.rs",
+        "crates/mcp/src/tools.rs",
+        "crates/mcp/src/read.rs"
       ],
       "file_paths": [
-        "crates/render/src/benchmarks.rs",
-        "crates/render/src/datasets.rs",
-        "crates/render/src/rubrics.rs",
-        "crates/render/src/compare.rs",
-        "crates/render/src/forecast.rs",
-        "crates/render/src/collective.rs",
-        "crates/render/src/prompts.rs",
-        "crates/render/src/margin.rs",
-        "crates/render/tests/render.rs",
-        "crates/render/src/margin_policies.rs"
+        "crates/mcp/Cargo.toml",
+        "crates/mcp/tool-contract.json",
+        "crates/mcp/src/main.rs",
+        "crates/mcp/src/client.rs",
+        "crates/mcp/src/rpc.rs",
+        "crates/mcp/src/errors.rs",
+        "crates/mcp/src/tools.rs",
+        "crates/mcp/src/tool_contract.rs",
+        "crates/mcp/src/schemas.rs",
+        "crates/mcp/src/read.rs",
+        "crates/mcp/src/write.rs",
+        "crates/mcp/src/relay_tools.rs",
+        "crates/mcp/src/prompts.rs",
+        "crates/mcp/src/prompts_tools.rs",
+        "crates/mcp/src/resources.rs"
       ],
       "group": "Platform Infrastructure",
-      "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
-      "id": "d3c24ea3-b074-4781-9bbe-d101a90264c9",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "569c353a-2570-4ea6-9da3-f0fed1bfa1a7",
       "keywords": [
-        "render",
-        "Markdown",
-        "benchmarks",
-        "datasets",
-        "rubrics",
-        "forecast",
-        "margin",
-        "collective",
-        "prompts",
-        "compare"
+        "mcp",
+        "model-context-protocol",
+        "json-rpc",
+        "stdio",
+        "tool-dispatch",
+        "agent-interface",
+        "lighttrack-api",
+        "read-only-hint",
+        "tool-contract",
+        "slash-commands"
       ],
-      "last_written_at": "2026-08-03T19:08:52.788529700+00:00",
-      "name": "rendering-analytics",
+      "last_written_at": "2026-09-21T20:10:07.905741700+00:00",
+      "name": "mcp-server",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "serde_json"
+        "Rust",
+        "reqwest 0.13",
+        "serde_json",
+        "lighttrack-contract",
+        "lighttrack-render"
       ]
     },
     {
-      "api_surface": "",
-      "business_feature": "Output Rendering",
+      "api_surface": "render(kind, value) -> Option<String> — dispatches by MCP tool name / CLI verb",
+      "business_feature": "Observability Response Rendering",
       "category": "lib",
       "cross_refs": [
-        "cli-tool",
-        "mcp-server",
-        "rendering-analytics"
+        "evaluation-rendering"
       ],
       "db_tables": [],
-      "description": "Converts LightTrack API JSON responses for operational entities into aligned Markdown tables for use by the lt CLI and lt-mcp MCP server. Covers events, traces, scores, prices, projects, jobs, limits, costs, and the shared Markdown table helpers. Pure serde_json::Value in, Markdown string out — no database or core crate dependency.",
+      "description": "Renders raw LightTrack API JSON responses for observability-domain endpoints into compact, human-readable Markdown for the `lt` CLI and `lt-mcp` server. Covers events, traces, scores, cost summaries, forecast reports, rollup tables, project listings, alert lists, label/calibration views, and collective-intelligence surfaces. Pure string work with no I/O: accepts a `serde_json::Value` and returns an `Option<String>` that callers fall back from to pretty-printed JSON on `None`. Depends on the shared `md` helper module and is held to `lighttrack-contract` by dispatch-table tests.",
       "entry_points": [
         "crates/render/src/lib.rs"
       ],
       "file_paths": [
         "crates/render/src/lib.rs",
         "crates/render/src/md.rs",
+        "crates/render/src/capabilities.rs",
         "crates/render/src/events.rs",
         "crates/render/src/traces.rs",
         "crates/render/src/scores.rs",
-        "crates/render/src/prices.rs",
-        "crates/render/src/projects.rs",
-        "crates/render/src/jobs.rs",
-        "crates/render/src/limits.rs",
+        "crates/render/src/rollup.rs",
         "crates/render/src/costs.rs",
-        "crates/render/src/capabilities.rs"
+        "crates/render/src/forecast.rs",
+        "crates/render/src/projects.rs",
+        "crates/render/src/labels.rs",
+        "crates/render/src/alerts.rs",
+        "crates/render/src/collective.rs"
       ],
       "group": "Platform Infrastructure",
-      "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
-      "id": "714a96f2-669b-460b-8781-1f51bc3fcd50",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "27581a68-b0d5-452e-8130-7283211996ae",
       "keywords": [
         "render",
-        "Markdown",
-        "table",
-        "TTY",
+        "markdown",
         "events",
         "traces",
         "scores",
-        "limits",
+        "rollup",
+        "forecast",
         "costs",
-        "format"
+        "alerts",
+        "collective"
       ],
-      "last_written_at": "2026-08-03T19:08:52.788436200+00:00",
-      "name": "rendering-core",
+      "last_written_at": "2026-09-21T20:08:07.104979100+00:00",
+      "name": "observability-rendering",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
+        "Rust",
         "serde_json"
       ]
     },
     {
-      "api_surface": "POST /v1/projects/:id/rubrics, GET /v1/projects/:id/rubrics, GET /v1/rubrics/:id",
-      "business_feature": "Evaluation Rubrics",
-      "category": "api",
+      "api_surface": "Implements Store trait methods: insert_score, list_scores_filtered, score_summary_by_dimension, create_benchmark, create_dataset, fork_dataset, import_dataset_items, create_rubric, insert_label, insert_calibration, create_prompt",
+      "business_feature": "Evaluation & Quality Scoring",
+      "category": "data",
       "cross_refs": [
-        "judge-engine",
-        "benchmark-management",
-        "scoring",
-        "store-sqlite-eval"
+        "pg-event-telemetry",
+        "pg-platform-operations"
       ],
       "db_tables": [
-        "rubrics"
+        "scores",
+        "benchmarks",
+        "benchmark_runs",
+        "datasets",
+        "dataset_items",
+        "rubrics",
+        "labels",
+        "calibrations",
+        "prompts",
+        "prompt_versions"
       ],
-      "description": "Defines and stores structured evaluation rubrics composed of weighted, anchor-point dimensions (RCAF methodology). Rubrics are referenced by benchmarks and used by the judge engine to produce per-dimension scores with an overall pass/fail threshold. The runner invokes rubric judging with k-sample averaging for reliability.",
+      "description": "Persists and queries the full evaluation stack: judge scores and their dimensional summaries, benchmark definitions and runs, eval datasets with fork/import lineage, scoring rubrics, human verdict labels, and judge calibration history. These tables form the quality ledger that gates prompt promotion and tracks model drift on managed Postgres deployments where production traffic flows.",
       "entry_points": [
-        "crates/core/src/rubric.rs",
-        "crates/api/src/rubrics.rs"
+        "crates/store-pg/src/scores.rs",
+        "crates/store-pg/src/benchmarks.rs",
+        "crates/store-pg/src/datasets.rs"
       ],
       "file_paths": [
-        "crates/api/src/rubrics.rs",
-        "crates/runner/src/rubric.rs",
-        "crates/core/src/rubric.rs"
+        "crates/store-pg/src/scores.rs",
+        "crates/store-pg/src/score_summary.rs",
+        "crates/store-pg/src/benchmarks.rs",
+        "crates/store-pg/src/datasets.rs",
+        "crates/store-pg/src/dataset_lineage.rs",
+        "crates/store-pg/src/rubrics.rs",
+        "crates/store-pg/src/labels.rs",
+        "crates/store-pg/src/calibrations.rs",
+        "crates/store-pg/src/prompts.rs"
       ],
       "group": "Evaluation & Benchmarking",
-      "group_id": "491ba1f4-9342-4eaf-a420-c5df8bb95021",
-      "id": "94d7cacc-3ab4-4e43-9a62-61c806ee360c",
+      "group_id": "448577e9-0a40-46f4-a6b7-1ba0696d3c09",
+      "id": "bcb4d3f6-3950-42fa-a00e-12126bf4794d",
       "keywords": [
-        "Rubric",
-        "RubricDimension",
-        "threshold",
-        "weight",
-        "anchor",
-        "RCAF",
-        "dimension",
-        "DimScore",
-        "RubricOutcome",
-        "structured"
+        "scores",
+        "benchmarks",
+        "rubrics",
+        "datasets",
+        "calibration",
+        "labels",
+        "verdicts",
+        "eval-corpus",
+        "prompt-registry",
+        "quality-ledger"
       ],
-      "last_written_at": "2026-08-03T19:08:52.785412500+00:00",
-      "name": "rubric-system",
+      "last_written_at": "2026-09-21T20:08:19.346812600+00:00",
+      "name": "pg-evaluation-store",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
+        "Rust",
+        "sqlx 0.8",
+        "tokio 1",
+        "Postgres"
+      ]
+    },
+    {
+      "api_surface": "Implements Store trait methods: insert_event, insert_event_checked, list_events_filtered, rollup, list_traces, list_trace_events, redaction_posture",
+      "business_feature": "LLM Event Telemetry",
+      "category": "data",
+      "cross_refs": [
+        "pg-platform-operations",
+        "pg-evaluation-store"
+      ],
+      "db_tables": [],
+      "description": "Persists and queries LLM call events, usage aggregates, rollups, distributed traces, and PII redaction posture against Postgres. The `events` module is split into write, list, filter, cost, and usage sub-files; `admission` gates duplicate events with a transaction-scoped advisory lock; `rollup` is the grouped-aggregate primitive that powers forecast and margin surfaces via trait defaults; `traces` groups spans into call trees.",
+      "entry_points": [
+        "crates/store-pg/src/events/mod.rs",
+        "crates/store-pg/src/admission.rs",
+        "crates/store-pg/src/rollup.rs"
+      ],
+      "file_paths": [
+        "crates/store-pg/src/events/mod.rs",
+        "crates/store-pg/src/events/write.rs",
+        "crates/store-pg/src/events/list.rs",
+        "crates/store-pg/src/events/filters.rs",
+        "crates/store-pg/src/events/cost.rs",
+        "crates/store-pg/src/events/usage.rs",
+        "crates/store-pg/src/events/cols.rs",
+        "crates/store-pg/src/admission.rs",
+        "crates/store-pg/src/traces.rs",
+        "crates/store-pg/src/rollup.rs",
+        "crates/store-pg/src/redaction.rs"
+      ],
+      "group": "LLM Observability",
+      "group_id": "12239d64-cf9d-4d05-b3de-5f01a3208d78",
+      "id": "9aa1714b-d868-4684-8328-325d5d249aed",
+      "keywords": [
+        "llm-event",
+        "telemetry",
+        "admission",
+        "rollup",
+        "traces",
+        "redaction",
+        "usage",
+        "cost",
+        "filter",
+        "ingestion"
+      ],
+      "last_written_at": "2026-09-21T20:08:21.522726100+00:00",
+      "name": "pg-event-telemetry",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "sqlx 0.8",
+        "tokio 1",
+        "Postgres"
+      ]
+    },
+    {
+      "api_surface": "Implements Store trait methods: create_project, create_api_key, create_limit_rule, upsert_price, fill_unpriced_cost, insert_revenue_event, reprice_revenue, create_job, claim_job, create_schedule, create_relay_task, lease_relay_tasks, settle_relay_task, create_device, replace_collective_contribution, insert_alert_dedup, create_alert_channel",
+      "business_feature": "Platform Operations & Governance",
+      "category": "data",
+      "cross_refs": [
+        "pg-event-telemetry",
+        "pg-evaluation-store"
+      ],
+      "db_tables": [
+        "projects",
+        "api_keys",
+        "limit_rules",
+        "model_prices",
+        "revenue_events",
+        "margin_policies",
+        "jobs",
+        "schedules",
+        "relay_tasks",
+        "devices",
+        "collective_entries",
+        "alerts",
+        "alert_channels"
+      ],
+      "description": "Implements the full set of platform plumbing surfaces on Postgres: project and API-key admin, usage limits, model pricing and revenue repricing, margin policies, background jobs with lease-fenced dequeues, cron schedules, cloud-to-device relay queue with concurrency-safe leases, device fleet registry, collective leaderboard with atomic contributor replacement, contribution ledger, and the alert ledger with dedup cooldown and routing channels. Also contains the crate root (`lib.rs`), shared SQL helpers (`util.rs`), Cargo manifest, and the conformance/metadata guard test suite.",
+      "entry_points": [
+        "crates/store-pg/src/lib.rs",
+        "crates/store-pg/src/jobs.rs",
+        "crates/store-pg/src/relay.rs"
+      ],
+      "file_paths": [
+        "crates/store-pg/src/lib.rs",
+        "crates/store-pg/src/util.rs",
+        "crates/store-pg/src/projects.rs",
+        "crates/store-pg/src/prices.rs",
+        "crates/store-pg/src/price_fill.rs",
+        "crates/store-pg/src/revenue.rs",
+        "crates/store-pg/src/margin_policies.rs",
+        "crates/store-pg/src/jobs.rs",
+        "crates/store-pg/src/schedules.rs",
+        "crates/store-pg/src/relay.rs",
+        "crates/store-pg/src/relay_lease.rs",
+        "crates/store-pg/src/devices.rs",
+        "crates/store-pg/src/collective.rs",
+        "crates/store-pg/src/contributions.rs",
+        "crates/store-pg/src/alerts.rs",
+        "crates/store-pg/src/alert_channels.rs",
+        "crates/store-pg/tests/conformance.rs",
+        "crates/store-pg/tests/metadata_guard.rs",
+        "crates/store-pg/tests/received_at.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "ae45e444-9735-4d0d-a66c-a946ba4d5e88",
+      "keywords": [
+        "projects",
+        "api-keys",
+        "limits",
+        "pricing",
+        "revenue",
+        "margin",
+        "jobs",
+        "schedules",
+        "relay",
+        "devices",
+        "collective",
+        "alerts",
+        "conformance",
+        "store-trait"
+      ],
+      "last_written_at": "2026-09-21T20:08:21.523063800+00:00",
+      "name": "pg-platform-operations",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "sqlx 0.8",
+        "tokio 1",
+        "Postgres"
+      ]
+    },
+    {
+      "api_surface": "Public API: scrub(text) -> ScrubResult, scrub_detailed(text) -> (String, ScrubReport), rule_set() -> Vec<PiiRule>, rules_fingerprint() -> &str",
+      "business_feature": "PII Scrubbing",
+      "category": "lib",
+      "cross_refs": [],
+      "db_tables": [],
+      "description": "Heuristic PII anonymization library that is the regex pass of the dataset-building pipeline: it replaces structured PII (emails, IBANs, SSNs, secrets, card numbers, IPs, phone numbers) with typed placeholders before traces are stored for judge scoring. Rules run in a fixed precedence order (most-specific first) and are deliberately conservative to avoid mangling evidence the downstream judge will read. The rule set is exported as a versioned JSON fixture consumed by client SDKs so their `guard(no_pii)` checks stay in sync with the server scrubber; a SHA-256 fingerprint of the ordered rule set is stamped on every scrubbed row so rule-set drift is observable in the database.",
+      "entry_points": [
+        "crates/anon/src/lib.rs"
+      ],
+      "file_paths": [
+        "crates/anon/Cargo.toml",
+        "crates/anon/src/lib.rs",
+        "crates/anon/src/stamp.rs",
+        "crates/anon/src/export.rs",
+        "crates/anon/src/tests.rs"
+      ],
+      "group": "Evaluation & Benchmarking",
+      "group_id": "448577e9-0a40-46f4-a6b7-1ba0696d3c09",
+      "id": "3df8f303-0005-4d18-8f39-d97cfc5fd20c",
+      "keywords": [
+        "pii",
+        "anonymization",
+        "scrubbing",
+        "redaction",
+        "email",
+        "phone",
+        "credit-card",
+        "ssn",
+        "iban",
+        "rules-fingerprint",
+        "dataset-building"
+      ],
+      "last_written_at": "2026-09-21T20:11:05.518154100+00:00",
+      "name": "pii-scrubbing",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "regex 1",
+        "sha2 0.11",
+        "serde_json 1 (dev)"
+      ]
+    },
+    {
+      "api_surface": "generate, generate_chat, generate_deterministic, generate_http (library API)",
+      "business_feature": "Multi-Provider LLM Generation",
+      "category": "lib",
+      "cross_refs": [
+        "claude-invocation-and-execution",
+        "judge-and-scoring"
+      ],
+      "db_tables": [],
+      "description": "Multi-provider candidate-output generation: routes `generate` / `generate_chat` / `generate_deterministic` calls to Anthropic (bare Messages API or `claude -p`), Google Gemini, OpenAI, and OpenRouter adapters. Enforces structured-output schemas with a schema-shed fallback, applies bounded exponential retry on transient failures (429/5xx/timeout), and stamps each outcome with determinism and schema-enforcement metadata. `http_target` supports operator-owned RAG/agent endpoints; `endpoint_probe` identifies what is answering at a re-pointed OpenAI-compatible base; `pool` and `retry` provide the shared HTTP client and backoff logic.",
+      "entry_points": [
+        "crates/engine/src/providers.rs",
+        "crates/engine/src/lib.rs"
+      ],
+      "file_paths": [
+        "crates/engine/src/providers.rs",
+        "crates/engine/src/providers/gemini.rs",
+        "crates/engine/src/providers/openai.rs",
+        "crates/engine/src/providers/openrouter.rs",
+        "crates/engine/src/anthropic_api.rs",
+        "crates/engine/src/chat.rs",
+        "crates/engine/src/http_target.rs",
+        "crates/engine/src/endpoint_probe.rs",
+        "crates/engine/src/pool.rs",
+        "crates/engine/src/retry.rs",
+        "crates/engine/src/family.rs",
+        "crates/engine/src/lib.rs",
+        "crates/engine/tests/provider_boundary.rs",
+        "crates/engine/tests/endpoint_probe.rs",
+        "crates/engine/tests/http_target.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "19e55525-23e7-4aa2-b7d3-0ca281fe1f4a",
+      "keywords": [
+        "generation",
+        "provider",
+        "gemini",
+        "openai",
+        "openrouter",
+        "anthropic",
+        "schema",
+        "retry",
+        "deterministic",
+        "http-target"
+      ],
+      "last_written_at": "2026-09-21T20:05:21.654939700+00:00",
+      "name": "provider-generation",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "reqwest 0.13",
+        "lighttrack-core",
         "serde_json"
       ]
     },
     {
-      "api_surface": "Calls all /v1/* endpoints of the LightTrack API",
-      "business_feature": "Runner Worker",
+      "api_surface": "POST /v1/events, POST /v1/scores, GET /v1/limits/status, POST /v1/relay/tasks, GET /v1/relay/tasks/{id}",
+      "business_feature": "Python SDK Observability Client",
       "category": "lib",
       "cross_refs": [
-        "judge-engine",
-        "scoring",
-        "benchmark-management",
-        "dataset-management",
-        "judge-calibration",
-        "billing-integration"
+        "typescript-sdk",
+        "rust-sdk"
       ],
       "db_tables": [],
-      "description": "The lt-runner binary — the local scoring and benchmark worker that runs alongside the developer's Claude CLI and API keys. Handles the worker-queue serve loop (claim job → run benchmark → finish), periodic dataset-sampling scheduler, recurring benchmark sweeps, and the Stripe billing sync command. It talks to the API exclusively over HTTP and never touches the database directly.",
+      "description": "Python client library for ingesting LLM call telemetry to the LightTrack API from any Python application. The core `LightTrack` class sends events best-effort on a background daemon thread; `instrument`/`wrap` monkey-patch OpenAI, Anthropic, and Gemini SDK clients for zero-config auto-tracing with full trace/span context propagation via `contextvars`. Includes pre-spend admission control, crash-surviving span journals, PII detection, and output guard validation; ships with no third-party runtime dependencies.",
+      "entry_points": [
+        "clients/python/lighttrack/client.py",
+        "clients/python/lighttrack/instrument.py",
+        "clients/python/lighttrack/__init__.py"
+      ],
+      "file_paths": [
+        "clients/python/example.py",
+        "clients/python/lighttrack/__init__.py",
+        "clients/python/lighttrack/client.py",
+        "clients/python/lighttrack/instrument.py",
+        "clients/python/lighttrack/auto.py",
+        "clients/python/lighttrack/admission.py",
+        "clients/python/lighttrack/journal.py",
+        "clients/python/lighttrack/limits.py",
+        "clients/python/lighttrack/pii.py",
+        "clients/python/lighttrack/diagnostics.py",
+        "clients/python/tests/conftest.py",
+        "clients/python/tests/test_admission.py",
+        "clients/python/tests/test_contract.py",
+        "clients/python/tests/test_diagnostics.py",
+        "clients/python/tests/test_instrument.py",
+        "clients/python/tests/test_journal.py",
+        "clients/python/tests/test_relay.py"
+      ],
+      "group": "LLM Observability",
+      "group_id": "12239d64-cf9d-4d05-b3de-5f01a3208d78",
+      "id": "f9f7fd73-7c48-4c30-ba1b-38f0d796c0cf",
+      "keywords": [
+        "telemetry",
+        "instrumentation",
+        "openai",
+        "anthropic",
+        "gemini",
+        "admission",
+        "journal",
+        "pii",
+        "guard",
+        "trace"
+      ],
+      "last_written_at": "2026-09-21T20:12:08.465400700+00:00",
+      "name": "python-sdk",
+      "pinned": false,
+      "tech_stack": [
+        "Python 3.12"
+      ]
+    },
+    {
+      "api_surface": "POST /webhook (LightTrack alert delivery), GET /health, GET /classification; consumes LightTrack GET /v1/events, GET /v1/scores, GET /v1/alerts, POST /v1/alerts/{id}/resolution; emits to Resend POST /emails",
+      "business_feature": "Reactive Alert Responder",
+      "category": "api",
+      "cross_refs": [],
+      "db_tables": [],
+      "description": "lt-responder is a local daemon that receives LightTrack alert webhooks (error spikes and quality regressions), classifies failures as transient vs code-side (using a carried `failure_class` field minted at the ingest boundary, with a phrase-list fallback), enriches each trigger with recent failing events or judge scores fetched from the LightTrack API, and runs a read-only Claude Code investigation against the locally-mapped repository. For opt-in projects it can also apply a gated auto-fix on a fresh `lt-fix/*` branch via an edit-mode Claude run, run the project's test command, and restore the original branch. Every run is bounded by a multi-layer circuit breaker (in-flight dedup, per-project cooldown, rolling-hour cap, concurrency semaphore) whose durable half is the LightTrack alert ledger so restarts don't reset the spend record. Finished diagnoses are persisted as Markdown files, posted back to LightTrack as alert resolutions, and optionally emailed via Resend.",
+      "entry_points": [
+        "crates/responder/src/main.rs",
+        "crates/responder/src/pipeline.rs",
+        "crates/responder/src/webhook.rs"
+      ],
+      "file_paths": [
+        "crates/responder/Cargo.toml",
+        "crates/responder/responder.map.example.json",
+        "crates/responder/src/main.rs",
+        "crates/responder/src/pipeline.rs",
+        "crates/responder/src/webhook.rs",
+        "crates/responder/src/classify.rs",
+        "crates/responder/src/enrich.rs",
+        "crates/responder/src/investigate.rs",
+        "crates/responder/src/act.rs",
+        "crates/responder/src/invoke.rs",
+        "crates/responder/src/breaker.rs",
+        "crates/responder/src/ledger.rs",
+        "crates/responder/src/report.rs",
+        "crates/responder/src/email.rs",
+        "crates/responder/src/git.rs",
+        "crates/responder/src/config.rs",
+        "crates/responder/src/state.rs"
+      ],
+      "group": "LLM Observability",
+      "group_id": "12239d64-cf9d-4d05-b3de-5f01a3208d78",
+      "id": "45ec4c09-1cbf-41a9-8662-ffa6ca212289",
+      "keywords": [
+        "error_spike",
+        "score_drop",
+        "failure_class",
+        "auto-fix",
+        "circuit-breaker",
+        "claude-code",
+        "investigation",
+        "diagnosis",
+        "alert",
+        "webhook",
+        "admission-control"
+      ],
+      "last_written_at": "2026-09-21T20:10:07.725603300+00:00",
+      "name": "reactive-alert-responder",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "axum 0.7",
+        "tokio 1",
+        "reqwest 0.13",
+        "serde_json",
+        "pulldown-cmark 0.12",
+        "anyhow 1"
+      ]
+    },
+    {
+      "api_surface": "GET /v1/benchmarks/:id, POST /v1/benchmarks/:id/runs, GET /v1/prices, POST /v1/scores, POST /v1/calibrations",
+      "business_feature": "Benchmark & Calibration",
+      "category": "lib",
+      "cross_refs": [
+        "runner-scoring-engine",
+        "runner-worker-pipeline"
+      ],
+      "db_tables": [
+        "benchmark_runs",
+        "scores",
+        "calibrations",
+        "datasets"
+      ],
+      "description": "Runs stored benchmarks (compare mode, rubric mode, simple mode) and measures judge trustworthiness via Cohen's κ calibration against human-labeled datasets. Tracks per-run spend budgets with pre-flight cost guards and live ceilings, records case-level provenance and billing, and persists κ history for drift detection. Feeds benchmark run results and calibration scores back to the API for the Evaluation & Benchmarking UI.",
+      "entry_points": [
+        "crates/runner/src/bench.rs",
+        "crates/runner/src/calibrate.rs"
+      ],
+      "file_paths": [
+        "crates/runner/src/bench.rs",
+        "crates/runner/src/compare.rs",
+        "crates/runner/src/calibrate.rs",
+        "crates/runner/src/calibrate_batch.rs",
+        "crates/runner/src/calibrate_watch.rs",
+        "crates/runner/src/calibration_post.rs",
+        "crates/runner/src/history.rs",
+        "crates/runner/src/targets.rs",
+        "crates/runner/src/budget.rs",
+        "crates/runner/src/case_spend.rs",
+        "crates/runner/src/provenance.rs"
+      ],
+      "group": "Evaluation & Benchmarking",
+      "group_id": "448577e9-0a40-46f4-a6b7-1ba0696d3c09",
+      "id": "63f1effb-3b78-42d8-a886-ff2a1458311f",
+      "keywords": [
+        "benchmark",
+        "calibrate",
+        "kappa",
+        "cohen",
+        "drift",
+        "budget",
+        "cost-guard",
+        "compare",
+        "targets",
+        "provenance"
+      ],
+      "last_written_at": "2026-09-21T20:04:15.843584400+00:00",
+      "name": "runner-benchmark-calibration",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "lighttrack-engine",
+        "lighttrack-core",
+        "lighttrack-render",
+        "reqwest 0.13",
+        "serde_json"
+      ]
+    },
+    {
+      "api_surface": "GET /v1/events, GET /v1/traces, POST /v1/scores, GET /v1/rubrics/:id",
+      "business_feature": "LLM Judge Scoring",
+      "category": "lib",
+      "cross_refs": [
+        "runner-benchmark-calibration",
+        "runner-worker-pipeline"
+      ],
+      "db_tables": [
+        "scores",
+        "events"
+      ],
+      "description": "Executes LLM-as-judge scoring against stored events and traces: invokes the judge model, parses structured verdicts per rubric dimension, and posts scores back to the API. Handles single-event scoring, whole-trace sampling with settle windows, regression detection, batch judging (N cases per call), pairwise round-robin A-vs-B comparison, exec-dimension sandboxing, and CI gate exit codes. Depends on lighttrack-engine for the claude/provider driver and lighttrack-core for shared types.",
+      "entry_points": [
+        "crates/runner/src/score.rs",
+        "crates/runner/src/judge_spec.rs"
+      ],
+      "file_paths": [
+        "crates/runner/src/score.rs",
+        "crates/runner/src/score_traces.rs",
+        "crates/runner/src/judge_spec.rs",
+        "crates/runner/src/rubric.rs",
+        "crates/runner/src/regression.rs",
+        "crates/runner/src/gate.rs",
+        "crates/runner/src/batch.rs",
+        "crates/runner/src/sandbox.rs",
+        "crates/runner/src/pairwise.rs",
+        "crates/runner/src/stats.rs",
+        "crates/runner/src/stats/normal.rs",
+        "crates/runner/src/stats/frontier.rs",
+        "crates/runner/src/stats/paired.rs",
+        "crates/runner/src/stats/cases.rs",
+        "crates/runner/src/stats/tiers.rs",
+        "crates/runner/src/stats/thinking.rs",
+        "crates/runner/src/stats/effort_curve.rs"
+      ],
+      "group": "Evaluation & Benchmarking",
+      "group_id": "448577e9-0a40-46f4-a6b7-1ba0696d3c09",
+      "id": "971b004d-7b8c-4a5e-8a71-3ab3436cf511",
+      "keywords": [
+        "judge",
+        "score",
+        "rubric",
+        "trace",
+        "batch-judging",
+        "pairwise",
+        "sandbox",
+        "gate",
+        "regression",
+        "verdict"
+      ],
+      "last_written_at": "2026-09-21T20:04:17.294490300+00:00",
+      "name": "runner-scoring-engine",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "lighttrack-engine",
+        "lighttrack-core",
+        "reqwest 0.13",
+        "clap 4",
+        "serde_json"
+      ]
+    },
+    {
+      "api_surface": "POST /v1/jobs/claim, PATCH /v1/jobs/:id, GET /v1/jobs/:id, POST /v1/datasets, POST /v1/labels, POST /v1/billing/revenue",
+      "business_feature": "Worker & Data Pipeline",
+      "category": "api",
+      "cross_refs": [
+        "runner-scoring-engine",
+        "runner-benchmark-calibration"
+      ],
+      "db_tables": [
+        "jobs",
+        "datasets",
+        "dataset_items",
+        "labels",
+        "schedules"
+      ],
+      "description": "Provides the lt-runner binary's CLI surface, job-queue worker loop, and all data-pipeline commands: dataset build/import/fork, online sampling schedules, human label import, and Stripe billing sync. The serve loop claims jobs via leased poll, dispatches by JobKind, and renews heartbeats to survive transient API errors without a spurious takeover. Also owns the shared HTTP client, CLI argument structs, and utility helpers used across every other runner module.",
       "entry_points": [
         "crates/runner/src/main.rs",
-        "crates/runner/src/cli.rs"
+        "crates/runner/src/serve.rs",
+        "crates/runner/src/dispatch.rs"
       ],
       "file_paths": [
         "crates/runner/src/main.rs",
         "crates/runner/src/cli.rs",
-        "crates/runner/src/http.rs",
-        "crates/runner/src/util.rs",
-        "crates/runner/src/billing.rs",
+        "crates/runner/src/serve.rs",
+        "crates/runner/src/serve_api.rs",
+        "crates/runner/src/serve_job.rs",
+        "crates/runner/src/dispatch.rs",
+        "crates/runner/src/enqueue.rs",
+        "crates/runner/src/runctl.rs",
         "crates/runner/src/schedule.rs",
-        "crates/runner/src/recurrence.rs",
-        "crates/runner/src/serve.rs"
+        "crates/runner/src/dataset.rs",
+        "crates/runner/src/dataset_import.rs",
+        "crates/runner/src/labels.rs",
+        "crates/runner/src/billing.rs",
+        "crates/runner/src/http.rs",
+        "crates/runner/src/util.rs"
       ],
       "group": "Platform Infrastructure",
-      "group_id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
-      "id": "1f69d46b-c8a7-404d-aa94-4da5c0a8141f",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "a8ab2575-58d9-4252-9a56-6af87205ef60",
       "keywords": [
-        "runner",
         "worker",
-        "job",
-        "schedule",
-        "recurrence",
-        "billing",
+        "job-queue",
         "serve",
-        "claim",
-        "LIGHTTRACK_URL",
-        "CLI",
-        "subcommand"
+        "dispatch",
+        "dataset",
+        "schedule",
+        "billing",
+        "labels",
+        "enqueue",
+        "lease"
       ],
-      "last_written_at": "2026-08-03T19:08:52.788012700+00:00",
-      "name": "runner-worker",
+      "last_written_at": "2026-09-21T20:04:15.844109500+00:00",
+      "name": "runner-worker-pipeline",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
+        "Rust",
+        "lighttrack-core",
+        "lighttrack-billing",
+        "lighttrack-anon",
+        "reqwest 0.13",
         "clap 4",
-        "reqwest 0.12",
-        "serde_json",
-        "tokio"
+        "dotenvy 0.15"
       ]
     },
     {
-      "api_surface": "POST /v1/scores, GET /v1/scores",
-      "business_feature": "LLM Scoring",
-      "category": "api",
+      "api_surface": "POST /v1/events, GET /v1/limits/status",
+      "business_feature": "Rust SDK Observability Client",
+      "category": "lib",
       "cross_refs": [
-        "judge-engine",
-        "event-ingest",
-        "rubric-system",
-        "trace-analytics",
-        "store-sqlite-core"
+        "python-sdk",
+        "typescript-sdk"
       ],
-      "db_tables": [
-        "scores",
-        "events"
-      ],
-      "description": "Records and retrieves LLM-as-judge scores for individual events and whole traces. The online scoring loop in lt-runner polls for unscored events, judges them via the engine, and POSTs scores back. Scores carry dimension breakdown, pass/fail verdict, reasoning text, and attribution cost.",
+      "db_tables": [],
+      "description": "Rust client library for ingesting LLM call telemetry into LightTrack from Rust applications. Reuses `lighttrack-core`'s `LlmEvent` as the wire type to prevent payload drift, sending events on a background thread via `reqwest`. Provides admission control, PII detection, and provider-response token extraction matching the shared SDK contract fixtures, packaged as a detached Cargo workspace so it builds and versions independently of the server.",
       "entry_points": [
-        "crates/api/src/scores.rs",
-        "crates/core/src/score.rs"
+        "clients/rust/src/lib.rs",
+        "clients/rust/src/admission.rs",
+        "clients/rust/examples/quickstart.rs"
       ],
       "file_paths": [
-        "crates/api/src/scores.rs",
-        "crates/api/src/tests_ingest.rs",
-        "crates/runner/src/score.rs",
-        "crates/runner/src/score_traces.rs",
-        "crates/core/src/score.rs"
+        "clients/rust/examples/quickstart.rs",
+        "clients/rust/src/lib.rs",
+        "clients/rust/src/admission.rs",
+        "clients/rust/src/diagnostics.rs",
+        "clients/rust/src/extract.rs",
+        "clients/rust/src/limits.rs",
+        "clients/rust/src/pii.rs"
       ],
-      "group": "Evaluation & Benchmarking",
-      "group_id": "491ba1f4-9342-4eaf-a420-c5df8bb95021",
-      "id": "16b0899b-77a9-491b-bc1a-0c489273fb75",
+      "group": "LLM Observability",
+      "group_id": "12239d64-cf9d-4d05-b3de-5f01a3208d78",
+      "id": "b2b45e2d-24fd-405f-b0ce-d60445159e75",
       "keywords": [
-        "Score",
-        "pass",
-        "value",
-        "max",
-        "reasoning",
-        "scored_by",
-        "judge",
-        "online",
-        "unscored",
-        "event_id",
-        "rubric"
+        "telemetry",
+        "rust",
+        "reqwest",
+        "admission",
+        "pii",
+        "extract",
+        "tokens",
+        "lighttrack-core"
       ],
-      "last_written_at": "2026-08-03T19:08:52.785105900+00:00",
-      "name": "scoring",
+      "last_written_at": "2026-09-21T20:12:08.465723500+00:00",
+      "name": "rust-sdk",
       "pinned": false,
       "tech_stack": [
         "Rust 2021",
-        "Axum 0.7",
-        "serde_json"
-      ]
-    },
-    {
-      "api_surface": "Calls: Firestore REST API at firestore.googleapis.com",
-      "business_feature": "Firestore Storage Backend",
-      "category": "data",
-      "cross_refs": [
-        "store-interface",
-        "api-server",
-        "prompt-registry"
-      ],
-      "db_tables": [
-        "events",
-        "projects",
-        "api_keys",
-        "limit_rules",
-        "scores",
-        "model_prices",
-        "benchmarks",
-        "benchmark_runs",
-        "datasets",
-        "dataset_items",
-        "rubrics",
-        "jobs",
-        "prompts",
-        "prompt_versions",
-        "revenue_events"
-      ],
-      "description": "Firestore backend implementing the Store trait over the Firestore REST API using blocking reqwest (no gRPC), supporting both the Firestore emulator for local/CI and production GCP via OAuth bearer token. Schemaless — collections are created on first write. Adds the prompt registry implementation not yet in the Postgres backend, and handles aggregation client-side due to Firestore query limitations.",
-      "entry_points": [
-        "crates/store-firestore/src/lib.rs",
-        "crates/store-firestore/src/rest.rs"
-      ],
-      "file_paths": [
-        "crates/store-firestore/src/lib.rs",
-        "crates/store-firestore/src/rest.rs",
-        "crates/store-firestore/src/codec.rs",
-        "crates/store-firestore/src/events.rs",
-        "crates/store-firestore/src/projects.rs",
-        "crates/store-firestore/src/scores.rs",
-        "crates/store-firestore/src/prices.rs",
-        "crates/store-firestore/src/limits.rs",
-        "crates/store-firestore/src/benchmarks.rs",
-        "crates/store-firestore/src/datasets.rs",
-        "crates/store-firestore/src/rubrics.rs",
-        "crates/store-firestore/src/jobs.rs",
-        "crates/store-firestore/src/prompts.rs",
-        "crates/store-firestore/src/revenue.rs",
-        "crates/store-firestore/tests/conformance.rs",
-        "schema/bigquery/001_init.sql"
-      ],
-      "group": "Data & Persistence",
-      "group_id": "e2935806-cfdd-493f-8f55-06ee5db7ce5f",
-      "id": "d08ae886-f8a9-49f3-be35-feba6233084d",
-      "keywords": [
-        "FirestoreStore",
-        "REST",
-        "emulator",
-        "GCP",
-        "OAuth",
-        "document",
-        "codec",
-        "runQuery",
-        "schemaless",
-        "BigQuery"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.787782700+00:00",
-      "name": "store-firestore",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "reqwest 0.12 (blocking)",
+        "reqwest 0.13",
         "serde_json"
       ]
     },
     {
       "api_surface": "",
-      "business_feature": "Storage Abstraction Layer",
+      "business_feature": "SQLite Governance Backend",
       "category": "data",
       "cross_refs": [
-        "store-sqlite-core",
-        "store-sqlite-eval",
-        "store-postgres",
-        "store-firestore"
+        "store-trait-and-types",
+        "store-conformance-governance",
+        "sqlite-platform-backend"
+      ],
+      "db_tables": [
+        "limit_rules",
+        "margin_policies",
+        "revenue_events",
+        "model_prices",
+        "alert_channels",
+        "alerts"
+      ],
+      "description": "SQLite implementation of the Store trait's usage-governance surfaces: limit rule evaluation (atomic admission with per-project locking), margin policies, revenue events, price book operations, usage cache for rolling window queries, alert channels, and PII redaction stamps. The usage cache is critical-path infrastructure — it keeps rolling `usage_since` O(1) by incrementally maintaining a window aggregate rather than scanning the full event table.",
+      "entry_points": [
+        "crates/store/src/sqlite/limits.rs",
+        "crates/store/src/sqlite/usage_cache.rs"
+      ],
+      "file_paths": [
+        "crates/store/src/sqlite/limits.rs",
+        "crates/store/src/sqlite/margin_policies.rs",
+        "crates/store/src/sqlite/revenue.rs",
+        "crates/store/src/sqlite/forecast.rs",
+        "crates/store/src/sqlite/prices.rs",
+        "crates/store/src/sqlite/price_fill.rs",
+        "crates/store/src/sqlite/usage_cache.rs",
+        "crates/store/src/sqlite/alerts.rs",
+        "crates/store/src/sqlite/alert_channels.rs",
+        "crates/store/src/sqlite/redaction.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "6e365da5-0e1a-415f-8d3f-d66e7f2451a4",
+      "keywords": [
+        "limits",
+        "admission",
+        "margin",
+        "revenue",
+        "pricing",
+        "usage_cache",
+        "alerts",
+        "redaction",
+        "throttle",
+        "forecast"
+      ],
+      "last_written_at": "2026-09-21T20:05:50.880651700+00:00",
+      "name": "sqlite-governance-backend",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "rusqlite 0.31"
+      ]
+    },
+    {
+      "api_surface": "",
+      "business_feature": "SQLite Observability Backend",
+      "category": "data",
+      "cross_refs": [
+        "store-trait-and-types",
+        "store-conformance-observability",
+        "sqlite-platform-backend"
+      ],
+      "db_tables": [
+        "scores",
+        "benchmarks",
+        "benchmark_runs",
+        "rubrics",
+        "datasets",
+        "dataset_items",
+        "labels",
+        "prompts",
+        "use_cases"
+      ],
+      "description": "SQLite implementation of the Store trait's observability and scoring surfaces: event ingest/query, scores, score summaries, traces (via rollup), benchmarks, calibrations, rubrics, datasets, labels, prompts, and use-case registry. Each domain is a free-function module over a locked `&Connection`. Includes the SQLite unit-test suite covering concurrency, migrations, maintenance, metrics, and collective behaviour.",
+      "entry_points": [
+        "crates/store/src/sqlite/events.rs",
+        "crates/store/src/sqlite/scores.rs"
+      ],
+      "file_paths": [
+        "crates/store/src/sqlite/events.rs",
+        "crates/store/src/sqlite/scores.rs",
+        "crates/store/src/sqlite/score_summary.rs",
+        "crates/store/src/sqlite/rollup.rs",
+        "crates/store/src/sqlite/calibrations.rs",
+        "crates/store/src/sqlite/benchmarks.rs",
+        "crates/store/src/sqlite/bench.rs",
+        "crates/store/src/sqlite/rubrics.rs",
+        "crates/store/src/sqlite/datasets.rs",
+        "crates/store/src/sqlite/dataset_import.rs",
+        "crates/store/src/sqlite/dataset_fork.rs",
+        "crates/store/src/sqlite/labels.rs",
+        "crates/store/src/sqlite/prompts.rs",
+        "crates/store/src/sqlite/use_cases.rs",
+        "crates/store/src/sqlite/collective.rs",
+        "crates/store/src/sqlite/contributions.rs",
+        "crates/store/src/sqlite/tests.rs",
+        "crates/store/src/sqlite/tests_collective.rs",
+        "crates/store/src/sqlite/tests_concurrency.rs",
+        "crates/store/src/sqlite/tests_maintenance.rs",
+        "crates/store/src/sqlite/tests_metrics.rs",
+        "crates/store/src/sqlite/tests_migration.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "f05f2284-1f27-40ad-bee2-deb67099160b",
+      "keywords": [
+        "SQLite",
+        "events",
+        "scores",
+        "benchmarks",
+        "rubrics",
+        "datasets",
+        "calibrations",
+        "rollup",
+        "traces",
+        "ingest"
+      ],
+      "last_written_at": "2026-09-21T20:05:50.881025400+00:00",
+      "name": "sqlite-observability-backend",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "rusqlite 0.31"
+      ]
+    },
+    {
+      "api_surface": "",
+      "business_feature": "SQLite Platform Backend",
+      "category": "data",
+      "cross_refs": [
+        "store-trait-and-types",
+        "sqlite-observability-backend",
+        "sqlite-governance-backend",
+        "store-schema-definition"
+      ],
+      "db_tables": [
+        "projects",
+        "api_keys",
+        "jobs",
+        "schedules",
+        "relay_tasks",
+        "devices"
+      ],
+      "description": "SQLite implementation of the Store trait's platform-operations surfaces: projects, API-key management, background job queue (with lease renewal and cancellation), schedule records, database maintenance (WAL checkpoint, incremental vacuum), in-process metrics ring, relay task lifecycle, and device registry. The `pool.rs` and `mod.rs` modules wire up the single locked connection and implement `SqliteStore`. The `schema.rs` here applies the declarative schema to a live connection.",
+      "entry_points": [
+        "crates/store/src/sqlite/mod.rs",
+        "crates/store/src/sqlite/pool.rs"
+      ],
+      "file_paths": [
+        "crates/store/src/sqlite/mod.rs",
+        "crates/store/src/sqlite/pool.rs",
+        "crates/store/src/sqlite/schema.rs",
+        "crates/store/src/sqlite/projects.rs",
+        "crates/store/src/sqlite/jobs.rs",
+        "crates/store/src/sqlite/schedules.rs",
+        "crates/store/src/sqlite/maintenance.rs",
+        "crates/store/src/sqlite/metrics.rs",
+        "crates/store/src/sqlite/relay.rs",
+        "crates/store/src/sqlite/relay_lease.rs",
+        "crates/store/src/sqlite/devices.rs",
+        "crates/store/src/sqlite/contributions.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "ab6c6112-fb6a-43aa-b1d6-f0ef23377dcb",
+      "keywords": [
+        "SqliteStore",
+        "projects",
+        "jobs",
+        "relay",
+        "devices",
+        "maintenance",
+        "metrics",
+        "schedules",
+        "WAL",
+        "connection"
+      ],
+      "last_written_at": "2026-09-21T20:05:50.881391400+00:00",
+      "name": "sqlite-platform-backend",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "rusqlite 0.31"
+      ]
+    },
+    {
+      "api_surface": "POST/GET /v1/jobs, POST /v1/jobs/:id/finish, POST/GET /v1/projects/:id/schedules, GET /v1/schedules, GET /v1/storage/status, GET /v1/projects/:id/redaction",
+      "business_feature": "Background Jobs & Store Maintenance",
+      "category": "api",
+      "cross_refs": [
+        "api-platform",
+        "evaluation-pipeline",
+        "device-relay"
+      ],
+      "db_tables": [
+        "jobs",
+        "schedules"
+      ],
+      "description": "Manages durable background work and store maintenance. The job queue supports claim/progress/finish/cancel lifecycle for async benchmark runners and other workloads; stored schedules drive recurring job kinds on a configured interval via a background sweep. The storage module implements quiet-window SQLite maintenance (checkpoint, WAL compaction) gated on an activity gauge, exposing disk accounting and the maintenance flight recorder via a status endpoint. Redaction posture is enforced here at the ingest boundary.",
+      "entry_points": [
+        "crates/api/src/jobs.rs",
+        "crates/api/src/schedules.rs",
+        "crates/api/src/storage.rs"
+      ],
+      "file_paths": [
+        "crates/api/src/storage.rs",
+        "crates/api/src/schedule_migrate.rs",
+        "crates/api/src/schedule_sweep.rs",
+        "crates/api/src/schedules.rs",
+        "crates/api/src/jobs.rs",
+        "crates/api/src/jobs_enqueue.rs",
+        "crates/api/src/redact.rs",
+        "crates/api/src/redaction.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "8b5cad82-800d-4c90-90ea-f8a443723c81",
+      "keywords": [
+        "job",
+        "schedule",
+        "maintenance",
+        "checkpoint",
+        "wal",
+        "redaction",
+        "sweep",
+        "background",
+        "recurrence",
+        "disk"
+      ],
+      "last_written_at": "2026-09-21T20:01:44.995421500+00:00",
+      "name": "storage-and-jobs",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "axum 0.7",
+        "tokio 1",
+        "lighttrack-store",
+        "lighttrack-anon"
+      ]
+    },
+    {
+      "api_surface": "",
+      "business_feature": "Governance Conformance Suite",
+      "category": "test",
+      "cross_refs": [
+        "store-conformance-observability",
+        "store-trait-and-types",
+        "sqlite-governance-backend"
+      ],
+      "db_tables": [
+        "limit_rules",
+        "margin_policies",
+        "model_prices",
+        "revenue_events",
+        "jobs",
+        "relay_tasks",
+        "devices",
+        "schedules"
+      ],
+      "description": "Backend-agnostic conformance test harness for governance and platform-operations domains: admission control, pricing, revenue, margin policies, refusals, jobs, relays, devices, schedules, tenancy, and database maintenance. Ensures every backend implementation honours the Store trait's admission semantics, limit enforcement, and operational contracts. Paired with the observability conformance half; together they cover the full Store trait surface.",
+      "entry_points": [
+        "crates/store/src/conformance/driver.rs",
+        "crates/store/src/conformance/admission.rs"
+      ],
+      "file_paths": [
+        "crates/store/src/conformance/admission.rs",
+        "crates/store/src/conformance/pricing.rs",
+        "crates/store/src/conformance/revenue.rs",
+        "crates/store/src/conformance/margin.rs",
+        "crates/store/src/conformance/margin_policy.rs",
+        "crates/store/src/conformance/refusals.rs",
+        "crates/store/src/conformance/jobs.rs",
+        "crates/store/src/conformance/job_leases.rs",
+        "crates/store/src/conformance/relay.rs",
+        "crates/store/src/conformance/relay_lease.rs",
+        "crates/store/src/conformance/devices.rs",
+        "crates/store/src/conformance/schedules.rs",
+        "crates/store/src/conformance/projects.rs",
+        "crates/store/src/conformance/tenancy.rs",
+        "crates/store/src/conformance/maintenance.rs",
+        "crates/store/src/conformance/driver.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "691eec3b-d884-4c85-9aa5-fa419b6b8457",
+      "keywords": [
+        "conformance",
+        "admission",
+        "limit",
+        "margin",
+        "pricing",
+        "revenue",
+        "relay",
+        "jobs",
+        "tenancy",
+        "maintenance"
+      ],
+      "last_written_at": "2026-09-21T20:05:49.260125400+00:00",
+      "name": "store-conformance-governance",
+      "pinned": false,
+      "tech_stack": [
+        "Rust"
+      ]
+    },
+    {
+      "api_surface": "",
+      "business_feature": "Observability Conformance Suite",
+      "category": "test",
+      "cross_refs": [
+        "store-conformance-governance",
+        "store-trait-and-types",
+        "sqlite-observability-backend"
+      ],
+      "db_tables": [
+        "scores",
+        "labels",
+        "prompts",
+        "use_cases",
+        "alert_channels",
+        "alerts"
+      ],
+      "description": "Backend-agnostic conformance test harness for the observability and scoring domains: events, scores, traces, rollup, forecasting, labels, prompts, use-cases, dataset lineage, collective intelligence, contributions, and alerting. Each module exposes a parameterized test function that any backend runs against to prove Store-trait compliance for that surface. Depends on `conformance/fixtures.rs` for shared test data construction.",
+      "entry_points": [
+        "crates/store/src/conformance/mod.rs",
+        "crates/store/src/conformance/fixtures.rs"
+      ],
+      "file_paths": [
+        "crates/store/src/conformance/mod.rs",
+        "crates/store/src/conformance/fixtures.rs",
+        "crates/store/src/conformance/events.rs",
+        "crates/store/src/conformance/scores.rs",
+        "crates/store/src/conformance/traces.rs",
+        "crates/store/src/conformance/score_summary.rs",
+        "crates/store/src/conformance/rollup.rs",
+        "crates/store/src/conformance/forecast.rs",
+        "crates/store/src/conformance/labels.rs",
+        "crates/store/src/conformance/prompts.rs",
+        "crates/store/src/conformance/use_cases.rs",
+        "crates/store/src/conformance/dataset_lineage.rs",
+        "crates/store/src/conformance/collective.rs",
+        "crates/store/src/conformance/contributions.rs",
+        "crates/store/src/conformance/alerts.rs",
+        "crates/store/src/conformance/catalog.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "b17dade9-c8d8-4e0c-9ca0-d782694902e4",
+      "keywords": [
+        "conformance",
+        "test",
+        "events",
+        "scores",
+        "traces",
+        "rollup",
+        "forecast",
+        "labels",
+        "collective",
+        "alerts"
+      ],
+      "last_written_at": "2026-09-21T20:05:50.881864800+00:00",
+      "name": "store-conformance-observability",
+      "pinned": false,
+      "tech_stack": [
+        "Rust"
+      ]
+    },
+    {
+      "api_surface": "",
+      "business_feature": "Store Integration Tests",
+      "category": "test",
+      "cross_refs": [
+        "store-trait-and-types",
+        "store-schema-definition",
+        "store-conformance-observability",
+        "store-conformance-governance"
       ],
       "db_tables": [],
-      "description": "Defines the backend-agnostic Store trait (~50 methods) covering every domain entity and the shared StoreError type. Includes codec helpers for timestamp/enum/JSON encoding that all backends share, and a conformance test suite that any backend implementation must pass. The admission logic (evaluate_admission) and EventFilter/EventPage keyset-pagination types live here.",
+      "description": "Integration and property tests for the store crate that run outside the source tree: schema equivalence across backends, schema documentation generation, backend-parity assertions, a soak test for concurrent ingest, a timestamp-format guard, and a legacy migration fixture that proves the SQLite backend can upgrade a pre-M14 schema forward. These tests exercise the full store stack end-to-end and are the regression guard for migration correctness.",
       "entry_points": [
-        "crates/store/src/lib.rs"
+        "crates/store/tests/sqlite_conformance.rs",
+        "crates/store/tests/schema_equivalence.rs"
+      ],
+      "file_paths": [
+        "crates/store/tests/sqlite_conformance.rs",
+        "crates/store/tests/schema_equivalence.rs",
+        "crates/store/tests/schema_doc.rs",
+        "crates/store/tests/parity_doc.rs",
+        "crates/store/tests/soak.rs",
+        "crates/store/tests/ts_format_guard.rs",
+        "crates/store/tests/legacy/mod.rs",
+        "crates/store/tests/legacy/sqlite_001_init_pre_m14.sql"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "386d105a-9806-445c-a1d6-c6a2e02082c7",
+      "keywords": [
+        "integration test",
+        "conformance",
+        "schema equivalence",
+        "migration",
+        "soak",
+        "parity",
+        "timestamp",
+        "legacy"
+      ],
+      "last_written_at": "2026-09-21T20:05:49.261566600+00:00",
+      "name": "store-integration-tests",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "rusqlite 0.31"
+      ]
+    },
+    {
+      "api_surface": "",
+      "business_feature": "Multi-Backend Schema Definition",
+      "category": "data",
+      "cross_refs": [
+        "store-integration-tests",
+        "sqlite-observability-backend",
+        "sqlite-platform-backend"
+      ],
+      "db_tables": [
+        "scores",
+        "benchmarks",
+        "datasets",
+        "limit_rules",
+        "model_prices",
+        "projects"
+      ],
+      "description": "Declarative, backend-agnostic schema DSL that describes every LightTrack table, column, and migration step once, then renders SQL for SQLite, Postgres, BigQuery, and human-readable documentation. Tables are grouped into domain modules (ingest, eval, ops, registry) so adding a column touches one file. Consumed by every backend's `init_schema` and by the schema-equivalence test suite.",
+      "entry_points": [
+        "crates/store/src/schema/mod.rs",
+        "crates/store/src/schema/tables/ingest.rs"
+      ],
+      "file_paths": [
+        "crates/store/src/schema/mod.rs",
+        "crates/store/src/schema/model.rs",
+        "crates/store/src/schema/cols.rs",
+        "crates/store/src/schema/migrations.rs",
+        "crates/store/src/schema/render.rs",
+        "crates/store/src/schema/render_sqlite.rs",
+        "crates/store/src/schema/render_pg.rs",
+        "crates/store/src/schema/render_bq.rs",
+        "crates/store/src/schema/render_doc.rs",
+        "crates/store/src/schema/tables/mod.rs",
+        "crates/store/src/schema/tables/ingest.rs",
+        "crates/store/src/schema/tables/eval.rs",
+        "crates/store/src/schema/tables/ops.rs",
+        "crates/store/src/schema/tables/registry.rs"
+      ],
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "2fc2870e-4595-4639-950a-590b19787216",
+      "keywords": [
+        "schema",
+        "migration",
+        "DDL",
+        "table",
+        "column",
+        "SQLite",
+        "Postgres",
+        "BigQuery",
+        "render",
+        "fingerprint"
+      ],
+      "last_written_at": "2026-09-21T20:05:50.882235+00:00",
+      "name": "store-schema-definition",
+      "pinned": false,
+      "tech_stack": [
+        "Rust"
+      ]
+    },
+    {
+      "api_surface": "Rust trait Store — consumed by crates/api, crates/mcp, crates/runner",
+      "business_feature": "Store Trait & Shared Types",
+      "category": "lib",
+      "cross_refs": [
+        "sqlite-observability-backend",
+        "sqlite-governance-backend",
+        "sqlite-platform-backend",
+        "store-schema-definition"
+      ],
+      "db_tables": [],
+      "description": "Defines the backend-agnostic `Store` trait (~180 methods), all shared DTOs (EventFilter, TraceFilter, Usage, Admission, CostRow, etc.), and utility modules used by every backend. It is the single authoritative contract between the API layer and any persistence backend — SQLite, Postgres, or Firestore. Depends on `lighttrack-core` for domain types; consumed by `crates/api`, `crates/mcp`, and every store backend.",
+      "entry_points": [
+        "crates/store/src/lib.rs",
+        "crates/store/src/capabilities/mod.rs"
       ],
       "file_paths": [
         "crates/store/src/lib.rs",
         "crates/store/src/codec.rs",
-        "crates/store/src/conformance.rs"
+        "crates/store/src/scope.rs",
+        "crates/store/src/threshold.rs",
+        "crates/store/src/capabilities/mod.rs",
+        "crates/store/src/capabilities/render.rs",
+        "crates/store/src/pricing.rs",
+        "crates/store/src/rollup_compat/mod.rs",
+        "crates/store/src/rollup_compat/margin.rs",
+        "crates/store/src/collective.rs",
+        "crates/store/src/dataset_import.rs"
       ],
-      "group": "Data & Persistence",
-      "group_id": "e2935806-cfdd-493f-8f55-06ee5db7ce5f",
-      "id": "add4cc79-bab0-46f4-9bda-bf607c0bd02e",
+      "group": "Platform Infrastructure",
+      "group_id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
+      "id": "e5002fe2-6619-4e1f-beaa-b6c2f4d3e90c",
       "keywords": [
         "Store",
+        "trait",
         "StoreError",
         "Admission",
         "EventFilter",
-        "EventPage",
         "TraceFilter",
         "Usage",
-        "conformance",
-        "codec",
-        "keyset",
-        "pagination"
+        "rollup",
+        "capabilities",
+        "threshold"
       ],
-      "last_written_at": "2026-08-03T19:08:52.787110500+00:00",
-      "name": "store-interface",
+      "last_written_at": "2026-09-21T20:05:49.258469+00:00",
+      "name": "store-trait-and-types",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "rusqlite 0.32",
-        "serde_json"
-      ]
-    },
-    {
-      "api_surface": "",
-      "business_feature": "Postgres Storage Backend",
-      "category": "data",
-      "cross_refs": [
-        "store-interface",
-        "api-server"
-      ],
-      "db_tables": [
-        "events",
-        "projects",
-        "api_keys",
-        "limit_rules",
-        "scores",
-        "model_prices",
-        "benchmarks",
-        "benchmark_runs",
-        "datasets",
-        "dataset_items",
-        "rubrics",
-        "jobs",
-        "relay_tasks",
-        "revenue_events"
-      ],
-      "description": "Postgres backend implementing the full Store trait via sqlx, targeting managed services (Neon, Cloud SQL, RDS, Supabase). Wraps an async PgPool with a Tokio runtime so the synchronous Store interface can block_on queries from spawn_blocking callers in the API. Uses FOR UPDATE SKIP LOCKED RETURNING for concurrency-safe job and relay-task dequeuing.",
-      "entry_points": [
-        "crates/store-pg/src/lib.rs",
-        "schema/postgres/001_init.sql"
-      ],
-      "file_paths": [
-        "crates/store-pg/src/lib.rs",
-        "crates/store-pg/src/events.rs",
-        "crates/store-pg/src/projects.rs",
-        "crates/store-pg/src/scores.rs",
-        "crates/store-pg/src/prices.rs",
-        "crates/store-pg/src/benchmarks.rs",
-        "crates/store-pg/src/datasets.rs",
-        "crates/store-pg/src/rubrics.rs",
-        "crates/store-pg/src/jobs.rs",
-        "crates/store-pg/src/relay.rs",
-        "crates/store-pg/src/revenue.rs",
-        "crates/store-pg/src/util.rs",
-        "crates/store-pg/tests/conformance.rs",
-        "schema/postgres/001_init.sql"
-      ],
-      "group": "Data & Persistence",
-      "group_id": "e2935806-cfdd-493f-8f55-06ee5db7ce5f",
-      "id": "5ad30e7f-28de-4f23-b6c1-6d4abde72d8b",
-      "keywords": [
-        "PgStore",
-        "sqlx",
-        "Postgres",
-        "PgPool",
-        "SKIP LOCKED",
-        "Neon",
-        "sslmode",
-        "schema",
-        "migration",
-        "blocking"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.787578500+00:00",
-      "name": "store-postgres",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "sqlx",
-        "tokio",
-        "serde_json"
-      ]
-    },
-    {
-      "api_surface": "",
-      "business_feature": "SQLite Core Storage",
-      "category": "data",
-      "cross_refs": [
-        "store-interface",
-        "store-sqlite-eval",
-        "limit-enforcement",
-        "event-ingest"
-      ],
-      "db_tables": [
-        "events",
-        "projects",
-        "api_keys",
-        "limit_rules",
-        "scores",
-        "model_prices"
-      ],
-      "description": "SQLite implementation of the Store trait for the core operational entities: events (with index-seekable project+timestamp queries), projects and API keys, limit rules and usage cache (O(1) rolling admission), and model prices. The UsageCache is a mutex-guarded in-memory structure locked before the connection to ensure TOCTOU-safe admission.",
-      "entry_points": [
-        "crates/store/src/sqlite/mod.rs",
-        "schema/sqlite/001_init.sql"
-      ],
-      "file_paths": [
-        "crates/store/src/sqlite/mod.rs",
-        "crates/store/src/sqlite/events.rs",
-        "crates/store/src/sqlite/scores.rs",
-        "crates/store/src/sqlite/projects.rs",
-        "crates/store/src/sqlite/limits.rs",
-        "crates/store/src/sqlite/prices.rs",
-        "crates/store/src/sqlite/usage_cache.rs",
-        "schema/sqlite/001_init.sql"
-      ],
-      "group": "Data & Persistence",
-      "group_id": "e2935806-cfdd-493f-8f55-06ee5db7ce5f",
-      "id": "f902d40d-a78b-4617-a2af-14a1de823610",
-      "keywords": [
-        "SqliteStore",
+        "Rust",
         "rusqlite",
-        "WAL",
-        "UsageCache",
-        "project_pred",
-        "keyset",
-        "sargable",
-        "admission",
-        "index",
-        "events"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.787271200+00:00",
-      "name": "store-sqlite-core",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "rusqlite 0.32 (bundled)"
+        "chrono",
+        "serde",
+        "thiserror"
       ]
     },
     {
-      "api_surface": "",
-      "business_feature": "SQLite Evaluation Storage",
-      "category": "data",
+      "api_surface": "POST /v1/events, POST /v1/scores, GET /v1/limits/status, POST /v1/relay/tasks",
+      "business_feature": "TypeScript SDK Observability Client",
+      "category": "lib",
       "cross_refs": [
-        "store-interface",
-        "store-sqlite-core",
-        "benchmark-management",
-        "relay-queue",
-        "margin-analytics",
-        "model-leaderboard",
-        "prompt-registry"
+        "python-sdk",
+        "rust-sdk"
       ],
-      "db_tables": [
-        "benchmarks",
-        "benchmark_runs",
-        "datasets",
-        "dataset_items",
-        "rubrics",
-        "jobs",
-        "prompts",
-        "prompt_versions",
-        "relay_tasks",
-        "revenue_events",
-        "collective_entries"
-      ],
-      "description": "SQLite backend modules for evaluation, scheduling, and extended-domain entities: benchmarks and runs, datasets and items, rubrics, async jobs, versioned prompts, relay tasks, revenue events, daily forecast counters, and collective leaderboard entries. Integration and timestamp-format conformance tests also live here.",
+      "db_tables": [],
+      "description": "TypeScript/JavaScript client library for ingesting LLM call telemetry to LightTrack from Node.js or browser applications. Mirrors the Python SDK's feature set — auto-instrumentation, admission control, crash-surviving journals, PII guard, relay task dispatch — using the global `fetch` API with zero runtime dependencies. Tests assert the shared SDK contract fixtures to prevent cross-language drift.",
       "entry_points": [
-        "crates/store/src/sqlite/mod.rs"
+        "clients/typescript/src/index.ts",
+        "clients/typescript/src/instrument.ts",
+        "clients/typescript/src/admission.ts"
       ],
       "file_paths": [
-        "crates/store/src/sqlite/benchmarks.rs",
-        "crates/store/src/sqlite/datasets.rs",
-        "crates/store/src/sqlite/rubrics.rs",
-        "crates/store/src/sqlite/jobs.rs",
-        "crates/store/src/sqlite/prompts.rs",
-        "crates/store/src/sqlite/relay.rs",
-        "crates/store/src/sqlite/revenue.rs",
-        "crates/store/src/sqlite/forecast.rs",
-        "crates/store/src/sqlite/collective.rs",
-        "crates/store/src/sqlite/tests.rs",
-        "crates/store/tests/sqlite_conformance.rs",
-        "crates/store/tests/ts_format_guard.rs"
-      ],
-      "group": "Data & Persistence",
-      "group_id": "e2935806-cfdd-493f-8f55-06ee5db7ce5f",
-      "id": "bdbaab46-f83e-4b8b-ac2d-e899fd05c170",
-      "keywords": [
-        "benchmarks",
-        "datasets",
-        "rubrics",
-        "jobs",
-        "prompts",
-        "relay",
-        "revenue",
-        "forecast",
-        "collective",
-        "conformance",
-        "RFC3339"
-      ],
-      "last_written_at": "2026-08-03T19:08:52.787377500+00:00",
-      "name": "store-sqlite-eval",
-      "pinned": false,
-      "tech_stack": [
-        "Rust 2021",
-        "rusqlite 0.32 (bundled)"
-      ]
-    },
-    {
-      "api_surface": "GET /v1/traces, GET /v1/traces/:id, POST /v1/traces/:id/score",
-      "business_feature": "Trace Analytics",
-      "category": "api",
-      "cross_refs": [
-        "event-ingest",
-        "scoring",
-        "store-sqlite-core"
-      ],
-      "db_tables": [
-        "events",
-        "scores"
-      ],
-      "description": "Groups LLM events by trace_id into derived rollup records with a span tree and per-trace cost/latency totals. Supports keyset-paginated trace listing and a dedicated whole-trace scoring endpoint. No new schema tables — traces are a query-time aggregation of the events table.",
-      "entry_points": [
-        "crates/api/src/traces.rs",
-        "crates/core/src/trace.rs"
-      ],
-      "file_paths": [
-        "crates/api/src/traces.rs",
-        "crates/api/src/tests_traces.rs",
-        "crates/core/src/trace.rs"
+        "clients/typescript/example.ts",
+        "clients/typescript/src/index.ts",
+        "clients/typescript/src/instrument.ts",
+        "clients/typescript/src/admission.ts",
+        "clients/typescript/src/diagnostics.ts",
+        "clients/typescript/src/journal.ts",
+        "clients/typescript/src/limits.ts",
+        "clients/typescript/src/pii.ts",
+        "clients/typescript/src/admission.test.ts",
+        "clients/typescript/src/contract.test.ts",
+        "clients/typescript/src/diagnostics.test.ts",
+        "clients/typescript/src/instrument.test.ts",
+        "clients/typescript/src/journal.test.ts",
+        "clients/typescript/src/relay.test.ts"
       ],
       "group": "LLM Observability",
-      "group_id": "89b3e20c-79b5-4a3b-ae5f-38ddfbcbcb13",
-      "id": "f82b86b8-8ea2-49fb-951b-3f548d5f4341",
+      "group_id": "12239d64-cf9d-4d05-b3de-5f01a3208d78",
+      "id": "3e637b68-74b5-4382-9828-f785f4ed1323",
       "keywords": [
-        "trace",
-        "span",
-        "trace_id",
-        "span_id",
-        "parent_span_id",
-        "rollup",
-        "TraceSummary",
-        "TraceTotals",
-        "TraceFilter",
-        "latency"
+        "telemetry",
+        "instrumentation",
+        "openai",
+        "anthropic",
+        "gemini",
+        "admission",
+        "journal",
+        "pii",
+        "guard",
+        "fetch"
       ],
-      "last_written_at": "2026-08-03T19:08:52.784563900+00:00",
-      "name": "trace-analytics",
+      "last_written_at": "2026-09-21T20:12:08.465952700+00:00",
+      "name": "typescript-sdk",
       "pinned": false,
       "tech_stack": [
-        "Rust 2021",
-        "Axum 0.7",
-        "serde_json"
+        "TypeScript 7.0",
+        "Node.js"
+      ]
+    },
+    {
+      "api_surface": "GET /api/limits, POST /api/limits, GET /api/alerts",
+      "business_feature": "Usage Limits & Alerting",
+      "category": "lib",
+      "cross_refs": [
+        "core-observability-types",
+        "economics-margin-pricing"
+      ],
+      "db_tables": [
+        "limit_rules",
+        "alerts",
+        "alert_channels"
+      ],
+      "description": "Provides the per-project usage limit evaluation engine: rules, scopes, thresholds, throttle/block escalation logic, and the alert and webhook-signature types that notify operators when limits are breached. The six integration tests in crates/core/tests guard repo invariants (manifest commands, blocking CI gates, guidance projections, chart policies) and are co-located here as the closest governance context.",
+      "entry_points": [
+        "crates/core/src/limits/mod.rs",
+        "crates/core/src/alert.rs"
+      ],
+      "file_paths": [
+        "crates/core/src/limits/mod.rs",
+        "crates/core/src/limits/rule.rs",
+        "crates/core/src/limits/scope.rs",
+        "crates/core/src/limits/status.rs",
+        "crates/core/src/limits/tests.rs",
+        "crates/core/src/limits/threshold.rs",
+        "crates/core/src/case_limits.rs",
+        "crates/core/src/alert.rs",
+        "crates/core/src/alert_channel.rs",
+        "crates/core/src/alert_sign.rs",
+        "crates/core/tests/blocking_gate_guard.rs",
+        "crates/core/tests/catchup_marker_guard.rs",
+        "crates/core/tests/chart_policy_guard.rs",
+        "crates/core/tests/gate_table_guard.rs",
+        "crates/core/tests/guidance_guard.rs",
+        "crates/core/tests/manifest_guard.rs"
+      ],
+      "group": "Usage Governance",
+      "group_id": "28066606-86df-45f1-870c-1cedafb0389f",
+      "id": "5b2cd610-77f3-4d26-aa7a-da3dd13618fe",
+      "keywords": [
+        "LimitRule",
+        "LimitScope",
+        "Threshold",
+        "LimitStatus",
+        "Escalation",
+        "Alert",
+        "AlertChannel",
+        "webhook",
+        "throttle",
+        "block"
+      ],
+      "last_written_at": "2026-09-21T20:06:05.849891+00:00",
+      "name": "usage-governance-limits",
+      "pinned": false,
+      "tech_stack": [
+        "Rust",
+        "serde",
+        "schemars 1",
+        "hmac",
+        "sha2"
       ]
     }
   ],
-  "generated_at": "2026-08-03T19:09:14.765359200+00:00",
+  "generated_at": "2026-09-21T20:12:08.914141500+00:00",
   "generator": "personas-context-scan",
   "groups": [
     {
       "color": "blue",
-      "context_count": 4,
+      "context_count": 7,
       "domain": "feature",
-      "id": "89b3e20c-79b5-4a3b-ae5f-38ddfbcbcb13",
+      "id": "12239d64-cf9d-4d05-b3de-5f01a3208d78",
       "name": "LLM Observability"
     },
     {
-      "color": "emerald",
+      "color": "amber",
       "context_count": 7,
       "domain": "feature",
-      "id": "491ba1f4-9342-4eaf-a420-c5df8bb95021",
+      "id": "448577e9-0a40-46f4-a6b7-1ba0696d3c09",
       "name": "Evaluation & Benchmarking"
     },
     {
-      "color": "amber",
-      "context_count": 3,
+      "color": "orange",
+      "context_count": 4,
       "domain": "feature",
-      "id": "ed6eab63-a4bf-4e3e-9b23-3baba606597a",
+      "id": "28066606-86df-45f1-870c-1cedafb0389f",
       "name": "Usage Governance"
     },
     {
-      "color": "orange",
+      "color": "violet",
       "context_count": 2,
       "domain": "feature",
-      "id": "9ba34dfc-d80d-4831-bffe-ecb8c8377401",
-      "name": "Revenue & Profit"
-    },
-    {
-      "color": "violet",
-      "context_count": 1,
-      "domain": "feature",
-      "id": "98492dae-9c12-436b-8fa4-2a6e3479c434",
+      "id": "2a5fc966-eb53-4da7-b750-d8c286316f6a",
       "name": "Collective Intelligence"
     },
     {
       "color": "indigo",
       "context_count": 2,
       "domain": "feature",
-      "id": "3f828e11-fcd9-4118-8619-4c189fc0a3ac",
+      "id": "b70c24eb-d122-4343-8f1b-94bd4da8edd2",
       "name": "Device Relay"
     },
     {
       "color": "red",
-      "context_count": 7,
-      "domain": "data",
-      "id": "e2935806-cfdd-493f-8f55-06ee5db7ce5f",
-      "name": "Data & Persistence"
-    },
-    {
-      "color": "pink",
-      "context_count": 8,
+      "context_count": 26,
       "domain": "infrastructure",
-      "id": "b759abf7-93a8-4f8f-93a6-b61bf254b40b",
+      "id": "19ab81ad-89e7-4118-9a55-af8cce6591e2",
       "name": "Platform Infrastructure"
     }
   ],
   "project": {
-    "id": "964ad47f-03bf-4849-ac97-f54c166615d2",
-    "name": "LightTrack",
-    "root": "C:\\Users\\mkdol\\dolla\\LightTrack"
+    "id": "28f040af-a5af-41e7-b3b5-0605c52be64d",
+    "name": "tracklight",
+    "root": "C:\\Users\\kazda\\kiro\\tracklight"
   },
   "provenance": {
-    "git_commit": "fd66bbedd756cd55e02492bae0625296502e08a7",
-    "git_commit_count": 144
+    "git_commit": "bd142af43d89d67fdce342a0a369b152eb185b2b",
+    "git_commit_count": 823
   },
   "stats": {
-    "contexts": 34,
-    "files": 210,
-    "groups": 8,
+    "contexts": 48,
+    "files": 665,
+    "groups": 6,
     "use_cases": 0
   },
   "taxonomy": {
