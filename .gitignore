@@ -79,3 +79,6 @@ Thumbs.db
 
 # /perfect loop state (not version-controlled; see .claude/perfect/config.md)
 /.perfect/
+
+# /contest arena and vault (not version-controlled; see .claude/contest/config.md)
+/.contest/

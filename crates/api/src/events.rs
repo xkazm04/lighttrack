@@ -53,11 +53,11 @@ pub(crate) fn prepare_event(
     // 1. The project's stored persistence policy (hash/drop) — the setting the projects API accepts
     // and the operator table displays, now actually enforced. Applied before the PII scrub: `drop`
     // removes the payloads outright; `hash` leaves nothing scrubbable.
-    if crate::redact::apply_policy(ev, persistence) {
-        tracing::debug!(project_id = %pid, event_id = %ev.id, policy = ?persistence, "applied payload persistence policy");
-    }
     // 2. Env-configured floor: scrub structured PII from what remains before it is stored.
-    let redacted = st.redact.redact_event(ev, persistence);
+    //
+    // Both layers run inside `apply_class`, which is the one place either of them is applied — see
+    // its doc comment for why a door that reaches past it cannot be caught afterwards.
+    let redacted = crate::redact::apply_class(&st.redact, ev, persistence);
     if redacted > 0 {
         tracing::debug!(project_id = %pid, event_id = %ev.id, spans = redacted, "scrubbed PII spans from an ingested event");
     }

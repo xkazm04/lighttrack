@@ -387,3 +387,32 @@ fn escalation_and_expiry_are_read_off_the_clock_not_written_into_the_rule() {
     r.enabled = false;
     assert!(!r.is_active_at(now));
 }
+
+#[test]
+fn evaluation_uses_the_supplied_clock_for_escalation() {
+    let now = chrono::Utc::now();
+    let mut r = rule();
+    r.escalation = Some(Escalation {
+        on_eta_days: 3.0,
+        to: LimitAction::Block,
+        for_hours: 24,
+    });
+    r.escalated_until = Some(now + chrono::Duration::seconds(1));
+
+    let live = r.evaluate_resolved_at(10.0, 10.0, ThresholdBasis::fixed(), None, now);
+    assert_eq!(live.action, LimitAction::Block);
+    assert!(live.rejects_ingest(), "the live escalation enforces");
+
+    let lapsed = r.evaluate_resolved_at(
+        10.0,
+        10.0,
+        ThresholdBasis::fixed(),
+        None,
+        now + chrono::Duration::seconds(2),
+    );
+    assert_eq!(lapsed.action, LimitAction::Alert);
+    assert!(
+        !lapsed.rejects_ingest(),
+        "after the supplied deadline, the configured alert action is back in force"
+    );
+}
