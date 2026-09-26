@@ -159,7 +159,7 @@ fn consequence(s: Surface) -> &'static str {
              through the same primitive."
         }
         Surface::RedactionPosture => {
-            "GET /v1/projects/:id/redaction is unavailable — this deployment cannot say whether \
+            "GET /v1/projects/{id}/redaction is unavailable — this deployment cannot say whether \
              its stored rows were scrubbed, or by which rule set."
         }
         Surface::RevenueReprice => {
@@ -171,7 +171,7 @@ fn consequence(s: Surface) -> &'static str {
              newest-first, not narrowed to one rubric or one kind of verdict."
         }
         Surface::UseCases => {
-            "The /v1/projects/:id/use-cases registry is unavailable — this deployment can group              calls by `events.name` but cannot say which call sites are SUPPOSED to exist, so              shadow usage (traffic nobody declared) and model drift are not reportable here."
+            "The /v1/projects/{id}/use-cases registry is unavailable — this deployment can group              calls by `events.name` but cannot say which call sites are SUPPOSED to exist, so              shadow usage (traffic nobody declared) and model drift are not reportable here."
         }
         Surface::Labels => {
             "POST/GET /v1/labels and GET /v1/scores?needs_review=1 are unavailable — human \
@@ -184,7 +184,7 @@ fn consequence(s: Surface) -> &'static str {
              against a human."
         }
         Surface::DatasetLineage => {
-            "POST /v1/datasets/:id/fork, POST /v1/datasets/:id/items/import and the version walk \
+            "POST /v1/datasets/{id}/fork, POST /v1/datasets/{id}/items/import and the version walk \
              are unavailable — a frozen dataset is terminal here, `version` stays 1 forever, and \
              failing verdicts cannot be mined into a regression set."
         }
@@ -196,15 +196,15 @@ fn consequence(s: Surface) -> &'static str {
         Surface::ScoreSummaries => {
             "GET /v1/quality/prompts and the prompt canary are unavailable — this deployment can              group a served prompt version'''s COST but not its quality, so a version that              regressed after promotion is visible only by reading /v1/scores by hand."
         }
-        Surface::Traces => "/v1/traces, /v1/traces/:id and whole-trace scoring are unavailable.",
+        Surface::Traces => "/v1/traces, /v1/traces/{id} and whole-trace scoring are unavailable.",
         Surface::Forecast => "/v1/forecast and the pre-emptive breach alerts are unavailable.",
         Surface::MarginBreakdowns => {
             "The per-customer margin drill-down and pricing what-if are unavailable."
         }
         Surface::MarginPolicies => {
-            "Margin guardrails (/v1/projects/:id/margin-policies) are unavailable — the forecast              sweep cannot turn a losing customer into a cap here."
+            "Margin guardrails (/v1/projects/{id}/margin-policies) are unavailable — the forecast              sweep cannot turn a losing customer into a cap here."
         }
-        Surface::Prompts => "The prompt registry (/v1/projects/:id/prompts) is unavailable.",
+        Surface::Prompts => "The prompt registry (/v1/projects/{id}/prompts) is unavailable.",
         Surface::Relay => "The device relay queue (/v1/relay/*) is unavailable.",
         Surface::Devices => {
             "Device enrolment (/v1/relay/devices) is unavailable — relay work here can only be              driven by the deprecated shared LIGHTTRACK_RELAY_DEVICE_KEY, which cannot be revoked              per machine, and leases are NOT filtered by what a device can actually run."
@@ -217,7 +217,7 @@ fn consequence(s: Surface) -> &'static str {
              cover."
         }
         Surface::ProjectAdmin => {
-            "PUT /v1/projects/:id is unavailable — a project's redaction policy cannot be changed."
+            "PUT /v1/projects/{id} is unavailable — a project's redaction policy cannot be changed."
         }
         Surface::KeyAdmin => "Listing and revoking a project's API keys is unavailable.",
         Surface::LimitLifecycle => {
@@ -233,7 +233,7 @@ fn consequence(s: Surface) -> &'static str {
              each replica's own memory, so a multi-instance deployment alerts once per instance."
         }
         Surface::AlertRouting => {
-            "Per-project alert channels (/v1/projects/:id/alert-channels) are unavailable — every \
+            "Per-project alert channels (/v1/projects/{id}/alert-channels) are unavailable — every \
              alert goes to the env-configured destinations only."
         }
         Surface::Maintenance => {
@@ -288,7 +288,7 @@ mod tests {
             .iter()
             .find(|d| d.field == Some("target"))
             .expect("the marked `target` body field must be advertised on the manifest");
-        assert_eq!(d.surface, "POST /v1/projects/:id/benchmarks");
+        assert_eq!(d.surface, "POST /v1/projects/{id}/benchmarks");
         assert_eq!(d.removed_in, "0.2.0");
         assert!(
             !d.replacement.is_empty(),

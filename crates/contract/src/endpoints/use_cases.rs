@@ -10,7 +10,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "upsert_use_case",
         method: Method::Post,
-        path: "/v1/projects/:id/use-cases",
+        path: "/v1/projects/{id}/use-cases",
         access: Admin,
         mutating: true,
         params: &[
@@ -71,7 +71,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_use_cases",
         method: Method::Get,
-        path: "/v1/projects/:id/use-cases",
+        path: "/v1/projects/{id}/use-cases",
         access: Key(Read),
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("UseCase"),
@@ -88,7 +88,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "use_case_coverage",
         method: Method::Get,
-        path: "/v1/projects/:id/use-cases/coverage",
+        path: "/v1/projects/{id}/use-cases/coverage",
         access: Key(Read),
         params: &[
             pm("id", "project", "project id"),
@@ -113,7 +113,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_use_case",
         method: Method::Get,
-        path: "/v1/projects/:id/use-cases/:key",
+        path: "/v1/projects/{id}/use-cases/{key}",
         access: Key(Read),
         params: &[
             pm("id", "project", "project id"),
@@ -133,7 +133,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "delete_use_case",
         method: Method::Delete,
-        path: "/v1/projects/:id/use-cases/:key",
+        path: "/v1/projects/{id}/use-cases/{key}",
         access: Admin,
         mutating: true,
         params: &[

@@ -196,7 +196,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_price_history",
         method: Method::Get,
-        path: "/v1/prices/history/:provider/:model",
+        path: "/v1/prices/history/{provider}/{model}",
         access: Key(Read),
         params: &[p("provider", "provider id"), p("model", "model id")],
         response: TypeRef::ArrayOf("ModelPriceRow"),
@@ -214,7 +214,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "put_price",
         method: Method::Put,
-        path: "/v1/prices/:provider/:model",
+        path: "/v1/prices/{provider}/{model}",
         access: Admin,
         mutating: true,
         idempotent: true,

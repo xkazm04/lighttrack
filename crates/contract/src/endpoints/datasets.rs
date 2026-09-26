@@ -10,7 +10,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_dataset",
         method: Method::Post,
-        path: "/v1/projects/:id/datasets",
+        path: "/v1/projects/{id}/datasets",
         access: Admin,
         mutating: true,
         params: &[
@@ -32,7 +32,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_datasets",
         method: Method::Get,
-        path: "/v1/projects/:id/datasets",
+        path: "/v1/projects/{id}/datasets",
         access: Key(Read),
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("Dataset"),
@@ -49,7 +49,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_dataset",
         method: Method::Get,
-        path: "/v1/datasets/:id",
+        path: "/v1/datasets/{id}",
         access: Key(Read),
         params: &[pm("id", "dataset", "dataset id")],
         response: TypeRef::Named("Dataset"),
@@ -66,7 +66,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "add_dataset_item",
         method: Method::Post,
-        path: "/v1/datasets/:id/items",
+        path: "/v1/datasets/{id}/items",
         access: Admin,
         mutating: true,
         params: &[
@@ -92,7 +92,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_dataset_items",
         method: Method::Get,
-        path: "/v1/datasets/:id/items",
+        path: "/v1/datasets/{id}/items",
         access: Key(Read),
         params: &[
             pm("id", "dataset", "dataset id"),
@@ -112,7 +112,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "freeze_dataset",
         method: Method::Post,
-        path: "/v1/datasets/:id/freeze",
+        path: "/v1/datasets/{id}/freeze",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -131,7 +131,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "dataset_item_from_label",
         method: Method::Post,
-        path: "/v1/datasets/:id/items/from-label",
+        path: "/v1/datasets/{id}/items/from-label",
         access: Admin,
         mutating: true,
         params: &[
@@ -146,7 +146,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_dataset_labels",
         method: Method::Get,
-        path: "/v1/datasets/:id/labels",
+        path: "/v1/datasets/{id}/labels",
         access: Key(Read),
         params: &[p("id", "dataset id")],
         response: TypeRef::ArrayOf("Label"),
@@ -157,7 +157,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "fork_dataset",
         method: Method::Post,
-        path: "/v1/datasets/:id/fork",
+        path: "/v1/datasets/{id}/fork",
         access: Admin,
         mutating: true,
         params: &[pm("id", "dataset", "id of the dataset to fork")],
@@ -176,7 +176,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "import_dataset_items",
         method: Method::Post,
-        path: "/v1/datasets/:id/items/import",
+        path: "/v1/datasets/{id}/items/import",
         access: Admin,
         mutating: true,
         params: &[
@@ -209,7 +209,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_dataset_versions",
         method: Method::Get,
-        path: "/v1/projects/:id/datasets/versions",
+        path: "/v1/projects/{id}/datasets/versions",
         access: Key(Read),
         params: &[
             p("id", "project id"),

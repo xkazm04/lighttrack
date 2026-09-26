@@ -60,7 +60,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "ack_alert",
         method: Method::Post,
-        path: "/v1/alerts/:id/ack",
+        path: "/v1/alerts/{id}/ack",
         // Acknowledging is a state change on shared operational record, so it needs `manage`.
         access: Key(Manage),
         mutating: true,
@@ -91,7 +91,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         method: Method::Post,
         // A resolution is written by the responder (an admin-keyed service), not by an app.
         machine: true,
-        path: "/v1/alerts/:id/resolution",
+        path: "/v1/alerts/{id}/resolution",
         access: Admin,
         mutating: true,
         params: &[p("id", "the alert id being closed out")],
@@ -105,7 +105,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_alert_channels",
         method: Method::Get,
-        path: "/v1/projects/:id/alert-channels",
+        path: "/v1/projects/{id}/alert-channels",
         // Where a project's alerts go is instance configuration, not a tenant read.
         access: Admin,
         params: &[p("id", "project id")],
@@ -119,7 +119,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "put_alert_channel",
         method: Method::Put,
-        path: "/v1/projects/:id/alert-channels",
+        path: "/v1/projects/{id}/alert-channels",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -151,7 +151,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "delete_alert_channel",
         method: Method::Delete,
-        path: "/v1/projects/:id/alert-channels/:cid",
+        path: "/v1/projects/{id}/alert-channels/{cid}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -164,7 +164,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "test_alert_channel",
         method: Method::Post,
-        path: "/v1/alert-channels/:id/test",
+        path: "/v1/alert-channels/{id}/test",
         // Sending a real, signed test alert is a use of the deployment's own credentials.
         access: Admin,
         mutating: true,

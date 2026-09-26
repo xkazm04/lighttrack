@@ -29,38 +29,38 @@
 //!                                        `meta` is `key` or `key=value` (metadata predicate).
 //!                                        Backends without the extended predicates answer 501
 //!                                        `unsupported` rather than silently ignoring a filter.
-//!   GET  /v1/events/:id
+//!   GET  /v1/events/{id}
 //!   POST /v1/traces                      OTLP/HTTP JSON export: OTel GenAI spans -> events (see `otlp`)
 //!   GET  /v1/traces?project=&limit=     list traces (rollups grouped by trace_id)
-//!   GET  /v1/traces/:id                 one trace: totals + span tree + scores within it
-//!   POST /v1/traces/:id/score           score a whole trace (anchored to its root span)
+//!   GET  /v1/traces/{id}                 one trace: totals + span tree + scores within it
+//!   POST /v1/traces/{id}/score           score a whole trace (anchored to its root span)
 //!   GET  /v1/costs?project=&since=&until=
 //!   GET  /v1/usecases?project=&since=   use-case rollup: usage+cost by name×provider×model, windowed
 //!   POST /v1/scores  GET /v1/scores?project=&limit=[&run=]   (`run` = one benchmark run's cases)
 //!   GET  /v1/scores?needs_review=1                          verdicts a human should look at (M11)
 //!   POST /v1/labels  GET /v1/labels?project=&subject=&rubric_id=&cursor=   human verdict ledger
-//!   GET  /v1/datasets/:id/labels                            a golden set's grades, joined
+//!   GET  /v1/datasets/{id}/labels                            a golden set's grades, joined
 //!   POST /v1/calibrations  GET /v1/calibrations?project=     judge-human agreement history
 //!   GET  /v1/judges/trust?project=&rubric_id=&judge=         trusted | untrusted | unknown
-//!   GET  /v1/prices  PUT /v1/prices/:provider/:model
+//!   GET  /v1/prices  PUT /v1/prices/{provider}/{model}
 //!   .../datasets .../rubrics .../benchmarks .../jobs            (see modules)
-//!   GET  /v1/benchmarks/:id/gate         CI-gate verdict from the latest finished run
+//!   GET  /v1/benchmarks/{id}/gate         CI-gate verdict from the latest finished run
 //!                                        (pass|regressed|no_baseline|no_runs + run_id/mean/baseline/n)
-//!   POST /v1/projects/:id/prompts  GET /v1/projects/:id/prompts          prompt registry
-//!   GET  /v1/projects/:id/prompts/:name?label=production|version=N       runtime fetch by label
-//!   PUT  /v1/projects/:id/prompts/:name                                  link/unlink its gating benchmark
-//!   POST /v1/projects/:id/prompts/:name/versions                         new version (auto-benchmarks)
-//!   POST /v1/projects/:id/prompts/:name/promote                          label promote (regression-gated)
-//!   PUT  /v1/projects/:id/prompts/:name/canary                           set/clear the online canary policy
+//!   POST /v1/projects/{id}/prompts  GET /v1/projects/{id}/prompts          prompt registry
+//!   GET  /v1/projects/{id}/prompts/{name}?label=production|version=N       runtime fetch by label
+//!   PUT  /v1/projects/{id}/prompts/{name}                                  link/unlink its gating benchmark
+//!   POST /v1/projects/{id}/prompts/{name}/versions                         new version (auto-benchmarks)
+//!   POST /v1/projects/{id}/prompts/{name}/promote                          label promote (regression-gated)
+//!   PUT  /v1/projects/{id}/prompts/{name}/canary                           set/clear the online canary policy
 //!   GET  /v1/quality/prompts?project=&since=&until=&rubric_id=           per-served-version quality
-//!   POST /v1/projects  GET /v1/projects   POST /v1/projects/:id/keys
-//!   PUT  /v1/projects/:id                update name/enabled/redaction/collective_opt_in (admin);
+//!   POST /v1/projects  GET /v1/projects   POST /v1/projects/{id}/keys
+//!   PUT  /v1/projects/{id}                update name/enabled/redaction/collective_opt_in (admin);
 //!                                        a redaction change is enforced on the NEXT ingested event
-//!   GET  /v1/projects/:id/redaction     what the ingest boundary did to the stored rows (M9)
-//!   POST /v1/projects/:id/limits  GET /v1/projects/:id/limits
-//!   PUT  /v1/limits/:id  DELETE /v1/limits/:id   update (incl. enable/disable) or remove a rule
-//!   POST /v1/projects/:id/margin-policies  GET  /v1/projects/:id/margin-policies
-//!   DELETE /v1/projects/:id/margin-policies/:pid   standing margin guardrails (admin)
+//!   GET  /v1/projects/{id}/redaction     what the ingest boundary did to the stored rows (M9)
+//!   POST /v1/projects/{id}/limits  GET /v1/projects/{id}/limits
+//!   PUT  /v1/limits/{id}  DELETE /v1/limits/{id}   update (incl. enable/disable) or remove a rule
+//!   POST /v1/projects/{id}/margin-policies  GET  /v1/projects/{id}/margin-policies
+//!   DELETE /v1/projects/{id}/margin-policies/{pid}   standing margin guardrails (admin)
 //!   GET  /v1/limits/status?project=      evaluate limits -> throttle flag + per-rule status, plus a
 //!                                        `rejected` block (count + est_missed_cost_usd + window) of
 //!                                        429'd ingest attempts per breached rule. That ledger is
@@ -75,26 +75,26 @@
 //!                                        breach" after — over the API, not only via an alert channel.
 //!                                        501 `unsupported` on backends without the grouped query.
 //!   POST /v1/jobs                        enqueue any job kind (admin; payload validated per kind)
-//!   POST/GET /v1/projects/:id/schedules  stored recurrence: a job kind + payload on an interval
+//!   POST/GET /v1/projects/{id}/schedules  stored recurrence: a job kind + payload on an interval
 //!   GET  /v1/schedules                   every recurring workload in this deployment (admin)
-//!   PUT/DELETE /v1/schedules/:id         patch (incl. enable/disable) or remove a schedule
-//!   GET  /v1/schedules/:id/runs          the jobs one schedule has produced
+//!   PUT/DELETE /v1/schedules/{id}         patch (incl. enable/disable) or remove a schedule
+//!   GET  /v1/schedules/{id}/runs          the jobs one schedule has produced
 //!   POST /v1/relay/tasks                 enqueue a device task (GET ?project=&status=&limit= lists)
-//!   GET  /v1/relay/tasks/:id             task status/result (the originating app polls this)
+//!   GET  /v1/relay/tasks/{id}             task status/result (the originating app polls this)
 //!   POST /v1/relay/devices               enrol a device (admin; the key is shown ONCE, never on MCP)
 //!   GET  /v1/relay/devices               the fleet + liveness (admin)
-//!   DELETE /v1/relay/devices/:id         revoke a device (admin)
+//!   DELETE /v1/relay/devices/{id}         revoke a device (admin)
 //!   POST /v1/relay/lease                 device: lease due tasks (device key; outbound-only).
 //!                                        Answers { tasks, lease_secs, renew_secs } — the TTL is
 //!                                        detection latency now, not "how long a run may take"
-//!   POST /v1/relay/tasks/:id/renew       device: heartbeat, fenced (409 = stop, you lost it)
-//!   POST /v1/relay/tasks/:id/progress    device: liveness detail, fenced
-//!   POST /v1/relay/tasks/:id/cancel      stop a queued/leased task (own project key or admin)
-//!   POST /v1/relay/tasks/:id/result      device: report succeeded | failed | deferred, fenced
+//!   POST /v1/relay/tasks/{id}/renew       device: heartbeat, fenced (409 = stop, you lost it)
+//!   POST /v1/relay/tasks/{id}/progress    device: liveness detail, fenced
+//!   POST /v1/relay/tasks/{id}/cancel      stop a queued/leased task (own project key or admin)
+//!   POST /v1/relay/tasks/{id}/result      device: report succeeded | failed | deferred, fenced
 //!   GET  /v1/relay/actions?project=&limit=   the action fingerprint ledger, derived from the settle
 //!                                        events: action_type × prompt_sha256, first/last seen, run
 //!                                        and error counts, and how many runs a judge can read
-//!   POST /v1/relay/actions/:action_type/dataset   (admin) snapshot that action's succeeded runs
+//!   POST /v1/relay/actions/{action_type}/dataset   (admin) snapshot that action's succeeded runs
 //!                                        (payload → input, result → output) into a dataset, so a
 //!                                        benchmark can gate the next prompt edit. A namespaced
 //!                                        action_type percent-encodes its `/`.
@@ -102,14 +102,14 @@
 //!   POST /v1/revenue/reprice?currency=&rate=&dry_run=  restate 1:1-fallback rows at a real rate
 //!   GET  /v1/margin?by=customer|product&since=&until=&below=<pct>   revenue − LLM cost rollup
 //!   GET  /v1/margin/trend?by=&days=&top=   per-day revenue/cost/margin series per customer/product
-//!   GET  /v1/margin/customer/:id?since=&until=   one customer's revenue+cost by model & use-case
+//!   GET  /v1/margin/customer/{id}?since=&until=   one customer's revenue+cost by model & use-case
 //!   GET  /v1/margin/simulate?by=&price_per_mtok=&flat_monthly=&since=&until=   pricing what-if (read-only)
 //!   GET  /v1/forecast?project=&by=&horizon=&lookback=   projected spend/budget-breach + margin-erosion + pre-emptive alerts
 //!        The same alerts also fire on a schedule with no request involved when
 //!        LIGHTTRACK_FORECAST_SWEEP_SECS is set (off by default; see `forecast_sweep`).
 //!        LIGHTTRACK_PROMPT_CANARY_SWEEP_SECS likewise arms the served-version canary
 //!        (off by default; see `prompt_canary_sweep`).
-//!   POST /v1/billing/:provider/webhook?project=   signed Stripe/Polar webhook → revenue (unauth; HMAC)
+//!   POST /v1/billing/{provider}/webhook?project=   signed Stripe/Polar webhook → revenue (unauth; HMAC)
 //!   GET  /v1/collective/digest?min_cases=     build this instance's privacy-safe model digest (admin)
 //!   POST /v1/collective/ingest                hub: accept a contributor's digest (gated; off default)
 //!   GET  /v1/collective/leaderboard?task_type=&provider=&judge=   merged real-world model leaderboard
@@ -569,7 +569,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/ingest/status", get(shed::get_ingest_status))
         .route("/v1/storage/status", get(storage::get_storage_status))
-        .route("/v1/events/:id", get(events_query::get_event_by_id))
+        .route("/v1/events/{id}", get(events_query::get_event_by_id))
         .route(
             "/v1/traces",
             // The OTLP door is an ingest door: one export fans a whole batch into the same write
@@ -581,8 +581,8 @@ pub(crate) fn build_router(state: AppState) -> Router {
                 .get(traces::list_traces)
                 .layer(DefaultBodyLimit::max(batch_body_limit)),
         )
-        .route("/v1/traces/:id", get(traces::get_trace))
-        .route("/v1/traces/:id/score", post(traces::score_trace))
+        .route("/v1/traces/{id}", get(traces::get_trace))
+        .route("/v1/traces/{id}/score", post(traces::score_trace))
         .route("/v1/costs", get(events_query::get_costs))
         .route("/v1/costs/prompts", get(events_query::get_prompt_costs))
         .route("/v1/costs/unpriced", get(costs_unpriced::get_unpriced))
@@ -596,41 +596,41 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/prices", get(prices::get_prices))
         .route(
-            "/v1/prices/history/:provider/:model",
+            "/v1/prices/history/{provider}/{model}",
             get(prices::get_price_history),
         )
-        .route("/v1/prices/:provider/:model", put(prices_fill::put_price))
+        .route("/v1/prices/{provider}/{model}", put(prices_fill::put_price))
         .route(
-            "/v1/projects/:id/datasets",
+            "/v1/projects/{id}/datasets",
             post(datasets::create_dataset).get(datasets::list_datasets),
         )
-        .route("/v1/datasets/:id", get(datasets::get_dataset))
+        .route("/v1/datasets/{id}", get(datasets::get_dataset))
         .route(
-            "/v1/datasets/:id/items",
+            "/v1/datasets/{id}/items",
             post(datasets::add_dataset_item).get(datasets::list_dataset_items),
         )
-        .route("/v1/datasets/:id/freeze", post(datasets::freeze_dataset))
+        .route("/v1/datasets/{id}/freeze", post(datasets::freeze_dataset))
         // "Promote to golden set": a labelled production event becomes a permanent eval case with
         // its human verdict copied across, instead of the grade evaporating in a spreadsheet.
         .route(
-            "/v1/datasets/:id/items/from-label",
+            "/v1/datasets/{id}/items/from-label",
             post(labels_promote::item_from_label),
         )
         .route(
-            "/v1/datasets/:id/labels",
+            "/v1/datasets/{id}/labels",
             get(labels_promote::dataset_labels),
         )
         // Eval corpus lineage (M24): a frozen set is a checkpoint, not a dead end.
         .route(
-            "/v1/datasets/:id/fork",
+            "/v1/datasets/{id}/fork",
             post(datasets_lineage::fork_dataset),
         )
         .route(
-            "/v1/datasets/:id/items/import",
+            "/v1/datasets/{id}/items/import",
             post(datasets_lineage::import_dataset_items),
         )
         .route(
-            "/v1/projects/:id/datasets/versions",
+            "/v1/projects/{id}/datasets/versions",
             get(datasets_lineage::list_dataset_versions),
         )
         .route(
@@ -643,61 +643,61 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/judges/trust", get(judges::judge_trust))
         .route(
-            "/v1/projects/:id/rubrics",
+            "/v1/projects/{id}/rubrics",
             post(rubrics::create_rubric).get(rubrics::list_rubrics),
         )
         // The use-case registry: what this project SAYS it uses an LLM for. `coverage` is declared
-        // before `:key` so the literal path segment is not swallowed by the parameter.
+        // before `{key}` so the literal path segment is not swallowed by the parameter.
         .route(
-            "/v1/projects/:id/use-cases",
+            "/v1/projects/{id}/use-cases",
             post(use_cases::upsert_use_case).get(use_cases::list_use_cases),
         )
         .route(
-            "/v1/projects/:id/use-cases/coverage",
+            "/v1/projects/{id}/use-cases/coverage",
             get(use_cases::coverage),
         )
         .route(
-            "/v1/projects/:id/use-cases/:key",
+            "/v1/projects/{id}/use-cases/{key}",
             get(use_cases::get_use_case).delete(use_cases::delete_use_case),
         )
-        .route("/v1/rubrics/:id", get(rubrics::get_rubric))
+        .route("/v1/rubrics/{id}", get(rubrics::get_rubric))
         .route(
-            "/v1/rubrics/:id/versions",
+            "/v1/rubrics/{id}/versions",
             post(rubrics::create_rubric_version),
         )
         .route(
-            "/v1/projects/:id/benchmarks",
+            "/v1/projects/{id}/benchmarks",
             post(benchmarks::create_benchmark).get(benchmarks::list_benchmarks),
         )
-        .route("/v1/benchmarks/:id", get(benchmarks::get_benchmark))
+        .route("/v1/benchmarks/{id}", get(benchmarks::get_benchmark))
         .route(
-            "/v1/benchmarks/:id/runs",
+            "/v1/benchmarks/{id}/runs",
             get(benchmarks::list_benchmark_runs),
         )
-        .route("/v1/benchmarks/:id/gate", get(benchmarks::benchmark_gate))
+        .route("/v1/benchmarks/{id}/gate", get(benchmarks::benchmark_gate))
         .route("/v1/benchmark-runs", post(benchmarks::post_benchmark_run))
         .route(
-            "/v1/benchmarks/:id/enqueue",
+            "/v1/benchmarks/{id}/enqueue",
             post(jobs_enqueue::enqueue_benchmark),
         )
         .route(
-            "/v1/projects/:id/prompts",
+            "/v1/projects/{id}/prompts",
             post(prompts::create_prompt).get(prompts::list_prompts),
         )
         .route(
-            "/v1/projects/:id/prompts/:name",
+            "/v1/projects/{id}/prompts/{name}",
             get(prompts::get_prompt).put(prompts::link_benchmark),
         )
         .route(
-            "/v1/projects/:id/prompts/:name/versions",
+            "/v1/projects/{id}/prompts/{name}/versions",
             post(prompts::add_version).get(prompts::list_versions),
         )
         .route(
-            "/v1/projects/:id/prompts/:name/canary",
+            "/v1/projects/{id}/prompts/{name}/canary",
             axum::routing::put(prompts_canary::set_canary),
         )
         .route(
-            "/v1/projects/:id/prompts/:name/promote",
+            "/v1/projects/{id}/prompts/{name}/promote",
             post(prompts::promote),
         )
         .route(
@@ -705,59 +705,59 @@ pub(crate) fn build_router(state: AppState) -> Router {
             get(jobs::list_jobs).post(jobs_enqueue::enqueue_job),
         )
         .route("/v1/jobs/claim", post(jobs::claim_job))
-        .route("/v1/jobs/:id", get(jobs::get_job))
-        .route("/v1/jobs/:id/cancel", post(jobs::cancel_job))
-        .route("/v1/jobs/:id/progress", post(jobs::job_progress))
-        .route("/v1/jobs/:id/renew", post(jobs::job_renew))
-        .route("/v1/jobs/:id/finish", post(jobs::job_finish))
+        .route("/v1/jobs/{id}", get(jobs::get_job))
+        .route("/v1/jobs/{id}/cancel", post(jobs::cancel_job))
+        .route("/v1/jobs/{id}/progress", post(jobs::job_progress))
+        .route("/v1/jobs/{id}/renew", post(jobs::job_renew))
+        .route("/v1/jobs/{id}/finish", post(jobs::job_finish))
         .route(
-            "/v1/projects/:id/schedules",
+            "/v1/projects/{id}/schedules",
             post(schedules::create_schedule).get(schedules::list_schedules),
         )
         .route("/v1/schedules", get(schedules::list_all_schedules))
         .route(
-            "/v1/schedules/:id",
+            "/v1/schedules/{id}",
             put(schedules::update_schedule).delete(schedules::delete_schedule),
         )
-        .route("/v1/schedules/:id/runs", get(schedules::schedule_runs))
+        .route("/v1/schedules/{id}/runs", get(schedules::schedule_runs))
         .route(
             "/v1/projects",
             post(projects::create_project).get(projects::list_projects),
         )
         .route(
-            "/v1/projects/:id",
+            "/v1/projects/{id}",
             put(projects::update_project).delete(projects::archive_project),
         )
         .route(
-            "/v1/projects/:id/redaction",
+            "/v1/projects/{id}/redaction",
             get(redaction::get_redaction_posture),
         )
         .route(
-            "/v1/projects/:id/keys",
+            "/v1/projects/{id}/keys",
             post(projects_keys::create_key).get(projects_keys::list_keys),
         )
         .route(
-            "/v1/projects/:id/keys/:kid",
+            "/v1/projects/{id}/keys/{kid}",
             delete(projects_keys::revoke_key),
         )
         .route(
-            "/v1/projects/:id/keys/:kid/rotate",
+            "/v1/projects/{id}/keys/{kid}/rotate",
             post(projects_keys::rotate_key),
         )
         .route(
-            "/v1/projects/:id/limits",
+            "/v1/projects/{id}/limits",
             post(limits::create_limit).get(limits::list_limits),
         )
         .route(
-            "/v1/limits/:id",
+            "/v1/limits/{id}",
             put(limits::update_limit).delete(limits::delete_limit),
         )
         .route(
-            "/v1/projects/:id/margin-policies",
+            "/v1/projects/{id}/margin-policies",
             post(margin_policies::create_policy).get(margin_policies::list_policies),
         )
         .route(
-            "/v1/projects/:id/margin-policies/:pid",
+            "/v1/projects/{id}/margin-policies/{pid}",
             delete(margin_policies::delete_policy),
         )
         .route("/v1/limits/status", get(limits::limits_status))
@@ -766,39 +766,48 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/relay/tasks",
             post(relay::enqueue_task).get(relay::list_tasks),
         )
-        .route("/v1/relay/tasks/:id", get(relay::get_task))
+        .route("/v1/relay/tasks/{id}", get(relay::get_task))
         .route(
-            "/v1/relay/tasks/:id/result",
+            "/v1/relay/tasks/{id}/result",
             post(relay_result::post_result),
         )
-        .route("/v1/relay/tasks/:id/renew", post(relay_lease::renew_lease))
+        .route("/v1/relay/tasks/{id}/renew", post(relay_lease::renew_lease))
         .route(
-            "/v1/relay/tasks/:id/progress",
+            "/v1/relay/tasks/{id}/progress",
             post(relay_lease::post_progress),
         )
-        .route("/v1/relay/tasks/:id/cancel", post(relay_lease::cancel_task))
+        .route(
+            "/v1/relay/tasks/{id}/cancel",
+            post(relay_lease::cancel_task),
+        )
         .route("/v1/relay/lease", post(relay_lease::lease_tasks))
         .route(
             "/v1/relay/devices",
             post(relay_devices::create_device).get(relay_devices::list_devices),
         )
         .route(
-            "/v1/relay/devices/:id",
+            "/v1/relay/devices/{id}",
             delete(relay_devices::revoke_device),
         )
         .route("/v1/relay/actions", get(relay_actions::list_actions))
         .route(
-            "/v1/relay/actions/:action_type/dataset",
+            "/v1/relay/actions/{action_type}/dataset",
             post(relay_actions::snapshot_dataset),
         )
         .route("/v1/revenue", post(revenue::post_revenue))
         .route("/v1/revenue/reprice", post(revenue_reprice::post_reprice))
         .route("/v1/margin", get(revenue::get_margin))
         .route("/v1/margin/trend", get(revenue::get_margin_trend))
-        .route("/v1/margin/customer/:id", get(revenue::get_customer_margin))
+        .route(
+            "/v1/margin/customer/{id}",
+            get(revenue::get_customer_margin),
+        )
         .route("/v1/margin/simulate", get(revenue::get_margin_simulate))
         .route("/v1/forecast", get(forecast::get_forecast))
-        .route("/v1/billing/:provider/webhook", post(billing::post_webhook))
+        .route(
+            "/v1/billing/{provider}/webhook",
+            post(billing::post_webhook),
+        )
         .route("/v1/collective/digest", get(collective::get_digest))
         .route("/v1/collective/ingest", post(collective::post_ingest))
         .route(
@@ -821,21 +830,21 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         // The alert ledger: what fired, who was told, who acknowledged it, and what came of it.
         .route("/v1/alerts", get(alerts::read::list_alerts))
-        .route("/v1/alerts/:id/ack", post(alerts::read::ack_alert))
+        .route("/v1/alerts/{id}/ack", post(alerts::read::ack_alert))
         .route(
-            "/v1/alerts/:id/resolution",
+            "/v1/alerts/{id}/resolution",
             post(alerts::read::attach_resolution),
         )
         .route(
-            "/v1/projects/:id/alert-channels",
+            "/v1/projects/{id}/alert-channels",
             get(alerts::routing::list_channels).put(alerts::routing::put_channel),
         )
         .route(
-            "/v1/projects/:id/alert-channels/:cid",
+            "/v1/projects/{id}/alert-channels/{cid}",
             delete(alerts::routing::delete_channel),
         )
         .route(
-            "/v1/alert-channels/:id/test",
+            "/v1/alert-channels/{id}/test",
             post(alerts::routing::test_channel),
         )
         // Over every route: the maintenance sweep's activity gauge. It must see ALL foreground work,

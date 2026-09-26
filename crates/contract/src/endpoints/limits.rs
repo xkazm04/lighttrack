@@ -10,7 +10,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_limit",
         method: Method::Post,
-        path: "/v1/projects/:id/limits",
+        path: "/v1/projects/{id}/limits",
         access: Admin,
         mutating: true,
         params: &[
@@ -39,7 +39,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_limits",
         method: Method::Get,
-        path: "/v1/projects/:id/limits",
+        path: "/v1/projects/{id}/limits",
         access: Key(Read),
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("LimitRule"),
@@ -57,7 +57,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "update_limit",
         method: Method::Put,
-        path: "/v1/limits/:id",
+        path: "/v1/limits/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -90,7 +90,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "delete_limit",
         method: Method::Delete,
-        path: "/v1/limits/:id",
+        path: "/v1/limits/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -110,7 +110,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_margin_policy",
         method: Method::Post,
-        path: "/v1/projects/:id/margin-policies",
+        path: "/v1/projects/{id}/margin-policies",
         access: Admin,
         mutating: true,
         params: &[
@@ -130,7 +130,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_margin_policies",
         method: Method::Get,
-        path: "/v1/projects/:id/margin-policies",
+        path: "/v1/projects/{id}/margin-policies",
         access: Admin,
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("MarginPolicy"),
@@ -148,7 +148,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "delete_margin_policy",
         method: Method::Delete,
-        path: "/v1/projects/:id/margin-policies/:pid",
+        path: "/v1/projects/{id}/margin-policies/{pid}",
         access: Admin,
         mutating: true,
         idempotent: true,
