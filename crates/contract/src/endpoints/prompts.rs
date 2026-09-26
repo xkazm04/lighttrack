@@ -10,7 +10,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_prompt",
         method: Method::Post,
-        path: "/v1/projects/:id/prompts",
+        path: "/v1/projects/{id}/prompts",
         access: Admin,
         mutating: true,
         params: &[
@@ -32,7 +32,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_prompts",
         method: Method::Get,
-        path: "/v1/projects/:id/prompts",
+        path: "/v1/projects/{id}/prompts",
         access: Key(Read),
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("Prompt"),
@@ -50,7 +50,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_prompt",
         method: Method::Get,
-        path: "/v1/projects/:id/prompts/:name",
+        path: "/v1/projects/{id}/prompts/{name}",
         access: Key(Read),
         params: &[
             pm("id", "project", "project id"),
@@ -75,7 +75,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "link_prompt_benchmark",
         method: Method::Put,
-        path: "/v1/projects/:id/prompts/:name",
+        path: "/v1/projects/{id}/prompts/{name}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -92,7 +92,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "add_prompt_version",
         method: Method::Post,
-        path: "/v1/projects/:id/prompts/:name/versions",
+        path: "/v1/projects/{id}/prompts/{name}/versions",
         access: Admin,
         mutating: true,
         params: &[
@@ -121,7 +121,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_prompt_versions",
         method: Method::Get,
-        path: "/v1/projects/:id/prompts/:name/versions",
+        path: "/v1/projects/{id}/prompts/{name}/versions",
         access: Key(Read),
         params: &[p("id", "project id"), p("name", "registry prompt name")],
         response: TypeRef::ArrayOf("PromptVersion"),
@@ -132,7 +132,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "set_prompt_canary",
         method: Method::Put,
-        path: "/v1/projects/:id/prompts/:name/canary",
+        path: "/v1/projects/{id}/prompts/{name}/canary",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -149,7 +149,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "promote_prompt",
         method: Method::Post,
-        path: "/v1/projects/:id/prompts/:name/promote",
+        path: "/v1/projects/{id}/prompts/{name}/promote",
         access: Admin,
         mutating: true,
         params: &[

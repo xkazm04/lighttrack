@@ -104,18 +104,22 @@ mod tests {
         }
     }
 
-    /// Every `:segment` of a path must be a declared `Path` parameter, or the generated OpenAPI
+    /// Every `{segment}` of a path must be a declared `Path` parameter, or the generated OpenAPI
     /// document is invalid and the MCP tool cannot bind the id it needs.
     #[test]
     fn every_path_segment_is_a_declared_parameter() {
         for e in endpoints() {
-            for seg in e.path.split('/').filter(|s| s.starts_with(':')) {
-                let name = &seg[1..];
+            for seg in e
+                .path
+                .split('/')
+                .filter(|s| s.starts_with('{') && s.ends_with('}'))
+            {
+                let name = &seg[1..seg.len() - 1];
                 assert!(
                     e.params
                         .iter()
                         .any(|p| p.kind == ParamKind::Path && p.name == name),
-                    "{}: path segment ':{name}' has no declared Path param",
+                    "{}: path segment '{{{name}}}' has no declared Path param",
                     e.id
                 );
             }

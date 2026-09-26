@@ -51,7 +51,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "update_project",
         method: Method::Put,
-        path: "/v1/projects/:id",
+        path: "/v1/projects/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -75,7 +75,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "archive_project",
         method: Method::Delete,
-        path: "/v1/projects/:id",
+        path: "/v1/projects/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -88,7 +88,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_redaction_posture",
         method: Method::Get,
-        path: "/v1/projects/:id/redaction",
+        path: "/v1/projects/{id}/redaction",
         access: Key(Read),
         params: &[
             p("id", "project id"),
@@ -108,7 +108,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_key",
         method: Method::Post,
-        path: "/v1/projects/:id/keys",
+        path: "/v1/projects/{id}/keys",
         access: Admin,
         mutating: true,
         params: &[
@@ -128,7 +128,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_keys",
         method: Method::Get,
-        path: "/v1/projects/:id/keys",
+        path: "/v1/projects/{id}/keys",
         access: Admin,
         params: &[p("id", "project id")],
         response: TypeRef::Untyped(
@@ -142,7 +142,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "revoke_key",
         method: Method::Delete,
-        path: "/v1/projects/:id/keys/:kid",
+        path: "/v1/projects/{id}/keys/{kid}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -156,7 +156,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "rotate_key",
         method: Method::Post,
-        path: "/v1/projects/:id/keys/:kid/rotate",
+        path: "/v1/projects/{id}/keys/{kid}/rotate",
         access: Admin,
         mutating: true,
         params: &[

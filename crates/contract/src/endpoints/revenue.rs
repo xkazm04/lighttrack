@@ -107,7 +107,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_customer_margin",
         method: Method::Get,
-        path: "/v1/margin/customer/:id",
+        path: "/v1/margin/customer/{id}",
         access: Admin,
         params: &[
             p("id", "customer id"),
@@ -152,7 +152,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "billing_webhook",
         method: Method::Post,
-        path: "/v1/billing/:provider/webhook",
+        path: "/v1/billing/{provider}/webhook",
         // The provider's HMAC signature IS the credential here — verified by the configured
         // `BillingSource`, never by a LightTrack bearer key. `ROUTE_SCOPES` says `Admin` only
         // because its two-column shape cannot say "authenticated by someone else's secret".

@@ -10,7 +10,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_benchmark",
         method: Method::Post,
-        path: "/v1/projects/:id/benchmarks",
+        path: "/v1/projects/{id}/benchmarks",
         access: Admin,
         mutating: true,
         params: &[
@@ -87,7 +87,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_benchmarks",
         method: Method::Get,
-        path: "/v1/projects/:id/benchmarks",
+        path: "/v1/projects/{id}/benchmarks",
         access: Key(Read),
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("Benchmark"),
@@ -104,7 +104,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_benchmark",
         method: Method::Get,
-        path: "/v1/benchmarks/:id",
+        path: "/v1/benchmarks/{id}",
         access: Key(Read),
         params: &[pm("id", "benchmark", "benchmark id")],
         response: TypeRef::Named("Benchmark"),
@@ -121,7 +121,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_benchmark_runs",
         method: Method::Get,
-        path: "/v1/benchmarks/:id/runs",
+        path: "/v1/benchmarks/{id}/runs",
         access: Key(Read),
         params: &[pm("id", "benchmark", "benchmark id")],
         response: TypeRef::ArrayOf("BenchmarkRun"),
@@ -138,7 +138,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "benchmark_gate",
         method: Method::Get,
-        path: "/v1/benchmarks/:id/gate",
+        path: "/v1/benchmarks/{id}/gate",
         access: Key(Read),
         params: &[pm("id", "benchmark", "benchmark id")],
         response: TypeRef::Untyped(
@@ -173,7 +173,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "enqueue_benchmark",
         method: Method::Post,
-        path: "/v1/benchmarks/:id/enqueue",
+        path: "/v1/benchmarks/{id}/enqueue",
         access: Admin,
         mutating: true,
         params: &[
