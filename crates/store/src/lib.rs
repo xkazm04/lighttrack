@@ -1401,6 +1401,17 @@ pub trait Store: Send + Sync {
     // --- model prices (Phase 3.6a) ---
     fn upsert_price(&self, p: &ModelPriceRow) -> Result<()>;
     fn list_prices(&self) -> Result<Vec<ModelPriceRow>>;
+    /// Write a whole seed book as ONE unit: every row lands or none does. The boot seeds only when
+    /// the book is empty, so a seed that stopped halfway used to leave a non-empty book that no
+    /// later start would ever finish — the node then priced 5 of 18 models and said nothing. The
+    /// default writes row by row; a backend that can commit atomically overrides it, and one that
+    /// cannot keeps that half-seed hazard.
+    fn seed_prices(&self, rows: &[ModelPriceRow]) -> Result<()> {
+        for p in rows {
+            self.upsert_price(p)?;
+        }
+        Ok(())
+    }
 
     // --- datasets (Phase 3.6b) ---
     fn create_dataset(&self, d: &Dataset) -> Result<()>;

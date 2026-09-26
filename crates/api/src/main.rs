@@ -372,11 +372,11 @@ async fn main() -> anyhow::Result<()> {
             };
 
             // Seed the price book from pricing.json on first run; thereafter the DB is the source of truth.
+            // "First run" is read as "the book is empty", so the seed is written as one unit: a seed
+            // that stopped halfway must leave the book empty, or no later start would finish it.
             if store.list_prices()?.is_empty() {
                 let (seed, from) = crate::prices::seed_book(&pricing);
-                for row in seed.rows() {
-                    store.upsert_price(&row)?;
-                }
+                store.seed_prices(&seed.rows())?;
                 let source = match from {
                     crate::prices::PriceSeed::File => pricing.clone(),
                     crate::prices::PriceSeed::Embedded => "compiled-in default".to_string(),
@@ -457,6 +457,12 @@ async fn main() -> anyhow::Result<()> {
         collective_auto::AutoContribute::describe(&collective_auto::AutoContribute::from_env());
     let canary_sweep = prompt_canary_sweep::SweepConfig::from_env();
     let canary_sweep_desc = prompt_canary_sweep::describe(canary_sweep);
+    // Bind before anything says "listening" and before any background task starts: the bind is the
+    // last step that can refuse this process (a port already held), and an instance that cannot
+    // serve must neither announce that it is serving nor leave sweeps running on its store. The
+    // address logged is the one the socket actually holds, so `:0` reports the port it was given.
+    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    let bound = listener.local_addr()?;
     // The whole runtime configuration as one indexed event: "why did prod behave differently" is a
     // field comparison across two boots, not a diff of two prose lines. The human-critical part (are
     // we up, and on what address) stays in the message so it reads at a glance in either format.
@@ -478,7 +484,7 @@ async fn main() -> anyhow::Result<()> {
         billing = %billing_desc,
         collective = %collective_desc,
         collective_auto_contribute = %auto_contribute_desc,
-        "lighttrack-api v{} listening on http://{bind}",
+        "lighttrack-api v{} listening on http://{bound}",
         env!("CARGO_PKG_VERSION"),
     );
     // Redaction is a *storage* posture: what an operator believes is in the DB has to match what is
@@ -523,7 +529,6 @@ async fn main() -> anyhow::Result<()> {
 
     let app = build_router(state);
 
-    let listener = tokio::net::TcpListener::bind(&bind).await?;
     // `into_make_service_with_connect_info` is what puts the socket peer address in each request's
     // extensions. Without it there is no source identity and `auth_throttle` silently does nothing —
     // so this is not an optional nicety, it is the throttle's input.

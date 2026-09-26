@@ -698,6 +698,9 @@ impl Store for SqliteStore {
     fn upsert_price(&self, p: &ModelPriceRow) -> Result<()> {
         self.with(|c| prices::upsert(c, p))
     }
+    fn seed_prices(&self, rows: &[ModelPriceRow]) -> Result<()> {
+        self.with(|c| prices::seed(c, rows))
+    }
     fn list_prices(&self) -> Result<Vec<ModelPriceRow>> {
         self.read(prices::list)
     }

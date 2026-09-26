@@ -43,6 +43,18 @@ pub(super) fn upsert(conn: &Connection, p: &ModelPriceRow) -> Result<()> {
     Ok(())
 }
 
+/// Store a whole seed book in one transaction, so a failure part-way leaves the book empty and the
+/// next start seeds it again. `unchecked_transaction` is sound here for the reason it is everywhere
+/// in this store: the caller holds the write-connection mutex.
+pub(super) fn seed(conn: &Connection, rows: &[ModelPriceRow]) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    for p in rows {
+        upsert(&tx, p)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// The **current** book: one row per key, the latest `effective_from` that is not in the future.
 ///
 /// A future-dated row (a rate announced ahead of its switch-over) is stored and returned by

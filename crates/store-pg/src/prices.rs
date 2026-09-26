@@ -16,7 +16,7 @@ use crate::util::{fmt_ts, parse_ts, pgerr};
 const COLS: &str = "provider, model, input_per_mtok, output_per_mtok, \
     cached_input_per_mtok, effective_from, source_url, verified_at, note";
 
-pub(crate) async fn upsert(pool: &PgPool, p: &ModelPriceRow) -> Result<()> {
+pub(crate) async fn upsert<'e, E: sqlx::PgExecutor<'e>>(ex: E, p: &ModelPriceRow) -> Result<()> {
     sqlx::query(
         "INSERT INTO model_prices (provider, model, input_per_mtok, output_per_mtok, \
          cached_input_per_mtok, effective_from, source_url, verified_at, note) \
@@ -36,10 +36,20 @@ pub(crate) async fn upsert(pool: &PgPool, p: &ModelPriceRow) -> Result<()> {
     .bind(p.source_url.clone())
     .bind(p.verified_at.map(fmt_ts))
     .bind(p.note.clone())
-    .execute(pool)
+    .execute(ex)
     .await
     .map_err(pgerr)?;
     Ok(())
+}
+
+/// A whole seed book in one transaction: a failure part-way leaves the book empty, so the next
+/// start seeds it again instead of serving a partial book forever.
+pub(crate) async fn seed(pool: &PgPool, rows: &[ModelPriceRow]) -> Result<()> {
+    let mut tx = pool.begin().await.map_err(pgerr)?;
+    for p in rows {
+        upsert(&mut *tx, p).await?;
+    }
+    tx.commit().await.map_err(pgerr)
 }
 
 /// The **current** book: one row per key, the latest `effective_from` not in the future. A

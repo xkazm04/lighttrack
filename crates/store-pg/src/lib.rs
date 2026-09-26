@@ -456,6 +456,9 @@ impl Store for PgStore {
     fn upsert_price(&self, p: &ModelPriceRow) -> Result<()> {
         self.rt.block_on(prices::upsert(&self.pool, p))
     }
+    fn seed_prices(&self, rows: &[ModelPriceRow]) -> Result<()> {
+        self.rt.block_on(prices::seed(&self.pool, rows))
+    }
     fn list_prices(&self) -> Result<Vec<ModelPriceRow>> {
         self.rt.block_on(prices::list(&self.pool))
     }

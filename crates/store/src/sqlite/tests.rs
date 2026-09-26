@@ -2917,3 +2917,39 @@ fn calls_and_tokens_caps_are_untouched_by_unpriced_traffic() {
         assert!(a.statuses.iter().all(|st| st.cost_evidence.is_none()));
     }
 }
+
+/// The boot seeds the price book only when it is empty, so the seed has to be one unit: a row that
+/// fails part-way leaves nothing behind, and the next start seeds again. Row by row, the same
+/// failure left a non-empty partial book that no later start would ever finish.
+#[test]
+fn a_seed_that_fails_part_way_leaves_the_book_empty() {
+    let row = |model: &str, input: f64| lighttrack_core::ModelPriceRow {
+        provider: "seed".into(),
+        model: model.into(),
+        input_per_mtok: input,
+        output_per_mtok: 1.0,
+        cached_input_per_mtok: None,
+        effective_from: Utc::now(),
+        source_url: None,
+        verified_at: None,
+        note: None,
+    };
+    // A NaN rate binds as NULL, which the NOT NULL rate column refuses: a real store-side failure
+    // on the second row, after the first has been written.
+    let book = [row("a", 1.0), row("b", f64::NAN), row("c", 1.0)];
+
+    let atomic = SqliteStore::open_in_memory().unwrap();
+    assert!(atomic.seed_prices(&book).is_err());
+    assert!(
+        atomic.list_prices().unwrap().is_empty(),
+        "a failed seed must leave the book empty, so the next start's emptiness check seeds again"
+    );
+
+    // The row-by-row loop it replaced, on the same book: the first row survives the failure.
+    let by_row = SqliteStore::open_in_memory().unwrap();
+    assert!(book
+        .iter()
+        .try_for_each(|p| by_row.upsert_price(p))
+        .is_err());
+    assert_eq!(by_row.list_prices().unwrap().len(), 1);
+}
