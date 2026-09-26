@@ -27,6 +27,7 @@ mod generator;
 mod router;
 mod routes;
 mod state;
+mod stream;
 mod target;
 mod telemetry;
 mod wire;
@@ -39,8 +40,36 @@ use std::sync::Arc;
 
 use anyhow::Context;
 
+const USAGE: &str = "\
+lt-gateway — one OpenAI-compatible endpoint on loopback in front of the seat-metered CLIs.
+
+usage: lt-gateway [--help | --version]
+
+Configuration is by environment (see docs/GATEWAY.md):
+  LIGHTTRACK_GATEWAY_BIND     bind address            (default 127.0.0.1:8790)
+  LIGHTTRACK_GATEWAY_CONFIG   routes file             (default gateway.toml)
+  LIGHTTRACK_URL / LIGHTTRACK_KEY / LIGHTTRACK_PROJECT   where events go
+  LIGHTTRACK_GATEWAY_OMIT_CONTENT=1   never send prompts/outputs on events
+  LIGHTTRACK_GATEWAY_DEV=1    honour X-LightTrack-Simulate for failover drills
+  LIGHTTRACK_CLAUDE_BIN / LIGHTTRACK_CODEX_BIN          CLI overrides
+";
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // No argument parser: the surface is env-only. But a binary that starts serving when asked
+    // `--help` is a trap, so the two flags everyone tries are answered before anything binds.
+    match std::env::args().nth(1).as_deref() {
+        Some("-h") | Some("--help") => {
+            print!("{USAGE}");
+            return Ok(());
+        }
+        Some("-V") | Some("--version") => {
+            println!("lt-gateway {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some(other) => anyhow::bail!("unknown argument '{other}'\n{USAGE}"),
+        None => {}
+    }
     let _ = dotenvy::dotenv();
     let bind = std::env::var("LIGHTTRACK_GATEWAY_BIND").unwrap_or_else(|_| "127.0.0.1:8790".into());
     let config_path = PathBuf::from(

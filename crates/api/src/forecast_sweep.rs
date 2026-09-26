@@ -217,7 +217,9 @@ pub(crate) async fn guardrail_pass(
     let store = st.store.clone();
     let pid = project.to_string();
     if let Ok(rules) = spawn_db(move || store.list_limit_rules(&pid, false)).await {
-        crate::forecast_alerts::attach_guardrails(&mut f.alerts, &rules);
+        // A fresh instant on purpose: `apply_policies` may have raised a rule moments ago, and the
+        // stamp is meant to reflect the rule set as it stands after this pass.
+        crate::forecast_alerts::attach_guardrails(&mut f.alerts, &rules, chrono::Utc::now());
     }
     Ok((f.alerts, acted))
 }

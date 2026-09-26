@@ -1,20 +1,12 @@
 //! The seam between the gateway and the engine — one trait, so the failover logic and the HTTP
 //! surface are testable without a CLI on the machine.
 
-use serde_json::Value;
-
-use lighttrack_engine::{generate, EngineConfig, GenOutcome, Result};
+use lighttrack_engine::{generate_chat, ChatOutcome, ChatRequest, EngineConfig, Result};
 
 use crate::target::Target;
 
 pub trait Generator: Send + Sync {
-    fn generate(
-        &self,
-        target: &Target,
-        system: Option<&str>,
-        input: &str,
-        schema: Option<&Value>,
-    ) -> Result<GenOutcome>;
+    fn generate(&self, target: &Target, req: &ChatRequest) -> Result<ChatOutcome>;
 }
 
 /// The real thing: the engine's provider dispatch, which already knows `claude -p`, `codex exec`
@@ -35,20 +27,7 @@ impl EngineGenerator {
 }
 
 impl Generator for EngineGenerator {
-    fn generate(
-        &self,
-        target: &Target,
-        system: Option<&str>,
-        input: &str,
-        schema: Option<&Value>,
-    ) -> Result<GenOutcome> {
-        generate(
-            &self.cfg,
-            &target.provider,
-            &target.model,
-            system,
-            input,
-            schema,
-        )
+    fn generate(&self, target: &Target, req: &ChatRequest) -> Result<ChatOutcome> {
+        generate_chat(&self.cfg, &target.provider, &target.model, req)
     }
 }

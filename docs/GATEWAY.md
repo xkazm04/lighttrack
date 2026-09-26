@@ -10,12 +10,25 @@ absorbed by retry-and-fallback and logged as a success on the model that did *no
 truncated body recorded as healthy, no `max_tokens`. The gateway is that wrapper written once,
 measured with the benchmark framework, and honest to the store.
 
-## What it is not (yet)
-- **No streaming.** `stream: true` is a 400. Both CLIs answer whole.
-- **No tools.** A request with `tools` is a 400. The gateway forwards text and JSON schemas only.
-- **One turn.** The engine takes `(system, input, schema)`. A message array with several
-  user/assistant turns is rendered into one input (with role labels) and the response says so
-  (`lighttrack.transcript: true`). Nothing is dropped; nothing is native either.
+## What each provider path can take
+The engine's input is a [`ChatRequest`] — system + turns (+ tools) — and each provider honours
+what it can, refusing the rest **before** any request rather than dropping it silently:
+
+| Target | Turns | Tools | Streaming |
+|---|---|---|---|
+| `openai`, `openrouter` (OpenAI wire shape) | native message array, including assistant `tool_calls` and `tool` results | **passed through verbatim**; the answer comes back as `tool_calls` with `finish_reason: tool_calls` | chunked delivery |
+| `google` (Gemini), `anthropic` with `ANTHROPIC_API_KEY` | native `user`/`model` (`assistant`) turns | refused (400 names the target) | chunked delivery |
+| `anthropic` via `claude -p`, `codex` | **rendered into one prompt** with role labels; the response says so (`lighttrack.transcript: true`) | refused | chunked delivery |
+
+- **Tools on a route are checked up front, for every target in the chain.** A route whose
+  fallback cannot run tools would otherwise serve tool-less prose during a limit window and call
+  it a fallback; the gateway refuses the request instead and names the target.
+- **Streaming is delivery, not generation.** `stream: true` returns `text/event-stream` with
+  `chat.completion.chunk` events — a role chunk, the content split on whitespace, a
+  `finish_reason` chunk, then a trailing usage chunk carrying the `lighttrack` block, then
+  `[DONE]`. Nothing arrives before the model is done: the CLIs answer whole, and the HTTP paths
+  are not streamed upstream either. What it buys is that an SDK call written against a streaming
+  endpoint keeps working.
 - **Not the judge's path.** The scoring engine keeps calling providers directly and stays
   unbudgeted. Routing the judge through here would put it under the app's limits and mix its
   spend into the app's rows.
@@ -39,10 +52,11 @@ LIGHTTRACK_URL=http://127.0.0.1:8787 LIGHTTRACK_KEY=<project key> lt-gateway
 
 ## The request
 `POST /v1/chat/completions`, the OpenAI shape. `model` is a **route name** from `gateway.toml` or a
-literal `provider/model[@effort]`. `messages` (text only), `response_format` (`json_schema` is
-enforced through the engine's schema path; `json_object` becomes a system instruction), and
-anything else an SDK sends (`temperature`, `max_tokens`…) is accepted and ignored — the CLIs have
-no such knobs. `X-LightTrack-Use-Case: <name>` files a literal request's events under a use case.
+literal `provider/model[@effort]`. `messages` (text parts only — no images), `tools` /
+`tool_choice`, `response_format` (`json_schema` is enforced through the engine's schema path;
+`json_object` becomes a system instruction), `stream`; anything else an SDK sends (`temperature`,
+`max_tokens`…) is accepted and ignored — the CLIs have no such knobs. `X-LightTrack-Use-Case:
+<name>` files a literal request's events under a use case.
 
 The response is a `chat.completion` with `model` = the target that answered, real `usage` (with
 `reasoning_tokens` where the provider reports them), and a `lighttrack` block: `route`,

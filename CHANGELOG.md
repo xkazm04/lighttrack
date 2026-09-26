@@ -30,15 +30,26 @@ entry is written while the change is still fresh, not reconstructed at tag time.
 
 ### Added
 
+- Rubric dimension kind **`grounding`** (`docs/BENCHMARK_FRAMEWORK.md` §3e): claims cut from the
+  output, each verified against the case's evidence passages, scored supported over claims issued;
+  zero claims leaves the dimension unscored. Engine entry point `run_rubric_judge_with_evidence`;
+  any path without evidence refuses it by name. `ScoreDetail.dimensions[]` gains `voided` and
+  `grounding` (per-claim verdicts, `missing_verdicts`, `stray_verdicts`, instrument `version`).
 - **`lt-gateway`** (`crates/gateway`, `docs/GATEWAY.md`): an OpenAI-compatible
   `POST /v1/chat/completions` on loopback for local apps, routing a use case (from `gateway.toml`)
   or a literal `provider/model[@effort]` through the engine's provider dispatch — `claude -p` and
   `codex exec` on subscription seats, or the HTTP providers. Fails over to the next seat on a usage
   limit and holds the exhausted seat out for `cooldown_secs`; records every attempt as an event on
   one `trace_id` (failed primary = `error` + `provider_failed`, the answer = `fell_back`); refuses
-  with 429 before any spend when `/v1/limits/status` says the project is enforcing. `stream` and
-  `tools` are 400 for now. Responses carry `lighttrack.attempts`, `x-lighttrack-served-by` and
-  `x-lighttrack-fell-back`.
+  with 429 before any spend when `/v1/limits/status` says the project is enforcing. Responses carry
+  `lighttrack.attempts`, `x-lighttrack-served-by` and `x-lighttrack-fell-back`. Message arrays
+  reach OpenAI-shaped providers natively and the CLIs as one rendered prompt
+  (`lighttrack.transcript`); `tools` pass through `openai`/`openrouter` verbatim (answer:
+  `tool_calls`) and are refused up front, naming the target, on any route with a target that
+  cannot run them; `stream: true` delivers the finished answer as SSE chunks.
+- `lighttrack-engine`: `ChatRequest` / `ChatOutcome` / `generate_chat` — a conversation (+ tools) as
+  the generation input. `generate` / `generate_deterministic` keep their signatures and are
+  single-turn wrappers over it; every adapter's request body now reads a `ChatRequest`.
 - `/gateway-onboard` skill: benchmark both seats on a difficulty-graded corpus for one use case and
   write the route (and its fallback, when measured fit) from the scorecard.
 

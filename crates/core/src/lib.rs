@@ -27,6 +27,7 @@ pub mod event;
 pub mod forecast;
 pub mod forecast_gate;
 pub mod gen_spend;
+pub mod grounding;
 pub mod job;
 pub mod job_kinds;
 pub mod label;
@@ -93,6 +94,7 @@ pub use event::{
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
 pub use forecast_gate::{Refusal, FLAT_BAND, MIN_OBSERVED_DAYS, MIN_SPAN_DAYS};
 pub use gen_spend::GenerationFacts;
+pub use grounding::{ClaimVerdict, GroundingDetail, MAX_CLAIMS_PER_DIM};
 pub use job::{
     job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_PREFIX_FAILURE,
     JOB_ERROR_WORKER_LOST,
@@ -141,10 +143,11 @@ pub use rubric::{
     DimensionCheck, DimensionKind, Rubric, RubricDimension, DEFAULT_RUBRIC_THRESHOLD,
 };
 pub use schedule::{Schedule, MIN_INTERVAL_SECS as SCHEDULE_MIN_INTERVAL_SECS};
+pub use score::reserved_target_keys_in;
 pub use score::{
     judge_verdict_schema, Benchmark, BenchmarkCase, BenchmarkRun, JudgeVerdict, Score, ScoreDetail,
     ScoreDim, ScoreKind, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM, MAX_REASONING_CHARS,
-    RECURRENCE_KEY, REGRESSION_DATASET_KEY,
+    RECURRENCE_KEY, REGRESSION_DATASET_KEY, RESERVED_TARGET_KEYS,
 };
 pub use trace::{
     normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,

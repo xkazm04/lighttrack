@@ -117,6 +117,16 @@ pub struct BenchTarget {
     /// Compare mode only; serde-defaulted, so a stored matrix without it is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limits: Option<crate::case_limits::CaseLimits>,
+    /// A JSON schema the target's answer must satisfy, sent through the engine's structured-output
+    /// path (`--json-schema` on the Claude CLI, `--output-schema` on Codex, `response_format` /
+    /// `responseSchema` / forced tool use on the HTTP providers). This is the shape an app's call
+    /// site sends through the gateway, so a benchmark without it measures a different transport
+    /// than the one shipped: a schema pasted into the system prompt is a request, this is an
+    /// enforcement, and a model that answers the first with fenced prose (haiku did, 21/21) can
+    /// answer the second cleanly. Serde-defaulted; ignored by an `http` target, whose endpoint
+    /// owns its own shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<serde_json::Value>,
 }
 
 impl BenchTarget {

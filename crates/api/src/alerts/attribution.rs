@@ -75,12 +75,24 @@ pub(crate) fn fetch(
     scope: Option<&LimitScope>,
 ) -> Attribution {
     let since = window.since(now);
-    let cost_rows = store
-        .cost_summary_windowed(TenantScope::Project(project), Some(since), None)
-        .unwrap_or_default();
-    let usecase_rows = store
-        .usecase_costs(TenantScope::Project(project), Some(since))
-        .unwrap_or_default();
+    let cost_rows = match store.cost_summary_windowed(
+        TenantScope::Project(project),
+        Some(since),
+        None,
+    ) {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(project_id = project, %error, rollup = "cost", "breach attribution rollup failed");
+            Vec::new()
+        }
+    };
+    let usecase_rows = match store.usecase_costs(TenantScope::Project(project), Some(since)) {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(project_id = project, %error, rollup = "use_case", "breach attribution rollup failed");
+            Vec::new()
+        }
+    };
     compose(&cost_rows, &usecase_rows, scope)
 }
 
@@ -168,25 +180,38 @@ fn group_models<'a>(
     rows: impl Iterator<Item = &'a CostRow>,
     usecase_rows: &[UseCaseCostRow],
 ) -> Vec<(String, f64)> {
-    let grouped = group_by(rows.map(|r| (r.model.clone(), r.cost_usd)));
-    grouped
+    let mut totals = std::collections::BTreeMap::<&str, f64>::new();
+    let mut members = std::collections::BTreeSet::<(&str, &str)>::new();
+    for row in rows {
+        *totals.entry(&row.model).or_default() += row.cost_usd;
+        members.insert((&row.provider, &row.model));
+    }
+
+    let mut usecases =
+        std::collections::BTreeMap::<&str, std::collections::BTreeMap<&str, f64>>::new();
+    for row in usecase_rows {
+        if members.contains(&(row.provider.as_str(), row.model.as_str())) {
+            if let Some(name) = row.name.as_deref() {
+                *usecases
+                    .entry(&row.model)
+                    .or_default()
+                    .entry(name)
+                    .or_default() += row.cost_usd;
+            }
+        }
+    }
+
+    totals
         .into_iter()
-        .map(|(model, cost)| (annotate(&model, usecase_rows), cost))
+        .map(|(model, cost)| (annotate(model, usecases.get(model)), cost))
         .collect()
 }
 
 /// The model's dominant named use-case, if any, appended as `model (use-case)`.
-fn annotate(model: &str, usecase_rows: &[UseCaseCostRow]) -> String {
-    let top = usecase_rows
-        .iter()
-        .filter(|r| r.model == model && r.name.is_some())
-        .max_by(|a, b| {
-            a.cost_usd
-                .partial_cmp(&b.cost_usd)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    match top.and_then(|r| r.name.as_deref()) {
-        Some(name) => format!("{model} ({name})"),
+fn annotate(model: &str, usecases: Option<&std::collections::BTreeMap<&str, f64>>) -> String {
+    let top = usecases.and_then(|rows| rows.iter().max_by(|a, b| a.1.total_cmp(b.1)));
+    match top {
+        Some((name, _)) => format!("{model} ({name})"),
         None => model.to_string(),
     }
 }
@@ -238,119 +263,4 @@ fn sum(iter: impl Iterator<Item = f64>) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn cost(provider: &str, model: &str, c: f64) -> CostRow {
-        CostRow {
-            project_id: "p".into(),
-            provider: provider.into(),
-            model: model.into(),
-            calls: 1,
-            input_tokens: 0,
-            output_tokens: 0,
-            cost_usd: c,
-            unpriced_calls: 0,
-        }
-    }
-
-    fn uc(name: Option<&str>, provider: &str, model: &str, c: f64) -> UseCaseCostRow {
-        UseCaseCostRow {
-            name: name.map(|s| s.to_string()),
-            provider: provider.into(),
-            model: model.into(),
-            calls: 1,
-            input_tokens: 0,
-            output_tokens: 0,
-            cost_usd: c,
-            unpriced_calls: 0,
-        }
-    }
-
-    #[test]
-    fn unscoped_ranks_top_three_models_with_shares_and_usecase_annotation() {
-        let costs = vec![
-            cost("openai", "gpt-4o", 6.0),
-            cost("anthropic", "claude-sonnet", 3.0),
-            cost("openai", "gpt-4o-mini", 1.0),
-            cost("openai", "tiny", 0.0), // zero spend dropped
-        ];
-        let ucs = vec![
-            uc(Some("summarize"), "openai", "gpt-4o", 5.0),
-            uc(Some("classify"), "openai", "gpt-4o", 1.0),
-            uc(None, "anthropic", "claude-sonnet", 3.0),
-        ];
-        let a = compose(&costs, &ucs, None);
-        assert_eq!(a.scope_note, None);
-        assert_eq!(a.contributors.len(), 3);
-        // total = 10 → shares 60/30/10; gpt-4o annotated with its dominant named use-case.
-        assert_eq!(a.contributors[0].label, "gpt-4o (summarize)");
-        assert!((a.contributors[0].share_pct - 60.0).abs() < 1e-9);
-        assert_eq!(a.contributors[1].label, "claude-sonnet");
-        assert!((a.contributors[1].share_pct - 30.0).abs() < 1e-9);
-        assert_eq!(a.contributors[2].label, "gpt-4o-mini");
-    }
-
-    #[test]
-    fn model_scope_attributes_within_the_model_by_usecase() {
-        let ucs = vec![
-            uc(Some("summarize"), "openai", "gpt-4o", 7.0),
-            uc(Some("chat"), "openai", "gpt-4o", 3.0),
-            uc(Some("other"), "openai", "gpt-4o-mini", 99.0), // different model → excluded
-        ];
-        let a = compose(&[], &ucs, Some(&LimitScope::Model("gpt-4o".into())));
-        assert_eq!(a.scope_note.as_deref(), Some("within scope model=gpt-4o"));
-        assert_eq!(a.contributors.len(), 2);
-        assert_eq!(a.contributors[0].label, "summarize");
-        assert!((a.contributors[0].share_pct - 70.0).abs() < 1e-9); // within-scope total = 10
-    }
-
-    /// The admission path treats a dated release as the capped model (`LimitScope::matches`), so the
-    /// alert's attribution must too — or the traffic that tripped the cap is the traffic the alert
-    /// says does not exist.
-    #[test]
-    fn model_scope_folds_in_the_dated_variants_the_cap_itself_caught() {
-        let ucs = vec![
-            uc(Some("summarize"), "openai", "gpt-4o-2024-08-06", 7.0),
-            uc(Some("chat"), "openai", "gpt-4o", 3.0),
-            uc(Some("other"), "openai", "gpt-4o-mini", 99.0), // a different family → excluded
-        ];
-        let a = compose(&[], &ucs, Some(&LimitScope::Model("gpt-4o".into())));
-        assert_eq!(a.contributors.len(), 2, "{a:?}");
-        assert_eq!(a.contributors[0].label, "summarize");
-        assert!((a.contributors[0].share_pct - 70.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn name_scope_attributes_within_the_usecase_by_model() {
-        let ucs = vec![
-            uc(Some("summarize"), "openai", "gpt-4o", 8.0),
-            uc(Some("summarize"), "anthropic", "claude-sonnet", 2.0),
-            uc(Some("classify"), "openai", "gpt-4o", 50.0), // different use-case → excluded
-        ];
-        let a = compose(&[], &ucs, Some(&LimitScope::Name("summarize".into())));
-        assert_eq!(a.scope_note.as_deref(), Some("within scope name=summarize"));
-        assert_eq!(a.contributors[0].label, "gpt-4o");
-        assert!((a.contributors[0].share_pct - 80.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn empty_rollups_degrade_silently() {
-        let a = compose(&[], &[], None);
-        assert!(a.is_empty());
-        assert!(a.message_tail().is_none());
-        // A scoped breach with no spend still states the scope rather than going blank.
-        let scoped = compose(&[], &[], Some(&LimitScope::Provider("openai".into())));
-        assert!(!scoped.is_empty());
-        assert!(scoped.contributors.is_empty());
-        assert!(scoped.message_tail().unwrap().contains("no attributable"));
-    }
-
-    #[test]
-    fn message_tail_lists_contributors() {
-        let costs = vec![cost("openai", "gpt-4o", 3.0), cost("openai", "mini", 1.0)];
-        let tail = compose(&costs, &[], None).message_tail().unwrap();
-        assert!(tail.contains("gpt-4o 75%"), "got: {tail}");
-        assert!(tail.contains("mini 25%"), "got: {tail}");
-    }
-}
+mod tests;

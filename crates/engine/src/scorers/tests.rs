@@ -106,7 +106,7 @@ fn regex_misconfiguration_is_an_operator_error() {
 fn numeric_respects_tolerance_and_explains_itself() {
     let d = json!({
         "key": "total", "description": "", "kind": "numeric",
-        "check": { "expect": "42", "tolerance": 0.1 }
+        "check": { "expect": "42.0", "tolerance": 0.1 }
     });
     let (s, why) = ok(d.clone(), None, "41.6");
     assert_eq!(s, 0.0);
@@ -124,6 +124,30 @@ fn numeric_respects_tolerance_and_explains_itself() {
     let (s, why) = ok(d, None, "no digits at all");
     assert_eq!(s, 0.0);
     assert!(why.contains("no number"), "{why}");
+}
+
+#[test]
+fn numeric_integer_targets_compare_exactly_beyond_f64_precision() {
+    let d = json!({ "key": "total", "description": "", "kind": "numeric" });
+    let expected = "207243426028869626379158320647863778";
+
+    assert_eq!(ok(d.clone(), Some(expected), expected).0, 1.0);
+    assert_eq!(
+        ok(d, Some(expected), "207243426028869626379158320647863779").0,
+        0.0,
+        "distinct integer answers must not collapse to the same floating-point value"
+    );
+}
+
+#[test]
+fn numeric_integer_targets_do_not_use_decimal_tolerance() {
+    let d = json!({
+        "key": "total", "description": "", "kind": "numeric",
+        "check": { "expect": "42", "tolerance": 0.1 }
+    });
+
+    assert_eq!(ok(d.clone(), None, "42.0").0, 1.0);
+    assert_eq!(ok(d, None, "41.95").0, 0.0);
 }
 
 #[test]
@@ -167,7 +191,7 @@ fn a_json_pointer_narrows_every_kind() {
 fn a_pointed_number_is_compared_numerically() {
     let d = json!({
         "key": "total", "description": "", "kind": "numeric",
-        "check": { "expect": "42", "path": "/total", "tolerance": 0.5 }
+        "check": { "expect": "42.0", "path": "/total", "tolerance": 0.5 }
     });
     assert_eq!(ok(d, None, r#"{"total": 41.7}"#).0, 1.0);
 }

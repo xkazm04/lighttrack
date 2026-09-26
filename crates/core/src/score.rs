@@ -75,6 +75,13 @@ pub struct ScoreDim {
     /// its reasoning tokens were paid for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning: Vec<String>,
+    /// The dimension was not measured for this verdict (an `exec` sandbox that could not run, a
+    /// `grounding` output with zero claims). `value` is a placeholder; it left the overall entirely.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub voided: bool,
+    /// `grounding` only: the per-claim verdicts and counters behind `value`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grounding: Option<crate::grounding::GroundingDetail>,
 }
 
 /// Structured provenance for a judged verdict: the per-dimension breakdown plus the reliability
@@ -132,7 +139,7 @@ pub struct ScoreDetail {
 }
 
 /// Truncate on a char boundary, marking that it happened.
-fn cap_str(s: &str) -> String {
+pub(crate) fn cap_str(s: &str) -> String {
     if s.chars().count() <= MAX_REASONING_CHARS {
         return s.to_string();
     }
@@ -151,6 +158,7 @@ impl ScoreDetail {
             for r in &mut d.reasoning {
                 *r = cap_str(r);
             }
+            d.grounding = d.grounding.take().map(|g| g.capped());
         }
         self.notes.truncate(MAX_NOTES);
         for n in &mut self.notes {
@@ -381,6 +389,32 @@ pub const RECURRENCE_KEY: &str = "schedule_interval_secs";
 /// forking, and a fork mints a new id.
 pub const REGRESSION_DATASET_KEY: &str = "regression_dataset";
 
+/// Every key the product reserves inside a benchmark's otherwise free-form `target` object.
+///
+/// The list exists because the reservation has to be checkable at the door a caller posts through,
+/// not only at the readers. A reserved key whose meaning is host policy and whose value arrives
+/// from a caller is not reserved at all: whatever a caller wrote under the name is read as the
+/// policy, and the next key this product carves out of `target` captures whatever callers already
+/// keep under that name. Enumeration is the weaker of the two available reservations — it can only
+/// protect names already invented — so the door refuses the listed names with the repair spelled
+/// out, and each reserved key gets a request field of its own so the host stays the only writer.
+pub const RESERVED_TARGET_KEYS: &[&str] = &[RECURRENCE_KEY, REGRESSION_DATASET_KEY];
+
+/// The reserved keys a `target` value occupies, in [`RESERVED_TARGET_KEYS`] order.
+///
+/// Empty for a matrix target (a JSON array has no room for a sibling key), for a scalar and for an
+/// absent one — those shapes cannot carry a reservation, so there is nothing to refuse.
+pub fn reserved_target_keys_in(target: &Value) -> Vec<&'static str> {
+    let Some(map) = target.as_object() else {
+        return Vec::new();
+    };
+    RESERVED_TARGET_KEYS
+        .iter()
+        .copied()
+        .filter(|k| map.contains_key(*k))
+        .collect()
+}
+
 /// A benchmark definition: a dataset + rubric + judge run repeatedly to track quality over time.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Benchmark {
@@ -604,5 +638,55 @@ mod tests {
                 .expect("an unreadable grade must not take the case with it");
         assert_eq!(odd.difficulty, None);
         assert_eq!(odd.input, "i");
+    }
+
+    /// A reserved key inside a free-form object a caller writes is read as policy, whoever put it
+    /// there. The control is the neighbouring key: an unreserved name reads as nothing, so this
+    /// test can tell "the host claimed a name" apart from "the host reads any string".
+    #[test]
+    fn a_caller_written_reserved_key_reads_as_host_policy() {
+        let caller_authored = Benchmark {
+            id: "b".into(),
+            project_id: "p".into(),
+            name: "n".into(),
+            rubric: "r".into(),
+            judge_model: "m".into(),
+            target: json!({ "endpoint": "https://x", REGRESSION_DATASET_KEY: "my-own-note" }),
+            dataset_ref: None,
+            rubric_id: None,
+            dataset: vec![],
+            baseline_score: None,
+            created_at: Utc::now(),
+        };
+        assert_eq!(caller_authored.regression_dataset(), Some("my-own-note"));
+
+        let control = Benchmark {
+            target: json!({ "endpoint": "https://x", "regression_notes": "my-own-note" }),
+            ..caller_authored.clone()
+        };
+        assert_eq!(control.regression_dataset(), None);
+    }
+
+    #[test]
+    fn reserved_keys_are_reported_by_name_and_only_when_present() {
+        assert_eq!(
+            reserved_target_keys_in(&json!({ "endpoint": "https://x" })),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            reserved_target_keys_in(&json!({ RECURRENCE_KEY: 60, "endpoint": "https://x" })),
+            vec![RECURRENCE_KEY]
+        );
+        assert_eq!(
+            reserved_target_keys_in(&json!({ REGRESSION_DATASET_KEY: "d", RECURRENCE_KEY: 60 })),
+            vec![RECURRENCE_KEY, REGRESSION_DATASET_KEY]
+        );
+        // A matrix target has no room for a sibling key, and neither has a scalar: nothing to
+        // report rather than a panic on `as_object`.
+        assert_eq!(
+            reserved_target_keys_in(&json!([{ "provider": "openai" }])),
+            Vec::<&str>::new()
+        );
+        assert_eq!(reserved_target_keys_in(&json!(null)), Vec::<&str>::new());
     }
 }

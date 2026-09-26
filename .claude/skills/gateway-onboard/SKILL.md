@@ -31,15 +31,18 @@ use-case registry key). Ask for either that is missing.
   LightTrack (a dataset, a rubric, a benchmark). The user reviews the scorecard before any route
   exists.
 - **Fewer targets, more cases.** Six targets is fifteen pairwise comparisons and a Bonferroni bar
-  that refuses everything at n=18. Two or three per seat, and at least 8 cases per tier.
+  that refuses everything at n=18. Three per seat is the standing ladder (below), so at least 8
+  cases per tier — and 10 when the hard tier is where the decision will be made.
 - **The difficulty ladder is for LLMs, not humans.** A "hard" tier that every model scores 100% on
   separates nothing and the operator paid for it. Scale the *input* (length, distractors,
   ambiguity, required structure), and re-grade after the first run if a tier reads flat.
-- Judge cross-family. The matrix holds both families, so the judge cannot be neutral to both:
-  prefer deterministic dimensions (`json_valid`, `regex`, `numeric`, `contains`) wherever the use
-  case allows, use a third family (`google/...` with `GEMINI_API_KEY`, or `openrouter/...`) for
-  the `llm` dimensions when a key exists, and otherwise keep the default judge and **report** the
-  `self_preference` flag the run records beside every number that came from it.
+- **Judge with Claude Fable** (`judge_model: "anthropic/claude-fable-5-1"`; the Messages API when
+  `ANTHROPIC_API_KEY` is set, the CLI otherwise). The operator's standing choice (2026-09-15): a
+  cheap third-family judge was tried on the first three onboardings and is not what they trust.
+  The matrix holds Claude rows, so the judge shares a family with some of what it grades: prefer
+  deterministic dimensions (`json_valid`, `regex`, `numeric`, `contains`) wherever the use case
+  allows, keep `llm` dimensions to what no mechanical check can say, and **report** the
+  `self_preference` flag the run records beside every number that came from an `llm` dimension.
 
 ## Step 0 — Preflight (report a short table, fix or stop)
 - `lt-api` reachable (`GET $LIGHTTRACK_URL/health`), and the project id + key for this app
@@ -62,8 +65,10 @@ POST /v1/projects/:id/use-cases
   "component": "<file or module>", "expected_models": ["<current provider/model>"] }
 ```
 
-`kind` decides the rubric shape in step 3. Note the schema, if any: it becomes the benchmark's
-`response_format` and the `json_valid` dimension.
+`kind` decides the rubric shape in step 3. Note the schema, if any: it goes on every benchmark
+target as `schema` (the engine's enforcement path — the same one the gateway uses for the app's
+`response_format`) and drives the `json_valid` dimension. A schema only pasted into the system
+prompt measures a transport the app will never ship.
 
 ## Step 2 — Build the corpus, graded
 Prefer real traffic. If the use case has events in LightTrack:
@@ -99,29 +104,36 @@ Set `threshold` to the bar the app actually needs (a parser that crashes on a mi
 1.0 on `json_valid`; use `gate` on that dimension).
 
 ## Step 4 — The benchmark: a ladder per seat
-Targets are `{provider, model, effort, system_prompt}` rows; one identical `system_prompt` (the
-app's) on every row so only `(model, effort)` varies. A first matrix of **four**:
+Targets are `{provider, model, effort, system_prompt, schema}` rows; one identical
+`system_prompt` (the app's) on every row so only `(model, effort)` varies. The standing ladder is
+**six** rows — the cheap, the middle and the top of each seat. The operator wants the top rows
+(`opus`, `gpt-5.6-sol`) measured on every case, not only when the cheap ones fail: the first
+three onboardings showed the cheap rows losing every comparison, and the question that decides a
+route is what the top of each seat does on the hard tier.
 
 ```
 POST /v1/projects/:id/benchmarks
 { "name": "<use-case-key> seats", "rubric_id": "<rubric>", "dataset_ref": "<dataset>",
-  "judge_model": "<cross-family judge, see guardrails>",
+  "judge_model": "anthropic/claude-fable-5-1",
   "targets": [
-    { "provider": "anthropic", "model": "haiku",   "effort": "low",    "label": "haiku@low",   "system_prompt": "..." },
-    { "provider": "anthropic", "model": "sonnet",  "effort": "medium", "label": "sonnet@med",  "system_prompt": "..." },
-    { "provider": "codex",     "model": "gpt-5.5", "effort": "low",    "label": "gpt-5.5@low", "system_prompt": "..." },
-    { "provider": "codex",     "model": "gpt-5.5", "effort": "medium", "label": "gpt-5.5@med", "system_prompt": "..." }
+    { "provider": "anthropic", "model": "haiku",       "effort": "low",    "label": "haiku@low",       "system_prompt": "...", "schema": { ...the app's output schema... } },
+    { "provider": "anthropic", "model": "sonnet",      "effort": "low",    "label": "sonnet@low",      "system_prompt": "...", "schema": { ... } },
+    { "provider": "anthropic", "model": "opus",        "effort": "low",    "label": "opus@low",        "system_prompt": "...", "schema": { ... } },
+    { "provider": "codex",     "model": "gpt-5.5",     "effort": "low",    "label": "gpt-5.5@low",     "system_prompt": "...", "schema": { ... } },
+    { "provider": "codex",     "model": "gpt-5.5",     "effort": "medium", "label": "gpt-5.5@med",     "system_prompt": "...", "schema": { ... } },
+    { "provider": "codex",     "model": "gpt-5.6-sol", "effort": "low",    "label": "gpt-5.6-sol@low", "system_prompt": "...", "schema": { ... } }
   ] }
 ```
 
-Run from the LightTrack repo root (the runner reads `.env` from the cwd):
+Run from the LightTrack repo root (the runner reads `.env` from the cwd). `--jobs` is a
+top-level flag, before the subcommand:
 
 ```
-lt-runner bench --benchmark <id>
+lt-runner --jobs 3 bench --benchmark <id>
 ```
 
-Escalate (`opus@high`, `gpt-5.6-*@high`) only if no row clears the hard tier; add rows to a
-*second* benchmark rather than widening this one past six.
+Escalate an *effort* (`opus@high`, `gpt-5.6-sol@high`) only if no row clears the hard tier; add
+rows to a *second* benchmark rather than widening this one past six.
 
 ## Step 5 — Read the run and decide
 `GET /v1/benchmarks/:id/runs` → the latest run's `report`. What to read, and the rule:
@@ -199,10 +211,17 @@ next model change (`GET /v1/benchmarks/:id/gate`).
 ## When it does not go to plan
 - **Every row at 100% on every tier** — the corpus is at the ceiling. Scale the hard tier's inputs
   and rerun before choosing; a choice made on a flat corpus is a coin flip with a scorecard.
+- **The app's system prompt is over ~16k characters** — the Codex CLI takes instructions on the
+  command line, so the engine folds a longer system prompt into the head of the user turn
+  (announced on stderr). Codex rows then measure a folded shape while Claude rows take a system
+  turn; say so beside the numbers, or fold the prompt on every target for a like-for-like matrix.
 - **A seat row has `errored > 0`** — read the run's error text. A usage limit *during the
   benchmark* is a measurement gap, not a quality signal; rerun that row when the window resets.
   A model name the CLI refuses is a stale install or a wrong id.
 - **The primary clears hard but the other seat clears nothing** — ship without a fallback and say
   the app stops on a limit. Do not lower the bar to manufacture one.
-- **The use case is multi-turn or uses tools** — the gateway renders turns into one prompt and
-  refuses tools. Say so; that call site is not a candidate yet.
+- **The use case is multi-turn or uses tools** — on the two seat CLIs the turns are rendered into
+  one prompt (the response flags `transcript`) and tools are refused; only the OpenAI-shaped
+  HTTP providers (`openai`, `openrouter`) take tools. A tool-using call site can be routed, but
+  every target in its chain must be one of those, so it is a route between API keys rather than
+  seats — say so, and benchmark those targets instead.

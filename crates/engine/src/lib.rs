@@ -5,18 +5,23 @@
 //! - [`prompts`]  — judge/eval/rubric prompt + schema builders (re-exported).
 //! - [`invocation`] — the **one** headless-Claude seam: posture, spawn, envelope, probe, resolve.
 //! - `providers`  — [`generate`] across `anthropic` / `google` / `openai` (schema-enforced + retried).
+//! - [`chat`]     — a conversation (+ tools) as a generation input, and [`generate_chat`] over it.
 //! - `parse`      — JSON extraction + the one-shot repair re-ask around a single judge sample.
 //! - `fence`      — per-call nonce delimiters around untrusted content (judge-prompt injection defense).
 //! - `anthropic_api` — the bare Messages API judge path (used when `ANTHROPIC_API_KEY` is set).
+//! - [`codex`]    — the Codex CLI (`codex exec`): GPT models on a ChatGPT seat, isolated and read-only.
 //! - [`http_target`] — generation from an operator-owned HTTP endpoint (a RAG pipeline, an agent).
 //! - [`endpoint_probe`] — what is answering at a re-pointed OpenAI-compatible base, before a run
 //!   is attributed to a provider.
 //! - `family`     — coarse model families, for the self-preference bias control.
 //! - `retry`      — bounded exponential backoff for transient (429/5xx/timeout) provider failures.
 //! - `scorers`   — deterministic (non-LLM) rubric dimensions: exact/regex/numeric/json_valid/contains.
-//! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_text`], [`parse_judge_spec`].
+//! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_rubric_judge_with_evidence`] (the
+//!   `grounding` kind), [`run_text`], [`parse_judge_spec`].
 
 mod anthropic_api;
+pub mod chat;
+pub mod codex;
 pub mod endpoint_probe;
 mod family;
 mod fence;
@@ -35,6 +40,7 @@ mod scorers;
 use lighttrack_core::JudgeVerdict;
 use thiserror::Error;
 
+pub use chat::{supports_tools, ChatOutcome, ChatRequest, ChatRole, ChatTurn};
 pub use endpoint_probe::{probe_openai_base, OPENAI_BASE_ENV};
 pub use family::{model_family, same_family};
 pub use http_target::{generate_http, HttpTargetRequest, HttpTargetResponse, HttpTargetUsage};
@@ -43,13 +49,15 @@ pub use invocation::{
     READONLY_BASE_TOOLS,
 };
 pub use judge::batch::{run_rubric_batch, BatchCase};
-pub use judge::{parse_judge_spec, run_judge, run_rubric_judge, run_text};
+pub use judge::{
+    parse_judge_spec, run_judge, run_rubric_judge, run_rubric_judge_with_evidence, run_text,
+};
 pub use pairwise::{run_pairwise, PairwiseOutcome, PairwiseVerdict, PairwiseWinner};
 pub use prompts::{
     build_eval_prompt, build_judge_prompt, build_pairwise_prompt, build_rubric_prompt,
     build_rubric_schema, Prompt,
 };
-pub use providers::{generate, generate_deterministic};
+pub use providers::{generate, generate_chat, generate_deterministic};
 pub use sandbox::{
     run_exec, ContreeCli, DockerCli, ExecOutcome, ExecVerdict, SandboxJob, SandboxRunner,
 };
@@ -297,6 +305,8 @@ pub struct DimScore {
     /// dimensions keep their relative weights instead of being silently re-based. `score` is 0.0 as
     /// a placeholder and means nothing; read this flag before reading it.
     pub voided: bool,
+    /// `grounding` only: the per-claim verdicts, counters and instrument pin behind `score`.
+    pub grounding: Option<lighttrack_core::GroundingDetail>,
 }
 
 impl DimScore {

@@ -134,9 +134,17 @@ Evolved daily. Checked items are done; the rest is the plan we agreed on.
 - [x] `/gateway-onboard <app> <use-case>` skill: difficulty-graded corpus → a ladder per seat →
       cheapest config per seat that clears the hard tier → route + fallback written from the scorecard →
       failover drill via `X-LightTrack-Simulate` (dev flag only).
-- [ ] Tool calls (passthrough for the HTTP providers; the CLIs cannot take them).
-- [ ] Streaming (SSE) — the CLIs answer whole, so this is chunked delivery of a finished answer at best.
-- [ ] Native multi-turn for the HTTP providers (today every provider gets one rendered prompt).
+- [x] **Native multi-turn + tool passthrough** (2026-09-15): the engine's input is now a `ChatRequest`
+      (system + turns + tools; `engine::generate_chat`). OpenAI-shaped providers (`openai`, `openrouter`)
+      take the message array and caller tools verbatim and answer with `tool_calls`; Gemini and the
+      Anthropic API take plain turns natively; the CLIs get one rendered prompt and refuse tools — an
+      error before the request, never a silent flatten. A tool request on a route is checked against
+      every target in the chain up front. Verified live: a two-round `get_weather` tool conversation
+      through OpenRouter, a rendered three-turn conversation through `claude -p`.
+- [x] **Streaming** (2026-09-15): `stream: true` delivers the finished answer as `chat.completion.chunk`
+      SSE events (role, whitespace-split content, finish, a trailing usage chunk with the `lighttrack`
+      block). Delivery only — nothing arrives before the model is done.
+- [ ] Upstream streaming for the HTTP providers (token-by-token), and Gemini/Anthropic tool translation.
 
 ## Judge calibration (post-3.6) ✅
 - [x] `core::calibration` — pure agreement math (Cohen's κ on pass/fail, Pearson, MAE/RMSE, judge-vs-human

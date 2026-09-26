@@ -45,15 +45,14 @@
     {
       "path": "README.md",
       "note": "M15 (typed API contract registry) rewrote the MCP tool counts in 'Use from Claude Code (MCP)'. They said 28 read + 15 write against an actual 43 + 21, which is the argument the section now makes: the catalog and its counts are generated from crates/contract into docs/API.md, a test fails when that file is stale, and the prose points at it instead of restating it. That one section is what this covers - the rest of the front page (the feature list the skip entry warned about) was still not read against the code, and the next pass still owes it."
+    },
+    {
+      "path": "CLAUDE.md",
+      "note": "Re-read against the command sources, tree, entry points, representative source, and recent history on 2026-09-15. Refreshed for the new lt-gateway boundary, recorded the already-flagged generated context map's concrete gateway gap, and added the observed commit/example convention; the declared projections remained pointers."
     }
   ],
 
   "skipped": [
-    {
-      "path": "CLAUDE.md",
-      "kind": "not-in-this-pass",
-      "reason": "the working agreement was followed but not re-read against the tree"
-    },
     {
       "path": "SECURITY.md",
       "kind": "not-in-this-pass",
@@ -77,7 +76,7 @@
       "flagged_on": "2026-08-24",
       "what": "Four new source files landed in this wave (store maintenance, store metrics, the api storage surface, the soak lane) and the map was not regenerated. Nothing in the repo regenerates or checks it, so its coverage claim silently decays with every new module.",
       "drained_when": "the map is regenerated, or a guard is added that fails when a crate module is absent from it",
-      "evidence": "2026-08-31, from the registry-map regeneration rather than from a pass: the `store-postgres` context still lists `crates/store-pg/src/events.rs`, which 79ab76d split into `crates/store-pg/src/events/`. 13 of its 14 paths survive. The context map is dated 2026-08-03; this is the first measured instance of the decay this flag names."
+      "evidence": "2026-08-31, from the registry-map regeneration rather than from a pass: the `store-postgres` context still lists `crates/store-pg/src/events.rs`, which 79ab76d split into `crates/store-pg/src/events/`. 13 of its 14 paths survive. The context map is dated 2026-08-03; this is the first measured instance of the decay this flag names. 2026-09-15: `crates/gateway` is a workspace member with a documented binary entry point but has no context in the map."
     },
     {
       "path": ".ai/manifest.yaml",

@@ -30,6 +30,7 @@ use serde_json::Value;
 
 use lighttrack_core::{split_effort, Effort};
 
+use crate::chat::{ChatOutcome, ChatRequest};
 use crate::{Determinism, EngineError, GenOutcome, Result, SchemaEnforcement};
 
 /// Env var that switches the `anthropic` provider onto this path.
@@ -73,26 +74,15 @@ fn resolve_model(model: &str) -> &str {
 /// Generate one completion through the bare Messages API.
 pub(crate) fn generate(
     model: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
+    req: &ChatRequest,
     deterministic: bool,
     effort: Option<Effort>,
-) -> Result<GenOutcome> {
+) -> Result<ChatOutcome> {
     let resolved = resolve_model(model);
     let key = std::env::var(API_KEY_ENV)
         .map_err(|_| EngineError::Other(format!("no Anthropic API key (set {API_KEY_ENV})")))?;
 
-    match send(
-        &key,
-        resolved,
-        model,
-        system_prompt,
-        input,
-        schema,
-        deterministic,
-        effort,
-    ) {
+    match send(&key, resolved, model, req, deterministic, effort) {
         // Some model/parameter combinations answer a `temperature` with a 400 (extended-thinking
         // configurations in particular). Detect it from the response rather than from a model
         // allowlist. Retry once *keeping the schema* — dropping to a schema-less prose call here
@@ -104,16 +94,7 @@ pub(crate) fn generate(
                 "[judge] anthropic model '{resolved}' rejects temperature (HTTP {status}); \
                  retrying without it — determinism is best-effort for this run"
             );
-            send(
-                &key,
-                resolved,
-                model,
-                system_prompt,
-                input,
-                schema,
-                false,
-                effort,
-            )
+            send(&key, resolved, model, req, false, effort)
         }
         other => other,
     }
@@ -140,24 +121,22 @@ fn max_tokens_for(effort: Option<Effort>) -> u64 {
 /// have been a request that never succeeds. `output_config` is GA and takes no beta header.
 fn body(
     resolved: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
+    req: &ChatRequest,
     deterministic: bool,
     effort: Option<Effort>,
-) -> Value {
+) -> Result<Value> {
     let mut body = serde_json::json!({
         "model": resolved,
         "max_tokens": max_tokens_for(effort),
-        "messages": [{ "role": "user", "content": input }],
+        "messages": req.anthropic_messages()?,
     });
     if let Some(level) = effort {
         body["output_config"] = serde_json::json!({ "effort": level.as_str() });
     }
-    if let Some(sys) = system_prompt {
+    if let Some(sys) = &req.system {
         body["system"] = serde_json::json!(sys);
     }
-    if let Some(sc) = schema {
+    if let Some(sc) = &req.schema {
         // Forced tool use is the API's strictest structured-output shape: the model cannot answer
         // in prose, and `tool_use.input` comes back as an object rather than text to re-parse.
         body["tools"] = serde_json::json!([{
@@ -171,28 +150,18 @@ fn body(
         // The Anthropic API has no `seed`; temperature is the whole sampling surface here.
         body["temperature"] = serde_json::json!(0.0);
     }
-    body
+    Ok(body)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn send(
     key: &str,
     resolved: &str,
     requested: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
+    req: &ChatRequest,
     deterministic: bool,
     effort: Option<Effort>,
-) -> Result<GenOutcome> {
-    let body = body(
-        resolved,
-        system_prompt,
-        input,
-        schema,
-        deterministic,
-        effort,
-    );
+) -> Result<ChatOutcome> {
+    let body = body(resolved, req, deterministic, effort)?;
 
     let started = Instant::now();
     let resp = crate::providers::http_client()?
@@ -231,13 +200,13 @@ fn send(
             reasoning_tokens: None,
         });
     }
-    let output = completion_text(&v, schema.is_some());
+    let output = completion_text(&v, req.schema.is_some());
     if output.is_empty() {
         return Err(EngineError::EmptyCompletion {
             who: "anthropic".into(),
         });
     }
-    Ok(GenOutcome {
+    Ok(ChatOutcome::text(GenOutcome {
         output,
         // The Messages API returns no dollar cost; the caller prices it from the DB price book.
         cost_usd: None,
@@ -258,7 +227,7 @@ fn send(
         // Temperature-pinned, but Anthropic exposes no seed — reproducible by convention only.
         determinism: Determinism::BestEffort,
         schema: SchemaEnforcement::NotRequested,
-    })
+    }))
 }
 
 /// The token cap that applied, when a Messages API response was cut off by `stop_reason:
@@ -304,6 +273,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn one(input: &str) -> ChatRequest {
+        ChatRequest::single(None, input, None)
+    }
+
     #[test]
     fn cli_aliases_resolve_to_api_model_ids() {
         assert_eq!(resolve_model("haiku"), "claude-haiku-4-5");
@@ -333,7 +306,7 @@ mod tests {
     /// model id with no `@` in it.
     #[test]
     fn the_model_field_never_carries_an_effort_suffix() {
-        let b = body(resolve_model("opus@xhigh"), None, "hi", None, false, None);
+        let b = body(resolve_model("opus@xhigh"), &one("hi"), false, None).unwrap();
         assert_eq!(b["model"], json!("claude-opus-5"));
         assert!(
             !b["model"].as_str().unwrap().contains('@'),
@@ -348,7 +321,7 @@ mod tests {
     #[test]
     fn effort_travels_as_output_config_effort() {
         for level in Effort::ALL {
-            let b = body("claude-opus-5", None, "hi", None, false, Some(level));
+            let b = body("claude-opus-5", &one("hi"), false, Some(level)).unwrap();
             assert_eq!(
                 b["output_config"]["effort"],
                 json!(level.as_str()),
@@ -360,7 +333,7 @@ mod tests {
             );
         }
         // No effort asked for: no output_config at all, so a stored matrix's request is unchanged.
-        let plain = body("claude-opus-5", None, "hi", None, false, None);
+        let plain = body("claude-opus-5", &one("hi"), false, None).unwrap();
         assert!(plain.get("output_config").is_none());
     }
 
@@ -373,7 +346,7 @@ mod tests {
         assert_eq!(max_tokens_for(Some(Effort::High)), MAX_TOKENS);
         assert_eq!(max_tokens_for(Some(Effort::XHigh)), MAX_TOKENS_HIGH_EFFORT);
         assert_eq!(max_tokens_for(Some(Effort::Max)), MAX_TOKENS_HIGH_EFFORT);
-        let b = body("claude-opus-5", None, "hi", None, false, Some(Effort::Max));
+        let b = body("claude-opus-5", &one("hi"), false, Some(Effort::Max)).unwrap();
         assert_eq!(b["max_tokens"], json!(MAX_TOKENS_HIGH_EFFORT));
     }
 
@@ -383,7 +356,7 @@ mod tests {
     /// harder.
     #[test]
     fn effort_leaves_the_determinism_request_alone() {
-        let b = body("claude-opus-5", None, "hi", None, true, Some(Effort::XHigh));
+        let b = body("claude-opus-5", &one("hi"), true, Some(Effort::XHigh)).unwrap();
         assert_eq!(b["temperature"], json!(0.0));
         assert_eq!(b["output_config"]["effort"], json!("xhigh"));
     }

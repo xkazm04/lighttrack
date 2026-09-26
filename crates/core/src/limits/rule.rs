@@ -274,7 +274,21 @@ impl LimitRule {
         basis: ThresholdBasis,
         cost_evidence: Option<CostEvidence>,
     ) -> LimitStatus {
-        let action = self.effective_action();
+        self.evaluate_resolved_at(current, threshold, basis, cost_evidence, Utc::now())
+    }
+
+    /// [`LimitRule::evaluate_resolved`] at a caller-supplied clock instant. Admission/status callers
+    /// use this after computing window bounds and threshold resolution from the same `now`, so an
+    /// escalation cannot lapse between the read and the action decision.
+    pub fn evaluate_resolved_at(
+        &self,
+        current: f64,
+        threshold: f64,
+        basis: ThresholdBasis,
+        cost_evidence: Option<CostEvidence>,
+        now: DateTime<Utc>,
+    ) -> LimitStatus {
+        let action = self.effective_action_at(now);
         let ratio = if threshold > 0.0 {
             current / threshold
         } else {

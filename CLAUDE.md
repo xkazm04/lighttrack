@@ -85,7 +85,9 @@ which directory to run from, which Windows gotcha bites — not a competing list
   it, or returning `StoreError::Unsupported` (→ 501), over a quiet default.
 
 ## Key invariants (don't regress)
-- The judge/scoring engine is **unbudgeted**; limits apply only to monitored ingest traffic.
+- The judge/scoring engine is **unbudgeted**; limits apply only to monitored ingest traffic. Do not
+  route judge calls through `lt-gateway`, which can apply the application's admission policy and
+  records configured application telemetry.
 - Judge is **provider-configurable** (`judge_model = "[provider/]model"`); judging is a structured
   generation parsed from the model's JSON text. Prefer a judge family different from the generator
   (self-preference bias).
@@ -97,6 +99,24 @@ which directory to run from, which Windows gotcha bites — not a competing list
   `LIGHTTRACK_MCP_ALLOW_WRITES` (default off)** on top of the API's admin-key checks. Don't expose
   secret-minting (API keys) over MCP — it would leak into agent context. The server is a thin HTTP
   client only: never give it direct DB access.
+- Gateway (`lt-gateway`) is an unauthenticated local-app boundary: keep its bind address loopback
+  unless an external authentication layer is deliberately added. It must record every attempted
+  seat, not only the successful fallback, and must reject a tool request before dispatch if any
+  target in the failover chain cannot preserve the tool contract. See `docs/GATEWAY.md`.
+
+## Context-map freshness
+
+`context-map.json` is a generated scoping aid, not authority over the checkout. Its current
+provenance predates `crates/gateway/`, so use `docs/GATEWAY.md` and that crate's modules when scoping
+gateway work. TODO: run the Personas context scan to add the gateway on the next authorized rescan;
+do not hand-edit the generated map or the generated block below.
+
+## A good change looks like
+
+- Use conventional `type(scope): concise summary` commit subjects; recent history consistently uses
+  `feat`, `fix`, `docs`, and `test` scopes.
+- `c359bdf` is a useful vertical-slice example: implementation, focused tests, operator docs, and
+  changelog moved together while `main.rs` stayed wiring-only and domain logic stayed modular.
 
 <!-- personas:context-map:start -->
 ## Git policy (harness-enforced)

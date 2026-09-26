@@ -472,7 +472,21 @@ pub(crate) fn run_compare(
     // compare run costs `targets × cases × gen_samples × (1 generation + judge_samples judge calls)`;
     // until now a fat-fingered `--gen-samples` was discovered only after it had been spent.
     let bench_targets: Vec<BenchTarget> = targets.iter().map(|r| r.target.clone()).collect();
-    let estimate = estimate_compare(&prices, &bench_targets, cases.len(), ng, samples, &jp, &jm);
+    // A rubric with no `llm` dimension is scored mechanically and never calls the judge, so it must
+    // not be estimated — or warned about — as though it did. A freeform rubric (no stored rubric)
+    // is always model-judged.
+    let model_judged = rubric
+        .as_ref()
+        .is_none_or(|r| r.dimensions.iter().any(|d| d.kind.is_llm()));
+    let estimate = estimate_compare(
+        &prices,
+        &bench_targets,
+        cases.len(),
+        ng,
+        samples,
+        (&jp, &jm),
+        model_judged,
+    );
     println!("  {}", estimate.line());
     if !estimate.unpriced.is_empty() {
         println!(

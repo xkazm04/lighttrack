@@ -367,9 +367,31 @@ fn scrub_all(ev: &mut LlmEvent, persistence: Redaction) -> usize {
     n
 }
 
+/// Apply a project's persistence class to one event and scrub what survives it — the two layers of
+/// this module, in their only correct order, at one call site per door. Returns the number of PII
+/// spans the scrub replaced.
+///
+/// The class is a property of the **project**, and it is decided once, from the project's stored
+/// policy. A door that derives it from what the record happens to carry — an emitter's opt-in flag,
+/// a payload that looks harmless — has made an inspection of one instance stand in for a policy, and
+/// the divergence is invisible afterwards: the [`RedactionStamp`] this writes names the class the
+/// door chose, not the one the project set, so the posture report reads a `drop` project's untouched
+/// rows as an ordinary `none` cohort. Passing a literal here is therefore not a shortcut; it is a
+/// forged receipt. Every door that makes an event durable calls this with `policy.redaction`.
+pub(crate) fn apply_class(redactor: &Redactor, ev: &mut LlmEvent, policy: Redaction) -> usize {
+    if apply_policy(ev, policy) {
+        tracing::debug!(
+            project_id = %ev.project_id, event_id = %ev.id, policy = ?policy,
+            "applied payload persistence policy"
+        );
+    }
+    redactor.redact_event(ev, policy)
+}
+
 /// Enforce a project's persistence policy on the event's captured payloads, in place. Returns `true`
 /// when the payloads were transformed (hash/drop applied to at least one present payload). Runs
 /// BEFORE the PII scrub: `drop` removes the payloads outright, `hash` leaves nothing scrubbable.
+/// Callers go through [`apply_class`], which pairs it with the scrub and the stamp.
 pub(crate) fn apply_policy(ev: &mut LlmEvent, policy: Redaction) -> bool {
     match policy {
         Redaction::None => false,

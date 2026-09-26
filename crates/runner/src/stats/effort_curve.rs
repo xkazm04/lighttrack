@@ -297,8 +297,17 @@ fn verdict(
         "the dial did not move — this rung is the rung below it at a higher price"
     } else if f.regressed > f.improved {
         "more cases flipped wrong than right: the extra thinking cost accuracy here"
-    } else if f.improved == 0 && f.regressed == 0 && score_delta.abs() <= EPS {
-        "the model thought harder and nothing about the verdicts changed"
+    } else if f.improved == 0 && f.regressed == 0 {
+        // No pass verdict moved. A score delta can still be non-zero here: with several draws per
+        // case, one draw in three going wrong moves the case's mean without crossing the majority
+        // that decides `pass`. The first live run hit exactly this and was told "the flips
+        // cancelled out" about a step with no flips at all.
+        if score_delta.abs() <= EPS {
+            "the model thought harder and nothing about the verdicts changed"
+        } else {
+            "no case changed its pass verdict — the score moved only on individual draws inside \
+             cases, which is sampling within a case rather than the level changing an answer"
+        }
     } else if f.improved > f.regressed {
         "the extra thinking paid, on the cases that flipped"
     } else {
@@ -433,6 +442,50 @@ mod tests {
         for banned in ["p_value", "significant", "alpha", "α"] {
             assert!(!block.contains(banned), "{banned} leaked: {block}");
         }
+    }
+
+    /// **Found by the first live run.** With 3 draws per case, one draw going wrong moves a case's
+    /// mean (1.00 → 0.67) without moving its pass verdict. That step has zero flips and a non-zero
+    /// score delta, and the report called it "the flips cancelled out" — a sentence about flips that
+    /// did not happen.
+    #[test]
+    fn a_score_that_moved_without_a_flip_is_not_called_cancelled_flips() {
+        let low = [c(21, 0.667, 250.0), c(22, 1.0, 250.0)];
+        let high = [c(21, 1.0, 400.0), c(22, 1.0, 400.0)];
+        let rows = [
+            row("m@low", Effort::Low, &low),
+            row("m@high", Effort::High, &high),
+        ];
+        let step = curve(&rows, &[None; 22], 3)["effort_curve"]["models"][0]["steps"][0].clone();
+        assert_eq!(step["improved"], json!(0));
+        assert_eq!(step["regressed"], json!(0));
+        assert!(step["mean_score_delta"].as_f64().unwrap() > 0.0);
+        let verdict = step["verdict"].as_str().unwrap();
+        assert!(!verdict.contains("cancelled out"), "{verdict}");
+        assert!(
+            verdict.contains("no case changed its pass verdict"),
+            "{verdict}"
+        );
+    }
+
+    /// Genuine cancellation still says so: equal, non-zero flips in each direction.
+    #[test]
+    fn equal_flips_in_both_directions_still_cancel_out() {
+        let low = [c(1, 0.0, 100.0), c(2, 1.0, 100.0)];
+        let high = [c(1, 1.0, 900.0), c(2, 0.0, 900.0)];
+        let rows = [
+            row("m@low", Effort::Low, &low),
+            row("m@high", Effort::High, &high),
+        ];
+        let step = curve(&rows, &[None; 2], 3)["effort_curve"]["models"][0]["steps"][0].clone();
+        assert_eq!(
+            (step["improved"].clone(), step["regressed"].clone()),
+            (json!(1), json!(1))
+        );
+        assert!(step["verdict"]
+            .as_str()
+            .unwrap()
+            .contains("the flips cancelled out"));
     }
 
     /// **The dead dial.** Asking for more effort changed nothing about how hard the model thought —

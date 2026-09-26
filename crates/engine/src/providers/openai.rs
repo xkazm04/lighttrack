@@ -14,6 +14,7 @@ use super::{
     api_base, effort_unsupported, http_client, http_error, read_bounded, schema_state, send_error,
     PINNED_SEED,
 };
+use crate::chat::{ChatOutcome, ChatRequest};
 use crate::{Determinism, EngineError, GenOutcome, Result};
 
 /// Our effort level as a Chat Completions `reasoning_effort` value.
@@ -42,22 +43,22 @@ fn reasoning_effort(model: &str, effort: Effort) -> Result<&'static str> {
 /// has already split any `@effort` suffix off it — so no `@`-suffixed string can reach the wire.
 fn body(
     model: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
+    req: &ChatRequest,
     deterministic: bool,
     effort: Option<Effort>,
 ) -> Result<Value> {
-    let mut messages = Vec::new();
-    if let Some(sys) = system_prompt {
-        messages.push(serde_json::json!({ "role": "system", "content": sys }));
-    }
-    messages.push(serde_json::json!({ "role": "user", "content": input }));
-    let mut body = serde_json::json!({ "model": model, "messages": messages });
+    let mut body = serde_json::json!({ "model": model, "messages": req.openai_messages() });
     if let Some(level) = effort {
         body["reasoning_effort"] = serde_json::json!(reasoning_effort(model, level)?);
     }
-    if let Some(sc) = schema {
+    // Caller tools ride through untouched: this is their native wire shape.
+    if let Some(tools) = &req.tools {
+        body["tools"] = tools.clone();
+        if let Some(choice) = &req.tool_choice {
+            body["tool_choice"] = choice.clone();
+        }
+    }
+    if let Some(sc) = &req.schema {
         body["response_format"] = serde_json::json!({
             "type": "json_schema",
             "json_schema": { "name": "verdict", "strict": true, "schema": sc },
@@ -74,15 +75,13 @@ fn body(
 /// OpenAI Chat Completions. Key from OPENAI_API_KEY.
 pub(super) fn generate(
     model: &str,
-    system_prompt: Option<&str>,
-    input: &str,
-    schema: Option<&Value>,
+    req: &ChatRequest,
     deterministic: bool,
     effort: Option<Effort>,
-) -> Result<GenOutcome> {
+) -> Result<ChatOutcome> {
     let key = std::env::var("OPENAI_API_KEY")
         .map_err(|_| EngineError::Other("no OpenAI API key (set OPENAI_API_KEY)".into()))?;
-    let body = body(model, system_prompt, input, schema, deterministic, effort)?;
+    let body = body(model, req, deterministic, effort)?;
 
     let started = Instant::now();
     let resp = http_client()?
@@ -113,20 +112,14 @@ pub(super) fn generate(
             reasoning_tokens,
         });
     }
-    let output = v
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    if output.is_empty() {
+    let (output, tool_calls, finish_reason) = message_parts(&v);
+    // A tool request is an answer with no text; only a stop with neither is empty.
+    if output.is_empty() && tool_calls.is_none() {
         return Err(EngineError::EmptyCompletion {
             who: "openai".into(),
         });
     }
-    Ok(GenOutcome {
+    let gen = GenOutcome {
         output,
         cost_usd: None,
         model: v
@@ -142,13 +135,38 @@ pub(super) fn generate(
             .and_then(|u| u.get("completion_tokens"))
             .and_then(Value::as_u64),
         reasoning_tokens: reasoning_tokens(usage),
-        schema: schema_state(schema),
+        schema: schema_state(req.schema.as_ref()),
         determinism: if deterministic {
             Determinism::Exact
         } else {
             Determinism::BestEffort
         },
+    };
+    Ok(ChatOutcome {
+        gen,
+        tool_calls,
+        finish_reason,
     })
+}
+
+/// The first choice's text, its `tool_calls` (when the model asked for any), and the stated
+/// `finish_reason`. Shared with the OpenRouter adapter, whose responses are this shape.
+pub(super) fn message_parts(v: &Value) -> (String, Option<Value>, Option<String>) {
+    let choice = v.pointer("/choices/0");
+    let output = choice
+        .and_then(|c| c.pointer("/message/content"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let tool_calls = choice
+        .and_then(|c| c.pointer("/message/tool_calls"))
+        .filter(|t| t.as_array().is_some_and(|a| !a.is_empty()))
+        .cloned();
+    let finish_reason = choice
+        .and_then(|c| c.get("finish_reason"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    (output, tool_calls, finish_reason)
 }
 
 /// Whether a Chat Completions response was cut off by the token cap, and if so, the cap that
@@ -184,12 +202,16 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn one(input: &str) -> ChatRequest {
+        ChatRequest::single(None, input, None)
+    }
+
     /// **The wire-body guarantee.** `gpt-5@high` reaches this adapter already split, and the body's
     /// `model` field carries the bare id — never a `@`-suffixed string, which OpenAI would answer
     /// with a 404 on a model nobody named.
     #[test]
     fn the_model_field_never_carries_an_effort_suffix() {
-        let b = body("gpt-5", None, "hi", None, false, None).unwrap();
+        let b = body("gpt-5", &one("hi"), false, None).unwrap();
         assert_eq!(b["model"], json!("gpt-5"));
         assert!(
             !b["model"].as_str().unwrap().contains('@'),
@@ -206,12 +228,12 @@ mod tests {
             (Effort::Medium, "medium"),
             (Effort::High, "high"),
         ] {
-            let b = body("gpt-5", None, "hi", None, false, Some(level)).unwrap();
+            let b = body("gpt-5", &one("hi"), false, Some(level)).unwrap();
             assert_eq!(b["reasoning_effort"], json!(wire));
             assert_eq!(b["model"], json!("gpt-5"), "still the bare model id");
         }
         // No effort asked for: the parameter is absent, so an existing matrix's request is unchanged.
-        let plain = body("gpt-4o", None, "hi", None, false, None).unwrap();
+        let plain = body("gpt-4o", &one("hi"), false, None).unwrap();
         assert!(plain.get("reasoning_effort").is_none());
     }
 
@@ -220,7 +242,7 @@ mod tests {
     #[test]
     fn a_level_above_openais_scale_errors_rather_than_folding_onto_high() {
         for level in [Effort::XHigh, Effort::Max] {
-            let err = body("gpt-5", None, "hi", None, false, Some(level)).unwrap_err();
+            let err = body("gpt-5", &one("hi"), false, Some(level)).unwrap_err();
             let msg = err.to_string();
             assert!(msg.contains("openai"), "names the adapter: {msg}");
             assert!(msg.contains("gpt-5"), "names the model: {msg}");
@@ -230,14 +252,20 @@ mod tests {
 
     #[test]
     fn deterministic_pins_temperature_and_seed() {
-        let b = body("gpt-4o", Some("be terse"), "hi", None, true, None).unwrap();
+        let b = body(
+            "gpt-4o",
+            &ChatRequest::single(Some("be terse"), "hi", None),
+            true,
+            None,
+        )
+        .unwrap();
         assert_eq!(b["temperature"], json!(0.0));
         assert_eq!(b["seed"], json!(PINNED_SEED));
         assert_eq!(b["messages"][0]["role"], json!("system"));
         assert_eq!(b["messages"][1]["content"], json!("hi"));
         // Asking for effort must not weaken the determinism request: the `Exact` stamp still rests
         // on exactly the two parameters it always did.
-        let with_effort = body("gpt-5", None, "hi", None, true, Some(Effort::Low)).unwrap();
+        let with_effort = body("gpt-5", &one("hi"), true, Some(Effort::Low)).unwrap();
         assert_eq!(with_effort["temperature"], json!(0.0));
         assert_eq!(with_effort["seed"], json!(PINNED_SEED));
     }

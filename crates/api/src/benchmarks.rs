@@ -49,6 +49,12 @@ pub(crate) struct CreateBenchmarkReq {
     /// on manual enqueue or a prompt-version cut). Carried inside `target` — see [`embed_recurrence`].
     #[serde(default)]
     schedule_interval_secs: Option<u64>,
+    /// Opt-in failure mining: the dataset **name** failing verdicts under this benchmark append to
+    /// (M24). Carried inside `target` under [`lighttrack_core::REGRESSION_DATASET_KEY`], which the
+    /// host writes — a caller that sends the key itself is refused, because a policy the product
+    /// reads out of caller-authored free-form JSON is a policy anyone can set by accident.
+    #[serde(default)]
+    regression_dataset: Option<String>,
 }
 
 /// Judging is the one call in this product whose quality *is* the product, and it is deliberately
@@ -64,25 +70,75 @@ fn default_judge_model() -> String {
     "opus@xhigh".to_string()
 }
 
-use lighttrack_core::RECURRENCE_KEY;
+use lighttrack_core::{reserved_target_keys_in, RECURRENCE_KEY, REGRESSION_DATASET_KEY};
 
-/// Fold an opt-in recurrence interval into the stored `target`. Recurrence needs an object (or empty)
-/// target; a comparison-matrix target is a JSON array with no room for a sibling key, so that
-/// combination is a hard 400 rather than a silent drop (a matrix benchmark simply can't recur in v1).
-fn embed_recurrence(target: serde_json::Value, secs: u64) -> Result<serde_json::Value, String> {
+/// Refuse a caller-supplied key this product has reserved inside `target`, and name the field to
+/// send instead.
+///
+/// `target` is documented free-form, so every name in it is a caller's until the product takes
+/// one. Two are taken already ([`lighttrack_core::RESERVED_TARGET_KEYS`]) and both are read as
+/// *policy*: a number under the recurrence key becomes a schedule row on the next boot, and the
+/// regression key redirects every failing verdict into a dataset by name. Neither reading asks who
+/// wrote the key, so before this door a caller's own note under one of those names bought them a
+/// policy they never requested — and a caller who had been keeping notes under a name the product
+/// had not taken yet was captured by the release that took it. The refusal is the reservation: an
+/// accepted key is a released key, whatever the field's documentation calls it.
+fn reject_reserved_target_keys(target: &serde_json::Value) -> Result<(), String> {
+    let taken = reserved_target_keys_in(target);
+    if taken.is_empty() {
+        return Ok(());
+    }
+    let names = taken
+        .iter()
+        .map(|k| format!("`{k}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let fields = taken
+        .iter()
+        .map(|k| match *k {
+            RECURRENCE_KEY => "`schedule_interval_secs`",
+            REGRESSION_DATASET_KEY => "`regression_dataset`",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let is_are = if taken.len() == 1 {
+        "that key is"
+    } else {
+        "those keys are"
+    };
+    Err(format!(
+        "`target` may not carry {names}: {is_are} reserved to the benchmark itself. Send the \
+         matching request field instead ({fields}), and keep your own keys under any other name."
+    ))
+}
+
+/// Fold a host-owned reserved key into the stored `target`. A reserved key needs an object (or
+/// empty) target; a comparison-matrix target is a JSON array with no room for a sibling key, so
+/// that combination is a hard 400 rather than a silent drop (a matrix benchmark simply can't
+/// recur, or mine its failures, in v1).
+fn embed_reserved(
+    target: serde_json::Value,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     match target {
-        serde_json::Value::Null => Ok(serde_json::json!({ RECURRENCE_KEY: secs })),
+        serde_json::Value::Null => Ok(serde_json::json!({ key: value })),
         serde_json::Value::Object(mut m) => {
-            m.insert(RECURRENCE_KEY.to_string(), serde_json::json!(secs));
+            m.insert(key.to_string(), value);
             Ok(serde_json::Value::Object(m))
         }
-        serde_json::Value::Array(_) => Err(
-            "schedule_interval_secs is not supported for a comparison-matrix benchmark (an array \
-             `target`/`targets`); use a single-target, rubric, or simple benchmark for recurrence"
-                .into(),
-        ),
-        _ => Err("schedule_interval_secs requires an object or empty `target`".into()),
+        serde_json::Value::Array(_) => Err(format!(
+            "{key} is not supported for a comparison-matrix benchmark (an array \
+             `target`/`targets`); use a single-target, rubric, or simple benchmark"
+        )),
+        _ => Err(format!("{key} requires an object or empty `target`")),
     }
+}
+
+/// Fold an opt-in recurrence interval into the stored `target`.
+fn embed_recurrence(target: serde_json::Value, secs: u64) -> Result<serde_json::Value, String> {
+    embed_reserved(target, RECURRENCE_KEY, serde_json::json!(secs))
 }
 
 pub(crate) async fn create_benchmark(
@@ -125,10 +181,26 @@ pub(crate) async fn create_benchmark(
     };
     let parsed = validate_target_matrix(&target).map_err(ApiError::bad_request)?;
     ensure_prompt_refs_exist(&st, &pid, &parsed).await?;
+    // The keys this product has taken out of `target` are refused here, before anything reads them
+    // as policy: a reserved name a caller may write is a released name, and the product's next
+    // reservation would capture whatever callers keep under it.
+    reject_reserved_target_keys(&target).map_err(ApiError::bad_request)?;
     // Opt-in recurrence rides inside `target` (no schema/column change); reject the one combination
     // it can't carry (a comparison matrix) up front.
     let target = match req.schedule_interval_secs.filter(|s| *s > 0) {
         Some(secs) => embed_recurrence(target, secs).map_err(ApiError::bad_request)?,
+        None => target,
+    };
+    // Failure mining rides in `target` the same way, and is written by the host for the same
+    // reason: the runner reads this name as the dataset it appends failing verdicts to.
+    let target = match req
+        .regression_dataset
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
+        Some(name) => embed_reserved(target, REGRESSION_DATASET_KEY, serde_json::json!(name))
+            .map_err(ApiError::bad_request)?,
         None => target,
     };
     let b = Benchmark {
@@ -263,8 +335,9 @@ pub(crate) struct GateResponse {
 /// A baseline is not a constant — it is a measurement, and it carries the conditions it was taken
 /// under. `stamp_pins` records those conditions on every *run* (`judge_model`, `dataset_ref`, and
 /// the dataset's frozen state and version); the baseline is a bare scalar in the benchmark row and
-/// records none of them. So the strongest statement this gate can make is the one condition it can
-/// actually read off the run: **the case set was allowed to move.**
+/// records none of them. So this gate may only rest a floor verdict on conditions it can actually
+/// read off the run, and there are **two** of them: the case set was allowed to move, and the
+/// instrument that produced the score was allowed to move.
 ///
 /// An unfrozen dataset means the cases could have changed between the moment the baseline was
 /// established and the moment this run was scored. The two numbers are then means over different
@@ -272,7 +345,10 @@ pub(crate) struct GateResponse {
 /// regression and it is not a pass; it is the *unverified* lane the exit-code contract already
 /// carries (`EXIT_NO_BASELINE`, deliberately distinct from `EXIT_REGRESSED` so CI can warn rather
 /// than hard-fail).
-fn baseline_not_comparable(run: &BenchmarkRun) -> Option<String> {
+///
+/// A moved judge or rubric is the same defect reached through the instrument instead of through
+/// the population, and it is the one this predicate used to miss: see [`instrument_moved`].
+fn baseline_not_comparable(run: &BenchmarkRun, bench: &Benchmark) -> Option<String> {
     match run.report.get("dataset_frozen") {
         Some(serde_json::Value::Bool(false)) => {
             let v = run
@@ -287,6 +363,38 @@ fn baseline_not_comparable(run: &BenchmarkRun) -> Option<String> {
                     .into(),
             })
         }
+        _ => instrument_moved(run, bench),
+    }
+}
+
+/// The second condition a floor verdict rests on: the run was scored by the instrument the
+/// benchmark still names.
+///
+/// `stamp_pins` freezes the judge model and the rubric that produced a run's score **into that
+/// run's report**. The benchmark row carries the ones it uses *now*, and switching either leaves
+/// the stored baseline untouched — so the next gate read subtracts a number one judge produced
+/// from a number a different judge produced and calls the difference a regression, or, worse,
+/// calls it a pass. The run and the baseline are then two configurations, and the verdict belongs
+/// to neither.
+///
+/// **Absence is not disagreement.** A run from before the pin existed records no judge and no
+/// rubric; reading that silence as drift would retire every legacy verdict at once, which is the
+/// same over-refusal the unfrozen-dataset predicate avoids by treating a missing flag as "nothing
+/// says the cases moved".
+fn instrument_moved(run: &BenchmarkRun, bench: &Benchmark) -> Option<String> {
+    let pinned = |k: &str| run.report.get(k).and_then(serde_json::Value::as_str);
+    if let Some(judge) = pinned("judge_model") {
+        if judge != bench.judge_model {
+            return Some(format!(
+                "baseline not comparable: this run was scored by judge '{judge}', and the benchmark now judges with '{}', so its mean and the stored baseline came out of different instruments; re-establish the baseline under the current judge",
+                bench.judge_model
+            ));
+        }
+    }
+    match (pinned("rubric_id"), bench.rubric_id.as_deref()) {
+        (Some(r), Some(current)) if r != current => Some(format!(
+            "baseline not comparable: this run was scored under rubric '{r}', and the benchmark now scores under '{current}', so its mean and the stored baseline were measured on different dimensions; re-establish the baseline under the current rubric"
+        )),
         _ => None,
     }
 }
@@ -335,7 +443,7 @@ pub(crate) fn decide_gate(
     // `no_runs` and `partial` never consulted it, so there is nothing to refuse and no caveat to
     // add — re-labelling them would replace one honest unverified state with another and lose why.
     let (status, caveat) = match status {
-        "pass" | "regressed" => match baseline.and_then(|_| baseline_not_comparable(run)) {
+        "pass" | "regressed" => match baseline.and_then(|_| baseline_not_comparable(run, bench)) {
             Some(why) => ("no_baseline", Some(why)),
             None => (status, None),
         },
@@ -388,7 +496,9 @@ pub(crate) async fn benchmark_gate(
 
 #[cfg(test)]
 mod tests {
-    use super::{embed_recurrence, validate_target_matrix};
+    use super::{
+        embed_recurrence, embed_reserved, reject_reserved_target_keys, validate_target_matrix,
+    };
 
     /// The judge-trust annotation is exercised through the handler and `judges::policy_block`;
     /// these cases are about the *evidence* verdict, so they pass none.
@@ -559,6 +669,63 @@ mod tests {
     }
 
     #[test]
+    fn gate_refuses_the_floor_when_the_judge_moved() {
+        // `stamp_pins` freezes the judge (and the rubric) that produced a run's score into that
+        // run's report. The benchmark row carries the judge it uses *now*. When the two disagree,
+        // the run's mean and the benchmark's baseline came out of different instruments, so
+        // subtracting them is arithmetic with no claim behind it — the same defect the
+        // unfrozen-dataset predicate already refuses, arriving through the judge instead of
+        // through the case set.
+        let moved = json!({ "judge_model": "sonnet", "dataset_frozen": true });
+
+        // The dangerous direction first: a run that would have passed.
+        let g = decide_gate(
+            &[run("passed", true, Some(0.9), moved.clone())],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "no_baseline");
+        let caveat = g.caveat.expect("the refused floor names its condition");
+        assert!(
+            caveat.contains("sonnet"),
+            "the judge that scored the run is named: {caveat}"
+        );
+        assert!(
+            caveat.contains("haiku"),
+            "the judge the benchmark uses now is named: {caveat}"
+        );
+
+        // And a `regressed` verdict resting on the same incomparable pair is not a regression.
+        let g = decide_gate(
+            &[run("regressed", true, Some(0.5), moved)],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "no_baseline");
+        assert!(g.caveat.is_some());
+
+        // Agreement is the comparable case: the verdict stands and no caveat is invented.
+        let g = decide_gate(
+            &[run(
+                "passed",
+                true,
+                Some(0.9),
+                json!({ "judge_model": "haiku" }),
+            )],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "pass");
+        assert_eq!(g.caveat, None);
+
+        // Absence is not disagreement. A run that predates the pin stamps no judge, and reading
+        // that silence as drift would retire every legacy run's verdict at once.
+        let g = decide_gate(
+            &[run("passed", true, Some(0.9), json!({ "n": 30 }))],
+            &bench(Some(0.8)),
+        );
+        assert_eq!(g.status, "pass");
+        assert_eq!(g.caveat, None);
+    }
+
+    #[test]
     fn gate_keeps_its_verdict_when_the_dataset_was_frozen_or_absent() {
         // A frozen dataset is the comparable case: the verdict stands, and no caveat is invented.
         let frozen = json!({ "dataset_frozen": true, "dataset_version": 7 });
@@ -646,5 +813,59 @@ mod tests {
             embed_recurrence(json!([{ "provider": "openai", "model": "gpt-4o" }]), 60).is_err()
         );
         assert!(embed_recurrence(json!("legacy-string"), 60).is_err());
+    }
+
+    /// The reservation is only a reservation where a caller cannot write the name, and the refusal
+    /// has to name the field that replaces it — a 400 that says "reserved" and stops leaves the
+    /// caller with a capability the documentation told them to reach for.
+    #[test]
+    fn a_caller_supplied_reserved_key_is_refused_with_the_repair_named() {
+        let e = reject_reserved_target_keys(&json!({
+            "endpoint": "https://x",
+            "regression_dataset": "my-own-note"
+        }))
+        .expect_err("a reserved key a caller wrote is refused");
+        assert!(e.contains("regression_dataset"), "{e}");
+        assert!(e.contains("Send the matching request field"), "{e}");
+
+        let both = reject_reserved_target_keys(&json!({
+            "schedule_interval_secs": 60,
+            "regression_dataset": "d"
+        }))
+        .expect_err("both reserved keys are refused");
+        assert!(both.contains("those keys are"), "{both}");
+
+        // The control, and the whole point of the design: every other name in this object still
+        // belongs to the caller. A door that refused unknown keys would have broken the free-form
+        // contract instead of reserving anything.
+        reject_reserved_target_keys(&json!({
+            "endpoint": "https://x",
+            "regression_notes": "mine",
+            "schedule": { "interval": 60 }
+        }))
+        .expect("an unreserved name is the caller's");
+        // Shapes that cannot carry a sibling key have nothing to refuse.
+        reject_reserved_target_keys(&json!([{ "provider": "openai", "model": "gpt-4o" }]))
+            .expect("a matrix target");
+        reject_reserved_target_keys(&json!(null)).expect("an absent target");
+    }
+
+    #[test]
+    fn the_host_writes_the_reserved_key_the_caller_may_not() {
+        assert_eq!(
+            embed_reserved(
+                json!({ "endpoint": "https://x" }),
+                "regression_dataset",
+                json!("support-failures")
+            )
+            .unwrap(),
+            json!({ "endpoint": "https://x", "regression_dataset": "support-failures" })
+        );
+        assert!(embed_reserved(
+            json!([{ "provider": "openai" }]),
+            "regression_dataset",
+            json!("d")
+        )
+        .is_err());
     }
 }

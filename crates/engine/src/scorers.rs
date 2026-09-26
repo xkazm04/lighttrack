@@ -23,6 +23,8 @@ use lighttrack_core::{DimensionCheck, DimensionKind, Rubric, RubricDimension};
 use crate::sandbox::SandboxRunner;
 use crate::{EngineError, Result};
 
+mod numeric;
+
 /// One deterministic dimension's verdict: its score plus why it got it.
 #[derive(Debug, Clone)]
 pub(crate) struct DetScore {
@@ -68,7 +70,7 @@ pub(crate) fn evaluate_all(
     rubric
         .dimensions
         .iter()
-        .filter(|d| !d.kind.is_llm())
+        .filter(|d| d.kind.is_mechanical())
         .map(|d| {
             let (score, reasoning) = evaluate(d, expected, output, exec)?;
             Ok(DetScore {
@@ -144,26 +146,7 @@ fn evaluate(
         }
         DimensionKind::Numeric => {
             let raw = target(d, expected)?;
-            let want: f64 = raw.parse().map_err(|_| {
-                EngineError::Other(format!(
-                    "rubric dimension '{}' (numeric) target `{raw}` is not a number",
-                    d.key
-                ))
-            })?;
-            let tol = c.tolerance.unwrap_or(0.0).abs();
-            match first_number(&subject) {
-                None => (
-                    Some(0.0),
-                    format!(
-                        "numeric: expected `{want}`, no number in `{}` → fail",
-                        snip(&subject)
-                    ),
-                ),
-                Some(got) => verdict(
-                    (got - want).abs() <= tol,
-                    format!("numeric: expected `{want}`, got `{got}`, tolerance {tol}"),
-                ),
-            }
+            numeric::evaluate(d, &raw, &subject, c.tolerance.unwrap_or(0.0).abs())?
         }
         DimensionKind::JsonValid => {
             // A path that resolved already proved the output is JSON; without one, parse it here.
@@ -205,10 +188,10 @@ fn evaluate(
             let o = crate::sandbox::run_exec(cli, &d.key, c, &subject)?;
             return Ok((o.verdict.score(), o.reasoning()));
         }
-        // Unreachable: `evaluate_all` filters LLM dimensions out. Defensive rather than silent.
-        DimensionKind::Llm => {
+        // Unreachable: `evaluate_all` filters model-judged dimensions out. Defensive, not silent.
+        DimensionKind::Llm | DimensionKind::Grounding => {
             return Err(EngineError::Other(format!(
-                "rubric dimension '{}' is LLM-judged and has no deterministic check",
+                "rubric dimension '{}' is model-judged and has no deterministic check",
                 d.key
             )))
         }
@@ -275,18 +258,6 @@ fn folded(a: &str, b: &str, case_sensitive: bool) -> (String, String) {
     } else {
         (a.to_lowercase(), b.to_lowercase())
     }
-}
-
-/// The output's number: the whole (trimmed) subject if it parses, else the first numeric token in it —
-/// so `"41.6"`, `"The answer is 41.6."` and `"1.2e3"` all yield a number to compare.
-fn first_number(s: &str) -> Option<f64> {
-    if let Ok(v) = s.trim().parse::<f64>() {
-        return Some(v);
-    }
-    let re = RegexBuilder::new(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
-        .build()
-        .ok()?;
-    re.find(s).and_then(|m| m.as_str().parse::<f64>().ok())
 }
 
 #[cfg(test)]
