@@ -166,7 +166,7 @@ jobs:
         with:
           shared-key: ci
       - name: Set up gcloud + Firestore emulator
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
         with:
           install_components: cloud-firestore-emulator
       - name: Start Firestore emulator
