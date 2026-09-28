@@ -83,7 +83,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The ruler is pinned by rust-toolchain.toml (one address, repo root). rustup ships on the
       # runner image and reads that file on the first cargo invocation, installing exactly the
       # pinned toolchain + components — so no job here names a version that could drift from it.
@@ -122,7 +122,7 @@ jobs:
       # PgStore::connect uses sslmode=prefer → plaintext fallback for this non-TLS local container.
       LIGHTTRACK_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/lighttrack
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # store-pg links native-tls (system OpenSSL); needed even against a plaintext local DB to build.
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
@@ -149,7 +149,7 @@ jobs:
       FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
       LIGHTTRACK_TEST_FIRESTORE: firestore://demo
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # store-firestore's reqwest uses native-tls (system OpenSSL) on Linux — required to build.
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
@@ -201,7 +201,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The ruler is pinned by rust-toolchain.toml (one address, repo root).
       - run: cargo --version
       - uses: Swatinem/rust-cache@v2
@@ -217,7 +217,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # store-pg links native-tls (system OpenSSL); cloud Postgres like Neon needs TLS. No live DB is
       # required to build/run the suite — store-pg uses runtime queries (no compile-time sqlx macros).
       - name: Install build deps
@@ -240,7 +240,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # reqwest pulls native-tls here too.
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
@@ -273,7 +273,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           # pyproject declares `requires-python = ">=3.8"`; this pins the one version CI proves.
@@ -294,7 +294,7 @@ jobs:
       run:
         working-directory: clients/typescript
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           # tsx and esbuild both declare `engines: node >=18`; 20 is the LTS we prove against.
@@ -340,7 +340,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # reqwest (rust client) and the anon crate's dev-deps link native-tls here too.
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
@@ -420,7 +420,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
       # The ruler is pinned by rust-toolchain.toml (one address, repo root). rustup ships on the
@@ -438,7 +438,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The ruler is pinned by rust-toolchain.toml (one address, repo root). rustup ships on the
       # runner image and reads that file on the first cargo invocation, installing exactly the
       # pinned toolchain + components — so no job here names a version that could drift from it.
@@ -480,7 +480,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check bans licenses sources
@@ -519,7 +519,7 @@ jobs:
       # The pin. Bumping it is the moment new upstream rules get applied to old history.
       GITLEAKS_VERSION: "8.30.1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # A shallow clone would scan a truncated history and pass on a token pushed last spring.
           fetch-depth: 0
@@ -545,7 +545,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Install gitleaks (latest)
@@ -572,7 +572,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories
