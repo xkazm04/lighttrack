@@ -1,6 +1,6 @@
 # Batch response budget is enforced against a ceiling the wire does not send
 
-status: proposed
+status: accepted
 kind: task (defect)
 registry-subject: software-engineering/llm-agent/prompt-and-context/prompt-assembly
 registry-technique: response-reservation-sizing
