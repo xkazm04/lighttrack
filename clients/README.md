@@ -243,8 +243,15 @@ Each SDK extracts model + token usage from the native response object:
 | Provider  | model            | input tokens                         | output tokens                          | cached |
 |-----------|------------------|--------------------------------------|----------------------------------------|--------|
 | OpenAI    | `model`          | `usage.prompt_tokens` / `input_tokens` | `usage.completion_tokens` / `output_tokens` | `usage.prompt_tokens_details.cached_tokens` / `input_tokens_details.cached_tokens` (Responses API) |
-| Anthropic | `model`          | `usage.input_tokens`                 | `usage.output_tokens`                  | `usage.cache_read_input_tokens` (not `cache_creation_…`) |
+| Anthropic | `model`          | `usage.input_tokens` **+** `usage.cache_read_input_tokens` **+** `usage.cache_creation_input_tokens` — Anthropic's `input_tokens` is the uncached remainder only | `usage.output_tokens`                  | `usage.cache_read_input_tokens` (not `cache_creation_…`) |
 | Gemini    | `modelVersion` / `model_version` | `usageMetadata.promptTokenCount` / `usage_metadata.prompt_token_count` | `…candidatesTokenCount` **+** `…thoughtsTokenCount` (and the snake_case duals) — thoughts are billed as output | `…cachedContentTokenCount` / `…cached_content_token_count` |
+
+Input is the **whole prompt** the provider counted, and cached is a subset of it (the price book bills
+`input − cached` at the input rate and `cached` at the cached rate). OpenAI and Gemini already report it
+that way; Anthropic does not, so its extractors add `cache_read_input_tokens` and
+`cache_creation_input_tokens` back into input. Cache-write tokens are therefore billed at the input
+rate: the price book has no cache-write rate, which is a known limitation, not a claim about
+Anthropic's write price.
 
 Both casings, everywhere they occur: the REST/JS shapes are camelCase and the google-genai Python
 objects are snake_case for the same fields. A missing token count is `0`; a *cached* count that was

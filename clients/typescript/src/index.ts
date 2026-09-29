@@ -125,7 +125,14 @@ export function extractOpenAI(resp: any): [string | undefined, number, number, n
 /** Extract (model, input, output, cached) from an Anthropic messages object. */
 export function extractAnthropic(resp: any): [string | undefined, number, number, number | undefined] {
   const u = resp?.usage ?? {};
-  return [resp?.model, num(u.input_tokens) ?? 0, num(u.output_tokens) ?? 0, num(u.cache_read_input_tokens)];
+  // Anthropic's `input_tokens` is only the UNCACHED remainder: cache reads and cache writes are counted
+  // beside it. The event convention is the whole prompt with `cachedInput` a subset of it (the price
+  // book bills `input - cached_input`), so the two cache counters are added back in. Left as reported,
+  // the fresh tokens saturated away against a larger cache read and cache writes were never billed.
+  // Cache-write tokens then bill at the input rate: the price book has no write rate.
+  const read = num(u.cache_read_input_tokens);
+  const input = (num(u.input_tokens) ?? 0) + (read ?? 0) + (num(u.cache_creation_input_tokens) ?? 0);
+  return [resp?.model, input, num(u.output_tokens) ?? 0, read];
 }
 
 /** Extract (model, input, output, cached) from a Gemini generateContent object. */

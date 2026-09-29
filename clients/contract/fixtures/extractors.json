@@ -63,7 +63,7 @@
     {
       "name": "anthropic-messages-with-cache",
       "provider": "anthropic",
-      "why": "cache_read_input_tokens is the cached counter; cache_creation_input_tokens is a different (billed) thing and must not be read as cached.",
+      "why": "Anthropic's input_tokens is the uncached remainder only; the event convention is the whole prompt with cached a subset of it. So input is input_tokens + cache_read + cache_creation (24 + 2048 + 1500 = 3572), and cached is cache_read_input_tokens alone: cache_creation must not be read as cached. Read as reported (input 24, cached 2048) the price book saturated 24 - 2048 to zero, dropped the fresh tokens and never billed the 1500 cache writes. Cache-write tokens bill at the input rate because the price book has no write rate (a stated limitation).",
       "response": {
         "id": "msg_01XyZ",
         "type": "message",
@@ -77,7 +77,7 @@
           "cache_read_input_tokens": 2048
         }
       },
-      "expect": { "model": "claude-sonnet-4-5-20250929", "input_tokens": 24, "output_tokens": 310, "cached_input_tokens": 2048 }
+      "expect": { "model": "claude-sonnet-4-5-20250929", "input_tokens": 3572, "output_tokens": 310, "cached_input_tokens": 2048 }
     },
     {
       "name": "anthropic-messages-uncached",

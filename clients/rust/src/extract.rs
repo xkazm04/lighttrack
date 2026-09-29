@@ -46,12 +46,18 @@ pub fn extract_openai(resp: &Value) -> Extracted {
 /// Anthropic messages.
 pub fn extract_anthropic(resp: &Value) -> Extracted {
     let u = &resp["usage"];
+    let read = u["cache_read_input_tokens"].as_u64();
+    // Anthropic's `input_tokens` is only the UNCACHED remainder: cache reads and cache writes are
+    // counted beside it. The event convention is the whole prompt with `cached` a subset of it (the
+    // price book bills `input - cached`), so the two cache counters are added back in. Left as
+    // reported, the fresh tokens saturated away against a larger cache read and cache writes were
+    // never billed. Cache-write tokens then bill at the input rate: the price book has no write rate.
+    let write = u["cache_creation_input_tokens"].as_u64().unwrap_or(0);
     Extracted {
         model: s(&resp["model"]),
-        input_tokens: u["input_tokens"].as_u64().unwrap_or(0),
+        input_tokens: u["input_tokens"].as_u64().unwrap_or(0) + read.unwrap_or(0) + write,
         output_tokens: u["output_tokens"].as_u64().unwrap_or(0),
-        // `cache_read_input_tokens` only. `cache_creation_input_tokens` is a different, billed thing.
-        cached_input_tokens: u["cache_read_input_tokens"].as_u64(),
+        cached_input_tokens: read,
     }
 }
 
