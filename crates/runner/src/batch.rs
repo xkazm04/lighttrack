@@ -48,6 +48,22 @@ pub(crate) fn cases_per_response(rubric: &Rubric, max_out_tokens: usize) -> usiz
     (max_out_tokens / (dims * OUT_TOKENS_PER_DIM)).max(1)
 }
 
+/// The response budget the packer sizes against: the operator's budget, held under the ceiling the
+/// selected provider path will actually put on the wire (`wire`, from the engine), so a batch is
+/// never planned whose projected response the request then truncates.
+pub(crate) fn response_budget(configured: usize, wire: Option<u64>) -> usize {
+    wire.map_or(configured, |w| {
+        configured.min(usize::try_from(w).unwrap_or(usize::MAX))
+    })
+}
+
+/// [`cases_per_response`] for the judge `jp`/`jm` will actually be sent to. The one entry both the
+/// benchmark packer and the calibration clamp use, so they cannot disagree about the ceiling.
+pub(crate) fn batch_limit(rubric: &Rubric, jp: &str, jm: &str) -> usize {
+    let wire = lighttrack_engine::wire_output_ceiling(jp, jm);
+    cases_per_response(rubric, response_budget(max_out_tokens_from_env(), wire))
+}
+
 /// How much of a batch's budget a case consumes.
 fn case_chars(c: &BenchmarkCase) -> usize {
     c.input.len()
@@ -128,7 +144,7 @@ pub(crate) fn judge_batched(
     // The operator asks for a batch size; the rubric decides what the response can actually carry.
     // Overrunning the output is the one failure that costs every case in the batch at once, so the
     // ceiling is enforced here rather than left as advice.
-    let by_output = cases_per_response(rubric, max_out_tokens_from_env());
+    let by_output = batch_limit(rubric, jp, jm);
     let effective = batch.min(by_output);
     if effective < batch {
         println!(
@@ -272,6 +288,41 @@ mod tests {
             "a wider rubric must pack fewer cases ({narrow} vs {wide})"
         );
         assert!(wide >= 1, "the ceiling must never reach zero cases");
+    }
+
+    /// The packer must never plan a batch whose projected response (`cases x dims x per-dim
+    /// tokens`) exceeds the ceiling the request carries. Arm A (no wire clamp) over-packs at the
+    /// default-effort wire ceiling: 1/2/3/6 dims pack 72/36/24/12 against 18/9/6/3 that fit.
+    #[test]
+    fn no_batch_is_planned_past_the_wire_ceiling() {
+        for wire in [4096u64, 64_000] {
+            for dims in [1usize, 2, 3, 6] {
+                let packed = cases_per_response(
+                    &rubric_with(dims),
+                    response_budget(DEFAULT_MAX_OUT_TOKENS, Some(wire)),
+                );
+                let projected = (packed * dims * OUT_TOKENS_PER_DIM) as u64;
+                assert!(
+                    projected <= wire,
+                    "{dims} dim(s): {packed} case(s) project {projected} tokens against a {wire} ceiling"
+                );
+            }
+        }
+    }
+
+    /// The floor: where the wire already carries more than the budget (`xhigh`/`max`, 64k), and where
+    /// the path sends no ceiling at all, the batch sizes are exactly what they were.
+    #[test]
+    fn the_clamp_does_not_shrink_batches_the_wire_already_fits() {
+        for wire in [Some(64_000u64), None] {
+            for (dims, was) in [(1usize, 72usize), (2, 36), (3, 24), (6, 12)] {
+                let now = cases_per_response(
+                    &rubric_with(dims),
+                    response_budget(DEFAULT_MAX_OUT_TOKENS, wire),
+                );
+                assert_eq!(now, was, "{dims} dim(s) at wire {wire:?}");
+            }
+        }
     }
 
     /// A rubric the model is never asked about cannot overrun its response.

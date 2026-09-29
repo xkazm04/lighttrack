@@ -101,8 +101,7 @@ pub(crate) fn compare(
     // --- the method under test: the same items, batched ---------------------------------------
     // Clamp exactly as `bench --batch` does. A calibration that measured a batch size the benchmark
     // would never actually use would be worse than none: it would bless a method nobody runs.
-    let by_output =
-        crate::batch::cases_per_response(rubric, crate::batch::max_out_tokens_from_env());
+    let by_output = crate::batch::batch_limit(rubric, jp, jm);
     let effective = batch.min(by_output);
     if effective < batch {
         println!(

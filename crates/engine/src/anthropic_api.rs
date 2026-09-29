@@ -103,7 +103,7 @@ pub(crate) fn generate(
 /// The output ceiling for a call at `effort`. See [`MAX_TOKENS_HIGH_EFFORT`] — the top two levels
 /// need real headroom or the model's own thinking hits *our* cap and the verdict is reported as
 /// [`EngineError::Truncated`] when nothing was wrong with the model.
-fn max_tokens_for(effort: Option<Effort>) -> u64 {
+pub(crate) fn max_tokens_for(effort: Option<Effort>) -> u64 {
     match effort {
         Some(Effort::XHigh) | Some(Effort::Max) => MAX_TOKENS_HIGH_EFFORT,
         _ => MAX_TOKENS,
