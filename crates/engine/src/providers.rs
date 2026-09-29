@@ -192,6 +192,30 @@ pub(crate) fn effort_unsupported(who: &str, model: &str, effort: Effort, why: &s
     ))
 }
 
+/// The `max_tokens` a request to `provider`/`model` (an `@effort` suffix allowed) will carry on the
+/// wire, or `None` when the path sends no ceiling of its own. Only the bare Anthropic Messages API
+/// does: the OpenAI, Gemini and OpenRouter adapters and both CLIs leave the response length to the
+/// provider. A caller that sizes a response (the batch packer) reads this instead of copying the
+/// constant, so the number it protects is the number the request carries.
+pub fn wire_output_ceiling(provider: &str, model: &str) -> Option<u64> {
+    output_ceiling_on(provider, model, anthropic_api::available())
+}
+
+/// [`wire_output_ceiling`] with the key's presence given, mirroring the routing in
+/// [`generate_once`]: the id-matched adapters first, then the Anthropic family on the bare API.
+fn output_ceiling_on(provider: &str, model: &str, api_key: bool) -> Option<u64> {
+    let id = lighttrack_core::ProviderId::new(provider);
+    if id.as_str() == openrouter::PROVIDER_ID || id.as_str() == crate::codex::PROVIDER_ID {
+        return None;
+    }
+    match lighttrack_core::family_of(provider) {
+        ProviderFamily::Anthropic if api_key => {
+            Some(anthropic_api::max_tokens_for(split_effort(model).1))
+        }
+        _ => None,
+    }
+}
+
 /// Generate a candidate output from a target (provider + model + optional system-prompt variant).
 /// When `schema` is set, structured output is enforced; a provider that *rejects* the schema (a 4xx)
 /// is retried once schema-less (a logged prose fallback) so strict-schema models never hard-fail.
@@ -439,7 +463,9 @@ fn generate_anthropic(
 
 #[cfg(test)]
 mod tests {
-    use super::{effort_unsupported, request_timeout, schema_state, stated_retry_after};
+    use super::{
+        effort_unsupported, output_ceiling_on, request_timeout, schema_state, stated_retry_after,
+    };
     use crate::SchemaEnforcement;
     use lighttrack_core::Effort;
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -536,5 +562,29 @@ mod tests {
         assert!(request_timeout(Some(Effort::Max)) > base);
         // Bounded, never unbounded: a black-holed endpoint must still lose eventually.
         assert!(request_timeout(Some(Effort::Max)) < Duration::from_secs(3600));
+    }
+
+    /// The ceiling the batch packer reads must be the one the Messages API request carries, per
+    /// effort, and only that path has one: every other route leaves the length to the provider.
+    #[test]
+    fn only_the_bare_anthropic_api_reports_a_wire_ceiling() {
+        assert_eq!(output_ceiling_on("anthropic", "opus", true), Some(4096));
+        assert_eq!(
+            output_ceiling_on("anthropic", "opus@high", true),
+            Some(4096)
+        );
+        assert_eq!(
+            output_ceiling_on("anthropic", "opus@xhigh", true),
+            Some(64_000)
+        );
+        assert_eq!(
+            output_ceiling_on("anthropic", "opus@max", true),
+            Some(64_000)
+        );
+        // No key: the `claude -p` CLI, which sends no `max_tokens`.
+        assert_eq!(output_ceiling_on("anthropic", "opus", false), None);
+        for other in ["openai", "google", "openrouter", "codex"] {
+            assert_eq!(output_ceiling_on(other, "m", true), None, "{other}");
+        }
     }
 }

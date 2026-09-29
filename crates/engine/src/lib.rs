@@ -57,7 +57,7 @@ pub use prompts::{
     build_eval_prompt, build_judge_prompt, build_pairwise_prompt, build_rubric_prompt,
     build_rubric_schema, Prompt,
 };
-pub use providers::{generate, generate_chat, generate_deterministic};
+pub use providers::{generate, generate_chat, generate_deterministic, wire_output_ceiling};
 pub use sandbox::{
     run_exec, ContreeCli, DockerCli, ExecOutcome, ExecVerdict, SandboxJob, SandboxRunner,
 };
