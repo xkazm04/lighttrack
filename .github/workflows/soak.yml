@@ -59,7 +59,7 @@ jobs:
     # is not cut off mid-certification, which would look like a failure and be a timeout.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The ruler is pinned by rust-toolchain.toml (one address, repo root) exactly as in ci.yml —
       # a certification judged by a floating toolchain would attribute a compiler's change to the
       # product. Do not add a toolchain step here.
