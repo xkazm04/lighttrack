@@ -62,3 +62,7 @@ Stage nothing with `-A`/`.`/`-u`; commit with `git commit -m "..." -- <paths>` a
   immediately, and `-- --exact` with only the short test name runs 0 tests and exits 0. Filter
   on the function name with no `--exact`. On Windows PowerShell 5.1, `Get-Content` without
   `-Encoding utf8` corrupts non-ASCII when a test module is extracted into a new file.
+- 2026-10-01: a new file named `nested_tests.rs` makes the consult hook route
+  `workflow-property-contracts` and `guest-execution-bounding`. Those are filename homonyms.
+  Read the openings, log `deviations: 0`, and do not apply their techniques. The hook records
+  a miss and does not block the commit.
