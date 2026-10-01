@@ -108,6 +108,7 @@ pub(crate) struct Alerter {
 
 impl Alerter {
     pub(crate) fn from_env() -> Self {
+        let (score_window, score_min_samples) = detectors::score_limits();
         Self {
             config: AlertConfig {
                 webhook: env_opt("LIGHTTRACK_ALERT_WEBHOOK"),
@@ -123,9 +124,8 @@ impl Alerter {
                     "LIGHTTRACK_ALERT_ERROR_WINDOW_SECS",
                     300,
                 )),
-                score_window: (env_u64("LIGHTTRACK_ALERT_SCORE_WINDOW", 20) as usize).max(4),
-                score_min_samples: (env_u64("LIGHTTRACK_ALERT_SCORE_MIN_SAMPLES", 8) as usize)
-                    .max(4),
+                score_window,
+                score_min_samples,
                 score_drop: env_f64("LIGHTTRACK_ALERT_SCORE_DROP", 0.15),
                 dev_destinations: vet::dev_destinations(),
             },

@@ -98,6 +98,35 @@ pub(super) fn window_phrase(secs: u64) -> String {
     }
 }
 
+/// A window under 6 never has a tail of 3 and a baseline of 3. A minimum above the window never
+/// fills. Both used to leave the startup banner claiming score-drop was on.
+const SCORE_SAMPLE_FLOOR: usize = 4;
+const SCORE_WINDOW_FLOOR: usize = 6;
+
+pub(super) fn score_limits_from(window_raw: u64, min_raw: u64) -> (usize, usize) {
+    let asked_window = (window_raw as usize).max(SCORE_SAMPLE_FLOOR);
+    let asked_min = (min_raw as usize).max(SCORE_SAMPLE_FLOOR);
+    let window = asked_window.max(SCORE_WINDOW_FLOOR);
+    let min_samples = asked_min.min(window);
+    if window != asked_window || min_samples != asked_min {
+        tracing::warn!(
+            window = window_raw,
+            min_samples = min_raw,
+            using_window = window,
+            using_min = min_samples,
+            "score-drop settings can never trip; using a window the detector can fire"
+        );
+    }
+    (window, min_samples)
+}
+
+pub(super) fn score_limits() -> (usize, usize) {
+    score_limits_from(
+        super::env_u64("LIGHTTRACK_ALERT_SCORE_WINDOW", 20),
+        super::env_u64("LIGHTTRACK_ALERT_SCORE_MIN_SAMPLES", 8),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +217,84 @@ mod tests {
             "a bench-only deployment must not look like alerting is off: {}",
             only.describe()
         );
+    }
+
+    fn score_alerter(window: usize, min_samples: usize) -> super::super::Alerter {
+        let mut alerter = banner_alerter(None, None);
+        alerter.config.score_window = window;
+        alerter.config.score_min_samples = min_samples;
+        alerter
+    }
+
+    fn drop_can_trip(window: usize, min_samples: usize) -> bool {
+        if window < 6 {
+            return false;
+        }
+        let alerter = score_alerter(window, min_samples);
+        let recent_k = (window / 4).max(3);
+        let base_n = window - recent_k;
+        let mut tripped = false;
+        for _ in 0..base_n {
+            tripped |= alerter.note_score("p:r", 1.0).is_some();
+        }
+        for _ in 0..recent_k {
+            tripped |= alerter.note_score("p:r", 0.0).is_some();
+        }
+        tripped
+    }
+
+    #[test]
+    fn a_score_minimum_above_the_window_can_still_trip() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let (window, min_samples) =
+            tracing::subscriber::with_default(WarnCapture(std::sync::Arc::clone(&seen)), || {
+                super::score_limits_from(4, 100)
+            });
+        assert!(
+            drop_can_trip(window, min_samples),
+            "resolved window={window} min={min_samples} still cannot fire"
+        );
+        let logged = seen.lock().expect("warn lock").clone();
+        assert!(
+            logged.contains("100"),
+            "an impossible score-drop setting must be said out loud: {logged}"
+        );
+
+        let quiet = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let defaults =
+            tracing::subscriber::with_default(WarnCapture(std::sync::Arc::clone(&quiet)), || {
+                super::score_limits_from(20, 8)
+            });
+        assert_eq!(defaults, (20, 8));
+        assert!(
+            quiet.lock().expect("warn lock").is_empty(),
+            "the defaults already trip and must not warn"
+        );
+    }
+
+    struct WarnCapture(std::sync::Arc<std::sync::Mutex<String>>);
+    impl tracing::Subscriber for WarnCapture {
+        fn enabled(&self, meta: &tracing::Metadata<'_>) -> bool {
+            *meta.level() <= tracing::Level::WARN
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut FieldDump(&self.0));
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    struct FieldDump<'a>(&'a std::sync::Mutex<String>);
+    impl tracing::field::Visit for FieldDump<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            let mut buf = self.0.lock().expect("warn lock");
+            use std::fmt::Write as _;
+            let _ = write!(buf, "{}={value:?};", field.name());
+        }
     }
 }
