@@ -66,3 +66,8 @@ Stage nothing with `-A`/`.`/`-u`; commit with `git commit -m "..." -- <paths>` a
   `workflow-property-contracts` and `guest-execution-bounding`. Those are filename homonyms.
   Read the openings, log `deviations: 0`, and do not apply their techniques. The hook records
   a miss and does not block the commit.
+- 2026-10-01: an MCP `args` name the forwarder does not append (`events_path`,
+  `collective_path`, `with_project`) publishes a filter the tool then drops. Put the
+  filter on the HTTP row and leave the tool args at the forwarded set. A new test file
+  named `jobs_tests.rs` routed `job-coordination` and `engine-host-contract`; same
+  homonym rule as above.
