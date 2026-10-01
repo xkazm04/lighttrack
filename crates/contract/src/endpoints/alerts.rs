@@ -30,6 +30,8 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
                     "score_drop",
                     "bench_run",
                     "ingest_rejected",
+                    "prompt_canary_regressed",
+                    "relay_task_unroutable",
                 ],
                 "only alerts of this kind",
             ),
@@ -48,7 +50,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         mcp: Some(McpTool {
             name: "list_alerts",
-            description: "The fired-alert ledger: what LightTrack has actually alerted on (limit breaches, spend forecasts, error spikes, quality regressions, dead relay tasks, finished benchmark runs, rejected ingest), whether each delivery LANDED, who acknowledged it, and what came of it. This is the durable record — an alert that fired while nobody was watching is here, and `delivered: []` means the alert reached no channel at all.",
+            description: "The fired-alert ledger: what LightTrack has actually alerted on (limit breaches, spend forecasts, error spikes, quality regressions, dead relay tasks, finished benchmark runs, rejected ingest, a regressed prompt canary, relay tasks whose action no device still advertises), whether each delivery LANDED, who acknowledged it, and what came of it. This is the durable record — an alert that fired while nobody was watching is here, and `delivered: []` means the alert reached no channel at all.",
             args: &["project", "kind", "since", "acked", "limit", "cursor"],
             ..McpTool::DEFAULT
         }),
@@ -178,3 +180,31 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ..Endpoint::DEFAULT
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The list door accepts every `AlertKind` and 400s on anything else, naming the enum. A kind
+    /// missing from this filter is a kind an agent is told does not exist.
+    #[test]
+    fn list_alerts_names_every_kind_the_door_accepts() {
+        let row = ENDPOINTS.iter().find(|e| e.id == "list_alerts").unwrap();
+        let kind = row.param("kind").expect("kind filter");
+        assert_eq!(
+            kind.enum_values,
+            &[
+                "limit_breach",
+                "limit_warning",
+                "forecast_alert",
+                "relay_task_dead",
+                "error_spike",
+                "score_drop",
+                "bench_run",
+                "ingest_rejected",
+                "prompt_canary_regressed",
+                "relay_task_unroutable",
+            ]
+        );
+    }
+}
