@@ -41,7 +41,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         params: &[
             ber(
                 "type",
-                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate"],
+                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate", "contribute"],
                 "the job kind",
             ),
             b("payload", JsonTy::Object, "kind-specific fields, validated against `type` at the door"),
@@ -49,7 +49,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("Job"),
         mcp: Some(McpTool {
             name: "enqueue_job",
-            description: "Queue one unit of background work of any kind (bench_run | score_events | score_traces | dataset_sample | calibrate). Non-blocking; a worker executes it — poll with get_job. The payload is validated against the kind, so a malformed one is refused here rather than dead-lettering three attempts later.",
+            description: "Queue one unit of background work of any kind (bench_run | score_events | score_traces | dataset_sample | calibrate | contribute). Non-blocking; a worker executes it — poll with get_job. The payload is validated against the kind, so a malformed one is refused here rather than dead-lettering three attempts later.",
             read_only: false,
             args: &["type", "payload"],
             ..McpTool::DEFAULT
@@ -179,7 +179,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             pm("id", "project", "the project this workload recurs for"),
             ber(
                 "type",
-                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate"],
+                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate", "contribute"],
                 "the job kind enqueued each time it fires",
             ),
             b("payload", JsonTy::Object, "the job payload enqueued each time it fires"),
@@ -243,7 +243,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             p("id", "schedule id"),
             be(
                 "type",
-                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate"],
+                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate", "contribute"],
                 "change the job kind it enqueues",
             ),
             b("payload", JsonTy::Object, "replace the payload"),
@@ -281,3 +281,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ..Endpoint::DEFAULT
     },
 ];
+
+#[cfg(test)]
+#[path = "jobs_tests.rs"]
+mod tests;
