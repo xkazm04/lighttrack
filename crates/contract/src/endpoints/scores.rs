@@ -57,7 +57,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             q("project", ""),
             q("run", "only this benchmark run's case results, in case order"),
             q("rubric_id", "only verdicts judged against this stored rubric; survives a rubric rename, unlike the free-text `rubric` label"),
-            qe("kind", &["freeform", "rubric", "bench_case", "compare_cell", "pairwise_game", "calibration", "trace"], "only verdicts of this kind"),
+            qe("kind", &["freeform", "rubric", "bench_case", "compare_cell", "pairwise_game", "calibration", "trace", "other"], "only verdicts of this kind"),
             qt("limit", JsonTy::Integer, "max scores (default 50, max 1000; run-scoped: default 5000)"),
             q("needs_review", "1/true keeps only verdicts a human should look at (M11)"),
             qt("threshold", JsonTy::Number, "the pass threshold `needs_review` measures near-misses against (default 0.7)"),
@@ -74,3 +74,28 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ..Endpoint::DEFAULT
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The list door 400s with every `ScoreKind`, including `other` (a verdict this build does
+    /// not classify). Leaving it out teaches an agent that the value is illegal.
+    #[test]
+    fn list_scores_names_every_score_kind() {
+        let row = ENDPOINTS.iter().find(|e| e.id == "list_scores").unwrap();
+        assert_eq!(
+            row.param("kind").expect("kind").enum_values,
+            &[
+                "freeform",
+                "rubric",
+                "bench_case",
+                "compare_cell",
+                "pairwise_game",
+                "calibration",
+                "trace",
+                "other",
+            ]
+        );
+    }
+}
