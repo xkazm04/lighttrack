@@ -60,8 +60,12 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             q("tag", "only events carrying this tag"),
             q("meta", "a metadata predicate: `key` or `key=value`"),
             qt("min_cost", JsonTy::Number, "minimum event cost (USD)"),
+            q("redaction_rules", "only events the scrub stamped with this rule-set fingerprint"),
+            qt("min_redacted_spans", JsonTy::Integer, "minimum spans the scrub replaced; 1 is everything it rewrote"),
             qt("count", JsonTy::Integer, "1 also returns X-Total-Count over the whole match set"),
             q("cursor", "keyset cursor from a prior call's next_cursor"),
+            q("unscored", "1, true, or yes: only events with no score yet. Ignores the other filters and returns no cursor"),
+            q("prompt", "with unscored, keep only events of this metadata.prompt tag"),
         ],
         response: TypeRef::ArrayOf("LlmEvent"),
         mcp: Some(McpTool {
@@ -259,5 +263,26 @@ mod tests {
             traces.param("status").expect("status").enum_values,
             &["success", "error"]
         );
+    }
+
+    /// The events door filters on redaction and on the unscored work list. A filter absent from
+    /// the row is a filter no generated client can send.
+    #[test]
+    fn list_events_names_the_redaction_and_unscored_filters() {
+        use crate::types::JsonTy;
+        let row = ENDPOINTS.iter().find(|e| e.id == "list_events").unwrap();
+        let param = |n: &str| row.param(n).unwrap_or_else(|| panic!("missing {n}"));
+        assert_eq!(param("redaction_rules").ty, JsonTy::String);
+        assert_eq!(param("min_redacted_spans").ty, JsonTy::Integer);
+        assert_eq!(param("unscored").ty, JsonTy::String);
+        assert_eq!(param("prompt").ty, JsonTy::String);
+        for name in [
+            "redaction_rules",
+            "min_redacted_spans",
+            "unscored",
+            "prompt",
+        ] {
+            assert!(!param(name).required, "{name} stays optional");
+        }
     }
 }
