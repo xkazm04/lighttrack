@@ -56,7 +56,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             q("model", "exact model match"),
             q("trace_id", "only events in this trace"),
             q("name", "use-case name filter (a call's `name`)"),
-            qe("status", &["success", "error"], "keep only events of this status"),
+            qe("status", &["success", "error", "timeout"], "keep only events of this status"),
             q("tag", "only events carrying this tag"),
             q("meta", "a metadata predicate: `key` or `key=value`"),
             qt("min_cost", JsonTy::Number, "minimum event cost (USD)"),
@@ -240,3 +240,24 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ..Endpoint::DEFAULT
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `/v1/events` accepts `timeout` because that is a `Status`. `/v1/traces` does not: its door
+    /// 400s on anything but success or error, and the trace enum must stay that narrower set.
+    #[test]
+    fn list_events_names_timeout_and_list_traces_does_not() {
+        let events = ENDPOINTS.iter().find(|e| e.id == "list_events").unwrap();
+        assert_eq!(
+            events.param("status").expect("status").enum_values,
+            &["success", "error", "timeout"]
+        );
+        let traces = ENDPOINTS.iter().find(|e| e.id == "list_traces").unwrap();
+        assert_eq!(
+            traces.param("status").expect("status").enum_values,
+            &["success", "error"]
+        );
+    }
+}
