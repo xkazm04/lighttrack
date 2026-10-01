@@ -125,12 +125,12 @@ pub(crate) fn relay_dead(t: &RelayTask) -> Alert {
 }
 
 pub(crate) fn error_spike(s: &ErrorSpike) -> Alert {
-    let mins = (s.window_secs / 60).max(1);
+    let window = super::detectors::window_phrase(s.window_secs);
     let sample = s.error.as_deref().unwrap_or("(no error message)");
     let msg = format!(
-        "LightTrack alert: project '{}' logged {} failed call(s) within {}m. \
+        "LightTrack alert: project '{}' logged {} failed call(s) within {window}. \
          Latest: {} on model '{}'. Sample error: {}",
-        s.project_id, s.count, mins, s.status, s.model, sample
+        s.project_id, s.count, s.status, s.model, sample
     );
     let subject = format!("LightTrack: error spike in '{}'", s.project_id);
     let extra = json!({ "spike": {

@@ -87,3 +87,57 @@ impl Alerter {
         }
     }
 }
+
+/// The window the spike actually used. Whole minutes stay `5m`; every other length is seconds.
+/// Integer minutes with a floor of one reported a 30s window as `1m`.
+pub(super) fn window_phrase(secs: u64) -> String {
+    if secs >= 60 && secs.is_multiple_of(60) {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spike(window_secs: u64) -> ErrorSpike {
+        ErrorSpike {
+            project_id: "p1".into(),
+            count: 6,
+            window_secs,
+            model: "gpt-4o".into(),
+            status: "error".into(),
+            error: Some("boom".into()),
+            failure_class: lighttrack_core::FailureClass::Unknown,
+        }
+    }
+
+    /// The human sentence is what an on-call reads. Integer minutes with a floor of 1 reported a
+    /// 90s window as "1m" and a 30s window as "1m" — both longer than the window that actually fired.
+    #[test]
+    fn the_spike_message_names_the_window_that_fired() {
+        let text = |secs| {
+            super::super::compose::error_spike(&spike(secs)).payload["text"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        };
+        let short = text(30);
+        let partial = text(90);
+        let whole = text(300);
+        assert!(
+            short.contains("30s"),
+            "a 30s window must not be rounded up to a minute: {short}"
+        );
+        assert!(
+            partial.contains("90s") || partial.contains("1m30s"),
+            "a 90s window is not one minute: {partial}"
+        );
+        assert!(
+            whole.contains("5m"),
+            "a whole number of minutes stays in minutes: {whole}"
+        );
+    }
+}
