@@ -12,7 +12,9 @@
 //! vaguer tool.
 
 /// `create_rubric.dimensions` — weighted, anchored scoring dimensions. `key` + `description` are
-/// required (neither has a serde default); `weight` / `anchors` / `floor` are optional.
+/// required (neither has a serde default). `weight`, `anchors`, `floor`, `kind` (default `llm`)
+/// and `check` are optional. `kind` is the closed set of how a dimension is scored; `check`
+/// configures anything other than the judge and is omitted entirely for the default.
 pub(crate) const RUBRIC_DIMENSIONS: &str = r#"{
     "type": "array",
     "description": "weighted scoring dimensions the judge fills per case",
@@ -24,7 +26,25 @@ pub(crate) const RUBRIC_DIMENSIONS: &str = r#"{
             "description": {"type":"string","description":"what this dimension measures"},
             "weight": {"type":"number","description":"relative weight in the overall score (default 1.0)"},
             "anchors": {"type":"array","items":{"type":"string"},"description":"anchored level descriptions, e.g. [\"1.0 = fully correct\", \"0.5 = minor error\", \"0 = wrong\"]"},
-            "floor": {"type":"number","description":"gating floor: if this dimension scores below it, the case fails regardless of the overall"}
+            "floor": {"type":"number","description":"gating floor: if this dimension scores below it, the case fails regardless of the overall"},
+            "kind": {"type":"string","enum":["llm","exact","regex","numeric","json_valid","contains","exec","grounding"],"description":"how this dimension is scored. Omit for llm, the judge model, which is the default. exact, regex, numeric, json_valid and contains are local mechanical checks; exec runs check.cmd in a sandbox and scores the exit code; grounding is model-judged claim by claim against the case evidence. A spelling off this list is a 400 (optional)"},
+            "check": {
+                "type": "object",
+                "description": "configuration for a non-default kind. Every field is optional, so an llm dimension omits the object. Ignored when kind is llm or omitted.",
+                "properties": {
+                    "expect": {"type":"string","description":"literal target for exact, contains, numeric, and optionally json_valid. Defaults to the case expected answer"},
+                    "pattern": {"type":"string","description":"regex only: unanchored pattern the output must match somewhere"},
+                    "tolerance": {"type":"number","description":"numeric only: absolute tolerance around the target. Omit for exact equality"},
+                    "path": {"type":"string","description":"JSON Pointer (RFC 6901) selecting the part of a JSON output to check. Omit to check the whole output"},
+                    "case_sensitive": {"type":"boolean","description":"compare case-sensitively. Default false"},
+                    "trim": {"type":"boolean","description":"trim surrounding whitespace before comparing. Default true"},
+                    "image": {"type":"string","description":"exec only: sandbox image, a UUID (exact pin) or tag:NAME (best-effort)"},
+                    "cmd": {"type":"string","description":"exec only: command run in the sandbox. Its exit code is the verdict; 0 scores 1.0"},
+                    "write": {"type":"string","description":"exec only: absolute path inside the sandbox where the candidate output is written before cmd runs"},
+                    "timeout_secs": {"type":"integer","description":"exec only: wall-clock ceiling in seconds. A timeout is unavailable, not a fail"},
+                    "env": {"type":"object","additionalProperties":{"type":"string"},"description":"exec only: literal fixture environment variables. Never host secrets; credential-shaped names are refused"}
+                }
+            }
         }
     }
 }"#;
@@ -118,6 +138,60 @@ mod tests {
             assert!(props.get(f).is_some(), "missing {f}");
         }
         assert_eq!(props["anchors"]["items"]["type"], "string");
+    }
+
+    /// The same gap on the rubric. `kind` is how a dimension stops being a judge call, and
+    /// `check` is how that kind is configured. Neither is in the schema an agent receives, so
+    /// every rubric an agent writes is all-`llm` even though the API accepts eight kinds.
+    #[test]
+    fn rubric_dimensions_name_kind_and_check() {
+        let s: Value = serde_json::from_str(RUBRIC_DIMENSIONS).expect("valid JSON");
+        let props = &s["items"]["properties"];
+        let kind = &props["kind"];
+        assert!(
+            !kind.is_null(),
+            "an agent is never told a dimension can be anything but the judge"
+        );
+        assert_eq!(
+            kind["enum"],
+            serde_json::json!([
+                "llm",
+                "exact",
+                "regex",
+                "numeric",
+                "json_valid",
+                "contains",
+                "exec",
+                "grounding"
+            ]),
+            "every kind the engine parses, default first"
+        );
+        let check = props.get("check").expect("check is offered");
+        for f in [
+            "expect",
+            "pattern",
+            "tolerance",
+            "path",
+            "case_sensitive",
+            "trim",
+            "image",
+            "cmd",
+            "write",
+            "timeout_secs",
+            "env",
+        ] {
+            assert!(check["properties"].get(f).is_some(), "check.{f}");
+        }
+        assert_eq!(check["properties"]["env"]["type"], "object");
+        let required = item_required(RUBRIC_DIMENSIONS);
+        assert!(
+            !required.contains(&"kind".to_string()),
+            "kind defaults to llm"
+        );
+        assert!(
+            !required.contains(&"check".to_string()),
+            "an llm dimension omits check"
+        );
     }
 
     #[test]
