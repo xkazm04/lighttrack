@@ -40,19 +40,24 @@ pub(crate) struct ScoreDrop {
 }
 
 impl Alerter {
-    /// Push `now` into the project's rolling error window, evict entries older than the window, and
-    /// return the current count. Takes an explicit `now` so it is unit-testable.
+    /// Push `now`, drop instants older than the window, and forget a project whose deque is then
+    /// empty. The map is per replica; leaving quiet projects in it grows for the life of the
+    /// process. Takes an explicit `now` so it is unit-testable.
     pub(super) fn note_error(&self, project: &str, now: Instant) -> u32 {
         let mut map = self.error_windows.lock().unwrap_or_else(|p| p.into_inner());
+        let window = self.config.error_window;
+        map.retain(|_, dq| {
+            while let Some(front) = dq.front() {
+                if now.duration_since(*front) > window {
+                    dq.pop_front();
+                } else {
+                    break;
+                }
+            }
+            !dq.is_empty()
+        });
         let dq = map.entry(project.to_string()).or_default();
         dq.push_back(now);
-        while let Some(front) = dq.front() {
-            if now.duration_since(*front) > self.config.error_window {
-                dq.pop_front();
-            } else {
-                break;
-            }
-        }
         dq.len() as u32
     }
 

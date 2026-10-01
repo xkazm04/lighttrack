@@ -166,3 +166,19 @@ impl tracing::field::Visit for FieldDump<'_> {
         let _ = write!(buf, "{}={value:?};", field.name());
     }
 }
+
+#[test]
+fn a_quiet_project_leaves_the_error_window() {
+    let alerter = banner_alerter(None, None);
+    let t0 = std::time::Instant::now();
+    assert_eq!(alerter.note_error("kept", t0), 1);
+    assert_eq!(alerter.note_error("old", t0), 1);
+    let later = t0 + alerter.config.error_window + std::time::Duration::from_secs(1);
+    assert_eq!(alerter.note_error("kept", later), 1);
+    let map = alerter.error_windows.lock().expect("error windows");
+    assert!(
+        !map.contains_key("old"),
+        "a project quiet past the window must not stay resident"
+    );
+    assert_eq!(map.get("kept").map(|dq| dq.len()), Some(1));
+}
