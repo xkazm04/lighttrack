@@ -5,7 +5,9 @@
 //! is told `targets` is "an array" writes a benchmark whose runs can never satisfy the promotion
 //! gate, because it cannot see that a target may carry a `prompt_ref` and that the literal field is
 //! `system_prompt`, not `prompt`. These mirror exactly what the API deserialises — `RubricDimension`
-//! (`crates/core/src/rubric.rs`) and `BenchmarkCase` / `BenchTarget` (`crates/core/src/score.rs`).
+//! (`crates/core/src/rubric.rs`), `BenchmarkCase` (`crates/core/src/score.rs`) and `BenchTarget`
+//! (`crates/core/src/bench_target.rs`), including a dimension's `kind` / `check` and a target's
+//! `schema`.
 //!
 //! Raw JSON text rather than a builder so the schema reads as the document an agent receives; the
 //! contract's own test parses every one of them, so a typo is a failing build, not a silently
@@ -67,8 +69,8 @@ pub(crate) const BENCHMARK_DATASET: &str = r#"{
 }"#;
 
 /// `create_benchmark.targets` — the provider/model comparison matrix. `provider` + `model` are
-/// required; `system_prompt` (the variant under test) and `label` optional. Note the field is
-/// `system_prompt`, not `prompt`.
+/// required; `system_prompt` (the variant under test), `label` and `schema` (structured output)
+/// are optional. Note the field is `system_prompt`, not `prompt`.
 pub(crate) const BENCHMARK_TARGETS: &str = r#"{
     "type": "array",
     "description": "comparison matrix: one row per target under test. A target is a (provider, model) with either a literal system_prompt or a prompt_ref that resolves from the registry at run time, or an HTTP endpoint of your own (kind.type=http) that receives {input, expected?, system_prompt?} and returns {output, usage?, latency_ms?, cost_usd?}.",
@@ -107,7 +109,8 @@ pub(crate) const BENCHMARK_TARGETS: &str = r#"{
                     "type": {"type":"string","enum":["model","http"]},
                     "url": {"type":"string","description":"https endpoint (http target only). Private, loopback and link-local addresses are refused."}
                 }
-            }
+            },
+            "schema": {"type":"object","description":"JSON schema the answer must satisfy, sent through the engine's structured-output path. This is enforcement: a schema pasted into system_prompt is only a request, and a model can answer that with fenced prose. Omit to leave the shape unconstrained. Ignored by an http target, whose endpoint owns its own shape (optional)"}
         }
     }
 }"#;

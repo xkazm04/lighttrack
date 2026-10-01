@@ -174,3 +174,21 @@ fn benchmark_targets_expose_the_resolvable_and_http_shapes() {
     );
     assert!(kind["properties"].get("url").is_some());
 }
+
+/// A target that cannot name its structured-output schema measures a different transport
+/// than the one shipped. A schema pasted into the system prompt is a request; this field is
+/// the enforcement the engine sends. An http target ignores it, so it stays optional.
+#[test]
+fn benchmark_targets_name_the_structured_output_schema() {
+    let s: Value = serde_json::from_str(BENCHMARK_TARGETS).expect("valid JSON");
+    let schema = &s["items"]["properties"]["schema"];
+    assert!(
+        !schema.is_null(),
+        "an agent is never told a target can require structured output"
+    );
+    assert_eq!(schema["type"], "object");
+    assert!(
+        !item_required(BENCHMARK_TARGETS).contains(&"schema".to_string()),
+        "a target with no schema stays legal"
+    );
+}
