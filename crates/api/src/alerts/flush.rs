@@ -80,3 +80,44 @@ pub(crate) async fn flush_once(state: &AppState) {
         .collect();
     Arc::clone(&state.alerts).fire(alerts).await;
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    /// `AlertKind::IngestRejected` declares Info, and the operator doc says the same. A channel
+    /// whose floor is Warning is the on-call page; a periodic rejection tally must not cross it.
+    #[test]
+    fn a_rejection_flush_stays_informational() {
+        let buckets = HashMap::from([("rule".to_string(), (4u64, 1.25f64))]);
+        let alert = super::compose::ingest_rejected("p1", &buckets, chrono::Utc::now());
+        assert_eq!(
+            alert.severity,
+            lighttrack_core::Severity::Info,
+            "a rejection flush is a tally, not a page"
+        );
+        assert!(
+            !lighttrack_core::AlertChannel {
+                min_severity: lighttrack_core::Severity::Warning,
+                ..channel_floor()
+            }
+            .accepts(alert.kind, alert.severity),
+            "a warning floor must not receive an informational flush"
+        );
+    }
+
+    fn channel_floor() -> lighttrack_core::AlertChannel {
+        lighttrack_core::AlertChannel {
+            id: "c".into(),
+            project_id: None,
+            kind: lighttrack_core::ChannelKind::Webhook,
+            target: "https://hook.test/x".into(),
+            secret_hash: None,
+            prev_secret_hash: None,
+            min_severity: lighttrack_core::Severity::Info,
+            kinds: Vec::new(),
+            enabled: true,
+            created_at: chrono::Utc::now(),
+        }
+    }
+}

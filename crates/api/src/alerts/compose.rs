@@ -246,7 +246,6 @@ pub(crate) fn ingest_rejected(
             extra,
         ),
     )
-    .with_severity(Severity::Warning)
 }
 
 fn warning_message(w: &LimitStatus) -> String {
