@@ -175,8 +175,8 @@ impl Alerter {
         if let Some(r) = &self.config.resend {
             chans.push(format!("resend({})", r.to.len()));
         }
-        if chans.is_empty() && self.config.bench_webhook.is_some() {
-            return "env: off (bench-webhook on), ledger: on".to_string();
+        if self.config.bench_webhook.is_some() && self.config.bench_webhook != self.config.webhook {
+            chans.push("bench-webhook".into());
         }
         if chans.is_empty() {
             return "env: off (per-project channels only), ledger: on".to_string();

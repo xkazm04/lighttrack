@@ -140,4 +140,53 @@ mod tests {
             "a whole number of minutes stays in minutes: {whole}"
         );
     }
+
+    fn banner_alerter(webhook: Option<&str>, bench: Option<&str>) -> super::super::Alerter {
+        use std::collections::HashMap;
+        use std::sync::{Mutex, OnceLock};
+        use std::time::Duration;
+        super::super::Alerter {
+            config: super::super::AlertConfig {
+                webhook: webhook.map(str::to_string),
+                bench_webhook: bench.map(str::to_string),
+                ntfy: None,
+                resend: None,
+                webhook_key: None,
+                cooldown: Duration::from_secs(3600),
+                error_threshold: 5,
+                error_window: Duration::from_secs(300),
+                score_window: 20,
+                score_min_samples: 8,
+                score_drop: 0.15,
+                dev_destinations: false,
+            },
+            http: super::super::http_client(),
+            last_sent: Mutex::new(HashMap::new()),
+            error_windows: Mutex::new(HashMap::new()),
+            score_windows: Mutex::new(HashMap::new()),
+            store: OnceLock::new(),
+        }
+    }
+
+    #[test]
+    fn a_distinct_bench_webhook_shows_on_the_startup_banner() {
+        let both = banner_alerter(Some("https://hook.test/x"), Some("https://ci.test/runs"));
+        assert!(
+            both.describe().contains("bench-webhook"),
+            "a second receiver must be visible at startup: {}",
+            both.describe()
+        );
+        let same = banner_alerter(Some("https://hook.test/x"), Some("https://hook.test/x"));
+        assert!(
+            !same.describe().contains("bench-webhook"),
+            "the fallback is the same receiver, not a second channel: {}",
+            same.describe()
+        );
+        let only = banner_alerter(None, Some("https://ci.test/runs"));
+        assert!(
+            only.describe().contains("bench-webhook"),
+            "a bench-only deployment must not look like alerting is off: {}",
+            only.describe()
+        );
+    }
 }
