@@ -110,13 +110,30 @@ impl Alerter {
         let mut all = env_channels(&self.config);
         if let Some(store) = self.store() {
             let project = alert.project_id.clone();
-            let stored = spawn_db(move || store.channels_for(project.as_deref().into()))
-                .await
-                .unwrap_or_default();
-            all.extend(stored);
+            let stored = spawn_db(move || store.channels_for(project.as_deref().into())).await;
+            all.extend(absorb_stored_channels(stored));
         }
         all.retain(|c| c.accepts(alert.kind, alert.severity));
         all
+    }
+}
+
+/// `Unsupported` is a declared gap and stays quiet. Any other failure still returns no stored
+/// rows — a routing table that is down must not silence the env channels — and is said out loud.
+/// `unwrap_or_default` used to swallow both.
+pub(super) fn absorb_stored_channels(
+    stored: Result<Vec<AlertChannel>, ApiError>,
+) -> Vec<AlertChannel> {
+    match stored {
+        Ok(rows) => rows,
+        Err(e) if e.is_unsupported() => Vec::new(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "alert channel lookup failed; delivering env channels only"
+            );
+            Vec::new()
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::error::{ApiError, ErrorCode};
 use std::time::Duration;
 
 fn cfg(webhook: Option<&str>, ntfy: Option<&str>) -> AlertConfig {
@@ -67,4 +68,62 @@ fn the_dedicated_bench_webhook_is_a_bench_run_only_channel_and_never_a_duplicate
         1,
         "the fallback is the same receiver, not a second channel"
     );
+}
+
+#[test]
+fn a_channel_lookup_failure_is_logged_and_an_unsupported_backend_is_quiet() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let failed =
+        tracing::subscriber::with_default(WarnCapture(std::sync::Arc::clone(&seen)), || {
+            absorb_stored_channels(Err(ApiError::internal("disk full")))
+        });
+    assert!(
+        failed.is_empty(),
+        "a lookup failure still delivers no stored rows"
+    );
+    let logged = seen.lock().expect("warn lock").clone();
+    assert!(
+        logged.contains("disk full"),
+        "a real store error must be said out loud, not swallowed: {logged}"
+    );
+
+    let quiet = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let unsupported =
+        tracing::subscriber::with_default(WarnCapture(std::sync::Arc::clone(&quiet)), || {
+            absorb_stored_channels(Err(ApiError::new(ErrorCode::Unsupported, "alert routing")))
+        });
+    assert!(unsupported.is_empty());
+    assert!(
+        quiet.lock().expect("warn lock").is_empty(),
+        "an unsupported backend is a declared gap, not an outage"
+    );
+
+    let ok = absorb_stored_channels(Ok(env_channels(&cfg(Some("https://hook.test/x"), None))));
+    assert_eq!(ok.len(), 1);
+}
+
+struct WarnCapture(std::sync::Arc<std::sync::Mutex<String>>);
+impl tracing::Subscriber for WarnCapture {
+    fn enabled(&self, meta: &tracing::Metadata<'_>) -> bool {
+        *meta.level() <= tracing::Level::WARN
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        event.record(&mut FieldDump(&self.0));
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+struct FieldDump<'a>(&'a std::sync::Mutex<String>);
+impl tracing::field::Visit for FieldDump<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        let mut buf = self.0.lock().expect("warn lock");
+        use std::fmt::Write as _;
+        let _ = write!(buf, "{}={value:?};", field.name());
+    }
 }
