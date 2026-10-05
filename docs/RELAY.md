@@ -415,3 +415,15 @@ and **raise/throw** (`RelayError`) on failure. Prefer the connector push for del
   rather than `LEASE LOST`, and still settles — which the store terminates as `cancelled` with no
   failure charged. Both halves are additive: an uncancelled renewal is byte-identical on the wire,
   so an un-upgraded agent is unaffected.
+- **The device publishes progress (shipped):** the `/progress` door above had no caller — `progress`
+  was `NULL` on every task any device had ever run, so between lease and settle the cloud could not
+  tell a ninety-minute `edit` run from a wedged device. `lt-agent` now publishes a liveness line
+  from `crates/agent/src/progress.rs`: a closed phase vocabulary (*resolving · spawned · exited ·
+  delivering · settling*) rendered with elapsed time, the renewal count and the first eight hex of
+  `prompt_sha256`, at most once per 15s window and immediately on a phase change. The same line goes
+  to the device's own stdout, so a wedged action is visible locally too. Three properties, each
+  pinned by a test: it is **fire-and-forget** (emission returns nothing, a 409 or a transport failure
+  is logged and never reaches the run), it runs on **its own thread** so a slow publish can never sit
+  on the path that would otherwise renew the lease, and the vocabulary has **nowhere to put prompt or
+  result text** — an action with `report_io = false` publishes nothing new about its content. Nothing
+  server-side changed; the field was already there, in both backends and in the conformance suite.
