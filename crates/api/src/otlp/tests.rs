@@ -717,3 +717,61 @@ async fn an_export_carries_the_proximity_signal_the_otlp_envelope_cannot_hold() 
         Some("0.500000"),
     );
 }
+
+/// `gen_ai.usage.cache_read_input_tokens` is Anthropic's **exclusive** sibling counter: the tokens it
+/// names are not inside `gen_ai.usage.input_tokens`. The mapper copies it into `cached_input` without
+/// adding it back into `input` (that conversion is per-provider knowledge the span does not carry —
+/// see `clients/rust/src/extract.rs`, which does have it), so a warm-cache span from such a sender
+/// arrives with `cached > input`.
+///
+/// This door must therefore REFUSE the span rather than repair it: which of the two counts is wrong
+/// is not knowable from the record, and the alternative is the under-bill the invariant exists to
+/// prevent — the residual saturating to zero and the whole prompt pricing at the cached rate.
+#[tokio::test]
+async fn a_cache_read_span_whose_subcount_exceeds_its_total_is_refused_not_repaired() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+
+    let span = json!({
+      "resourceSpans": [{
+        "resource": { "attributes": [] },
+        "scopeSpans": [{
+          "scope": { "name": "opentelemetry.instrumentation.anthropic" },
+          "spans": [{
+            "traceId": "5b8efff798038103d269b633813fc60d",
+            "spanId": "eee19b7ec3c1b180",
+            "name": "chat claude-haiku-4-5",
+            "kind": 3,
+            "startTimeUnixNano": at_ms(0),
+            "endTimeUnixNano": at_ms(500),
+            "attributes": [
+              { "key": "gen_ai.system", "value": { "stringValue": "anthropic" } },
+              { "key": "gen_ai.request.model", "value": { "stringValue": "claude-haiku-4-5" } },
+              { "key": "gen_ai.usage.input_tokens", "value": { "intValue": "100" } },
+              { "key": "gen_ai.usage.output_tokens", "value": { "intValue": "10" } },
+              { "key": "gen_ai.usage.cache_read_input_tokens", "value": { "intValue": "400" } }
+            ],
+            "status": { "code": 1 }
+          }]
+        }]
+      }]
+    });
+
+    let (status, body) = export(&app, &key, span).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["lighttrack"]["accepted"], 0, "{body}");
+    assert_eq!(body["lighttrack"]["invalid"], 1, "{body}");
+    assert_eq!(
+        body["lighttrack"]["results"][0]["code"], "usage_subcount_exceeds_total",
+        "the same code the SDK doors return: {body}"
+    );
+    assert_eq!(body["partialSuccess"]["rejectedSpans"], 1, "{body}");
+    assert!(
+        store
+            .list_events(TenantScope::Project("proj-a"), 10)
+            .unwrap()
+            .is_empty(),
+        "and nothing was stored with cached > input"
+    );
+}

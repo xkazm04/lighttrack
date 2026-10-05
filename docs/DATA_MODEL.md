@@ -20,7 +20,7 @@ The heart of the system. Emitted by monitored apps, normalized + costed by `api`
 | `operation` | string | `chat` \| `completion` \| `embedding` \| `other` |
 | `input_tokens` | int | |
 | `output_tokens` | int | |
-| `cached_input_tokens` | int? | billed at cached rate when priced |
+| `cached_input_tokens` | int? | billed at cached rate when priced. A **subset** of `input_tokens`, never an addition: the price book bills `input − cached` at the input rate and `cached` at the cached rate. Refused on ingest when it exceeds `input_tokens` (`usage_subcount_exceeds_total`, HTTP 400) — a sender reporting cached tokens *beside* the total (Anthropic's `cache_read_input_tokens` is the exclusive counter that invites this) would otherwise bill its whole prompt at the cached rate. The record is refused, never repaired; `LIGHTTRACK_CHECK_USAGE_SUBCOUNTS=0` admits it again. `null` means "not reported", which is not the same as `0`. |
 | `reasoning_tokens` | int? | o-series / thinking |
 | `cost_usd` | float? | provider-reported or computed from PriceBook |
 | `latency_ms` | int? | |

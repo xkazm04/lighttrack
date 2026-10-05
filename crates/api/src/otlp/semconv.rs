@@ -80,6 +80,20 @@ const OUTPUT_TOKEN_KEYS: &[&str] = &[
     "llm.usage.completion_tokens",
     "ai.usage.completionTokens",
 ];
+/// Sources for `usage.cached_input`, which the event convention defines as a **subset** of
+/// `usage.input`.
+///
+/// `gen_ai.usage.cache_read_input_tokens` does not obey that convention: it is Anthropic's
+/// **exclusive** sibling counter, whose tokens are *not* inside `gen_ai.usage.input_tokens`. A warm
+/// cache from such a sender therefore arrives here with `cached > input`.
+///
+/// That is **not repaired here, deliberately.** Adding the counter back into `input` is exactly what
+/// the SDK extractors do (`clients/rust/src/extract.rs`), and they can, because each one knows which
+/// provider it is reading. A span carries no such knowledge: `gen_ai.system` is a string the sender
+/// chose, and the two counts are equally plausible as the wrong one. So the impossible record is
+/// refused at the shared validation door with `usage_subcount_exceeds_total` (see
+/// `crate::events_validate_usage`) rather than silently patched into a number nobody can audit — a
+/// door that quietly fixes bad input is how this invariant went unenforced in the first place.
 const CACHED_TOKEN_KEYS: &[&str] = &[
     "gen_ai.usage.cached_input_tokens",
     "gen_ai.usage.cache_read_input_tokens",

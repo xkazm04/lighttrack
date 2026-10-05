@@ -199,6 +199,7 @@ mod events_admission;
 mod events_batch;
 mod events_query;
 mod events_validate;
+mod events_validate_usage;
 mod forecast;
 mod forecast_alerts;
 mod forecast_sweep;
@@ -275,6 +276,8 @@ mod tests_forecast;
 mod tests_health;
 #[cfg(test)]
 mod tests_ingest;
+#[cfg(test)]
+mod tests_ingest_usage;
 #[cfg(test)]
 mod tests_limit_scope;
 #[cfg(test)]
