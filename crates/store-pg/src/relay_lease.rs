@@ -24,22 +24,23 @@ pub(crate) async fn renew(
 ) -> Result<LeaseHeld> {
     let now = Utc::now();
     let deadline = now + Duration::seconds(lease_secs.max(0));
-    let n = sqlx::query(
+    // `RETURNING status`, exactly as the SQLite reference does and for the same reason: which of
+    // the two live states the row is in is the stop request, and the renewal is the only channel
+    // that reaches a running holder.
+    let status: Option<String> = sqlx::query_scalar(
         "UPDATE relay_tasks SET lease_deadline = $3, updated_at = $4 \
-         WHERE id = $1 AND lease_fence = $2 AND status IN ('leased','cancelling')",
+         WHERE id = $1 AND lease_fence = $2 AND status IN ('leased','cancelling') \
+         RETURNING status",
     )
     .bind(id.to_string())
     .bind(fmt_ts(fence))
     .bind(fmt_ts(deadline))
     .bind(fmt_ts(now))
-    .execute(pool)
+    .fetch_optional(pool)
     .await
-    .map_err(pgerr)?
-    .rows_affected();
-    if n > 0 {
-        return Ok(LeaseHeld::Held {
-            deadline: Some(deadline),
-        });
+    .map_err(pgerr)?;
+    if let Some(status) = status {
+        return Ok(held(Some(deadline), &status));
     }
     not_held(pool, id).await
 }
@@ -52,20 +53,22 @@ pub(crate) async fn update_progress(
     fence: DateTime<Utc>,
     progress: &str,
 ) -> Result<LeaseHeld> {
-    let n = sqlx::query(
+    let status: Option<String> = sqlx::query_scalar(
         "UPDATE relay_tasks SET progress = $3, updated_at = $4 \
-         WHERE id = $1 AND lease_fence = $2 AND status IN ('leased','cancelling')",
+         WHERE id = $1 AND lease_fence = $2 AND status IN ('leased','cancelling') \
+         RETURNING status",
     )
     .bind(id.to_string())
     .bind(fmt_ts(fence))
     .bind(progress.to_string())
     .bind(fmt_ts(Utc::now()))
-    .execute(pool)
+    .fetch_optional(pool)
     .await
-    .map_err(pgerr)?
-    .rows_affected();
-    if n > 0 {
-        return Ok(LeaseHeld::Held { deadline: None });
+    .map_err(pgerr)?;
+    if let Some(status) = status {
+        // Every conditioned write a holder makes carries the stop request back, not only the
+        // renewal — a device that publishes progress more often learns sooner.
+        return Ok(held(None, &status));
     }
     not_held(pool, id).await
 }
@@ -218,6 +221,16 @@ pub(crate) async fn settle(
         Some(t) => RelaySettle::Settled(Box::new(t)),
         None => RelaySettle::NoSuchTask,
     })
+}
+
+/// The landed-write answer, told apart by the live state the row is in. Same rule as the SQLite
+/// reference — a holder must get the same verdict whichever backend a deployment runs.
+fn held(deadline: Option<DateTime<Utc>>, status: &str) -> LeaseHeld {
+    if status == RelayStatus::Cancelling.as_str() {
+        LeaseHeld::held_cancelling(deadline)
+    } else {
+        LeaseHeld::held(deadline)
+    }
 }
 
 /// Say what the record actually holds now, so a refused holder can name what beat it.

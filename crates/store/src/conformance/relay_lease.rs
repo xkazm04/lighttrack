@@ -23,8 +23,13 @@ pub(super) fn relay_fencing(store: &dyn Store, pid: &str) -> Result<()> {
     // reports with hours later is the one it was handed.
     let renewed = store.renew_relay_lease(&t.id, stale_fence, 3600)?;
     let deadline = match renewed {
-        LeaseHeld::Held { deadline } => deadline.expect("a renewal returns the new deadline"),
-        other => panic!("a live holder's renewal must land, got {other:?}"),
+        LeaseHeld::Held {
+            deadline,
+            // GUARD: a healthy run is unaffected. Nobody asked this holder to stop, so the answer
+            // carries no stop request and the device keeps running.
+            cancel_requested: false,
+        } => deadline.expect("a renewal returns the new deadline"),
+        other => panic!("a live holder's renewal must land unflagged, got {other:?}"),
     };
     let after = store
         .get_relay_task(Scope::Operator, &t.id)?
@@ -40,9 +45,12 @@ pub(super) fn relay_fencing(store: &dyn Store, pid: &str) -> Result<()> {
     );
 
     // Progress rides its own door and is visible on the task.
-    assert!(store
-        .update_relay_progress(&t.id, stale_fence, "step 2 of 5")?
-        .is_held());
+    let published = store.update_relay_progress(&t.id, stale_fence, "step 2 of 5")?;
+    assert!(published.is_held());
+    assert!(
+        !published.cancel_requested(),
+        "nobody cancelled this task; no write may tell its holder to stop"
+    );
     assert_eq!(
         store
             .get_relay_task(Scope::Operator, &t.id)?
@@ -159,10 +167,23 @@ pub(super) fn relay_cancellation(store: &dyn Store, pid: &str) -> Result<()> {
         "a cancelled run must never be reclaimed as stale — this is the race the fence-less \
          reclaim path used to lose"
     );
+    // GUARD: the renewal of a `cancelling` task is still HELD — not an error, not a 409. The lease
+    // stays the device's until it reports, which is what keeps a second copy from ever starting.
+    let renewed = store.renew_relay_lease(&running.id, fence, 60)?;
     assert!(
-        store.renew_relay_lease(&running.id, fence, 60)?.is_held(),
+        renewed.is_held(),
         "a device asked to stop is still running and must keep its lease until it reports"
     );
+    // …and the renewal is the only channel that reaches a running device, so it is where the stop
+    // request has to arrive. Without this the cancel is documented three times and delivered zero:
+    // the run finishes, the connector fires, and the task then reports `cancelled`.
+    assert!(
+        renewed.cancel_requested(),
+        "a cancelled task's renewal must TELL its holder to stop, or the cancel never reaches it"
+    );
+    // The same answer on the progress door, so a device that publishes learns at least as soon.
+    let published = store.update_relay_progress(&running.id, fence, "mid-cancel")?;
+    assert!(published.is_held() && published.cancel_requested());
     // Whatever it reports, the task ends `cancelled`: an operator stopped it, so its outcome is not
     // a verdict on the action and must not consume the retry budget.
     let ended = settled(
