@@ -10,9 +10,9 @@ describe a route that does not exist, or miss one that does.
 
 | | |
 |---|---|
-| Endpoints (method × path) | 132 |
-| Distinct `/v1` routes | 102 |
-| MCP tools | 68 (46 read, 22 write) |
+| Endpoints (method × path) | 133 |
+| Distinct `/v1` routes | 103 |
+| MCP tools | 69 (47 read, 22 write) |
 | CLI verbs | 93 |
 | Endpoints with a Markdown renderer | 46 |
 | Machine doors (SDK / device / provider) | 17 |
@@ -55,6 +55,7 @@ those are machine doors (an SDK's ingest, a device agent's lease, a provider's w
 | GET | `/v1/forecast` | `read` | `get_forecast` | `lt forecast` | `get_forecast` |
 | POST | `/v1/scores` | `ingest` | `record_score` |  |  |
 | GET | `/v1/scores` | `read` | `list_scores` |  | `list_scores` |
+| GET | `/v1/benchmarks/:id/regression` | `read` | `get_benchmark_regression` |  |  |
 | POST | `/v1/projects/:id/datasets` | admin | `create_dataset` |  |  |
 | GET | `/v1/projects/:id/datasets` | `read` | `list_datasets` |  | `list_datasets` |
 | GET | `/v1/datasets/:id` | `read` | `get_dataset` |  | `get_dataset` |
@@ -163,8 +164,8 @@ those are machine doors (an SDK's ingest, a device agent's lease, a provider's w
 
 ## Response types
 
-64 of 132 endpoints return a named type that derives `schemars::JsonSchema`, so
-`/openapi.json` describes their fields. The other 67 build their body with
+64 of 133 endpoints return a named type that derives `schemars::JsonSchema`, so
+`/openapi.json` describes their fields. The other 68 build their body with
 `serde_json::json!` and have no struct to point at; the contract describes each in prose and
 the generated document carries that prose instead of a field list. Turning one into a named
 type is a strict improvement that needs no coordination — add the struct, derive
