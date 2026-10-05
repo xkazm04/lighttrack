@@ -385,7 +385,8 @@ pub fn merge_leaderboard(
             .or_default()
             .push(e);
     }
-    let groups: BTreeMap<Key, (Acc, f64, Between)> = buckets
+    type Group = (Acc, f64, Between, Option<(String, String)>);
+    let groups: BTreeMap<Key, Group> = buckets
         .into_iter()
         .map(|(k, es)| {
             let raw: Vec<f64> = es.iter().map(|e| e.n_cases as f64).collect();
@@ -420,17 +421,24 @@ pub fn merge_leaderboard(
                     Some(&e.contributor_id),
                 );
             }
-            (k, (a, max_share, between))
+            let window = super::provenance::evidence_window(es.iter().map(|e| e.received_at));
+            (k, (a, max_share, between, window))
         })
         .collect();
     let mut out: Vec<LeaderboardRow> = groups
         .into_iter()
         .map(
-            |((provider, model, task_type), (a, max_source_share, between))| {
+            |((provider, model, task_type), (a, max_source_share, between, window))| {
                 let judge_providers: Vec<String> = a.judge_providers.iter().cloned().collect();
                 let mixed_judges = mixed_judges_of(&judge_providers);
                 let rigor = a.row_rigor();
                 let mixed_rigor = rigor.is_mixed();
+                // Both facts the accumulator already held and the row used to drop.
+                let (n_rubrics, mixed_rubrics) = super::provenance::rubric_agreement(&a.rubric_fps);
+                let (oldest_at, newest_at) = match window {
+                    Some((o, n)) => (Some(o), Some(n)),
+                    None => (None, None),
+                };
                 LeaderboardRow {
                     provider,
                     model,
@@ -451,6 +459,10 @@ pub fn merge_leaderboard(
                     max_source_share: r3(max_source_share),
                     rigor,
                     mixed_rigor,
+                    n_rubrics,
+                    mixed_rubrics,
+                    newest_at,
+                    oldest_at,
                 }
             },
         )
@@ -1076,5 +1088,74 @@ mod tests {
         // A fat row is not flagged.
         let rows = merge_leaderboard(&[entry("a", "haiku", 0.9, 500, None)], 30);
         assert!(!rows[0].low_confidence);
+    }
+
+    fn rubriced(contrib: &str, fp: Option<&str>, age_days: i64) -> CollectiveEntry {
+        let mut e = entry(contrib, "haiku", 0.8, 50, None);
+        e.rubric_fingerprint = fp.map(str::to_string);
+        e.received_at = Utc::now() - chrono::Duration::days(age_days);
+        e
+    }
+
+    #[test]
+    fn merge_discloses_mixed_rubrics_across_contributors() {
+        // Two contributors scored the same bucket under two different rubrics: the row is
+        // incommensurable and must say so instead of rendering as consensus.
+        let rows = merge_leaderboard(
+            &[
+                rubriced("a", Some("ab12"), 1),
+                rubriced("b", Some("cd34"), 1),
+            ],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert_eq!(rows[0].n_rubrics, Some(2));
+        assert_eq!(rows[0].mixed_rubrics, Some(2));
+    }
+
+    #[test]
+    fn a_single_rubric_row_is_not_flagged_mixed() {
+        // The mirror of how `mixed_judges` behaves for one judge family.
+        let rows = merge_leaderboard(
+            &[
+                rubriced("a", Some("ab12"), 1),
+                rubriced("b", Some("ab12"), 1),
+            ],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert_eq!(rows[0].n_rubrics, Some(1));
+        assert!(rows[0].mixed_rubrics.is_none());
+    }
+
+    #[test]
+    fn unrecorded_rubrics_are_absence_never_imputed_agreement() {
+        let rows = merge_leaderboard(
+            &[rubriced("a", None, 1), rubriced("b", None, 1)],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        assert!(
+            rows[0].n_rubrics.is_none(),
+            "v1/v2 sources know of no rubric — Some(1) would invent agreement"
+        );
+        assert!(rows[0].mixed_rubrics.is_none());
+    }
+
+    #[test]
+    fn merge_publishes_the_evidence_window() {
+        let rows = merge_leaderboard(
+            &[rubriced("a", None, 3), rubriced("b", None, 200)],
+            DEFAULT_LOW_CONFIDENCE_CASES,
+        );
+        let newest = rows[0].newest_at.as_deref().expect("window present");
+        let oldest = rows[0].oldest_at.as_deref().expect("window present");
+        assert_eq!(
+            newest,
+            super::super::provenance::day_stamp(Utc::now() - chrono::Duration::days(3))
+        );
+        assert_eq!(
+            oldest,
+            super::super::provenance::day_stamp(Utc::now() - chrono::Duration::days(200))
+        );
+        assert_eq!(newest.len(), 30, "fixed-width RFC3339(Nanos, Z)");
+        assert!(oldest < newest, "string order is time order");
     }
 }

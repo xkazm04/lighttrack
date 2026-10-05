@@ -533,14 +533,37 @@ fn collective_resp() -> Value {
         "properties": {
             "contributors": {"type":"integer"}, "n_models": {"type":"integer"},
             "task_type": {"type":["string","null"]},
-            "rows": { "type":"array", "items": obj(json!({
-                "provider": {"type":"string"}, "model": {"type":"string"}, "task_type": {"type":"string"},
-                "quality": {"type":"number"}, "pass_rate": {"type":"number"},
-                "avg_cost_usd": {"type":"number"}, "p50_latency_ms": {"type":["integer","null"]},
-                "n_contributors": {"type":"integer"}, "n_runs": {"type":"integer"}, "n_cases": {"type":"integer"}
-            })) }
+            "held_back": {"type":"integer"}, "as_of": {"type":["string","null"]},
+            "rows": { "type":"array", "items": collective_row() }
         }
     })
+}
+
+/// One merged leaderboard row. The uncertainty apparatus is declared on purpose: `quality` alone is a
+/// ranking an agent will act on, and the CI, the source spread, the confidence flag, the single-source
+/// share, the judge/rubric mixture and the evidence window are what say whether it should.
+///
+/// `n_rubrics` is a **count**: a rubric fingerprint is a contributor-chosen high-cardinality hash and
+/// is never published per row (see `lighttrack_core::collective::provenance`).
+fn collective_row() -> Value {
+    obj(json!({
+        "provider": {"type":"string"}, "model": {"type":"string"}, "task_type": {"type":"string"},
+        "quality": {"type":"number"}, "pass_rate": {"type":"number"},
+        "quality_ci95": {"type":["number","null"],"description":"95% CI half-width on quality; absent when too few cases carry a known variance"},
+        "source_spread": {"type":["number","null"],"description":"weighted SD across the contributors' means — published even when no CI could be formed"},
+        "low_confidence": {"type":"boolean","description":"fewer cases than the display floor: shown, not authoritative"},
+        "avg_cost_usd": {"type":"number"}, "p50_latency_ms": {"type":["integer","null"]},
+        "p95_latency_ms": {"type":["integer","null"]},
+        "judge_providers": {"type":"array","items":{"type":"string"}},
+        "mixed_judges": {"type":["integer","null"],"description":"judge families behind the row when more than one — the number is incommensurable across them"},
+        "n_rubrics": {"type":["integer","null"],"description":"distinct rubrics behind the row; null = not recorded, never agreement"},
+        "mixed_rubrics": {"type":["integer","null"],"description":"set when two or more rubrics scored the row — a stronger incommensurability than mixed_judges"},
+        "newest_at": {"type":["string","null"],"description":"day of the newest evidence, RFC3339 — how current the row is"},
+        "oldest_at": {"type":["string","null"],"description":"day of the oldest evidence, RFC3339"},
+        "max_source_share": {"type":"number","description":"share of the row's weight held by its largest single source; 1.0 = one instance's private eval"},
+        "mixed_rigor": {"type":"boolean"},
+        "n_contributors": {"type":"integer"}, "n_runs": {"type":"integer"}, "n_cases": {"type":"integer"}
+    }))
 }
 
 #[cfg(test)]
@@ -592,6 +615,33 @@ mod tests {
         assert!(
             variants.iter().any(|v| v == "partial"),
             "a cost-halted run is its own verdict"
+        );
+    }
+
+    #[test]
+    fn collective_schema_declares_the_honesty_fields() {
+        // An agent handed a bare ranking will pick a model from a thin, one-rubric, year-old row and
+        // never know it did. The declared contract is what makes those facts impossible to miss.
+        let s = output_schema("get_collective_leaderboard").expect("schema present");
+        assert!(s["properties"].get("as_of").is_some(), "board date");
+        assert!(s["properties"].get("held_back").is_some());
+        let row = &s["properties"]["rows"]["items"]["properties"];
+        for f in [
+            "quality_ci95",
+            "source_spread",
+            "low_confidence",
+            "max_source_share",
+            "mixed_judges",
+            "n_rubrics",
+            "mixed_rubrics",
+            "newest_at",
+            "oldest_at",
+        ] {
+            assert!(row.get(f).is_some(), "{f} must be declared");
+        }
+        assert!(
+            row.get("rubric_fingerprints").is_none(),
+            "the row publishes the rubric COUNT, never the fingerprints"
         );
     }
 }
