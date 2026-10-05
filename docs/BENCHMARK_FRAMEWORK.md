@@ -1525,6 +1525,46 @@ as a named one.
 - **Surfaces.** `lt collective leaderboard|digest|contribute|withdraw --hub <url>` (the CLI does the two-hop push:
   GET own digest → POST to the hub); the `get_collective_leaderboard` MCP read tool; a rendered
   leaderboard table shared by CLI + MCP.
+- **Every wire vocabulary is clamped hub-side, in one place — and the collisions that creates are
+  folded, not dropped.** The hub used to clamp two of the three categorical fields a contributor can
+  send (`determinism` to the three rigor levels, `judge_provider` to the judge families) and pass the
+  third, `task_type`, through with a `trim()`. So the fixed vocabulary was real on the *contributor*
+  side (the classifier is total over it) and aspirational on the *hub* side, which is the half that
+  matters: a hub cannot trust that a poster classified. Three consequences, all live: a raw benchmark
+  name — a confession of product line, internal roadmap, and the existence of a project — reached the
+  stored table and the public `?task_type=` filter; the filter key was contributor-chosen string
+  equality rather than a closed enum; and a contributor could keep a **sub-floor bucket on the board
+  by renaming it**, splitting 4 cases × 3 invented labels past a 5-case floor that only ever saw
+  fragments. `core::collective::vocab` now owns all three clamps (and is checked against
+  `ModelDigestEntry`'s own schema, so a fourth wire enum cannot arrive without one), and an
+  off-vocabulary `task_type` becomes `general` — the vocabulary's own catch-all — while a member
+  spelled `" QA "` is *folded in*, not punished.
+  - *The clamp had to be paid for.* `collective_entries` is keyed on
+    `(contributor_id, provider, model, task_type)` and upserts last-writer-wins, so clamping
+    `claims-triage-v3` and `widget-regression-v9` both to `general` turns two independent buckets into
+    one key and the second overwrite **halves the contributor's evidence**. (That collision was already
+    reachable with two identical keys in one payload, and nothing disclosed it.) A clamp that loses
+    evidence is worse than no clamp. So the post-clamp list is re-aggregated **case-weighted** in the
+    API, before the single `replace_collective_contribution` call — deliberately not in the store, so
+    no backend's parity obligation grows and the rule is identical on all three. Counts sum;
+    quality, pass-rate, cost and p50 are case-weighted; p95 is the worst observed; judge and rubric
+    collapse to `mixed`; determinism folds to the weakest stamp with one silent entry voiding the
+    claim; the coverage tags degrade to `mixed`; and `quality_variance` recombines by the law of total
+    variance only when **every** folded entry carried one. A bucket that collides with nothing is
+    passed through untouched.
+  - *The floor now sees whole buckets.* The `min_cases` k-floor and `MAX_ENTRIES` apply to the
+    **folded** list, which is what closes the rename-to-split hole: a bucket is judged by all of its
+    evidence or none of it, never by a fragment.
+  - *Both outcomes are disclosed.* The ingest ack gains `clamped_task_type` (labels the hub refused to
+    take at face value) and `folded_duplicates` (entries absorbed into an earlier bucket), beside the
+    existing `skipped` / `dropped_under_min` / `rejected_implausible`. Every self-reported number is
+    bounded, clamped, rejected or disclosed — never simply believed, and never quietly altered either:
+    a contributor whose own `claims-triage-v3` row reappears as `general` can reconcile the board
+    against its own numbers from the ack alone.
+  - *No migration, and a clean revert.* Nothing is backfilled and no row is deleted. Ingest replaces a
+    source's whole set, so the stored `task_type` domain narrows as a consequence of each
+    contributor's **next** push, and reverting the code restores the previous labels on the push after
+    that.
 
 ## Data model additions (SQLite ↔ Postgres ↔ Firestore, behind the Store trait)
 This is what the schema actually contains — not a plan. Tables that were once aspirational here
