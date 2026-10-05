@@ -169,9 +169,10 @@ pub(crate) fn compose(
 /// prefixes are stripped. One rule, evaluated twice, must agree — otherwise the breach the cap
 /// detected is not the spend the alert explains.
 fn same_model(provider: &str, model: &str, capped: &str) -> bool {
-    model == capped
-        || lighttrack_core::model_id::canonicalize(provider, model).family
-            == lighttrack_core::model_id::canonicalize(provider, capped).family
+    // Delegated rather than restated: this used to be a fifth private copy of the decision, beside
+    // the four in the store backends and the usage breakdown. `LimitScope::matches_model_row` is
+    // the one authority, so an alert can only ever explain the membership the cap enforced.
+    LimitScope::Model(capped.to_string()).matches_model_row(provider, model)
 }
 
 /// Aggregate cost rows by model, labelling each model with its dominant (highest-cost) named

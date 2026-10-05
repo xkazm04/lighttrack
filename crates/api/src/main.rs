@@ -281,6 +281,8 @@ mod tests_ingest_usage;
 #[cfg(test)]
 mod tests_limit_scope;
 #[cfg(test)]
+mod tests_limit_scope_family;
+#[cfg(test)]
 mod tests_margin_policy;
 #[cfg(test)]
 mod tests_persistence_class;

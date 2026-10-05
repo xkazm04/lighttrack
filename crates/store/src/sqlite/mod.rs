@@ -470,6 +470,18 @@ impl Store for SqliteStore {
         since: DateTime<Utc>,
         scope: &LimitScope,
     ) -> Result<Usage> {
+        // A `Model` scope's membership is wider than `WHERE model = ?` (canonical family), so the
+        // ledger has to fold the same way the gate does — one authority, in `scope_usage`. Every
+        // other dimension keeps its indexed equality query: there, exact IS the matcher.
+        if scope.folds_canonical_family() {
+            return crate::scope_usage::usage_for_scope(
+                |q| self.rollup(q),
+                project,
+                since,
+                None,
+                scope,
+            );
+        }
         self.read_op(DbOp::UsageRead, |c| {
             events::usage_since_scoped(c, project, since, scope)
         })

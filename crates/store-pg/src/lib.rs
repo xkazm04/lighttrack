@@ -257,6 +257,19 @@ impl Store for PgStore {
         since: DateTime<Utc>,
         scope: &LimitScope,
     ) -> Result<Usage> {
+        // A `Model` scope's membership is the canonical family, wider than `= $3`. One authority
+        // for the fold (`lighttrack_store::scope_usage`), so this backend's ledger and the gate
+        // cannot disagree about what is inside the scope. Exact-value dimensions keep their
+        // indexed equality query.
+        if scope.folds_canonical_family() {
+            return lighttrack_store::scope_usage::usage_for_scope(
+                |q| self.rollup(q),
+                project,
+                since,
+                None,
+                scope,
+            );
+        }
         self.rt.block_on(events::usage_since_scoped(
             &self.pool, project, since, scope,
         ))

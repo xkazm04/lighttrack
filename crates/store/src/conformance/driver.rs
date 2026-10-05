@@ -10,8 +10,8 @@ use lighttrack_core::new_id;
 use super::{
     admission, alerts, catalog, collective, contributions, dataset_lineage, devices, events,
     forecast, job_leases, jobs, labels, maintenance, margin, margin_policy, pricing, projects,
-    prompts, refusals, relay, revenue, rollup, schedules, score_summary, scores, tenancy, traces,
-    use_cases,
+    prompts, refusals, relay, revenue, rollup, schedules, scope_family, score_summary, scores,
+    tenancy, traces, use_cases,
 };
 use crate::{Result, Store, Surface};
 
@@ -56,6 +56,7 @@ fn section(store: &dyn Store, pid: &str, surface: Surface) -> Result<()> {
         }
         Surface::EventFilters => {
             events::scoped_usage(store)?;
+            scope_family::model_family_usage(store)?;
             events::parity_gap_methods(store)?;
         }
         Surface::Rollup => rollup::rollup(store)?,

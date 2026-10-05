@@ -134,6 +134,29 @@ impl LimitScope {
             LimitScope::Customer(v) => d.customer_id == Some(v.as_str()),
         }
     }
+
+    /// Whether membership under this scope is **wider than equality** on the dimension's own stored
+    /// value.
+    ///
+    /// Only [`LimitScope::Model`] is: it folds the canonical family, so `SELECT ... WHERE model = ?`
+    /// is not the set of rows [`LimitScope::matches`] would let the rule reject. A ledger that
+    /// answers "how much has this scope spent" with that query reports a number the gate does not
+    /// recognise — the cap rejects traffic it refuses to count. Every exact-value dimension
+    /// (provider / name / api_key / customer) answers `false`, because for them exact **is** the
+    /// matcher and an indexed equality query is both correct and cheaper.
+    pub fn folds_canonical_family(&self) -> bool {
+        matches!(self, LimitScope::Model(_))
+    }
+
+    /// [`LimitScope::matches`] for a caller holding only a `(provider, model)` pair — a grouped
+    /// rollup row, a cost-breakdown row, an alert attribution row. The three dimensions that ride on
+    /// the event rather than on the aggregate (`name`, `api_key_id`, `customer_id`) are absent, so a
+    /// scope on one of those matches nothing here, exactly as an untagged event matches no customer
+    /// cap. Use it instead of re-deciding family membership at the call site: that is how the gate
+    /// and the ledger drifted apart in the first place.
+    pub fn matches_model_row(&self, provider: &str, model: &str) -> bool {
+        self.matches(&ScopeDims::new(provider, model, None))
+    }
 }
 
 /// Whether a rule's optional scope admits an event with these dimensions. `None` (unscoped) always

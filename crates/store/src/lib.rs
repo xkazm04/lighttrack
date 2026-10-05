@@ -16,6 +16,7 @@ pub mod pricing;
 mod rollup_compat;
 pub mod schema;
 pub mod scope;
+pub mod scope_usage;
 pub mod sqlite;
 pub mod threshold;
 

@@ -1841,6 +1841,74 @@ fn scoped_cap_rejects_only_matching_dimension() {
         scoped.calls, 1,
         "only the one admitted gpt-4o row counts toward the model scope"
     );
+
+    // The assertion above uses no family variant, so it reads the same under raw string equality
+    // and under the canonical-family fold — it pins the filter, not membership. A dated snapshot
+    // is inside the cap's scope (`LimitScope::matches` lets the cap reject it), so the ledger has
+    // to count it; otherwise the number the rule is evaluated against is not the traffic the gate
+    // turns away. The admission path already folds the family via `usage_cache`, which is why this
+    // event is REJECTED at 1 + 1 = 2 >= 2 even though it is not spelled `gpt-4o`.
+    let mut dated = ev("p1", "gpt-4o-2024-08-06", 1, 1, 0.0);
+    dated.provider = "openai".into();
+    let dated_adm = s.insert_event_checked(&dated).unwrap();
+    assert!(
+        !dated_adm.admitted,
+        "a `gpt-4o` cap rejects `gpt-4o-2024-08-06`: the gate folds the canonical family"
+    );
+    // ...and the ledger agrees: the rejected row was not stored, so the scoped total stays 1.
+    let after = s
+        .usage_since_scoped(
+            "p1",
+            LimitWindow::Hour.since(Utc::now()),
+            &LimitScope::Model("gpt-4o".into()),
+        )
+        .unwrap();
+    assert_eq!(after.calls, 1, "the refused event is not in the ledger");
+
+    // Now store one in-family dated row under a cap that observes rather than blocks, and read it
+    // back through the scoped query: this is the half raw equality gets wrong.
+    s.create_limit_rule(&LimitRule {
+        id: "r-model-observe".into(),
+        project_id: "p2".into(),
+        metric: LimitMetric::Calls,
+        window: LimitWindow::Hour,
+        threshold: Threshold::Fixed(99.0),
+        action: LimitAction::Alert,
+        enabled: true,
+        warn_at: None,
+        scope: Some(LimitScope::Model("gpt-4o".into())),
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
+    })
+    .unwrap();
+    for model in [
+        "gpt-4o",
+        "openai/gpt-4o",
+        "gpt-4o-2024-08-06",
+        "gpt-4o-mini",
+    ] {
+        let mut e = ev("p2", model, 1, 1, 1.0);
+        e.provider = "openai".into();
+        assert!(s.insert_event_checked(&e).unwrap().admitted);
+    }
+    let family = s
+        .usage_since_scoped(
+            "p2",
+            LimitWindow::Hour.since(Utc::now()),
+            &LimitScope::Model("gpt-4o".into()),
+        )
+        .unwrap();
+    assert_eq!(
+        family.calls, 3,
+        "gpt-4o + openai/gpt-4o + gpt-4o-2024-08-06 are one family; gpt-4o-mini is not          (raw equality counts 1)"
+    );
+    assert!(
+        (family.cost_usd - 3.0).abs() < 1e-9,
+        "the in-family cost total (got {})",
+        family.cost_usd
+    );
 }
 
 #[test]
