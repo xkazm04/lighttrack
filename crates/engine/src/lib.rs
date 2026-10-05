@@ -16,8 +16,11 @@
 //! - `family`     — coarse model families, for the self-preference bias control.
 //! - `retry`      — bounded exponential backoff for transient (429/5xx/timeout) provider failures.
 //! - `scorers`   — deterministic (non-LLM) rubric dimensions: exact/regex/numeric/json_valid/contains.
-//! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_rubric_judge_with_evidence`] (the
-//!   `grounding` kind), [`run_text`], [`parse_judge_spec`].
+//! - `judge`      — [`run_rubric_judge`], [`run_rubric_judge_with_evidence`] (the `grounding`
+//!   kind), [`run_text`], [`parse_judge_spec`].
+//! - `judge::freeform` — the **freeform** contract ([`FreeformContract`]): criteria text with an
+//!   identity and a locally-computed pass threshold, plus [`run_freeform_judge`]. The counterpart to
+//!   the structured rubric, and the path `score` / `bench` simple / `calibrate` take.
 
 mod anthropic_api;
 pub mod chat;
@@ -49,12 +52,13 @@ pub use invocation::{
     READONLY_BASE_TOOLS,
 };
 pub use judge::batch::{run_rubric_batch, BatchCase};
-pub use judge::{
-    parse_judge_spec, run_judge, run_rubric_judge, run_rubric_judge_with_evidence, run_text,
+pub use judge::freeform::{
+    run_freeform_judge, run_judge, FreeformContract, FreeformOutcome, DEFAULT_FREEFORM_THRESHOLD,
 };
+pub use judge::{parse_judge_spec, run_rubric_judge, run_rubric_judge_with_evidence, run_text};
 pub use pairwise::{run_pairwise, PairwiseOutcome, PairwiseVerdict, PairwiseWinner};
 pub use prompts::{
-    build_eval_prompt, build_judge_prompt, build_pairwise_prompt, build_rubric_prompt,
+    build_eval_prompt, build_freeform_prompt, build_pairwise_prompt, build_rubric_prompt,
     build_rubric_schema, Prompt,
 };
 pub use providers::{generate, generate_chat, generate_deterministic, wire_output_ceiling};

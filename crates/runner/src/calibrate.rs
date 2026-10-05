@@ -11,7 +11,8 @@ use anyhow::{bail, Context, Result};
 
 use lighttrack_core::{agreement, Agreement, CalibrationItem, ModelPriceRow, Rubric};
 use lighttrack_engine::{
-    build_judge_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig,
+    build_freeform_prompt, parse_judge_spec, run_freeform_judge, run_rubric_judge, EngineConfig,
+    FreeformContract,
 };
 
 use crate::cli::Cli;
@@ -319,18 +320,30 @@ fn judge_item(
             .unwrap_or_else(|| price_gen_cost(prices, jp, jm, o.input_tokens, o.output_tokens));
         Ok((o.overall, jc))
     } else {
-        let prompt = build_judge_prompt(rubric_text.unwrap_or(""), &it.input, &it.output);
-        let v = run_judge(engine, jp, jm, &prompt).context("judge failed")?;
-        let norm = if v.verdict.max > 0.0 {
-            v.verdict.score / v.verdict.max
-        } else {
-            v.verdict.score
-        };
+        // **One instrument.** This arm used to judge through `build_judge_prompt`, whose signature
+        // had no `expected` parameter at all — while the benchmark judged the same criteria text
+        // through `build_eval_prompt` *with* a fenced reference block. So the kappa that mints the
+        // trust verdict (and that `judges::policy_block` lets gate a deploy) was measured on a
+        // prompt production never sends. The item's reference answer goes in, exactly as the
+        // benchmark sends it.
+        let contract = FreeformContract::new(rubric_text.unwrap_or(""));
+        let prompt = item_prompt(&contract, it);
+        let v = run_freeform_judge(engine, jp, jm, &contract, &prompt, samples, 1)
+            .context("judge failed")?;
+        let norm = v.overall;
         let jc = v
             .cost_usd
             .unwrap_or_else(|| price_gen_cost(prices, jp, jm, v.input_tokens, v.output_tokens));
         Ok((norm, jc))
     }
+}
+
+/// The judging prompt for one calibration item: the **benchmark's** builder, with the item's
+/// reference answer when it carries one. Extracted so the prompt calibration measures κ on is
+/// assertable without a provider call — the whole point being that it is the same prompt production
+/// sends, which it was not before.
+fn item_prompt(contract: &FreeformContract, it: &CalibrationItem) -> lighttrack_engine::Prompt {
+    build_freeform_prompt(contract, &it.input, it.expected.as_deref(), &it.output)
 }
 
 /// Load calibration items from a JSONL file (one object per line) or a JSON array file.
@@ -380,7 +393,9 @@ fn parse_items(text: &str, file: &str) -> Result<Vec<CalibrationItem>> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_items;
+    use super::{item_prompt, parse_items};
+    use lighttrack_core::CalibrationItem;
+    use lighttrack_engine::FreeformContract;
 
     #[test]
     fn parses_jsonl_skipping_blanks_and_comments() {
@@ -458,5 +473,61 @@ mod tests {
     fn missing_required_field_errors() {
         // `human_score` is required by CalibrationItem.
         assert!(parse_items("{\"input\":\"a\",\"output\":\"x\"}", "f").is_err());
+    }
+
+    /// **The paraphrased rubric, measured by a fourth paraphrase.** Calibration used to judge
+    /// through `build_judge_prompt`, whose signature had no `expected` at all, while the benchmark
+    /// judged the same criteria with a fenced reference block — so the κ that mints the trust
+    /// verdict described a prompt production never sent. One builder now, reference and all.
+    #[test]
+    fn calibration_judges_the_prompt_the_benchmark_sends() {
+        let c = FreeformContract::new("be factually accurate");
+        let with_ref = CalibrationItem {
+            input: "what is the capital of France?".into(),
+            output: "Paris".into(),
+            context: None,
+            expected: Some("Paris".into()),
+            human_score: 1.0,
+            note: None,
+        };
+        let p = item_prompt(&c, &with_ref);
+        assert!(
+            p.text.contains("REFERENCE / EXPECTED ANSWER"),
+            "the item's reference answer never reached the judge"
+        );
+        assert!(p.text.contains("and the reference answer"));
+        // Byte-identical to what the benchmark arm builds for the same case.
+        let bench_shaped = lighttrack_engine::build_freeform_prompt(
+            &c,
+            &with_ref.input,
+            with_ref.expected.as_deref(),
+            &with_ref.output,
+        );
+        assert_eq!(
+            strip_fence(&p.text),
+            strip_fence(&bench_shaped.text),
+            "calibration and the benchmark must judge through one prompt"
+        );
+
+        // An item with no reference gets no reference block — the honest shape, not an empty fence.
+        let no_ref = CalibrationItem {
+            expected: None,
+            ..with_ref
+        };
+        assert!(!item_prompt(&c, &no_ref)
+            .text
+            .contains("REFERENCE / EXPECTED ANSWER"));
+    }
+
+    /// The fence mints a per-call nonce, so two builds of the same prompt differ only in their
+    /// delimiter lines.
+    fn strip_fence(text: &str) -> String {
+        text.lines()
+            .filter(|l| !l.contains("<<<LT:"))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            )
     }
 }

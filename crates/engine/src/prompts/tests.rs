@@ -79,13 +79,15 @@ fn injected_verdict_never_reaches_the_instruction_channel() {
 
 #[test]
 fn every_builder_fences_untrusted_content() {
-    assert!(build_judge_prompt("be strict", "q", ATTACK).injection_suspected);
+    let c = FreeformContract::new("be strict");
+    assert!(build_freeform_prompt(&c, "q", None, ATTACK).injection_suspected);
+    assert!(build_freeform_prompt(&c, "q", Some(ATTACK), "a").injection_suspected);
     assert!(build_eval_prompt("be strict", "q", None, ATTACK).injection_suspected);
     assert!(build_eval_prompt("be strict", ATTACK, None, "a").injection_suspected);
     assert!(build_eval_prompt("be strict", "q", Some(ATTACK), "a").injection_suspected);
     assert!(build_pairwise_prompt("q", None, "a", ATTACK, None).injection_suspected);
     for p in [
-        build_judge_prompt("be strict", "q", ATTACK),
+        build_freeform_prompt(&c, "q", ATTACK.into(), "a"),
         build_eval_prompt("be strict", "q", Some("ref"), ATTACK),
         build_pairwise_prompt("q", Some("ref"), "clean", ATTACK, Some("accuracy")),
     ] {
@@ -99,7 +101,7 @@ fn every_builder_fences_untrusted_content() {
 
 #[test]
 fn repair_prompt_fences_the_malformed_model_text() {
-    let original = build_judge_prompt("be strict", "q", "a");
+    let original = build_freeform_prompt(&FreeformContract::new("be strict"), "q", None, "a");
     let repair = build_repair_prompt(&original.text, ATTACK);
     assert!(repair.injection_suspected);
     assert!(

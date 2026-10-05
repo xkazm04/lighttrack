@@ -2,7 +2,9 @@
 //! driven through the [`Generator`] seam with a deterministic fake (no live API calls).
 
 use super::*;
+use crate::parse::extract_json_object;
 use crate::SchemaEnforcement;
+use lighttrack_core::JudgeVerdict;
 
 #[test]
 fn verdict_from_judge_text() {
@@ -574,3 +576,7 @@ mod deterministic;
 /// The eval corpus: whole recorded verdicts, replayed through this same path. See `corpus.rs`.
 #[cfg(test)]
 mod corpus;
+
+/// The freeform contract: locally-computed pass, measured counters, one prompt. See `freeform.rs`.
+#[cfg(test)]
+mod freeform;

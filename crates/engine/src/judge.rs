@@ -6,16 +6,16 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use lighttrack_core::{judge_verdict_schema, JudgeVerdict, Rubric};
+use lighttrack_core::Rubric;
 
 use crate::invocation::{self, Invocation};
-use crate::parse::{extract_json_object, extract_json_value, sample_parsed, Parsed};
+use crate::parse::{extract_json_value, Parsed};
 use crate::pool;
 use crate::prompts::{build_rubric_prompt, build_rubric_schema, Prompt};
 use crate::scorers::{self, DetScore};
 use crate::{
-    Determinism, DimScore, EngineConfig, EngineError, GenOutcome, JudgeOutcome, Result,
-    RubricOutcome, TextOutcome,
+    Determinism, DimScore, EngineConfig, EngineError, GenOutcome, Result, RubricOutcome,
+    TextOutcome,
 };
 use grounding::Grounding;
 
@@ -159,52 +159,6 @@ fn weighted(dims: &[(String, f64)], rubric: &Rubric) -> f64 {
     } else {
         0.0
     }
-}
-
-/// Run the judge on the given provider/model with a fully-formed prompt. The verdict schema is
-/// enforced and a single repair re-ask is attempted before an unparseable verdict is a hard error.
-pub fn run_judge(
-    cfg: &EngineConfig,
-    provider: &str,
-    model: &str,
-    prompt: &Prompt,
-) -> Result<JudgeOutcome> {
-    let schema = judge_verdict_schema();
-    let parsed = sample_parsed(
-        // Deterministic sampling — a verdict is a measurement (see ProviderGen::generate).
-        |_i, p| {
-            crate::providers::generate_deterministic(cfg, provider, model, None, p, Some(&schema))
-        },
-        0,
-        &prompt.text,
-        |raw| {
-            let json = extract_json_object(raw).ok_or_else(|| {
-                EngineError::Parse(format!("no JSON object in judge output: {raw}"))
-            })?;
-            serde_json::from_str::<JudgeVerdict>(&json).map_err(|e| {
-                EngineError::Parse(format!("judge JSON not a verdict: {e}; got: {json}"))
-            })
-        },
-    )?;
-    let verdict = parsed.value.ok_or_else(|| {
-        EngineError::Parse(
-            parsed
-                .raw_failure
-                .map(|r| format!("judge output not a verdict after repair: {r}"))
-                .unwrap_or_else(|| "judge produced no verdict".into()),
-        )
-    })?;
-    Ok(JudgeOutcome {
-        verdict,
-        cost_usd: parsed.cost_usd,
-        model: parsed.model,
-        session_id: None,
-        latency_ms: Some(parsed.latency_ms),
-        input_tokens: Some(parsed.input_tokens),
-        output_tokens: Some(parsed.output_tokens),
-        injection_suspected: prompt.injection_suspected || parsed.injection_suspected,
-        determinism: parsed.determinism,
-    })
 }
 
 /// Free-form text generation on Claude (anonymization / healing paragraphs).
@@ -631,6 +585,7 @@ fn aggregate(
 }
 
 pub(crate) mod batch;
+pub(crate) mod freeform;
 pub(crate) mod grounding;
 
 #[cfg(test)]
