@@ -1782,3 +1782,55 @@ Purely additive — a caller that passes neither new parameter gets the previous
 optional row fields and `as_of`. Nothing stored is written, read differently, or deleted: every fact
 published here was already in `collective_entries`. New: `core::collective::provenance` owns both
 folds so the "mixed means at least two" rule is written once.
+
+## The failure signature beside the mean (M28, `challenge-2026-10-05`)
+
+`GET /v1/benchmarks/:id/gate` answers `{"status":"regressed","mean":0.71,"baseline":0.78}` — one
+bit, and no way to act on it. Every byte needed to answer *which dimension, which cases, and how did
+they fail* was already stored on the rows the same run wrote: per-dimension score, weight, floor,
+`floor_hit`, `voided`, the judge's own reasoning strings, `agreement`, `parse_failures`,
+`injection_suspected`. Nothing aggregated any of it per run. The only dimensional aggregate in the
+store (`Store::score_summary_by_dimension`) groups by an *event* dimension (`metadata.prompt`) — the
+right primitive for a prompt canary and the wrong axis for this question.
+
+New read surface: **`GET /v1/benchmarks/:id/regression?run=<new>&against=<old>`**
+(MCP: `get_benchmark_regression`, `readOnlyHint`). `against` defaults to the previous finished run of
+the same benchmark.
+
+- **A row per rubric dimension, worst drop first.** `mean_before`, `mean_after`, `delta`, `n_before`,
+  `n_after`, `floor_hits_before/after`, `voided_before/after`. The table is ordered by `delta`
+  ascending, so the dimension that moved against the operator is the first line read.
+- **`coverage_changed` is not a delta.** `judge::aggregate` stores `0.0` as the placeholder for a
+  dimension it could not measure and excludes it from the overall via `voided`. A dimension scored on
+  one side and voided (or absent) on the other therefore reports `status: "coverage_changed"` with
+  **both counts and no number** — a delta against a placeholder is a fabricated −1.0 collapse, and
+  these rows sort after every compared row rather than claiming a place in the ranking.
+- **Flipped cases carry the judge's own words.** A case that passed in the old run and fails in the
+  new one appears under `flipped` with its `case_index` and the stored `reasoning` of the
+  worst-dropping dimension. A case's verdict is the conjunction over the observations that carry one,
+  because a compare run writes several cells per case and "one target passed" is not the case passing.
+- **Every failure family carries its denominator.** `parse_failures`, `low_agreement`,
+  `injection_suspected` and `floor_hit` are counted per run as `cases` out of the `denominator` of
+  cases that *could* have tripped them (a verdict with no sample accounting cannot have had a parse
+  failure; a dimension with no floor cannot hit one). A family whose denominator is `0` renders
+  `status: "not_measured"`, **never `0`** — a detector that cannot fire and a detector that found
+  nothing call for opposite actions. `low_agreement` uses the same constant `scores_review` triages a
+  single verdict with, so the family count and the review queue cannot disagree about what a shaky
+  verdict is.
+- **A freeform-only run says so.** Two runs with no dimensional verdicts answer
+  `status: "no_dimensions"` naming the freeform contract (criteria text + threshold, one overall
+  score) as the reason and naming `rubric_id` as the repair. An empty dimension array would read as
+  "nothing regressed", which is the one answer this surface must never give by accident.
+- **The comparability rule is called, not copied.** `benchmarks::instrument_moved` already refuses to
+  subtract numbers produced by different judges or rubrics; this route calls it and returns `409`
+  with that function's exact wording. A diff across a judge swap is a methodology change, not a
+  regression.
+- **Cases are paired by `case_index`.** Cases present on one side only are reported as
+  `unpaired_before` / `unpaired_after` rather than averaged in, because averaging over two different
+  populations is how a dataset edit reads as a regression.
+
+Purely additive, and deliberately **no new `Store` method**: the arithmetic is a pure fold over two
+`Vec<Score>` (`crates/api/src/benchmarks_regression/diff.rs`) above the trait, so SQLite and Postgres
+cannot diverge on it — the backend-parity gap a `score_deltas_by_dimension` trait method would have
+opened cannot exist here. Nothing stored changes and `GET .../gate` is byte-identical for all five of
+its statuses.
