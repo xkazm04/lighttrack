@@ -23,13 +23,11 @@ use crate::event::LlmEvent;
 /// Anything else is a caller's own opaque id (`"req-1"`, `"Order-7"`) and is preserved **verbatim**:
 /// case is meaningful there, and folding it would merge distinct traces and mangle an id the operator
 /// reads back.
+///
+/// The rule itself lives in [`crate::TraceRef`], which also applies it on deserialize so a read
+/// door's parameter type carries it; this keeps the function the two ingest doors already call.
 pub fn normalize_trace_ref(id: &str) -> String {
-    let is_w3c_hex = matches!(id.len(), 16 | 32) && id.chars().all(|c| c.is_ascii_hexdigit());
-    if is_w3c_hex {
-        id.to_ascii_lowercase()
-    } else {
-        id.to_string()
-    }
+    crate::trace_ref::TraceRef::new(id).into_string()
 }
 
 /// The single definition of the two numbers the list and the detail view must agree on: a trace's

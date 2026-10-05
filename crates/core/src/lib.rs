@@ -52,6 +52,7 @@ pub mod rubric;
 pub mod schedule;
 pub mod score;
 pub mod trace;
+pub mod trace_ref;
 pub mod unpriced;
 pub mod usage_split;
 pub mod use_case;
@@ -154,6 +155,7 @@ pub use trace::{
     normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,
     TraceTotals,
 };
+pub use trace_ref::TraceRef;
 pub use unpriced::{UnpricedLedger, UnpricedRow, UNPRICED_NOTES};
 pub use usage_split::SubcountOverflow;
 pub use use_case::{UseCase, UseCaseKind, UseCaseStatus};
