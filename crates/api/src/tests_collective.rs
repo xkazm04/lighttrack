@@ -1165,3 +1165,208 @@ async fn v2_digests_still_merge_under_a_v3_hub() {
         "a partly-unknown row is not a frozen-dataset row: {lb}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// The wire vocabulary clamp + the fold it creates (`collective/fold.rs`, `core::collective::vocab`).
+//
+// `task_type` is the field the fixed-task-vocabulary rule is named for, and it used to be the one
+// categorical field the hub did not clamp: a free-text benchmark name reached the stored table and
+// the `?task_type=` filter, so a contributor could split a bucket under the case floor by renaming
+// it. Clamping creates upsert-key collisions, which the fold resolves by case-weighted
+// re-aggregation rather than the store's last-writer-wins — and discloses both in the ack.
+// ---------------------------------------------------------------------------------------------
+
+/// One digest entry with an explicit `task_type`, so a test can put an arbitrary label on the wire.
+fn entry_tt(model: &str, task_type: &str, q: f64, runs: u32, cases: u32) -> Value {
+    json!({
+        "provider": "anthropic", "model": model, "task_type": task_type,
+        "quality": q, "pass_rate": q, "avg_cost_usd": 0.003,
+        "p50_latency_ms": 900, "p95_latency_ms": 2000, "n_runs": runs, "n_cases": cases
+    })
+}
+
+#[tokio::test]
+async fn an_off_vocabulary_task_type_is_clamped_to_general_and_disclosed() {
+    let (state, store) = setup(true, false, 5);
+    let key = contributor_key(&store, "a");
+    let app = crate::build_router(state);
+    let (status, ack) = ingest(
+        &app,
+        Some(&key),
+        json!({ "entries": [entry_tt("haiku", "claims-triage-v3", 0.8, 1, 10)] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted"], 1, "{ack}");
+    assert_eq!(
+        ack["clamped_task_type"], 1,
+        "the clamp is disclosed, not silent: {ack}"
+    );
+    let stored = store.list_collective_entries().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(
+        stored[0].task_type, "general",
+        "a free-text benchmark name must never reach the stored table"
+    );
+}
+
+#[tokio::test]
+async fn a_vocabulary_member_in_the_wrong_case_is_folded_in_not_clamped() {
+    let (state, store) = setup(true, false, 5);
+    let key = contributor_key(&store, "a");
+    let app = crate::build_router(state);
+    let (status, ack) = ingest(
+        &app,
+        Some(&key),
+        json!({ "entries": [entry_tt("haiku", " QA ", 0.8, 1, 10)] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted"], 1, "{ack}");
+    assert_eq!(
+        ack["clamped_task_type"], 0,
+        "case/whitespace is folded, which is not a clamp: {ack}"
+    );
+    let stored = store.list_collective_entries().unwrap();
+    assert_eq!(stored[0].task_type, "qa");
+}
+
+/// GUARD: a label already in the vocabulary is stored verbatim and counts as no clamp.
+#[tokio::test]
+async fn an_in_vocabulary_task_type_survives_the_clamp_unchanged() {
+    let (state, store) = setup(true, false, 5);
+    let key = contributor_key(&store, "a");
+    let app = crate::build_router(state);
+    let (status, ack) = ingest(
+        &app,
+        Some(&key),
+        json!({ "entries": [entry_tt("haiku", "summarization", 0.8, 1, 10)] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["clamped_task_type"], 0, "{ack}");
+    let stored = store.list_collective_entries().unwrap();
+    assert_eq!(stored[0].task_type, "summarization");
+}
+
+#[tokio::test]
+async fn two_invented_labels_fold_into_one_row_instead_of_overwriting() {
+    // The collision the clamp creates: both labels become `general`, which is the exact upsert key
+    // the store resolves last-writer-wins. Folding before the single store call is what keeps the
+    // contributor's evidence whole.
+    let (state, store) = setup(true, false, 5);
+    let key = contributor_key(&store, "a");
+    let app = crate::build_router(state);
+    let (status, ack) = ingest(
+        &app,
+        Some(&key),
+        json!({ "entries": [
+            entry_tt("haiku", "claims-triage-v3", 0.8, 1, 10),
+            entry_tt("haiku", "widget-regression-v9", 0.4, 3, 30),
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted"], 1, "{ack}");
+    assert_eq!(ack["clamped_task_type"], 2, "{ack}");
+    assert_eq!(ack["folded_duplicates"], 1, "{ack}");
+    let stored = store.list_collective_entries().unwrap();
+    assert_eq!(stored.len(), 1, "one row, not two and not one of two");
+    assert_eq!(stored[0].task_type, "general");
+    assert_eq!(stored[0].n_cases, 40, "evidence is summed, never halved");
+    assert_eq!(stored[0].n_runs, 4);
+    // Case-weighted mean: (0.8*10 + 0.4*30) / 40 = 0.5.
+    assert!(
+        (stored[0].quality - 0.5).abs() < 1e-9,
+        "case-weighted mean, not last-writer-wins: {}",
+        stored[0].quality
+    );
+}
+
+#[tokio::test]
+async fn two_entries_identical_in_the_upsert_key_fold_rather_than_lose_one() {
+    // Reachable today, with no clamp involved: one payload, two entries on the same
+    // (provider, model, task_type). The store's upsert overwrote the first and nothing said so.
+    let (state, store) = setup(true, false, 5);
+    let key = contributor_key(&store, "a");
+    let app = crate::build_router(state);
+    let (status, ack) = ingest(
+        &app,
+        Some(&key),
+        json!({ "entries": [
+            entry_tt("haiku", "qa", 0.8, 1, 10),
+            entry_tt("haiku", "qa", 0.4, 3, 30),
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ack}");
+    assert_eq!(ack["accepted"], 1, "{ack}");
+    assert_eq!(ack["clamped_task_type"], 0, "{ack}");
+    assert_eq!(ack["folded_duplicates"], 1, "{ack}");
+    let stored = store.list_collective_entries().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].n_cases, 40);
+    assert!((stored[0].quality - 0.5).abs() < 1e-9, "{:?}", stored[0]);
+}
+
+/// Property: whatever a contributor puts on the wire, every entry the hub *persists* carries a
+/// `task_type` that is a member of the published vocabulary. Generated deterministically (a tiny
+/// LCG) so a failure is reproducible, over the shapes that break a naive clamp: empty, unicode,
+/// 4KB, and vocabulary-adjacent labels.
+#[tokio::test]
+async fn every_persisted_task_type_is_a_vocabulary_member_for_generated_bodies() {
+    let labels: Vec<String> = vec![
+        "".into(),
+        "   ".into(),
+        "QA".into(),
+        " qa ".into(),
+        "Summarization".into(),
+        "summarizations".into(),
+        "general-v2".into(),
+        "claims-triage-v3".into(),
+        "RESUME-extraction".into(),
+        "\u{65e5}\u{672c}\u{8a9e}".into(),
+        "\u{1f642}".into(),
+        "../../etc/passwd".into(),
+        "mixed".into(),
+        "unknown".into(),
+        "x".repeat(4096),
+    ];
+    let mut seed: u64 = 0x5eed_1234;
+    let mut next = move || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (seed >> 33) as usize
+    };
+    let (state, store) = setup(true, false, 5);
+    let key = contributor_key(&store, "a");
+    let app = crate::build_router(state);
+    let vocab = lighttrack_core::collective::TASK_TYPES;
+    for i in 0..100 {
+        let n = 1 + next() % 3;
+        let entries: Vec<Value> = (0..n)
+            .map(|j| {
+                let tt = labels[next() % labels.len()].clone();
+                let cases = 5 + (next() % 50) as u32;
+                let q = (next() % 101) as f64 / 100.0;
+                entry_tt(
+                    if j % 2 == 0 { "haiku" } else { "sonnet" },
+                    &tt,
+                    q,
+                    1,
+                    cases,
+                )
+            })
+            .collect();
+        let (status, ack) = ingest(&app, Some(&key), json!({ "entries": entries })).await;
+        assert_eq!(status, StatusCode::OK, "body {i}: {ack}");
+        for e in store.list_collective_entries().unwrap() {
+            assert!(
+                vocab.contains(&e.task_type.as_str()),
+                "body {i} persisted {:?}, which is outside the published vocabulary",
+                e.task_type
+            );
+        }
+    }
+}
