@@ -13,6 +13,10 @@ use crate::error::ApiError;
 use crate::guards::authenticate;
 use crate::state::AppState;
 
+mod routes;
+
+use routes::DegradedRoute;
+
 /// The manifest as served. `surfaces` is what works; `unsupported` is what answers 501, named
 /// explicitly rather than left to be inferred from the first list's absences — a client that has to
 /// diff two lists to find out what is missing will not do it.
@@ -21,6 +25,15 @@ pub(crate) struct CapabilitiesBody {
     pub backend: &'static str,
     pub surfaces: Vec<&'static str>,
     pub unsupported: Vec<&'static str>,
+    /// The route-level consequence of `unsupported`: every `METHOD /path` that answers HTTP 501 on
+    /// this backend, derived from the endpoint table rather than left for the operator to work out
+    /// from `docs/PARITY.md` and a reading of the handler.
+    pub unsupported_routes: Vec<String>,
+    /// Routes that still answer, with less in them. A refused surface does not always remove a
+    /// route — `maintenance` and `metrics` are refused on Postgres and remove none at all,
+    /// narrowing `GET /v1/storage/status` to null fields — and publishing those as 501s would send
+    /// an operator hunting a status code no route returns.
+    pub degraded_routes: Vec<DegradedRoute>,
     /// Whether a configured usage cap is genuinely enforced under concurrent ingest. `false` means
     /// caps here are **advisory**: a burst can exceed one before it takes effect.
     pub atomic_admission: bool,
@@ -91,6 +104,8 @@ impl From<Capabilities> for CapabilitiesBody {
             backend: c.backend,
             surfaces: c.surfaces.iter().map(|s| s.as_str()).collect(),
             unsupported: c.missing().iter().map(|s| s.as_str()).collect(),
+            unsupported_routes: routes::unsupported(&c),
+            degraded_routes: routes::degraded(&c),
             atomic_admission: c.atomic_admission,
             schema_fingerprint: c.schema_fingerprint,
             deprecations: deprecations(),
