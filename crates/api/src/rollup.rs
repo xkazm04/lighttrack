@@ -17,7 +17,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{Dimension, RollupQuery, RollupRow, TimeKey, MAX_GROUP_BY};
+use lighttrack_core::{Dimension, ProviderId, RollupQuery, RollupRow, TimeKey, MAX_GROUP_BY};
 
 use crate::auth::Principal;
 use crate::error::ApiError;
@@ -136,9 +136,22 @@ fn parse_filters(raw: Option<&str>, admin: bool) -> Result<Vec<(Dimension, Strin
                 "the `day` dimension cannot be filtered on; use `since`/`until`",
             ));
         }
-        out.push((d, value.to_string()));
+        out.push((d, canonical_filter_value(d, value)));
     }
     Ok(out)
+}
+
+/// A filter value is matched with `=` against a stored column, so it has to be spelled the way the
+/// ingest door spelled it. `provider` is canonicalized by [`ProviderId`] on the way in, so it is
+/// canonicalized here too; every other dimension stays **exact** — `model` in particular, which is
+/// the pricing/limits merge key and a different question from this one.
+fn canonical_filter_value(d: Dimension, value: &str) -> String {
+    match d {
+        // An empty value is left alone rather than becoming the `unknown` sentinel: `provider:`
+        // asked for nothing, and that is not the same question as "rows with no provider".
+        Dimension::Provider if !value.is_empty() => ProviderId::new(value).to_string(),
+        _ => value.to_string(),
+    }
 }
 
 /// Grouping or filtering by `api_key` enumerates a project's key ids. That is an operator question,

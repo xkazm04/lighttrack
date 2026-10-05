@@ -24,7 +24,9 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{new_id, LlmEvent, Score, ScoreDetail, Trace, TraceCoverage, TraceSpan};
+use lighttrack_core::{
+    new_id, LlmEvent, Score, ScoreDetail, Trace, TraceCoverage, TraceRef, TraceSpan,
+};
 use lighttrack_store::{TraceFilter, MAX_TRACE_SPANS};
 
 use crate::error::ApiError;
@@ -166,14 +168,14 @@ fn views(scores: Vec<Score>, current: &TraceCoverage) -> Vec<TraceScoreView> {
 pub(crate) async fn get_trace(
     State(st): State<AppState>,
     headers: HeaderMap,
-    Path(id): Path<String>,
+    Path(id): Path<TraceRef>,
 ) -> Result<Json<TraceDetail>, ApiError> {
     let p = authenticate(&st, &headers).await?;
     let scope = resolve_read_project(&p, None)?;
-    let trace = load_trace(&st, scope.clone(), &id).await?;
+    let trace = load_trace(&st, scope.clone(), id.as_str()).await?;
 
     let store = st.store.clone();
-    let tid = id.clone();
+    let tid = id.to_string();
     let scores = spawn_db(move || store.list_trace_scores(scope.as_deref().into(), &tid)).await?;
     let scores = views(scores, &trace.coverage());
     Ok(Json(TraceDetail { trace, scores }))
@@ -208,7 +210,7 @@ fn one() -> f64 {
 pub(crate) async fn score_trace(
     State(st): State<AppState>,
     headers: HeaderMap,
-    Path(id): Path<String>,
+    Path(id): Path<TraceRef>,
     Json(body): Json<TraceScoreBody>,
 ) -> Result<Json<Score>, ApiError> {
     let p = authenticate(&st, &headers).await?;
@@ -217,7 +219,7 @@ pub(crate) async fn score_trace(
     // not a configuration change).
     crate::auth_scopes::ensure_scope(&p, lighttrack_core::Scope::Ingest)?;
     let scope = resolve_read_project(&p, None)?;
-    let trace = load_trace(&st, scope, &id).await?;
+    let trace = load_trace(&st, scope, id.as_str()).await?;
 
     // Every span, not only the roots: `trace.spans` is a forest whose inner calls sit in
     // `children`. Walking the top level alone meant a per-call verdict on a nested span never

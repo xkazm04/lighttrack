@@ -287,6 +287,8 @@ mod tests_margin_policy;
 #[cfg(test)]
 mod tests_persistence_class;
 #[cfg(test)]
+mod tests_query_identity;
+#[cfg(test)]
 mod tests_redaction;
 #[cfg(test)]
 mod tests_relay;
