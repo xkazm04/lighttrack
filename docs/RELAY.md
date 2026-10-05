@@ -403,3 +403,15 @@ and **raise/throw** (`RelayError`) on failure. Prefer the connector push for del
   one transaction with `SELECT … FOR UPDATE` so duplicate reports can't double-apply. Covered by
   the shared conformance suite (relay section skips backends without support) — CI's ephemeral
   Postgres runs it automatically — and smoke-verified over HTTP against Postgres 16.
+- **The cancel reaches the device (shipped):** the promise above — "its device learns at its next
+  renewal" — is now carried by the renewal itself. `LeaseHeld::Held` has a `cancel_requested` flag,
+  set by both store backends (`UPDATE … RETURNING status`) when the row is `cancelling`; the
+  renewal stays **200 Held**, because the device must keep its lease until it reports, and the
+  conformance suite pins both halves. On the device, `lt-agent`'s `verdict.rs` is the single
+  authority mapping HTTP status + typed body to one of *held · stop · reclaimed · no-such-task ·
+  unknown* (an unrecognised failure is **unknown**, which keeps a live run alive), and `deliver.rs`
+  holds the connector call back so the stop check sits **between** producing the result and
+  delivering it. A cancelled run therefore makes no connector write, logs `CANCELLED by operator`
+  rather than `LEASE LOST`, and still settles — which the store terminates as `cancelled` with no
+  failure charged. Both halves are additive: an uncancelled renewal is byte-identical on the wire,
+  so an un-upgraded agent is unaffected.
