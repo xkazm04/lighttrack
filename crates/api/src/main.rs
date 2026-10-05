@@ -69,6 +69,8 @@
 //!                                        restart, and rolls entries off after 24h (rejected events are
 //!                                        never stored — that would corrupt the usage/cost rollups).
 //!   GET  /v1/limits/usage?project=&by=&window=&limit=
+//!   GET  /v1/limits/preview?project=&metric=&window=&threshold=&action=&warn_at=&scope=&over=
+//!                                        replay a CANDIDATE cap over stored traffic (read-only)
 //!                                        rolling usage grouped by ONE scope dimension
 //!                                        (api_key | customer | model | provider | name), each row
 //!                                        carrying the scoped rules that bind it. Answers "which key
@@ -216,6 +218,8 @@ mod judges;
 mod labels;
 mod labels_promote;
 mod limits;
+mod limits_preview;
+mod limits_replay;
 mod limits_usage;
 mod logging;
 mod margin_guardrails;
@@ -284,6 +288,8 @@ mod tests_ingest_usage;
 mod tests_limit_scope;
 #[cfg(test)]
 mod tests_limit_scope_family;
+#[cfg(test)]
+mod tests_limits_preview;
 #[cfg(test)]
 mod tests_margin_policy;
 #[cfg(test)]
@@ -785,6 +791,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         )
         .route("/v1/limits/status", get(limits::limits_status))
         .route("/v1/limits/usage", get(limits_usage::usage_by_scope))
+        .route("/v1/limits/preview", get(limits_preview::preview_limit))
         .route(
             "/v1/relay/tasks",
             post(relay::enqueue_task).get(relay::list_tasks),

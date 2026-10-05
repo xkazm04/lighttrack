@@ -2,6 +2,7 @@
 //! optional dimension scope a rule binds to, and the status a rule evaluates to against rolling
 //! usage. Split by concern; every type is re-exported here so callers keep one path.
 
+pub mod backtest;
 mod rule;
 mod scope;
 mod status;

@@ -216,4 +216,59 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         doc: "Rolling usage broken down by one scope dimension — the 'who is spending' view.",
         ..Endpoint::DEFAULT
     },
+    // A read-only replay, so a GET and never a write: nothing is stored, no rule is created and no
+    // rejection is counted. That is what lets its MCP tool be `readOnlyHint` rather than gated
+    // behind LIGHTTRACK_MCP_ALLOW_WRITES. `surface: "rollup"` because the replay is a fan of
+    // `Store::rollup` windows — a backend without it answers 501, never an empty timeline.
+    Endpoint {
+        id: "limits_preview",
+        method: Method::Get,
+        path: "/v1/limits/preview",
+        access: Key(Read),
+        params: &[
+            Param {
+                name: "project",
+                doc: "project id; required unless the key already names one",
+                mcp_required: Some(true),
+                ..Param::DEFAULT
+            },
+            Param {
+                name: "threshold",
+                ty: JsonTy::Number,
+                required: true,
+                doc: "the candidate cap; validated by the same door a create goes through",
+                ..Param::DEFAULT
+            },
+            qe("metric", &["cost_usd", "calls", "tokens"], "what the candidate caps (default cost_usd)"),
+            qe("window", &["hour", "day", "month"], "the candidate rolling window (default day)"),
+            qe(
+                "action",
+                &["alert", "throttle", "block"],
+                "the candidate reaction; `throttle` also returns the shed ramp (default alert)",
+            ),
+            qt("warn_at", JsonTy::Number, "soft-warning fraction in (0,1); also the throttle ramp's start"),
+            q("scope", "candidate dimension scope as JSON, e.g. {\"model\":\"gpt-4o\"}"),
+            q("over", "how far back to replay: 7d | 48h | 90m (default seven windows, capped at 90d)"),
+            qt("steps", JsonTy::Integer, "sampled instants across the span (default 48, max 200)"),
+        ],
+        response: TypeRef::Untyped(
+            "{ project_id, metric, window, action, threshold, warn_at?, scope?, over: {from, to, \
+             steps, step_secs, window_secs}, would_breach, peak_ratio, breached_steps, episodes: \
+             [{first_at, last_at, peak_ratio, steps, calls, cost_usd}], timeline: [{at, current, \
+             ratio, shed_fraction, warning, breached, calls, cost_usd}], simulated, notes } — when \
+             the candidate would have fired, how hard, and how much it would have shed.",
+        ),
+        mcp: Some(McpTool {
+            name: "preview_limit",
+            description: "Backtest a candidate usage cap against this project's stored traffic WITHOUT creating it: the breach episodes it would have caused, the peak ratio, and (for `throttle`) the shed ramp. Read-only — nothing is stored, no rule exists afterwards. Use it to pick a threshold before calling `create_limit`. Monitored ingest only; the judge is unbudgeted.",
+            args: &[
+                "project", "threshold", "metric", "window", "action", "warn_at", "scope", "over",
+            ],
+            ..McpTool::DEFAULT
+        }),
+        cli: Some(&["limits", "preview"]),
+        doc: "Replay a candidate cap over stored traffic — the pre-breach answer, before any 429.",
+        surface: "rollup",
+        ..Endpoint::DEFAULT
+    },
 ];

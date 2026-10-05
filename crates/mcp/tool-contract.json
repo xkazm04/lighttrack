@@ -600,6 +600,23 @@
       "project"
     ]
   },
+  "preview_limit": {
+    "properties": {
+      "action": "string",
+      "metric": "string",
+      "over": "string",
+      "project": "string",
+      "scope": "string",
+      "threshold": "number",
+      "warn_at": "number",
+      "window": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project",
+      "threshold"
+    ]
+  },
   "promote_prompt": {
     "properties": {
       "force": "boolean",

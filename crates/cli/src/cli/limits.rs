@@ -67,6 +67,42 @@ pub(crate) enum LimitsCmd {
         #[arg(long)]
         project: String,
     },
+    /// Backtest a CANDIDATE cap over stored traffic without creating it: when it would have fired,
+    /// how hard, and (for --action throttle) how much it would have shed.
+    Preview {
+        #[arg(long)]
+        project: Option<String>,
+        /// The candidate cap. Validated by the same door a create goes through.
+        #[arg(long)]
+        threshold: f64,
+        /// `cost_usd` | `calls` | `tokens`.
+        #[arg(long, default_value = "cost_usd")]
+        metric: String,
+        /// Rolling window: `hour` | `day` | `month`.
+        #[arg(long, default_value = "day")]
+        window: String,
+        /// `alert` | `throttle` | `block`.
+        #[arg(long, default_value = "alert")]
+        action: String,
+        /// Soft-warning fraction in (0,1); also where a throttle's shed ramp starts.
+        #[arg(long = "warn-at")]
+        warn_at: Option<f64>,
+        /// Scope the candidate to one provider.
+        #[arg(long = "scope-provider", group = "scope")]
+        scope_provider: Option<String>,
+        /// Scope the candidate to one model (membership is the canonical family).
+        #[arg(long = "scope-model", group = "scope")]
+        scope_model: Option<String>,
+        /// Scope the candidate to one use-case (event `name`).
+        #[arg(long = "scope-name", group = "scope")]
+        scope_name: Option<String>,
+        /// How far back to replay: `7d` | `48h` | `90m`.
+        #[arg(long)]
+        over: Option<String>,
+        /// Sampled instants across the span.
+        #[arg(long)]
+        steps: Option<usize>,
+    },
     /// Who is spending: rolling usage broken down by one scope dimension, with the rules that bind.
     Usage {
         #[arg(long)]
