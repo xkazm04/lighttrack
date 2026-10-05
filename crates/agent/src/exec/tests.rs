@@ -6,6 +6,11 @@ use serde_json::json;
 
 use super::*;
 
+/// These tests are not about liveness publishing: an emitter attached to nothing.
+fn quiet() -> Emitter {
+    Emitter::detached()
+}
+
 fn task(action_type: &str) -> RelayTask {
     serde_json::from_value(json!({
         "id": "t-1", "project_id": "p1", "action_type": action_type,
@@ -45,11 +50,11 @@ fn unknown_or_invalid_action_fails_without_invoking_claude() {
     let engine = EngineConfig::default();
     let cfg = cfg(dir.path().to_str().unwrap());
 
-    let r = execute(&cfg, &engine, &task("ns/missing")).report;
+    let r = execute(&cfg, &engine, &task("ns/missing"), &quiet()).report;
     assert_eq!(r.status, "failed");
     assert!(r.error.unwrap().contains("no action"));
 
-    let r = execute(&cfg, &engine, &task("../escape")).report;
+    let r = execute(&cfg, &engine, &task("../escape"), &quiet()).report;
     assert_eq!(r.status, "failed");
     assert!(r.error.unwrap().contains("invalid action_type"));
 }
@@ -97,7 +102,7 @@ fn an_over_claiming_action_fails_before_any_spawn() {
             lib.path().to_str().unwrap(),
             with_root.then(|| roots.path().to_str().unwrap()),
         );
-        let r = execute(&cfg, &engine, &task("ns/act")).report;
+        let r = execute(&cfg, &engine, &task("ns/act"), &quiet()).report;
         assert_eq!(r.status, "failed", "{spec}");
         let err = r.error.unwrap_or_default();
         assert!(
@@ -130,7 +135,7 @@ fn a_well_formed_edit_action_reaches_the_spawn() {
         lib.path().to_str().unwrap(),
         Some(roots.path().to_str().unwrap()),
     );
-    let r = execute(&cfg, &engine, &task("ns/act")).report;
+    let r = execute(&cfg, &engine, &task("ns/act"), &quiet()).report;
     assert_eq!(r.status, "failed");
     assert!(
         r.error.unwrap().contains("lighttrack-test"),
@@ -152,7 +157,7 @@ fn a_run_names_its_prompt_but_ships_its_text_only_on_request() {
     let lib = tempfile::tempdir().unwrap();
     write_action(lib.path(), "");
     let closed = cfg(lib.path().to_str().unwrap());
-    let r = execute(&closed, &engine, &task("ns/act")).report;
+    let r = execute(&closed, &engine, &task("ns/act"), &quiet()).report;
     assert_eq!(r.status, "failed", "the fake binary cannot run");
     assert_eq!(
         r.prompt_sha256.as_deref(),
@@ -166,12 +171,12 @@ fn a_run_names_its_prompt_but_ships_its_text_only_on_request() {
     let lib = tempfile::tempdir().unwrap();
     write_action(lib.path(), "report_io = true\nversion = \"7\"\n");
     let opted_in = cfg(lib.path().to_str().unwrap());
-    let r = execute(&opted_in, &engine, &task("ns/act")).report;
+    let r = execute(&opted_in, &engine, &task("ns/act"), &quiet()).report;
     assert_eq!(r.rendered_prompt.as_deref(), Some("Hello world"));
     assert_eq!(r.action_version.as_deref(), Some("7"));
 
     // No action, no prompt, nothing to fingerprint — the one unstamped outcome.
-    let r = execute(&opted_in, &engine, &task("ns/missing")).report;
+    let r = execute(&opted_in, &engine, &task("ns/missing"), &quiet()).report;
     assert!(r.prompt_sha256.is_none());
 }
 

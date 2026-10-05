@@ -16,6 +16,7 @@
 //! interval on that discovery — repeatedly, since nothing about the failure told the cloud to route
 //! the task elsewhere.
 
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -28,6 +29,7 @@ use crate::cloud::Client;
 use crate::config::AgentConfig;
 use crate::deliver;
 use crate::exec;
+use crate::progress::{self, Emitter, Phase};
 use crate::report::RunReport;
 use crate::verdict::Verdict;
 
@@ -93,7 +95,9 @@ fn run_one(
 ) {
     let Some(fence) = task.lease_fence else {
         // A cloud predating M7 stamps no fence. Run it the old way: unfenced, exactly as before.
-        let report = deliver::propagate(exec::execute(cfg, engine, task));
+        // No fence, so no door to publish liveness through: `/progress` is fenced exactly as the
+        // renewal is. An unfenced run reports what it always did.
+        let report = deliver::propagate(exec::execute(cfg, engine, task, &Emitter::detached()));
         announce(client, task, &report);
         settle(client, task, None, &report);
         return;
@@ -106,7 +110,10 @@ fn run_one(
     // per task. Dropping the sender wakes it instantly.
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
     let interrupt_ref = &interrupt;
-    let produced = std::thread::scope(|scope| {
+    // Read by the publisher, written by the heartbeat; neither waits on the other.
+    let renewals = AtomicU32::new(0);
+    let renewals_ref = &renewals;
+    std::thread::scope(|scope| {
         // `move` takes the receiver (not `Sync`) into the heartbeat; everything else it uses is a
         // shared reference or `Copy`.
         scope.spawn(move || {
@@ -115,6 +122,7 @@ fn run_one(
                 done_rx.recv_timeout(Duration::from_secs(renew_secs))
             {
                 let v = client.renew(&task.id, fence);
+                renewals_ref.fetch_add(1, AtomicOrdering::Relaxed);
                 let stop = match &v {
                     Verdict::Held { .. } => None,
                     // The operator's cancel, arriving on the only channel that reaches a running
@@ -147,20 +155,46 @@ fn run_one(
                 break;
             }
         });
-        let produced = exec::execute(cfg, engine, task);
+        // Progress rides its OWN thread and its own door. Not an optimisation: the renew cadence
+        // equals the lease TTL after the first renewal, so a progress POST sharing the heartbeat's
+        // thread could cost this run its lease — and a telemetry channel able to kill the work it
+        // reports on is worse than no channel.
+        let (px, phases) = progress::channel();
+        scope.spawn(move || {
+            progress::pump(
+                &progress::CloudSink {
+                    client,
+                    task_id: &task.id,
+                    fence,
+                },
+                phases,
+                progress::PUBLISH_WINDOW,
+                renewals_ref,
+                &client.name,
+            )
+        });
+        let produced = exec::execute(cfg, engine, task, &px);
         drop(done_tx);
-        produced
-    });
 
-    // THE seam: the result exists and nothing irreversible has happened yet.
-    let interrupt = interrupt.into_inner().unwrap_or_else(|e| e.into_inner());
-    let report = match settlement(interrupt.as_ref()) {
-        Settlement::Abandon => return,
-        Settlement::SettleOnly => produced.report,
-        Settlement::DeliverAndSettle => deliver::propagate(produced),
-    };
-    announce(client, task, &report);
-    settle(client, task, Some(fence), &report);
+        // THE seam: the result exists and nothing irreversible has happened yet. (Inside the scope
+        // only so the publisher can be shut down before the settle; the decision is unchanged.)
+        let interrupt = *interrupt_ref.lock().unwrap_or_else(|e| e.into_inner());
+        let report = match settlement(interrupt.as_ref()) {
+            Settlement::Abandon => return,
+            Settlement::SettleOnly => produced.report,
+            Settlement::DeliverAndSettle => {
+                px.emit(Phase::Delivering);
+                deliver::propagate(produced)
+            }
+        };
+        px.emit(Phase::Settling);
+        // Dropping the emitter is what ends the publisher, and it happens BEFORE the settle: the
+        // scope joins the publisher after the settle, so a hung final publish can at worst delay
+        // the next task — never this run's renewal, which stopped at `drop(done_tx)`.
+        drop(px);
+        announce(client, task, &report);
+        settle(client, task, Some(fence), &report);
+    });
 }
 
 /// What the heartbeat learned while the CLI ran. The two interruptions are kept apart because their
@@ -263,38 +297,4 @@ fn settle(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The decision this change creates. A cancelled run keeps its report and loses its delivery;
-    /// a reclaimed run loses both; an uninterrupted run keeps both. Before the seam existed there
-    /// was one boolean, consulted after `exec` had already delivered — so a cancelled run's
-    /// connector had fired by the time anybody asked.
-    #[test]
-    fn the_stop_check_decides_between_producing_and_delivering() {
-        assert_eq!(settlement(None), Settlement::DeliverAndSettle);
-        assert_eq!(
-            settlement(Some(&Interrupt::Cancelled)),
-            Settlement::SettleOnly,
-            "a cancelled run must not deliver, and must still report"
-        );
-        assert_eq!(
-            settlement(Some(&Interrupt::Lost)),
-            Settlement::Abandon,
-            "a reclaimed run's result belongs to nobody"
-        );
-    }
-
-    /// An operator reading a device log has to be able to tell the two apart. They were one message
-    /// ("LEASE LOST") for both, because the agent could not tell them apart either.
-    #[test]
-    fn a_cancel_and_a_takeover_do_not_read_the_same() {
-        assert_ne!(Interrupt::Cancelled.headline(), Interrupt::Lost.headline());
-        assert!(Interrupt::Cancelled.headline().contains("CANCELLED"));
-        assert!(Interrupt::Lost.headline().contains("LEASE LOST"));
-        assert!(Interrupt::Cancelled
-            .consequence()
-            .contains("still reported"));
-        assert!(Interrupt::Lost.consequence().contains("NOT be reported"));
-    }
-}
+mod tests;

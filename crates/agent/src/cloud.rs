@@ -118,6 +118,29 @@ impl Client {
         ))
     }
 
+    /// Publish liveness detail for a task this device is running, carrying the lease fence.
+    ///
+    /// Its own door, never the heartbeat's: liveness must not wait on the work having something to
+    /// say, or a device that is alive but stuck computing a line reads as a dead one. And unlike
+    /// every other call in this module the answer is **not** classified into a `Verdict` — progress
+    /// is a read model, so a refusal here is a log line and nothing else. Giving it an ownership
+    /// opinion would let a telemetry channel stop the work it reports on.
+    pub(crate) fn progress(
+        &self,
+        task_id: &str,
+        fence: DateTime<Utc>,
+        progress: &str,
+    ) -> Result<()> {
+        let a = self.post_raw(
+            &format!("/v1/relay/tasks/{task_id}/progress"),
+            &json!({ "fence": fence, "progress": progress }),
+        )?;
+        if !(200..300).contains(&a.status) {
+            bail!("HTTP {}: {}", a.status, a.body);
+        }
+        Ok(())
+    }
+
     /// Settle one task with the run's outcome + usage accounting, carrying the lease fence. A 409
     /// here means the report was NOT recorded — this device no longer owns the task.
     ///

@@ -15,6 +15,7 @@ mod connect;
 mod deliver;
 mod exec;
 mod inventory;
+mod progress;
 mod report;
 mod run;
 mod verdict;

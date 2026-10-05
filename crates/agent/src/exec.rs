@@ -15,9 +15,17 @@ use serde_json::{json, Value};
 use crate::actions;
 use crate::config::AgentConfig;
 use crate::deliver::{Pending, Produced};
+use crate::progress::{self, Emitter, Phase};
 use crate::report::{PromptIdentity, RunReport};
 
-pub(crate) fn execute(cfg: &AgentConfig, engine: &EngineConfig, task: &RelayTask) -> Produced {
+/// `px` is write-only telemetry (`crate::progress`): emitting a phase cannot block, cannot fail and
+/// returns nothing, so no path through this module can be changed by whether the cloud heard it.
+pub(crate) fn execute(
+    cfg: &AgentConfig,
+    engine: &EngineConfig,
+    task: &RelayTask,
+    px: &Emitter,
+) -> Produced {
     let action = match actions::load(&cfg.actions_dir, &task.action_type) {
         Ok(a) => a,
         // A missing/broken action is a real failure: retrying later is right (the user can add
@@ -25,6 +33,10 @@ pub(crate) fn execute(cfg: &AgentConfig, engine: &EngineConfig, task: &RelayTask
         // Unstamped, and the only outcome that is: there was no prompt to fingerprint.
         Err(e) => return unstamped(format!("action: {e:#}")),
     };
+    px.emit(Phase::Resolving {
+        action: task.action_type.clone(),
+        version: action.spec.version.clone(),
+    });
     // Which prompt text is about to run, computed before anything is spawned so that every other
     // outcome — including a posture refusal that costs nothing — can name it.
     let prompt = match actions::render(&action.prompt_template, task) {
@@ -38,7 +50,7 @@ pub(crate) fn execute(cfg: &AgentConfig, engine: &EngineConfig, task: &RelayTask
         action.spec.version.as_deref(),
         action.spec.report_io,
     );
-    let (report, delivery) = run(cfg, engine, task, &action, &prompt);
+    let (report, delivery) = run(cfg, engine, task, &action, &prompt, &identity, px);
     Produced {
         report: report.stamp(&identity),
         identity: Some(identity),
@@ -58,12 +70,15 @@ fn unstamped(error: String) -> Produced {
 /// The report, plus the connector call the caller must decide about. A `None` delivery is either
 /// "the run failed" or "the action declares no connector" — in both cases there is nothing to hold
 /// back.
+#[allow(clippy::too_many_arguments)]
 fn run(
     cfg: &AgentConfig,
     engine: &EngineConfig,
     task: &RelayTask,
     action: &actions::Action,
     prompt: &str,
+    identity: &PromptIdentity,
+    px: &Emitter,
 ) -> (RunReport, Option<Pending>) {
     let spec = &action.spec;
 
@@ -90,11 +105,38 @@ fn run(
         inv = inv.with_cwd(dir);
     }
 
+    // The span that can last hours and published nothing at all. The phase goes out before it,
+    // because the whole point is to be readable from the cloud *while* it is in flight.
+    let connector = progress::connector_kind(spec.connector.as_ref());
+    px.emit(Phase::Spawned {
+        mode: spec.mode.as_str(),
+        // The declared NAME, never the resolved path: the operator needs to know which repository,
+        // not where this device keeps it.
+        workspace: spec.workspace.clone(),
+        model: spec.model.clone(),
+        fingerprint: identity.prompt_sha256.clone(),
+    });
     let out = match invocation::run(&engine.claude(), &inv) {
         Ok(out) => out,
-        Err(e) if rate_limited(&e) => return (RunReport::deferred(format!("claude: {e}")), None),
-        Err(e) => return (RunReport::failed(format!("claude: {e}")), None),
+        Err(e) if rate_limited(&e) => {
+            px.emit(Phase::Exited {
+                subtype: "rate-limited".to_string(),
+                connector,
+            });
+            return (RunReport::deferred(format!("claude: {e}")), None);
+        }
+        Err(e) => {
+            px.emit(Phase::Exited {
+                subtype: "error".to_string(),
+                connector,
+            });
+            return (RunReport::failed(format!("claude: {e}")), None);
+        }
     };
+    px.emit(Phase::Exited {
+        subtype: out.subtype.clone(),
+        connector,
+    });
     if !out.ok() {
         // An agentic mode reads its envelope even on a controlled non-zero exit (a budget cap), so
         // a run that reported an error must not settle `succeeded` with the error text as a result.
