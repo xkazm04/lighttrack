@@ -16,7 +16,9 @@
 //! - [`config`] — the env-derived [`Collective`] knobs every handler reads.
 //! - [`identity`] — who a contribution belongs to (shared by the two write routes).
 //! - [`digest`] (`GET /digest`) + [`scorecard`] — which projects consent, and how one run becomes a stat.
-//! - [`ingest`] (`POST /ingest`) + [`sanitize`] — the store transaction, and what a hub will believe.
+//! - [`ingest`] (`POST /ingest`) + [`sanitize`] — the store transaction, and what a hub will believe,
+//!   plus [`fold`] — the case-weighted re-aggregation that keeps a clamped vocabulary from colliding
+//!   two of a contributor's buckets into one last-writer-wins row.
 //! - [`leaderboard`] (`GET /leaderboard`) — merge, k-anonymity over sources, then filters.
 //! - [`withdraw`] (`DELETE /contribution`) — the right to revoke a contribution, plus
 //!   [`withdraw_all`] (`?all=1`), the contributor-side fan-out across every ledgered hub.
@@ -26,6 +28,7 @@
 mod config;
 mod contribute;
 mod digest;
+mod fold;
 mod identity;
 mod ingest;
 mod leaderboard;

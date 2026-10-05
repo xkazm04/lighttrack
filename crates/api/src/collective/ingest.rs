@@ -1,9 +1,10 @@
 //! `POST /v1/collective/ingest` — a hub receives a digest from a contributor and stores it (gated by
 //! `LIGHTTRACK_COLLECTIVE_ACCEPT`; off by default).
 //!
-//! This module owns the *transaction*: gate, identity, rate limit, replace-the-source's-set, sweep,
-//! and the disclosure ack. What makes a single contributed entry acceptable is
-//! [`super::sanitize`]'s job.
+//! This module owns the *transaction*: gate, identity, rate limit, fold, replace-the-source's-set,
+//! sweep, and the disclosure ack. What makes a single contributed entry acceptable is
+//! [`super::sanitize`]'s job; re-aggregating the entries whose keys collide after the clamp is
+//! [`super::fold`]'s.
 
 use axum::{extract::State, http::HeaderMap, Json};
 use chrono::Utc;
@@ -16,6 +17,7 @@ use lighttrack_core::{
 use crate::error::ApiError;
 use crate::state::{spawn_db, AppState};
 
+use super::fold::fold_entries;
 use super::identity::resolve_contributor;
 use super::sanitize::{sanitize_entry, Reject};
 
@@ -35,6 +37,16 @@ pub(crate) struct IngestAck {
     /// claim of a billion cases is disclosed back to the contributor, never silently absorbed into a
     /// merged row.
     rejected_implausible: usize,
+    /// Entries whose contributed `task_type` was outside the published vocabulary and was therefore
+    /// clamped to `general`. Disclosed because the clamp *narrows what the contributor sees on the
+    /// board*: a bucket it pushed under its own name reappears merged into `general`, and a counter is
+    /// the difference between that being a documented hub policy and looking like lost data.
+    clamped_task_type: usize,
+    /// Entries absorbed into an earlier entry sharing `(provider, model, task_type)` — after the
+    /// clamp, two invented labels are one bucket. Their cases, runs and quality are **folded**
+    /// (see [`super::fold`]); before the fold existed the store's upsert resolved the collision
+    /// last-writer-wins and the earlier entry's evidence vanished with nothing said.
+    folded_duplicates: usize,
 }
 
 /// Hub side: accept a contributor's digest and replace its stored entry set — one store call, so a
@@ -72,9 +84,9 @@ pub(crate) async fn post_ingest(
     let now = Utc::now();
     enforce_min_interval(&st, &contributor, now).await?;
     let mut skipped = 0usize;
-    let mut dropped_under_min = 0usize;
     let mut rejected_implausible = 0usize;
-    let entries: Vec<CollectiveEntry> = digest
+    let mut clamped_task_type = 0usize;
+    let clamped: Vec<CollectiveEntry> = digest
         .entries
         .into_iter()
         .filter_map(
@@ -87,13 +99,31 @@ pub(crate) async fn post_ingest(
                     rejected_implausible += 1;
                     None
                 }
-                Ok(ce) if ce.n_cases < min_cases => {
-                    dropped_under_min += 1;
-                    None
+                Ok(s) => {
+                    if s.task_type_clamped {
+                        clamped_task_type += 1;
+                    }
+                    Some(s.entry)
                 }
-                Ok(ce) => Some(ce),
             },
         )
+        .collect();
+    // Fold BEFORE the floor and before `MAX_ENTRIES`, and before the single store call. Two reasons,
+    // and the order matters for both: the store's upsert key is exactly what the clamp now makes
+    // collide, so an unfolded list loses a bucket's evidence to last-writer-wins; and a floor applied
+    // to the pre-fold list would judge a bucket by a fragment of itself, which is how a contributor
+    // could keep a sub-floor bucket on the board by splitting it across invented labels.
+    let (folded, folded_duplicates) = fold_entries(clamped);
+    let mut dropped_under_min = 0usize;
+    let entries: Vec<CollectiveEntry> = folded
+        .into_iter()
+        .filter(|ce| {
+            let keep = ce.n_cases >= min_cases;
+            if !keep {
+                dropped_under_min += 1;
+            }
+            keep
+        })
         .take(MAX_ENTRIES)
         .collect();
     let accepted = entries.len();
@@ -126,6 +156,8 @@ pub(crate) async fn post_ingest(
         skipped,
         dropped_under_min,
         rejected_implausible,
+        clamped_task_type,
+        folded_duplicates,
     }))
 }
 
