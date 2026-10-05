@@ -1671,3 +1671,59 @@ Remaining future work: BigQuery analytical sink + Pub/Sub queue (Phase 5/packagi
 - LLM-as-judge best practices — https://futureagi.com/blog/llm-as-judge-best-practices-2026 ·
   https://www.comet.com/site/blog/llm-as-a-judge/ ·
   Rubric-based evals & position bias — https://arxiv.org/pdf/2602.02219
+
+## Appendix — the freeform judge is a contract too (2026-10-05)
+
+LightTrack has **two** judge contracts, and only one of them used to be one. §3's structured rubric
+computes `pass` locally, measures agreement over the samples that parsed, and counts the ones that
+did not. The **freeform** path beside it — criteria text passed as a string, used by `score`
+(production trace scoring), `bench` simple mode, `bench compare`'s non-rubric arm and `calibrate` —
+did none of that. It now does, through `FreeformContract` and `crates/engine/src/judge/freeform.rs`.
+
+What changed, and why each one was a deviation from §3's own methodology:
+
+- **Pass is computed, never dictated.** A freeform verdict used to persist `pass: v.verdict.pass` —
+  the boolean the judge *model* emitted about the candidate it was evaluating. A candidate that
+  talked the judge into `"pass": true` wrote the gate's answer, and the fence's
+  `injection_suspected` flag did not stop the row being stored as a pass. `pass` is now
+  `normalized_overall >= contract.threshold`, computed in the contract exactly as the rubric's
+  `overall >= rubric.threshold` is. The model's own claim is kept beside it
+  (`FreeformOutcome::model_dissented`), because the disagreement is itself a signal.
+- **The bar is one bar.** A freeform contract defaults to `DEFAULT_RUBRIC_THRESHOLD` (0.7) — the same
+  constant a stored rubric defaults to — and a benchmark may set its own at
+  `target.judge_threshold`. Two contracts gating at different bars by accident of which door a score
+  came through was the shape of the bug.
+- **The reliability counters are measurements.** `samples_requested` / `samples_parsed` /
+  `parse_failures` were the literals `1 / 1 / 0` and `agreement` was the literal `1.0` (or `None`).
+  The cost landed at the operator surface: `GET /v1/scores?needs_review=1` computes `low_agreement`
+  and `parse_failures` as triage reasons, and **neither could ever fire on a freeform verdict** — not
+  because those verdicts were stable, but because the row asserted they were. They describe the
+  samples that actually ran now, and the triage reaches them with no change to the API.
+- **One bad sample is a counted drop, not a dead run.** An unparseable freeform sample used to be a
+  hard error that `bench` escalated into the death of the whole benchmark. With k samples, a sample
+  still unparseable after the one-shot repair re-ask is dropped from the mean and counted — the
+  rubric path's rule. *No* parseable sample at all is still a hard error: a verdict nobody measured
+  must not be stored as a confident 0.0 fail.
+- **The criteria carry an identity.** Freeform criteria arrive as a string on every request, so
+  there is no stored row to cite, and `rubric_id` was `None` on every freeform verdict — no query
+  could tell two runs under edited criteria apart. `FreeformContract::id()` is a prefixed, truncated
+  sha256 of the criteria (`freeform:<16 hex>`), stamped on every verdict and pinned into every run
+  report by `stamp_pins`. The threshold is deliberately **not** part of the identity: the criteria
+  are the instrument, the bar is policy.
+- **Calibration and production measure one instrument.** `calibrate` judged through
+  `build_judge_prompt`, whose signature had **no `expected` parameter at all**, while the benchmark
+  judged the same criteria text through `build_eval_prompt` **with** a fenced
+  `REFERENCE / EXPECTED ANSWER` block. So the κ that mints the trust verdict of §3 — the one
+  `judges::policy_block` lets gate a deploy — was measured on a prompt production never sends. There
+  is now one builder, `build_freeform_prompt`, whose reference block is present iff the case carries
+  a reference; `build_judge_prompt` is gone.
+
+Reading a stored freeform verdict: `pass` is the contract's decision, `detail.agreement` and
+`detail.parse_failures` are real, and `rubric_id` names the criteria digest when the benchmark had
+no stored rubric. Verdicts written before this change are self-identifying — a null `agreement` on a
+`ScoreKind::Freeform` row is a pre-contract verdict. Nothing stored was restated.
+
+**Known gap:** `bench compare`'s per-case score rows still stamp `rubric_id` from
+`bench.rubric_id` (`crates/runner/src/compare.rs`), which is `None` in freeform mode; the *run
+report* carries the contract digest via `stamp_pins`, so a compare run is identifiable but its
+individual rows are not. One line, deliberately left for a change that owns that file.
