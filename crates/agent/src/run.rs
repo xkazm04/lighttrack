@@ -16,8 +16,8 @@
 //! interval on that discovery — repeatedly, since nothing about the failure told the cloud to route
 //! the task elsewhere.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -26,8 +26,10 @@ use lighttrack_engine::{resolve_claude_bin, EngineConfig};
 
 use crate::cloud::Client;
 use crate::config::AgentConfig;
+use crate::deliver;
 use crate::exec;
 use crate::report::RunReport;
+use crate::verdict::Verdict;
 
 pub(crate) fn run(cfg: &AgentConfig, once: bool) -> Result<()> {
     let engine = EngineConfig {
@@ -91,20 +93,20 @@ fn run_one(
 ) {
     let Some(fence) = task.lease_fence else {
         // A cloud predating M7 stamps no fence. Run it the old way: unfenced, exactly as before.
-        let report = exec::execute(cfg, engine, task);
+        let report = deliver::propagate(exec::execute(cfg, engine, task));
         announce(client, task, &report);
         settle(client, task, None, &report);
         return;
     };
 
-    let lost = AtomicBool::new(false);
+    let interrupt: Mutex<Option<Interrupt>> = Mutex::new(None);
     // The heartbeat waits on a channel, not a sleep: `thread::scope` joins the heartbeat before
     // the run's report is returned, and a sleeping heartbeat held every settle back for up to a
     // full renewal interval after the CLI had already exited — dead time on a serial loop, once
     // per task. Dropping the sender wakes it instantly.
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-    let lost_ref = &lost;
-    let report = std::thread::scope(|scope| {
+    let interrupt_ref = &interrupt;
+    let produced = std::thread::scope(|scope| {
         // `move` takes the receiver (not `Sync`) into the heartbeat; everything else it uses is a
         // shared reference or `Copy`.
         scope.spawn(move || {
@@ -112,39 +114,106 @@ fn run_one(
             while let Err(RecvTimeoutError::Timeout) =
                 done_rx.recv_timeout(Duration::from_secs(renew_secs))
             {
-                match client.renew(&task.id, fence) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        // Affirmative evidence of a takeover (or a cancellation). Nothing can
-                        // interrupt the CLI mid-call, but the delivery this run would have made is
-                        // suppressed — the settle below is skipped entirely.
-                        eprintln!(
-                            "[{}] LEASE LOST on task {} — this run is no longer ours. Its result \
-                             will NOT be reported or delivered.",
-                            client.name, task.id
-                        );
-                        lost_ref.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                    // A transient failure is not evidence of a lost lease, and treating it as one
+                let v = client.renew(&task.id, fence);
+                let stop = match &v {
+                    Verdict::Held { .. } => None,
+                    // The operator's cancel, arriving on the only channel that reaches a running
+                    // device. The lease is still ours, so this run still reports — it must only
+                    // not deliver.
+                    Verdict::Stop { .. } => Some(Interrupt::Cancelled),
+                    // Affirmative evidence of a takeover. Nothing can interrupt the CLI mid-call,
+                    // but neither the delivery nor the settle may happen on nobody's authority.
+                    Verdict::Reclaimed { .. } | Verdict::NoSuchTask => Some(Interrupt::Lost),
+                    // "I could not tell" is not evidence of a lost lease, and treating it as one
                     // would abandon a healthy run on a blip. That is what the TTL/3 cadence buys:
                     // room to miss one or two and try again.
-                    Err(e) => {
-                        eprintln!("[{}] lease renewal failed (will retry): {e:#}", client.name)
+                    Verdict::Unknown { .. } => None,
+                };
+                let Some(stop) = stop else {
+                    if let Verdict::Unknown { err } = &v {
+                        eprintln!("[{}] lease renewal failed (will retry): {err}", client.name);
                     }
-                }
+                    continue;
+                };
+                eprintln!(
+                    "[{}] {} on task {} — {}. {}",
+                    client.name,
+                    stop.headline(),
+                    task.id,
+                    v.describe(),
+                    stop.consequence(),
+                );
+                *interrupt_ref.lock().unwrap_or_else(|e| e.into_inner()) = Some(stop);
+                break;
             }
         });
-        let report = exec::execute(cfg, engine, task);
+        let produced = exec::execute(cfg, engine, task);
         drop(done_tx);
-        report
+        produced
     });
 
-    if lost.load(Ordering::Relaxed) {
-        return;
-    }
+    // THE seam: the result exists and nothing irreversible has happened yet.
+    let interrupt = interrupt.into_inner().unwrap_or_else(|e| e.into_inner());
+    let report = match settlement(interrupt.as_ref()) {
+        Settlement::Abandon => return,
+        Settlement::SettleOnly => produced.report,
+        Settlement::DeliverAndSettle => deliver::propagate(produced),
+    };
     announce(client, task, &report);
     settle(client, task, Some(fence), &report);
+}
+
+/// What the heartbeat learned while the CLI ran. The two interruptions are kept apart because their
+/// settlements are opposite: a cancelled run is still ours to report, a reclaimed one is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Interrupt {
+    /// An operator asked this run to stop. The lease is still ours.
+    Cancelled,
+    /// Somebody else holds the task now, or it is gone.
+    Lost,
+}
+
+impl Interrupt {
+    /// Distinct wording on purpose: "you were cancelled" and "you were taken over" are different
+    /// facts, and the device's log could say neither — because the agent could not tell them apart.
+    fn headline(self) -> &'static str {
+        match self {
+            Interrupt::Cancelled => "CANCELLED by operator",
+            Interrupt::Lost => "LEASE LOST",
+        }
+    }
+
+    fn consequence(self) -> &'static str {
+        match self {
+            Interrupt::Cancelled => {
+                "Its result will NOT be delivered; the run is still reported honestly."
+            }
+            Interrupt::Lost => "Its result will NOT be reported or delivered.",
+        }
+    }
+}
+
+/// What to do with a produced result. This decision is the point of the change: it sits between
+/// producing the result and delivering it, which is the only place a cancel can still stop the
+/// irreversible half. While the connector call lived inside `exec`, the seam did not exist and the
+/// one stop flag was consulted after delivery had already happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Settlement {
+    /// Nothing interrupted: propagate through the action's connector, then settle.
+    DeliverAndSettle,
+    /// Cancelled: skip the connector, and still settle — the store terminates a cancelling task as
+    /// `cancelled` and charges it no failure, so reporting is the honest thing to do.
+    SettleOnly,
+    /// Lost: the result belongs to a run the cloud has handed away. Neither deliver nor settle.
+    Abandon,
+}
+
+fn settlement(interrupt: Option<&Interrupt>) -> Settlement {
+    match interrupt {
+        None => Settlement::DeliverAndSettle,
+        Some(Interrupt::Cancelled) => Settlement::SettleOnly,
+        Some(Interrupt::Lost) => Settlement::Abandon,
+    }
 }
 
 fn announce(client: &Client, task: &lighttrack_core::RelayTask, report: &RunReport) {
@@ -166,18 +235,66 @@ fn settle(
     fence: Option<chrono::DateTime<chrono::Utc>>,
     report: &RunReport,
 ) {
-    if let Err(e) = client.settle(&task.id, fence, report) {
-        // A 409 is not a failure to recover from: the cloud refused the report because this device
-        // no longer owns the task, and whoever owns it now owns the outcome. Anything else
-        // self-heals — the lease expires and the cloud requeues.
-        if crate::cloud::is_conflict(&e) {
-            eprintln!(
-                "[{}] settle {} REFUSED (409): this device no longer held the task; its result \
-                 was not recorded.",
-                client.name, task.id
-            );
-        } else {
-            eprintln!("[{}] settle {} failed: {e:#}", client.name, task.id);
+    // The same classifier the renewal uses — one taxonomy, one authority. What was here was a
+    // SECOND substring test over a formatted error string, free to drift from the first.
+    match client.settle(&task.id, fence, report) {
+        Verdict::Held { .. } | Verdict::Stop { .. } => {}
+        // Not a failure to recover from: the cloud refused the report because this device no longer
+        // owns the task, and whoever owns it now owns the outcome.
+        Verdict::Reclaimed { status } => eprintln!(
+            "[{}] settle {} REFUSED (409): this device no longer held the task{}; its result was \
+             not recorded.",
+            client.name,
+            task.id,
+            match status {
+                Some(s) => format!(" (the record now holds '{s}')"),
+                None => String::new(),
+            }
+        ),
+        Verdict::NoSuchTask => eprintln!(
+            "[{}] settle {} REFUSED (404): the task no longer exists; its result was not recorded.",
+            client.name, task.id
+        ),
+        // Anything else self-heals — the lease expires and the cloud requeues.
+        Verdict::Unknown { err } => {
+            eprintln!("[{}] settle {} failed: {err}", client.name, task.id)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The decision this change creates. A cancelled run keeps its report and loses its delivery;
+    /// a reclaimed run loses both; an uninterrupted run keeps both. Before the seam existed there
+    /// was one boolean, consulted after `exec` had already delivered — so a cancelled run's
+    /// connector had fired by the time anybody asked.
+    #[test]
+    fn the_stop_check_decides_between_producing_and_delivering() {
+        assert_eq!(settlement(None), Settlement::DeliverAndSettle);
+        assert_eq!(
+            settlement(Some(&Interrupt::Cancelled)),
+            Settlement::SettleOnly,
+            "a cancelled run must not deliver, and must still report"
+        );
+        assert_eq!(
+            settlement(Some(&Interrupt::Lost)),
+            Settlement::Abandon,
+            "a reclaimed run's result belongs to nobody"
+        );
+    }
+
+    /// An operator reading a device log has to be able to tell the two apart. They were one message
+    /// ("LEASE LOST") for both, because the agent could not tell them apart either.
+    #[test]
+    fn a_cancel_and_a_takeover_do_not_read_the_same() {
+        assert_ne!(Interrupt::Cancelled.headline(), Interrupt::Lost.headline());
+        assert!(Interrupt::Cancelled.headline().contains("CANCELLED"));
+        assert!(Interrupt::Lost.headline().contains("LEASE LOST"));
+        assert!(Interrupt::Cancelled
+            .consequence()
+            .contains("still reported"));
+        assert!(Interrupt::Lost.consequence().contains("NOT be reported"));
     }
 }
