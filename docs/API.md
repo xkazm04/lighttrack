@@ -10,10 +10,10 @@ describe a route that does not exist, or miss one that does.
 
 | | |
 |---|---|
-| Endpoints (method × path) | 133 |
-| Distinct `/v1` routes | 103 |
-| MCP tools | 69 (47 read, 22 write) |
-| CLI verbs | 93 |
+| Endpoints (method × path) | 134 |
+| Distinct `/v1` routes | 104 |
+| MCP tools | 70 (48 read, 22 write) |
+| CLI verbs | 94 |
 | Endpoints with a Markdown renderer | 46 |
 | Machine doors (SDK / device / provider) | 17 |
 | Paged reads | 6 |
@@ -128,6 +128,7 @@ those are machine doors (an SDK's ingest, a device agent's lease, a provider's w
 | DELETE | `/v1/projects/:id/margin-policies/:pid` | admin |  | `lt margin-policies delete` |  |
 | GET | `/v1/limits/status` | `read` | `get_limit_status` | `lt limits status` | `get_limit_status` |
 | GET | `/v1/limits/usage` | `read` |  | `lt limits usage` |  |
+| GET | `/v1/limits/preview` | `read` | `preview_limit` | `lt limits preview` |  |
 | POST | `/v1/relay/tasks` | `ingest` |  | `lt relay tasks enqueue` |  |
 | GET | `/v1/relay/tasks` | `read` | `list_relay_tasks` | `lt relay tasks list` |  |
 | GET | `/v1/relay/tasks/:id` | `read` | `get_relay_task` |  |  |
@@ -164,8 +165,8 @@ those are machine doors (an SDK's ingest, a device agent's lease, a provider's w
 
 ## Response types
 
-64 of 133 endpoints return a named type that derives `schemars::JsonSchema`, so
-`/openapi.json` describes their fields. The other 68 build their body with
+64 of 134 endpoints return a named type that derives `schemars::JsonSchema`, so
+`/openapi.json` describes their fields. The other 69 build their body with
 `serde_json::json!` and have no struct to point at; the contract describes each in prose and
 the generated document carries that prose instead of a field list. Turning one into a named
 type is a strict improvement that needs no coordination — add the struct, derive
