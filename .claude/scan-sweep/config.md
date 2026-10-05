@@ -71,3 +71,36 @@ Stage nothing with `-A`/`.`/`-u`; commit with `git commit -m "..." -- <paths>` a
   filter on the HTTP row and leave the tool args at the forwarded set. A new test file
   named `jobs_tests.rs` routed `job-coordination` and `engine-host-contract`; same
   homonym rule as above.
+- 2026-10-05 (`--challenge`, first challenge run here, 12/12 landed): four operating facts this
+  repo forces on a challenge run.
+  **(a) `target/` is unusable while this session's own `lt-mcp` MCP server is attached** - cargo
+  cannot replace `target/debug/lt-mcp.exe` and the build dies with `os error 5`. Every builder and
+  every gate needs a `CARGO_TARGET_DIR` outside the repo (the OS temp dir, never under the tree or
+  an overlay).
+  **(b) `cargo test --workspace` without `--no-fail-fast` under-reports the total** - it returned
+  1913 where the real figure was 1941. Any ledger or baseline comparison must pass the flag or it
+  is comparing against a truncated number.
+  **(c) `docs/PARITY.md` is NOT a hand-editable shared surface.** It is generated from the
+  backends' manifests and guarded by `crates/store/tests/parity_doc.rs`, so a hand-written note in
+  it goes red unless the change actually adds a `Surface`. This file listed it as lockable and a
+  builder correctly refused; `CHANGELOG.md` is the right home for an operator note. Generated docs
+  that ARE safe to append under the lock: `docs/API.md` (via `LIGHTTRACK_WRITE_API_MATRIX=1`),
+  `docs/BENCHMARK_FRAMEWORK.md`, `docs/RELAY.md`.
+  **(d) `crates/store/tests/soak.rs::store_soak_lane` is a flaky instrument** - it fails its own
+  planted-red self-check at roughly 1 in 10 runs *in isolation*, measured 1/13 at an untouched base
+  sha against 2/11 on the merged tree. Three builders hit it independently and each re-ran and moved
+  on, which is the behaviour to worry about. Brief every builder that it is pre-existing and outside
+  their write set, or the run burns an investigation per wave.
+- 2026-10-05: `challenge.sharedSurfaces` for this repo is
+  `docs/API.md`, `docs/BENCHMARK_FRAMEWORK.md`, `docs/RELAY.md` (append at the END, commit alone
+  under the `mkdir` lock). Also serialize these **code** files one-card-per-wave rather than
+  locking them: `crates/api/src/main.rs` (5 cards wanted it), `crates/mcp/src/schemas.rs` (3 cards;
+  and clippy's `items_after_test_module` forbids appending at the very end, so it is a 3-way merge
+  not a union), `crates/core/src/lib.rs`, `crates/contract/src/lib.rs`.
+- 2026-10-05: in this repo a new HTTP route now **requires** a `lighttrack_contract::endpoints()`
+  row or it answers **500** (the access layer landed this run), and the row needs a `surface` that
+  passes a two-way completeness check. Derive the surface from the store methods the route actually
+  calls - assert `row.surface == the surface whose methods() contains "<method>"` rather than
+  hardcoding it. Also: `tool_contract` ties an MCP `outputSchema` to the endpoint having a
+  `render_kind`, so a row without one must NOT get a schema. Two builders' write sets shrank once
+  they checked this first.
