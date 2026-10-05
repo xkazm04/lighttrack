@@ -74,6 +74,42 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         degrades: &["score_filters"],
         ..Endpoint::DEFAULT
     },
+    // An aggregate over the *verdicts* above rather than over the benchmark row, which is why it is
+    // declared here beside them: its only store read is `list_run_scores`, and what it publishes is
+    // the per-dimension signature those verdicts already carry.
+    Endpoint {
+        id: "benchmark_regression",
+        method: Method::Get,
+        path: "/v1/benchmarks/:id/regression",
+        // The same credential the gate is served to. A regression table is the gate's verdict with
+        // its reasons attached; a key that may read one may read the other.
+        access: Key(Read),
+        params: &[
+            pm("id", "benchmark", "benchmark id"),
+            qr("run", "the finished run under scrutiny"),
+            q(
+                "against",
+                "the run to compare it against (default: the previous finished run of this benchmark)",
+            ),
+        ],
+        response: TypeRef::Untyped(
+            "{ status: ok|no_dimensions, reason?, dimensions: [{ key, status: \
+             compared|coverage_changed, mean_before?, mean_after?, delta?, n_before, n_after, \
+             floor_hits_before, floor_hits_after, voided_before, voided_after }], flipped: [{ \
+             case_index, dimension?, reasonings }], families_before, families_after: [{ family, \
+             status: measured|not_measured, cases, denominator }], unpaired_before, unpaired_after \
+             } — the per-dimension delta table, worst drop first; 409 when the two runs were not \
+             scored by the same instrument.",
+        ),
+        mcp: Some(McpTool {
+            name: "get_benchmark_regression",
+            description: "Why a benchmark regressed, not just that it did: the per-dimension delta table between two finished runs (worst-dropping dimension first), the cases whose verdict flipped with the judge's own reasoning for the dimension that moved, and failure-family counts (parse_failures, low_agreement, injection_suspected, floor_hit) each with the denominator of cases that could have tripped it — a family whose denominator is 0 reads `not_measured`, never 0. `against` defaults to the previous finished run. 409 when the two runs were scored by different judges or rubrics, because that is a methodology change rather than a regression.",
+            args: &["id", "run", "against"],
+            ..McpTool::DEFAULT
+        }),
+        doc: "Per-dimension regression between two finished runs: deltas, flipped cases with the judge's words, and failure families with their denominators.",
+        ..Endpoint::DEFAULT
+    },
 ];
 
 #[cfg(test)]

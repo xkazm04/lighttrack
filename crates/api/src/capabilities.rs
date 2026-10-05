@@ -13,7 +13,7 @@ use crate::error::ApiError;
 use crate::guards::authenticate;
 use crate::state::AppState;
 
-mod routes;
+pub(crate) mod routes;
 
 use routes::DegradedRoute;
 

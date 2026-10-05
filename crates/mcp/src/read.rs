@@ -47,6 +47,16 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "check_benchmark_gate" => bind(args, "benchmark", |b| {
             c.get(&format!("/v1/benchmarks/{b}/gate"))
         }),
+        "get_benchmark_regression" => bind(args, "benchmark", |b| {
+            // `run` is required by the HTTP row, so it is required here too rather than defaulted:
+            // a forwarder that invents a run id answers a question nobody asked.
+            let Some(run) = args.get("run").and_then(Value::as_str) else {
+                return Err("missing required argument: run".to_string());
+            };
+            let mut p = format!("/v1/benchmarks/{b}/regression?run={}", enc_q(run));
+            push_str_params(&mut p, args, &["against"]);
+            c.get(&p)
+        }),
         "get_usecases" => c.get(&usecases_path(args)),
         "query_rollup" => c.get(&rollup_path(args)),
         "list_datasets" => bind(args, "project", |p| {

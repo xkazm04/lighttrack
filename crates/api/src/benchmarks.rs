@@ -381,7 +381,7 @@ fn baseline_not_comparable(run: &BenchmarkRun, bench: &Benchmark) -> Option<Stri
 /// rubric; reading that silence as drift would retire every legacy verdict at once, which is the
 /// same over-refusal the unfrozen-dataset predicate avoids by treating a missing flag as "nothing
 /// says the cases moved".
-fn instrument_moved(run: &BenchmarkRun, bench: &Benchmark) -> Option<String> {
+pub(crate) fn instrument_moved(run: &BenchmarkRun, bench: &Benchmark) -> Option<String> {
     let pinned = |k: &str| run.report.get(k).and_then(serde_json::Value::as_str);
     if let Some(judge) = pinned("judge_model") {
         if judge != bench.judge_model {

@@ -45,6 +45,7 @@
 //!   GET  /v1/prices  PUT /v1/prices/:provider/:model
 //!   .../datasets .../rubrics .../benchmarks .../jobs            (see modules)
 //!   GET  /v1/benchmarks/:id/gate         CI-gate verdict from the latest finished run
+//!   GET  /v1/benchmarks/:id/regression?run=&against=   per-dimension deltas, flipped cases, failure families
 //!                                        (pass|regressed|no_baseline|no_runs + run_id/mean/baseline/n)
 //!   POST /v1/projects/:id/prompts  GET /v1/projects/:id/prompts          prompt registry
 //!   GET  /v1/projects/:id/prompts/:name?label=production|version=N       runtime fetch by label
@@ -183,6 +184,7 @@ mod auth;
 mod auth_scopes;
 mod auth_throttle;
 mod benchmarks;
+mod benchmarks_regression;
 mod benchmarks_target;
 mod billing;
 mod capabilities;
@@ -692,6 +694,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
             get(benchmarks::list_benchmark_runs),
         )
         .route("/v1/benchmarks/:id/gate", get(benchmarks::benchmark_gate))
+        .route(
+            "/v1/benchmarks/:id/regression",
+            get(benchmarks_regression::benchmark_regression),
+        )
         .route("/v1/benchmark-runs", post(benchmarks::post_benchmark_run))
         .route(
             "/v1/benchmarks/:id/enqueue",
