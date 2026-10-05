@@ -1727,3 +1727,58 @@ no stored rubric. Verdicts written before this change are self-identifying — a
 `bench.rubric_id` (`crates/runner/src/compare.rs`), which is `None` in freeform mode; the *run
 report* carries the contract digest via `stamp_pins`, so a compare run is identifiable but its
 individual rows are not. One line, deliberately left for a change that owns that file.
+
+## Every leaderboard row states its own measurement (M28, `challenge-2026-10-05`)
+
+The board already did the hard honesty work — a CI that *widens* when sources disagree,
+`source_spread` when no CI can be formed, `low_confidence`, `max_source_share`, `held_back`, the
+whole rigor block. Two facts it held were dropped on the last line: **which rubric** scored the row,
+and **when** the evidence arrived. `Acc.rubric_fps` was filled from every stored entry and never
+read by `merge_leaderboard`; `received_at` was loaded on the read path and used only to decide
+retention. So a row merged from two incompatible rubrics rendered as consensus, and a board nobody
+had fed in a year read as current.
+
+The asymmetry was the giveaway: a judge-family mismatch is disclosed (`judge_providers`,
+`mixed_judges`) *and* filterable (`?judge=`), while a rubric mismatch — the stronger
+incommensurability, since two rubrics can disagree about what the scale *means* — was collected by
+the same `collapse`-shaped logic and silently discarded.
+
+- **Rubric agreement, as a count.** A row now carries `n_rubrics` and, when two or more rubrics
+  stand behind it, `mixed_rubrics`. A source already tagged `mixed` counts as two, exactly as for
+  judge families. `n_rubrics` is **absent when nothing was recorded** — a row whose sources all
+  predate rubric fingerprinting does not know how many rubrics scored it, and `1` would impute an
+  agreement nobody measured.
+- **The count, deliberately not the fingerprints.** A rubric fingerprint is a high-cardinality,
+  contributor-chosen hash. Publishing the *set* on every row would hand any anonymous reader a
+  linkage key: a contributor with a rare rubric could have its whole `(provider, model, task_type)`
+  footprint traced across the board, which is the unilateral identifiability that
+  `min_contributors` and `bucket_cost` exist to prevent. The number is what makes the row legible;
+  the hash is what would make the contributor legible. Same treatment as cost — disclose the fact,
+  coarsen the fingerprint away.
+- **An evidence window, day-coarsened.** Each row carries `newest_at` / `oldest_at` and the envelope
+  carries `as_of` = the newest evidence behind any **visible** row. All three are fixed-width
+  `RFC3339(Nanos, Z)` truncated to the UTC day: a nanosecond receipt time is the same kind of
+  fingerprint (two rows stamped with the identical instant came from one ingest, which joins a
+  contributor's rows without naming it), while the day keeps every decision the window is for. Fixed
+  width means lexicographic order is chronological order, so the freshness filter is a string
+  compare. An empty board owns no date — `as_of` is absent, never today.
+- **Both facts are filterable, after the floor.** `GET …/leaderboard?rubric=<fingerprint>` keeps rows
+  at least one of whose sources scored under that rubric, and `?fresh_days=30` keeps rows with at
+  least one source received inside the window. Both run **after** the `min_contributors` retain and
+  the counts are recomputed over the survivors, so a filter can never be the thing that publishes a
+  single-source row. `?rubric=` is an **input only** — it is matched against the stored entries, the
+  caller supplies a fingerprint it already holds (its own digest's, typically), and a source tagged
+  `mixed` cannot vouch for one rubric so it does not match. A row that cannot prove its age is
+  dropped by `?fresh_days=`, never assumed current.
+- **The MCP contract caught up.** `get_collective_leaderboard`'s declared output schema stopped at
+  `n_cases`, so an agent reading the tool contract saw a bare ranking with none of the uncertainty
+  apparatus and would trust a thin, one-rubric, eleven-month-old row exactly as much as a fresh
+  cross-validated one. The row schema now declares `quality_ci95`, `source_spread`,
+  `low_confidence`, `max_source_share`, `mixed_judges`, `n_rubrics`, `mixed_rubrics`, `newest_at`,
+  `oldest_at` and `mixed_rigor`, and the envelope declares `held_back` and `as_of`. The forwarded
+  *filter* keys are unchanged: MCP forwards stay a subset.
+
+Purely additive — a caller that passes neither new parameter gets the previous response plus four
+optional row fields and `as_of`. Nothing stored is written, read differently, or deleted: every fact
+published here was already in `collective_entries`. New: `core::collective::provenance` owns both
+folds so the "mixed means at least two" rule is written once.
