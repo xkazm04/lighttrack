@@ -32,6 +32,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["costs"]),
         render_kind: Some("get_cost_summary"),
         doc: "Cost and usage grouped by project, provider and model over an optional window.",
+        degrades: &["event_filters"],
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -72,6 +73,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["prices", "unpriced"]),
         render_kind: Some("list_unpriced_models"),
         doc: "Which models carried traffic the price book could not cost, loudest first.",
+        surface: "pricing",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -107,6 +109,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["prompts", "quality"]),
         render_kind: Some("get_prompt_quality"),
         doc: "How each served prompt version is scoring in production, with n and a ~95% interval.",
+        surface: "score_summaries",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -136,6 +139,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         render_kind: Some("get_usecases"),
         doc: "Usage and cost grouped by use-case name, provider and model.",
+        surface: "event_filters",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -175,6 +179,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["rollup"]),
         render_kind: Some("query_rollup"),
         doc: "The grouped cost/usage primitive every fixed cost surface is one grouping of.",
+        surface: "rollup",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -209,6 +214,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["prices", "history"]),
         render_kind: Some("list_price_history"),
         doc: "One model's price timeline, newest first — what a call in a past window really cost.",
+        surface: "pricing",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -257,6 +263,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             ],
         }),
         doc: "Upsert one model's rate, hot-swapping the live book and optionally pricing its history.",
+        degrades: &["pricing"],
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -294,6 +301,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["forecast"]),
         render_kind: Some("get_forecast"),
         doc: "Projected spend, budget-breach ETAs and margin-erosion crossovers for a project.",
+        surface: "forecast",
         ..Endpoint::DEFAULT
     },
 ];

@@ -32,6 +32,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["collective", "digest"]),
         render_kind: Some("get_collective_digest"),
         doc: "Preview this instance's contributable digest, built only from consenting projects' runs.",
+        surface: "collective",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -50,6 +51,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
              drop is disclosed back rather than silently absorbed.",
         ),
         doc: "Hub door: accept a contributor's digest and replace that source's stored entry set.",
+        surface: "collective",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -84,6 +86,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["collective", "leaderboard"]),
         render_kind: Some("get_collective_leaderboard"),
         doc: "The merged cross-contributor model leaderboard, k-anonymized over sources.",
+        surface: "collective",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -105,6 +108,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["collective", "withdraw"]),
         doc: "Withdraw a source's contributed entries — consent stays revocable, not one-way.",
+        surface: "collective",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -130,6 +134,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["collective", "contribute"]),
         doc: "Build this instance's digest, hash-gate it, push it to a hub, and record the attempt.",
+        degrades: &["contributions"],
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -152,6 +157,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["collective", "history"]),
         render_kind: Some("get_collective_contributions"),
         doc: "The contributor-side ledger: what we pushed, to which hub, and what it said back.",
+        surface: "contributions",
         ..Endpoint::DEFAULT
     },
 ];

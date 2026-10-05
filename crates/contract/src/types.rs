@@ -238,6 +238,12 @@ impl McpTool {
     };
 }
 
+/// The surface every backend serves. A row that annotates no surface is a row on this one.
+///
+/// Spelled the same as `lighttrack_store::Surface::EventsCore::as_str()`; the API's
+/// `capabilities::routes` tests bind the two vocabularies together in both directions.
+pub const CORE_SURFACE: &str = "events_core";
+
 /// One HTTP endpoint, and every surface it is reachable from.
 pub struct Endpoint {
     /// Stable identifier, unique across the table. Used as the OpenAPI `operationId`.
@@ -271,6 +277,23 @@ pub struct Endpoint {
     pub render_kind: Option<&'static str>,
     /// On its way off the published surface, if it is — the route-level twin of `Param::deprecated`.
     pub deprecated: Option<Deprecation>,
+    /// The store capability surface whose absence makes this route answer HTTP 501 **in full**.
+    /// Defaults to [`CORE_SURFACE`], which every backend serves — so the question "which surface
+    /// takes this route out" has an answer on every row rather than on the ones somebody
+    /// remembered to annotate.
+    ///
+    /// Stringly-typed for the same reason `Access`'s key scopes are: this crate deliberately
+    /// depends on nothing but `serde_json`, and `Surface` lives in `lighttrack-store`. The API
+    /// holds the one test that binds these names back to `Surface::ALL`, in both directions.
+    pub surface: &'static str,
+    /// Surfaces whose absence **narrows** this route rather than removing it: a query filter that
+    /// answers 501, a response field that comes back `null`, a list that comes back empty.
+    ///
+    /// A separate column from `surface` because conflating them publishes a lie. `maintenance` and
+    /// `metrics` are refused on Postgres and take out *no route at all* —
+    /// `GET /v1/storage/status` nulls two fields and says so — so an operator told "these routes
+    /// answer 501" about them goes looking for a 501 that does not exist.
+    pub degrades: &'static [&'static str],
     pub doc: &'static str,
 }
 
@@ -293,6 +316,8 @@ impl Endpoint {
         cli: None,
         render_kind: None,
         deprecated: None,
+        surface: CORE_SURFACE,
+        degrades: &[],
         doc: "",
     };
 

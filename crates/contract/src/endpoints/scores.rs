@@ -71,6 +71,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         render_kind: Some("list_scores"),
         doc: "Judge verdicts, newest first; narrowable to one run, rubric, kind, or the review queue.",
+        degrades: &["score_filters"],
         ..Endpoint::DEFAULT
     },
 ];

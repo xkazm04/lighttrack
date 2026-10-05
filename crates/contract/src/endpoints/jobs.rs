@@ -113,6 +113,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["jobs", "cancel"]),
         doc: "Ask a queued or running job to stop; cancelling a finished job is a 409.",
+        surface: "job_leases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -146,6 +147,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
              worker's (reaped, requeued or reclaimed) and the run must stop.",
         ),
         doc: "Heartbeat: extend this worker's lease, or learn by 409 that it lost the job.",
+        surface: "job_leases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -197,6 +199,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["schedules", "create"]),
         doc: "Store a recurring workload; its payload is validated against its kind at creation.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -209,6 +212,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["schedules", "list"]),
         render_kind: Some("list_schedules"),
         doc: "One project's schedules; a project key reads its own, a mismatch is a 403.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -230,6 +234,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["schedules", "list"]),
         render_kind: Some("list_schedules"),
         doc: "Every recurring workload in this deployment, across projects.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -253,6 +258,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("Schedule"),
         cli: Some(&["schedules", "set"]),
         doc: "Patch a schedule; an omitted field is left alone, so pausing cannot rewrite a payload.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -266,6 +272,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Untyped("{ deleted: id } — the jobs it already produced are kept."),
         cli: Some(&["schedules", "delete"]),
         doc: "Remove a schedule; the history of what it enqueued survives it.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -278,6 +285,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["schedules", "runs"]),
         render_kind: Some("list_jobs"),
         doc: "The jobs one schedule has produced, matched by the `schedule_id` its sweep stamps.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
 ];

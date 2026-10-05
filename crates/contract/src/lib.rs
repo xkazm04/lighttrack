@@ -26,7 +26,7 @@ mod types;
 
 pub use types::{
     Access, Deprecation, DeprecationStage, Endpoint, JsonTy, KeyScope, McpTool, Method, Param,
-    ParamKind, TypeRef,
+    ParamKind, TypeRef, CORE_SURFACE,
 };
 
 /// Every endpoint in the contract, in router order.
@@ -50,6 +50,19 @@ pub fn route_paths() -> Vec<&'static str> {
     let mut v: Vec<&'static str> = endpoints()
         .map(|e| e.path)
         .filter(|p| p.starts_with("/v1"))
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// Every surface name the table claims — as a route-level refusal or as a degradation.
+///
+/// The denominator of the completeness check that runs in the API, where `Surface::ALL` is
+/// visible: a surface no row claims is a refusal with no published consequence.
+pub fn claimed_surfaces() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = endpoints()
+        .flat_map(|e| std::iter::once(e.surface).chain(e.degrades.iter().copied()))
         .collect();
     v.sort_unstable();
     v.dedup();
@@ -157,6 +170,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every row resolves to exactly one route-level surface, and the resolution is not empty —
+    /// a derived selection that selects nothing must fail rather than report nothing refused.
+    #[test]
+    fn every_row_resolves_to_exactly_one_surface() {
+        let mut resolved = 0usize;
+        for e in endpoints() {
+            let s = e.surface;
+            assert!(!s.is_empty(), "{}: empty surface name", e.id);
+            assert!(
+                !s.contains(' ') && s == s.to_lowercase(),
+                "{}: '{s}' is not a snake_case surface name",
+                e.id
+            );
+            for d in e.degrades {
+                assert_ne!(
+                    *d, s,
+                    "{}: '{d}' cannot both remove this route and merely narrow it",
+                    e.id
+                );
+            }
+            resolved += 1;
+        }
+        assert!(
+            resolved >= 130,
+            "only {resolved} rows resolved to a surface — the mapping is empty or the table shrank"
+        );
     }
 
     /// The coverage property the whole item exists to establish: no route is reachable from

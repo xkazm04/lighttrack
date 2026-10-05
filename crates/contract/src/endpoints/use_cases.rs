@@ -66,6 +66,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["use-cases", "register"]),
         doc: "Register a place this project calls an LLM, or correct one already registered. Idempotent on (project, key), so fixing a description never means deleting the row the events attribute to.",
+        surface: "use_cases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -83,6 +84,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["use-cases", "list"]),
         doc: "List the LLM call sites this project has declared.",
+        surface: "use_cases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -108,6 +110,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["use-cases", "coverage"]),
         doc: "Declared against observed: which call sites have traffic, which are running a model they never declared, which traffic nobody declared at all, and how many calls carry no use case.",
+        surface: "use_cases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -128,6 +131,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["use-cases", "show"]),
         doc: "Read one declared LLM call site.",
+        surface: "use_cases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -144,6 +148,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         mcp: None,
         cli: Some(&["use-cases", "delete"]),
         doc: "Remove a registration. The events that referenced it are untouched - they become undeclared traffic again, which is the honest state.",
+        surface: "use_cases",
         ..Endpoint::DEFAULT
     },
 ];

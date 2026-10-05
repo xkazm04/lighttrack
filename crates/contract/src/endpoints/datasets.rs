@@ -141,6 +141,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("DatasetItem"),
         cli: Some(&["datasets", "promote"]),
         doc: "Promote a labelled production event into a golden case, copying the human verdict onto it.",
+        surface: "labels",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -152,6 +153,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::ArrayOf("Label"),
         cli: Some(&["datasets", "labels"]),
         doc: "Every human verdict on this set's items — the join `lt-runner calibrate --dataset` reads.",
+        surface: "labels",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -171,6 +173,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["datasets", "fork"]),
         doc: "Fork a frozen dataset into the next version of its name, labels and all.",
+        surface: "dataset_lineage",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -204,6 +207,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["datasets", "import"]),
         doc: "Mine stored events or verdicts into an unfrozen dataset; 409 if it is frozen.",
+        surface: "dataset_lineage",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -218,6 +222,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::ArrayOf("Dataset"),
         cli: Some(&["datasets", "versions"]),
         doc: "Every version of one dataset name, newest first — what a run's dataset_pin resolves to.",
+        surface: "dataset_lineage",
         ..Endpoint::DEFAULT
     },
 ];

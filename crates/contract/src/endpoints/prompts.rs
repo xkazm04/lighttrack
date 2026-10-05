@@ -27,6 +27,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["prompts", "create"]),
         doc: "Register a new prompt with its first version; 409 when the name already exists.",
+        surface: "prompts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -45,6 +46,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["prompts", "list"]),
         render_kind: Some("list_prompts"),
         doc: "A project's registry prompts with their label pointers and gating benchmark.",
+        surface: "prompts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -70,6 +72,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         render_kind: Some("get_prompt"),
         doc: "Runtime fetch: resolve a prompt by version, by label, or to its latest version.",
+        surface: "prompts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -87,6 +90,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("Prompt"),
         cli: Some(&["prompts", "link"]),
         doc: "Point an existing prompt at the benchmark whose regression check gates its promotions.",
+        surface: "prompts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -116,6 +120,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             ..McpTool::DEFAULT
         }),
         doc: "Cut the next monotonic version; the linked benchmark is auto-enqueued against it.",
+        surface: "prompts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -127,6 +132,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::ArrayOf("PromptVersion"),
         cli: Some(&["prompts", "versions"]),
         doc: "Every stored version of one registry prompt.",
+        surface: "prompts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -144,6 +150,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("Prompt"),
         cli: Some(&["prompts", "canary"]),
         doc: "Set or clear the online canary policy; a policy that could never fire is refused.",
+        surface: "prompts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -171,6 +178,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             args: &["id", "name", "label", "version", "force"],
         }),
         doc: "Point a label at a version, blocked (409) when the gating benchmark has regressed.",
+        surface: "prompts",
         ..Endpoint::DEFAULT
     },
 ];

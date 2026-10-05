@@ -13,8 +13,11 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         path: "/v1/capabilities",
         access: Key(Read),
         response: TypeRef::Untyped(
-            "{ backend, surfaces: {name: bool}, refuses: [name], atomic_limits: bool } — what this \
-             deployment's store backend implements and what it answers 501 `unsupported` for.",
+            "{ backend, surfaces: [name], unsupported: [name], unsupported_routes: \
+             [\"METHOD /path\"], degraded_routes: [{route, surfaces}], atomic_admission, \
+             schema_fingerprint, deprecations } — what this deployment's store backend implements, \
+             and the ROUTE-level consequence of what it does not: `unsupported_routes` answer 501 \
+             `unsupported`, `degraded_routes` still answer with less in them.",
         ),
         mcp: Some(McpTool {
             name: "get_capabilities",
@@ -80,6 +83,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["events"]),
         render_kind: Some("query_events"),
         doc: "Recent events, newest first; keyset pagination through `X-Next-Cursor`.",
+        degrades: &["event_filters"],
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -122,6 +126,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["storage", "status"]),
         doc: "Disk accounting per table and index, per-family latency, and the maintenance ledger.",
+        degrades: &["maintenance", "metrics"],
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -183,6 +188,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["traces"]),
         render_kind: Some("list_traces"),
         doc: "Traces (events grouped by trace_id), newest first.",
+        surface: "traces",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -204,6 +210,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["trace"]),
         render_kind: Some("get_trace"),
         doc: "One trace: totals, span tree, and scores within it.",
+        surface: "traces",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -241,6 +248,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             ..McpTool::DEFAULT
         }),
         doc: "Score a whole trace, anchored to its root span.",
+        surface: "traces",
         ..Endpoint::DEFAULT
     },
 ];

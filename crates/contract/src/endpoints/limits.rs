@@ -85,6 +85,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["limits", "update"]),
         doc: "Replace a limit rule wholesale; the sweep-owned fields are carried over, not cleared.",
+        surface: "limit_lifecycle",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -105,6 +106,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["limits", "delete"]),
         doc: "Remove a limit rule by id.",
+        surface: "limit_lifecycle",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -125,6 +127,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("MarginPolicy"),
         cli: Some(&["margin-policies", "create"]),
         doc: "Store a standing margin guardrail; the forecast sweep is what turns it into rules.",
+        surface: "margin_policies",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -143,6 +146,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["margin-policies", "list"]),
         render_kind: Some("list_margin_policies"),
         doc: "A project's standing margin guardrails.",
+        surface: "margin_policies",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -156,6 +160,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Untyped("{ deleted: id } — the policy that was removed."),
         cli: Some(&["margin-policies", "delete"]),
         doc: "Remove a margin policy; the rules it created are reaped by the sweep, not here.",
+        surface: "margin_policies",
         ..Endpoint::DEFAULT
     },
     Endpoint {

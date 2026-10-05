@@ -57,6 +57,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["alerts", "list"]),
         render_kind: Some("list_alerts"),
         doc: "The fired-alert ledger, newest first: deliveries, acknowledgement and resolution.",
+        surface: "alerts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -86,6 +87,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["alerts", "ack"]),
         doc: "Acknowledge one alert: record that someone saw it.",
+        surface: "alerts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -102,6 +104,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         )),
         response: TypeRef::Untyped("{ resolved } — the alert id the resolution was attached to."),
         doc: "Attach what came of an alert, turning a notification into a closed loop.",
+        surface: "alerts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -114,6 +117,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::ArrayOf("AlertChannel"),
         cli: Some(&["alerts", "channels", "list"]),
         doc: "The channels this project's alerts effectively reach: its own plus the inherited globals.",
+        surface: "alert_routing",
         ..Endpoint::DEFAULT
     },
     // No MCP tool, deliberately: this mints a webhook signing secret and returns it exactly once,
@@ -148,6 +152,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["alerts", "channels", "set"]),
         doc: "Add a routing destination for a project's alerts; a signed one is minted a secret once.",
+        surface: "alert_routing",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -161,6 +166,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Untyped("{ deleted } — the channel id that was removed."),
         cli: Some(&["alerts", "channels", "delete"]),
         doc: "Remove one stored routing destination.",
+        surface: "alert_routing",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -177,6 +183,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["alerts", "channels", "test"]),
         doc: "Send a real, signed test alert down one channel and report whether it landed.",
+        surface: "alert_routing",
         ..Endpoint::DEFAULT
     },
 ];

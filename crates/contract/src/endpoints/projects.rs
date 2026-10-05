@@ -70,6 +70,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("Project"),
         cli: Some(&["projects", "update"]),
         doc: "Update a project; an omitted field is left as-is and the policy cache is invalidated.",
+        surface: "project_admin",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -83,6 +84,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("Project"),
         cli: Some(&["projects", "archive"]),
         doc: "Archive a project: disabled and stamped `archived_at`, with every row kept.",
+        surface: "project_admin",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -101,6 +103,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["projects", "redaction"]),
         doc: "What the ingest boundary actually did to this project's stored rows.",
+        surface: "redaction_posture",
         ..Endpoint::DEFAULT
     },
     // Secret-minting: the response carries the full key exactly once, so this must never be
@@ -137,6 +140,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["keys", "list"]),
         doc: "A project's keys with their scopes, expiry, last use and revocation state.",
+        surface: "key_admin",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -150,6 +154,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Untyped("The revoked key's non-secret metadata, with `revoked: true`."),
         cli: Some(&["keys", "revoke"]),
         doc: "Revoke a key immediately; the row is kept for audit.",
+        surface: "key_admin",
         ..Endpoint::DEFAULT
     },
     // Secret-minting too: the successor's full key is in the response, so no MCP tool reaches it.
@@ -174,6 +179,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["keys", "rotate"]),
         doc: "Rotate a key: mint a successor and give the predecessor a deadline, not a cliff.",
+        surface: "key_admin",
         ..Endpoint::DEFAULT
     },
 ];
