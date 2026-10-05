@@ -53,6 +53,7 @@ pub mod schedule;
 pub mod score;
 pub mod trace;
 pub mod unpriced;
+pub mod usage_split;
 pub mod use_case;
 
 pub use alert::{Alert, AlertKind, Delivery, Severity};
@@ -154,6 +155,7 @@ pub use trace::{
     TraceTotals,
 };
 pub use unpriced::{UnpricedLedger, UnpricedRow, UNPRICED_NOTES};
+pub use usage_split::SubcountOverflow;
 pub use use_case::{UseCase, UseCaseKind, UseCaseStatus};
 
 /// Convenience: a fresh UUIDv4 as a `String` (our canonical id form).

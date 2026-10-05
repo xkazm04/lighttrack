@@ -320,9 +320,15 @@ impl PriceBook {
         usage: &TokenUsage,
         mode: PricingMode,
     ) -> Option<f64> {
+        // The split has one home ([`TokenUsage::billable_input`]) and it is checked BEFORE the price
+        // row is resolved — `resolve` picks the prompt-length tier from the same `usage.input`, so a
+        // record whose sub-count exceeds its total would otherwise select a cheaper tier on its way
+        // to a cost nobody disputes. A violating record has no honest price, so it gets none:
+        // unpriced is visible (`cost_usd: null`, and the unpriced ledger counts it), while the
+        // saturating arithmetic this replaces billed the *whole* prompt at the cached rate.
+        let billable_input = usage.billable_input().ok()?;
         let p = self.resolve(provider, model, usage.input, mode)?;
-        let cached = usage.cached_input.unwrap_or(0);
-        let billable_input = usage.input.saturating_sub(cached);
+        let cached = usage.cached_tokens();
 
         let mut cost = (billable_input as f64) * p.input_per_mtok / 1_000_000.0
             + (usage.output as f64) * p.output_per_mtok / 1_000_000.0;
@@ -709,5 +715,28 @@ mod tests {
         );
         assert_eq!(PricingMode::parse(" BATCH "), PricingMode::Batch);
         assert_eq!(PricingMode::parse("turbo"), PricingMode::Standard);
+    }
+    /// A record whose cached sub-count exceeds its total has no honest price, so it gets none.
+    ///
+    /// The old arithmetic was `input.saturating_sub(cached)`: the residual reached zero, the whole
+    /// prompt billed at the *cached* rate, and the number looked like a bargain rather than a bug.
+    /// It must also never reach [`PriceBook::resolve`], which picks the prompt-length tier from the
+    /// same understated `usage.input` — a tier-priced model is used here precisely so that a reached
+    /// `resolve` would have produced some number instead of `None`.
+    #[test]
+    fn a_violating_subcount_is_unpriced_rather_than_cheaply_priced() {
+        let b = variant_book();
+        let mut u = usage(100, 10);
+        u.cached_input = Some(400);
+        assert_eq!(
+            b.cost_usd("google", "gemini-2.5-pro", &u),
+            None,
+            "unpriced is visible; a cheap wrong number is not"
+        );
+        // The same book prices the well-formed shape, so `None` above is the invariant talking and
+        // not a missing price row.
+        let mut ok = usage(100, 10);
+        ok.cached_input = Some(40);
+        assert!(b.cost_usd("google", "gemini-2.5-pro", &ok).is_some());
     }
 }
