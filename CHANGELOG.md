@@ -87,6 +87,23 @@ entry is written while the change is still fresh, not reconstructed at tag time.
   agent guidance; `.claude/CLAUDE.md` is a projection of it and is currently listed under
   `guidance.staleProjections` because it still carries generator scaffold that contradicts it.
 
+### Fixed
+
+- **A model-scoped usage cap now counts the traffic it would reject.** `LimitScope::matches` decides
+  a `{"model": "gpt-4o"}` rule *applies* by canonical family (so it catches `gpt-4o-2024-08-06` and
+  `openai/gpt-4o`), but `usage_since_scoped` computed the number that rule is *evaluated against*
+  with raw string equality — in all three store backends — and `GET /v1/limits/usage?by=model`
+  attached rules to rows the same way. On a provider that ships dated snapshots, such a cap reported
+  `current ≈ 0` on `GET /v1/limits/status` forever: `warn_at` never fired, `breached` was never true,
+  and the rule still read as configured and enforcing. Membership is now decided once
+  (`lighttrack_store::scope_usage`, folding the grouped rollup through `LimitScope::matches`), so the
+  gate, `/v1/limits/status`, `/v1/limits/usage` and the alert attribution report the same scope.
+  **Operator note:** a deployment that has been living under a silently inert model cap starts being
+  enforced on upgrade — `current`, `ratio` and `breached` on those rules will jump from ~0 to the
+  real in-family spend. Exact-value dimensions (provider / name / api_key / customer) are unchanged
+  and keep exact semantics; unscoped rules are unchanged. A backend that cannot serve the grouped
+  rollup answers 501 `unsupported` rather than a short count.
+
 <!--
 Template for the next release — copy, do not delete:
 
