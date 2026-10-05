@@ -175,6 +175,7 @@
 //!      LIGHTTRACK_MODEL_ALIASES (model-identity normalization table; default config/pricing.json,
 //!      whose per-model `aliases` lists are the declared collapses since M8).
 
+mod access_layer;
 mod alerts;
 mod alerts_canary;
 mod alerts_relay;
@@ -252,6 +253,10 @@ mod storage;
 mod traces;
 mod use_cases;
 
+#[cfg(test)]
+mod tests_access_matrix;
+#[cfg(test)]
+mod tests_access_probe;
 #[cfg(test)]
 mod tests_auth_throttle;
 #[cfg(test)]
@@ -843,6 +848,19 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/v1/alert-channels/:id/test",
             post(alerts::routing::test_channel),
         )
+        // Innermost of the three router-wide layers: the contract's `access` column, enforced.
+        // It resolves (method, MatchedPath) to one `Endpoint` row and applies the declared rule
+        // BEFORE any extractor runs, which is what lets an unauthenticated POST be told 401 rather
+        // than learning the body schema from a 422 first. All logic lives in `access_layer`.
+        //
+        // It sits inside `source_scope` (which `guards::authenticate` reads) and therefore outside
+        // the per-route ingest shed, so an ingest POST now authenticates before it takes a shed
+        // permit. Deliberate: `Router::layer` cannot be placed inside a `MethodRouter`'s own
+        // layers, and the failed-credential throttle already bounds the keyless case.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            access_layer::enforce,
+        ))
         // Over every route: the maintenance sweep's activity gauge. It must see ALL foreground work,
         // not just the ingest doors — a long analytical read holds a WAL snapshot and is exactly the
         // work a checkpoint should not compete with — so it is layered here rather than beside the

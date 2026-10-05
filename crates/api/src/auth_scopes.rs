@@ -11,9 +11,13 @@
 //! explicit [`ensure_scope`] calls on the config-write handlers. The *declaration* of that map used
 //! to be a `ROUTE_SCOPES` table in this file; it is now one column of `lighttrack-contract`, so the
 //! same fact is stated once beside the endpoint's parameters, response and MCP/CLI coverage instead
-//! of in a sixth parallel list. The test at the bottom still holds it to every route string in
-//! `main.rs`, so a route added without a decision about who may call it fails the build — it just
-//! reads that decision from the contract now.
+//! of in a sixth parallel list.
+//!
+//! Since `access_layer`, the declaration *is* the enforcement: one router layer resolves every
+//! request against that column before any extractor runs, and `tests_access_matrix` drives all 130
+//! rows through the real `build_router` to prove each declared denial. The pin that used to live at
+//! the bottom of this file — a text scan of `main.rs` compared against deduplicated path strings —
+//! is gone, replaced by a guard that forbids its return.
 
 use lighttrack_core::Scope;
 
@@ -45,44 +49,75 @@ pub(crate) fn ensure_scope(p: &Principal, want: Scope) -> Result<(), ApiError> {
 mod tests {
     use super::*;
 
-    /// Every `/v1/...` string literal in `build_router`.
-    fn router_routes() -> Vec<String> {
-        let src = include_str!("main.rs");
-        let mut out = Vec::new();
-        for (i, part) in src.split("\"/v1").enumerate() {
-            if i == 0 {
-                continue;
-            }
-            if let Some(end) = part.find('"') {
-                out.push(format!("/v1{}", &part[..end]));
-            }
-        }
-        out.sort();
-        out.dedup();
-        out
+    /// `src` with every `//` line comment removed. A source-scanning guard that matched its own
+    /// prose would report a clean codebase in a voice indistinguishable from success.
+    fn code_only(src: &str) -> String {
+        src.lines()
+            .map(|l| match l.find("//") {
+                Some(i) => &l[..i],
+                None => l,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
-    /// The point of the table: a route added without deciding who may call it fails here, rather
-    /// than quietly inheriting whatever guard its handler happened to copy from a neighbour. The
-    /// declaration moved to `lighttrack-contract`; the guarantee did not move with it, it stayed.
+    /// The guard that replaced the bijection, and it pins **both** ends on purpose.
+    ///
+    /// What used to be here read `main.rs` as text, split it on `"/v1`, and compared the resulting
+    /// path strings against `route_paths()`. It defaulted toward green in all three ways: its
+    /// population was source text (so a comment mentioning a route satisfied it), its needle was a
+    /// quoted path (so the method was invisible, `route_paths()` being deduplicated), and its
+    /// haystack was one file. It also asserted nothing whatsoever about enforcement.
+    ///
+    /// `tests_access_matrix` does the real thing — it drives every row of the contract through
+    /// `build_router` and asserts the declared denial — and `access_layer` is what makes that pass.
+    /// So this guard asserts the new instruments exist and forbids a regression to text scanning.
     #[test]
-    fn every_v1_route_in_the_router_has_a_declared_scope() {
-        let declared = lighttrack_contract::route_paths();
-        let routed = router_routes();
-        assert!(
-            !routed.is_empty(),
-            "no routes found in main.rs — the extractor broke, not the router"
-        );
-        for path in &routed {
+    fn the_access_bijection_is_derived_from_the_router_not_from_source_text() {
+        // Built in two pieces so the needle does not occur literally in this file and match itself.
+        let text_pin = concat!("include_str!(\"main", ".rs\")");
+        for (name, src) in [
+            ("auth_scopes.rs", include_str!("auth_scopes.rs")),
+            ("access_layer.rs", include_str!("access_layer.rs")),
+            (
+                "tests_access_matrix.rs",
+                include_str!("tests_access_matrix.rs"),
+            ),
+            (
+                "tests_access_probe.rs",
+                include_str!("tests_access_probe.rs"),
+            ),
+        ] {
             assert!(
-                declared.contains(&path.as_str()),
-                "route {path} has no declared scope — add an Endpoint row in crates/contract"
+                !code_only(src).contains(text_pin),
+                "{name} scans main.rs as text again — the access bijection is the probe in \
+                 tests_access_matrix, driven through the real Router"
             );
         }
-        for path in &declared {
+
+        // The layer resolves the axum route template, not a string it found in a file.
+        let layer = code_only(include_str!("access_layer.rs"));
+        assert!(
+            layer.contains("MatchedPath"),
+            "access_layer no longer resolves rows by MatchedPath"
+        );
+        assert!(
+            layer.contains("e.path == template && e.method == method"),
+            "access_layer no longer resolves rows by method AND path — a method mismatch would \
+             become invisible again"
+        );
+
+        // And the probe still carries its floor: a derived selection that selects nothing must fail.
+        let matrix = code_only(include_str!("tests_access_matrix.rs"));
+        for needle in [
+            "every_admin_row_refuses_a_project_key",
+            "every_guarded_row_refuses_a_missing_credential",
+            "every_declared_row_is_wired_with_its_declared_method",
+            "the_matrix_covers_every_access_variant",
+        ] {
             assert!(
-                routed.iter().any(|p| p == path),
-                "the contract declares {path}, which build_router no longer serves"
+                matrix.contains(needle),
+                "tests_access_matrix lost {needle} — the access matrix is no longer derived"
             );
         }
     }

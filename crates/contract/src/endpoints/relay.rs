@@ -141,7 +141,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         id: "cancel_relay_task",
         method: Method::Post,
         path: "/v1/relay/tasks/:id/cancel",
-        access: Key(Manage),
+        // Paired with the enqueue door above, not with the config writes. `Key(Manage)` was the
+        // declaration and "any project key of the owning tenant" was the enforcement, which only
+        // stayed invisible while nothing resolved requests against this column: a client holding
+        // the default ingest+read pair could enqueue a task and not stop it. The owner who started
+        // the work may cancel it; which task is *theirs* is still the tenant scope's answer, and a
+        // foreign id is still 404 rather than 403 (M17).
+        access: Key(Ingest),
         mutating: true,
         params: &[p("id", "relay task id")],
         response: TypeRef::Named("RelayCancel"),

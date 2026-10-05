@@ -39,8 +39,13 @@ pub fn endpoint(id: &str) -> Option<&'static Endpoint> {
     endpoints().find(|e| e.id == id)
 }
 
-/// Every distinct `/v1/...` route path the contract declares. This is the set the API's bijection
-/// test holds `build_router` to.
+/// Every distinct `/v1/...` route path the contract declares.
+///
+/// **Paths only — the methods are deduplicated away**, so this is a coverage denominator (see
+/// [`matrix`]) and a reachability check, never an authorization one. The API's access bijection is
+/// `crates/api/src/tests_access_matrix.rs`, which walks `endpoints()` and probes each (method, path)
+/// pair through the real router; holding a router to *this* set is how a declared `GET` served only
+/// as `POST` used to pass.
 pub fn route_paths() -> Vec<&'static str> {
     let mut v: Vec<&'static str> = endpoints()
         .map(|e| e.path)
