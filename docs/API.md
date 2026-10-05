@@ -10,12 +10,12 @@ describe a route that does not exist, or miss one that does.
 
 | | |
 |---|---|
-| Endpoints (method × path) | 130 |
+| Endpoints (method × path) | 132 |
 | Distinct `/v1` routes | 102 |
 | MCP tools | 68 (46 read, 22 write) |
 | CLI verbs | 93 |
 | Endpoints with a Markdown renderer | 46 |
-| Machine doors (SDK / device / provider) | 15 |
+| Machine doors (SDK / device / provider) | 17 |
 | Paged reads | 6 |
 | Reachable from neither MCP nor CLI | 0 |
 
@@ -29,6 +29,8 @@ those are machine doors (an SDK's ingest, a device agent's lease, a provider's w
 | Method | Path | Scope | MCP tool | CLI | Renderer |
 |---|---|---|---|---|---|
 | GET | `/health` | — |  | `lt health` |  |
+| GET | `/health/live` | — | 🔒 |  |  |
+| GET | `/health/ready` | — | 🔒 |  |  |
 | GET | `/openapi.json` | — |  | `lt openapi` |  |
 | GET | `/v1/capabilities` | `read` | `get_capabilities` | `lt capabilities` | `get_capabilities` |
 | POST | `/v1/events` | `ingest` | 🔒 |  |  |
@@ -131,7 +133,7 @@ those are machine doors (an SDK's ingest, a device agent's lease, a provider's w
 | POST | `/v1/relay/tasks/:id/result` | admin | 🔒 |  |  |
 | POST | `/v1/relay/tasks/:id/renew` | admin | 🔒 |  |  |
 | POST | `/v1/relay/tasks/:id/progress` | admin | 🔒 |  |  |
-| POST | `/v1/relay/tasks/:id/cancel` | `manage` |  | `lt relay tasks cancel` |  |
+| POST | `/v1/relay/tasks/:id/cancel` | `ingest` |  | `lt relay tasks cancel` |  |
 | POST | `/v1/relay/lease` | admin | 🔒 |  |  |
 | POST | `/v1/relay/devices` | admin |  | `lt relay devices add` |  |
 | GET | `/v1/relay/devices` | admin | `list_relay_devices` | `lt relay devices list` |  |
@@ -161,8 +163,8 @@ those are machine doors (an SDK's ingest, a device agent's lease, a provider's w
 
 ## Response types
 
-64 of 130 endpoints return a named type that derives `schemars::JsonSchema`, so
-`/openapi.json` describes their fields. The other 65 build their body with
+64 of 132 endpoints return a named type that derives `schemars::JsonSchema`, so
+`/openapi.json` describes their fields. The other 67 build their body with
 `serde_json::json!` and have no struct to point at; the contract describes each in prose and
 the generated document carries that prose instead of a field list. Turning one into a named
 type is a strict improvement that needs no coordination — add the struct, derive
