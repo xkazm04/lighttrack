@@ -23,6 +23,29 @@ use crate::event::LlmEvent;
 /// Anything else is a caller's own opaque id (`"req-1"`, `"Order-7"`) and is preserved **verbatim**:
 /// case is meaningful there, and folding it would merge distinct traces and mangle an id the operator
 /// reads back.
+/// Longest accepted caller-supplied `trace_id` / `span_id` / `parent_span_id`, in characters.
+///
+/// Sized off the sibling caller-supplied identifiers this codebase already bounds — a prompt name or
+/// label is 1–128 (`MAX_IDENT_LEN`), a project id 1–64 — because a trace ref is the same kind of
+/// thing: a string the caller chooses that ends up in a URL path segment (`/v1/traces/<id>`), a query
+/// value, a store key and a log line an operator reads during an incident. 128 is four times the
+/// widest W3C id (32 hex characters for a trace, 16 for a span), so every conformant id and every
+/// realistic opaque one (`"req-1"`, `"Order-7"`, a UUID at 36) fits with room to spare.
+///
+/// This is a **bound only**. The alphabet stays open on purpose: a non-W3C id is the caller's own
+/// opaque id and this module deliberately preserves it verbatim (see [`normalize_trace_ref`]).
+pub const MAX_TRACE_REF_LEN: usize = 128;
+
+/// Is a caller-supplied trace/span ref within [`MAX_TRACE_REF_LEN`]?
+///
+/// The ingest doors call this *before* admitting an event: propagation metadata arrives from whoever
+/// is calling, and an unbounded one is a caller-chosen string written straight into the record an
+/// operator reads during an incident. Counted in characters, as `validate_project_id` and
+/// `validate_ident` count theirs, so the limit an error message quotes is the limit enforced.
+pub fn trace_ref_within_bound(id: &str) -> bool {
+    id.chars().count() <= MAX_TRACE_REF_LEN
+}
+
 pub fn normalize_trace_ref(id: &str) -> String {
     let is_w3c_hex = matches!(id.len(), 16 | 32) && id.chars().all(|c| c.is_ascii_hexdigit());
     if is_w3c_hex {
@@ -548,6 +571,32 @@ mod tests {
             "ABCDEF0123456789A"
         );
         assert_eq!(normalize_trace_ref(""), "");
+    }
+
+    /// The bound, which is a bound and nothing else: everything the folding rule above pins still
+    /// holds under it, and only length decides.
+    #[test]
+    fn trace_refs_are_bounded_but_not_otherwise_constrained() {
+        // Under the cap, an opaque id — any alphabet, any case — is still accepted verbatim.
+        assert!(trace_ref_within_bound("Order-7"));
+        assert_eq!(normalize_trace_ref("Order-7"), "Order-7");
+        // Exactly at the cap is accepted (the boundary belongs to the caller, as it does for a
+        // project id and a prompt name).
+        let at_cap = "a".repeat(MAX_TRACE_REF_LEN);
+        assert!(trace_ref_within_bound(&at_cap));
+        assert_eq!(normalize_trace_ref(&at_cap), at_cap);
+        // One character over is not.
+        assert!(!trace_ref_within_bound(&"a".repeat(MAX_TRACE_REF_LEN + 1)));
+        // The former unbounded case: a 100 KB id no longer passes the gate. Canonicalization itself
+        // is unchanged and still returns it verbatim — the refusal lives at ingest, not here.
+        let huge = "x".repeat(100_000);
+        assert!(!trace_ref_within_bound(&huge));
+        assert_eq!(normalize_trace_ref(&huge), huge);
+        // Both W3C lengths and the empty string sit far below the cap, so folding is untouched.
+        assert!(trace_ref_within_bound("5B8EFFF798038103D269B633813FC60C"));
+        assert!(trace_ref_within_bound(""));
+        // Characters, not bytes: 128 multi-byte characters is one id, not four.
+        assert!(trace_ref_within_bound(&"é".repeat(MAX_TRACE_REF_LEN)));
     }
 
     #[test]

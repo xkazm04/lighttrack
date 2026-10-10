@@ -150,8 +150,8 @@ pub use score::{
     RECURRENCE_KEY, REGRESSION_DATASET_KEY, RESERVED_TARGET_KEYS,
 };
 pub use trace::{
-    normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,
-    TraceTotals,
+    normalize_trace_ref, trace_ref_within_bound, Trace, TraceCoverage, TraceDrift, TraceShape,
+    TraceSpan, TraceSummary, TraceTotals, MAX_TRACE_REF_LEN,
 };
 pub use unpriced::{UnpricedLedger, UnpricedRow, UNPRICED_NOTES};
 pub use use_case::{UseCase, UseCaseKind, UseCaseStatus};
