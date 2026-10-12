@@ -1,0 +1,183 @@
+{
+ "schema": "conform-run/1",
+ "worker": "dde883c3-bf9c-4a9b-aebc-415de3fc99d9",
+ "subject": "eval-harness",
+ "evaluatedAt": "2026-10-12T23:01:39.916754+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "judge-and-scoring",
+   "subject": "eval-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/engine/src/judge.rs:367 Mixed rubrics invoke model judgment even after a deterministic dimension breaches its gating floor, violating the requirement that assertions screen out failed outputs before judgment.",
+   "techniques": [
+    {
+     "technique": "assertion-vs-judgment",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/judge.rs:367 Model sampling depends on dimension kinds rather than deterministic gate success; the deterministic-floor test also supplies and consumes an LLM style verdict for the mechanically wrong answer."
+    },
+    {
+     "technique": "comparison-modes",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/pairwise.rs:66 The pairwise path judges both presentation orders, reverses the second verdict's labels, and converts disagreement into a tie with a position-bias flag."
+    }
+   ]
+  },
+  {
+   "context": "runner-scoring-engine",
+   "subject": "eval-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/runner/src/pairwise.rs:422 The pairwise runner sorts every candidate into a win-rate ranking without checking completed-comparison connectivity or enforcing an exposure floor.",
+   "techniques": [
+    {
+     "technique": "comparison-modes",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/pairwise.rs:530 The pairwise report is explicitly identified as pairwise and records no_baseline rather than presenting relative preference as an absolute passing gate."
+    },
+    {
+     "technique": "outcome-conditioned-cost",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/stats/effort_curve.rs:223 The effort-step cost delta includes all shared judged cases without filtering both arms' pass fields, and its report has no both-succeeded companion delta or subset count."
+    },
+    {
+     "technique": "pairing-schedule",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/pairwise.rs:422 print_ranking sorts all labels by completed-game win rate without a connectivity check or minimum completed exposure; a planned round-robin does not guarantee the completed graph remains connected."
+    },
+    {
+     "technique": "uncontrolled-games-beside-the-win-rate",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/pairwise.rs:326 Exclusions are charged to both participants and positional ties are disclosed, but ranking still includes candidates with arbitrarily large excluded shares, including candidates that played no games."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-pipeline",
+   "subject": "eval-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/benchmarks.rs:70 Benchmark creation defaults to a capability alias rather than a concrete dated judge identifier, allowing the instrument to change while the stored judge specification remains unchanged.",
+   "techniques": [
+    {
+     "technique": "judge-stability",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/benchmarks.rs:70 The API's default judge is an alias plus effort, not the concrete dated model pin required by the standard."
+    },
+    {
+     "technique": "metric-role-contract",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/prompts_gate.rs:107 After the trust check, force=true allows promotion before regression and incomplete-evidence checks, so a declared quality constraint can be overridden after the result is known."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-scoring-types",
+   "subject": "eval-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/core/src/score.rs:462 Deserializing a benchmark without a judge_model selects a moving alias rather than a concrete dated judge, weakening the identity of the measurement instrument.",
+   "techniques": [
+    {
+     "technique": "judge-stability",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/score.rs:462 Benchmark's serde default supplies haiku, a capability alias; a missing judge specification therefore does not obtain a concrete dated pin."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-rendering",
+   "subject": "eval-harness",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/render/src/benchmarks.rs:61 The run-history renderer combines all available means into one trend without separating instrument versions, allowing methodology changes to appear as changes in product quality.",
+   "techniques": [
+    {
+     "technique": "judge-stability",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:61 runs collects every non-null mean and renders a single sparkline; it neither checks instrument pins nor partitions or marks the trend when they change."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-12T23:01:39.916754+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "eval-harness"
+   ],
+   "techniques": [
+    "assertion-vs-judgment",
+    "comparison-modes"
+   ],
+   "deviations": 1,
+   "context": "judge-and-scoring",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-12T23:01:39.916754+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "eval-harness"
+   ],
+   "techniques": [
+    "comparison-modes",
+    "outcome-conditioned-cost",
+    "pairing-schedule",
+    "uncontrolled-games-beside-the-win-rate"
+   ],
+   "deviations": 1,
+   "context": "runner-scoring-engine",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-12T23:01:39.916754+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "eval-harness"
+   ],
+   "techniques": [
+    "judge-stability",
+    "metric-role-contract"
+   ],
+   "deviations": 1,
+   "context": "evaluation-pipeline",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-12T23:01:39.916754+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "eval-harness"
+   ],
+   "techniques": [
+    "judge-stability"
+   ],
+   "deviations": 1,
+   "context": "evaluation-scoring-types",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-12T23:01:39.916754+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "eval-harness"
+   ],
+   "techniques": [
+    "judge-stability"
+   ],
+   "deviations": 1,
+   "context": "evaluation-rendering",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

@@ -2608,7 +2608,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/benchmarks.rs:70 Benchmark creation defaults to a capability alias rather than a concrete dated judge identifier, allowing the instrument to change while the stored judge specification remains unchanged.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:7ccead00b7f92aba",
+          "evaluatedRevision": 37
         },
         {
           "subject": "agent-memory",
@@ -2810,7 +2814,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/benchmarks.rs:61 The run-history renderer combines all available means into one trend without separating instrument versions, allowing methodology changes to appear as changes in product quality.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:7ccead00b7f92aba",
+          "evaluatedRevision": 37
         },
         {
           "subject": "mcp-tools",
@@ -2976,7 +2984,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/score.rs:462 Deserializing a benchmark without a judge_model selects a moving alias rather than a concrete dated judge, weakening the identity of the measurement instrument.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:7ccead00b7f92aba",
+          "evaluatedRevision": 37
         },
         {
           "subject": "generator-uncertainty-scoring",
@@ -3692,7 +3704,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/judge.rs:367 Mixed rubrics invoke model judgment even after a deterministic dimension breaches its gating floor, violating the requirement that assertions screen out failed outputs before judgment.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:7ccead00b7f92aba",
+          "evaluatedRevision": 37
         },
         {
           "subject": "judge-calibration-and-drift",
@@ -5466,7 +5482,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/pairwise.rs:422 The pairwise runner sorts every candidate into a win-rate ranking without checking completed-comparison connectivity or enforcing an exposure floor.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:7ccead00b7f92aba",
+          "evaluatedRevision": 37
         },
         {
           "subject": "production-trace-scoring",

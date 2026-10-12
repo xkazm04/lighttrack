@@ -586,6 +586,111 @@
           "evidence": "crates/mcp/src/tool_contract.rs:89 The tool contract snapshot is re-baselined via the runtime environment variable LIGHTTRACK_PIN_TOOL_CONTRACT with no pipeline check to prevent accidental recording in CI and no integrity assertion."
         }
       ]
+    },
+    "70358003-cc4e-4553-ba3c-e864f30850d1/eval-harness": {
+      "context": "judge-and-scoring",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T23:01:39.916Z",
+      "worker": "dde883c3-bf9c-4a9b-aebc-415de3fc99d9",
+      "techniques": [
+        {
+          "technique": "assertion-vs-judgment",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/judge.rs:367 Model sampling depends on dimension kinds rather than deterministic gate success; the deterministic-floor test also supplies and consumes an LLM style verdict for the mechanically wrong answer."
+        },
+        {
+          "technique": "comparison-modes",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/pairwise.rs:66 The pairwise path judges both presentation orders, reverses the second verdict's labels, and converts disagreement into a tie with a position-bias flag."
+        }
+      ]
+    },
+    "971b004d-7b8c-4a5e-8a71-3ab3436cf511/eval-harness": {
+      "context": "runner-scoring-engine",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T23:01:39.916Z",
+      "worker": "dde883c3-bf9c-4a9b-aebc-415de3fc99d9",
+      "techniques": [
+        {
+          "technique": "comparison-modes",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/pairwise.rs:530 The pairwise report is explicitly identified as pairwise and records no_baseline rather than presenting relative preference as an absolute passing gate."
+        },
+        {
+          "technique": "outcome-conditioned-cost",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/stats/effort_curve.rs:223 The effort-step cost delta includes all shared judged cases without filtering both arms' pass fields, and its report has no both-succeeded companion delta or subset count."
+        },
+        {
+          "technique": "pairing-schedule",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/pairwise.rs:422 print_ranking sorts all labels by completed-game win rate without a connectivity check or minimum completed exposure; a planned round-robin does not guarantee the completed graph remains connected."
+        },
+        {
+          "technique": "uncontrolled-games-beside-the-win-rate",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/pairwise.rs:326 Exclusions are charged to both participants and positional ties are disclosed, but ranking still includes candidates with arbitrarily large excluded shares, including candidates that played no games."
+        }
+      ]
+    },
+    "430d498e-2077-4dde-b0c6-2735cb9ddfc4/eval-harness": {
+      "context": "evaluation-pipeline",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T23:01:39.916Z",
+      "worker": "dde883c3-bf9c-4a9b-aebc-415de3fc99d9",
+      "techniques": [
+        {
+          "technique": "judge-stability",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/benchmarks.rs:70 The API's default judge is an alias plus effort, not the concrete dated model pin required by the standard."
+        },
+        {
+          "technique": "metric-role-contract",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/prompts_gate.rs:107 After the trust check, force=true allows promotion before regression and incomplete-evidence checks, so a declared quality constraint can be overridden after the result is known."
+        }
+      ]
+    },
+    "060b7649-5405-4f72-ac96-572409e6039d/eval-harness": {
+      "context": "evaluation-scoring-types",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T23:01:39.916Z",
+      "worker": "dde883c3-bf9c-4a9b-aebc-415de3fc99d9",
+      "techniques": [
+        {
+          "technique": "judge-stability",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/score.rs:462 Benchmark's serde default supplies haiku, a capability alias; a missing judge specification therefore does not obtain a concrete dated pin."
+        }
+      ]
+    },
+    "9dc97639-bd28-43ef-bb53-96fb8ef10967/eval-harness": {
+      "context": "evaluation-rendering",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T23:01:39.916Z",
+      "worker": "dde883c3-bf9c-4a9b-aebc-415de3fc99d9",
+      "techniques": [
+        {
+          "technique": "judge-stability",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/benchmarks.rs:61 runs collects every non-null mean and renders a single sparkline; it neither checks instrument pins nor partitions or marks the trend when they change."
+        }
+      ]
     }
   }
 }
