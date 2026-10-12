@@ -1845,7 +1845,11 @@
           "revision": 43,
           "changedAt": "2026-10-02",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/core/src/prompt.rs:88 Searched the listed core files for interpolation, token budgets, cache breakpoints, and compaction and found none; prompt text is stored on an immutable version row, and the only {{input}} replace in the repo is crates/runner/src/targets.rs:64, outside this context.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:7436fd55a7cb2500",
+          "evaluatedRevision": 43
         },
         {
           "subject": "trace-rollup-and-attribution",
@@ -2782,7 +2786,11 @@
           "revision": 43,
           "changedAt": "2026-10-02",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/render/src/lib.rs:6 Searched crates/render for system-prompt assembly, token budgets, cache breakpoints, compaction, and template interpolation and found none; this crate only turns API JSON into Markdown, including a verbatim dump of stored prompt text.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:7436fd55a7cb2500",
+          "evaluatedRevision": 43
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -3570,7 +3578,11 @@
           "revision": 43,
           "changedAt": "2026-10-02",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/gateway/src/wire.rs:136 Every system and developer message is lifted out of the turn list and joined into one system field, so a system message that arrived mid-conversation moves to the front.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:7436fd55a7cb2500",
+          "evaluatedRevision": 43
         },
         {
           "subject": "agent-runtime-assembly",
@@ -3874,7 +3886,11 @@
           "revision": 43,
           "changedAt": "2026-10-02",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/mcp/src/prompts.rs:74 MCP prompt text teaches tool names by hand, so a renamed tool stays in the instruction after the generated tools/list roster moves.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:7436fd55a7cb2500",
+          "evaluatedRevision": 43
         },
         {
           "subject": "agent-instruction-files",
@@ -4831,7 +4847,11 @@
           "revision": 43,
           "changedAt": "2026-10-02",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/anthropic_api.rs:44 The Anthropic output ceiling is the vendor's published floor, and a max_tokens stop is returned as truncation with no higher-ceiling retry.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:7436fd55a7cb2500",
+          "evaluatedRevision": 43
         },
         {
           "subject": "multi-provider-gateway-plane",

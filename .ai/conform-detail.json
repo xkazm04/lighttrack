@@ -691,6 +691,167 @@
           "evidence": "crates/render/src/benchmarks.rs:61 runs collects every non-null mean and renders a single sparkline; it neither checks instrument pins nor partitions or marks the trend when they change."
         }
       ]
+    },
+    "9dc97639-bd28-43ef-bb53-96fb8ef10967/prompt-assembly": {
+      "context": "evaluation-rendering",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T23:56:33.821Z",
+      "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+      "techniques": [
+        {
+          "technique": "layered-composition",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/prompts.rs:59 Resolved prompt text is copied into a display fence, not composed as model-facing layers."
+        },
+        {
+          "technique": "variable-interpolation",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/prompts.rs:41 The renderer reads a finished string and does not fill template holes."
+        }
+      ]
+    },
+    "569c353a-2570-4ea6-9da3-f0fed1bfa1a7/prompt-assembly": {
+      "context": "mcp-server",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T23:56:33.821Z",
+      "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+      "techniques": [
+        {
+          "technique": "capability-documentation",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/prompts.rs:74 tools/list is generated from lighttrack-contract (tools.rs:26); these prompt strings name tools by hand, and the test only checks the substring is present."
+        },
+        {
+          "technique": "variable-interpolation",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/prompts.rs:73 Empty arguments are dropped and a missing project selects another instruction, but the argument has no declared type or trust class and is interpolated into the instruction."
+        },
+        {
+          "technique": "context-budgeting",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/resources.rs:84 Elision does not enforce a total: the wide-trace test expects the elided JSON to stay over MAX_RESOURCE_JSON, and the markdown item is rendered from the unelided body."
+        },
+        {
+          "technique": "recovery-path-as-loss-signal",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/resources.rs:110 The get_event pointer is the recovery path; a search of crates/mcp/src found no counter of how often that path is taken, only the marker and tests that it is present."
+        },
+        {
+          "technique": "layered-composition",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/prompts.rs:58 prompts/get is the only door and returns the finished user message; callers do not append prompt text."
+        },
+        {
+          "technique": "task-envelope",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/prompts.rs:76 The task opens with the work and a concrete close, not an expertise claim."
+        },
+        {
+          "technique": "context-reachability",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/prompts.rs:6 The prompt names the tool and leaves the table for the agent to fetch rather than inlining the data."
+        },
+        {
+          "technique": "elision-to-a-refetch-pointer",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/resources.rs:151 Over-budget event input/output is replaced with a byte count and a get_event pointer; the API record is not rewritten, and fields under 64 bytes stay."
+        },
+        {
+          "technique": "consumer-coupled-decoration",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/resources.rs:114 The elision marker's byte count has a named consumer: the caller deciding whether to fetch."
+        },
+        {
+          "technique": "contributed-document-admission",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/prompts.rs:3 These prompts are authored in this repo, not a registry of documents the team did not write."
+        },
+        {
+          "technique": "history-compaction",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/prompts.rs:4 There is no multi-turn transcript here to cut; resource elision is a payload pointer, not history compaction."
+        },
+        {
+          "technique": "fold-only-acknowledged-evidence",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/resources.rs:103 The marker is written into the resource before any model call in this process; it is not a fold of evidence a completed call already carried."
+        }
+      ]
+    },
+    "19e55525-23e7-4aa2-b7d3-0ca281fe1f4a/prompt-assembly": {
+      "context": "provider-generation",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T23:56:33.821Z",
+      "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+      "techniques": [
+        {
+          "technique": "response-reservation-sizing",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/anthropic_api.rs:44 4096 and 64000 are constants, not a percentile of observed lengths; truncation returns EngineError::Truncated. providers.rs:197-198 sends no ceiling for OpenAI, Gemini, OpenRouter, and the CLIs."
+        },
+        {
+          "technique": "layered-composition",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/chat.rs:121 One ChatRequest is projected per provider, system ahead of turns; a single user turn renders verbatim."
+        },
+        {
+          "technique": "context-ownership-regimes",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:236 The conversation arrives on the call. This context does not hold or compact it between turns. No cache_control or continuation-signature field was found under crates/engine."
+        }
+      ]
+    },
+    "f9429abc-1dbe-4992-bb3a-e3626b963cb1/prompt-assembly": {
+      "context": "core-observability-types",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T23:56:33.821Z",
+      "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+      "techniques": [
+        {
+          "technique": "variable-interpolation",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/prompt.rs:90 This file stores a free-form config blob and does not render holes; the substitute lives in the runner."
+        },
+        {
+          "technique": "layered-composition",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/prompt.rs:12 The context versions stored prompt text. It does not assemble the bytes sent to a model."
+        }
+      ]
+    },
+    "cb7bbb5f-02f2-48d9-90f3-cea5b3d14b47/prompt-assembly": {
+      "context": "gateway-proxy",
+      "subject": "prompt-assembly",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T23:56:33.821Z",
+      "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+      "techniques": [
+        {
+          "technique": "layered-composition",
+          "verdict": "deviation",
+          "evidence": "crates/gateway/src/wire.rs:136 prepare() pushes every system and developer role into system_parts and continues, then joins them. A json_object request also appends an instruction onto that system field (wire.rs:149)."
+        },
+        {
+          "technique": "response-reservation-sizing",
+          "verdict": "deviation",
+          "evidence": "crates/gateway/src/wire.rs:28 The caller's max_tokens is dropped before ChatRequest is built, so HTTP seats that could honor it still get no caller ceiling."
+        }
+      ],
+      "registryProposal": "layered-composition already treats a gateway as a last writer and requires a position-preserving hoist, but the golden path's scope sentence (systems that own their assembler) makes a proxy look out of scope. Say a last-hop rewrite is in scope even when the proxy authors no layer."
     }
   }
 }
