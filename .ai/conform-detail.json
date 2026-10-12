@@ -1,0 +1,109 @@
+{
+  "schema": "conform-detail/1",
+  "pairs": {
+    "ae45e444-9735-4d0d-a66c-a946ba4d5e88/agent-memory": {
+      "context": "pg-platform-operations",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T19:27:35.191Z",
+      "worker": "021113af-c543-448c-b39d-6d749628db22",
+      "techniques": [
+        {
+          "technique": "consolidation",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/prices.rs:3 Price corrections version billing rates; they do not distill episodes into agent beliefs."
+        },
+        {
+          "technique": "cross-context-promotion",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/collective.rs:3 The shared surface contains leaderboard aggregates, not lessons promoted from per-context memory stores."
+        },
+        {
+          "technique": "procedure-promotion",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/schedules.rs:1 Stored recurring-workload configuration is not a promotion path from observed procedures into capabilities."
+        }
+      ]
+    },
+    "9aa1714b-d868-4684-8328-325d5d249aed/agent-memory": {
+      "context": "pg-event-telemetry",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T19:27:35.191Z",
+      "worker": "021113af-c543-448c-b39d-6d749628db22",
+      "techniques": [
+        {
+          "technique": "episodic-capture",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/events/write.rs:22 The write path persists supplied LlmEvent telemetry; it does not capture distilled agent episodes."
+        },
+        {
+          "technique": "observation-clock",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/events/cols.rs:22 This is an accounting timestamp choice, explicitly outside the technique's language-grounding obligation."
+        },
+        {
+          "technique": "rollup-compaction",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/rollup.rs:75 The rollup computes numeric event aggregates; it does not merge redundant memory items into superseding summaries."
+        }
+      ]
+    },
+    "bcb4d3f6-3950-42fa-a00e-12126bf4794d/agent-memory": {
+      "context": "pg-evaluation-store",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T19:27:35.191Z",
+      "worker": "021113af-c543-448c-b39d-6d749628db22",
+      "techniques": [
+        {
+          "technique": "pending-beliefs-live-apart",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/labels.rs:1 Human evaluation labels are verdict records, not unconfirmed agent beliefs awaiting adoption."
+        },
+        {
+          "technique": "procedure-promotion",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/prompts.rs:1 This registry versions prompt assets; it does not promote procedures distilled from repeated agent episodes."
+        }
+      ]
+    },
+    "e5002fe2-6619-4e1f-beaa-b6c2f4d3e90c/agent-memory": {
+      "context": "store-trait-and-types",
+      "subject": "agent-memory",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T19:27:35.191Z",
+      "worker": "021113af-c543-448c-b39d-6d749628db22",
+      "techniques": [
+        {
+          "technique": "observation-clock",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/codec.rs:16 The codec encodes timestamps; it does not ground relative language during memory distillation."
+        },
+        {
+          "technique": "owner-and-counterpart-scope",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/scope.rs:9 Scope represents application tenant access, not ownership and counterpart views over agent memories."
+        },
+        {
+          "technique": "procedure-promotion",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/capabilities/mod.rs:1 Capabilities declare implemented persistence surfaces rather than procedures learned and promoted by an agent."
+        },
+        {
+          "technique": "rollup-compaction",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/rollup_compat/mod.rs:1 These adapters implement grouped accounting queries, not compaction of redundant memory claims."
+        }
+      ]
+    }
+  }
+}

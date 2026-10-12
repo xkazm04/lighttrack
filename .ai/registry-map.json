@@ -4175,7 +4175,11 @@
           "revision": 47,
           "changedAt": "2026-10-05",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/scores.rs:1 The inspected modules persist evaluation evidence and versioned evaluation assets rather than an agent's remembered beliefs or learned procedures.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:23599eae61aa7119",
+          "evaluatedRevision": 47
         },
         {
           "subject": "eval-harness",
@@ -4324,7 +4328,11 @@
           "revision": 47,
           "changedAt": "2026-10-05",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/events/mod.rs:1 This context stores and queries monitored LLM telemetry rather than implementing an agent's working, episodic, or consolidated memory.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:23599eae61aa7119",
+          "evaluatedRevision": 47
         },
         {
           "subject": "llm-call-telemetry-model",
@@ -4442,7 +4450,11 @@
           "revision": 47,
           "changedAt": "2026-10-05",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/projects.rs:1 The inspected platform modules persist administrative and operational records rather than information carried forward through an agent-memory pipeline.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:23599eae61aa7119",
+          "evaluatedRevision": 47
         },
         {
           "subject": "test-harness",
@@ -6791,7 +6803,11 @@
           "revision": 47,
           "changedAt": "2026-10-05",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store/src/lib.rs:3 The inspected contract describes application persistence and backend capabilities without defining an agent-memory lifecycle.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:23599eae61aa7119",
+          "evaluatedRevision": 47
         }
       ],
       "governance": "governed"
