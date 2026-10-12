@@ -857,7 +857,11 @@
           "revision": 26,
           "changedAt": "2026-10-06",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/tests_ingest.rs:36 Integration test setup repeatedly applies full SQLite schema migrations from scratch on every test case instead of copying a prepared template, incurring substantial migration overhead and violating build-once-copy-per-test fixture economics.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:5521806124d93882",
+          "evaluatedRevision": 26
         },
         {
           "subject": "mcp-tools",
@@ -3982,7 +3986,11 @@
           "revision": 26,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/mcp/src/tool_contract.rs:89 The MCP server snapshot test permits rewriting the canonical tool-contract.json artifact via an environment variable at runtime without a source-code constant, CI write refusal, or integrity test.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:5521806124d93882",
+          "evaluatedRevision": 26
         }
       ],
       "governance": "governed"
@@ -6598,7 +6606,11 @@
           "revision": 26,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/conformance/driver.rs:20 Conformance tests run across surfaces using a single shared mutable store with intentional execution order coupling, preventing test isolation and parallel execution.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:5521806124d93882",
+          "evaluatedRevision": 26
         },
         {
           "subject": "agent-memory",
@@ -6664,7 +6676,11 @@
           "revision": 26,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/tests/parity_doc.rs:33 Golden documentation and schema snapshots rely on runtime environment variables for re-baselining without a compile-time constant, integrity test, or CI refusal mechanism, allowing tests to re-record silently.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:5521806124d93882",
+          "evaluatedRevision": 26
         },
         {
           "subject": "quality-gates",

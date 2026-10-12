@@ -1,0 +1,175 @@
+{
+  "schema": "conform-run/1",
+  "worker": "fcbc9663-345d-42cf-8662-04bd9d55a0fa",
+  "subject": "test-harness",
+  "evaluatedAt": "2026-10-12T21:56:36.825566+00:00",
+  "provider": "agy",
+  "model": "gemini-3.8-flash-high",
+  "pairs": [
+    {
+      "context": "api-integration-tests",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/api/src/tests_ingest.rs:36 Integration test setup repeatedly applies full SQLite schema migrations from scratch on every test case instead of copying a prepared template, incurring substantial migration overhead and violating build-once-copy-per-test fixture economics.",
+      "techniques": [
+        {
+          "technique": "fixture-economics",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_ingest.rs:36 Every test invocation in the API test suite calls SqliteStore::open_in_memory(), executing all DDL migration statements anew per test rather than creating a shared template database and cloning it."
+        },
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_eval_targets.rs:150 The evaluation promotion test refuses a candidate unless positive evidence of the resolved prompt version decision is present in the recorded run, verifying the decision path rather than accepting default success."
+        }
+      ]
+    },
+    {
+      "context": "store-integration-tests",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/store/tests/parity_doc.rs:33 Golden documentation and schema snapshots rely on runtime environment variables for re-baselining without a compile-time constant, integrity test, or CI refusal mechanism, allowing tests to re-record silently.",
+      "techniques": [
+        {
+          "technique": "approval-snapshots-with-guarded-update",
+          "verdict": "deviation",
+          "evidence": "crates/store/tests/parity_doc.rs:33 Re-baselining parity and schema documentation files is controlled by an invisible environment variable without a compile-time source toggle or an integrity test asserting the record mode is disabled in CI."
+        },
+        {
+          "technique": "pin-the-call-not-the-name",
+          "verdict": "deviation",
+          "evidence": "crates/store/tests/ts_format_guard.rs:57 The structural scan for RFC3339 timestamp formatting functions asserts violations is empty but declares no population floor on scanned files or matching sites, risking silent false-clean passes if files are unread."
+        },
+        {
+          "technique": "long-lane-certification",
+          "verdict": "conformant",
+          "evidence": "crates/store/tests/soak.rs:27 The soak suite runs on an independent cadence with declared trend criteria in soak-criteria.json and structured JSON artifact generation, decoupled from the per-commit merge gate."
+        },
+        {
+          "technique": "negative-control-tests",
+          "verdict": "conformant",
+          "evidence": "crates/store/tests/soak.rs:381 Every soak run executes a planted drift run with injected latency in the second half, explicitly asserting that the harness fails on the write_p95_drift_ratio criterion."
+        }
+      ]
+    },
+    {
+      "context": "store-conformance-observability",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/store/src/conformance/driver.rs:20 Conformance tests run across surfaces using a single shared mutable store with intentional execution order coupling, preventing test isolation and parallel execution.",
+      "techniques": [
+        {
+          "technique": "fixture-economics",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/driver.rs:20 The driver explicitly relies on a shared mutable project and database state where downstream sections depend on events written by earlier sections, creating hidden ordering dependencies."
+        },
+        {
+          "technique": "derived-selection-must-be-measured",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/refusals.rs:88 The refusal driver measures the exercised methods of undeclared surfaces against Surface::methods(), failing if any method is omitted from refusal verification rather than assuming coverage."
+        }
+      ]
+    },
+    {
+      "context": "mcp-server",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/mcp/src/tool_contract.rs:89 The MCP server snapshot test permits rewriting the canonical tool-contract.json artifact via an environment variable at runtime without a source-code constant, CI write refusal, or integrity test.",
+      "techniques": [
+        {
+          "technique": "approval-snapshots-with-guarded-update",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/tool_contract.rs:89 The tool contract snapshot is re-baselined via the runtime environment variable LIGHTTRACK_PIN_TOOL_CONTRACT with no pipeline check to prevent accidental recording in CI and no integrity assertion."
+        }
+      ]
+    }
+  ],
+  "declined": [
+    {
+      "subject": "test-harness",
+      "context": "reactive-alert-responder",
+      "reason": "withdrawn after review: reviewer (sonnet): The anchor, Cargo.toml:6, is only the crate description line and doesn't show that no test harness exists. The crate has #[cfg(test)] test code in breaker.rs, classify.rs, enrich.rs, investigate.rs and webhook.rs, so the not-applicable claim is contradicted."
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-10-12T21:56:36.825566+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "test-harness"
+      ],
+      "techniques": [
+        "fixture-economics",
+        "unreached-decisions-pin-nothing"
+      ],
+      "deviations": 1,
+      "context": "api-integration-tests",
+      "via": "curator-multi:agy",
+      "model": "gemini-3.8-flash-high"
+    },
+    {
+      "ts": "2026-10-12T21:56:36.825566+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "test-harness"
+      ],
+      "techniques": [
+        "suite-partitioning"
+      ],
+      "deviations": 0,
+      "context": "reactive-alert-responder",
+      "via": "curator-multi:agy",
+      "model": "gemini-3.8-flash-high"
+    },
+    {
+      "ts": "2026-10-12T21:56:36.825566+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "test-harness"
+      ],
+      "techniques": [
+        "approval-snapshots-with-guarded-update",
+        "long-lane-certification",
+        "negative-control-tests",
+        "pin-the-call-not-the-name"
+      ],
+      "deviations": 1,
+      "context": "store-integration-tests",
+      "via": "curator-multi:agy",
+      "model": "gemini-3.8-flash-high"
+    },
+    {
+      "ts": "2026-10-12T21:56:36.825566+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "test-harness"
+      ],
+      "techniques": [
+        "derived-selection-must-be-measured",
+        "fixture-economics"
+      ],
+      "deviations": 1,
+      "context": "store-conformance-observability",
+      "via": "curator-multi:agy",
+      "model": "gemini-3.8-flash-high"
+    },
+    {
+      "ts": "2026-10-12T21:56:36.825566+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "test-harness"
+      ],
+      "techniques": [
+        "approval-snapshots-with-guarded-update"
+      ],
+      "deviations": 1,
+      "context": "mcp-server",
+      "via": "curator-multi:agy",
+      "model": "gemini-3.8-flash-high"
+    }
+  ]
+}
