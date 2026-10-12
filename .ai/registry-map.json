@@ -2584,7 +2584,11 @@
           "revision": 53,
           "changedAt": "2026-10-06",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/benchmarks.rs:380 A finished run with no judge pin and no frozen flag still receives a floor verdict, including pass.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:6e635d76a310aa4b",
+          "evaluatedRevision": 53
         },
         {
           "subject": "eval-harness",
@@ -2750,7 +2754,11 @@
           "revision": 53,
           "changedAt": "2026-10-06",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/benchmarks.rs:38 The CI-gate badge prints status, mean, baseline, n, and run id, and does not print caveat or judge_trust.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:6e635d76a310aa4b",
+          "evaluatedRevision": 53
         },
         {
           "subject": "prompt-assembly",
@@ -4629,7 +4637,11 @@
           "revision": 53,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/anon/src/export.rs:62 When LIGHTTRACK_UPDATE_FIXTURES is set, the freshness test overwrites the fixture and returns without comparing it.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:6e635d76a310aa4b",
+          "evaluatedRevision": 53
         },
         {
           "subject": "telemetry-pii-redaction",
@@ -5159,7 +5171,11 @@
           "revision": 53,
           "changedAt": "2026-10-06",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/responder/src/act.rs:83 The auto-fix agent is given edit and test tools, so the only bar against weakening tests is a sentence in the prompt.",
+          "evaluatedAt": "2026-10-12",
+          "evaluatedAgainst": "sha256-b2:6e635d76a310aa4b",
+          "evaluatedRevision": 53
         },
         {
           "subject": "test-harness",

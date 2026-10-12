@@ -104,6 +104,378 @@
           "evidence": "crates/store/src/rollup_compat/mod.rs:1 These adapters implement grouped accounting queries, not compaction of redundant memory claims."
         }
       ]
+    },
+    "45ec4c09-1cbf-41a9-8662-ffa6ca212289/quality-gates": {
+      "context": "reactive-alert-responder",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T20:55:58.344Z",
+      "worker": "a30b1067-e42e-4892-9953-b9b87f2a923e",
+      "techniques": [
+        {
+          "technique": "oracle-frozen-during-repair",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/act.rs:83 Repair runs in Mode::Edit with an empty allowlist; the oracle is not read-only."
+        },
+        {
+          "technique": "prose-rule-drift",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/act.rs:171 The do-not-edit-tests rule exists only as prompt text, and nothing invokes a checker for it."
+        },
+        {
+          "technique": "self-reported-gate-inputs",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/classify.rs:51 A carried transient label skips investigation without reading the message, so the producer of the field decides the gate."
+        },
+        {
+          "technique": "false-positive-economics",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/classify.rs:78 The HTTP fallback was narrowed after a real code error was classified as transient."
+        },
+        {
+          "technique": "gate-liveness",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/classify.rs:148 A known false-transient string is seeded and must come back Code."
+        },
+        {
+          "technique": "decidable-in-a-window",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/classify.rs:14 The phrase scan is kept as a bounded fallback and every use is counted rather than treated as the whole rule."
+        },
+        {
+          "technique": "instrument-answers-only-its-own-question",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/classify.rs:42 A carried terminal class does not let the phrase list re-answer the same decision."
+        },
+        {
+          "technique": "match-the-resolved-artifact",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/classify.rs:94 Status codes are matched as tokens in HTTP-shaped text, not as raw substrings."
+        },
+        {
+          "technique": "unmeasurable-criteria",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/classify.rs:55 An unknown or missing class is not treated as transient; it is marked fallback and the message is read."
+        },
+        {
+          "technique": "refusal-names-a-reachable-remedy",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/act.rs:129 A failed auto-fix commit names the branch and a git status command using the repo path it already has."
+        },
+        {
+          "technique": "hook-hygiene",
+          "verdict": "not-applicable",
+          "evidence": "crates/responder/src/act.rs:1 Auto-fix is an explicit stage on a new branch, not a commit or push hook."
+        },
+        {
+          "technique": "severity-by-construction",
+          "verdict": "not-applicable",
+          "evidence": "crates/responder/src/classify.rs:22 Skip is an internal routing label; this crate does not map a finding count to a process exit code."
+        }
+      ]
+    },
+    "430d498e-2077-4dde-b0c6-2735cb9ddfc4/quality-gates": {
+      "context": "evaluation-pipeline",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T20:55:58.344Z",
+      "worker": "a30b1067-e42e-4892-9953-b9b87f2a923e",
+      "techniques": [
+        {
+          "technique": "unmeasurable-criteria",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/benchmarks.rs:380 Missing dataset_frozen and missing judge/rubric pins are treated as comparable, so historical runs pass the floor the flag was added to protect."
+        },
+        {
+          "technique": "waiver-names-its-finding",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/prompts_gate.rs:65 One request flag allows promotion and clears resolution, regression, and incomplete together; it does not name a finding."
+        },
+        {
+          "technique": "blocking-by-input-determinism",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/prompts_gate.rs:191 Promotion blocks on one judge sample's confidence bound; the judge is not a function of the prompt text, and there is no cross-run aggregate."
+        },
+        {
+          "technique": "false-positive-economics",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/prompts_gate.rs:83 The scalar compare was narrowed so a dip inside the run's own interval does not block."
+        },
+        {
+          "technique": "gate-liveness",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/benchmarks.rs:584 A halted run whose partial mean clears the baseline is seeded and must not come back pass."
+        },
+        {
+          "technique": "severity-by-construction",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/prompts_gate.rs:18 AllowWithWarning is defined as a proceed, so the advisory path is not labeled as a block."
+        },
+        {
+          "technique": "refusal-names-a-reachable-remedy",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/prompts_gate.rs:118 The non-resolvable warning names the target field the operator adds to turn the check on."
+        },
+        {
+          "technique": "match-the-resolved-artifact",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/prompts_gate.rs:10 The gate reads the version the generator actually fetched, not the enqueue payload copied onto the run."
+        },
+        {
+          "technique": "instrument-answers-only-its-own-question",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/prompts_gate.rs:45 Regression is taken from the runner's verdict instead of a second comparison that could disagree."
+        },
+        {
+          "technique": "policy-projection",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/benchmarks.rs:306 The API verdict carries the caveat that names which comparability condition refused the floor."
+        },
+        {
+          "technique": "self-reported-gate-inputs",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/prompts_gate.rs:147 A resolvable benchmark with no resolved-version field is a block, so a missing record is not an allow."
+        },
+        {
+          "technique": "prose-rule-drift",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/prompts_gate.rs:114 The no-prompt_ref case is an emitted warning in the gate function, not a comment with no caller."
+        },
+        {
+          "technique": "oracle-frozen-during-repair",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/prompts.rs:390 Promotion is an admin HTTP action, not an agent task whose job is to make a failing check pass."
+        },
+        {
+          "technique": "hook-hygiene",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/benchmarks.rs:468 The benchmark gate is an HTTP handler, not a commit or push hook."
+        },
+        {
+          "technique": "branch-provenance-gate",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/prompts_gate.rs:1 This gate decides a label move from run evidence; it does not read branch ancestry."
+        },
+        {
+          "technique": "gate-laddering",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/benchmarks.rs:302 These files expose one verdict function; they do not place the same check on editor, commit, push, and merge rungs."
+        }
+      ],
+      "registryProposal": "blocking-by-input-determinism treats a model judge as an instrument that has not earned a block, but a regression gate whose subject is that score has no source-text restatement; the irreversible-activation exception should name this population."
+    },
+    "5b2cd610-77f3-4d26-aa7a-da3dd13618fe/quality-gates": {
+      "context": "usage-governance-limits",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T20:55:58.344Z",
+      "techniques": [
+        {
+          "technique": "enforcement-binding",
+          "verdict": "deviation",
+          "evidence": "crates/core/tests/blocking_gate_guard.rs:36 In-repo joins are tested; the technique's proof is a refusal observed at the merge decision, and this file says no test can read that setting."
+        },
+        {
+          "technique": "unmeasurable-criteria",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/limits/threshold.rs:110 An unreadable revenue basis becomes +inf and never breaches, including when the backend cannot serve revenue; an unpriceable cost cap does fail closed elsewhere."
+        },
+        {
+          "technique": "fabrication-economics",
+          "verdict": "deviation",
+          "evidence": "crates/core/tests/manifest_guard.rs:167 C1 accepts either boolean, so verified:true passes with no evidence that anyone ran the command."
+        },
+        {
+          "technique": "unparseable-form-is-a-finding",
+          "verdict": "deviation",
+          "evidence": "crates/core/tests/blocking_gate_guard.rs:115 A job whose continue-on-error the indent scan does not see stays blocking, so an unrecognised form is a pass for the advisory check."
+        },
+        {
+          "technique": "blocking-by-input-determinism",
+          "verdict": "conformant",
+          "evidence": "crates/core/tests/blocking_gate_guard.rs:268 The advisory lane is justified by feeds that move without this repository, and the test requires those jobs not to block."
+        },
+        {
+          "technique": "severity-by-construction",
+          "verdict": "conformant",
+          "evidence": "crates/core/tests/blocking_gate_guard.rs:127 Whether a job blocks is read from continue-on-error, not from the manifest's label alone."
+        },
+        {
+          "technique": "policy-projection",
+          "verdict": "conformant",
+          "evidence": "crates/core/tests/gate_table_guard.rs:1 The published Blocking column is generated-compared against the workflow in both directions."
+        },
+        {
+          "technique": "gate-liveness",
+          "verdict": "conformant",
+          "evidence": "crates/core/tests/gate_table_guard.rs:196 A fixture where the doc says blocking and the workflow says advisory is required to disagree."
+        },
+        {
+          "technique": "gate-laddering",
+          "verdict": "conformant",
+          "evidence": "crates/core/tests/manifest_guard.rs:220 Every ciHardPass command must appear in scripts/gates.sh, so the local script is the same rule text as the blocking set."
+        },
+        {
+          "technique": "match-the-resolved-artifact",
+          "verdict": "conformant",
+          "evidence": "crates/core/tests/chart_policy_guard.rs:605 The chart guard fails when values still declare a control the deployment template no longer mounts."
+        },
+        {
+          "technique": "refusal-names-a-reachable-remedy",
+          "verdict": "conformant",
+          "evidence": "crates/core/tests/blocking_gate_guard.rs:252 A grade mismatch names the two edits that make the manifest and the workflow agree."
+        },
+        {
+          "technique": "prose-rule-drift",
+          "verdict": "conformant",
+          "evidence": "crates/core/tests/guidance_guard.rs:18 The pointer rule for guidance files is a test, so a second build instruction fails the suite."
+        },
+        {
+          "technique": "instrument-answers-only-its-own-question",
+          "verdict": "conformant",
+          "evidence": "crates/core/tests/blocking_gate_guard.rs:12 The file exists because the other two guards can both be green while this join is unbound."
+        },
+        {
+          "technique": "renameable-detector-keys",
+          "verdict": "conformant",
+          "evidence": "crates/core/tests/blocking_gate_guard.rs:241 A hard-pass capability with no job row fails the guard instead of dropping out of the checked set."
+        },
+        {
+          "technique": "decidable-in-a-window",
+          "verdict": "conformant",
+          "evidence": "crates/core/tests/gate_table_guard.rs:16 The workflow check is stated as a bounded indent scan, and the comment names that shape."
+        },
+        {
+          "technique": "hook-hygiene",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/tests/manifest_guard.rs:222 The local rung these tests bind is a script, and the comment records that there is no hook."
+        },
+        {
+          "technique": "item-liveness",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/limits/status.rs:1 These files evaluate limit rules and CI text; they are not a board of long-lived work items."
+        },
+        {
+          "technique": "vacuous-by-evaluation",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/tests/gate_table_guard.rs:31 The guard reads workflow text; no inference layer fills the condition it asserts."
+        }
+      ],
+      "withdrawn": {
+        "worker": "a30b1067-e42e-4892-9953-b9b87f2a923e",
+        "state": "deviation",
+        "at": "2026-10-12T20:57:39.232048+00:00",
+        "reason": "reviewer (sonnet): The technique at blocking_gate_guard.rs:115 has the direction backwards. The `jobs()` scan sets `blocking = true` by default, so a job whose continue-on-error it misses reads as blocking. That makes the hard-pass check pass and the advisory check fail. The verdict says it is a pass for the advisory "
+      }
+    },
+    "9dc97639-bd28-43ef-bb53-96fb8ef10967/quality-gates": {
+      "context": "evaluation-rendering",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T20:55:58.344Z",
+      "worker": "a30b1067-e42e-4892-9953-b9b87f2a923e",
+      "techniques": [
+        {
+          "technique": "policy-projection",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/benchmarks.rs:38 The markdown projection drops caveat and judge_trust, so a reader of the badge sees a smaller policy than the API verdict."
+        },
+        {
+          "technique": "unmeasurable-criteria",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/benchmarks.rs:23 no_baseline is a distinct headline, and this function never renders the caveat that says why the floor was refused."
+        },
+        {
+          "technique": "severity-by-construction",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/limits.rs:41 The status badge is chosen from breached and warning only, so an unpriceable cap that rejects ingest still renders as ok when breached is false."
+        },
+        {
+          "technique": "gate-liveness",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/benchmarks.rs:176 Each documented gate status is pinned to its own headline so a known verdict cannot fall through to the dot arm."
+        },
+        {
+          "technique": "match-the-resolved-artifact",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/compare.rs:169 The tier verdict is printed from the runner's object and is not recomputed in the renderer."
+        },
+        {
+          "technique": "refusal-names-a-reachable-remedy",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/benchmarks.rs:13 gate returns markdown; it does not refuse and does not print a repair command."
+        }
+      ],
+      "registryProposal": "policy-projection would catch a dumb renderer that lags the verdict object if the technique required a fixture whose verdict carries every field and whose projection must mention each one."
+    },
+    "3df8f303-0005-4d18-8f39-d97cfc5fd20c/quality-gates": {
+      "context": "pii-scrubbing",
+      "subject": "quality-gates",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-12",
+      "evaluatedTs": "2026-10-12T20:55:58.344Z",
+      "worker": "a30b1067-e42e-4892-9953-b9b87f2a923e",
+      "techniques": [
+        {
+          "technique": "oracle-frozen-during-repair",
+          "verdict": "deviation",
+          "evidence": "crates/anon/src/export.rs:62 The same test that is the oracle can rewrite that oracle and then return success."
+        },
+        {
+          "technique": "gate-liveness",
+          "verdict": "deviation",
+          "evidence": "crates/anon/src/export.rs:78 Equal rule arrays pass with no floor, so two empty rule lists are a clean result."
+        },
+        {
+          "technique": "self-reported-gate-inputs",
+          "verdict": "conformant",
+          "evidence": "crates/anon/src/export.rs:58 The hatch is an environment variable read at start, which is the channel the technique allows a run not to rewrite mid-flight."
+        },
+        {
+          "technique": "severity-by-construction",
+          "verdict": "conformant",
+          "evidence": "crates/anon/src/export.rs:66 A missing fixture panics instead of comparing against an empty stand-in."
+        },
+        {
+          "technique": "refusal-names-a-reachable-remedy",
+          "verdict": "conformant",
+          "evidence": "crates/anon/src/export.rs:69 The missing-fixture panic names the crate test command that regenerates the file."
+        },
+        {
+          "technique": "policy-projection",
+          "verdict": "conformant",
+          "evidence": "crates/anon/src/export.rs:79 The fixture is checked against rule_set() rather than a second hand-copied table."
+        },
+        {
+          "technique": "unparseable-form-is-a-finding",
+          "verdict": "conformant",
+          "evidence": "crates/anon/src/export.rs:103 Lookaround in an exported pattern fails the test, so a form the other engines cannot run is a finding."
+        },
+        {
+          "technique": "false-positive-economics",
+          "verdict": "conformant",
+          "evidence": "crates/anon/src/lib.rs:10 Ambiguous shapes are specified to under-match because a false redaction rewrites the text the judge later scores."
+        },
+        {
+          "technique": "match-the-resolved-artifact",
+          "verdict": "conformant",
+          "evidence": "crates/anon/src/export.rs:73 The fixture check parses JSON before it compares bytes, so formatting is not the only reading."
+        },
+        {
+          "technique": "blocking-by-input-determinism",
+          "verdict": "conformant",
+          "evidence": "crates/anon/src/export.rs:84 The freshness failure compares two artifacts in the tree, so the same commit yields the same verdict."
+        }
+      ]
     }
   }
 }
