@@ -571,7 +571,11 @@
           "revision": 3,
           "changedAt": "2026-09-20",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/alerts/channels.rs:47 Webhook delivery permits unsigned payloads, leaving receivers without the authentication the standard requires.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:a6170b7423099d53",
+          "evaluatedRevision": 3
         },
         {
           "subject": "alerting",
@@ -2075,7 +2079,11 @@
           "revision": 3,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/margin_guardrails.rs:100 Predicted breach ETAs drive persisted enforcement-action escalations, violating the standard's requirement that forecasts remain advisory.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:a6170b7423099d53",
+          "evaluatedRevision": 3
         },
         {
           "subject": "agent-memory",
@@ -5403,7 +5411,11 @@
           "revision": 3,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/responder/src/webhook.rs:88 The receiver bypasses signature verification when no secret is configured, allowing unverified alerts to trigger investigation.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:a6170b7423099d53",
+          "evaluatedRevision": 3
         },
         {
           "subject": "settings",
@@ -7177,7 +7189,11 @@
           "revision": 3,
           "changedAt": "2026-09-20",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/limits/rule.rs:234 The rule evaluator supports forecast-driven replacement of the effective enforcement action, contrary to the standard's advisory-only forecast requirement.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:a6170b7423099d53",
+          "evaluatedRevision": 3
         },
         {
           "subject": "alerting",

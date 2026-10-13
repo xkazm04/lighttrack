@@ -1745,6 +1745,100 @@
           "evidence": "crates/agent/src/inventory.rs:36 The local action inventory enumerates executable disk directories to filter cloud task leasing rather than determining session-scoped tool capabilities."
         }
       ]
+    },
+    "a89f25a3-bf61-4f19-a72a-357db8fcdefe/breach-alerting-and-attribution": {
+      "context": "alerts-system",
+      "subject": "breach-alerting-and-attribution",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T07:58:24.927Z",
+      "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+      "techniques": [
+        {
+          "technique": "identity-scope-attribution-refusal",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/alerts/attribution.rs:159 The API-key/customer branch emits no contributors and supplies this pointer; the referenced endpoint authenticates callers and resolves their project scope."
+        },
+        {
+          "technique": "notification-channel-security",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/channels.rs:68 The signature header is conditional, while sending proceeds without it; channel creation also defaults signing off."
+        },
+        {
+          "technique": "off-request-path-delivery",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/ledger.rs:76 notify_warnings composes the message and payload synchronously before spawn_fire; ingest calls this method directly, violating the requirement to move formatting downstream of detection into the spawned task."
+        },
+        {
+          "technique": "scope-inverted-attribution",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/alerts/attribution.rs:147 Use-case caps group their filtered rows by model; the other branches invert model caps into workloads and provider caps into models, using within-scope totals and explicit empty-scope notes."
+        },
+        {
+          "technique": "top-contributor-attribution",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/attribution.rs:96 fetch converts failed reads into empty vectors and still composes attribution, so a failed provider-scope read can produce 'no attributable spend in window' instead of omitting enrichment; ranking, shares and dual rendering otherwise exist."
+        }
+      ]
+    },
+    "5b2cd610-77f3-4d26-aa7a-da3dd13618fe/breach-alerting-and-attribution": {
+      "context": "usage-governance-limits",
+      "subject": "breach-alerting-and-attribution",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T07:58:24.927Z",
+      "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+      "techniques": [
+        {
+          "technique": "pre-breach-forecasting",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/limits/rule.rs:234 Forecast-driven escalation can replace Alert with Throttle or Block; the tests explicitly exercise Block, so the forecast mechanism is capable of changing enforcement even though evaluation still reads measured usage."
+        },
+        {
+          "technique": "scoped-dedup-keys",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/limits/status.rs:199 alert_key supplies project_id, metric, window and scope_tag to this format; the key excludes current usage and detection methodology, and the scoped-key test checks the model suffix."
+        }
+      ]
+    },
+    "45ec4c09-1cbf-41a9-8662-ffa6ca212289/breach-alerting-and-attribution": {
+      "context": "reactive-alert-responder",
+      "subject": "breach-alerting-and-attribution",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T07:58:24.927Z",
+      "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+      "techniques": [
+        {
+          "technique": "notification-channel-security",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/webhook.rs:88 Verification and freshness checks run only with a configured secret; main merely warns when an unsigned receiver binds beyond loopback and continues serving."
+        }
+      ]
+    },
+    "22a431dc-2c4e-441c-9ecb-ee84020685be/breach-alerting-and-attribution": {
+      "context": "cost-and-revenue-governance",
+      "subject": "breach-alerting-and-attribution",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T07:58:24.927Z",
+      "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+      "techniques": [
+        {
+          "technique": "pre-breach-forecasting",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/margin_guardrails.rs:100 This forecast-alert predicate raises escalated_until and writes the updated rule; explainable advisory messages and shared mapping exist, but forecasts can change enforcement."
+        },
+        {
+          "technique": "scoped-dedup-keys",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/forecast_alerts.rs:42 The forecast key contains project, kind, subject and severity, excludes production methodology and ETA, and both sweep and query obtain alerts from the shared mapping."
+        }
+      ]
     }
   }
 }

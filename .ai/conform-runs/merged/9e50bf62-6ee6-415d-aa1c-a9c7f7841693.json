@@ -1,0 +1,167 @@
+{
+ "schema": "conform-run/1",
+ "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+ "subject": "breach-alerting-and-attribution",
+ "evaluatedAt": "2026-10-13T07:58:24.927076+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "alerts-system",
+   "subject": "breach-alerting-and-attribution",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/alerts/channels.rs:47 Webhook delivery permits unsigned payloads, leaving receivers without the authentication the standard requires.",
+   "techniques": [
+    {
+     "technique": "identity-scope-attribution-refusal",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/alerts/attribution.rs:159 The API-key/customer branch emits no contributors and supplies this pointer; the referenced endpoint authenticates callers and resolves their project scope."
+    },
+    {
+     "technique": "notification-channel-security",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/alerts/channels.rs:68 The signature header is conditional, while sending proceeds without it; channel creation also defaults signing off."
+    },
+    {
+     "technique": "off-request-path-delivery",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/alerts/ledger.rs:76 notify_warnings composes the message and payload synchronously before spawn_fire; ingest calls this method directly, violating the requirement to move formatting downstream of detection into the spawned task."
+    },
+    {
+     "technique": "scope-inverted-attribution",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/alerts/attribution.rs:147 Use-case caps group their filtered rows by model; the other branches invert model caps into workloads and provider caps into models, using within-scope totals and explicit empty-scope notes."
+    },
+    {
+     "technique": "top-contributor-attribution",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/alerts/attribution.rs:96 fetch converts failed reads into empty vectors and still composes attribution, so a failed provider-scope read can produce 'no attributable spend in window' instead of omitting enrichment; ranking, shares and dual rendering otherwise exist."
+    }
+   ]
+  },
+  {
+   "context": "usage-governance-limits",
+   "subject": "breach-alerting-and-attribution",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/core/src/limits/rule.rs:234 The rule evaluator supports forecast-driven replacement of the effective enforcement action, contrary to the standard's advisory-only forecast requirement.",
+   "techniques": [
+    {
+     "technique": "pre-breach-forecasting",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/limits/rule.rs:234 Forecast-driven escalation can replace Alert with Throttle or Block; the tests explicitly exercise Block, so the forecast mechanism is capable of changing enforcement even though evaluation still reads measured usage."
+    },
+    {
+     "technique": "scoped-dedup-keys",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/limits/status.rs:199 alert_key supplies project_id, metric, window and scope_tag to this format; the key excludes current usage and detection methodology, and the scoped-key test checks the model suffix."
+    }
+   ]
+  },
+  {
+   "context": "reactive-alert-responder",
+   "subject": "breach-alerting-and-attribution",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/responder/src/webhook.rs:88 The receiver bypasses signature verification when no secret is configured, allowing unverified alerts to trigger investigation.",
+   "techniques": [
+    {
+     "technique": "notification-channel-security",
+     "verdict": "deviation",
+     "evidence": "crates/responder/src/webhook.rs:88 Verification and freshness checks run only with a configured secret; main merely warns when an unsigned receiver binds beyond loopback and continues serving."
+    }
+   ]
+  },
+  {
+   "context": "cost-and-revenue-governance",
+   "subject": "breach-alerting-and-attribution",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/margin_guardrails.rs:100 Predicted breach ETAs drive persisted enforcement-action escalations, violating the standard's requirement that forecasts remain advisory.",
+   "techniques": [
+    {
+     "technique": "pre-breach-forecasting",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/margin_guardrails.rs:100 This forecast-alert predicate raises escalated_until and writes the updated rule; explainable advisory messages and shared mapping exist, but forecasts can change enforcement."
+    },
+    {
+     "technique": "scoped-dedup-keys",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/forecast_alerts.rs:42 The forecast key contains project, kind, subject and severity, excludes production methodology and ETA, and both sweep and query obtain alerts from the shared mapping."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "breach-alerting-and-attribution",
+   "context": "pg-platform-operations",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-13T07:58:24.927076+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "breach-alerting-and-attribution"
+   ],
+   "techniques": [
+    "identity-scope-attribution-refusal",
+    "notification-channel-security",
+    "off-request-path-delivery",
+    "scope-inverted-attribution",
+    "top-contributor-attribution"
+   ],
+   "deviations": 1,
+   "context": "alerts-system",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-13T07:58:24.927076+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "breach-alerting-and-attribution"
+   ],
+   "techniques": [
+    "pre-breach-forecasting",
+    "scoped-dedup-keys"
+   ],
+   "deviations": 1,
+   "context": "usage-governance-limits",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-13T07:58:24.927076+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "breach-alerting-and-attribution"
+   ],
+   "techniques": [
+    "notification-channel-security"
+   ],
+   "deviations": 1,
+   "context": "reactive-alert-responder",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-13T07:58:24.927076+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "breach-alerting-and-attribution"
+   ],
+   "techniques": [
+    "pre-breach-forecasting",
+    "scoped-dedup-keys"
+   ],
+   "deviations": 1,
+   "context": "cost-and-revenue-governance",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}
