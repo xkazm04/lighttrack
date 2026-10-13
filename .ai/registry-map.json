@@ -2656,7 +2656,11 @@
           "revision": 11,
           "changedAt": "2026-09-22",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/labels_promote.rs:93 Label promotion copies production text directly into a permanent dataset case without dataset-entry scrubbing or an anonymization audit.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:529238b95e86e429",
+          "evaluatedRevision": 11
         },
         {
           "subject": "prompt-assembly",
@@ -2814,7 +2818,11 @@
           "revision": 11,
           "changedAt": "2026-09-22",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/benchmarks.rs:38 The gate renderer prints the verdict and numbers without the API's comparability caveat, hiding why the baseline cannot support a claim.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:529238b95e86e429",
+          "evaluatedRevision": 11
         },
         {
           "subject": "eval-harness",
@@ -2984,7 +2992,11 @@
           "revision": 11,
           "changedAt": "2026-09-22",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/score.rs:115 The serialized verdict type accepts arbitrary determinism strings without normalizing unknown values to not recorded.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:529238b95e86e429",
+          "evaluatedRevision": 11
         },
         {
           "subject": "eval-harness",
@@ -5437,14 +5449,13 @@
           "changedAt": "2026-09-22",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/runner/src/compare.rs:773 writes the per-case result row with no concession field, while crates/engine/src/codex/mod.rs:171 announces a real handicap (an oversized system prompt folded into the user turn) only on stderr and crates/engine/src/providers.rs:222 sheds the JSON schema into a prose retry whose SchemaEnforcement::Shed never leaves the engine - so a cell measured on a weakened task renders as commensurable with the rest; entitlement exhaustion is likewise unrepresentable, crates/runner/src/compare.rs:183 reducing each cell to a bool before the breaker, so a spent allowance reports as an unhealthy provider.",
-          "evaluatedAt": "2026-09-22",
-          "evaluatedAgainst": "sha256:c676b38cbfcb70b5",
-          "evaluatedRevision": 10,
+          "evidence": "crates/runner/src/compare.rs:183 Generation failures reach the breaker as booleans, preventing entitlement exhaustion from being distinguished from provider ill health.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:529238b95e86e429",
+          "evaluatedRevision": 11,
           "source": "conform",
           "adoptedFrom": "662e62fb-df6c-45c9-9f3d-cdc98cb44cf8",
-          "revisionsBehind": 1,
-          "stale": true
+          "revisionsBehind": 1
         },
         {
           "subject": "fleet-orchestration",
@@ -5598,7 +5609,11 @@
           "revision": 11,
           "changedAt": "2026-09-22",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/pairwise.rs:139 The paid pairwise matrix guards game count but has no dollar-ceiling enforcement during generation or judging.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:529238b95e86e429",
+          "evaluatedRevision": 11
         },
         {
           "subject": "test-harness",
