@@ -2584,7 +2584,11 @@
           "revision": 5,
           "changedAt": "2026-09-29",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/judges.rs:89 Benchmark and prompt gates block on an untrusted or never-calibrated judge only when the project has turned require_trusted_judge on, so the default path still lets those scores fail a release or promote a prompt.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:d0f0d4aa66f81402",
+          "evaluatedRevision": 5
         },
         {
           "subject": "quality-gates",
@@ -2976,7 +2980,11 @@
           "revision": 5,
           "changedAt": "2026-09-29",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/score.rs:346 When a calibration score also carries a product rubric_id, the alert series key is that rubric_id, so the reserved lt:calibration label is not the window.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:d0f0d4aa66f81402",
+          "evaluatedRevision": 5
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -4231,7 +4239,11 @@
           "revision": 5,
           "changedAt": "2026-09-29",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "conformant",
+          "evidence": "crates/store-pg/src/calibrations.rs:3 These files append per-judge calibration rows and ordinary score rows, and they do not measure agreement, schedule a cycle, choose a judge, or run a rolling score-drop detector.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:d0f0d4aa66f81402",
+          "evaluatedRevision": 5
         },
         {
           "subject": "agent-memory",
@@ -5425,14 +5437,13 @@
           "changedAt": "2026-09-29",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/runner/src/calibrate_watch.rs:81 alarms on a configured drift_threshold with no measured repeatability floor beneath it (crates/core/src/calibration.rs:26 Agreement carries pearson/mae/rmse/bias/kappa and no per-dimension self-agreement or good-vs-bad spread), so the sentinel cannot tell a drop from the judge arguing with itself and the golden set at crates/runner/src/calibrate.rs:2 is never split before it is used to choose a judge.",
-          "evaluatedAt": "2026-09-22",
-          "evaluatedAgainst": "sha256-b2:9a1456dda8827240",
-          "evaluatedRevision": 4,
+          "evidence": "crates/runner/src/calibrate_watch.rs:81 The watch sentinel pages on a kappa drop larger than a configured drift_threshold, and that comparison has no measured per-dimension repeatability floor under it.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:d0f0d4aa66f81402",
+          "evaluatedRevision": 5,
           "source": "conform",
           "adoptedFrom": "8702fe0e-f66b-4541-9dcc-514a41033990",
-          "revisionsBehind": 1,
-          "stale": true
+          "revisionsBehind": 1
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -5561,7 +5572,11 @@
           "revision": 5,
           "changedAt": "2026-09-29",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/gate.rs:18 bench --gate fails the build from the run status alone, and these files never read a trusted, untrusted, or uncalibrated state.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:d0f0d4aa66f81402",
+          "evaluatedRevision": 5
         },
         {
           "subject": "judge-contract-design",
