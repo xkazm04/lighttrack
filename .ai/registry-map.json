@@ -1302,7 +1302,11 @@
           "revision": 9,
           "changedAt": "2026-10-02",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/invocation/probe.rs:118 The availability probe checks .credentials.json file presence on disk instead of executing an auth-status command in the child environment, masking invalid or revoked accounts.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:5791230ffb7d9fad",
+          "evaluatedRevision": 9
         },
         {
           "subject": "untrusted-extension-host",
@@ -1654,7 +1658,11 @@
           "revision": 9,
           "changedAt": "2026-10-02",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/cli/Cargo.toml:6 Searches for subject terms 'claude -p', 'codex exec', 'spawn_bounded', and 'ClaudeBin' across crates/cli returned zero hits; the manifest demonstrates that this crate implements an operator management CLI for querying and administering the LightTrack API rather than a transport for spawning headless coding agents.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:5791230ffb7d9fad",
+          "evaluatedRevision": 9
         },
         {
           "subject": "mcp-tools",
@@ -2345,7 +2353,11 @@
           "revision": 9,
           "changedAt": "2026-10-02",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/agent/src/main.rs:50 The relay agent relies on file-existence credential checks rather than a zero-token authorization probe and aborts immediately when missing rather than degrading through a fallback ladder.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:5791230ffb7d9fad",
+          "evaluatedRevision": 9
         },
         {
           "subject": "mcp-tools",
@@ -4054,7 +4066,11 @@
           "revision": 9,
           "changedAt": "2026-10-02",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/mcp/Cargo.toml:6 Searches for subject terms 'claude -p', 'codex exec', 'spawn_bounded', and 'ClaudeBin' across crates/mcp returned zero hits; the manifest declares an MCP server providing tools over stdio rather than an application invoking headless agent CLIs as model transports.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:5791230ffb7d9fad",
+          "evaluatedRevision": 9
         },
         {
           "subject": "test-harness",
@@ -5007,7 +5023,11 @@
           "revision": 9,
           "changedAt": "2026-10-02",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/providers.rs:371 The candidate generation dispatcher inverts the fallback ladder by prioritizing metered API calls over local flat-rate agent CLI seats and fails directly on missing CLI binaries without an inspectable fallback ladder.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:5791230ffb7d9fad",
+          "evaluatedRevision": 9
         },
         {
           "subject": "cross-provider-benchmark-operations",
