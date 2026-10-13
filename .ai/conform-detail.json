@@ -2781,6 +2781,67 @@
           "evidence": "clients/typescript/src/journal.ts:186 Recovery selects owned JSONL files, rather than accounting for or pruning embedded-database tables."
         }
       ]
+    },
+    "45ec4c09-1cbf-41a9-8662-ffa6ca212289/fleet-orchestration": {
+      "context": "reactive-alert-responder",
+      "subject": "fleet-orchestration",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T13:06:29.736Z",
+      "worker": "b07d4995-df0a-489e-90f5-d0a44a6ec255",
+      "techniques": [
+        {
+          "technique": "completion-claim-verification",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/git.rs:44 is_clean returns false on Git I/O errors; negating it makes an unreadable checkout count as changed, and ACT records that value as applied instead of unverified."
+        },
+        {
+          "technique": "coordination-failure-triage",
+          "verdict": "not-applicable",
+          "evidence": "crates/responder/src/pipeline.rs:100 This classifier triages monitored application failures, not failed multi-agent coordination or topology redesign."
+        },
+        {
+          "technique": "deliberation-as-an-elected-turn",
+          "verdict": "not-applicable",
+          "evidence": "crates/responder/src/pipeline.rs:30 Fixed Rust routing selects the pipeline; a model does not choose its dispatch topology."
+        },
+        {
+          "technique": "durable-fleet-state",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/breaker.rs:61 Startup initializes active admissions empty; the alert ledger remembers completed resolutions but does not restore or reconcile running sessions before admission."
+        },
+        {
+          "technique": "evidence-outranks-a-liveness-claim",
+          "verdict": "not-applicable",
+          "evidence": "crates/responder/src/invoke.rs:76 The inspected path enforces a subprocess execution deadline, rather than reclaiming ownership from stale session self-reports."
+        },
+        {
+          "technique": "hibernation-and-resume",
+          "verdict": "not-applicable",
+          "evidence": "crates/responder/src/invoke.rs:46 The inspected dispatch constructs fresh bounded invocations; searches found no parking or checkpoint-resume path."
+        },
+        {
+          "technique": "parallel-dispatch",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/breaker.rs:121 Deduplication is by project ID; configuration permits different IDs to share a repository, with no repository-scope reservation before ACT changes branches and edits files."
+        },
+        {
+          "technique": "result-harvest",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/report.rs:60 Results are keyed by sanitized project and second-resolution timestamp, then overwritten by ordinary file writes, rather than ingested under run/session-incarnation identity with conflict detection."
+        },
+        {
+          "technique": "session-registry",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/breaker.rs:30 Active bookkeeping is a set of project names, without minted session identities, lifecycle states, incarnation fencing, or enumerable write-scope claims."
+        },
+        {
+          "technique": "soft-budget-under-the-hard-cap",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/invoke.rs:50 Dollar and wall-clock caps are enforced, but neither investigation nor edit brief carries a smaller derived count budget."
+        }
+      ]
     }
   }
 }

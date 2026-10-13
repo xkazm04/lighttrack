@@ -5403,7 +5403,11 @@
           "revision": 25,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/responder/src/breaker.rs:121 Admission reserves project IDs rather than repository write scopes, allowing different projects mapped to the same checkout to run conflicting edit sessions.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:3eafb649495c9498",
+          "evaluatedRevision": 26
         },
         {
           "subject": "eval-harness",
