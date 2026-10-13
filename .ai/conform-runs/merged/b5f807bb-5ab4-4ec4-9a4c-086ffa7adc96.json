@@ -1,0 +1,68 @@
+{
+ "schema": "conform-run/1",
+ "worker": "b5f807bb-5ab4-4ec4-9a4c-086ffa7adc96",
+ "subject": "agent-instruction-files",
+ "evaluatedAt": "2026-10-13T11:00:09.658924+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "reactive-alert-responder",
+   "subject": "agent-instruction-files",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/responder/src/act.rs:83 The reusable fix brief forbids git commands and pushes while its edit invocation supplies no deterministic denial for those actions, leaving a mechanically enforceable restriction in prose.",
+   "techniques": [
+    {
+     "technique": "enforcement-demotion",
+     "verdict": "deviation",
+     "evidence": "crates/responder/src/act.rs:172 The preceding line supplies 'do not'; ACT passes an empty tool list through invoke.rs, and the shared edit posture adds no git/push deny rule, so enforcement depends on the model obeying this brief."
+    },
+    {
+     "technique": "restraint-amplifier-balance",
+     "verdict": "conformant",
+     "evidence": "crates/responder/src/investigate.rs:58 The investigation brief pairs its prohibition on file modification with a checkable outlet: propose a concrete fix and disclose risks."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "agent-instruction-files",
+   "context": "mcp-server",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "agent-instruction-files",
+   "context": "device-relay-agent",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "agent-instruction-files",
+   "context": "pii-scrubbing",
+   "reason": "pair anchor refused: crates/anon/Cargo.toml:6 does not contain the quoted text"
+  },
+  {
+   "subject": "agent-instruction-files",
+   "context": "api-endpoint-table",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-13T11:00:09.658924+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-instruction-files"
+   ],
+   "techniques": [
+    "enforcement-demotion",
+    "restraint-amplifier-balance"
+   ],
+   "deviations": 1,
+   "context": "reactive-alert-responder",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

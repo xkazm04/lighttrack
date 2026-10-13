@@ -2514,6 +2514,27 @@
           "evidence": "crates/core/src/score.rs:443 The complete Benchmark definition has no baseline source-run, setter or baseline-specific judge and dataset revision record."
         }
       ]
+    },
+    "45ec4c09-1cbf-41a9-8662-ffa6ca212289/agent-instruction-files": {
+      "context": "reactive-alert-responder",
+      "subject": "agent-instruction-files",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T11:00:09.658Z",
+      "worker": "b5f807bb-5ab4-4ec4-9a4c-086ffa7adc96",
+      "techniques": [
+        {
+          "technique": "enforcement-demotion",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/act.rs:172 The preceding line supplies 'do not'; ACT passes an empty tool list through invoke.rs, and the shared edit posture adds no git/push deny rule, so enforcement depends on the model obeying this brief."
+        },
+        {
+          "technique": "restraint-amplifier-balance",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/investigate.rs:58 The investigation brief pairs its prohibition on file modification with a checkable outlet: propose a concrete fix and disclose risks."
+        }
+      ]
     }
   }
 }

@@ -5423,7 +5423,11 @@
           "revision": 31,
           "changedAt": "2026-09-25",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/responder/src/act.rs:83 The reusable fix brief forbids git commands and pushes while its edit invocation supplies no deterministic denial for those actions, leaving a mechanically enforceable restriction in prose.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:25b61236a62604b0",
+          "evaluatedRevision": 31
         },
         {
           "subject": "mcp-tools",
