@@ -2756,7 +2756,11 @@
           "revision": 8,
           "changedAt": "2026-09-30",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/benchmarks.rs:216 Benchmark creation stores an unqualified scalar baseline, leaving subsequent gates unable to establish its measurement conditions.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:2fa1e4fd027c9e92",
+          "evaluatedRevision": 8
         },
         {
           "subject": "test-harness",
@@ -3132,7 +3136,11 @@
           "revision": 8,
           "changedAt": "2026-09-30",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/score.rs:443 The benchmark data model represents its baseline mean as a scalar without a record of the conditions that make comparison defensible.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:2fa1e4fd027c9e92",
+          "evaluatedRevision": 8
         },
         {
           "subject": "test-harness",
@@ -5745,14 +5753,13 @@
           "changedAt": "2026-09-30",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/store/src/schema/tables/eval.rs:72 stores baseline_score as a bare Real with no judge model, dataset version or set-at date, and crates/runner/src/history.rs:6 builds the comparability predicate from mode, target and dataset version only - so the floor test at crates/runner/src/stats/paired.rs:135 compares against a number from a possibly retired instrument and can neither refuse nor date it.",
-          "evaluatedAt": "2026-09-22",
-          "evaluatedAgainst": "sha256-b2:ec7bfd40bd0cf6b1",
-          "evaluatedRevision": 7,
+          "evidence": "crates/runner/src/rubric.rs:382 The runner tests a scalar baseline without validating the conditions under which that measurement was established.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:2fa1e4fd027c9e92",
+          "evaluatedRevision": 8,
           "source": "conform",
           "adoptedFrom": "662e62fb-df6c-45c9-9f3d-cdc98cb44cf8",
-          "revisionsBehind": 1,
-          "stale": true
+          "revisionsBehind": 1
         },
         {
           "subject": "quality-gates",

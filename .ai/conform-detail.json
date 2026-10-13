@@ -2407,6 +2407,113 @@
         }
       ],
       "registryProposal": "Clarify in the standard's scope boundaries that LLM-as-judge scoring pipelines are outside voice-io."
+    },
+    "971b004d-7b8c-4a5e-8a71-3ab3436cf511/quality-regression-gating": {
+      "context": "runner-scoring-engine",
+      "subject": "quality-regression-gating",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T10:19:29.073Z",
+      "worker": "64b9a6db-f164-4b8b-a918-a37bee6c2d74",
+      "techniques": [
+        {
+          "technique": "baseline-carries-its-conditions",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/rubric.rs:382 The floor receives only the numeric baseline and current summary, with no baseline provenance predicate."
+        },
+        {
+          "technique": "family-wise-correction",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/stats/normal.rs:105 Compare mode supplies the target count; verdict artifacts disclose the correction, threshold, family size and power cost."
+        },
+        {
+          "technique": "fixed-alpha-discipline",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/stats/paired.rs:25 The decision level is compiled into the verdict module and has no inspected runtime setting."
+        },
+        {
+          "technique": "paired-per-case-testing",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/compare.rs:873 Case identity alignment and subset disclosure are implemented, but the history selector receives no current judge identity and its filter does not require matching judges."
+        },
+        {
+          "technique": "partial-run-never-green",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/util.rs:320 A halted comparison containing a completed regressed target becomes regressed rather than unverified; the standard prohibits both green and regression verdicts for partial runs."
+        },
+        {
+          "technique": "tested-superiority-claims",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/compare.rs:1225 The winner is tested with case pairing and all-pairs correction, but its claim exists in the printed matrix summary created after the per-target reports were posted, rather than being persisted with the run."
+        },
+        {
+          "technique": "unverified-vs-regressed-exit-states",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/gate.rs:9 The status mapper distinguishes regression code 3, unverified code 4 and success code 0; main activates it only under --gate."
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/store/src/schema/tables/eval.rs:72 stores baseline_score as a bare Real with no judge model, dataset version or set-at date, and crates/runner/src/history.rs:6 builds the comparability predicate from mode, target and dataset version only - so the floor test at crates/runner/src/stats/paired.rs:135 compares against a number from a possibly retired instrument and can neither refuse nor date it.",
+          "evaluatedAt": "2026-09-22",
+          "worker": null,
+          "reason": "replaced by 64b9a6db-f164-4b8b-a918-a37bee6c2d74"
+        }
+      ]
+    },
+    "430d498e-2077-4dde-b0c6-2735cb9ddfc4/quality-regression-gating": {
+      "context": "evaluation-pipeline",
+      "subject": "quality-regression-gating",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T10:19:29.073Z",
+      "worker": "64b9a6db-f164-4b8b-a918-a37bee6c2d74",
+      "techniques": [
+        {
+          "technique": "baseline-carries-its-conditions",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/benchmarks.rs:216 The API records no baseline source run, setter or measured instrument and dataset revision; its later predicate accepts missing pins and compares run pins against current benchmark settings."
+        },
+        {
+          "technique": "family-wise-correction",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/prompts_gate.rs:191 Promotion can add a regression block using report.ci95, the uncorrected interval, even when a multi-target runner verdict passed at the corrected threshold."
+        },
+        {
+          "technique": "partial-run-never-green",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/prompts_gate.rs:157 Without a baseline, regression_refusal returns before examining incomplete status, allowing a resolved partial or cancelled run to promote without reporting its partiality."
+        },
+        {
+          "technique": "tested-superiority-claims",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/quality.rs:10 The inspected API surfaces expose measurements and stored run payloads without making a model-winner claim."
+        },
+        {
+          "technique": "unverified-vs-regressed-exit-states",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/benchmarks.rs:438 Unrecognized run statuses submitted across the HTTP boundary can fall through to a passing scalar comparison instead of becoming unverified."
+        }
+      ]
+    },
+    "060b7649-5405-4f72-ac96-572409e6039d/quality-regression-gating": {
+      "context": "evaluation-scoring-types",
+      "subject": "quality-regression-gating",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T10:19:29.073Z",
+      "worker": "64b9a6db-f164-4b8b-a918-a37bee6c2d74",
+      "techniques": [
+        {
+          "technique": "baseline-carries-its-conditions",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/score.rs:443 The complete Benchmark definition has no baseline source-run, setter or baseline-specific judge and dataset revision record."
+        }
+      ]
     }
   }
 }
