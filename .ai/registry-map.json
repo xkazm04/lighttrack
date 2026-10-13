@@ -1789,7 +1789,11 @@
           "revision": 10,
           "changedAt": "2026-09-09",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/collective/types.rs:77 The serialized digest includes an unrestricted rubric fingerprint, allowing an internal-derived correlation key to cross the organizational boundary despite the standard's closed-channel requirement.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:9b1c943f13921ab0",
+          "evaluatedRevision": 10
         }
       ],
       "governance": "governed"
@@ -1827,7 +1831,11 @@
           "revision": 10,
           "changedAt": "2026-09-09",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/collective/fold.rs:147 Duplicate buckets are summed after individual plausibility checks without rechecking the combined count, allowing a stored bucket to exceed the million-case ceiling.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:9b1c943f13921ab0",
+          "evaluatedRevision": 10
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -3540,7 +3548,11 @@
           "revision": 10,
           "changedAt": "2026-09-09",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-firestore/src/collective.rs:97 Consumption invents a zero quality for missing or mistyped stored data, while other decoding failures abort the listing instead of skipping and reporting the defective entry.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:9b1c943f13921ab0",
+          "evaluatedRevision": 10
         },
         {
           "subject": "alerting",
