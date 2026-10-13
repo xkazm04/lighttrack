@@ -1,0 +1,124 @@
+{
+ "schema": "conform-run/1",
+ "worker": "dc743542-fdc5-4425-b180-3093d5802aa2",
+ "subject": "billing-revenue-normalization",
+ "evaluatedAt": "2026-10-13T22:30:32.893819+00:00",
+ "provider": "agy",
+ "model": "gemini-3.8-flash-high",
+ "pairs": [
+  {
+   "context": "billing-provider-adapters",
+   "subject": "billing-revenue-normalization",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/billing/src/stripe.rs:168 The adapter stamps the operator-maintained FX book version onto normalized revenue events but omits the provider's API contract version, leaving field semantic changes unverifiable across provider contract rotations.",
+   "techniques": [
+    {
+     "technique": "contract-version-is-provenance",
+     "verdict": "deviation",
+     "evidence": "crates/billing/src/stripe.rs:168 Stamps fx_book_version on the record but does not extract, pin, or record the provider's API contract version."
+    },
+    {
+     "technique": "signature-is-the-auth",
+     "verdict": "conformant",
+     "evidence": "crates/billing/src/stripe.rs:59 Verifies HMAC-SHA256 over raw body bytes with timestamp tolerance before parsing JSON."
+    },
+    {
+     "technique": "deterministic-external-ids",
+     "verdict": "conformant",
+     "evidence": "crates/billing/src/stripe.rs:152 Derives deterministic primary key from provider and object id, namespacing refund derivations."
+    },
+    {
+     "technique": "minor-unit-currency-handling",
+     "verdict": "conformant",
+     "evidence": "crates/billing/src/fx.rs:192 Converts minor to major units using an ISO-4217 lookup table distinguishing zero-decimal and three-decimal currencies."
+    },
+    {
+     "technique": "static-auditable-fx-book",
+     "verdict": "conformant",
+     "evidence": "crates/billing/src/fx.rs:128 Loads a static versioned FX table at startup, dropping non-positive rates and marking missing currencies as unconverted."
+    },
+    {
+     "technique": "revenue-kind-taxonomy",
+     "verdict": "conformant",
+     "evidence": "crates/billing/src/stripe.rs:202 Classifies events into a closed taxonomy storing non-negative magnitudes and attributing sign to kind."
+    }
+   ],
+   "registryProposal": "Distinguish pure webhook-consuming normalizers from endpoint provisioners, as consumers cannot configure API contract versions selected during endpoint registration."
+  },
+  {
+   "context": "cost-and-revenue-governance",
+   "subject": "billing-revenue-normalization",
+   "bundle": "llm-observability",
+   "state": "conformant",
+   "evidence": "crates/api/src/billing.rs:107 Webhook deliveries are persisted in a single atomic transaction before acknowledging with HTTP 200, rolling back and unmarking idempotency on failure.",
+   "techniques": [
+    {
+     "technique": "idempotent-revenue-upsert",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/billing.rs:107 Persists batches in a single atomic database transaction and acknowledges only after commit."
+    },
+    {
+     "technique": "signature-is-the-auth",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/billing.rs:49 Inbound webhook endpoint delegates authentication solely to signature verification before any database writes."
+    },
+    {
+     "technique": "revenue-kind-taxonomy",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:48 Validates that ingested amounts are finite non-negative magnitudes and enforces valid subscription period bounds."
+    },
+    {
+     "technique": "static-auditable-fx-book",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:139 Discloses unconverted currencies on aggregate margin reports based on row-level conversion provenance."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "billing-revenue-normalization",
+   "context": "api-endpoint-table",
+   "reason": "api-endpoint-table specifies static endpoint routing metadata, HTTP access rules, parameter descriptors, and contract schemas (crates/contract/src/endpoints/*); it does not implement runtime webhook signature verification, currency/minor-unit conversion, or revenue persistence upserts."
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-13T22:30:32.893819+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "billing-revenue-normalization"
+   ],
+   "techniques": [
+    "contract-version-is-provenance",
+    "deterministic-external-ids",
+    "minor-unit-currency-handling",
+    "revenue-kind-taxonomy",
+    "signature-is-the-auth",
+    "static-auditable-fx-book"
+   ],
+   "deviations": 1,
+   "context": "billing-provider-adapters",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-13T22:30:32.893819+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "billing-revenue-normalization"
+   ],
+   "techniques": [
+    "idempotent-revenue-upsert",
+    "revenue-kind-taxonomy",
+    "signature-is-the-auth",
+    "static-auditable-fx-book"
+   ],
+   "deviations": 0,
+   "context": "cost-and-revenue-governance",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  }
+ ]
+}

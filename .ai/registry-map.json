@@ -1220,7 +1220,11 @@
           "revision": 3,
           "changedAt": "2026-09-11",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/billing/src/stripe.rs:168 The adapter stamps the operator-maintained FX book version onto normalized revenue events but omits the provider's API contract version, leaving field semantic changes unverifiable across provider contract rotations.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:6c728b0d6ba9bcf6",
+          "evaluatedRevision": 3
         },
         {
           "subject": "multi-provider-gateway-plane",
@@ -2063,7 +2067,11 @@
           "revision": 3,
           "changedAt": "2026-09-11",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "conformant",
+          "evidence": "crates/api/src/billing.rs:107 Webhook deliveries are persisted in a single atomic transaction before acknowledging with HTTP 200, rolling back and unmarking idempotency on failure.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:6c728b0d6ba9bcf6",
+          "evaluatedRevision": 3
         },
         {
           "subject": "usage-limit-governance",

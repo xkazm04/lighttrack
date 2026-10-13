@@ -3081,6 +3081,79 @@
         }
       ],
       "registryProposal": "The daily-series rules never say what to do when server-arrival time does not exist; an unlabeled fallback to client time is a disclosure miss the technique could name."
+    },
+    "00e9cbd9-1f34-4dbb-91be-6ad436bce75b/billing-revenue-normalization": {
+      "context": "billing-provider-adapters",
+      "subject": "billing-revenue-normalization",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T22:30:32.893Z",
+      "worker": "dc743542-fdc5-4425-b180-3093d5802aa2",
+      "techniques": [
+        {
+          "technique": "contract-version-is-provenance",
+          "verdict": "deviation",
+          "evidence": "crates/billing/src/stripe.rs:168 Stamps fx_book_version on the record but does not extract, pin, or record the provider's API contract version."
+        },
+        {
+          "technique": "signature-is-the-auth",
+          "verdict": "conformant",
+          "evidence": "crates/billing/src/stripe.rs:59 Verifies HMAC-SHA256 over raw body bytes with timestamp tolerance before parsing JSON."
+        },
+        {
+          "technique": "deterministic-external-ids",
+          "verdict": "conformant",
+          "evidence": "crates/billing/src/stripe.rs:152 Derives deterministic primary key from provider and object id, namespacing refund derivations."
+        },
+        {
+          "technique": "minor-unit-currency-handling",
+          "verdict": "conformant",
+          "evidence": "crates/billing/src/fx.rs:192 Converts minor to major units using an ISO-4217 lookup table distinguishing zero-decimal and three-decimal currencies."
+        },
+        {
+          "technique": "static-auditable-fx-book",
+          "verdict": "conformant",
+          "evidence": "crates/billing/src/fx.rs:128 Loads a static versioned FX table at startup, dropping non-positive rates and marking missing currencies as unconverted."
+        },
+        {
+          "technique": "revenue-kind-taxonomy",
+          "verdict": "conformant",
+          "evidence": "crates/billing/src/stripe.rs:202 Classifies events into a closed taxonomy storing non-negative magnitudes and attributing sign to kind."
+        }
+      ],
+      "registryProposal": "Distinguish pure webhook-consuming normalizers from endpoint provisioners, as consumers cannot configure API contract versions selected during endpoint registration."
+    },
+    "22a431dc-2c4e-441c-9ecb-ee84020685be/billing-revenue-normalization": {
+      "context": "cost-and-revenue-governance",
+      "subject": "billing-revenue-normalization",
+      "bundle": "llm-observability",
+      "state": "conformant",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T22:30:32.893Z",
+      "worker": "dc743542-fdc5-4425-b180-3093d5802aa2",
+      "techniques": [
+        {
+          "technique": "idempotent-revenue-upsert",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/billing.rs:107 Persists batches in a single atomic database transaction and acknowledges only after commit."
+        },
+        {
+          "technique": "signature-is-the-auth",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/billing.rs:49 Inbound webhook endpoint delegates authentication solely to signature verification before any database writes."
+        },
+        {
+          "technique": "revenue-kind-taxonomy",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/revenue.rs:48 Validates that ingested amounts are finite non-negative magnitudes and enforces valid subscription period bounds."
+        },
+        {
+          "technique": "static-auditable-fx-book",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/revenue.rs:139 Discloses unconverted currencies on aggregate margin reports based on row-level conversion provenance."
+        }
+      ]
     }
   }
 }
