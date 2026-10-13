@@ -1362,7 +1362,11 @@
           "revision": 27,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/engine/src/invocation/run.rs:23 The invocation module is a subprocess spawner configuring CLI arguments and environment variables for external `claude` and `codex` binaries; grepping `crates/engine/src/invocation` and `codex` for `checkpoint`, `assembly`, `subagent`, `contributed`, `mutator`, and `observer` yields zero matches, proving the absence of an in-process agent runtime pipeline.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:9036e979656a8dc5",
+          "evaluatedRevision": 27
         },
         {
           "subject": "supply-chain",
@@ -2397,7 +2401,11 @@
           "revision": 27,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/agent/src/run.rs:57 The `lt-agent` binary runs a polling loop that leases tasks from cloud LightTrack instances over HTTPS and executes them via the Claude Code CLI; grepping `crates/agent` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero matches, demonstrating that it is an edge task executor rather than an agent runtime assembling an in-process hook chain.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:9036e979656a8dc5",
+          "evaluatedRevision": 27
         },
         {
           "subject": "module-design",
@@ -4018,7 +4026,11 @@
           "revision": 27,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/mcp/src/main.rs:77 The `lt-mcp` binary operates strictly as a Model Context Protocol tool server over stdio JSON-RPC 2.0; grepping `crates/mcp` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero occurrences of agent runtime assembly mechanisms, confirming its precondition is not met.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:9036e979656a8dc5",
+          "evaluatedRevision": 27
         },
         {
           "subject": "agent-cli-transport",
@@ -4586,7 +4598,11 @@
           "revision": 27,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/lib.rs:123 The `SURFACES` constant enumerates the database storage domains implemented by `PgStore` (telemetry events, pricing, job leases, and relay queues); grepping `crates/store-pg` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero agent assembly mechanisms, confirming its role is purely storage under `job-coordination` rather than `agent-runtime-assembly`.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:9036e979656a8dc5",
+          "evaluatedRevision": 27
         },
         {
           "subject": "prompt-assembly",
@@ -5069,7 +5085,11 @@
           "revision": 27,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "clients/python/lighttrack/client.py:274 The Python SDK is an asynchronous telemetry ingestion client that dispatches LLM event records via an internal queue and background worker thread; grepping `clients/python` for `assembly`, `checkpoint`, `subagent`, `mutator`, and `observer` confirms the absence of an agent runtime assembly.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:9036e979656a8dc5",
+          "evaluatedRevision": 27
         },
         {
           "subject": "test-harness",
