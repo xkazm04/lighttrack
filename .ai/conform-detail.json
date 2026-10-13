@@ -2678,6 +2678,109 @@
           "evidence": "crates/store-firestore/src/collective.rs:111 A malformed required receipt timestamp propagates through Result collection and fails the whole leaderboard read without per-entry warnings or skipped counts; missing quality, pass rate, and cost are instead repaired to zero."
         }
       ]
+    },
+    "ab6c6112-fb6a-43aa-b1d6-f0ef23377dcb/embedded-db": {
+      "context": "sqlite-platform-backend",
+      "subject": "embedded-db",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T12:23:47.275Z",
+      "worker": "b06dbc63-c845-4175-afb7-673b19f79826",
+      "techniques": [
+        {
+          "technique": "connection-pooling",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/sqlite/pool.rs:96 The condition-variable wait has no deadline; busy_timeout bounds SQLite lock waits, not pool checkout."
+        },
+        {
+          "technique": "corruption-class-response",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/sqlite/mod.rs:256 The complete write wrapper invokes each closure and returns its result without inspecting corruption or quarantining the shared connection against subsequent writes."
+        },
+        {
+          "technique": "journal-and-durability-modes",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/sqlite/schema.rs:39 WAL is explicitly requested and its effective mode is checked later, but inspected writer/reader construction neither selects nor asserts synchronous; searches found no synchronous configuration."
+        }
+      ]
+    },
+    "f05f2284-1f27-40ad-bee2-deb67099160b/embedded-db": {
+      "context": "sqlite-observability-backend",
+      "subject": "embedded-db",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T12:23:47.275Z",
+      "worker": "b06dbc63-c845-4175-afb7-673b19f79826",
+      "techniques": [
+        {
+          "technique": "storage-accounting-and-pruning",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/sqlite/collective.rs:71 purge_before accepts only a connection and cutoff and executes DELETE immediately; neither it nor its inspected replacement path provides dry-run candidate reporting."
+        }
+      ]
+    },
+    "3e637b68-74b5-4382-9828-f785f4ed1323/embedded-db": {
+      "context": "typescript-sdk",
+      "subject": "embedded-db",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T12:23:47.275Z",
+      "worker": "b06dbc63-c845-4175-afb7-673b19f79826",
+      "techniques": [
+        {
+          "technique": "analytical-reads-off-the-serving-store",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/index.ts:651 Functional requests go to the remote API; this context has no embedded serving database to offload."
+        },
+        {
+          "technique": "connection-pooling",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/index.ts:688 Telemetry transport uses fetch; no embedded-engine connection pool was found."
+        },
+        {
+          "technique": "corruption-class-response",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/journal.ts:233 This is filesystem-journal failure handling, not corruption of canonical or derived database structures."
+        },
+        {
+          "technique": "db-self-instrumentation",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/journal.ts:255 Local recovery parses JSONL records; no embedded database operations exist to instrument."
+        },
+        {
+          "technique": "derived-capacity-limits",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/index.ts:621 The SDK observes remote admission limits; these are not embedded-store entry, transaction, or cache capacities."
+        },
+        {
+          "technique": "extension-lifecycle",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/journal.ts:70 The local persistence capability is Node filesystem access, with no embedded-engine extension registration."
+        },
+        {
+          "technique": "journal-and-durability-modes",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/journal.ts:231 An append-only JSONL breadcrumb file has no database journal-mode/synchronization matrix."
+        },
+        {
+          "technique": "quiet-window-maintenance",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/journal.ts:139 Cleanup concerns the SDK's breadcrumb file, not database checkpointing or compaction."
+        },
+        {
+          "technique": "single-writer-holder-discipline",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/journal.ts:229 Each journal instance creates a process-specific randomized file; no shared single-writer database directory was found."
+        },
+        {
+          "technique": "storage-accounting-and-pruning",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/journal.ts:186 Recovery selects owned JSONL files, rather than accounting for or pruning embedded-database tables."
+        }
+      ]
     }
   }
 }

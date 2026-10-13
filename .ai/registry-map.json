@@ -6359,7 +6359,11 @@
           "revision": 15,
           "changedAt": "2026-09-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/sqlite/collective.rs:71 The retention pruner immediately deletes matching entries without a dry-run mode, contrary to the standard's default candidate-reporting requirement.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:0722fec97cff5b66",
+          "evaluatedRevision": 15
         }
       ],
       "governance": "governed"
@@ -6397,7 +6401,11 @@
           "revision": 15,
           "changedAt": "2026-09-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/sqlite/pool.rs:96 Reader checkout waits indefinitely when the pool is exhausted, violating the required bounded acquisition timeout.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:0722fec97cff5b66",
+          "evaluatedRevision": 15
         },
         {
           "subject": "agent-memory",
@@ -7162,7 +7170,11 @@
           "revision": 15,
           "changedAt": "2026-09-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "clients/typescript/src/journal.ts:231 Context searches found no duckdb, indexedDB, or rusqlite integration, and the inspected SDK uses HTTP plus JSONL filesystem breadcrumbs rather than an embedded database engine.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:0722fec97cff5b66",
+          "evaluatedRevision": 15
         },
         {
           "subject": "module-design",
