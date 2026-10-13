@@ -1346,7 +1346,11 @@
           "revision": 19,
           "changedAt": "2026-09-30",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/engine/src/invocation/mode.rs:45 Searched crates/engine/src/invocation, codex, and sandbox for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; invocation modes are strictly limited to generate, readonly-scan, and edit without voice input or output pipelines.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:fa1c8ca716f872dc",
+          "evaluatedRevision": 20
         },
         {
           "subject": "quality-gates",
@@ -2413,7 +2417,11 @@
           "revision": 19,
           "changedAt": "2026-09-30",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/agent/src/main.rs:29 Searched crates/agent for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; lt-agent is a daemon that leases relay tasks and executes them with the local Claude Code CLI without audio or voice interfaces.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:fa1c8ca716f872dc",
+          "evaluatedRevision": 20
         },
         {
           "subject": "agent-runtime-assembly",
@@ -3884,7 +3892,11 @@
           "revision": 19,
           "changedAt": "2026-09-30",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/engine/src/judge.rs:28 Searched crates/engine/src/judge, prompts, and scorers for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; judging evaluates textual prompts against structured rubrics and deterministic rules with no audio processing or speech recognition.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:fa1c8ca716f872dc",
+          "evaluatedRevision": 20
         },
         {
           "subject": "test-harness",
@@ -4975,7 +4987,11 @@
           "revision": 19,
           "changedAt": "2026-09-30",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:230 Searched crates/engine/src/providers for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; generation dispatches text and chat requests to LLM APIs with schema enforcement and lacks speech synthesis or audio input pipelines.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:fa1c8ca716f872dc",
+          "evaluatedRevision": 20
         },
         {
           "subject": "retry-backoff",
