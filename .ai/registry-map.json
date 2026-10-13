@@ -1071,7 +1071,11 @@
           "revision": 9,
           "changedAt": "2026-09-09",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/api/src/http.rs:3 Searches found no failover, chat/completions or owned_by in the API directory, and its outbound seam serves alert delivery and collective pushes rather than interchangeable inference upstreams.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:f268193750c0a517",
+          "evaluatedRevision": 9
         },
         {
           "subject": "concurrency-guards",
@@ -1232,7 +1236,11 @@
           "revision": 9,
           "changedAt": "2026-09-09",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/billing/src/lib.rs:38 Context and repository searches located gateway constructs elsewhere but found no failover, chat/completions or owned_by here, whose adapters return accounting records rather than proxy products.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:f268193750c0a517",
+          "evaluatedRevision": 9
         },
         {
           "subject": "prompt-assembly",
@@ -3586,7 +3594,11 @@
           "revision": 9,
           "changedAt": "2026-09-09",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/gateway/src/failover.rs:74 A local subprocess-spawn failure advances the candidate chain instead of carrying router attribution that stops the sweep.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:f268193750c0a517",
+          "evaluatedRevision": 9
         },
         {
           "subject": "stream-proxy-hop",
@@ -4943,7 +4955,11 @@
           "revision": 9,
           "changedAt": "2026-09-09",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/providers/gemini.rs:150 The Gemini adapter returns a text-only outcome that loses native response material and termination vocabulary without a caller-selected preservation mode.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:f268193750c0a517",
+          "evaluatedRevision": 9
         },
         {
           "subject": "voice-io",

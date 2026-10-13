@@ -1,0 +1,235 @@
+{
+  "schema": "conform-run/1",
+  "worker": "afb0c268-cb08-474a-a965-394e1062dd8e",
+  "subject": "multi-provider-gateway-plane",
+  "evaluatedAt": "2026-10-13T09:07:38.802264+00:00",
+  "provider": "codex",
+  "model": "gpt-6.1-sol",
+  "pairs": [
+    {
+      "context": "gateway-proxy",
+      "subject": "multi-provider-gateway-plane",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/gateway/src/failover.rs:74 A local subprocess-spawn failure advances the candidate chain instead of carrying router attribution that stops the sweep.",
+      "techniques": [
+        {
+          "technique": "adapter-direction-asymmetry",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/generator.rs:31 This context delegates provider translation to the engine rather than defining outbound and inbound provider adapters."
+        },
+        {
+          "technique": "caller-scoped-normalization-strictness",
+          "verdict": "deviation",
+          "evidence": "crates/gateway/src/chat.rs:145 Absent upstream counters become zero in the published response, expressly forbidden by the technique; the request also exposes no normalization-strictness switch."
+        },
+        {
+          "technique": "exclusive-authorship-of-a-measured-decision",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/chat.rs:179 Substitution is disclosed through fell_back, served_by and the attempt report, satisfying the technique's exception for self-describing fallback results; no selector comparison was found here."
+        },
+        {
+          "technique": "join-breadth-follows-the-wrong-match-cost",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/router.rs:47 The models surface publishes configured routes and their targets, rather than joining upstream inventory names against a catalog."
+        },
+        {
+          "technique": "named-members-over-a-uniform-collection",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/routes.rs:15 This collection belongs to interchangeable request dispatch, which the standard explicitly distinguishes from heterogeneous inventory aggregation."
+        },
+        {
+          "technique": "per-provider-stream-framing",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/stream.rs:33 The SSE producer consumes an already settled completion; it does not frame incoming upstream streams."
+        },
+        {
+          "technique": "policy-verdict-in-the-status-space",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/chat.rs:50 Admission branches on a typed verdict before dispatch; the failover loop likewise consumes typed Verdict values, rather than operator-configured status lists."
+        },
+        {
+          "technique": "router-versus-candidate-failure",
+          "verdict": "deviation",
+          "evidence": "crates/gateway/src/failover.rs:74 A failure raised locally before an upstream call is classified for candidate failover; AttemptKind retains retry classification but no independent router/candidate side."
+        },
+        {
+          "technique": "strategy-tree-with-inherited-policy",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/config.rs:59 The checked configuration provides one ordered chain per route and a global cooldown, with no second execution-policy scope; the technique explicitly exempts one candidate set under one policy."
+        },
+        {
+          "technique": "upstream-identity-before-inventory",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/routes.rs:21 Targets come from explicit provider/model configuration, and the models endpoint enumerates routes rather than discovering upstream implementations."
+        }
+      ]
+    },
+    {
+      "context": "provider-generation",
+      "subject": "multi-provider-gateway-plane",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/engine/src/providers/gemini.rs:150 The Gemini adapter returns a text-only outcome that loses native response material and termination vocabulary without a caller-selected preservation mode.",
+      "techniques": [
+        {
+          "technique": "adapter-direction-asymmetry",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/chat.rs:161 Outbound translation reshapes the conversation into provider-specific message structures, fitting the technique's structural-request exception."
+        },
+        {
+          "technique": "caller-scoped-normalization-strictness",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/providers/gemini.rs:222 Native thought parts are unconditionally deleted; generate_chat also serves gateway callers, but ChatRequest and ChatOutcome offer no request-scoped native-preservation mode."
+        },
+        {
+          "technique": "exclusive-authorship-of-a-measured-decision",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:320 The caller supplies the provider and model, and retries retain that target; this context does not compare candidate-selection policies."
+        },
+        {
+          "technique": "named-members-over-a-uniform-collection",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/endpoint_probe.rs:69 The probe gathers evidence for one endpoint; it does not aggregate inventories from heterogeneous contributing sources."
+        },
+        {
+          "technique": "per-provider-stream-framing",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/providers/openai.rs:103 The checked HTTP adapters read bounded complete response bodies and parse settled JSON rather than upstream event streams."
+        },
+        {
+          "technique": "strategy-tree-with-inherited-policy",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:387 Dispatch invokes the caller-supplied provider/model directly; there are no nested candidate-selection policy scopes in this interface."
+        },
+        {
+          "technique": "upstream-identity-before-inventory",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/endpoint_probe.rs:81 Native-route evidence is resolved before consulting the shared model listing; the single resolver preserves evidence and date, uses dated discriminators, and handles empty or unrecognized endpoints without guessing."
+        }
+      ]
+    },
+    {
+      "context": "billing-provider-adapters",
+      "subject": "multi-provider-gateway-plane",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evidence": "crates/billing/src/lib.rs:38 Context and repository searches located gateway constructs elsewhere but found no failover, chat/completions or owned_by here, whose adapters return accounting records rather than proxy products.",
+      "techniques": [
+        {
+          "technique": "caller-scoped-normalization-strictness",
+          "verdict": "not-applicable",
+          "evidence": "crates/billing/src/stripe.rs:116 Normalization produces canonical accounting records, the boundary the standard explicitly excludes from caller-selectable proxy normalization."
+        }
+      ],
+      "absenceTerms": [
+        "failover",
+        "chat/completions",
+        "owned_by"
+      ]
+    },
+    {
+      "context": "api-platform",
+      "subject": "multi-provider-gateway-plane",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evidence": "crates/api/src/http.rs:3 Searches found no failover, chat/completions or owned_by in the API directory, and its outbound seam serves alert delivery and collective pushes rather than interchangeable inference upstreams.",
+      "techniques": [],
+      "absenceTerms": [
+        "failover",
+        "chat/completions",
+        "owned_by"
+      ]
+    }
+  ],
+  "declined": [
+    {
+      "subject": "multi-provider-gateway-plane",
+      "context": "api-endpoint-table",
+      "reason": "withdrawn after review: reviewer (sonnet): The anchor (benchmarks.rs:192) is the doc line of one enqueue_benchmark endpoint; it does not show that no inference-gateway endpoint exists in the table, so the not-applicable rests on an incidental line."
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-10-13T09:07:38.802264+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "multi-provider-gateway-plane"
+      ],
+      "techniques": [
+        "adapter-direction-asymmetry",
+        "caller-scoped-normalization-strictness",
+        "exclusive-authorship-of-a-measured-decision",
+        "join-breadth-follows-the-wrong-match-cost",
+        "named-members-over-a-uniform-collection",
+        "per-provider-stream-framing",
+        "policy-verdict-in-the-status-space",
+        "router-versus-candidate-failure",
+        "strategy-tree-with-inherited-policy",
+        "upstream-identity-before-inventory"
+      ],
+      "deviations": 1,
+      "context": "gateway-proxy",
+      "via": "curator-multi:codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "ts": "2026-10-13T09:07:38.802264+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "multi-provider-gateway-plane"
+      ],
+      "techniques": [
+        "adapter-direction-asymmetry",
+        "caller-scoped-normalization-strictness",
+        "exclusive-authorship-of-a-measured-decision",
+        "named-members-over-a-uniform-collection",
+        "per-provider-stream-framing",
+        "strategy-tree-with-inherited-policy",
+        "upstream-identity-before-inventory"
+      ],
+      "deviations": 1,
+      "context": "provider-generation",
+      "via": "curator-multi:codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "ts": "2026-10-13T09:07:38.802264+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "multi-provider-gateway-plane"
+      ],
+      "techniques": [
+        "caller-scoped-normalization-strictness"
+      ],
+      "deviations": 0,
+      "context": "billing-provider-adapters",
+      "via": "curator-multi:codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "ts": "2026-10-13T09:07:38.802264+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "multi-provider-gateway-plane"
+      ],
+      "techniques": [],
+      "deviations": 0,
+      "context": "api-platform",
+      "via": "curator-multi:codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "ts": "2026-10-13T09:07:38.802264+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "multi-provider-gateway-plane"
+      ],
+      "techniques": [],
+      "deviations": 0,
+      "context": "api-endpoint-table",
+      "via": "curator-multi:codex",
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}
