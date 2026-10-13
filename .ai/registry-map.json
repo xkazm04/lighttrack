@@ -3096,7 +3096,11 @@
           "revision": 3,
           "changedAt": "2026-10-05",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/rubric.rs:83 The dimension contract classifies every kind outside LLM and grounding as mechanical and exposes no distinct stochastic, rubricless generator-uncertainty kind.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:a449ca2b8da79c6e",
+          "evaluatedRevision": 3
         },
         {
           "subject": "quality-gates",
@@ -3848,7 +3852,11 @@
           "revision": 3,
           "changedAt": "2026-10-05",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/prompts.rs:229 Pairwise judging requests a discrete winner without label probabilities, preventing the caller from measuring the model's commitment to that decision.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:a449ca2b8da79c6e",
+          "evaluatedRevision": 3
         },
         {
           "subject": "agent-memory",

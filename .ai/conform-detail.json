@@ -2842,6 +2842,119 @@
           "evidence": "crates/responder/src/invoke.rs:50 Dollar and wall-clock caps are enforced, but neither investigation nor edit brief carries a smaller derived count budget."
         }
       ]
+    },
+    "70358003-cc4e-4553-ba3c-e864f30850d1/generator-uncertainty-scoring": {
+      "context": "judge-and-scoring",
+      "subject": "generator-uncertainty-scoring",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T21:07:26.875Z",
+      "worker": "6b0bb68b-54c7-4619-bdbd-5f35b72f85b3",
+      "techniques": [
+        {
+          "technique": "compare-gates-at-matched-coverage",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/judge.rs:552 This computes one rubric verdict; it does not compare confidence gates before and after a scorer or calibration change."
+        },
+        {
+          "technique": "generator-vs-itself",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/judge.rs:398 The sampled instrument here is the judge; its agreement is not generator answer variance."
+        },
+        {
+          "technique": "probability-calibration-is-not-agreement",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/prompts.rs:257 The requested scalar measures anchored rubric quality, not a probability of correctness or generator confidence."
+        },
+        {
+          "technique": "score-source-ensembling",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/judge.rs:544 This weights rubric dimensions; it does not fit an ensemble combining judge and judge-free confidence sources."
+        },
+        {
+          "technique": "score-source-kinds",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/scorers.rs:73 The execution paths handle mechanical, LLM, and grounding dimensions, but provide no separate generator-uncertainty kind or evaluator."
+        },
+        {
+          "technique": "stated-distribution-over-closed-labels",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/prompts.rs:232 The closed-label contract requires only a winner and rationale; the pairwise path consumes that winner without a distribution-derived confidence."
+        }
+      ]
+    },
+    "060b7649-5405-4f72-ac96-572409e6039d/generator-uncertainty-scoring": {
+      "context": "evaluation-scoring-types",
+      "subject": "generator-uncertainty-scoring",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T21:07:26.875Z",
+      "worker": "6b0bb68b-54c7-4619-bdbd-5f35b72f85b3",
+      "techniques": [
+        {
+          "technique": "compare-gates-at-matched-coverage",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/score.rs:441 The declared baseline is a quality mean, not a confidence-gate operating point or a comparison of calibrated scorers."
+        },
+        {
+          "technique": "probability-calibration-is-not-agreement",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/score.rs:27 This schema describes rubric quality, not generator confidence or probability of correctness."
+        },
+        {
+          "technique": "score-source-ensembling",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/rubric.rs:228 These are rubric-dimension weights; the types do not declare a fitted composite confidence estimator."
+        },
+        {
+          "technique": "score-source-kinds",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/rubric.rs:83 The opened enum and classification methods provide judged and mechanical sources without the required separate generator-uncertainty source."
+        }
+      ]
+    },
+    "971b004d-7b8c-4a5e-8a71-3ab3436cf511/generator-uncertainty-scoring": {
+      "context": "runner-scoring-engine",
+      "subject": "generator-uncertainty-scoring",
+      "bundle": "llm-observability",
+      "state": "unknown",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T21:07:26.875Z",
+      "techniques": [
+        {
+          "technique": "compare-gates-at-matched-coverage",
+          "verdict": "not-applicable",
+          "evidence": "crates/runner/src/stats/paired.rs:175 This tests paired quality regression using statistical significance, not errors admitted by alternative model-confidence gates."
+        },
+        {
+          "technique": "generator-vs-itself",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/stats.rs:118 The fewer-than-two-samples branch returns perfect stability; compare.rs calls it for candidate scores and publishes gen_agreement even when n_candidates is one."
+        },
+        {
+          "technique": "score-source-ensembling",
+          "verdict": "not-applicable",
+          "evidence": "crates/runner/src/compare.rs:702 This averages quality scores across candidate draws; it does not combine judge scores with judge-free confidence using fitted source weights."
+        },
+        {
+          "technique": "score-source-kinds",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/rubric.rs:60 The runner counts every non-llm kind as deterministic, including model-judged grounding, so its source classification does not reliably distinguish who decides the score."
+        },
+        {
+          "technique": "stated-distribution-over-closed-labels",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/pairwise.rs:283 The runner converts the model's discrete A/B/Tie winner into scores and pass flags without a stated label distribution or confidence."
+        }
+      ],
+      "withdrawn": {
+        "worker": "6b0bb68b-54c7-4619-bdbd-5f35b72f85b3",
+        "state": "deviation",
+        "at": "2026-10-13T21:08:01.014598+00:00",
+        "reason": "reviewer (sonnet): The claim is real: crates/runner/src/compare.rs:736 and :775 publish gen_agreement from stability(), which returns 1.0 for fewer than two samples. But compare.rs is not among the context's listed files, and it calls stats.rs rather than the other way round, so the verdict is not about this context's"
+      }
     }
   }
 }
