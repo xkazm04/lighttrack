@@ -2043,7 +2043,11 @@
           "revision": 5,
           "changedAt": "2026-09-01",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/forecast.rs:258 The erosion forecast drops the unattributed key before fitting it, so a rising unlinked cost slope never gets the trend the technique says it must have.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:f27ce9388e9f0665",
+          "evaluatedRevision": 5
         },
         {
           "subject": "billing-revenue-normalization",
@@ -2534,7 +2538,11 @@
           "revision": 5,
           "changedAt": "2026-09-01",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/margin.rs:103 compute_margin folds only priced cost and call count, so unpriced calls that already contributed $0.00 never reach MarginRow and the rollup understates COGS without the count.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:f27ce9388e9f0665",
+          "evaluatedRevision": 5
         },
         {
           "subject": "llm-price-book-operations",
@@ -3404,7 +3412,11 @@
           "revision": 5,
           "changedAt": "2026-09-01",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-firestore/src/rollup.rs:11 The daily rollup the forecast reads answers a server-arrival window on client ts and the row carries no marker, so a backdated clock can move spend between forecast days unlabeled.",
+          "evaluatedAt": "2026-10-13",
+          "evaluatedAgainst": "sha256-b2:f27ce9388e9f0665",
+          "evaluatedRevision": 5
         }
       ],
       "governance": "governed"

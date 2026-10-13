@@ -1,0 +1,196 @@
+{
+ "schema": "conform-run/1",
+ "worker": "cba7935a-30fe-40d7-b1fc-ac6c04ff850d",
+ "subject": "margin-and-unit-economics",
+ "evaluatedAt": "2026-10-13T21:42:38.185095+00:00",
+ "provider": "grok",
+ "model": "grok-4.7",
+ "pairs": [
+  {
+   "context": "economics-margin-pricing",
+   "subject": "margin-and-unit-economics",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/core/src/margin.rs:103 compute_margin folds only priced cost and call count, so unpriced calls that already contributed $0.00 never reach MarginRow and the rollup understates COGS without the count.",
+   "techniques": [
+    {
+     "technique": "below-filter-honesty",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin_policy.rs:254 Undefined margin% is None when revenue is 0, and a below-percent trigger still keeps a negative-dollar row."
+    },
+    {
+     "technique": "cogs-by-construction",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/margin.rs:58 Judge generation cost sits on ScoreDetail, off the event sum, but the margin row drops unpriced_calls."
+    },
+    {
+     "technique": "loss-first-ordering",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin.rs:123 Rollup sorts by margin dollars ascending; the trend caps by absolute margin after totals, and the what-if sorts by simulated margin."
+    },
+    {
+     "technique": "margin-erosion-forecasting",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin_trend.rs:58 Daily points reuse recognized_amount; forecast_margin fits cost against flat daily revenue and keeps eta on its own field. The 4-day evidence floor is shorter than two weeks and was not scored as a miss."
+    },
+    {
+     "technique": "pricing-what-if-simulation",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin_sim.rs:115 Revenue is replaced from tokens and a prorated flat fee; cost stays the measured cost; an empty price pair is an error; the HTTP stamp is the API wrapper."
+    },
+    {
+     "technique": "revenue-recognition-rules",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin.rs:158 One recognized_amount: linear overlap when period end is after start, else full amount on a half-open timestamp, refunds as negated abs, shared with the daily trend and recognized_revenue."
+    }
+   ],
+   "registryProposal": "The two-week slope floor and a labeled evidence floor of four observed days are both defensible; the technique could say whether a refused-and-labeled shorter window is still a deviation."
+  },
+  {
+   "context": "cost-and-revenue-governance",
+   "subject": "margin-and-unit-economics",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/forecast.rs:258 The erosion forecast drops the unattributed key before fitting it, so a rising unlinked cost slope never gets the trend the technique says it must have.",
+   "techniques": [
+    {
+     "technique": "below-filter-honesty",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:83 Percent threshold is divided by 100 once; undefined percent keeps only negative dollars; the response echoes below and omits it when unfiltered."
+    },
+    {
+     "technique": "cogs-by-construction",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/revenue.rs:191 The handler loads CostByDimension, which carries unpriced_calls, then publishes cost totals with no unpriced count."
+    },
+    {
+     "technique": "loss-first-ordering",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:364 The trend payload keeps pre-cap key_count and top_n; row order is the core loss-first order, and the customer drilldown is cost-descending."
+    },
+    {
+     "technique": "margin-erosion-forecasting",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/forecast.rs:258 Daily trend still includes that key. Lookback may be 4 days, under the two-week slope floor; projections are separate eta fields and thin fits are refused."
+    },
+    {
+     "technique": "pricing-what-if-simulation",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:326 The handler writes nothing, rejects an empty price pair via SimAssumptions, and echoes assumptions including window_days."
+    },
+    {
+     "technique": "revenue-recognition-rules",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:139 Margin, simulate, and the customer drilldown all call compute_margin; unconverted currencies are echoed from the stored converted stamp, not a live FX book."
+    }
+   ],
+   "registryProposal": "Do not automate repricing leaves open whether a default-off sweep that writes spend caps from an erosion ETA is in bounds; this API does that and does not change prices."
+  },
+  {
+   "context": "firestore-core-dataplane",
+   "subject": "margin-and-unit-economics",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/store-firestore/src/rollup.rs:11 The daily rollup the forecast reads answers a server-arrival window on client ts and the row carries no marker, so a backdated clock can move spend between forecast days unlabeled.",
+   "techniques": [
+    {
+     "technique": "below-filter-honesty",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/margin_policies.rs:24 Searched filter_below and margin_pct in the listed Firestore modules: no hits. The trigger is stored, not applied."
+    },
+    {
+     "technique": "cogs-by-construction",
+     "verdict": "conformant",
+     "evidence": "crates/store-firestore/src/revenue.rs:114 cost_by_dimension reads the events collection and does not add a missing cost_usd; scores.rs writes score cost_usd into the scores collection."
+    },
+    {
+     "technique": "loss-first-ordering",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/revenue.rs:62 Searched for a margin sort: revenue rows are newest-timestamp first, and score ordering is by case, not margin dollars."
+    },
+    {
+     "technique": "margin-erosion-forecasting",
+     "verdict": "deviation",
+     "evidence": "crates/store-firestore/src/rollup.rs:11 No slope or eta is computed here. The daily series that forecasting reads substitutes client ts for received_at without saying so on the row."
+    },
+    {
+     "technique": "pricing-what-if-simulation",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/prices.rs:3 Searched price_per_mtok, hypothetical, and simulated: no hits. Rates are an append-only book, not a hypothetical margin overlay."
+    },
+    {
+     "technique": "revenue-recognition-rules",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/revenue.rs:138 Searched recognized_amount and amortiz: no hits. recognizable only selects candidate events with a half-open timestamp; it does not prorate or sign-flip."
+    }
+   ],
+   "registryProposal": "The daily-series rules never say what to do when server-arrival time does not exist; an unlabeled fallback to client time is a disclosure miss the technique could name."
+  }
+ ],
+ "declined": [
+  {
+   "subject": "margin-and-unit-economics",
+   "context": "pg-platform-operations",
+   "reason": "conformant with fewer than two techniques shown realized"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-13T21:42:38.185095+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "margin-and-unit-economics"
+   ],
+   "techniques": [
+    "below-filter-honesty",
+    "cogs-by-construction",
+    "loss-first-ordering",
+    "margin-erosion-forecasting",
+    "pricing-what-if-simulation",
+    "revenue-recognition-rules"
+   ],
+   "deviations": 1,
+   "context": "economics-margin-pricing",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  },
+  {
+   "ts": "2026-10-13T21:42:38.185095+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "margin-and-unit-economics"
+   ],
+   "techniques": [
+    "below-filter-honesty",
+    "cogs-by-construction",
+    "loss-first-ordering",
+    "margin-erosion-forecasting",
+    "pricing-what-if-simulation",
+    "revenue-recognition-rules"
+   ],
+   "deviations": 1,
+   "context": "cost-and-revenue-governance",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  },
+  {
+   "ts": "2026-10-13T21:42:38.185095+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "margin-and-unit-economics"
+   ],
+   "techniques": [
+    "below-filter-honesty",
+    "cogs-by-construction",
+    "loss-first-ordering",
+    "margin-erosion-forecasting",
+    "pricing-what-if-simulation",
+    "revenue-recognition-rules"
+   ],
+   "deviations": 1,
+   "context": "firestore-core-dataplane",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  }
+ ]
+}
