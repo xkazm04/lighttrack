@@ -852,6 +852,231 @@
         }
       ],
       "registryProposal": "layered-composition already treats a gateway as a last writer and requires a position-preserving hoist, but the golden path's scope sentence (systems that own their assembler) makes a proxy look out of scope. Say a last-hop rewrite is in scope even when the proxy authors no layer."
+    },
+    "569c353a-2570-4ea6-9da3-f0fed1bfa1a7/mcp-tools": {
+      "context": "mcp-server",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T01:11:05.566Z",
+      "worker": "12d74f3e-1723-48f6-8457-55e2f4c7a643",
+      "techniques": [
+        {
+          "technique": "server-composition",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/tools.rs:98 Dispatch resolves through a hardcoded chain of dispatch functions across multiple modules rather than resolving handlers through the single registry, and omits schema validation at the door."
+        },
+        {
+          "technique": "tool-schema-design",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/main.rs:79 tools/call unconditionally wraps errors in rpc::send_result, routing protocol faults such as unknown tools in-band as tool results instead of raising JSON-RPC protocol errors."
+        },
+        {
+          "technique": "tool-identity-vs-tool-name",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/tool_contract.rs:74 Tools are addressed and correlated solely by name without minting or publishing a rename-stable identifier on the wire."
+        },
+        {
+          "technique": "caller-differentiated-capability",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/read.rs:241 Subtracted query parameters available on the HTTP endpoint are silently ignored by events_path rather than refusing them by name with an error explaining the MCP tool surface does not support them."
+        },
+        {
+          "technique": "transport-selection",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/rpc.rs:1 Standard streams transport is selected for local single-process usage with stdout dedicated strictly to framed protocol messages and diagnostics routed to stderr."
+        },
+        {
+          "technique": "enumeration-without-a-scope",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/errors.rs:36 Per-caller resources are scoped to a tenant project key, and cross-project queries treat unowned objects as not found rather than leaking existence."
+        },
+        {
+          "technique": "authentication-and-scoping",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/client.rs:112 The server attaches the configured caller credential to downstream API requests, avoiding token passthrough across trust boundaries."
+        },
+        {
+          "technique": "suspendable-request-classes",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/main.rs:77 Metadata verbs like tools/list are strictly synchronous and non-blocking, ensuring discovery never suspends for human input."
+        },
+        {
+          "technique": "ambient-selection-is-not-an-argument",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/main.rs:5 The server fronts a multi-tenant stateless HTTP service rather than a single-seat interactive application with ambient document or selection state."
+        },
+        {
+          "technique": "sanctioned-session-state",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/main.rs:6 Precondition does not hold as lt-mcp is a thin stateless client without replica affinity or stateful sessions."
+        },
+        {
+          "technique": "sealed-continuation-state",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/rpc.rs:33 Pagination uses database keyset cursor strings returned by the API rather than sealing intermediate execution continuation state into caller-carried tokens."
+        },
+        {
+          "technique": "catalog-projection-modes",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/tools.rs:25 Precondition does not hold as lt-mcp targets a standalone local deployment with a catalog within host ceilings, where folding tools behind routing projections is unnecessary."
+        },
+        {
+          "technique": "fluent-syntax-bounded-grammar",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/client.rs:138 Tools accept structured JSON fields rather than command strings or fluent domain notations that require an in-process grammar parser."
+        },
+        {
+          "technique": "one-server-many-registrations",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/main.rs:37 Precondition is host-side multi-registration tracking across extensions; lt-mcp is a single-process stdio server without knowledge of host registration duplicates."
+        },
+        {
+          "technique": "orchestration-to-tool-migration",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/Cargo.toml:6 Precondition does not hold as lt-mcp exposes observability tools rather than migrating a fixed pipeline to agentic tool calls."
+        },
+        {
+          "technique": "first-party-agent-is-a-principal",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/client.rs:4 The server acts as an external HTTP client of the LightTrack API without maintaining a privileged first-party agent companion door."
+        },
+        {
+          "technique": "command-audit-by-position",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/client.rs:149 Precondition does not hold as lt-mcp does not spawn or audit shell command lines from caller configurations."
+        },
+        {
+          "technique": "egress-argument-gating",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/write.rs:11 Precondition does not hold as lt-mcp does not gate outbound sharing or recipient-scoped capabilities over third-party schemas."
+        },
+        {
+          "technique": "write-freshness-gate",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/write.rs:8 Precondition does not hold as write tools perform API entity mutations rather than in-place text edits over shared file artifacts."
+        },
+        {
+          "technique": "client-integration",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/main.rs:1 Precondition does not hold as lt-mcp is an MCP server rather than an MCP client or host integrating federated servers."
+        },
+        {
+          "technique": "untrusted-result-handling",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/rpc.rs:21 Precondition governs the host-side model context injection defense, whereas lt-mcp is the server publishing results."
+        }
+      ],
+      "registryProposal": "The MCP standard defines tool definitions with name, description, inputSchema, and annotations, but provides no standardized field for a rename-stable identifier (such as id), forcing servers to rely on custom annotations to fulfill tool-identity-vs-tool-name."
+    },
+    "664d493f-717e-4161-8f17-f667cc0cfdb9/mcp-tools": {
+      "context": "api-contract-core",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T01:11:05.566Z",
+      "worker": "12d74f3e-1723-48f6-8457-55e2f4c7a643",
+      "techniques": [
+        {
+          "technique": "tool-identity-vs-tool-name",
+          "verdict": "deviation",
+          "evidence": "crates/contract/src/mcp.rs:52 The tool generator emits only the addressable string name and omits rename-stable identifiers on tool listing metadata."
+        },
+        {
+          "technique": "server-composition",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/mcp.rs:24 The MCP tool catalog is generated directly as a projection of the single authoritative endpoint registry."
+        },
+        {
+          "technique": "caller-differentiated-capability",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/types.rs:272 The endpoint struct explicitly separates machine-only doors, agent-facing MCP tools, and human CLI verbs."
+        },
+        {
+          "technique": "tool-schema-design",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/mcp.rs:186 Tests assert that all arguments marked required for an endpoint are declared in the MCP schema's required array."
+        },
+        {
+          "technique": "ambient-selection-is-not-an-argument",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/lib.rs:1 The contract defines an HTTP API rather than a single-seat interactive application with ambient selection."
+        },
+        {
+          "technique": "write-freshness-gate",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/types.rs:259 The contract distinguishes mutating operations for gating without implementing file artifact editing."
+        },
+        {
+          "technique": "command-audit-by-position",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/types.rs:275 Precondition does not hold as the contract core defines endpoint descriptors and does not parse or execute shell commands."
+        }
+      ]
+    },
+    "2ed37e25-1a0a-44b7-85e7-70a1822f84aa/mcp-tools": {
+      "context": "api-integration-tests",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T01:11:05.566Z",
+      "techniques": [
+        {
+          "technique": "server-composition",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_capabilities.rs:35 Tests verify Axum router endpoints directly via HTTP request handling and do not test MCP server composition."
+        },
+        {
+          "technique": "transport-selection",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_capabilities.rs:11 Precondition does not hold as tests use in-memory tower oneshot HTTP rather than stdio or SSE MCP transports."
+        }
+      ],
+      "withdrawn": {
+        "worker": "12d74f3e-1723-48f6-8457-55e2f4c7a643",
+        "state": "not-applicable",
+        "at": "2026-10-13T01:11:49.565864+00:00",
+        "reason": "reviewer (sonnet): The evidence says a grep for 'mcp' across the test files found zero matches, but crates/api/src/tests_limits_preview.rs mentions MCP and reads `e.mcp` (line 308) to assert the tool's `read_only` flag, so the not-applicable claim is contradicted."
+      }
+    },
+    "7db38bb1-3ffe-4798-b7a7-bc8e3c4cf34d/mcp-tools": {
+      "context": "api-endpoint-table",
+      "subject": "mcp-tools",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-13",
+      "evaluatedTs": "2026-10-13T01:11:05.566Z",
+      "worker": "12d74f3e-1723-48f6-8457-55e2f4c7a643",
+      "techniques": [
+        {
+          "technique": "caller-differentiated-capability",
+          "verdict": "deviation",
+          "evidence": "crates/contract/src/endpoints/observability.rs:78 The tool schema subtracts endpoint query parameters (such as status, tag, meta) without publishing the asymmetry or declaring how the tool handles requests for subtracted options."
+        },
+        {
+          "technique": "tool-identity-vs-tool-name",
+          "verdict": "deviation",
+          "evidence": "crates/contract/src/endpoints/observability.rs:75 The MCP tool descriptor declares an addressable tool name but does not specify a rename-stable identifier for correlation."
+        },
+        {
+          "technique": "server-composition",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/endpoints/mod.rs:30 The static endpoint table groups serve as the single source of truth from which MCP tools, OpenAPI, and CLI verbs are derived."
+        },
+        {
+          "technique": "tool-schema-design",
+          "verdict": "conformant",
+          "evidence": "crates/contract/src/endpoints/observability.rs:24 Tool descriptions clearly articulate purpose, operational semantics, and guidance on error interpretation."
+        },
+        {
+          "technique": "ambient-selection-is-not-an-argument",
+          "verdict": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/platform.rs:11 Precondition does not hold as endpoint rows define HTTP service routes rather than single-seat application commands."
+        }
+      ]
     }
   }
 }
