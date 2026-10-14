@@ -6638,7 +6638,11 @@
           "revision": 18,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/sqlite/projects.rs:84 Row mappers hand-write positional field decoders that must stay synchronized with hand-written SELECT column lists across multiple modules rather than deriving them from the single schema model.",
+          "evaluatedAt": "2026-10-14",
+          "evaluatedAgainst": "sha256-b2:b67182492821d592",
+          "evaluatedRevision": 18
         },
         {
           "subject": "dynamic-secret-lifecycle",
