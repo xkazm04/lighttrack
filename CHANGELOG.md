@@ -87,6 +87,10 @@ entry is written while the change is still fresh, not reconstructed at tag time.
   agent guidance; `.claude/CLAUDE.md` is a projection of it and is currently listed under
   `guidance.staleProjections` because it still carries generator scaffold that contradicts it.
 
+### Fixed
+
+- **A billing webhook duplicate that arrives while its first attempt is still persisting is refused with 409**, not acknowledged: a batch that then rolls back was reported done to the provider, which never resends. Only a committed delivery id short-circuits.
+
 <!--
 Template for the next release — copy, do not delete:
 

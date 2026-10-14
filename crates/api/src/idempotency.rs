@@ -26,6 +26,11 @@ use crate::state::AppState;
 pub(crate) const DEFAULT_CAPACITY: usize = 8192;
 
 /// A bounded, thread-safe set of recently-seen idempotency keys with FIFO eviction.
+///
+/// A key is **in flight** from [`begin`](Self::begin) until its [`Claim`] commits. A duplicate that
+/// arrives in that window must NOT be acknowledged: the provider would mark the delivery done while
+/// the first attempt could still roll back, and nothing would ever resend it. Only a key whose
+/// writes committed reads as `Done`.
 pub(crate) struct SeenWebhooks {
     capacity: usize,
     inner: Mutex<Inner>,
@@ -34,7 +39,43 @@ pub(crate) struct SeenWebhooks {
 #[derive(Default)]
 struct Inner {
     set: HashSet<String>,
+    in_flight: HashSet<String>,
     fifo: VecDeque<String>,
+}
+
+/// What `begin` found for a delivery key.
+pub(crate) enum Begin {
+    /// First sight: the caller owns the delivery and must `commit` the claim once it is durable.
+    New(Claim),
+    /// Already persisted: safe to acknowledge without re-running the writes.
+    Done,
+    /// Another attempt is still persisting it: do not acknowledge, the provider must retry.
+    InFlight,
+}
+
+/// Ownership of one in-flight key. Dropping it uncommitted (store error, client disconnect, panic)
+/// forgets the key, so the provider's retry is reprocessed instead of swallowed.
+pub(crate) struct Claim {
+    seen: std::sync::Arc<SeenWebhooks>,
+    key: String,
+    committed: bool,
+}
+
+impl Claim {
+    /// The delivery is durably stored: from now on a repeat is `Done`.
+    pub(crate) fn commit(mut self) {
+        self.committed = true;
+        let mut g = self.seen.inner.lock().unwrap_or_else(|p| p.into_inner());
+        g.in_flight.remove(&self.key);
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.seen.forget(&self.key);
+        }
+    }
 }
 
 impl SeenWebhooks {
@@ -45,28 +86,37 @@ impl SeenWebhooks {
         }
     }
 
-    /// Record `key` as seen and report whether it was **already** present (a duplicate delivery).
-    /// Evicts the oldest key when over capacity. A poisoned lock degrades to "not seen" (fail-open)
-    /// so idempotency bookkeeping never blocks legitimate ingest.
-    pub(crate) fn check_and_insert(&self, key: &str) -> bool {
+    /// Claim `key`. Evicts the oldest key when over capacity. A poisoned lock degrades to "not
+    /// seen" (fail-open) so idempotency bookkeeping never blocks legitimate ingest.
+    pub(crate) fn begin(self: &std::sync::Arc<Self>, key: &str) -> Begin {
         let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         if g.set.contains(key) {
-            return true;
+            return if g.in_flight.contains(key) {
+                Begin::InFlight
+            } else {
+                Begin::Done
+            };
         }
         g.set.insert(key.to_string());
+        g.in_flight.insert(key.to_string());
         g.fifo.push_back(key.to_string());
         while g.fifo.len() > self.capacity {
             if let Some(old) = g.fifo.pop_front() {
                 g.set.remove(&old);
+                g.in_flight.remove(&old);
             }
         }
-        false
+        Begin::New(Claim {
+            seen: self.clone(),
+            key: key.to_string(),
+            committed: false,
+        })
     }
 
-    /// Drop `key` from the seen-set so a later retry is reprocessed — call this when processing the
-    /// delivery failed, so a transient error doesn't permanently swallow the provider's retries.
-    pub(crate) fn forget(&self, key: &str) {
+    /// Drop `key` from the seen-set so a later retry is reprocessed.
+    fn forget(&self, key: &str) {
         let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        g.in_flight.remove(key);
         if g.set.remove(key) {
             g.fifo.retain(|k| k != key);
         }
@@ -123,35 +173,51 @@ fn touch_due(m: &mut HashMap<String, Instant>, id: &str, now: Instant, every: Du
 mod tests {
     use super::*;
 
-    #[test]
-    fn first_sight_is_new_repeat_is_duplicate() {
-        let seen = SeenWebhooks::new(16);
-        assert!(!seen.check_and_insert("wh_1")); // first delivery
-        assert!(seen.check_and_insert("wh_1")); // retry → duplicate
-        assert!(!seen.check_and_insert("wh_2")); // a different event is still new
+    use std::sync::Arc;
+
+    fn new_claim(seen: &Arc<SeenWebhooks>, k: &str) -> Claim {
+        match seen.begin(k) {
+            Begin::New(c) => c,
+            _ => panic!("{k} should have been new"),
+        }
     }
 
     #[test]
-    fn forget_allows_reprocessing() {
-        let seen = SeenWebhooks::new(16);
-        assert!(!seen.check_and_insert("wh_1"));
-        seen.forget("wh_1");
-        // After a failed-delivery forget, the provider's retry is reprocessed, not swallowed.
-        assert!(!seen.check_and_insert("wh_1"));
-        assert!(seen.check_and_insert("wh_1"));
+    fn first_sight_is_new_committed_repeat_is_done() {
+        let seen = Arc::new(SeenWebhooks::new(16));
+        new_claim(&seen, "wh_1").commit();
+        assert!(matches!(seen.begin("wh_1"), Begin::Done));
+        assert!(matches!(seen.begin("wh_2"), Begin::New(_))); // a different event is still new
+    }
+
+    /// The acknowledgement point: a duplicate that lands while the first attempt is still persisting
+    /// must not be acked, because the first attempt may yet roll back.
+    #[test]
+    fn a_duplicate_while_in_flight_is_not_acknowledged() {
+        let seen = Arc::new(SeenWebhooks::new(16));
+        let claim = new_claim(&seen, "wh_1");
+        assert!(matches!(seen.begin("wh_1"), Begin::InFlight));
+        claim.commit();
+        assert!(matches!(seen.begin("wh_1"), Begin::Done));
+    }
+
+    #[test]
+    fn an_uncommitted_claim_is_forgotten_so_the_retry_is_reprocessed() {
+        let seen = Arc::new(SeenWebhooks::new(16));
+        drop(new_claim(&seen, "wh_1")); // store error, disconnect or panic
+        new_claim(&seen, "wh_1").commit();
+        assert!(matches!(seen.begin("wh_1"), Begin::Done));
     }
 
     #[test]
     fn evicts_oldest_over_capacity() {
-        let seen = SeenWebhooks::new(2);
-        assert!(!seen.check_and_insert("a"));
-        assert!(!seen.check_and_insert("b"));
-        assert!(!seen.check_and_insert("c")); // over cap → evicts the oldest, "a"
-                                              // "b" and "c" are still within the window (a re-check doesn't disturb the FIFO order).
-        assert!(seen.check_and_insert("c"));
-        assert!(seen.check_and_insert("b"));
-        // "a" was evicted, so it reads as new again.
-        assert!(!seen.check_and_insert("a"));
+        let seen = Arc::new(SeenWebhooks::new(2));
+        new_claim(&seen, "a").commit();
+        new_claim(&seen, "b").commit();
+        new_claim(&seen, "c").commit(); // over cap -> evicts the oldest, "a"
+        assert!(matches!(seen.begin("c"), Begin::Done));
+        assert!(matches!(seen.begin("b"), Begin::Done));
+        assert!(matches!(seen.begin("a"), Begin::New(_))); // evicted, reads as new again
     }
 
     /// One write per key per interval, however many requests arrive; a stale entry is refreshed;
