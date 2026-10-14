@@ -26,6 +26,12 @@ pub(crate) struct ForecastAlert {
     /// is what is already being done", which is the difference between a warning and a report.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policy_applied: Option<String>,
+    /// The subject resolves to another party (a customer), so a broadcast channel must not carry it
+    /// or its per-day revenue and cost: `alerts::compose::forecast` refuses to enumerate it and
+    /// points at the authenticated `GET /v1/forecast` instead. Never serialized: the authenticated
+    /// response keeps its shape and its detail.
+    #[serde(skip)]
+    pub identity_scoped: bool,
 }
 
 impl ForecastAlert {
@@ -83,6 +89,7 @@ pub(crate) fn build_alerts(
                 subject: b.rule_id.clone(),
                 eta_days: round2(eta),
                 policy_applied: None,
+                identity_scoped: false,
                 message: format!(
                     "project '{project}' is on track to breach its {} {} budget ({:.4}) {} — \
                      projected ~{:.4}/day, current rolling {:.4}{}",
@@ -107,6 +114,7 @@ pub(crate) fn build_alerts(
                     subject: m.key.clone(),
                     eta_days: round2(eta),
                     policy_applied: None,
+                    identity_scoped: false,
                     message: format!(
                         "'{}' is on track to turn unprofitable {} — revenue ~${:.2}/day vs cost \
                          rising to ~${:.2}/day{}",
@@ -126,6 +134,7 @@ pub(crate) fn build_alerts(
                 subject: m.key.clone(),
                 eta_days: 0.0,
                 policy_applied: None,
+                identity_scoped: false,
                 message: format!(
                     "'{}' is already unprofitable (margin ${:.2}) and cost is still rising{}",
                     m.key,
@@ -271,6 +280,7 @@ mod tests {
             eta_days: 5.0,
             message: String::new(),
             policy_applied: None,
+            identity_scoped: false,
         }];
         let mut guard = rule();
         guard.id = "g1".into();
@@ -312,6 +322,7 @@ mod tests {
             eta_days: 9.0,
             message: String::new(),
             policy_applied: None,
+            identity_scoped: false,
         };
         let warned = a.dedup_key();
         a.severity = "high";
