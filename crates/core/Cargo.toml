@@ -22,3 +22,8 @@ schemars = { version = "1", default-features = false, features = ["derive", "std
 # implementation is the only way those two can agree.
 hmac = "0.13"
 sha2 = "0.11"
+
+[features]
+# `test_env::EnvGuard`, the one lock every test that writes the process environment takes. Enabled
+# from `[dev-dependencies]` only, so no shipped binary links an environment writer.
+test-env = []

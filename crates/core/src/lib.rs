@@ -57,6 +57,9 @@ pub mod unpriced;
 pub mod usage_split;
 pub mod use_case;
 
+#[cfg(any(test, feature = "test-env"))]
+pub mod test_env;
+
 pub use alert::{Alert, AlertKind, Delivery, Severity};
 pub use alert_channel::{AlertChannel, ChannelKind};
 pub use alert_sign::{

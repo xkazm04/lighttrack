@@ -126,11 +126,12 @@ mod tests {
         // No identity from any config level, and no fallback derived from the host.
         let empty = std::env::temp_dir().join(format!("lt-empty-gitconfig-{}", std::process::id()));
         std::fs::write(&empty, "").expect("empty config");
-        std::env::set_var("GIT_CONFIG_GLOBAL", &empty);
-        std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
-        std::env::set_var("GIT_CONFIG_COUNT", "1");
-        std::env::set_var("GIT_CONFIG_KEY_0", "user.useConfigOnly");
-        std::env::set_var("GIT_CONFIG_VALUE_0", "true");
+        let mut env = lighttrack_core::test_env::EnvGuard::lock();
+        env.set("GIT_CONFIG_GLOBAL", &empty)
+            .set("GIT_CONFIG_NOSYSTEM", "1")
+            .set("GIT_CONFIG_COUNT", "1")
+            .set("GIT_CONFIG_KEY_0", "user.useConfigOnly")
+            .set("GIT_CONFIG_VALUE_0", "true");
 
         assert!(checkout_new(&repo, "lt-fix/test").await);
         std::fs::write(std::path::Path::new(&repo).join("fix.txt"), "edited").unwrap();
@@ -145,15 +146,7 @@ mod tests {
         );
         assert_eq!(current_branch(&repo).await.as_deref(), Some("lt-fix/test"));
 
-        for k in [
-            "GIT_CONFIG_GLOBAL",
-            "GIT_CONFIG_NOSYSTEM",
-            "GIT_CONFIG_COUNT",
-            "GIT_CONFIG_KEY_0",
-            "GIT_CONFIG_VALUE_0",
-        ] {
-            std::env::remove_var(k);
-        }
+        drop(env);
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_file(&empty);
     }

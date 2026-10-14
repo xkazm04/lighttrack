@@ -110,7 +110,8 @@ mod tests {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         let subscriber = WarnCapture(std::sync::Arc::clone(&seen));
         let key = super::ENV_INTERVAL;
-        let _guard = EnvVar::set(key, "15m");
+        let mut env = lighttrack_core::test_env::EnvGuard::lock();
+        env.set(key, "15m");
         tracing::subscriber::with_default(subscriber, || {
             let got = super::interval();
             assert_eq!(got, Some(std::time::Duration::from_secs(900)));
@@ -121,23 +122,10 @@ mod tests {
             "a bad flush interval must be said out loud, not treated as unset: {logged}"
         );
 
-        let _zero = EnvVar::set(key, "0");
+        env.set(key, "0");
         assert_eq!(super::interval(), None, "0 switches the flush off");
-        let _mins = EnvVar::set(key, "120");
+        env.set(key, "120");
         assert_eq!(super::interval(), Some(std::time::Duration::from_secs(120)));
-    }
-
-    struct EnvVar(&'static str);
-    impl EnvVar {
-        fn set(key: &'static str, value: &str) -> Self {
-            std::env::set_var(key, value);
-            Self(key)
-        }
-    }
-    impl Drop for EnvVar {
-        fn drop(&mut self) {
-            std::env::remove_var(self.0);
-        }
     }
 
     struct WarnCapture(std::sync::Arc<std::sync::Mutex<String>>);

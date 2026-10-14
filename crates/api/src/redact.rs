@@ -650,21 +650,17 @@ mod tests {
         // `from_raw` is where the logic lives, but nothing would catch a `from_env` that read the
         // wrong key or dropped the unset case. Both env states are exercised in ONE test so no other
         // test in this binary can observe the mutation half-applied.
-        let saved = std::env::var(ENV_REDACT).ok();
-        std::env::remove_var(ENV_REDACT);
+        let mut env = lighttrack_core::test_env::EnvGuard::lock();
+        env.remove(ENV_REDACT);
         assert!(
             Redactor::from_env().enabled_for("p1"),
             "unset env must scrub"
         );
-        std::env::set_var(ENV_REDACT, "off");
+        env.set(ENV_REDACT, "off");
         assert!(
             !Redactor::from_env().enabled_for("p1"),
             "env=off must not scrub"
         );
-        match saved {
-            Some(v) => std::env::set_var(ENV_REDACT, v),
-            None => std::env::remove_var(ENV_REDACT),
-        }
     }
 
     #[test]

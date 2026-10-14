@@ -165,17 +165,16 @@ mod tests {
     #[test]
     fn provider_capabilities_come_from_the_keys_that_are_actually_present() {
         // Two env vars name the same provider; the declaration must not say it twice.
-        std::env::set_var("GEMINI_API_KEY", "x");
-        std::env::set_var("GOOGLE_API_KEY", "y");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        let mut env = lighttrack_core::test_env::EnvGuard::lock();
+        env.set("GEMINI_API_KEY", "x")
+            .set("GOOGLE_API_KEY", "y")
+            .remove("ANTHROPIC_API_KEY");
         let p = providers_from_env();
         assert_eq!(p.iter().filter(|x| *x == "google").count(), 1);
         assert!(!p.contains(&"anthropic".to_string()));
         // An empty value is not a credential.
-        std::env::set_var("GEMINI_API_KEY", "");
-        std::env::remove_var("GOOGLE_API_KEY");
+        env.set("GEMINI_API_KEY", "").remove("GOOGLE_API_KEY");
         assert!(!providers_from_env().contains(&"google".to_string()));
-        std::env::remove_var("GEMINI_API_KEY");
     }
 
     #[test]

@@ -112,15 +112,16 @@ fn zero_cooldown_always_sends() {
 #[test]
 fn a_malformed_numeric_setting_degrades_to_the_default() {
     let key = "LIGHTTRACK_ALERT_TEST_UNPARSEABLE";
-    std::env::set_var(key, "1h");
+    let mut env = lighttrack_core::test_env::EnvGuard::lock();
+    env.set(key, "1h");
     assert_eq!(super::env_u64(key, 3600), 3600);
-    std::env::set_var(key, " 42 ");
+    env.set(key, " 42 ");
     assert_eq!(
         super::env_u64(key, 3600),
         42,
         "surrounding whitespace is not a typo"
     );
-    std::env::remove_var(key);
+    env.remove(key);
     assert_eq!(super::env_u64(key, 7), 7);
 }
 

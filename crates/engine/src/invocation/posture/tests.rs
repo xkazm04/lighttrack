@@ -149,10 +149,11 @@ fn seat_runs_strip_the_billing_key_and_bare_runs_demand_it() {
     // The env var is process-global; drive both branches off an explicit `bare` flag and a
     // key we set/clear here rather than whatever the developer's shell happens to hold.
     let mut cmd = Command::new("echo");
-    std::env::set_var("ANTHROPIC_API_KEY", "sk-test");
+    let mut env = lighttrack_core::test_env::EnvGuard::lock();
+    env.set("ANTHROPIC_API_KEY", "sk-test");
     assert!(apply_auth(&mut cmd, false).is_ok());
     assert!(apply_auth(&mut cmd, true).is_ok());
-    std::env::remove_var("ANTHROPIC_API_KEY");
+    env.remove("ANTHROPIC_API_KEY");
     assert!(apply_auth(&mut cmd, false).is_ok());
     assert!(matches!(
         apply_auth(&mut cmd, true),

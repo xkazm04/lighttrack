@@ -398,7 +398,8 @@ mod tests {
 
     #[test]
     fn expand_env_fills_and_fails_loudly() {
-        std::env::set_var("LT_TEST_TOKEN", "s3cret");
+        let mut env = lighttrack_core::test_env::EnvGuard::lock();
+        env.set("LT_TEST_TOKEN", "s3cret");
         assert_eq!(
             expand_env("Bearer ${LT_TEST_TOKEN}").unwrap(),
             "Bearer s3cret"

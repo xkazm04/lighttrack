@@ -24,7 +24,8 @@ fn cfg(actions_dir: &str) -> AgentConfig {
 }
 
 fn cfg_with_root(actions_dir: &str, workspaces_root: Option<&str>) -> AgentConfig {
-    std::env::set_var("LT_TEST_DEVICE_KEY", "k");
+    // Parsed, not loaded: `AgentConfig::load` resolves the device key, `toml::from_str` does not,
+    // and nothing on the execute path reads it, so these tests set no environment.
     let esc = |s: &str| s.replace('\\', "\\\\");
     let root = workspaces_root
         .map(|r| format!("workspaces_root = \"{}\"\n", esc(r)))
