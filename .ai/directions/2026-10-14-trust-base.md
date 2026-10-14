@@ -5,7 +5,7 @@ raised_by: intake intake-vox-1014
 source: librarian/sources/2026-10-14-rtk-ai-vox.md
 stage: the workspace test gate (cargo test --workspace on the Linux runner) and the escape census
 size: ~16 files / ~60 lines / S
-status: proposed
+status: accepted
 ---
 
 ## Why the scope implies it
