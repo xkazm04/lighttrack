@@ -26,15 +26,17 @@ pub(super) fn run_stat(
     if run.n_cases == 0 {
         return None;
     }
+    // A run that recorded no pass rate does not join a bucket. The wire row has no way to say
+    // "unknown" for it, and shipping 0.0 asserts that nothing passed, which the bucket would average
+    // in as evidence (aggregate-only-digests: when a measure cannot be computed, ship its absence;
+    // the row cannot, so the run stays home).
+    let pass_rate = run.pass_rate?;
     let cost_per_case_usd = run.cost_usd / run.n_cases as f64;
     // A diverged run is excluded HERE, at the site, before it can join a bucket. A non-finite figure
     // serialises as JSON `null`, which the hub cannot read back into a number, so one bad run would
     // sink the whole push - healthy buckets included - as an opaque rejection. (The hub also refuses
     // non-finite entries in `sanitize::implausible`, but only for a body it could parse at all.)
-    if !(quality.is_finite()
-        && run.pass_rate.is_none_or(f64::is_finite)
-        && cost_per_case_usd.is_finite())
-    {
+    if !(quality.is_finite() && pass_rate.is_finite() && cost_per_case_usd.is_finite()) {
         return None;
     }
     Some(RunStat {
@@ -42,7 +44,7 @@ pub(super) fn run_stat(
         model,
         task_type: task_type_from(&bench.name, None),
         quality,
-        pass_rate: run.pass_rate.unwrap_or(0.0),
+        pass_rate,
         cost_per_case_usd,
         n_cases: run.n_cases,
         p50_latency_ms: run.p50_latency_ms,
@@ -249,6 +251,28 @@ mod tests {
         );
         assert_eq!(s.task_type, "qa");
         assert!((s.cost_per_case_usd - 0.02).abs() < 1e-9); // 0.4 / 20
+    }
+
+    /// A run with no recorded pass rate must not enter a bucket as a pass rate of zero.
+    #[test]
+    fn a_run_with_no_pass_rate_does_not_enter_a_bucket_as_zero() {
+        let b = bench("QA bench", Value::Null);
+        let id = json!({ "provider": "anthropic", "model": "haiku" });
+        let mut unknown = run(id.clone(), Some(0.9), 10, 0.1);
+        unknown.pass_rate = None;
+        let mut known = run(id, Some(0.9), 10, 0.1);
+        known.pass_rate = Some(1.0);
+        let stats: Vec<_> = [&unknown, &known]
+            .iter()
+            .filter_map(|r| run_stat(&b, r, None))
+            .collect();
+        let (entries, _) = lighttrack_core::build_digest_counted(&stats, 1);
+        assert_eq!(entries.len(), 1);
+        assert!(
+            (entries[0].pass_rate - 1.0).abs() < 1e-9,
+            "got {}",
+            entries[0].pass_rate
+        );
     }
 
     #[test]
