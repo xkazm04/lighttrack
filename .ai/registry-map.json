@@ -3292,7 +3292,11 @@
           "revision": 17,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/job.rs:22 Background job status is defined as an unvalidated raw String rather than a single authoritative closed enum with an explicit transition relation.",
+          "evaluatedAt": "2026-10-14",
+          "evaluatedAgainst": "sha256-b2:68f09609d1498e88",
+          "evaluatedRevision": 17
         },
         {
           "subject": "scoring-rubrics",
@@ -6110,7 +6114,11 @@
           "revision": 17,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/runctl.rs:95 The worker publishes progress as an informational ETA string without checkpointing durable step positions, causing reclaimed jobs to restart from case zero.",
+          "evaluatedAt": "2026-10-14",
+          "evaluatedAgainst": "sha256-b2:68f09609d1498e88",
+          "evaluatedRevision": 17
         },
         {
           "subject": "untrusted-extension-host",
@@ -6674,7 +6682,11 @@
           "revision": 17,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/sqlite/jobs.rs:119 Stale running jobs are only recovered as an opportunistic side effect of worker claims rather than through an active sweep or boot recovery mechanism.",
+          "evaluatedAt": "2026-10-14",
+          "evaluatedAgainst": "sha256-b2:68f09609d1498e88",
+          "evaluatedRevision": 17
         }
       ],
       "governance": "governed"
@@ -6758,7 +6770,11 @@
           "revision": 17,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/jobs.rs:39 The operator jobs endpoint returns raw database rows without computing lease age, next action, or sorting anomalies first.",
+          "evaluatedAt": "2026-10-14",
+          "evaluatedAgainst": "sha256-b2:68f09609d1498e88",
+          "evaluatedRevision": 17
         },
         {
           "subject": "prompt-assembly",
