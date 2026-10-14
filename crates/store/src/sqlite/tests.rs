@@ -2931,3 +2931,28 @@ fn calls_and_tokens_caps_are_untouched_by_unpriced_traffic() {
         assert!(a.statuses.iter().all(|st| st.cost_evidence.is_none()));
     }
 }
+
+#[test]
+fn metadata_filter_treats_the_key_as_one_literal_key() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    for (i, (k, v)) in [("a.b", "dot"), ("a\"b", "quote"), ("a", "plain")]
+        .into_iter()
+        .enumerate()
+    {
+        let mut e = ev("p1", "gpt-4o", 1, 1, 0.0);
+        e.id = format!("m{i}");
+        e.metadata = serde_json::json!({ k: v });
+        s.insert_event(&e).unwrap();
+    }
+    for (k, want) in [("a.b", 1usize), ("a\"b", 1), ("a", 1)] {
+        let r = s.list_events_filtered(
+            Scope::Project("p1"),
+            &crate::EventFilter {
+                metadata_key: Some(k.into()),
+                ..Default::default()
+            },
+            100,
+        );
+        assert_eq!(r.unwrap().events.len(), want, "key {k:?}");
+    }
+}
