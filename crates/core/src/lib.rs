@@ -96,8 +96,8 @@ pub use forecast_gate::{Refusal, FLAT_BAND, MIN_OBSERVED_DAYS, MIN_SPAN_DAYS};
 pub use gen_spend::GenerationFacts;
 pub use grounding::{ClaimVerdict, GroundingDetail, MAX_CLAIMS_PER_DIM};
 pub use job::{
-    job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_PREFIX_FAILURE,
-    JOB_ERROR_WORKER_LOST,
+    job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_CANCEL_ORPHANED,
+    JOB_ERROR_PREFIX_FAILURE, JOB_ERROR_WORKER_LOST,
 };
 pub use job_kinds::{
     validate_payload, BenchRunPayload, CalibratePayload, ContributePayload, DatasetSamplePayload,

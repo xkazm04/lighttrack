@@ -4,7 +4,9 @@
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
-use lighttrack_core::{job_is_terminal, Job, JobCancel, JobFinish, JOB_ERROR_WORKER_LOST};
+use lighttrack_core::{
+    job_is_terminal, Job, JobCancel, JobFinish, JOB_ERROR_CANCEL_ORPHANED, JOB_ERROR_WORKER_LOST,
+};
 use lighttrack_store::{Result, StoreError};
 
 use crate::codec::*;
@@ -239,6 +241,7 @@ pub(crate) fn claim_job(
 ) -> Result<Option<Job>> {
     let now = fmt_ts(Utc::now());
     let stale = fmt_ts(stale_before);
+    settle_orphaned_cancels(rest, &stale, &now)?;
 
     for _ in 0..5 {
         let candidate = match oldest_queued(rest, kinds)? {
@@ -301,6 +304,35 @@ pub(crate) fn claim_job(
         // precondition failed: another worker won this one — loop and pick the next.
     }
     Ok(None)
+}
+
+/// A stale `cancelling` job lost its worker mid-cancel. It is not claimable, so settle it as
+/// `cancelled` here instead of leaving it live forever (same contract as the SQL backends). Each
+/// write is guarded by the doc's `updateTime`; losing that race means someone else just touched it,
+/// and the next claim re-evaluates it.
+fn settle_orphaned_cancels(rest: &Rest, stale: &str, now: &str) -> Result<()> {
+    let filters: Vec<(&str, &str, Value)> = vec![
+        ("status", "EQUAL", json!("cancelling")),
+        ("claimed_at", "LESS_THAN", json!(stale)),
+    ];
+    for doc in rest.query_raw("jobs", &filters, None, Some(20))? {
+        let name = doc.get("name").and_then(Value::as_str).unwrap_or_default();
+        let update_time = doc
+            .get("updateTime")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut m = Fields::new();
+        m.insert("status".into(), json!("cancelled"));
+        m.insert("updated_at".into(), json!(now));
+        m.insert("error".into(), json!(JOB_ERROR_CANCEL_ORPHANED));
+        rest.commit_update(
+            name,
+            &m,
+            &["status", "updated_at", "error"],
+            Some(update_time),
+        )?;
+    }
+    Ok(())
 }
 
 /// The worker's capability declaration as a query filter, or nothing when it declared none.

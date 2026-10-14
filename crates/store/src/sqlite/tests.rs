@@ -2723,21 +2723,35 @@ fn cancel_is_race_safe_against_stale_reclaim() {
             .is_none(),
         "a cancelling job must never be reclaimed as stale"
     );
+    // Its worker never wound it down (the cutoff above made the lease stale), so the claim path
+    // settles it as `cancelled` with the orphan marker: never restarted, never left live forever.
     let after = s.get_job(Scope::Operator, "b").unwrap().unwrap();
-    assert_eq!(after.status, "cancelling");
+    assert_eq!(after.status, "cancelled");
+    assert_eq!(
+        after.error.as_deref(),
+        Some(lighttrack_core::JOB_ERROR_CANCEL_ORPHANED)
+    );
     assert_eq!(after.attempts, 1, "the reclaim never touched it");
     assert_eq!(after.stale_reclaims, 0);
 
-    // The worker notices and finishes it as cancelled — with no error, so no retry is consumed.
+    // Order C — a live worker winds a cancelling job down: it finishes as cancelled with no
+    // error, so no retry is consumed.
+    s.create_job(&mk("c")).unwrap();
+    s.claim_job(Utc::now(), &[]).unwrap().expect("claim c");
+    assert_eq!(
+        s.cancel_job(Scope::Operator, "c").unwrap(),
+        Some(JobCancel::Cancelling)
+    );
+    let held = s.get_job(Scope::Operator, "c").unwrap().unwrap();
     s.finish_job(
-        "b",
+        "c",
         "cancelled",
         &serde_json::json!({ "partial": true }),
         None,
-        after.claimed_at,
+        held.claimed_at,
     )
     .unwrap();
-    let done = s.get_job(Scope::Operator, "b").unwrap().unwrap();
+    let done = s.get_job(Scope::Operator, "c").unwrap().unwrap();
     assert_eq!((done.status.as_str(), done.failures), ("cancelled", 0));
     assert!(s
         .claim_job(Utc::now() + chrono::Duration::seconds(1), &[])

@@ -5,7 +5,9 @@ use serde_json::Value;
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
-use lighttrack_core::{Job, JobCancel, JobFinish, JOB_ERROR_WORKER_LOST};
+use lighttrack_core::{
+    Job, JobCancel, JobFinish, JOB_ERROR_CANCEL_ORPHANED, JOB_ERROR_WORKER_LOST,
+};
 use lighttrack_store::Result;
 
 use crate::util::{fmt_ts, json_or_null, parse_ts, pgerr, val_or_null};
@@ -54,6 +56,17 @@ pub(crate) async fn claim(
 ) -> Result<Option<Job>> {
     let now = fmt_ts(Utc::now());
     let stale = fmt_ts(stale_before);
+    // A stale `cancelling` job lost its worker mid-cancel; it is not claimable, so settle it as
+    // `cancelled` here rather than leaving it live forever (same contract as the SQLite backend).
+    sqlx::query(
+        "UPDATE jobs SET status='cancelled', updated_at=$1, error=$3          WHERE status='cancelling' AND claimed_at < $2",
+    )
+    .bind(now.clone())
+    .bind(stale.clone())
+    .bind(JOB_ERROR_CANCEL_ORPHANED)
+    .execute(pool)
+    .await
+    .map_err(pgerr)?;
     // Atomic + concurrency-safe: FOR UPDATE SKIP LOCKED so parallel workers don't grab the same job.
     // Same accounting contract as SQLite: reclaiming a stale `running` job is a WORKER DEATH — it
     // counts in `stale_reclaims` and stamps the marker error, never in `failures` (the retry
