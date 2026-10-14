@@ -126,7 +126,8 @@ mod tests {
         std::fs::write(&path, "sources = []").unwrap();
         assert!(AgentConfig::load(path.to_str().unwrap()).is_err());
 
-        std::env::set_var("LT_TEST_DEVICE_KEY", "k");
+        let mut env = lighttrack_core::test_env::EnvGuard::lock();
+        env.set("LT_TEST_DEVICE_KEY", "k");
         std::fs::write(
             &path,
             "[[sources]]\nname = \"cloud\"\nurl = \"https://x.example/\"\ndevice_key_env = \"LT_TEST_DEVICE_KEY\"\n",

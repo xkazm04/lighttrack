@@ -23,3 +23,7 @@ clap = { version = "4", features = ["derive", "env"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "blocking", "rustls", "query"] }
 anyhow = "1"
 dotenvy = "0.15"
+
+[dev-dependencies]
+# The one process-wide lock for tests that write the environment (lighttrack_core::test_env).
+lighttrack-core = { workspace = true, features = ["test-env"] }

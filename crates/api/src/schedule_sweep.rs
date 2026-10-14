@@ -225,23 +225,23 @@ mod tests {
     fn the_sweep_is_on_by_default_and_floors_its_interval() {
         // Unlike the forecast sweep, absence means ON: a stored schedule that does not fire is a
         // broken feature, not a respected default.
-        std::env::remove_var(ENV_SECS);
+        let mut env = lighttrack_core::test_env::EnvGuard::lock();
+        env.remove(ENV_SECS);
         assert_eq!(
             SweepConfig::from_env().map(|c| c.interval),
             Some(Duration::from_secs(DEFAULT_SECS))
         );
         // Explicit zero is the off switch.
-        std::env::set_var(ENV_SECS, "0");
+        env.set(ENV_SECS, "0");
         assert!(SweepConfig::from_env().is_none());
         // A misconfiguration cannot make it a spin loop.
-        std::env::set_var(ENV_SECS, "1");
+        env.set(ENV_SECS, "1");
         assert_eq!(
             SweepConfig::from_env().map(|c| c.interval),
             Some(Duration::from_secs(MIN_SECS))
         );
         // Junk falls back to the default rather than silently disabling the sweep.
-        std::env::set_var(ENV_SECS, "later");
+        env.set(ENV_SECS, "later");
         assert!(SweepConfig::from_env().is_some());
-        std::env::remove_var(ENV_SECS);
     }
 }

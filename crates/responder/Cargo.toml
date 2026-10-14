@@ -27,3 +27,7 @@ anyhow = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "charset", "http2", "system-proxy"] }
 # Render the diagnosis Markdown to HTML for the email body (email clients don't render Markdown).
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
+[dev-dependencies]
+# The one process-wide lock for tests that write the environment (lighttrack_core::test_env).
+lighttrack-core = { workspace = true, features = ["test-env"] }
