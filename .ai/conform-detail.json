@@ -4849,6 +4849,140 @@
           "evidence": "crates/api/src/tests_tenancy.rs:198 The suite requires the login response to name expiry. tests_ingest.rs asserts a key list omits key_hash."
         }
       ]
+    },
+    "b17dade9-c8d8-4e0c-9ca0-d782694902e4/conformance-checking": {
+      "context": "store-conformance-observability",
+      "subject": "conformance-checking",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T23:46:49.032Z",
+      "worker": "9345ebac-3b92-4507-9959-f027786f563b",
+      "techniques": [
+        {
+          "technique": "finding-severity-ladder",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/mod.rs:57 The suite collapses all evaluation into panicking on assertion failure rather than categorizing observations into hard failures, failures, warnings, and unable-to-check outcomes."
+        },
+        {
+          "technique": "declared-deviation-register",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/events.rs:122 Discrepancies in Postgres and Firestore default behaviors are documented in doc comments rather than recorded in an enumerable declared deviation register containing document, clause, cost-motivation, and reconciliation state."
+        },
+        {
+          "technique": "declared-then-proven",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/events.rs:19 Assertions verify execution without tagging proofs by rung (presence, shape, execution) or emitting remediation details alongside findings."
+        },
+        {
+          "technique": "checker-false-positive-discipline",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/catalog.rs:206 The suite actively guards against false passes by ensuring that omitted difficulty levels remain unassigned instead of being silently coerced into an intermediate tier."
+        },
+        {
+          "technique": "claim-write-back",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/mod.rs:59 Successful test executions are never written back as proof stamps into the backend manifest or repository contract; proofs expire with the process."
+        },
+        {
+          "technique": "pass-ratio-comparability",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/rollup.rs:19 The conformance tests return Result<()> with no weighted pass ratio, summary percentage, or runnable predicate metadata."
+        },
+        {
+          "technique": "fixture-repo-testing",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/conformance/fixtures.rs:12 Precondition does not hold: the suite tests in-memory data structures and backend stores using entity fixtures rather than evaluating whole fixture repositories."
+        },
+        {
+          "technique": "inline-predicate-rung-inference",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/conformance/events.rs:14 Precondition does not hold: checks are implemented directly in Rust rather than inferred from inline execution commands embedded in a specification format."
+        },
+        {
+          "technique": "edition-stratified-conformance",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/conformance/scores.rs:11 Precondition does not hold: the conformance suite is developed and versioned in-tree without tracking external specification editions."
+        },
+        {
+          "technique": "rule-registry-enumerated-fixtures",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/conformance/alerts.rs:20 Precondition does not hold: the harness exercises backend domain methods rather than enumerating an independent rule registry with fail/pass fixtures."
+        },
+        {
+          "technique": "derived-expectation-needs-an-evidence-floor",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/conformance/events.rs:59 Precondition does not hold: test expectations are fixed values derived from test inputs rather than dynamically computed from an untyped target without fixtures."
+        }
+      ],
+      "registryProposal": "The standard defines conformance checking around programs that evaluate a repository against a contract, but internal subsystem harnesses (such as backend-agnostic storage trait suites) face identical hazards around silent false passes, unstratified deviations, and uncalibrated severity; the standard should explicitly address in-process trait/API contract checkers."
+    },
+    "691eec3b-d884-4c85-9aa5-fa419b6b8457/conformance-checking": {
+      "context": "store-conformance-governance",
+      "subject": "conformance-checking",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T23:46:49.032Z",
+      "worker": "9345ebac-3b92-4507-9959-f027786f563b",
+      "techniques": [
+        {
+          "technique": "finding-severity-ladder",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/admission.rs:242 Non-atomic admission on Firestore is printed to stderr rather than emitted as a warning or deferred outcome on a structured severity ladder."
+        },
+        {
+          "technique": "declared-deviation-register",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/admission.rs:251 Deliberate backend non-conformance (non-atomic admission on Firestore) is branched ad-hoc in test code rather than registered in an enumerable declared deviation register."
+        },
+        {
+          "technique": "declared-then-proven",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/driver.rs:27 The driver runs execution tests without annotating findings by proof rung (presence, shape, execution) or reporting actionable remediation on failure."
+        },
+        {
+          "technique": "checker-false-positive-discipline",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/admission.rs:271 The test harness validates negative controls against non-atomic implementations to prevent false-pass certifications of race-prone stores."
+        },
+        {
+          "technique": "claim-write-back",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/driver.rs:36 Successful conformance execution does not write proof back into any contract or capability manifest; evidence disappears upon process termination."
+        },
+        {
+          "technique": "pass-ratio-comparability",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/driver.rs:18 The harness emits no pass ratio, score percentage, or predicate breakdown, reducing the conformance assessment to an all-or-nothing Result."
+        },
+        {
+          "technique": "fixture-repo-testing",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/conformance/driver.rs:19 Precondition does not hold: the conformance driver executes against in-memory or database trait implementations rather than judging committed whole repository trees."
+        },
+        {
+          "technique": "inline-predicate-rung-inference",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/conformance/driver.rs:25 Precondition does not hold: checks are declared as Rust code methods rather than inline shell command predicates within a specification sheet."
+        },
+        {
+          "technique": "edition-stratified-conformance",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/conformance/driver.rs:40 Precondition does not hold: the suite is maintained internally without numbered specification editions or upstream suite revisions to stratify."
+        },
+        {
+          "technique": "rule-registry-enumerated-fixtures",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/conformance/refusals.rs:40 Precondition does not hold: the conformance harness checks trait methods rather than an independent registry of linter or gate rules with paired fail/pass fixtures."
+        },
+        {
+          "technique": "derived-expectation-needs-an-evidence-floor",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/conformance/refusals.rs:81 Precondition does not hold: expected methods are looked up from static SURFACE_METHODS metadata rather than derived dynamically from the codebase under test without fixtures."
+        }
+      ],
+      "registryProposal": "The standard's definition of declared-deviation registers should provide guidance on how runtime capabilities matrices (such as Capabilities declarations) can fulfill or integrate with deviation registration."
     }
   }
 }

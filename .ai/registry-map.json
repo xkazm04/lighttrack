@@ -7012,7 +7012,11 @@
           "revision": 10,
           "changedAt": "2026-09-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/conformance/driver.rs:26 The conformance driver executes sections or refusal walks directly to panic on assertion failure without publishing structured findings, classifying outcomes across a finding severity ladder, or recording deliberate non-conformance in a declared deviation register.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:58a3b7c0b9efb42c",
+          "evaluatedRevision": 10
         },
         {
           "subject": "test-harness",
@@ -7099,7 +7103,11 @@
           "revision": 10,
           "changedAt": "2026-09-23",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/conformance/mod.rs:58 The conformance suite executes domain checks returning a binary Result<()> that panics on failure rather than publishing structured findings across a finding severity ladder with declared deviations registered.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:58a3b7c0b9efb42c",
+          "evaluatedRevision": 10
         },
         {
           "subject": "test-harness",
