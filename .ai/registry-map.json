@@ -2153,7 +2153,11 @@
           "revision": 5,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "conformant",
+          "evidence": "crates/api/src/limits.rs:159 Creating a limit rejects a non-positive or non-finite threshold through LimitRule::validate, and update_limit calls that same function, so the two write doors share one check.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:a784035133baaaba",
+          "evaluatedRevision": 5
         },
         {
           "subject": "llm-call-telemetry-model",
@@ -3415,7 +3419,11 @@
           "revision": 5,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/otlp/semconv.rs:198 A GenAI span with no input-token attribute is stored as zero input tokens, so an enforcing token cap treats that call as no usage.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:a784035133baaaba",
+          "evaluatedRevision": 5
         },
         {
           "subject": "usage-event-ingestion",

@@ -3664,6 +3664,93 @@
         }
       ],
       "registryProposal": "per-provider-usage-extractors requires a stated fallback order for naming duals but does not say newest-first, while attribute-precedence-lists does. The OpenAI extractor tries prompt_tokens before input_tokens; if a dual-emitting response should prefer the current name, the extractor technique should say so."
+    },
+    "22a431dc-2c4e-441c-9ecb-ee84020685be/usage-limit-governance": {
+      "context": "cost-and-revenue-governance",
+      "subject": "usage-limit-governance",
+      "bundle": "llm-observability",
+      "state": "conformant",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T01:29:34.218Z",
+      "worker": "3af5e668-29b0-411f-b83e-ef871cbffd20",
+      "techniques": [
+        {
+          "technique": "metric-window-threshold-action-model",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/limits.rs:159 update_limit calls the same validate at limits.rs:189. evaluate_project_limits builds each status with evaluate_rule_resolved_at (limits.rs:69). The status payload says the rejection ledger is in-memory and resets on restart (limits.rs:241)."
+        },
+        {
+          "technique": "dimension-scoped-caps",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/limits_usage.rs:61 GET usage-by-scope returns the untagged bucket and evaluates each value with the same resolved-threshold helper as the status page. scope_binds_row uses LimitScope::matches for model families."
+        },
+        {
+          "technique": "cost-evidence-and-imputation",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/limits.rs:266 cost_basis reports imputed dollars, the client-reported share, and unpriceable separately, and the notes say the estimate is not written onto the event."
+        },
+        {
+          "technique": "graduated-throttle-with-deterministic-shed",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/limits.rs:338 This flag is the shared hard-refuse predicate. Searched shed_ticket and shed_fraction in the listed API files and found no second lottery; shed_fraction travels inside the LimitStatus the store already built."
+        },
+        {
+          "technique": "incremental-window-accounting",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/limits.rs:59 Status and forecast read store aggregates. Searched rowid, seen_rowid, and usage_cache in these handlers and found no hot-path cache."
+        },
+        {
+          "technique": "concurrent-admission-integrity",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/limits.rs:47 This is the read-only status view. Searched advisory lock and insert_events_checked in the listed handlers and found no admission critical section."
+        }
+      ]
+    },
+    "ae7d2e99-8b0f-49f5-83c9-138d65df5241/usage-limit-governance": {
+      "context": "event-ingest",
+      "subject": "usage-limit-governance",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T01:29:34.218Z",
+      "worker": "3af5e668-29b0-411f-b83e-ef871cbffd20",
+      "techniques": [
+        {
+          "technique": "cost-evidence-and-imputation",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/otlp/semconv.rs:198 This is TokenUsage.input when none of INPUT_TOKEN_KEYS is present; output does the same at semconv.rs:202. Cost stays null when the book cannot price it (events.rs:131-132). The evaluator then has no presence bit left."
+        },
+        {
+          "technique": "concurrent-admission-integrity",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/events_batch.rs:192 post_batch prepares every item, then calls insert_events_checked once (events_batch.rs:200). The single-event door calls insert_event_checked once (events.rs:269)."
+        },
+        {
+          "technique": "incremental-window-accounting",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/events.rs:25 prepare_event overwrites received_at from the server clock before admission. The delta cache that evicts on that stamp lives in the SQLite usage cache, which this door does not reimplement."
+        },
+        {
+          "technique": "dimension-scoped-caps",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/events.rs:99 stamp_api_key writes the authenticated key id and strips a client-supplied api_key_id when no key is present, so a caller cannot move spend onto another key's cap."
+        },
+        {
+          "technique": "graduated-throttle-with-deterministic-shed",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/events.rs:204 Accepted and 429 responses carry usage_ratio and shed_fraction from the shared statuses, including the binding rule id. shed.rs is a separate in-flight semaphore for process load and says so in its first line."
+        },
+        {
+          "technique": "metric-window-threshold-action-model",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/events_admission.rs:38 record_rejection counts hard stops and sheds under the status alert key, which includes scope, and does not insert the event. Alert-only breaches stay on the admitted response."
+        },
+        {
+          "technique": "enforcement-placement-and-reconciliation",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/events.rs:265 This door refuses the record and returns 429 with the admission retry hint. It publishes proximity so a client can decide before the next call. The inline gateway check is outside this context."
+        }
+      ]
     }
   }
 }
