@@ -3539,6 +3539,131 @@
           "evidence": "crates/core/src/pricing.rs:333 TokenUsage has only four counters, so supported cache-write tokens folded into input receive the ordinary input rate and cannot retain their distinct count or lifetime price tier."
         }
       ]
+    },
+    "f9429abc-1dbe-4992-bb3a-e3626b963cb1/multi-provider-event-normalization": {
+      "context": "core-observability-types",
+      "subject": "multi-provider-event-normalization",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T01:03:21.186Z",
+      "worker": "ae511e3e-fbef-446a-9259-1f009c688a4e",
+      "techniques": [
+        {
+          "technique": "attribute-precedence-lists",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/event.rs:160 This crate holds one canonical field per fact. No span-attribute name lists; searched PROVIDER_KEYS, gen_ai.usage, precedence."
+        },
+        {
+          "technique": "deterministic-span-derived-ids",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/trace_ref.rs:28 The shared door rule lowercases every 16/32-hex id, including the all-zero sentinel, and does not trim or drop empties. Event ids themselves are uuid::new_v4 in new_id."
+        },
+        {
+          "technique": "per-provider-usage-extractors",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/lib.rs:6 No provider-response extractors here. usage_split::check_subcounts does reject cached_input greater than input."
+        },
+        {
+          "technique": "provider-family-matching",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/provider.rs:177 Raw ProviderId is preserved and AliasTable is conservative, but azure and vertex are family substrings. vertex is contains(\"vertex\") on the Google arm."
+        },
+        {
+          "technique": "refuse-to-derive",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/trace.rs:237 usage_split refuses to invent a token split, and TraceTotals.unpriced_spans labels the detail view. TraceSummary has no unpriced counter beside this f64."
+        },
+        {
+          "technique": "two-doors-one-pipeline",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/event.rs:207 received_at cannot be taken from any door's body. normalize_trace_ref is the one trace-id rule both doors are documented to call."
+        }
+      ],
+      "registryProposal": "The technique says both to fold a hosted variant onto one internal provider and to keep the raw string. This code stores the raw canonical id and uses family only as a price-book fallback; the standard should say whether that split is conforming, apart from the host-substring ban it already states."
+    },
+    "cb7bbb5f-02f2-48d9-90f3-cea5b3d14b47/multi-provider-event-normalization": {
+      "context": "gateway-proxy",
+      "subject": "multi-provider-event-normalization",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T01:03:21.186Z",
+      "worker": "ae511e3e-fbef-446a-9259-1f009c688a4e",
+      "techniques": [
+        {
+          "technique": "attribute-precedence-lists",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/telemetry.rs:116 Usage is copied from the engine outcome. Searched gen_ai, otel, precedence under crates/gateway/src: no span-attribute lists. prompt_tokens appears only on the outbound OpenAI completion body."
+        },
+        {
+          "technique": "deterministic-span-derived-ids",
+          "verdict": "deviation",
+          "evidence": "crates/gateway/src/telemetry.rs:175 trace_id is the request id, but event id and span_id are fresh UUIDs, so a second emission of the same attempt cannot dedup. emit logs failures and does not retry."
+        },
+        {
+          "technique": "per-provider-usage-extractors",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/generator.rs:31 This crate never reads a provider JSON body. GenOutcome has no cached-token field, so the event cannot carry one."
+        },
+        {
+          "technique": "provider-family-matching",
+          "verdict": "conformant",
+          "evidence": "crates/gateway/src/target.rs:61 codex is assigned to OpenAI by exact id because family_of would say Other. The event still stores a.target.provider unchanged. same_seat refuses to merge two Other families."
+        },
+        {
+          "technique": "refuse-to-derive",
+          "verdict": "deviation",
+          "evidence": "crates/gateway/src/telemetry.rs:142 Served calls also coerce Option token counts with unwrap_or(0) at line 122. reasoning is passed through as Option and can stay null."
+        },
+        {
+          "technique": "two-doors-one-pipeline",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/telemetry.rs:79 One native JSON emission path. This crate is not an ingest operator adding a second wire format."
+        }
+      ]
+    },
+    "f9f7fd73-7c48-4c30-ba1b-38f0d796c0cf/multi-provider-event-normalization": {
+      "context": "python-sdk",
+      "subject": "multi-provider-event-normalization",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T01:03:21.186Z",
+      "worker": "ae511e3e-fbef-446a-9259-1f009c688a4e",
+      "techniques": [
+        {
+          "technique": "attribute-precedence-lists",
+          "verdict": "not-applicable",
+          "evidence": "clients/python/lighttrack/client.py:75 Reads a provider response object, not span attributes. Searched gen_ai, otel, opentelemetry, span_attribute under clients/python: no hits. Name fallbacks belong to the extractor technique."
+        },
+        {
+          "technique": "deterministic-span-derived-ids",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:10 track() never sets id, including when it sends trace_id and span_id. Journal recovery re-posts the same span under a new server-minted id."
+        },
+        {
+          "technique": "per-provider-usage-extractors",
+          "verdict": "conformant",
+          "evidence": "clients/python/lighttrack/client.py:96 Three extractors share _get and return one tuple. Anthropic adds cache read and cache write into input and keeps the read as cached_input, which stays None when absent. OpenAI tries prompt_tokens before input_tokens."
+        },
+        {
+          "technique": "provider-family-matching",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:46 Unknown names pass through _PROVIDER_ALIASES.get verbatim. azure, vertex, and genai are folded, so a multi-family host becomes one lab."
+        },
+        {
+          "technique": "refuse-to-derive",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:305 Omitted counts become 0, including journal recovery, whose log says the tokens are unknown. A missing model is sent as the string unknown."
+        },
+        {
+          "technique": "two-doors-one-pipeline",
+          "verdict": "not-applicable",
+          "evidence": "clients/python/lighttrack/client.py:576 One native event path. Guard scores post to /v1/scores and are not a second event format."
+        }
+      ],
+      "registryProposal": "per-provider-usage-extractors requires a stated fallback order for naming duals but does not say newest-first, while attribute-precedence-lists does. The OpenAI extractor tries prompt_tokens before input_tokens; if a dual-emitting response should prefer the current name, the extractor technique should say so."
     }
   }
 }

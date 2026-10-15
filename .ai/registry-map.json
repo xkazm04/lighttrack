@@ -2000,7 +2000,11 @@
           "revision": 6,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/provider.rs:177 A string that merely starts with the multi-family host azure is classified as OpenAI before later families are tested, and the price-book fallback then prices that id from OpenAI rows.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:a0932e26160bfd85",
+          "evaluatedRevision": 7
         },
         {
           "subject": "tracing",
@@ -3835,7 +3839,11 @@
           "revision": 6,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/gateway/src/telemetry.rs:142 A failed attempt is recorded as a zero-token call, so an unmeasured seat spend reads as free traffic.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:a0932e26160bfd85",
+          "evaluatedRevision": 7
         },
         {
           "subject": "mcp-tools",
@@ -5477,7 +5485,11 @@
           "revision": 6,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:46 Host names that front more than one model family are rewritten to a single lab before the event is sent, and the original provider string is not kept.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:a0932e26160bfd85",
+          "evaluatedRevision": 7
         }
       ],
       "governance": "governed"
