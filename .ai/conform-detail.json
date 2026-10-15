@@ -4598,6 +4598,129 @@
         }
       ],
       "registryProposal": "LightTrack's trace listing was implemented around (ended, trace_id) keyset pagination before keyset-trace-pagination was revised to require start-time ordering to prevent silent skips under late span arrival."
+    },
+    "f9f7fd73-7c48-4c30-ba1b-38f0d796c0cf/tracing": {
+      "context": "python-sdk",
+      "subject": "tracing",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T22:22:04.742Z",
+      "worker": "c809e996-11b6-476d-ad2b-a1ddd61cbec9",
+      "techniques": [
+        {
+          "technique": "cross-boundary-propagation",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:390 Relay enqueue constructs its envelope without carrying the active trace, parent span, or predecessor reference, detaching queued work from its initiating trace."
+        },
+        {
+          "technique": "raw-record-viewers",
+          "verdict": "not-applicable",
+          "evidence": "clients/python/lighttrack/client.py:302 This context records and sends telemetry; it does not implement payload inspection viewers."
+        },
+        {
+          "technique": "span-model",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:76 An absent provider token count is silently emitted as zero, violating the distinction between absence and measurement."
+        },
+        {
+          "technique": "trace-capture",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/journal.py:125 Span opening synchronously serializes, writes, and flushes its journal before provider execution, violating the standard's in-memory-only capture hot path."
+        },
+        {
+          "technique": "waterfall-rendering",
+          "verdict": "not-applicable",
+          "evidence": "clients/python/lighttrack/client.py:1 The SDK emits events and provides no trace visualization surface."
+        }
+      ]
+    },
+    "f9429abc-1dbe-4992-bb3a-e3626b963cb1/tracing": {
+      "context": "core-observability-types",
+      "subject": "tracing",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T22:22:04.742Z",
+      "worker": "c809e996-11b6-476d-ad2b-a1ddd61cbec9",
+      "techniques": [
+        {
+          "technique": "raw-record-viewers",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/trace.rs:7 This module assembles trace data rather than rendering raw records."
+        },
+        {
+          "technique": "span-model",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/event.rs:55 The canonical status enum lacks the required running, cancelled, and interrupted distinctions."
+        },
+        {
+          "technique": "synthetic-and-estimated-traces",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/trace.rs:472 Span nodes copy captured event latency, including absence; this assembly path does not synthesize estimated span timings."
+        },
+        {
+          "technique": "trace-capture",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/trace.rs:5 This context defines records and computes rollups; it does not open, buffer, flush, or retain captured operations."
+        },
+        {
+          "technique": "vocabulary-source-selection",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/event.rs:155 The schema authority explicitly defines its house token convention and assigns provider-specific conversion to extractors."
+        },
+        {
+          "technique": "waterfall-rendering",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/trace.rs:208 The type supplies placement data for consumers; it does not draw a waterfall."
+        }
+      ]
+    },
+    "27581a68-b0d5-452e-8130-7283211996ae/tracing": {
+      "context": "observability-rendering",
+      "subject": "tracing",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T22:22:04.742Z",
+      "worker": "c809e996-11b6-476d-ad2b-a1ddd61cbec9",
+      "techniques": [
+        {
+          "technique": "class-before-inspection",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/lib.rs:8 This context formats supplied records and does not govern their storage placement or export authorization."
+        },
+        {
+          "technique": "cross-boundary-propagation",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/lib.rs:105 The renderer transforms received JSON into text; it does not create execution handoffs."
+        },
+        {
+          "technique": "raw-record-viewers",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/events.rs:130 The payload budget produces an ellipsis without the required shown/total counts or a route to the full record."
+        },
+        {
+          "technique": "span-model",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/traces.rs:186 Missing span usage is displayed as zero tokens rather than as an absent measurement."
+        },
+        {
+          "technique": "trace-capture",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/lib.rs:3 This context consumes API responses rather than capturing operations."
+        },
+        {
+          "technique": "vocabulary-source-selection",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/lib.rs:103 This consumer formats an existing API vocabulary rather than selecting instrumentation attribute names."
+        },
+        {
+          "technique": "waterfall-rendering",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/traces.rs:174 The trace view uses bullets and numeric offsets/durations instead of bars on a shared time axis, so identifying the long pole requires reading values."
+        }
+      ]
     }
   }
 }

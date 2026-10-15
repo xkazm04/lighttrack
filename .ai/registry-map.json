@@ -2040,7 +2040,11 @@
           "revision": 6,
           "changedAt": "2026-09-17",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/event.rs:55 The shared outcome vocabulary cannot distinguish running, cancelled, and interrupted spans.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:2834875c395bfaad",
+          "evaluatedRevision": 6
         },
         {
           "subject": "multi-provider-gateway-plane",
@@ -4481,7 +4485,11 @@
           "revision": 6,
           "changedAt": "2026-09-17",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/events.rs:130 Payload rendering truncates content without reporting shown-versus-total counts or providing access to the omitted remainder.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:2834875c395bfaad",
+          "evaluatedRevision": 6
         }
       ],
       "governance": "governed"
@@ -5465,7 +5473,11 @@
           "revision": 6,
           "changedAt": "2026-09-17",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:76 Missing token measurements become zero, making unknown usage indistinguishable from measured zero.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:2834875c395bfaad",
+          "evaluatedRevision": 6
         },
         {
           "subject": "error-handling",
