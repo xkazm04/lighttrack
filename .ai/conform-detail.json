@@ -3375,6 +3375,170 @@
           "evidence": "crates/store/src/sqlite/jobs.rs:61 Cancellation updates are executed in a single atomic SQL statement preventing intermediate unrestorable states."
         }
       ]
+    },
+    "ae7d2e99-8b0f-49f5-83c9-138d65df5241/llm-call-telemetry-model": {
+      "context": "event-ingest",
+      "subject": "llm-call-telemetry-model",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T00:26:52.422Z",
+      "worker": "43f28e77-e0a5-449b-b8d4-8bc8246316f8",
+      "techniques": [
+        {
+          "technique": "dual-clock-event-time",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/events.rs:38 Shared preparation stamps server receipt time separately from the retained client event time."
+        },
+        {
+          "technique": "ingest-skew-rejection",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/events_batch.rs:183 Asymmetric bounds and per-item codes exist, but validation failures only become error responses; skew refusals never enter the rejection ledger, whose recording path handles admission refusals."
+        },
+        {
+          "technique": "metadata-attribution-keys",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/redact.rs:270 The redaction helper called by prepare_event converts scalar or array metadata into an object to add a server stamp, violating the requirement to preserve non-object metadata unchanged."
+        },
+        {
+          "technique": "nullable-cost-never-zero",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/events.rs:135 This assignment only runs when cost resolves; an unpriced request carrying metadata.cost_source retains that claim instead of having no provenance."
+        },
+        {
+          "technique": "server-owned-fields",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/events.rs:131 Project, receipt time and credential identity are stamped correctly, but the early return leaves client-supplied cost_source untouched on unpriced events."
+        },
+        {
+          "technique": "token-usage-quadruple",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/otlp/semconv.rs:203 Accepted keys include the explicitly documented exclusive cache_read_input_tokens counter, but input is copied without normalization; input=100 and cache-read=50 passes the subset check while understating the inclusive input total."
+        }
+      ]
+    },
+    "9aa1714b-d868-4684-8328-325d5d249aed/llm-call-telemetry-model": {
+      "context": "pg-event-telemetry",
+      "subject": "llm-call-telemetry-model",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T00:26:52.422Z",
+      "worker": "43f28e77-e0a5-449b-b8d4-8bc8246316f8",
+      "techniques": [
+        {
+          "technique": "dual-clock-event-time",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/src/events/usage.rs:86 usage_by_scope filters on ts despite serving the rolling pre-breach accounting view."
+        },
+        {
+          "technique": "ingest-skew-rejection",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/events/write.rs:35 This persistence stage consumes a prepared event; client timestamp admission and skew configuration belong to the receiving API."
+        },
+        {
+          "technique": "metadata-attribution-keys",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/src/events/list.rs:54 The extended predicates explicitly include metadata, so generic key and key=value event queries are unavailable on this backend; the refusal is honest but the technique is not fully realized."
+        },
+        {
+          "technique": "nullable-cost-never-zero",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/src/traces.rs:65 The trace-summary projection sums nullable costs as zero without selecting or returning an unpriced-span count."
+        },
+        {
+          "technique": "server-owned-fields",
+          "verdict": "not-applicable",
+          "evidence": "crates/store-pg/src/events/write.rs:81 The store preserves the receipt time supplied by the prepared internal record rather than establishing ownership at an HTTP boundary."
+        },
+        {
+          "technique": "token-usage-quadruple",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/src/events/write.rs:54 The complete INSERT and row mapper persist only the original four token classes, with no distinct cache-write counter or lifetime tier required by the standard's extension."
+        }
+      ]
+    },
+    "22a431dc-2c4e-441c-9ecb-ee84020685be/llm-call-telemetry-model": {
+      "context": "cost-and-revenue-governance",
+      "subject": "llm-call-telemetry-model",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T00:26:52.422Z",
+      "worker": "43f28e77-e0a5-449b-b8d4-8bc8246316f8",
+      "techniques": [
+        {
+          "technique": "dual-clock-event-time",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/forecast.rs:353 Forecast margin and guardrail inputs use cost_by_dimension, whose inspected adapter retains the default client-time window, while the daily forecast series selects receipt time."
+        },
+        {
+          "technique": "ingest-skew-rejection",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/forecast.rs:336 These governance calculations read existing usage aggregates rather than admit client-reported call timestamps."
+        },
+        {
+          "technique": "metadata-attribution-keys",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/forecast.rs:249 Customer/product dimension results retain an explicit unattributed bucket instead of inventing a billing identity."
+        },
+        {
+          "technique": "nullable-cost-never-zero",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/forecast.rs:167 DailyUsage carries no unpriced count, and SpendProjection neither discloses missing prices nor refuses projections because of them; limit-status disclosures do not cover this forecast path."
+        },
+        {
+          "technique": "server-owned-fields",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/prices_fill.rs:157 This cost mutation is an explicit price-book fill of existing records, not acceptance of client-supplied event ownership fields."
+        },
+        {
+          "technique": "token-usage-quadruple",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/forecast.rs:179 The forecast consumes an aggregate token metric rather than defining or normalizing per-call token classes."
+        }
+      ]
+    },
+    "f9429abc-1dbe-4992-bb3a-e3626b963cb1/llm-call-telemetry-model": {
+      "context": "core-observability-types",
+      "subject": "llm-call-telemetry-model",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T00:26:52.422Z",
+      "worker": "43f28e77-e0a5-449b-b8d4-8bc8246316f8",
+      "techniques": [
+        {
+          "technique": "dual-clock-event-time",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/event.rs:211 LlmEvent models receipt time separately from ts and documents their accounting/history roles and the historical backfill sentinel."
+        },
+        {
+          "technique": "ingest-skew-rejection",
+          "verdict": "not-applicable",
+          "evidence": "crates/core/src/event.rs:198 The shared record represents client event time; configurable admission bounds and HTTP rejection behavior belong to the ingest context."
+        },
+        {
+          "technique": "metadata-attribution-keys",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/event.rs:267 Named readers expose customer, product, credential, pricing-lane and cost-source conventions over the open metadata value, with absent linkage represented as None."
+        },
+        {
+          "technique": "nullable-cost-never-zero",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/trace.rs:237 The complete TraceSummary type has no unpriced counter, so its list-view cost cannot disclose the missing-price population as TraceTotals does."
+        },
+        {
+          "technique": "server-owned-fields",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/event.rs:210 The schema prevents clients from setting receipt time through deserialization while retaining it on serialized reads."
+        },
+        {
+          "technique": "token-usage-quadruple",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/pricing.rs:333 TokenUsage has only four counters, so supported cache-write tokens folded into input receive the ordinary input rate and cannot retain their distinct count or lifetime price tier."
+        }
+      ]
     }
   }
 }

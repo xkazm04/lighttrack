@@ -2048,7 +2048,11 @@
           "revision": 7,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/trace.rs:237 TraceSummary exposes a cost aggregate without an unpriced count, although the separate trace-detail totals disclose that gap.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:9f199f8ff9e7a925",
+          "evaluatedRevision": 7
         },
         {
           "subject": "structured-output",
@@ -2161,7 +2165,11 @@
           "revision": 7,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/forecast.rs:167 Forecasts fit priced-cost sums without disclosing unpriced calls, allowing incomplete spend to produce apparently complete projections and alerts.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:9f199f8ff9e7a925",
+          "evaluatedRevision": 7
         },
         {
           "subject": "breach-alerting-and-attribution",
@@ -3350,7 +3358,11 @@
           "revision": 7,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/events.rs:131 Unpriced events bypass cost-source stamping without stripping a client-supplied provenance claim.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:9f199f8ff9e7a925",
+          "evaluatedRevision": 7
         },
         {
           "subject": "agent-memory",
@@ -4647,7 +4659,11 @@
           "revision": 7,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-pg/src/events/usage.rs:86 Grouped rolling usage uses client event time while project totals and admission use receipt time, so the breakdown can describe different spend from the enforced window.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:9f199f8ff9e7a925",
+          "evaluatedRevision": 7
         },
         {
           "subject": "trace-rollup-and-attribution",
