@@ -5920,7 +5920,11 @@
           "revision": 7,
           "changedAt": "2026-09-01",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/score_traces.rs:322 Sample membership is a residue of the tunable sample_every rate, so changing N re-draws the admitted set instead of only adding traces, and the posted verdict does not record the rate that admitted it.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:65f1d14beed83924",
+          "evaluatedRevision": 7
         },
         {
           "subject": "judge-contract-design",
