@@ -4190,6 +4190,130 @@
         }
       ],
       "registryProposal": "schema-drift-detection should say that applying two full scripts to two empty databases is not the fresh-versus-upgraded convergence diff, even when one script is a frozen older file."
+    },
+    "569c353a-2570-4ea6-9da3-f0fed1bfa1a7/operator-surfaces-for-llm-spend": {
+      "context": "mcp-server",
+      "subject": "operator-surfaces-for-llm-spend",
+      "bundle": "llm-observability",
+      "state": "conformant",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T04:05:55.249Z",
+      "worker": "14a09f51-1c2c-4970-a994-6f0cf0c1eff3",
+      "techniques": [
+        {
+          "technique": "agent-prompts-as-dashboards",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/prompts.rs:74 Seven journeys name read tools, require the rendered table verbatim on the spend reports, state the ≥80% limit band, and degrade a bare limit-check to list_projects."
+        },
+        {
+          "technique": "glyph-encoded-business-thresholds",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/prompts.rs:156 The margin journey triages by the renderer's glyph names rather than asking the model to re-derive the band."
+        },
+        {
+          "technique": "read-tools-default-writes-gated",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/tools.rs:111 Writes stay off unless that env flag is set, the refusal names the switch, and read tools carry readOnlyHint. Stderr only gets the RPC method, not a distinct write-attempt log."
+        },
+        {
+          "technique": "secret-surfaces-never-exposed-to-agents",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/write.rs:11 The pinned 70-tool contract has no key-mint, key-rotate, alert-channel, or device-enrol tool. Device enrolment stays absent even when writes are enabled."
+        },
+        {
+          "technique": "single-render-layer-many-consumers",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/tools.rs:128 A hit from lighttrack_render is returned as Markdown plus the raw body in structuredContent."
+        },
+        {
+          "technique": "sql-panel-sets-over-the-relational-store",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/main.rs:3 Searched crates/mcp for grafana, SELECT, and dashboard; this is a stdio API client, not a panel wall."
+        }
+      ]
+    },
+    "27581a68-b0d5-452e-8130-7283211996ae/operator-surfaces-for-llm-spend": {
+      "context": "observability-rendering",
+      "subject": "operator-surfaces-for-llm-spend",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T04:05:55.249Z",
+      "worker": "14a09f51-1c2c-4970-a994-6f0cf0c1eff3",
+      "techniques": [
+        {
+          "technique": "agent-prompts-as-dashboards",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/prompts.rs:1 This module renders stored prompt versions. It is not an agent journey catalog."
+        },
+        {
+          "technique": "glyph-encoded-business-thresholds",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/md.rs:4 margin.rs glyph() is the 🔴 / ⚠️<20% / 🟢 rule, with an em-dash for a missing ratio and a signed delta, but Table pads by chars().count(). forecast.rs also marks a losing row \"already ❌\" instead of glyph()."
+        },
+        {
+          "technique": "read-tools-default-writes-gated",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/lib.rs:6 Pure formatter. It registers no tools and holds no write switch."
+        },
+        {
+          "technique": "secret-surfaces-never-exposed-to-agents",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/lib.rs:1 Not an agent tool server. list_projects shows name, status, redaction, created, and id, and secret-tool placement is decided in mcp and cli."
+        },
+        {
+          "technique": "single-render-layer-many-consumers",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/lib.rs:3 One pure kind→Markdown dispatch, no I/O. Empty-window sentences, top-N truncation, currency notes, and the unpriced floor are rendered here."
+        },
+        {
+          "technique": "sql-panel-sets-over-the-relational-store",
+          "verdict": "not-applicable",
+          "evidence": "crates/render/src/md.rs:2 Searched crates/render for grafana, SELECT, and dashboard; nothing queries a store."
+        }
+      ],
+      "registryProposal": "The Rust application for this technique cites margin.rs glyph() as the worked example and does not mention table padding. The technique now requires display-width padding; md.rs still documents chars().count() and a one-column drift on wide glyphs, so the application and the decision rule disagree about this repo."
+    },
+    "3b5a951b-68d6-447c-b995-aca691db5036/operator-surfaces-for-llm-spend": {
+      "context": "cli-infrastructure",
+      "subject": "operator-surfaces-for-llm-spend",
+      "bundle": "llm-observability",
+      "state": "conformant",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T04:05:55.249Z",
+      "worker": "14a09f51-1c2c-4970-a994-6f0cf0c1eff3",
+      "techniques": [
+        {
+          "technique": "agent-prompts-as-dashboards",
+          "verdict": "not-applicable",
+          "evidence": "crates/cli/src/main.rs:26 lt prompts is the product prompt registry. These files contain no agent journey procedures."
+        },
+        {
+          "technique": "glyph-encoded-business-thresholds",
+          "verdict": "conformant",
+          "evidence": "crates/cli/src/limits.rs:118 Limit status is printed by the shared render kind. No glyph function is in these files. The 0.8 at limits.rs:279 is a warn_at value in a request-body test, not a second band."
+        },
+        {
+          "technique": "read-tools-default-writes-gated",
+          "verdict": "not-applicable",
+          "evidence": "crates/cli/src/main.rs:1 Human admin CLI. The technique says this surface does not get the agent write switch."
+        },
+        {
+          "technique": "secret-surfaces-never-exposed-to-agents",
+          "verdict": "conformant",
+          "evidence": "crates/cli/src/projects.rs:4 keys create and rotate print the secret once on this human CLI. alert_channels.rs keeps webhook signing-secret minting CLI-only for the same reason."
+        },
+        {
+          "technique": "single-render-layer-many-consumers",
+          "verdict": "conformant",
+          "evidence": "crates/cli/src/http.rs:36 A successful interactive session prints that Markdown; --json or a non-tty leaves the payload."
+        },
+        {
+          "technique": "sql-panel-sets-over-the-relational-store",
+          "verdict": "not-applicable",
+          "evidence": "crates/cli/src/main.rs:33 query here builds query strings. Searched the listed CLI files for grafana, SELECT, and dashboard; no panel set."
+        }
+      ]
     }
   }
 }

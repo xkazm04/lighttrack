@@ -1770,7 +1770,11 @@
           "revision": 2,
           "changedAt": "2026-08-30",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "conformant",
+          "evidence": "crates/cli/src/http.rs:36 Interactive lt output is the shared render crate's Markdown, and --json or a pipe keeps the raw JSON so this CLI does not keep a second copy of the spend tables.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:56f3abeffc1687c8",
+          "evaluatedRevision": 2
         },
         {
           "subject": "agent-memory",
@@ -4230,7 +4234,11 @@
           "revision": 2,
           "changedAt": "2026-08-30",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "conformant",
+          "evidence": "crates/mcp/src/prompts.rs:6 lt-mcp packages operator spend questions as read-only prompt procedures over the shared renderer, and it does not let a missing argument fail the journey.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:56f3abeffc1687c8",
+          "evaluatedRevision": 2
         },
         {
           "subject": "agent-runtime-assembly",
@@ -4428,7 +4436,11 @@
           "revision": 2,
           "changedAt": "2026-08-30",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/md.rs:4 Shared spend tables measure column width in Unicode scalars, so a wide status glyph is a column off in the raw text the CLI and the agent both show.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:56f3abeffc1687c8",
+          "evaluatedRevision": 2
         },
         {
           "subject": "voice-io",
