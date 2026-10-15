@@ -624,7 +624,11 @@
           "revision": 4,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/alerts/ledger.rs:248 Alert delivery is attempted once after inserting the admitted fire record, and failed delivery leaves the condition suppressed for the entire cooldown window without unspending the window or triggering retries.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:90e16e9a2b80434b",
+          "evaluatedRevision": 4
         },
         {
           "subject": "eval-harness",
@@ -3718,7 +3722,11 @@
           "revision": 4,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-firestore/src/alerts.rs:74 Firestore alert admission suppresses fires based on the detection timestamp on the dedup guard document without verifying confirmed delivery, causing failed delivery attempts to consume the cooldown window.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:90e16e9a2b80434b",
+          "evaluatedRevision": 4
         }
       ],
       "governance": "governed"
@@ -7551,7 +7559,11 @@
           "revision": 4,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/limits/rule.rs:297 Limit rule evaluation is purely level-triggered against instantaneous metrics without edge-triggering transitions, sustained-for durations, or hysteresis recovery bands.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:90e16e9a2b80434b",
+          "evaluatedRevision": 4
         },
         {
           "subject": "hitl-approval",

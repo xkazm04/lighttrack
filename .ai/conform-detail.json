@@ -3751,6 +3751,139 @@
           "evidence": "crates/api/src/events.rs:265 This door refuses the record and returns 429 with the admission retry hint. It publishes proximity so a client can decide before the next call. The inline gateway check is outside this context."
         }
       ]
+    },
+    "a89f25a3-bf61-4f19-a72a-357db8fcdefe/alerting": {
+      "context": "alerts-system",
+      "subject": "alerting",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T01:58:51.958Z",
+      "worker": "0a508801-5753-40ea-bc7b-3722fac9c618",
+      "techniques": [
+        {
+          "technique": "dedup-and-cooldown",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/ledger.rs:248 The cooldown gate stamps on detection rather than delivery, so a failed delivery leaves the window spent without retry."
+        },
+        {
+          "technique": "alert-lifecycle",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/read.rs:127 Resolution accepts arbitrary untyped JSON rather than the closed vocabulary of resolution kinds (auto-resolved, fixed, dismissed as noise, expired), and no retention reaper is defined."
+        },
+        {
+          "technique": "flap-control",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/ledger.rs:36 Alerts are level-triggered on current breach status filtered only by cooldown, lacking edge detection, sustain streaks, hysteresis, or recovery notifications."
+        },
+        {
+          "technique": "escalation-routing",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/routing.rs:116 Routing only filters channels by a static severity floor without an escalation ladder for unacknowledged alerts or quiet-hours deferred delivery."
+        },
+        {
+          "technique": "periodic-digest",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/flush.rs:78 Periodic rejection flushes push unconditionally down the real-time event channel rather than through a dedicated content-gated digest with at-most-once claims."
+        },
+        {
+          "technique": "absence-as-a-condition",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/mod.rs:155 The alerting subsystem evaluates only upon received events without treating missing signals as conditions or emitting an external delivery heartbeat."
+        },
+        {
+          "technique": "evaluation-loop",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/mod.rs:198 The alert subsystem lacks a dedicated, always-running evaluation loop over rules and signals, relying instead on ad-hoc invocations from request handlers."
+        },
+        {
+          "technique": "rule-authoring-validation",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/alerts/mod.rs:121 Alert parameters are populated from environment variables with static defaults, lacking an authoring door that validates metric domains, thresholds, or preview-before-save."
+        }
+      ]
+    },
+    "5b2cd610-77f3-4d26-aa7a-da3dd13618fe/alerting": {
+      "context": "usage-governance-limits",
+      "subject": "alerting",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T01:58:51.958Z",
+      "worker": "0a508801-5753-40ea-bc7b-3722fac9c618",
+      "techniques": [
+        {
+          "technique": "flap-control",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/limits/rule.rs:297 Breach status is computed instantaneously as a level-triggered comparison, lacking transition edge detection, sustain streaks, hysteresis recovery bands, or recovery notifications."
+        },
+        {
+          "technique": "alert-lifecycle",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/alert.rs:196 The core Alert model stores resolution as untyped JSON rather than the closed vocabulary of resolution kinds, and specifies no retention reaper."
+        },
+        {
+          "technique": "rule-authoring-validation",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/limits/threshold.rs:88 Fixed threshold validation enforces only positivity and finiteness, allowing bare numbers that lack derivation from measured instrument noise spread."
+        },
+        {
+          "technique": "escalation-routing",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/alert_channel.rs:84 The AlertChannel model only checks a static severity floor, lacking support for escalation ladders of unacknowledged alerts or quiet-hours delivery deferral."
+        },
+        {
+          "technique": "dedup-and-cooldown",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/alert.rs:230 The fully_delivered predicate requires all historical delivery attempts to succeed, failing to treat a fire with subsequent successful attempts as delivered, and core alert types lack reminder models."
+        },
+        {
+          "technique": "absence-as-a-condition",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/limits/status.rs:146 Unresolvable thresholds resolve to inert without age tracking or surfacing as broken alert conditions, and absence of metrics is not evaluated as a distinct monitored state."
+        },
+        {
+          "technique": "evaluation-loop",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/limits/rule.rs:75 Limit windows compute rolling lookback instants for point-in-time evaluation, but the core types define no autonomous evaluation loop with overlap guards or liveness tracking."
+        },
+        {
+          "technique": "periodic-digest",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/alert.rs:55 Periodic batches are defined only as real-time event kinds, lacking support for digest batch channels, adaptive content gating, or at-most-once reservation."
+        }
+      ]
+    },
+    "32c31d6e-f9fb-4806-855a-b6056d920f34/alerting": {
+      "context": "firestore-eval-collective",
+      "subject": "alerting",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T01:58:51.958Z",
+      "worker": "0a508801-5753-40ea-bc7b-3722fac9c618",
+      "techniques": [
+        {
+          "technique": "dedup-and-cooldown",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/src/alerts.rs:74 Cooldown admission checks only the fired_at timestamp of the guard document, suppressing subsequent fires even if previous deliveries failed."
+        },
+        {
+          "technique": "alert-lifecycle",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/src/alerts.rs:149 Resolution accepts arbitrary untyped JSON rather than enforcing the closed vocabulary of resolution kinds, and no retention reaper is defined."
+        },
+        {
+          "technique": "escalation-routing",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/src/alert_channels.rs:28 Channel schema only persists a static min_severity floor without representing an escalation ladder or quiet-hours deferred delivery settings."
+        },
+        {
+          "technique": "absence-as-a-condition",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/src/alerts.rs:172 The store only indexes and queries positive fired_at timestamps for emitted alerts, with no schema or query support for tracking signal absence or heartbeats."
+        }
+      ]
     }
   }
 }
