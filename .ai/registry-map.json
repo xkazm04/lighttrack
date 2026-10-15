@@ -2697,7 +2697,11 @@
           "revision": 15,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/pricing.rs:330 An unknown model returns no price instead of the conservative default required by the standard, leaving its cost excluded from monetary totals.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:7247db31eb8f3dce",
+          "evaluatedRevision": 15
         },
         {
           "subject": "eval-harness",
@@ -3150,7 +3154,11 @@
           "revision": 15,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/unpriced.rs:45 The unpriced renderer reports window-scoped counts without printing the response's since boundary, so readers cannot identify the period those counts describe.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:7247db31eb8f3dce",
+          "evaluatedRevision": 15
         }
       ],
       "governance": "governed"

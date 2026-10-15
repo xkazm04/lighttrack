@@ -4983,6 +4983,68 @@
         }
       ],
       "registryProposal": "The standard's definition of declared-deviation registers should provide guidance on how runtime capabilities matrices (such as Capabilities declarations) can fulfill or integrate with deviation registration."
+    },
+    "e2e94385-c146-47f1-8018-92afdf565ab7/cost-metering": {
+      "context": "economics-margin-pricing",
+      "subject": "cost-metering",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T23:57:15.887Z",
+      "worker": "7d8a74aa-cea8-4563-894a-3049374174d3",
+      "techniques": [
+        {
+          "technique": "price-tables",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/pricing.rs:330 A lookup miss propagates None; the counted unpriced ledger does not supply the required conservative default price."
+        },
+        {
+          "technique": "spend-attribution",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/margin.rs:100 The customer/product rollup retains untagged cost in an explicit unattributed bucket instead of dropping it."
+        },
+        {
+          "technique": "spend-observability",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/margin.rs:102 compute_margin sums known costs but discards each input bucket's unpriced_calls; its returned margin rows carry no qualification for the incomplete cost."
+        },
+        {
+          "technique": "unit-classes-are-open",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/pricing.rs:339 Pricing returns a definite scalar from input, output and cache-read rates without a residual-unit qualification; cache writes have no separate rate."
+        },
+        {
+          "technique": "whole-prompt-denominator",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/pricing.rs:333 Whole-prompt subtraction is validated, but cache-write tokens remain billed at ordinary input rates, falling short of rule 4's separate write-rate requirement."
+        }
+      ]
+    },
+    "9dc97639-bd28-43ef-bb53-96fb8ef10967/cost-metering": {
+      "context": "evaluation-rendering",
+      "subject": "cost-metering",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T23:57:15.887Z",
+      "worker": "7d8a74aa-cea8-4563-894a-3049374174d3",
+      "techniques": [
+        {
+          "technique": "spend-attribution",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/margin.rs:41 The API echoes below when totals cover a filtered at-risk cohort, but this renderer omits that predicate and presents them as an unqualified Total."
+        },
+        {
+          "technique": "spend-observability",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/unpriced.rs:46 The spend caveat refers to this window, but ledger() never renders its supplied since boundary."
+        },
+        {
+          "technique": "usage-ledgers",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/unpriced.rs:45 The consumer drops the ledger response's since boundary instead of rendering the window supplied with its counts."
+        }
+      ]
     }
   }
 }
