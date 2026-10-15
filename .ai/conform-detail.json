@@ -4065,6 +4065,42 @@
           "evidence": "crates/core/src/alert.rs:153 Severity::from_wire maps every unknown spelling to Info without a defaulted marker; alert row readers use this parser, and the test explicitly expects nonsense to become Info."
         }
       ]
+    },
+    "971b004d-7b8c-4a5e-8a71-3ab3436cf511/judge-contract-design": {
+      "context": "runner-scoring-engine",
+      "subject": "judge-contract-design",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T03:18:32.301Z",
+      "worker": "889b9c97-9ccc-4f61-818e-8e5915da5123",
+      "techniques": [
+        {
+          "technique": "bias-counterbalancing-instructions",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/pairwise.rs:274 Pairwise records preserve position-bias results but omit candidate lengths, and the runner computes no length-conditioned preference or length adjustment."
+        },
+        {
+          "technique": "gating-floors",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/score_traces.rs:173 The trace posting preserves the aggregate pass boolean but omits per-dimension floor hits, leaving a floor veto unexplained."
+        },
+        {
+          "technique": "mixed-rubric-honesty",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/judge_spec.rs:40 Trace scoring omits ScoreDetail, discarding dimension scores, weights, sample reasonings, agreement, and parse accounting."
+        },
+        {
+          "technique": "nonce-fenced-candidate-isolation",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/score_traces.rs:174 The trace request omits the detailed verdict containing injection_suspected, so the engine's boundary-forgery signal does not accompany the persisted score."
+        },
+        {
+          "technique": "weighted-anchored-dimensions",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/judge_spec.rs:55 Scoring commands accept criteria-only freeform contracts producing holistic scores without named, weighted, anchored dimensions."
+        }
+      ]
     }
   }
 }

@@ -5924,7 +5924,11 @@
           "revision": 2,
           "changedAt": "2026-08-28",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/judge_spec.rs:40 Trace scoring discards detailed judge provenance, so persisted trace verdicts lose floor explanations, agreement disclosures, and injection-suspected flags.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:bdab85912b46dc98",
+          "evaluatedRevision": 2
         },
         {
           "subject": "generator-uncertainty-scoring",
