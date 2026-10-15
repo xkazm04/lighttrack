@@ -1135,7 +1135,11 @@
           "revision": 14,
           "changedAt": "2026-09-17",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/state.rs:193 A policy read started before an update can finish after cache invalidation and republish the old policy without checking a generation.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:ccc991958e998a93",
+          "evaluatedRevision": 16
         },
         {
           "subject": "settings",
@@ -4896,7 +4900,11 @@
           "revision": 14,
           "changedAt": "2026-09-17",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-pg/src/jobs.rs:125 Job progress updates check neither the lease identity nor lifecycle status, allowing an old worker to overwrite progress after reclamation or completion.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:ccc991958e998a93",
+          "evaluatedRevision": 16
         },
         {
           "subject": "fleet-orchestration",
@@ -7414,7 +7422,11 @@
           "revision": 14,
           "changedAt": "2026-09-17",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/typescript/src/journal.ts:191 Two recovering processes can both read an orphan journal before either deletes it and independently emit duplicate telemetry.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:ccc991958e998a93",
+          "evaluatedRevision": 16
         },
         {
           "subject": "embedded-db",
