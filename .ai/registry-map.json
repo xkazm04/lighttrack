@@ -1983,7 +1983,11 @@
           "revision": 7,
           "changedAt": "2026-09-18",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "conformant",
+          "evidence": "crates/core/src/trace.rs:297 The core observability module derives traces purely on read from raw events as an I/O-free fold, enforcing unified shape rules, span caps, and unpriced span counts without materializing a traces table.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:441741a78f8712b4",
+          "evaluatedRevision": 7
         },
         {
           "subject": "agent-memory",
@@ -3423,7 +3427,11 @@
           "revision": 7,
           "changedAt": "2026-09-18",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/traces.rs:64 API trace listing exposes keyset pagination on (ended, trace_id) descending, which skips traces when subsequent spans arrive, and omits total matching count N.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:441741a78f8712b4",
+          "evaluatedRevision": 7
         },
         {
           "subject": "usage-limit-governance",
@@ -4727,7 +4735,11 @@
           "revision": 7,
           "changedAt": "2026-09-18",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-pg/src/traces.rs:144 Keyset pagination orders descending on ended (latest event time), which moves forward as late spans arrive and silently skips active traces.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:441741a78f8712b4",
+          "evaluatedRevision": 7
         },
         {
           "subject": "multi-provider-event-normalization",

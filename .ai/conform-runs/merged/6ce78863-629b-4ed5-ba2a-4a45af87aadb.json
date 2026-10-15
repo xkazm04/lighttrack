@@ -1,0 +1,182 @@
+{
+ "schema": "conform-run/1",
+ "worker": "6ce78863-629b-4ed5-ba2a-4a45af87aadb",
+ "subject": "trace-rollup-and-attribution",
+ "evaluatedAt": "2026-10-15T21:40:03.206869+00:00",
+ "provider": "agy",
+ "model": "gemini-3.8-flash-high",
+ "pairs": [
+  {
+   "context": "core-observability-types",
+   "subject": "trace-rollup-and-attribution",
+   "bundle": "llm-observability",
+   "state": "conformant",
+   "evidence": "crates/core/src/trace.rs:297 The core observability module derives traces purely on read from raw events as an I/O-free fold, enforcing unified shape rules, span caps, and unpriced span counts without materializing a traces table.",
+   "techniques": [
+    {
+     "technique": "derived-trace-rollup",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/trace.rs:302 Oldest-first sort drives deterministic parentage, model ordering, and tree assembly."
+    },
+    {
+     "technique": "single-shape-rule",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/trace.rs:41 Single shared shape computes duration from first start to last finish and status across all views."
+    },
+    {
+     "technique": "span-cap-truncation-signal",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/trace.rs:269 Exposes spans_total, spans_logged, and spans_truncated on Trace so clipped reads self-describe."
+    },
+    {
+     "technique": "unpriced-span-accounting",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/trace.rs:197 Carries unpriced span count alongside cost_usd in TraceTotals when models lack price entries."
+    },
+    {
+     "technique": "tenant-scoped-trace-ids",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/trace.rs:29 Normalizes 16- and 32-character hex trace/span identifiers to lowercase while preserving opaque IDs verbatim."
+    }
+   ]
+  },
+  {
+   "context": "pg-event-telemetry",
+   "subject": "trace-rollup-and-attribution",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/store-pg/src/traces.rs:144 Keyset pagination orders descending on ended (latest event time), which moves forward as late spans arrive and silently skips active traces.",
+   "techniques": [
+    {
+     "technique": "derived-trace-rollup",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/traces.rs:254 Queries raw events table ordered by ts ASC on read, maintaining first-seen model order in a single query."
+    },
+    {
+     "technique": "single-shape-rule",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/traces.rs:226 Computes list summary duration and status via TraceShape rather than re-deriving separate arithmetic."
+    },
+    {
+     "technique": "span-cap-truncation-signal",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/traces.rs:283 Fetches max_spans plus one, truncating to oldest spans and querying COUNT(*) for real total on clip."
+    },
+    {
+     "technique": "tenant-scoped-trace-ids",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/traces.rs:262 Filters by project_id in SQL query using idx_events_project_trace, isolating tenant trace IDs."
+    },
+    {
+     "technique": "unpriced-span-accounting",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/events/write.rs:71 Binds nullable cost_usd directly as NULL rather than coercing unpriced spans to 0.00 at insert."
+    },
+    {
+     "technique": "keyset-trace-pagination",
+     "verdict": "deviation",
+     "evidence": "crates/store-pg/src/traces.rs:130 Pages on composite cursor (ended, trace_id) descending instead of start time, skipping rows as ended mutates, and omits total count N."
+    }
+   ]
+  },
+  {
+   "context": "event-ingest",
+   "subject": "trace-rollup-and-attribution",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/traces.rs:64 API trace listing exposes keyset pagination on (ended, trace_id) descending, which skips traces when subsequent spans arrive, and omits total matching count N.",
+   "techniques": [
+    {
+     "technique": "derived-trace-rollup",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/traces.rs:175 Loads trace detail purely on read from underlying store events without materializing a traces table."
+    },
+    {
+     "technique": "single-shape-rule",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/traces.rs:181 Serves trace detail and summary list using shared TraceShape definition for duration and status."
+    },
+    {
+     "technique": "span-cap-truncation-signal",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/traces.rs:326 Enforces MAX_TRACE_SPANS limit during trace fetch, preserving head and reporting truncation."
+    },
+    {
+     "technique": "tenant-scoped-trace-ids",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/events.rs:104 Server-stamps authenticated API key ID and strips client-supplied attribution when unauthenticated."
+    },
+    {
+     "technique": "unpriced-span-accounting",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/events.rs:70 Leaves cost_usd as None for models missing from price book without coercing to zero."
+    },
+    {
+     "technique": "keyset-trace-pagination",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/traces.rs:64 Paging endpoint orders on latest activity (ended) descending rather than immutable start time, causing silent skips under concurrent arrivals, and omits total matching count N."
+    }
+   ],
+   "registryProposal": "LightTrack's trace listing was implemented around (ended, trace_id) keyset pagination before keyset-trace-pagination was revised to require start-time ordering to prevent silent skips under late span arrival."
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-15T21:40:03.206869+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "trace-rollup-and-attribution"
+   ],
+   "techniques": [
+    "derived-trace-rollup",
+    "single-shape-rule",
+    "span-cap-truncation-signal",
+    "tenant-scoped-trace-ids",
+    "unpriced-span-accounting"
+   ],
+   "deviations": 0,
+   "context": "core-observability-types",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-15T21:40:03.206869+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "trace-rollup-and-attribution"
+   ],
+   "techniques": [
+    "derived-trace-rollup",
+    "keyset-trace-pagination",
+    "single-shape-rule",
+    "span-cap-truncation-signal",
+    "tenant-scoped-trace-ids",
+    "unpriced-span-accounting"
+   ],
+   "deviations": 1,
+   "context": "pg-event-telemetry",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-15T21:40:03.206869+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "trace-rollup-and-attribution"
+   ],
+   "techniques": [
+    "derived-trace-rollup",
+    "keyset-trace-pagination",
+    "single-shape-rule",
+    "span-cap-truncation-signal",
+    "tenant-scoped-trace-ids",
+    "unpriced-span-accounting"
+   ],
+   "deviations": 1,
+   "context": "event-ingest",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  }
+ ]
+}
