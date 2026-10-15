@@ -4007,6 +4007,64 @@
           "evidence": "clients/typescript/src/index.ts:621 The shared refresh promise is cleared only after this unbounded request settles; request() supplies no timeout or abort signal, so a hung fetch can prevent every later refresh."
         }
       ]
+    },
+    "430d498e-2077-4dde-b0c6-2735cb9ddfc4/hitl-approval": {
+      "context": "evaluation-pipeline",
+      "subject": "hitl-approval",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T02:56:10.045Z",
+      "worker": "631a0713-5fe6-4777-a731-06e7f033cc67",
+      "techniques": [
+        {
+          "technique": "decision-records",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/labels.rs:73 Authentication scopes the write, but labeler is only checked for nonblank text and is persisted without binding it to the authenticated decider."
+        },
+        {
+          "technique": "fail-loud-classification-default",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/prompts.rs:470 An invalid stored target matrix becomes an empty matrix, classifying the benchmark as nonresolving and weakening the resolved-version check to an advisory instead of failing closed."
+        }
+      ]
+    },
+    "1c799276-3129-490e-b740-b5c16c49e59f/hitl-approval": {
+      "context": "claude-invocation-and-execution",
+      "subject": "hitl-approval",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T02:56:10.045Z",
+      "worker": "631a0713-5fe6-4777-a731-06e7f033cc67",
+      "techniques": [
+        {
+          "technique": "fail-closed-profile-for-headless",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/invocation/tools.rs:48 The allowed prefix list includes find, so find . -delete is positively classified as read-only and passes the ReadonlyScan posture check without examining its destructive arguments."
+        },
+        {
+          "technique": "fail-loud-classification-default",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/codex/audit.rs:62 Malformed audit lines are silently skipped; an unreadable tool-call record can therefore produce an empty executed set that verify_and_discard accepts, without an uncertainty marker."
+        }
+      ]
+    },
+    "5b2cd610-77f3-4d26-aa7a-da3dd13618fe/hitl-approval": {
+      "context": "usage-governance-limits",
+      "subject": "hitl-approval",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T02:56:10.045Z",
+      "worker": "631a0713-5fe6-4777-a731-06e7f033cc67",
+      "techniques": [
+        {
+          "technique": "fail-loud-classification-default",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/alert.rs:153 Severity::from_wire maps every unknown spelling to Info without a defaulted marker; alert row readers use this parser, and the test explicitly expects nonsense to become Info."
+        }
+      ]
     }
   }
 }

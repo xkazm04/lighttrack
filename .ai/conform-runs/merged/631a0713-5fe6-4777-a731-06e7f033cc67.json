@@ -1,0 +1,109 @@
+{
+ "schema": "conform-run/1",
+ "worker": "631a0713-5fe6-4777-a731-06e7f033cc67",
+ "subject": "hitl-approval",
+ "evaluatedAt": "2026-10-15T02:56:10.045555+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "evaluation-pipeline",
+   "subject": "hitl-approval",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/labels.rs:73 Human verdict attribution comes from caller-supplied text rather than the authenticated principal, so the ledger cannot establish who actually decided.",
+   "techniques": [
+    {
+     "technique": "decision-records",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/labels.rs:73 Authentication scopes the write, but labeler is only checked for nonblank text and is persisted without binding it to the authenticated decider."
+    },
+    {
+     "technique": "fail-loud-classification-default",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/prompts.rs:470 An invalid stored target matrix becomes an empty matrix, classifying the benchmark as nonresolving and weakening the resolved-version check to an advisory instead of failing closed."
+    }
+   ]
+  },
+  {
+   "context": "claude-invocation-and-execution",
+   "subject": "hitl-approval",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/engine/src/invocation/tools.rs:48 The headless read-only classifier accepts destructive specifications such as Bash(find . -delete) because it checks only a textual prefix.",
+   "techniques": [
+    {
+     "technique": "fail-closed-profile-for-headless",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/invocation/tools.rs:48 The allowed prefix list includes find, so find . -delete is positively classified as read-only and passes the ReadonlyScan posture check without examining its destructive arguments."
+    },
+    {
+     "technique": "fail-loud-classification-default",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/codex/audit.rs:62 Malformed audit lines are silently skipped; an unreadable tool-call record can therefore produce an empty executed set that verify_and_discard accepts, without an uncertainty marker."
+    }
+   ]
+  },
+  {
+   "context": "usage-governance-limits",
+   "subject": "hitl-approval",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/core/src/alert.rs:153 Unrecognized alert severities silently become the least severe class, reducing operator attention instead of preserving uncertainty at maximum severity.",
+   "techniques": [
+    {
+     "technique": "fail-loud-classification-default",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/alert.rs:153 Severity::from_wire maps every unknown spelling to Info without a defaulted marker; alert row readers use this parser, and the test explicitly expects nonsense to become Info."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-15T02:56:10.045555+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "hitl-approval"
+   ],
+   "techniques": [
+    "decision-records",
+    "fail-loud-classification-default"
+   ],
+   "deviations": 1,
+   "context": "evaluation-pipeline",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-15T02:56:10.045555+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "hitl-approval"
+   ],
+   "techniques": [
+    "fail-closed-profile-for-headless",
+    "fail-loud-classification-default"
+   ],
+   "deviations": 1,
+   "context": "claude-invocation-and-execution",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-15T02:56:10.045555+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "hitl-approval"
+   ],
+   "techniques": [
+    "fail-loud-classification-default"
+   ],
+   "deviations": 1,
+   "context": "usage-governance-limits",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}
