@@ -996,7 +996,11 @@
           "revision": 6,
           "changedAt": "2026-09-18",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/tests_tenancy.rs:364 The suite requires a key minted with no scopes field to receive ingest and read, which is the default-broad grant scope-design refuses.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:57d60a438fa36d05",
+          "evaluatedRevision": 6
         },
         {
           "subject": "quality-regression-gating",
@@ -1219,7 +1223,11 @@
           "revision": 6,
           "changedAt": "2026-09-18",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/guards.rs:42 Only an HTTP 401 increments an in-memory counter, so a scope denial is returned to the caller and is not stored as an authorization event with the operation, the missing grant, or a correlation handle.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:57d60a438fa36d05",
+          "evaluatedRevision": 6
         },
         {
           "subject": "quality-gates",

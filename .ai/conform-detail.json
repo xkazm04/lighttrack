@@ -4721,6 +4721,134 @@
           "evidence": "crates/render/src/traces.rs:174 The trace view uses bullets and numeric offsets/durations instead of bars on a shared time axis, so identifying the long pole requires reading values."
         }
       ]
+    },
+    "06329049-432d-4a4b-91c0-f1967d7c9e99/authorization": {
+      "context": "api-platform",
+      "subject": "authorization",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T22:56:15.469Z",
+      "worker": "7b3b9616-c6a9-4b55-be45-bfe1cce542ed",
+      "techniques": [
+        {
+          "technique": "privilege-tiers",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/guards.rs:119 Admin and dev pass; a project key is refused. Scopes stay a separate flat set of ingest, read, and manage."
+        },
+        {
+          "technique": "dispatch-chokepoint-gating",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/main.rs:873 build_router installs access_layer::enforce as a router-wide layer. secret_eq digests both sides and compares with subtle::ConstantTimeEq."
+        },
+        {
+          "technique": "scope-design",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/projects_keys.rs:26 An omitted scope list mints ingest and read. Unknown strings are refused at parse, and an empty list is refused."
+        },
+        {
+          "technique": "ceiling-before-consent",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/projects_keys.rs:54 Key mint is admin-only. A requested scope outside the vocabulary is a 400 at the mint; there is no public approval surface that renders the requester's list."
+        },
+        {
+          "technique": "declarative-requirements",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/guards.rs:144 The contract column is what the router layer reads, and this handler restates Ingest as its own literal. resolve_read_project restates Read the same way."
+        },
+        {
+          "technique": "authorization-audit",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/guards.rs:42 record_failure only counts 401s. ensure_scope's 403 is not traced. ApiError::into_response writes the body and no trail line. The throttle warn names a source and a count once the budget is spent."
+        },
+        {
+          "technique": "failure-direction",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/auth.rs:29 Unset and any typo share the permissive arm. Enforced mode still distinguishes missing API key from invalid API key, and a matching expired secret returns key_expired."
+        },
+        {
+          "technique": "one-accessor-per-fold-direction",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/health.rs:107 Verdict is Up, Down, or Unknown. is_up is true only for Up, and this negation folds Unknown into not-ready. render() still prints unknown as its own word."
+        },
+        {
+          "technique": "identity-bearing-keys",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/auth.rs:147 Admin and dev reads span every project, so the owner cannot be made unaddressable. Tenancy is a TenantScope argument."
+        },
+        {
+          "technique": "read-write-predicate-symmetry",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/auth.rs:146 scope() is the one project-key mapping. Admin project writes call ensure_can_admin before load_project, so a project key is forbidden whether or not the id exists."
+        },
+        {
+          "technique": "unregistered-is-stronger-than-refused",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/guards.rs:55 Auth mode is fixed at startup and build_router always registers the same routes. A missing token in dev becomes an admin-equivalent principal. check_boot will not start that posture unless the opt-out sentence is set, and warn_if_unenforced prints it."
+        },
+        {
+          "technique": "machine-credential-consumption",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/auth.rs:4 Lookup is by a stored prefix; the salt sits in the same string as the digest. A prefix miss returns before verify_key. Login responses differ for missing, invalid, and expired keys. The spoken id is api_keys.id, and list responses omit the hash."
+        }
+      ],
+      "registryProposal": "failure-direction does not say whether a boot gate that refuses to start a permissive parse (unless a separate opt-out sentence is set) cures a parser that maps both an unset mode and a typo'd mode to the same permissive value."
+    },
+    "2ed37e25-1a0a-44b7-85e7-70a1822f84aa/authorization": {
+      "context": "api-integration-tests",
+      "subject": "authorization",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T22:56:15.469Z",
+      "worker": "7b3b9616-c6a9-4b55-be45-bfe1cce542ed",
+      "techniques": [
+        {
+          "technique": "dispatch-chokepoint-gating",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_dev_mode.rs:170 The enforced-mode call with no bearer token is asserted 401, and the dev default project is not created."
+        },
+        {
+          "technique": "scope-design",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_tenancy.rs:364 The same test also requires an explicit [ingest] grant to stay ingest-only and a typo'd scope to be HTTP 400."
+        },
+        {
+          "technique": "ceiling-before-consent",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_tenancy.rs:326 The admin mint test posts scopes [reed] and expects 400. No test renders a requester-authored scope list on an approval surface."
+        },
+        {
+          "technique": "authorization-audit",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_tenancy.rs:182 The suite requires the HTTP body to name the missing scope. No test asserts a denial trail, a correlation handle, or a denial count on a health surface."
+        },
+        {
+          "technique": "failure-direction",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_tenancy.rs:220 A correct secret past its expiry must answer a distinct 401 code from a bad credential."
+        },
+        {
+          "technique": "identity-bearing-keys",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_scope.rs:178 The test requires an operator read to return both projects' jobs, so a cross-owner read is a supported case."
+        },
+        {
+          "technique": "read-write-predicate-symmetry",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_scope.rs:101 Foreign benchmark, dataset, and rubric ids return 404 with the not_found code, and a missing id returns the same status. This test does not issue the matching by-id write."
+        },
+        {
+          "technique": "unregistered-is-stronger-than-refused",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_auth_throttle.rs:197 The test sets AuthMode::Dev and expects HTTP 200 for garbage bearer tokens and for no token. The mutating routes stay registered."
+        },
+        {
+          "technique": "machine-credential-consumption",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_tenancy.rs:198 The suite requires the login response to name expiry. tests_ingest.rs asserts a key list omits key_hash."
+        }
+      ]
     }
   }
 }
