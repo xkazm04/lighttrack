@@ -4392,6 +4392,93 @@
         "at": "2026-10-15T04:30:09.577328+00:00",
         "reason": "reviewer (sonnet): The not-applicable rests on incidental anchors and wrong search terms: sample_every/settle_secs/TraceCoverage/fnv1a are runner-side selection terms, while this engine context contains the judge prompt builder that production trace scoring calls (prompts.rs:57 names it; prompts/grounding.rs uses FNV-"
       }
+    },
+    "3df8f303-0005-4d18-8f39-d97cfc5fd20c/telemetry-pii-redaction": {
+      "context": "pii-scrubbing",
+      "subject": "telemetry-pii-redaction",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T04:42:03.732Z",
+      "worker": "3c4f72ac-3b85-48b0-93f7-defbc5e2772b",
+      "techniques": [
+        {
+          "technique": "denylist-plus-pattern-pass",
+          "verdict": "deviation",
+          "evidence": "crates/anon/src/lib.rs:124 Operates exclusively as a regex pattern pass over flat strings without a key-matching pass for structured records, location reduction, or quoted spans."
+        },
+        {
+          "technique": "emit-site-inventory",
+          "verdict": "deviation",
+          "evidence": "crates/anon/src/lib.rs:1 No inventory enumerating transport payload fields and their dispositions (scrubbed, dropped, passed with reason) exists beside the scrubber."
+        },
+        {
+          "technique": "exclusion-bounds-reads-not-output",
+          "verdict": "not-applicable",
+          "evidence": "crates/anon/src/lib.rs:6 Free-text scrubbing is deferred to an LLM pass rather than evaluating generative output against read exclusions at publish boundaries."
+        },
+        {
+          "technique": "hook-coverage-gaps",
+          "verdict": "deviation",
+          "evidence": "crates/anon/src/lib.rs:60 Exports PII rules for SDK consumption without providing an outbound transport hook, capture wrapper, or documented coverage gaps."
+        },
+        {
+          "technique": "redact-at-the-cap",
+          "verdict": "deviation",
+          "evidence": "crates/anon/src/lib.rs:127 Lacks recursion, breadth, and payload size caps that drop untraversed content, and has no cycle or crash fallback guard."
+        },
+        {
+          "technique": "redaction-invariants-as-tests",
+          "verdict": "deviation",
+          "evidence": "crates/anon/src/tests.rs:280 Asserts in-memory regex match absence on returned strings instead of whole-string absence of distinct planted secrets in serialized transport payloads across an inventory."
+        }
+      ]
+    },
+    "f9f7fd73-7c48-4c30-ba1b-38f0d796c0cf/telemetry-pii-redaction": {
+      "context": "python-sdk",
+      "subject": "telemetry-pii-redaction",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-15",
+      "evaluatedTs": "2026-10-15T04:42:03.732Z",
+      "worker": "3c4f72ac-3b85-48b0-93f7-defbc5e2772b",
+      "techniques": [
+        {
+          "technique": "correlation-preserving-redaction",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:331 Telemetry correlation handles (trace and span IDs) and project attributes are attached verbatim without keyed pseudonymisation."
+        },
+        {
+          "technique": "denylist-plus-pattern-pass",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:186 Pattern checking is confined to optional output guardrails on LLM completions rather than executing a two-pass key/value scrubber over outbound telemetry records."
+        },
+        {
+          "technique": "emit-site-inventory",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:308 Telemetry events are assembled ad-hoc across optional keyword arguments without an enumerated inventory of transport fields and their dispositions."
+        },
+        {
+          "technique": "exclusion-bounds-reads-not-output",
+          "verdict": "not-applicable",
+          "evidence": "clients/python/lighttrack/client.py:323 The client forwards copied LLM prompts, completions, and metadata rather than generative composed reports."
+        },
+        {
+          "technique": "hook-coverage-gaps",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/instrument.py:186 Instrumentation wraps provider errors by stringifying raw exceptions and transmitting them without a scrubbing hook or documented coverage gaps."
+        },
+        {
+          "technique": "redact-at-the-cap",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:634 Emits outbound telemetry directly via json.dumps without recursion, breadth, or size caps that drop untraversed subtrees, and without cycle guards."
+        },
+        {
+          "technique": "redaction-invariants-as-tests",
+          "verdict": "deviation",
+          "evidence": "clients/python/tests/test_contract.py:97 Contract tests pin the PII table against server fixtures and guard evaluations, but do not assert the absence of planted secrets in serialized telemetry payloads."
+        }
+      ]
     }
   }
 }

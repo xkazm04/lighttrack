@@ -1,0 +1,141 @@
+{
+ "schema": "conform-run/1",
+ "worker": "3c4f72ac-3b85-48b0-93f7-defbc5e2772b",
+ "subject": "telemetry-pii-redaction",
+ "evaluatedAt": "2026-10-15T04:42:03.732713+00:00",
+ "provider": "agy",
+ "model": "gemini-3.8-flash-high",
+ "pairs": [
+  {
+   "context": "pii-scrubbing",
+   "subject": "telemetry-pii-redaction",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/anon/src/lib.rs:124 The PII scrubber operates only as a regex string substitution pass without key-based drops, correlation-preserving pseudonyms, caps, or serialized transport payload absence assertions.",
+   "techniques": [
+    {
+     "technique": "denylist-plus-pattern-pass",
+     "verdict": "deviation",
+     "evidence": "crates/anon/src/lib.rs:124 Operates exclusively as a regex pattern pass over flat strings without a key-matching pass for structured records, location reduction, or quoted spans."
+    },
+    {
+     "technique": "emit-site-inventory",
+     "verdict": "deviation",
+     "evidence": "crates/anon/src/lib.rs:1 No inventory enumerating transport payload fields and their dispositions (scrubbed, dropped, passed with reason) exists beside the scrubber."
+    },
+    {
+     "technique": "exclusion-bounds-reads-not-output",
+     "verdict": "not-applicable",
+     "evidence": "crates/anon/src/lib.rs:6 Free-text scrubbing is deferred to an LLM pass rather than evaluating generative output against read exclusions at publish boundaries."
+    },
+    {
+     "technique": "hook-coverage-gaps",
+     "verdict": "deviation",
+     "evidence": "crates/anon/src/lib.rs:60 Exports PII rules for SDK consumption without providing an outbound transport hook, capture wrapper, or documented coverage gaps."
+    },
+    {
+     "technique": "redact-at-the-cap",
+     "verdict": "deviation",
+     "evidence": "crates/anon/src/lib.rs:127 Lacks recursion, breadth, and payload size caps that drop untraversed content, and has no cycle or crash fallback guard."
+    },
+    {
+     "technique": "redaction-invariants-as-tests",
+     "verdict": "deviation",
+     "evidence": "crates/anon/src/tests.rs:280 Asserts in-memory regex match absence on returned strings instead of whole-string absence of distinct planted secrets in serialized transport payloads across an inventory."
+    }
+   ]
+  },
+  {
+   "context": "python-sdk",
+   "subject": "telemetry-pii-redaction",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "clients/python/lighttrack/client.py:634 The Python SDK serializes and transmits telemetry payloads over HTTP without redaction passes, field inventories, caps, or correlation-preserving pseudonyms.",
+   "techniques": [
+    {
+     "technique": "correlation-preserving-redaction",
+     "verdict": "deviation",
+     "evidence": "clients/python/lighttrack/client.py:331 Telemetry correlation handles (trace and span IDs) and project attributes are attached verbatim without keyed pseudonymisation."
+    },
+    {
+     "technique": "denylist-plus-pattern-pass",
+     "verdict": "deviation",
+     "evidence": "clients/python/lighttrack/client.py:186 Pattern checking is confined to optional output guardrails on LLM completions rather than executing a two-pass key/value scrubber over outbound telemetry records."
+    },
+    {
+     "technique": "emit-site-inventory",
+     "verdict": "deviation",
+     "evidence": "clients/python/lighttrack/client.py:308 Telemetry events are assembled ad-hoc across optional keyword arguments without an enumerated inventory of transport fields and their dispositions."
+    },
+    {
+     "technique": "exclusion-bounds-reads-not-output",
+     "verdict": "not-applicable",
+     "evidence": "clients/python/lighttrack/client.py:323 The client forwards copied LLM prompts, completions, and metadata rather than generative composed reports."
+    },
+    {
+     "technique": "hook-coverage-gaps",
+     "verdict": "deviation",
+     "evidence": "clients/python/lighttrack/instrument.py:186 Instrumentation wraps provider errors by stringifying raw exceptions and transmitting them without a scrubbing hook or documented coverage gaps."
+    },
+    {
+     "technique": "redact-at-the-cap",
+     "verdict": "deviation",
+     "evidence": "clients/python/lighttrack/client.py:634 Emits outbound telemetry directly via json.dumps without recursion, breadth, or size caps that drop untraversed subtrees, and without cycle guards."
+    },
+    {
+     "technique": "redaction-invariants-as-tests",
+     "verdict": "deviation",
+     "evidence": "clients/python/tests/test_contract.py:97 Contract tests pin the PII table against server fixtures and guard evaluations, but do not assert the absence of planted secrets in serialized telemetry payloads."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "telemetry-pii-redaction",
+   "context": "pg-event-telemetry",
+   "reason": "Precondition does not hold: telemetry-pii-redaction governs outbound telemetry about to leave team custody to an unowned third-party sink ('if the record is going somewhere you can delete from, that is the neighbour; if it is going somewhere you can only ask, it is here'). pg-event-telemetry is an internal Postgres persistence and reporting store owned and operated by the team, falling squarely under the neighbour subject observability-telemetry. Per instructions, not-applicable is not accepted from this seat, so this context is declined."
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-15T04:42:03.732713+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "telemetry-pii-redaction"
+   ],
+   "techniques": [
+    "denylist-plus-pattern-pass",
+    "emit-site-inventory",
+    "exclusion-bounds-reads-not-output",
+    "hook-coverage-gaps",
+    "redact-at-the-cap",
+    "redaction-invariants-as-tests"
+   ],
+   "deviations": 1,
+   "context": "pii-scrubbing",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-15T04:42:03.732713+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "telemetry-pii-redaction"
+   ],
+   "techniques": [
+    "correlation-preserving-redaction",
+    "denylist-plus-pattern-pass",
+    "emit-site-inventory",
+    "exclusion-bounds-reads-not-output",
+    "hook-coverage-gaps",
+    "redact-at-the-cap",
+    "redaction-invariants-as-tests"
+   ],
+   "deviations": 1,
+   "context": "python-sdk",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  }
+ ]
+}

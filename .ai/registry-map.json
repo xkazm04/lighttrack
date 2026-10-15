@@ -5025,7 +5025,11 @@
           "revision": 1,
           "changedAt": "2026-09-03",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/anon/src/lib.rs:124 The PII scrubber operates only as a regex string substitution pass without key-based drops, correlation-preserving pseudonyms, caps, or serialized transport payload absence assertions.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:291ed63388cf9602",
+          "evaluatedRevision": 1
         },
         {
           "subject": "test-harness",
@@ -5481,7 +5485,11 @@
           "revision": 1,
           "changedAt": "2026-09-03",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:634 The Python SDK serializes and transmits telemetry payloads over HTTP without redaction passes, field inventories, caps, or correlation-preserving pseudonyms.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:291ed63388cf9602",
+          "evaluatedRevision": 1
         },
         {
           "subject": "prompt-assembly",
