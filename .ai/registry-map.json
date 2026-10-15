@@ -7168,7 +7168,11 @@
           "revision": 10,
           "changedAt": "2026-09-05",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/tests/schema_equivalence.rs:4 The equivalence check applies a full script to two empty databases, so a fresh install can match the frozen script while a file that actually upgraded still diverges.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:b7d5afcb859dfff9",
+          "evaluatedRevision": 10
         },
         {
           "subject": "mcp-tools",
@@ -7222,7 +7226,11 @@
           "revision": 10,
           "changedAt": "2026-09-05",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/schema/migrations.rs:11 The plan's own contract treats a missing table as a successful add, so a widening that runs before its table exists is indistinguishable from a column that was added.",
+          "evaluatedAt": "2026-10-15",
+          "evaluatedAgainst": "sha256-b2:b7d5afcb859dfff9",
+          "evaluatedRevision": 10
         },
         {
           "subject": "data-access",
