@@ -5689,6 +5689,78 @@
         }
       ],
       "registryProposal": "Clarify in reading-is-not-running that LLM CLI execution runners declaring read-only posture over an untrusted workspace must explicitly enforce isolation flags (e.g. --bare, --ignore-rules) to prevent ambient workspace hooks and skills from executing."
+    },
+    "2ed37e25-1a0a-44b7-85e7-70a1822f84aa/test-input-generation": {
+      "context": "api-integration-tests",
+      "subject": "test-input-generation",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-10-16",
+      "evaluatedTs": "2026-10-16T21:33:14.791Z",
+      "techniques": [
+        {
+          "technique": "exhaustive-when-bounded",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_persistence_class.rs:190 The test iterates over all variants of the bounded Redaction enum to assert invariants across the entire configuration space without sampling, though no bound calculation is recorded."
+        },
+        {
+          "technique": "field-captured-operation-traces",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_traces.rs:1 The trace tests in the suite exercise the HTTP ingestion endpoint for OpenTelemetry traces rather than replaying field-captured user operation traces through the generator vocabulary."
+        },
+        {
+          "technique": "generator-bounds-the-space",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_ingest.rs:147 The integration test suite uses hand-crafted JSON payloads rather than randomized generators, so generator reachability constraints and bounds do not apply."
+        },
+        {
+          "technique": "inside-out-invariants",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_ingest.rs:35 Setup exports the raw SqliteStore handle alongside AppState so integration tests inspect tables directly from the outside, bypassing inside-out invariant checking entry points."
+        },
+        {
+          "technique": "liveness-needs-a-quiet-period",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_health.rs:1 The suite runs deterministic single-shot requests without continuous fault injection or chaos phases requiring a quiet period."
+        },
+        {
+          "technique": "model-based-oracle",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/tests_ingest.rs:636 The test checks only a single hard-coded error code rather than an oracle predicting the set of violated rules for accept-or-reject decisions."
+        },
+        {
+          "technique": "negative-space-generation",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/tests_ingest.rs:628 Invalid events are constructed by perturbing a valid event across the timestamp tolerance boundary, asserting the specific rejection code while verifying persistence was untouched."
+        },
+        {
+          "technique": "proof-cost-follows-the-circuit",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_capabilities.rs:1 The repository does not employ symbolic execution or SMT solver-backed proof engines in its toolchain."
+        },
+        {
+          "technique": "seed-is-not-a-reproduction",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_dev_mode.rs:1 Tests are deterministic and hand-written without pseudorandom seeds, so seed-versus-derived-input persistence does not apply."
+        },
+        {
+          "technique": "stage-ordered-fuzz-targets",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_ingest.rs:4 The multi-stage ingress pipeline is tested only end-to-end via router oneshot requests without stage-ordered fuzz targets draining shallow stages first."
+        },
+        {
+          "technique": "swarm-feature-sampling",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/tests_auth_throttle.rs:1 The suite does not generate randomized operation sequences, so feature-probability sampling and feature-omission distributions do not apply."
+        }
+      ],
+      "registryProposal": "The test-input-generation standard assumes test suites are either property/fuzz generators or hand-written unit tests; when applied to integration test suites for stateful systems, inside-out invariants and negative-space generation apply directly to integration harnesses, whereas randomized techniques (generator bounds, swarm feature sampling, seed reproduction) require explicit preconditions distinguishing property-based harnesses from API integration suites.",
+      "withdrawn": {
+        "worker": "1778f204-1355-4dac-be9c-3cc9d731f0c2",
+        "state": "deviation",
+        "at": "2026-10-16T21:33:29.030244+00:00",
+        "reason": "reviewer (sonnet): tests_ingest.rs:35 only shows setup() returning the SqliteStore handle next to AppState so a test can read persisted rows after a request, and requests still go through the real axum router (`ingest` in tests_ingest.rs). Nothing in it shows invariant-checking entry points being bypassed. The support"
+      }
     }
   }
 }
