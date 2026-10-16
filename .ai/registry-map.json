@@ -2591,7 +2591,11 @@
           "revision": 18,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "conformant",
+          "evidence": "crates/agent/src/main.rs:7 The binary entry point only parses arguments, loads config, and starts the loop, and each decision lives in a sibling module.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:7c8008f2207b1946",
+          "evaluatedRevision": 18
         },
         {
           "subject": "agent-browser-control",
@@ -7571,7 +7575,11 @@
           "revision": 18,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/typescript/src/instrument.ts:27 Trace context is one process-global cell restored around sequential awaits, and concurrent callers are told to pass their own trace id, so the carrier concedes the parallel lane.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:7c8008f2207b1946",
+          "evaluatedRevision": 18
         },
         {
           "subject": "prompt-assembly",

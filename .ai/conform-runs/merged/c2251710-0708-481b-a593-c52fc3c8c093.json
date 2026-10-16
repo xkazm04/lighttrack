@@ -1,0 +1,239 @@
+{
+ "schema": "conform-run/1",
+ "worker": "c2251710-0708-481b-a593-c52fc3c8c093",
+ "subject": "module-design",
+ "evaluatedAt": "2026-10-16T01:58:34.580953+00:00",
+ "provider": "grok",
+ "model": "grok-4.7",
+ "pairs": [
+  {
+   "context": "device-relay-agent",
+   "subject": "module-design",
+   "bundle": "software-engineering",
+   "state": "conformant",
+   "evidence": "crates/agent/src/main.rs:7 The binary entry point only parses arguments, loads config, and starts the loop, and each decision lives in a sibling module.",
+   "techniques": [
+    {
+     "technique": "module-depth",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/actions.rs:111 The cloud names an action type; workspace path resolution stays on the device, so callers do not learn the path rule."
+    },
+    {
+     "technique": "seams-and-adapters",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/exec.rs:5 Produce and deliver are split so the lease check in the runner is the only enabling point before the irreversible connector call."
+    },
+    {
+     "technique": "borrowed-surface",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/connect.rs:38 Delivery matches an owned enum variant by name. A search of crates/agent for Deref and macro_rules found no implicit forwarding."
+    },
+    {
+     "technique": "io-free-core",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/actions.rs:186 Prompt rendering is a function of the template and the task value; the tests pass constructed values and build no I/O doubles."
+    },
+    {
+     "technique": "concurrency-at-the-edge",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/run.rs:2 Task runs stay serial because that is the rule; the heartbeat thread lives in the runner beside the blocking CLI call, and exec itself does not spawn."
+    },
+    {
+     "technique": "locality-and-leverage",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/inventory.rs:9 What the device can run changes with the action folders, so the advertised set is derived from those folders instead of a second list in config."
+    },
+    {
+     "technique": "marked-unverifiable-region",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/verdict.rs:9 Ownership is classified from the HTTP status and the typed body in one function, after a substring match on a formatted error had been the hatch."
+    },
+    {
+     "technique": "mirror-type-at-the-edge",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/actions.rs:266 Tests build RelayTask from JSON, so the input the logic reads already has a constructor and needs no host mirror."
+    },
+    {
+     "technique": "state-carrier-decides-the-lane",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/run.rs:113 The renewal count is an Atomic shared by the heartbeat and the progress publisher, so the side thread does not write a copy that the join drops."
+    },
+    {
+     "technique": "host-primitive-facade",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/Cargo.toml:18 One blocking HTTP client. A search of crates/agent for wasm and cfg(target) found no second execution host."
+    },
+    {
+     "technique": "structural-improvement-loop",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/exec.rs:7 The file records one finished split. A search of crates/agent for a cadence, a review-by date, or an emitted structural spec found none."
+    },
+    {
+     "technique": "structure-is-not-delegable",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/main.rs:3 This binary leases and runs relay tasks. Nothing in the crate selects structural candidates or grants standing approval over a structural pass."
+    },
+    {
+     "technique": "scoreable-designs-are-built-not-argued",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/run/tests.rs:8 The test pins one settlement decision. A search of crates/agent for benchmark and criterion found no harness over substitutable implementations."
+    },
+    {
+     "technique": "change-class-is-the-workload",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/cloud.rs:72 The workload in this crate is leasing tasks. No change-class replay or arm comparison is present."
+    }
+   ],
+   "registryProposal": "The four process techniques (structural-improvement-loop, structure-is-not-delegable, scoreable-designs-are-built-not-argued, change-class-is-the-workload) have no residue in a runtime crate; grading their absence as a deviation makes every service fail the subject."
+  },
+  {
+   "context": "typescript-sdk",
+   "subject": "module-design",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "clients/typescript/src/instrument.ts:27 Trace context is one process-global cell restored around sequential awaits, and concurrent callers are told to pass their own trace id, so the carrier concedes the parallel lane.",
+   "techniques": [
+    {
+     "technique": "state-carrier-decides-the-lane",
+     "verdict": "deviation",
+     "evidence": "clients/typescript/src/instrument.ts:25 The span owned flag is a latch on that one cell. A search of clients/typescript for AsyncLocalStorage found no per-task carrier, and the next comment tells concurrent traces to work around the global."
+    },
+    {
+     "technique": "borrowed-surface",
+     "verdict": "deviation",
+     "evidence": "clients/typescript/src/instrument.ts:234 wrap() probes three foreign client shapes with independent ifs, so a client that grows another SDK's method is also instrumented with that SDK's extractor. The probes are not an owned closed set."
+    },
+    {
+     "technique": "module-depth",
+     "verdict": "conformant",
+     "evidence": "clients/typescript/src/limits.ts:4 Reading a limit view is separated from the admission decision, so callers of admit learn the verdict and the header parsing stays in limits.ts."
+    },
+    {
+     "technique": "seams-and-adapters",
+     "verdict": "conformant",
+     "evidence": "clients/typescript/src/instrument.test.ts:26 Tests replace the send method and capture the event body, so the instrumentation path runs with no network. The same post method is the production door."
+    },
+    {
+     "technique": "io-free-core",
+     "verdict": "conformant",
+     "evidence": "clients/typescript/src/admission.ts:154 admit decides from the cached view and an instant. The contract test passes nowMs, so the branch is reached without a fake clock or a fake socket."
+    },
+    {
+     "technique": "concurrency-at-the-edge",
+     "verdict": "conformant",
+     "evidence": "clients/typescript/src/index.ts:674 The unsettled fetch stays inside post. guard, the extractors, and admit are synchronous, so the async model does not colour the decisions."
+    },
+    {
+     "technique": "locality-and-leverage",
+     "verdict": "conformant",
+     "evidence": "clients/typescript/src/pii.ts:6 The PII table is generated from the server scrubber, so a rule change has one source and the old hand-copied table is the drift they removed."
+    },
+    {
+     "technique": "declarative-or-sequential",
+     "verdict": "conformant",
+     "evidence": "clients/typescript/src/index.ts:208 guard fills a violation list and a checks map in one pass, which is the multiple-outputs case where an explicit sequence is the form the technique requires."
+    },
+    {
+     "technique": "marked-unverifiable-region",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/index.ts:340 The error body is accepted only after JSON.parse and a typeof check. A search of clients/typescript for eval and new Function found no dynamic execution hatch."
+    },
+    {
+     "technique": "mirror-type-at-the-edge",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/instrument.test.ts:32 Tests hand the extractor a plain object, so the provider response is already constructible and no host mirror is required."
+    },
+    {
+     "technique": "emitted-code-names-from-a-root",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/contract.test.ts:46 renderPiiModule returns a complete module source string. The technique excludes a generator that writes a standalone file, because there is no caller scope to splice into."
+    },
+    {
+     "technique": "host-primitive-facade",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/index.ts:6 Node and the browser are named as one fetch surface. journal.ts no-ops node:fs off Node. A search found no second timer or spawn implementation for hosts that disagree about those primitives."
+    },
+    {
+     "technique": "structural-improvement-loop",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/contract.test.ts:9 Shared fixtures pin behaviour across SDKs. A search of clients/typescript for a structural-pass cadence or an emitted spec found none."
+    },
+    {
+     "technique": "structure-is-not-delegable",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/index.ts:3 This package is a telemetry client. Nothing in it selects structural candidates or holds a standing approval over a structural flow."
+    },
+    {
+     "technique": "scoreable-designs-are-built-not-argued",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/instrument.test.ts:23 This helper captures events from one wrapped client. A search of clients/typescript for benchmark found no comparison of substitutable implementations."
+    },
+    {
+     "technique": "change-class-is-the-workload",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/limits.ts:8 The fixtures pin parsing of fixed bytes. They do not replay a class of change against two structures."
+    }
+   ],
+   "registryProposal": "state-carrier-decides-the-lane's tells are a cloned aggregate and an apology at a spawn site; a process-global async cell with the same concession is easy to leave unread, and the technique should name that carrier."
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-16T01:58:34.580953+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "module-design"
+   ],
+   "techniques": [
+    "borrowed-surface",
+    "change-class-is-the-workload",
+    "concurrency-at-the-edge",
+    "host-primitive-facade",
+    "io-free-core",
+    "locality-and-leverage",
+    "marked-unverifiable-region",
+    "mirror-type-at-the-edge",
+    "module-depth",
+    "scoreable-designs-are-built-not-argued",
+    "seams-and-adapters",
+    "state-carrier-decides-the-lane",
+    "structural-improvement-loop",
+    "structure-is-not-delegable"
+   ],
+   "deviations": 0,
+   "context": "device-relay-agent",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  },
+  {
+   "ts": "2026-10-16T01:58:34.580953+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "module-design"
+   ],
+   "techniques": [
+    "borrowed-surface",
+    "change-class-is-the-workload",
+    "concurrency-at-the-edge",
+    "declarative-or-sequential",
+    "emitted-code-names-from-a-root",
+    "host-primitive-facade",
+    "io-free-core",
+    "locality-and-leverage",
+    "marked-unverifiable-region",
+    "mirror-type-at-the-edge",
+    "module-depth",
+    "scoreable-designs-are-built-not-argued",
+    "seams-and-adapters",
+    "state-carrier-decides-the-lane",
+    "structural-improvement-loop",
+    "structure-is-not-delegable"
+   ],
+   "deviations": 1,
+   "context": "typescript-sdk",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  }
+ ]
+}
