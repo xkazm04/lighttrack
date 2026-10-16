@@ -5486,6 +5486,78 @@
           "evidence": "crates/core/src/rubric.rs:228 Dimensions expose independent relative weights without a declared total or weight-specific rationale; authoring validation checks positivity, while aggregation divides by the supplied sum instead of enforcing a stated budget."
         }
       ]
+    },
+    "06329049-432d-4a4b-91c0-f1967d7c9e99/settings": {
+      "context": "api-platform",
+      "subject": "settings",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-16",
+      "evaluatedTs": "2026-10-16T02:41:49.702Z",
+      "worker": "213aaade-7537-4be2-9a67-25d61dcfdc26",
+      "techniques": [
+        {
+          "technique": "config-backup-and-restore",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/projects.rs:134 Project configuration persists through the backend Store; searches and inspected write paths found no application-overwritten operator settings file requiring local rotation."
+        },
+        {
+          "technique": "cross-source-precedence-chain",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/main.rs:391 The database URL takes precedence only for recognized prefixes; a present unsupported URL falls through to the SQLite path rather than stopping."
+        },
+        {
+          "technique": "in-place-document-patch",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/projects.rs:180 The inspected configuration update patches typed project fields and persists a backend row; no long-lived settings-document load/save lifecycle was found."
+        },
+        {
+          "technique": "settings-audit-and-history",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/projects.rs:184 Redaction and enablement changes overwrite the project row without recording a settings change containing old/new values, timestamp, category, and origin; inspected SQLite/Postgres implementations perform direct UPDATEs without such a record."
+        },
+        {
+          "technique": "typed-accessors",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/auth_throttle/budget.rs:212 Malformed throttle settings become None and are defaulted by from_env without reporting the parse failure, making invalid configuration indistinguishable from absence."
+        }
+      ]
+    },
+    "f9f7fd73-7c48-4c30-ba1b-38f0d796c0cf/settings": {
+      "context": "python-sdk",
+      "subject": "settings",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-16",
+      "evaluatedTs": "2026-10-16T02:41:49.702Z",
+      "worker": "213aaade-7537-4be2-9a67-25d61dcfdc26",
+      "techniques": [
+        {
+          "technique": "config-backup-and-restore",
+          "verdict": "not-applicable",
+          "evidence": "clients/python/lighttrack/journal.py:86 The persisted files contain span lifecycle records; searched configuration and file-write paths revealed no operator settings file that the SDK overwrites."
+        },
+        {
+          "technique": "cross-source-precedence-chain",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:263 Argument, environment, and compiled-default URL sources collapse directly into one string without retaining or exposing which source supplied it."
+        },
+        {
+          "technique": "in-place-document-patch",
+          "verdict": "not-applicable",
+          "evidence": "clients/python/lighttrack/journal.py:125 The inspected document writes append individual span records; the SDK has no settings-document round trip whose unknown members or observer identities must survive."
+        },
+        {
+          "technique": "read-batching",
+          "verdict": "not-applicable",
+          "evidence": "clients/python/lighttrack/client.py:267 SDK configuration resolves from constructor inputs and local environment lookups; inspected paths expose no per-setting storage or network round trips to batch."
+        },
+        {
+          "technique": "typed-accessors",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/journal.py:72 The accessor accepts negative and non-finite floats without validation, while its exception branch silently substitutes the default for malformed values."
+        }
+      ]
     }
   }
 }

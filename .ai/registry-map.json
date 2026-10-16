@@ -1159,7 +1159,11 @@
           "revision": 13,
           "changedAt": "2026-09-05",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/main.rs:391 An explicitly supplied database URL with an unrecognized scheme falls through to SQLite instead of stopping configuration resolution, allowing the service to boot against an unintended backend.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:85c48ec5bdb5581f",
+          "evaluatedRevision": 13
         },
         {
           "subject": "docs-sync",
@@ -5581,7 +5585,11 @@
           "revision": 13,
           "changedAt": "2026-09-05",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/python/lighttrack/journal.py:74 An invalid journal orphan interval silently becomes the default, hiding an operator configuration error and potentially changing when unfinished calls are recovered.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:85c48ec5bdb5581f",
+          "evaluatedRevision": 13
         },
         {
           "subject": "multi-provider-event-normalization",
