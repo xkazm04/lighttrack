@@ -5642,6 +5642,53 @@
         }
       ],
       "registryProposal": "In developer-facing CLI and MCP surfaces that emit Markdown or plaintext tables without CSS design tokens, status glyphs (e.g., Unicode symbols like ✅, ❌, ⚠️, ⏳, •, ·) serve the exact role of status color badges; the standard could explicitly formalize glyph mappings and fallback directions for text-only rendering layers."
+    },
+    "1c799276-3129-490e-b740-b5c16c49e59f/supply-chain": {
+      "context": "claude-invocation-and-execution",
+      "subject": "supply-chain",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-16",
+      "evaluatedTs": "2026-10-16T21:08:27.684Z",
+      "worker": "9b384a37-8f0b-4863-8f82-20d31da76928",
+      "techniques": [
+        {
+          "technique": "reading-is-not-running",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/invocation/tools.rs:16 Classifies Bash command prefixes like git log and find as read-only tools, admitting script execution inside the analyzed repository rather than enforcing static parsing or approved digest checks."
+        },
+        {
+          "technique": "permission-manifest-scoping",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/posture.rs:64 Configures CLI flags for subprocess execution rather than platform capability manifests."
+        },
+        {
+          "technique": "verification-scope",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/sandbox/docker.rs:123 Checks image digest pinning to classify execution determinism rather than scoping package manager install verification stages."
+        },
+        {
+          "technique": "archive-extraction-safety",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/sandbox/docker.rs:64 Candidate code is streamed into the container over stdin; no archive unpacking occurs."
+        },
+        {
+          "technique": "unsafe-deserialization-off-by-default",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/run.rs:42 Child output parsing uses serde_json for data-only JSON envelopes without instantiating executable object graphs."
+        },
+        {
+          "technique": "secret-scanning-architecture",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/posture.rs:198 Child environment key stripping protects runtime credentials rather than performing commit-time git secret scanning."
+        },
+        {
+          "technique": "license-reach-follows-integration-form",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/resolve.rs:10 Resolves external CLI binary paths on the host system without managing copyleft notices or integration form boundaries."
+        }
+      ],
+      "registryProposal": "Clarify in reading-is-not-running that LLM CLI execution runners declaring read-only posture over an untrusted workspace must explicitly enforce isolation flags (e.g. --bare, --ignore-rules) to prevent ambient workspace hooks and skills from executing."
     }
   }
 }

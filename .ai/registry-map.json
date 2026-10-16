@@ -1472,7 +1472,11 @@
           "revision": 6,
           "changedAt": "2026-09-25",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/invocation/posture.rs:123 Mode::ReadonlyScan allows read-only repository scans to run without --bare and permits prefixed Bash commands, letting ambient repository hooks and scripts execute during an operation declared as read-only.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:f5666db1094acd9f",
+          "evaluatedRevision": 6
         },
         {
           "subject": "hitl-approval",

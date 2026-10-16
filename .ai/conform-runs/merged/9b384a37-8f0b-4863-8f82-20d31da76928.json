@@ -1,0 +1,84 @@
+{
+ "schema": "conform-run/1",
+ "worker": "9b384a37-8f0b-4863-8f82-20d31da76928",
+ "subject": "supply-chain",
+ "evaluatedAt": "2026-10-16T21:08:27.684838+00:00",
+ "provider": "agy",
+ "model": "gemini-3.8-flash-high",
+ "pairs": [
+  {
+   "context": "claude-invocation-and-execution",
+   "subject": "supply-chain",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/engine/src/invocation/posture.rs:123 Mode::ReadonlyScan allows read-only repository scans to run without --bare and permits prefixed Bash commands, letting ambient repository hooks and scripts execute during an operation declared as read-only.",
+   "techniques": [
+    {
+     "technique": "reading-is-not-running",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/invocation/tools.rs:16 Classifies Bash command prefixes like git log and find as read-only tools, admitting script execution inside the analyzed repository rather than enforcing static parsing or approved digest checks."
+    },
+    {
+     "technique": "permission-manifest-scoping",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/invocation/posture.rs:64 Configures CLI flags for subprocess execution rather than platform capability manifests."
+    },
+    {
+     "technique": "verification-scope",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/sandbox/docker.rs:123 Checks image digest pinning to classify execution determinism rather than scoping package manager install verification stages."
+    },
+    {
+     "technique": "archive-extraction-safety",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/sandbox/docker.rs:64 Candidate code is streamed into the container over stdin; no archive unpacking occurs."
+    },
+    {
+     "technique": "unsafe-deserialization-off-by-default",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/invocation/run.rs:42 Child output parsing uses serde_json for data-only JSON envelopes without instantiating executable object graphs."
+    },
+    {
+     "technique": "secret-scanning-architecture",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/invocation/posture.rs:198 Child environment key stripping protects runtime credentials rather than performing commit-time git secret scanning."
+    },
+    {
+     "technique": "license-reach-follows-integration-form",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/invocation/resolve.rs:10 Resolves external CLI binary paths on the host system without managing copyleft notices or integration form boundaries."
+    }
+   ],
+   "registryProposal": "Clarify in reading-is-not-running that LLM CLI execution runners declaring read-only posture over an untrusted workspace must explicitly enforce isolation flags (e.g. --bare, --ignore-rules) to prevent ambient workspace hooks and skills from executing."
+  }
+ ],
+ "declined": [
+  {
+   "subject": "supply-chain",
+   "context": "runner-worker-pipeline",
+   "reason": "The runner-worker-pipeline context implements CLI job worker loops, task dispatch, dataset sampling, and Stripe billing sync; none of its files implement, configure, or intersect supply-chain techniques (such as dependency policy gates, lockfile checks, secret scanning, or archive extraction)."
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-16T21:08:27.684838+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "supply-chain"
+   ],
+   "techniques": [
+    "archive-extraction-safety",
+    "license-reach-follows-integration-form",
+    "permission-manifest-scoping",
+    "reading-is-not-running",
+    "secret-scanning-architecture",
+    "unsafe-deserialization-off-by-default",
+    "verification-scope"
+   ],
+   "deviations": 1,
+   "context": "claude-invocation-and-execution",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  }
+ ]
+}
