@@ -5558,6 +5558,90 @@
           "evidence": "clients/python/lighttrack/journal.py:72 The accessor accepts negative and non-finite floats without validation, while its exception branch silently substitutes the default for malformed values."
         }
       ]
+    },
+    "27581a68-b0d5-452e-8130-7283211996ae/status-vocabulary": {
+      "context": "observability-rendering",
+      "subject": "status-vocabulary",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-16",
+      "evaluatedTs": "2026-10-16T04:22:57.952Z",
+      "worker": "1e7cb61c-9d76-49d4-896c-a5bceaa2f47f",
+      "techniques": [
+        {
+          "technique": "status-color-mapping",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/alerts.rs:98 Unknown severities degrade to the calmest member ('· info') rather than the most severe member ('critical'), which is asserted as expected behavior in test at alerts.rs:225."
+        },
+        {
+          "technique": "vocabulary-chain-integrity",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/md.rs:143 Status glyph presentation accepts a bare string slice rather than a closed wire union, bypassing compile-time exhaustiveness and silently degrading unhandled members to a neutral dot."
+        },
+        {
+          "technique": "timestamp-display",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/md.rs:214 short_ts performs naive byte-range string slicing of RFC3339 timestamps without timezone conversion, locale resolution, or relative/elapsed time formatting."
+        },
+        {
+          "technique": "untrusted-label-rendering",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/md.rs:40 Table::row enforces escaping at the primitive boundary by mapping each cell through cell() to escape pipe delimiters and collapse newlines."
+        },
+        {
+          "technique": "number-formatting",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/traces.rs:195 The latency unit and plus prefix are bound strictly inside the value-present branch so that absent measurements render the clean unornamented sentinel '—'."
+        },
+        {
+          "technique": "vocabulary-evolution-checklist",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/lib.rs:133 While endpoint kinds are tested against the contract, display status vocabularies lack a compile-time checklist or gate ensuring new variants update wire types, catalogs, and presentation tables together."
+        }
+      ],
+      "registryProposal": "In developer-facing CLI and MCP surfaces that emit Markdown or plaintext tables without CSS design tokens, status glyphs (e.g., Unicode symbols like ✅, ❌, ⚠️, ⏳, •, ·) serve the exact role of status color badges; the standard could explicitly formalize glyph mappings and fallback directions for text-only rendering layers."
+    },
+    "9dc97639-bd28-43ef-bb53-96fb8ef10967/status-vocabulary": {
+      "context": "evaluation-rendering",
+      "subject": "status-vocabulary",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-16",
+      "evaluatedTs": "2026-10-16T04:22:57.952Z",
+      "worker": "1e7cb61c-9d76-49d4-896c-a5bceaa2f47f",
+      "techniques": [
+        {
+          "technique": "status-color-mapping",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/benchmarks.rs:25 Benchmark gate verdicts are approval decisions, but unknown status tokens degrade to a neutral dot and leak the raw token string instead of degrading toward the least approved member."
+        },
+        {
+          "technique": "vocabulary-chain-integrity",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/jobs.rs:29 Job statuses are handled as raw strings and rendered by interpolating the unvalidated wire token directly beside an ungated glyph lookup."
+        },
+        {
+          "technique": "timestamp-display",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/schedules.rs:34 Schedule due times are formatted through short_ts with static trimming rather than relative duration formatting, timezone adjustment, or clock-skew clamping."
+        },
+        {
+          "technique": "untrusted-label-rendering",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/prompts.rs:57 Prompt content is enclosed in a dynamically sized backtick fence exceeding any backtick sequence in the text, preventing untrusted content from breaking out into markdown markup."
+        },
+        {
+          "technique": "number-formatting",
+          "verdict": "conformant",
+          "evidence": "crates/render/src/benchmarks.rs:78 The latency unit is concatenated strictly within the value-present map closure, preventing the placeholder from being corrupted into an ornamented sentinel like '—ms'."
+        },
+        {
+          "technique": "vocabulary-evolution-checklist",
+          "verdict": "deviation",
+          "evidence": "crates/render/src/benchmarks.rs:17 Coverage of gate status variants relies on manual assertions and code comments rather than a four-layer compile-time evolution checklist."
+        }
+      ],
+      "registryProposal": "In developer-facing CLI and MCP surfaces that emit Markdown or plaintext tables without CSS design tokens, status glyphs (e.g., Unicode symbols like ✅, ❌, ⚠️, ⏳, •, ·) serve the exact role of status color badges; the standard could explicitly formalize glyph mappings and fallback directions for text-only rendering layers."
     }
   }
 }

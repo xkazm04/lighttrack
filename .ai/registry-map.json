@@ -3150,7 +3150,11 @@
           "revision": 5,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/benchmarks.rs:25 The benchmark CI-gate verdict falls back to a neutral dot and echoes the raw token for unknown statuses rather than failing closed to the least-approved member.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:bea7b30fd48d528d",
+          "evaluatedRevision": 5
         },
         {
           "subject": "cost-metering",
@@ -4415,7 +4419,11 @@
           "revision": 5,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/alerts.rs:98 The alert severity mapping falls back to the calmest value ('· info') for unknown severities instead of degrading toward the most severe member, masking unhandled alert severities behind an informational badge.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:bea7b30fd48d528d",
+          "evaluatedRevision": 5
         },
         {
           "subject": "prompt-assembly",
