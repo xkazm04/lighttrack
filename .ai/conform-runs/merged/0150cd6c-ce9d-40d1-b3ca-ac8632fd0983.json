@@ -1,0 +1,93 @@
+{
+ "schema": "conform-run/1",
+ "worker": "0150cd6c-ce9d-40d1-b3ca-ac8632fd0983",
+ "subject": "scoring-rubrics",
+ "evaluatedAt": "2026-10-16T02:17:59.603779+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "pg-evaluation-store",
+   "subject": "scoring-rubrics",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store-pg/src/scores.rs:133 An unreadable breakdown silently becomes absent while the scalar score remains available, violating the requirement that the explanation travel with the composite.",
+   "techniques": [
+    {
+     "technique": "normalization",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/score_summary.rs:57 Summaries use each verdict's declared scale rather than cohort extrema; the query excludes nonpositive maxima and API ingestion rejects out-of-range values."
+    },
+    {
+     "technique": "score-explanation",
+     "verdict": "deviation",
+     "evidence": "crates/store-pg/src/scores.rs:133 A decoding failure discards the explanation without refusing or qualifying the returned scalar."
+    },
+    {
+     "technique": "unmeasured-honesty",
+     "verdict": "deviation",
+     "evidence": "crates/store-pg/src/score_summary.rs:62 NULL pass verdicts contribute zero passes while remaining in COUNT(*), so an unknown pass status lowers pass_rate exactly like a measured failure."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-scoring-types",
+   "subject": "scoring-rubrics",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/core/src/score.rs:299 The score contract permits a composite without its dimensional explanation, so consumers cannot always audit the number.",
+   "techniques": [
+    {
+     "technique": "score-explanation",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/score.rs:299 The serialized score can omit its breakdown entirely, including for rubric-based composites."
+    },
+    {
+     "technique": "unmeasured-honesty",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/grounding.rs:29 Missing verification lowers the grounding score as unsupported evidence; the engine confirms missing claims remain in the denominator rather than preserving an unknown measurement."
+    },
+    {
+     "technique": "weight-design",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/rubric.rs:228 Dimensions expose independent relative weights without a declared total or weight-specific rationale; authoring validation checks positivity, while aggregation divides by the supplied sum instead of enforcing a stated budget."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-16T02:17:59.603779+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "scoring-rubrics"
+   ],
+   "techniques": [
+    "normalization",
+    "score-explanation",
+    "unmeasured-honesty"
+   ],
+   "deviations": 1,
+   "context": "pg-evaluation-store",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-16T02:17:59.603779+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "scoring-rubrics"
+   ],
+   "techniques": [
+    "score-explanation",
+    "unmeasured-honesty",
+    "weight-design"
+   ],
+   "deviations": 1,
+   "context": "evaluation-scoring-types",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

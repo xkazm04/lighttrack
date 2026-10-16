@@ -3380,7 +3380,11 @@
           "revision": 3,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/score.rs:299 The score contract permits a composite without its dimensional explanation, so consumers cannot always audit the number.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:476078a37f34137d",
+          "evaluatedRevision": 3
         }
       ],
       "governance": "governed"
@@ -4688,7 +4692,11 @@
           "revision": 3,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-pg/src/scores.rs:133 An unreadable breakdown silently becomes absent while the scalar score remains available, violating the requirement that the explanation travel with the composite.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:476078a37f34137d",
+          "evaluatedRevision": 3
         }
       ],
       "governance": "governed"
