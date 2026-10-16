@@ -5086,6 +5086,148 @@
           "evidence": "crates/api/src/storage.rs:521 This maintenance operates on database pages and journals, without a traced guest heap or promise jobs requiring external roots."
         }
       ]
+    },
+    "45ec4c09-1cbf-41a9-8662-ffa6ca212289/error-handling": {
+      "context": "reactive-alert-responder",
+      "subject": "error-handling",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-16",
+      "evaluatedTs": "2026-10-16T01:10:20.206Z",
+      "worker": "8220e79b-41ce-484a-9229-9632b91c63cf",
+      "techniques": [
+        {
+          "technique": "taxonomy-design",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/classify.rs:21 Closed enum (Transient vs Code) categorizes failures according to whether an automated investigation should be spent, mapping directly from the core wire taxonomy (lighttrack_core::FailureClass)."
+        },
+        {
+          "technique": "structured-propagation",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/classify.rs:50 Prioritizes the structured classification carried from the ingest boundary, quarantining prose heuristics to an unstated fallback tier whose usage rate is tracked."
+        },
+        {
+          "technique": "swallowed-error-prevention",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/ledger.rs:69 Converts HTTP and network errors when contacting the alert ledger to None using .ok()?, silently falling back to in-process memory without routing to any door."
+        },
+        {
+          "technique": "error-doors",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/webhook.rs:145 Malformed webhook payloads print to stderr with eprintln! and return HTTP 200 OK, presenting a dropped alert as an empty success to the caller rather than opening an operator telemetry door or returning an HTTP error."
+        },
+        {
+          "technique": "consumer-decides-error-shape",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/main.rs:39 As a terminating executable binary rather than a published library, main absorbs errors into an opaque aggregate (anyhow::Result<()>) terminating at the process door."
+        },
+        {
+          "technique": "containment-boundary-restores-state",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/act.rs:124 Restores the user's checked-out branch after executing an auto-fix run on a dedicated review branch, preventing uncommitted or intermediate states from escaping into the working copy."
+        },
+        {
+          "technique": "crash-capture",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/main.rs:38 The daemon registers no panic hook (std::panic::set_hook) and maintains no local crash spool or breadcrumbs before startup, leaving unhandled panics uncaptured."
+        },
+        {
+          "technique": "cancellation-attribution",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/classify.rs:87 Treats timeouts as generic transients without attributing cancellation causes (local deadline, client disconnect, supersession, or server drain)."
+        },
+        {
+          "technique": "exit-contract-is-a-taxonomy-projection",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/main.rs:64 Fallible exit paths bail with dynamic anyhow errors rather than projecting internal failure classes into distinct numeric exit status codes."
+        },
+        {
+          "technique": "reclassification-is-not-repair",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/classify.rs:55 Unrecognized wire classes are quarantined into Unknown to trigger the fallback classifier, rather than being reclassified into a concrete category."
+        },
+        {
+          "technique": "parse-failure-keeps-identity",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/webhook.rs:125 Deserialization failure drops the payload entirely via bad(\"spike\", e) without projecting identity fields like alert_id or project_id."
+        },
+        {
+          "technique": "user-facing-mapping",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/report.rs:33 Reports raw diagnostic strings and boolean status without a structured mapping registry providing next-action suggestions."
+        }
+      ]
+    },
+    "f9f7fd73-7c48-4c30-ba1b-38f0d796c0cf/error-handling": {
+      "context": "python-sdk",
+      "subject": "error-handling",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-16",
+      "evaluatedTs": "2026-10-16T01:10:20.206Z",
+      "worker": "8220e79b-41ce-484a-9229-9632b91c63cf",
+      "techniques": [
+        {
+          "technique": "structured-propagation",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/instrument.py:186 Converts structured provider exceptions into plain strings via str(error), stripping typed exception details and HTTP status codes, which forces downstream systems to classify using prose matching."
+        },
+        {
+          "technique": "consumer-decides-error-shape",
+          "verdict": "conformant",
+          "evidence": "clients/python/lighttrack/client.py:204 The published SDK exposes a typed exception carrying structured fields (code, status, is_unroutable) so callers can branch on failure causes without matching message text."
+        },
+        {
+          "technique": "crash-capture",
+          "verdict": "conformant",
+          "evidence": "clients/python/lighttrack/journal.py:109 Persists an append-only local journal breadcrumb containing call references before each provider request starts, enabling a subsequent process to recover in-flight calls after an unhandled process termination."
+        },
+        {
+          "technique": "error-doors",
+          "verdict": "conformant",
+          "evidence": "clients/python/lighttrack/diagnostics.py:52 Routes background telemetry delivery failures to a rate-limited stderr door with cooldown suppression counters, preventing telemetry errors from disappearing into a silent swallow while catching internal logging exceptions."
+        },
+        {
+          "technique": "swallowed-error-prevention",
+          "verdict": "conformant",
+          "evidence": "clients/python/lighttrack/instrument.py:223 Catches host application provider exceptions solely to record failure metrics before immediately re-raising, preventing the instrumentation wrapper from swallowing host errors."
+        },
+        {
+          "technique": "taxonomy-design",
+          "verdict": "conformant",
+          "evidence": "clients/python/lighttrack/limits.py:87 Extracts integer retry intervals directly from rate-limit response headers at ingest classification time, storing it as a typed field so downstream callers never re-parse raw error headers."
+        },
+        {
+          "technique": "user-facing-mapping",
+          "verdict": "conformant",
+          "evidence": "clients/python/lighttrack/diagnostics.py:113 Maps HTTP status codes into user-facing failure explanations coupled with concrete remediation suggestions (such as setting environment variables or checking network configuration)."
+        },
+        {
+          "technique": "containment-boundary-restores-state",
+          "verdict": "conformant",
+          "evidence": "clients/python/lighttrack/instrument.py:81 Uses contextlib finally blocks to ensure context variables are cleanly restored even when wrapped operations fail or unwind."
+        },
+        {
+          "technique": "parse-failure-keeps-identity",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/journal.py:228 An unparseable or truncated journal record is dropped without projecting its key or identity slot, though it prevents the whole journal file from failing to load."
+        },
+        {
+          "technique": "cancellation-attribution",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:738 Settles the span breadcrumb on any exit path including cancellations without attributing the cancellation cause (deadline, supersession, client abort)."
+        },
+        {
+          "technique": "exit-contract-is-a-taxonomy-projection",
+          "verdict": "not-applicable",
+          "evidence": "clients/python/lighttrack/__init__.py:68 The client library is an imported package without a process exit boundary or shell exit code contract."
+        },
+        {
+          "technique": "reclassification-is-not-repair",
+          "verdict": "conformant",
+          "evidence": "clients/python/lighttrack/admission.py:186 Unknown admission verdicts fall through to unknown rather than being reclassified as a specific failure kind."
+        }
+      ]
     }
   }
 }

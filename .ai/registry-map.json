@@ -5509,7 +5509,11 @@
           "revision": 16,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/python/lighttrack/instrument.py:186 Intercepted provider exceptions are flattened directly to strings via str(error) before recording, discarding status codes and typed error variants and forcing downstream consumers to resort to prose matching.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:d811928687fd4faf",
+          "evaluatedRevision": 17
         },
         {
           "subject": "telemetry-pii-redaction",
@@ -5732,7 +5736,11 @@
           "revision": 16,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/responder/src/ledger.rs:69 Network and HTTP transport failures while querying the alert ledger are silently converted to None with .ok()? and discarded without reaching any error door (log, telemetry, or user notification), causing the responder to silently fall back to local process memory while masking persistent API outages.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:d811928687fd4faf",
+          "evaluatedRevision": 17
         },
         {
           "subject": "mcp-tools",
