@@ -6950,7 +6950,11 @@
           "revision": 2,
           "changedAt": "2026-09-04",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/api/src/jobs_enqueue.rs:109 Context and repository searches found no microtask, HostHooks, JobExecutor, ModuleLoader, or JsValue occurrences, and this context persists application jobs and maintains database storage rather than implementing an embedded language engine's host contract.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:08d3fea13f40733a",
+          "evaluatedRevision": 2
         },
         {
           "subject": "session-continuation",

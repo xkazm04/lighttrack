@@ -5045,6 +5045,47 @@
           "evidence": "crates/render/src/unpriced.rs:45 The consumer drops the ledger response's since boundary instead of rendering the window supplied with its counts."
         }
       ]
+    },
+    "8b5cad82-800d-4c90-90ea-f8a443723c81/engine-host-contract": {
+      "context": "storage-and-jobs",
+      "subject": "engine-host-contract",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-16",
+      "evaluatedTs": "2026-10-16T00:36:33.281Z",
+      "worker": "ba0e9738-f8c9-44e1-952e-07f9f854154c",
+      "techniques": [
+        {
+          "technique": "contained-async-module-loader",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs_enqueue.rs:89 The enqueue boundary validates application job payloads; searches found no guest module resolution or loading hook."
+        },
+        {
+          "technique": "idle-aware-job-loop",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/schedule_sweep.rs:67 This ticker drives stored-schedule maintenance, without embedded-engine microtask/macrotask ordering."
+        },
+        {
+          "technique": "monotonic-and-wall-clock-split",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/schedule_sweep.rs:96 Wall time selects durable schedules from storage; no guest timer/date clock seam or suspendable engine contexts were found."
+        },
+        {
+          "technique": "null-and-blocking-executors",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:121 Execution ownership comes from a durable store claim, without engine-shipped promise executors or a default context executor."
+        },
+        {
+          "technique": "spec-mirrored-hook-surface",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs_enqueue.rs:145 The accepted vocabulary is the application's job kinds; no specification-defined language host-hook surface was found."
+        },
+        {
+          "technique": "untraceable-jobs-as-roots",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/storage.rs:521 This maintenance operates on database pages and journals, without a traced guest heap or promise jobs requiring external roots."
+        }
+      ]
     }
   }
 }
