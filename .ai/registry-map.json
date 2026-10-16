@@ -2681,7 +2681,11 @@
           "revision": 2,
           "changedAt": "2026-10-02",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "conformant",
+          "evidence": "crates/core/src/pricing.rs:85 PriceBook indexes variant-encoded model rates, resolves them in deterministic priority order, and builds as-of dated snapshots that protect past event costs from retroactive changes.",
+          "evaluatedAt": "2026-10-16",
+          "evaluatedAgainst": "sha256-b2:1f43aefeff056ea5",
+          "evaluatedRevision": 2
         },
         {
           "subject": "cost-metering",

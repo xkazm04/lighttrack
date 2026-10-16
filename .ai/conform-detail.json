@@ -5228,6 +5228,38 @@
           "evidence": "clients/python/lighttrack/admission.py:186 Unknown admission verdicts fall through to unknown rather than being reclassified as a specific failure kind."
         }
       ]
+    },
+    "e2e94385-c146-47f1-8018-92afdf565ab7/llm-price-book-operations": {
+      "context": "economics-margin-pricing",
+      "subject": "llm-price-book-operations",
+      "bundle": "llm-observability",
+      "state": "conformant",
+      "evaluatedAt": "2026-10-16",
+      "evaluatedTs": "2026-10-16T01:27:47.753Z",
+      "worker": "9cede9ae-7f96-43a3-9bef-5a9621b4e1e6",
+      "techniques": [
+        {
+          "technique": "price-row-variant-encoding",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/pricing.rs:99 Model key suffixes encode prompt-length tiers (@in>N) and discount lanes (@batch, @flex) in a closed grammar composing one level deep without schema churn."
+        },
+        {
+          "technique": "price-resolution-order",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/pricing.rs:371 Resolves row by strict precedence: lane variant first, then highest exceeded prompt tier threshold, then base rate, with narrow alias fallback and null miss."
+        },
+        {
+          "technique": "price-provenance-and-staleness",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/price_row.rs:71 Rows store effective_from, source_url, and verified_at; PriceBookPosture measures book age against the oldest verified row against a configurable staleness budget."
+        },
+        {
+          "technique": "no-retroactive-repricing",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/pricing.rs:209 Price book builds point-in-time snapshots selecting rates in force at event time; past costs are never restated, and unpriced events are ledgered separately."
+        }
+      ],
+      "registryProposal": "The application note in rust--price-resolution-order.md flagged a deviation where PriceBook::rows stamped Utc::now() instead of the seed's verification date. As of M26, PriceBook::rows preserves self.verified_at onto both effective_from and verified_at (pricing.rs:264-266), resolving the historical deviation."
     }
   }
 }
