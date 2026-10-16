@@ -1,0 +1,22 @@
+{
+ "schema": "conform-run/1",
+ "worker": "fc64c57a-3cb1-41ec-8470-9694ac4fd5cc",
+ "subject": "usage-event-ingestion",
+ "evaluatedAt": "2026-10-16T21:56:15.177165+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "usage-event-ingestion",
+   "context": "pg-event-telemetry",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "usage-event-ingestion",
+   "context": "event-ingest",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": []
+}
