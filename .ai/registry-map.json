@@ -3527,7 +3527,11 @@
           "revision": 15,
           "changedAt": "2026-09-17",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/shed.rs:186 A timeout releases the HTTP-held permit while blocking store work can continue, allowing subsequent requests to increase backend occupancy beyond the configured cap.",
+          "evaluatedAt": "2026-10-17",
+          "evaluatedAgainst": "sha256-b2:56e509787bc708cd",
+          "evaluatedRevision": 15
         }
       ],
       "governance": "governed"

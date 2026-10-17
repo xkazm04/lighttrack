@@ -1,0 +1,113 @@
+{
+ "schema": "conform-run/1",
+ "worker": "04d6d3c1-deee-4f1d-b08f-23596a15ae30",
+ "subject": "admission-queue",
+ "evaluatedAt": "2026-10-17T21:22:55.421175+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "event-ingest",
+   "subject": "admission-queue",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/shed.rs:186 A timeout releases the HTTP-held permit while blocking store work can continue, allowing subsequent requests to increase backend occupancy beyond the configured cap.",
+   "techniques": [
+    {
+     "technique": "admission-vocabulary",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/shed.rs:207 Capacity refusal returns a stable overloaded code with HTTP 503, distinct from budget refusal and internal failure, and is counted."
+    },
+    {
+     "technique": "admit-on-the-expanded-cost",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/otlp/semconv.rs:216 Inherited resource-level prompts become owned payloads on every mapped span without an aggregate expanded-size budget; mapping also precedes the native batch-count check."
+    },
+    {
+     "technique": "budget-includes-the-callers-own-cache",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/shed.rs:133 The gate reads its own semaphore availability rather than platform-free capacity; there is no platform-free denominator requiring a reserved-cache correction."
+    },
+    {
+     "technique": "depth-bounds-and-shed",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/shed.rs:82 Numeric zero disables the bound, contrary to the technique's prohibition on magic unlimited values; timed-out blocking jobs can also outlive their permits."
+    },
+    {
+     "technique": "load-aware-admission",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/shed.rs:173 Admission checks permit availability without consulting host or container pressure; no pressure thresholds, hysteresis, or probe-failure posture were found."
+    },
+    {
+     "technique": "priority-and-fairness",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/shed.rs:172 Every origin competes for the entire global permit budget without per-origin occupancy limits, so one tenant can occupy every slot; spend caps do not bound concurrent occupancy."
+    },
+    {
+     "technique": "queue-cardinality",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/shed.rs:169 Single-event, batch, and OTLP routes share this process guard for the selected store backend; ingress capacity is not partitioned into independent per-route pools."
+    },
+    {
+     "technique": "refusal-without-release",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/shed.rs:216 These are stateless, replay-safe telemetry submissions with reasoned refusal and a retry hint; no expensive long-lived caller establishment was found to justify holding callers."
+    },
+    {
+     "technique": "remediation-derived-bounds",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/shed.rs:79 The concurrency ceiling is resolved independently of body-size ceilings and the shipped 512Mi container memory limit; no evaluated derivation preserves headroom below destructive memory enforcement."
+    },
+    {
+     "technique": "resource-denominated-bounds",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/shed.rs:60 Tiny events and multi-megabyte batches each consume one permit; separate per-request byte caps provide neither aggregate byte accounting nor a host-derived occupancy budget."
+    },
+    {
+     "technique": "speculative-work-admission",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/events_batch.rs:200 These paths persist explicitly submitted telemetry; searches found no prefetch, speculative submission, or redundant execution fan-out."
+    },
+    {
+     "technique": "wait-telemetry",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/shed.rs:248 The ingest surface reports outstanding HTTP permits without separating backend waiting from execution or exposing oldest wait; continuing blocking jobs disappear from this gauge after HTTP timeout."
+    },
+    {
+     "technique": "zero-depth-admission",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/access_layer.rs:166 Authentication precedes the nonblocking ingest gate and performs blocking-pool store lookups, so a full gate's refusal can wait behind backend work or become an authentication timeout."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-17T21:22:55.421175+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "admission-queue"
+   ],
+   "techniques": [
+    "admission-vocabulary",
+    "admit-on-the-expanded-cost",
+    "budget-includes-the-callers-own-cache",
+    "depth-bounds-and-shed",
+    "load-aware-admission",
+    "priority-and-fairness",
+    "queue-cardinality",
+    "refusal-without-release",
+    "remediation-derived-bounds",
+    "resource-denominated-bounds",
+    "speculative-work-admission",
+    "wait-telemetry",
+    "zero-depth-admission"
+   ],
+   "deviations": 1,
+   "context": "event-ingest",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}
