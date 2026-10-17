@@ -6982,7 +6982,11 @@
           "revision": 5,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/schedule_sweep.rs:63 Recurring background loops are spawned as unowned, detached tasks without registering through a central supervisor door, retaining no stop handle, and participating in no graceful shutdown drain.",
+          "evaluatedAt": "2026-10-17",
+          "evaluatedAgainst": "sha256-b2:22ed2a99172ae050",
+          "evaluatedRevision": 5
         },
         {
           "subject": "engine-host-contract",

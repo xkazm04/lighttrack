@@ -5837,6 +5837,53 @@
           "evidence": "crates/api/src/access_layer.rs:166 Authentication precedes the nonblocking ingest gate and performs blocking-pool store lookups, so a full gate's refusal can wait behind backend work or become an authentication timeout."
         }
       ]
+    },
+    "8b5cad82-800d-4c90-90ea-f8a443723c81/background-jobs": {
+      "context": "storage-and-jobs",
+      "subject": "background-jobs",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-17",
+      "evaluatedTs": "2026-10-17T22:51:34.267Z",
+      "worker": "b1d176f9-ff81-4012-a8e4-a06db08c8a60",
+      "techniques": [
+        {
+          "technique": "loop-supervision",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/storage.rs:292 Recurring storage maintenance runs in an ad-hoc detached task without registering through a central supervisor door, retaining no stop handle, and lacking epochal shutdown draining."
+        },
+        {
+          "technique": "tick-isolation",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/schedule_sweep.rs:81 The recurring sweep execution lacks a panic capture barrier and a per-tick timeout deadline, causing any unhandled panic or hang to terminate or stall the background task silently."
+        },
+        {
+          "technique": "adaptive-cadence",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/schedule_sweep.rs:67 The sweep operates on a rigid fixed interval with no dual active/idle rates and no wake-on-signal hybrid to respond immediately when schedules are created or modified."
+        },
+        {
+          "technique": "loop-health-telemetry",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/schedule_sweep.rs:117 The sweep emits log events only when work is found, emitting no per-tick health snapshots with closed-vocabulary outcomes and offering no independent silence detection."
+        },
+        {
+          "technique": "startup-sweeps",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/schedule_sweep.rs:69 Startup intentionally discards the immediate tick and lacks a bounded reconciliation sweep for orphaned jobs left in running or cancelling states by previous aborted processes."
+        },
+        {
+          "technique": "job-progress-and-cancellation",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/jobs.rs:127 The job queue implements cooperative two-step cancellation with in-flight jobs transitioned to cancelling until clean completion, alongside dedicated progress reporting and snapshot retrieval."
+        },
+        {
+          "technique": "timeout-is-a-status-not-a-consumption",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:43 Job collection is implemented as an immediate snapshot read rather than a bounded wait handle over pending operations, so wait budget timeout semantics do not apply."
+        }
+      ],
+      "registryProposal": "The standard primarily contemplates in-process supervised loops; when split across an API server and external workers, background work divides between local sweeps and durable job queues where distributed lease heartbeats replace in-process task supervisors."
     }
   }
 }
