@@ -1179,7 +1179,11 @@
           "revision": 14,
           "changedAt": "2026-09-25",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "docs/ARCHITECTURE.md:423 The handwritten API description contradicts error.rs, which maps store conflicts to 409 and unsupported operations to 501, leaving readers with an incorrect error contract.",
+          "evaluatedAt": "2026-10-17",
+          "evaluatedAgainst": "sha256-b2:fd96220db75846a1",
+          "evaluatedRevision": 14
         },
         {
           "subject": "node-boot-and-declarative-bootstrap",

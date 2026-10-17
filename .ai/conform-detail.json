@@ -5884,6 +5884,52 @@
         }
       ],
       "registryProposal": "The standard primarily contemplates in-process supervised loops; when split across an API server and external workers, background work divides between local sweeps and durable job queues where distributed lease heartbeats replace in-process task supervisors."
+    },
+    "06329049-432d-4a4b-91c0-f1967d7c9e99/docs-sync": {
+      "context": "api-platform",
+      "subject": "docs-sync",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-17",
+      "evaluatedTs": "2026-10-17T23:40:19.811Z",
+      "worker": "fe6c7da1-c279-42d0-93da-92263816ee1d",
+      "techniques": [
+        {
+          "technique": "catch-up-markers",
+          "verdict": "conformant",
+          "evidence": "docs/catchup-marker.json:159 The marker records an anchor commit/date, scoped coverage, skipped documents, and this outstanding backend-description debt with an explicit drain condition."
+        },
+        {
+          "technique": "coupled-surface-inventory",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/capabilities.rs:116 This description permits any authenticated principal, while line 129 requires Read and docs/API.md publishes that requirement; the generated matrix and handwritten description are not reconciled as coupled surfaces."
+        },
+        {
+          "technique": "dated-corrections",
+          "verdict": "conformant",
+          "evidence": "docs/DECISIONS.md:191 The dated addendum preserves the former authorization behavior, explains the typed-scope correction used by auth.rs, and names signature and tenancy checks supporting it."
+        },
+        {
+          "technique": "doc-rot-detection",
+          "verdict": "deviation",
+          "evidence": "docs/ARCHITECTURE.md:423 error.rs:275 and :278 explicitly contradict this claim; inspected documentation checks do not compare this handwritten error description against its implementation."
+        },
+        {
+          "technique": "named-duplication-points",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/state.rs:91 This repeated policy claim contradicts guards.rs:88-91 and ARCHITECTURE.md:373-375, which deny disabled project keys all access; no named duplication check covering this occurrence was found."
+        },
+        {
+          "technique": "same-change-enforcement",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/error.rs:275 This behavior contradicts ARCHITECTURE.md:423; searches found no same-change obligation or regeneration check covering that handwritten paragraph, although the generated API matrix has its own equality check."
+        },
+        {
+          "technique": "source-doc-mapping",
+          "verdict": "deviation",
+          "evidence": "docs/ARCHITECTURE.md:409 This handwritten table names its source in prose, but searches and inspected guard readers found no coverage-gated source-to-document mapping for it; its error list and adjacent conversion claim have drifted."
+        }
+      ]
     }
   }
 }
