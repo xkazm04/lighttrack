@@ -7562,7 +7562,11 @@
           "revision": 2,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "clients/typescript/package.json:4 This package implements telemetry ingestion rather than a guest-language engine, and searches of its directory and the repository found no bytecode, realm, disassemble, hiddenClass or debugGlobal constructs requiring this subject.",
+          "evaluatedAt": "2026-10-18",
+          "evaluatedAgainst": "sha256-b2:2c6a2e97171d3e18",
+          "evaluatedRevision": 2
         },
         {
           "subject": "concurrency-guards",
