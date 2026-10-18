@@ -3865,7 +3865,11 @@
           "revision": 7,
           "changedAt": "2026-10-08",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/gateway/src/stream.rs:90 Searches for bytes_stream, EventSource and Last-Event-ID found no gateway hits; this route serializes a completed answer into a finite SSE body rather than terminating and re-emitting a long-lived upstream stream.",
+          "evaluatedAt": "2026-10-18",
+          "evaluatedAgainst": "sha256-b2:35d2934ae538833a",
+          "evaluatedRevision": 7
         },
         {
           "subject": "model-routing",

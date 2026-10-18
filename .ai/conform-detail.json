@@ -6323,6 +6323,57 @@
           "evidence": "crates/api/src/jobs_enqueue.rs:97 This bounds queue attempts; no agent repair loop generates failure signatures or measures improvement."
         }
       ]
+    },
+    "cb7bbb5f-02f2-48d9-90f3-cea5b3d14b47/stream-proxy-hop": {
+      "context": "gateway-proxy",
+      "subject": "stream-proxy-hop",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-18",
+      "evaluatedTs": "2026-10-18T22:03:50.253Z",
+      "worker": "684f9b37-c96c-4a5b-ae48-eac5ec7bb839",
+      "techniques": [
+        {
+          "technique": "abort-versus-unreachable",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/chat.rs:66 Generation runs to completion before response construction; there is no live upstream stream being relayed."
+        },
+        {
+          "technique": "credential-attachment-at-the-hop",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/router.rs:15 Ordinary SDK POST requests do not impose the header restriction motivating this streaming credential technique."
+        },
+        {
+          "technique": "idle-heartbeat-injection",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/stream.rs:85 Events are serialized into an in-memory response body, without an upstream-driven idle streaming interval."
+        },
+        {
+          "technique": "lifetime-cap-rotation",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/stream.rs:32 This delivers one finished completion; rotating and resuming a long-lived subscription does not apply."
+        },
+        {
+          "technique": "origin-non-disclosure",
+          "verdict": "not-applicable",
+          "evidence": "docs/GATEWAY.md:30 The subject's defining upstream stream proxy boundary is absent; this does not establish general error-disclosure safety."
+        },
+        {
+          "technique": "progress-lease-not-wall-clock",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/generator.rs:9 The generator returns a whole completion rather than exposing an open-ended transport session requiring a progress lease."
+        },
+        {
+          "technique": "reconnect-storm-hygiene",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/stream.rs:88 The one-shot completion has a meaningful terminal marker, matching the technique's explicit exclusion."
+        },
+        {
+          "technique": "upstream-status-normalization",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/chat.rs:121 SSE is synthesized from the completed response value; no upstream streaming handshake status crosses this boundary."
+        }
+      ]
     }
   }
 }
