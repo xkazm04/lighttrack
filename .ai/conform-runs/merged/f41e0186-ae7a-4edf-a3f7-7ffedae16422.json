@@ -1,0 +1,17 @@
+{
+ "schema": "conform-run/1",
+ "worker": "f41e0186-ae7a-4edf-a3f7-7ffedae16422",
+ "subject": "structured-output",
+ "evaluatedAt": "2026-10-18T22:18:49.824341+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "structured-output",
+   "context": "core-observability-types",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": []
+}
