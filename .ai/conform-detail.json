@@ -6007,6 +6007,77 @@
           "evidence": "clients/typescript/src/index.ts:116 Extraction reads observable provider-response fields; inspection and searches found no hidden-class, array-storage or string-representation assertions."
         }
       ]
+    },
+    "3e637b68-74b5-4382-9828-f785f4ed1323/invariant-placement": {
+      "context": "typescript-sdk",
+      "subject": "invariant-placement",
+      "bundle": "software-engineering",
+      "state": "conformant",
+      "evaluatedAt": "2026-10-18",
+      "evaluatedTs": "2026-10-18T00:39:54.215Z",
+      "worker": "bc7e9afb-adf5-4e9f-9b9e-21b2e307f9e9",
+      "techniques": [
+        {
+          "technique": "build-time-evaluation-of-cross-value-invariants",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/diagnostics.ts:19 Precondition does not hold as client constants are standalone single-value defaults without cross-value overlap or bound invariants."
+        },
+        {
+          "technique": "completeness-at-emission",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/limits.ts:94 Inbound client responses use the single validation door altitude rather than staged outbound emission."
+        },
+        {
+          "technique": "constraint-deletion-is-silent",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/admission.test.ts:31 Pre-spend admission refusal is protected against silent removal by a dedicated negative test asserting the typed error class and reason identifier."
+        },
+        {
+          "technique": "consumption-bounds-at-most-once",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/index.ts:830 Settling the span's breadcrumb clears journalKey to prevent duplicate retirement, with recovery removing the journal file to bound replay at most once."
+        },
+        {
+          "technique": "derived-properties-cannot-be-forged",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/contract.test.ts:80 PII_RULES is derived from crates/anon via contract fixtures with a named recomputation path, and gated against drift by a contract test."
+        },
+        {
+          "technique": "indistinguishable-members-do-not-rise",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/limits.ts:22 Scope pairs use named property interfaces rather than positional tuples asserted as structural guarantees."
+        },
+        {
+          "technique": "initialization-proof-tokens",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/journal.ts:68 Filesystem module loading is handled by lazy promise caching rather than proof tokens as the client has no bring-up phase."
+        },
+        {
+          "technique": "occurrence-is-not-a-type",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/journal.ts:11 Span durability across process termination is recognized as a runtime occurrence property rather than a type property, placed at span open in an append-only journal."
+        },
+        {
+          "technique": "paired-sites-localize-the-fault",
+          "verdict": "not-applicable",
+          "evidence": "clients/typescript/src/contract.test.ts:163 Cross-deployable wire protocol invariants are validated through shared contract fixtures rather than intra-process paired assertions."
+        },
+        {
+          "technique": "placement-precedes-gate",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/admission.ts:11 Admission checking is placed at the call-site altitude using local cached views rather than an inline network gate, deliberately bounding blast radius so telemetry never blocks LLM execution."
+        },
+        {
+          "technique": "repairing-check-erases-its-evidence",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/limits.ts:81 Unparseable Retry-After headers return null instead of being defensively coerced to 0, preventing invalid headers from erasing evidence into immediate retries."
+        },
+        {
+          "technique": "shape-with-a-not-applicable-member",
+          "verdict": "conformant",
+          "evidence": "clients/typescript/src/admission.ts:33 AdmitReason excludes placeholder absence members, placing refusal absence in the AdmitReason | null wrapper to eliminate compiler-mandated dummy branches."
+        }
+      ]
     }
   }
 }

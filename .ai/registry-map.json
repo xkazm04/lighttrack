@@ -7659,7 +7659,11 @@
           "revision": 9,
           "changedAt": "2026-09-21",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "conformant",
+          "evidence": "clients/typescript/src/limits.ts:28 The TypeScript client systematically places limit parsing at the door altitude and pre-spend admission at the local call-site altitude, handles crash durability at span opening as an occurrence property, and mechanically derives shared PII fixtures.",
+          "evaluatedAt": "2026-10-18",
+          "evaluatedAgainst": "sha256-b2:c6563834f502429c",
+          "evaluatedRevision": 9
         }
       ],
       "governance": "governed"
