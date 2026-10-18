@@ -1532,7 +1532,11 @@
           "revision": 2,
           "changedAt": "2026-09-25",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/engine/src/invocation/run.rs:123 This context launches CLI subprocesses and exchanges bytes; context and repository searches found no PhantomPinned, MaybeUninit, NonNull, or transmute, and inspection found no foreign-memory binding surface requiring these techniques.",
+          "evaluatedAt": "2026-10-18",
+          "evaluatedAgainst": "sha256-b2:823cd55ac89d000b",
+          "evaluatedRevision": 2
         }
       ],
       "governance": "governed"

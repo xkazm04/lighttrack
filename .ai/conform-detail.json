@@ -5930,6 +5930,47 @@
           "evidence": "docs/ARCHITECTURE.md:409 This handwritten table names its source in prose, but searches and inspected guard readers found no coverage-gated source-to-document mapping for it; its error list and adjacent conversion claim have drifted."
         }
       ]
+    },
+    "1c799276-3129-490e-b740-b5c16c49e59f/engine-binding-surface": {
+      "context": "claude-invocation-and-execution",
+      "subject": "engine-binding-surface",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-18",
+      "evaluatedTs": "2026-10-18T00:11:48.405Z",
+      "worker": "e1908672-acbc-4c0f-8d30-fecd81557e41",
+      "techniques": [
+        {
+          "technique": "address-sensitive-construction",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/run.rs:23 Construction prepares a subprocess command; no foreign constructor retains the address of host-allocated wrapper storage."
+        },
+        {
+          "technique": "ask-the-authority-not-the-shadow",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/sandbox/contree.rs:32 The thread-local holds a host-assigned session identifier, not a cached foreign-runtime permission, lock, or liveness answer."
+        },
+        {
+          "technique": "capability-deferred-release",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/sandbox.rs:435 The sandbox helper's destructor removes a temporary host file; release requires no foreign-runtime thread or lock capability."
+        },
+        {
+          "technique": "hierarchy-as-three-relations",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/codex/events.rs:62 The adapter dispatches on serialized event tags rather than exposing a foreign class hierarchy or reinterpreting object layouts."
+        },
+        {
+          "technique": "phantom-capability-parameter",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/run.rs:21 The gate validates host invocation configuration before spawning; it does not establish an entered foreign region whose capability must accompany handles."
+        },
+        {
+          "technique": "pre-resolve-what-the-engine-cannot-await",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/run.rs:132 The host sends prompt bytes through stdin; no synchronous foreign-engine resource callback or asynchronous resource pre-resolution exists here."
+        }
+      ]
     }
   }
 }
