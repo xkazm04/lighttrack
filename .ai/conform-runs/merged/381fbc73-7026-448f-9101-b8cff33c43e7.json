@@ -1,0 +1,17 @@
+{
+ "schema": "conform-run/1",
+ "worker": "381fbc73-7026-448f-9101-b8cff33c43e7",
+ "subject": "terminal-multiplexing",
+ "evaluatedAt": "2026-10-18T22:33:53.840974+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "terminal-multiplexing",
+   "context": "gateway-proxy",
+   "reason": "pair anchor refused: crates/gateway/Cargo.toml:6 does not contain the quoted text"
+  }
+ ],
+ "consults": []
+}
