@@ -1,0 +1,17 @@
+{
+ "schema": "conform-run/1",
+ "worker": "a80b961d-acfd-4d42-be00-cdf006524738",
+ "subject": "machine-paced-delivery",
+ "evaluatedAt": "2026-10-18T00:58:20.988097+00:00",
+ "provider": "agy",
+ "model": "gemini-3.8-flash-high",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "machine-paced-delivery",
+   "context": "device-relay-agent",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": []
+}
