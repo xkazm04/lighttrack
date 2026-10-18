@@ -7042,7 +7042,11 @@
           "revision": 8,
           "changedAt": "2026-10-09",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/api/src/schedule_sweep.rs:67 Searches of the context and repository found no PreCompact, stop_gate, candidate_yield or loop_authority constructs; this context runs timer-driven background work rather than enforcing agent continuation at turn boundaries.",
+          "evaluatedAt": "2026-10-18",
+          "evaluatedAgainst": "sha256-b2:b0eabf78abd856a4",
+          "evaluatedRevision": 8
         },
         {
           "subject": "fleet-orchestration",

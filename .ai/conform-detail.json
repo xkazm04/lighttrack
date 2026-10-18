@@ -6262,6 +6262,67 @@
         }
       ],
       "registryProposal": "In multi-provider evaluation engines, distinguishing between per-request transient backoff (within engine adapters) and candidate-level circuit breaking (within matrix runners) should be clarified in the standard's scope hierarchy."
+    },
+    "8b5cad82-800d-4c90-90ea-f8a443723c81/session-continuation": {
+      "context": "storage-and-jobs",
+      "subject": "session-continuation",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-18",
+      "evaluatedTs": "2026-10-18T21:46:29.117Z",
+      "worker": "4689b4a1-0be7-404e-83f1-42ed7995700f",
+      "techniques": [
+        {
+          "technique": "advisory-guard-fail-mode",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/redact.rs:213 This handles ingest privacy failures; it is not an advisory interceptor controlling a session boundary."
+        },
+        {
+          "technique": "boundary-applied-stop",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:128 The boundary belongs to benchmark cases, without a reasoning/tool-call batch or candidate yield."
+        },
+        {
+          "technique": "compaction-checkpoint",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/storage.rs:517 Checkpointing concerns the database journal, without model-context compaction or continuation-state restoration."
+        },
+        {
+          "technique": "continuation-as-state",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs_enqueue.rs:109 The persisted record represents queued background work, without a stop hook that keeps an agent session working."
+        },
+        {
+          "technique": "gate-state-lifetimes",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/storage.rs:634 These are maintenance-report counters, without shared session stop gates or verification-phase resets."
+        },
+        {
+          "technique": "ordered-teardown",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs.rs:141 Cancellation targets an individual queue job; this context does not arm session stop-blocking guards."
+        },
+        {
+          "technique": "ordered-yield-composition",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/storage.rs:548 Maintenance yields to foreground request activity, without independently authored session-continuation frames."
+        },
+        {
+          "technique": "sealed-stage-advance",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/schedules.rs:146 Schedules validate recurring job payloads; no staged agent run advances on model completion signals."
+        },
+        {
+          "technique": "single-loop-authority",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/schedule_sweep.rs:145 This prevents overlapping scheduled jobs, without competing authorities deciding whether an agent session may end."
+        },
+        {
+          "technique": "stuck-loop-detection",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/jobs_enqueue.rs:97 This bounds queue attempts; no agent repair loop generates failure signatures or measures improvement."
+        }
+      ]
     }
   }
 }
