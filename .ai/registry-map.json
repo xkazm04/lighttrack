@@ -5340,7 +5340,11 @@
           "revision": 4,
           "changedAt": "2026-10-10",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/providers.rs:222 Candidate-output generation across providers lacks declared call-site purpose identity, infers credential posture from ambient environment variables, strips schema constraints without demoting enforcement levels, and raises errors without writing a preceding spend ledger.",
+          "evaluatedAt": "2026-10-18",
+          "evaluatedAgainst": "sha256-b2:7f5a9031da3d28ce",
+          "evaluatedRevision": 4
         },
         {
           "subject": "eval-harness",
