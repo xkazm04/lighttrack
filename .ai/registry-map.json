@@ -3881,7 +3881,11 @@
           "revision": 21,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/gateway/src/routes.rs:18 The gateway resolves incoming model requests through route table lookup or raw literal passthrough without evaluating policy rules, closed call classes, or measured capability tiers.",
+          "evaluatedAt": "2026-10-18",
+          "evaluatedAgainst": "sha256-b2:5484901d8df95b15",
+          "evaluatedRevision": 21
         },
         {
           "subject": "prompt-assembly",

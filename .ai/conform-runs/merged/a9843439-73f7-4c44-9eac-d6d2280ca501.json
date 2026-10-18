@@ -1,0 +1,113 @@
+{
+ "schema": "conform-run/1",
+ "worker": "a9843439-73f7-4c44-9eac-d6d2280ca501",
+ "subject": "model-routing",
+ "evaluatedAt": "2026-10-18T01:26:05.805112+00:00",
+ "provider": "agy",
+ "model": "gemini-3.8-flash-high",
+ "pairs": [
+  {
+   "context": "gateway-proxy",
+   "subject": "model-routing",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/gateway/src/routes.rs:18 The gateway resolves incoming model requests through route table lookup or raw literal passthrough without evaluating policy rules, closed call classes, or measured capability tiers.",
+   "techniques": [
+    {
+     "technique": "admission-is-not-a-tier",
+     "verdict": "conformant",
+     "evidence": "crates/gateway/src/chat.rs:39 Checks wire format compatibility across the chain up front, refusing and naming targets unable to forward tools."
+    },
+    {
+     "technique": "cache-continuity",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/chat.rs:33 Routes statelessly per call with no session stickiness, conversation pinning, or prompt cache warmth tracking."
+    },
+    {
+     "technique": "candidate-ranking",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/routes.rs:21 Builds target chains from static configuration order rather than dynamic ranking based on live operational signals."
+    },
+    {
+     "technique": "capability-floors",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/chat.rs:38 Checks tool support across the chain but lacks recorded capability floors for model tiers with empirical breakage data."
+    },
+    {
+     "technique": "consumer-overrides",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/routes.rs:45 Literal provider/model requests act as unbounded consumer overrides that bypass route configuration without reaper conditions."
+    },
+    {
+     "technique": "effort-calibration",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/config.rs:57 Route targets define uncalibrated strings without measurement dates, sample sizes, or cap-based effort constraints."
+    },
+    {
+     "technique": "failover-horizon",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/failover.rs:101 While failover occurs before response bytes are streamed, the horizon is not modeled as explicit state or recorded in telemetry."
+    },
+    {
+     "technique": "failover-path-liveness",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/chat.rs:55 Failure simulation is restricted to a dev-only header switch rather than continuous live fault injection with bounded rate and window."
+    },
+    {
+     "technique": "model-identity",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/target.rs:62 Grouping only distinguishes provider billing seats to prevent same-seat failover rather than tracking model weight identity across vendors."
+    },
+    {
+     "technique": "policy-governance",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/config.rs:29 Routing configuration lacks policy versioning, change approval workflows, and version citations in event records."
+    },
+    {
+     "technique": "quality-axis-separation",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/telemetry.rs:72 Telemetry captures only operational transport events without a semantic evaluation feedback sink to assess answer quality."
+    },
+    {
+     "technique": "routing-policy",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/routes.rs:20 Route resolution performs simple key lookup without evaluating provider allow/block lists, complexity thresholds, or compliance tags."
+    },
+    {
+     "technique": "turn-classification",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/routes.rs:37 Literal provider/model requests bypass routing and are served directly instead of enforcing a closed vocabulary of call classes."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-18T01:26:05.805112+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "model-routing"
+   ],
+   "techniques": [
+    "admission-is-not-a-tier",
+    "cache-continuity",
+    "candidate-ranking",
+    "capability-floors",
+    "consumer-overrides",
+    "effort-calibration",
+    "failover-horizon",
+    "failover-path-liveness",
+    "model-identity",
+    "policy-governance",
+    "quality-axis-separation",
+    "routing-policy",
+    "turn-classification"
+   ],
+   "deviations": 1,
+   "context": "gateway-proxy",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  }
+ ]
+}
