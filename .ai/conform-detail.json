@@ -6205,6 +6205,63 @@
           "evidence": "crates/gateway/src/routes.rs:37 Literal provider/model requests bypass routing and are served directly instead of enforcing a closed vocabulary of call classes."
         }
       ]
+    },
+    "19e55525-23e7-4aa2-b7d3-0ca281fe1f4a/retry-backoff": {
+      "context": "provider-generation",
+      "subject": "retry-backoff",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-18",
+      "evaluatedTs": "2026-10-18T21:09:07.716Z",
+      "worker": "bed45f1e-f828-4aee-a70f-9d4f316e9ed8",
+      "techniques": [
+        {
+          "technique": "backoff-design",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/retry.rs:106 Exponential backoff doubles delay with jitter, respects provider-stated delays, and terminates with OverBudgetWait when stated delay exceeds remaining budget."
+        },
+        {
+          "technique": "circuit-breakers",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/providers.rs:320 Provider calls are dispatched through with_retry without an engine-level circuit breaker, repeatedly hammering failing providers across calls."
+        },
+        {
+          "technique": "client-retry-and-redirect-conventions",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/providers.rs:71 The HTTP client leaves redirect following to reqwest's 10-hop default without single-hop bounding or scheme downgrade checks, and retry termination is embedded in the loop."
+        },
+        {
+          "technique": "durable-retries",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/retry.rs:19 Provider candidate generation is ephemeral in-flight evaluation work bounded by a 60-second call budget where retries appropriately live only in-memory."
+        },
+        {
+          "technique": "error-classification-for-retry",
+          "verdict": "conformant",
+          "evidence": "crates/engine/src/providers.rs:124 Responses are mapped at the boundary into typed EngineError variants, separating transient rate limits and server errors from permanent failures and capturing stated delays."
+        },
+        {
+          "technique": "jittered-revocation-with-irrevocable-terminal",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:367 Provider generation acts as a consumer of external LLM APIs and does not issue leased credentials requiring revocation ladders or irrevocable terminal states."
+        },
+        {
+          "technique": "retry-observability",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/retry.rs:119 Ladder exhaustion returns the bare transient error without recording a distinct exhausted state, and successful retries discard attempt counts, hiding degradation."
+        },
+        {
+          "technique": "storm-control",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/providers.rs:253 Retries lack an aggregate fleet budget to cap volume, and layered fallbacks such as schema-shedding re-invoke generate_retrying, multiplying retry attempts across layers."
+        },
+        {
+          "technique": "suspension-is-not-failure",
+          "verdict": "deviation",
+          "evidence": "crates/engine/src/providers.rs:146 Connection errors are collapsed with timeouts into EngineError::Timeout and retried as transient failures, burning attempts on blocked connection attempts without suspension."
+        }
+      ],
+      "registryProposal": "In multi-provider evaluation engines, distinguishing between per-request transient backoff (within engine adapters) and candidate-level circuit breaking (within matrix runners) should be clarified in the standard's scope hierarchy."
     }
   }
 }
