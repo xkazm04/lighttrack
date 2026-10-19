@@ -67,6 +67,11 @@
       "path": ".ai/registry-map.json",
       "kind": "not-in-this-pass",
       "reason": "generated artifact — the join between this repo's contexts and the knowledge registry's subjects, produced by ai-registry/scripts/build-registry-map.mjs. It did not exist at this marker's anchor: it landed in 4070e17 and was listed here on 2026-08-31 by the change that noticed the omission, not by a pass that read it. Every pair it records carries state `unknown`, so nothing in it has been judged against this tree."
+    },
+    {
+      "path": ".ai/conform-detail.json",
+      "kind": "not-in-this-pass",
+      "reason": "generated artifact, the companion of .ai/registry-map.json: ai-registry/scripts/merge-conform-runs.mjs writes it when two /conform verdicts on one pair disagree (the older verdict is recorded here) or when a verdict is withdrawn on review. It landed in f421f6e with the curator's conform runs and was listed here on 2026-10-19 by the change that noticed the omission, not by a pass that read it."
     }
   ],
 
