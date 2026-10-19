@@ -84,7 +84,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_job",
         method: Method::Get,
-        path: "/v1/jobs/:id",
+        path: "/v1/jobs/{id}",
         access: Admin,
         params: &[pm("id", "job", "job id")],
         response: TypeRef::Named("Job"),
@@ -102,7 +102,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "cancel_job",
         method: Method::Post,
-        path: "/v1/jobs/:id/cancel",
+        path: "/v1/jobs/{id}/cancel",
         access: Admin,
         mutating: true,
         params: &[p("id", "job id")],
@@ -119,7 +119,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "job_progress",
         method: Method::Post,
-        path: "/v1/jobs/:id/progress",
+        path: "/v1/jobs/{id}/progress",
         access: Admin,
         mutating: true,
         machine: true,
@@ -134,7 +134,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "job_renew",
         method: Method::Post,
-        path: "/v1/jobs/:id/renew",
+        path: "/v1/jobs/{id}/renew",
         access: Admin,
         mutating: true,
         machine: true,
@@ -153,7 +153,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "job_finish",
         method: Method::Post,
-        path: "/v1/jobs/:id/finish",
+        path: "/v1/jobs/{id}/finish",
         access: Admin,
         mutating: true,
         machine: true,
@@ -174,7 +174,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_schedule",
         method: Method::Post,
-        path: "/v1/projects/:id/schedules",
+        path: "/v1/projects/{id}/schedules",
         access: Admin,
         mutating: true,
         params: &[
@@ -205,7 +205,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_project_schedules",
         method: Method::Get,
-        path: "/v1/projects/:id/schedules",
+        path: "/v1/projects/{id}/schedules",
         access: Key(Read),
         params: &[pm("id", "project", "the project whose schedules to list")],
         response: TypeRef::ArrayOf("Schedule"),
@@ -240,7 +240,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "update_schedule",
         method: Method::Put,
-        path: "/v1/schedules/:id",
+        path: "/v1/schedules/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -264,7 +264,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "delete_schedule",
         method: Method::Delete,
-        path: "/v1/schedules/:id",
+        path: "/v1/schedules/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -278,7 +278,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "schedule_runs",
         method: Method::Get,
-        path: "/v1/schedules/:id/runs",
+        path: "/v1/schedules/{id}/runs",
         access: Admin,
         params: &[p("id", "schedule id")],
         response: TypeRef::ArrayOf("Job"),

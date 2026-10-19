@@ -10,7 +10,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_rubric",
         method: Method::Post,
-        path: "/v1/projects/:id/rubrics",
+        path: "/v1/projects/{id}/rubrics",
         access: Admin,
         mutating: true,
         params: &[
@@ -42,7 +42,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_rubrics",
         method: Method::Get,
-        path: "/v1/projects/:id/rubrics",
+        path: "/v1/projects/{id}/rubrics",
         access: Key(Read),
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("Rubric"),
@@ -60,7 +60,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_rubric",
         method: Method::Get,
-        path: "/v1/rubrics/:id",
+        path: "/v1/rubrics/{id}",
         access: Key(Read),
         params: &[pm("id", "rubric", "rubric id")],
         response: TypeRef::Untyped(
@@ -81,7 +81,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_rubric_version",
         method: Method::Post,
-        path: "/v1/rubrics/:id/versions",
+        path: "/v1/rubrics/{id}/versions",
         access: Admin,
         mutating: true,
         params: &[

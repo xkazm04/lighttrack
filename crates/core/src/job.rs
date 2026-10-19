@@ -17,7 +17,8 @@ pub struct Job {
     ///
     /// `cancelling` is a *running* job an operator asked to stop: the worker notices at its next
     /// case boundary and finishes it as `cancelled`. It is deliberately outside the claimable set,
-    /// so the stale-claim reclaim path can never restart a run someone cancelled.
+    /// so the stale-claim reclaim path can never restart a run someone cancelled. If its worker dies
+    /// before stopping, the next claim settles it as `cancelled` with `JOB_ERROR_CANCEL_ORPHANED`.
     #[serde(default = "default_status")]
     pub status: String,
     /// The tenant this work belongs to, stamped at enqueue from the benchmark/schedule it runs.
@@ -205,6 +206,12 @@ pub enum JobFinish {
 pub const JOB_ERROR_WORKER_LOST: &str =
     "worker lost: the worker holding this job did not finish before the stale-claim timeout \
      (crashed, killed, or partitioned) — this is not a benchmark failure";
+
+/// Stored on a `cancelling` job whose worker died before it could stop at a case boundary. The claim
+/// path settles such a job as `cancelled` (never back to `running`), and this marker says the stop
+/// was finished for the worker, so the partial results it never wrote are known to be missing.
+pub const JOB_ERROR_CANCEL_ORPHANED: &str =
+    "cancelled: the worker holding this job died after the cancel was requested, before it      reached a case boundary — any partial results it had not yet written are lost";
 
 /// Prefix on a stored job error that means the job RAN and the work itself failed.
 pub const JOB_ERROR_PREFIX_FAILURE: &str = "benchmark failure: ";

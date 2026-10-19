@@ -91,7 +91,7 @@ fn the_served_body_names_the_routes_each_backend_refuses() {
     assert!(
         pg.unsupported_routes
             .iter()
-            .any(|r| r == "GET /v1/projects/:id/use-cases"),
+            .any(|r| r == "GET /v1/projects/{id}/use-cases"),
         "the use-case registry 501s on the backend carrying production traffic: {:?}",
         pg.unsupported_routes
     );
@@ -114,8 +114,8 @@ fn the_served_body_names_the_routes_each_backend_refuses() {
     let fs = CapabilitiesBody::from(lighttrack_store_firestore::FirestoreStore::manifest());
     for want in [
         "GET /v1/traces",
-        "GET /v1/traces/:id",
-        "GET /v1/projects/:id/redaction",
+        "GET /v1/traces/{id}",
+        "GET /v1/projects/{id}/redaction",
     ] {
         assert!(
             fs.unsupported_routes.iter().any(|r| r == want),

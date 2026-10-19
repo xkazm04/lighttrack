@@ -101,8 +101,8 @@ pub use forecast_gate::{Refusal, FLAT_BAND, MIN_OBSERVED_DAYS, MIN_SPAN_DAYS};
 pub use gen_spend::GenerationFacts;
 pub use grounding::{ClaimVerdict, GroundingDetail, MAX_CLAIMS_PER_DIM};
 pub use job::{
-    job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_PREFIX_FAILURE,
-    JOB_ERROR_WORKER_LOST,
+    job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_CANCEL_ORPHANED,
+    JOB_ERROR_PREFIX_FAILURE, JOB_ERROR_WORKER_LOST,
 };
 pub use job_kinds::{
     validate_payload, BenchRunPayload, CalibratePayload, ContributePayload, DatasetSamplePayload,
@@ -155,8 +155,8 @@ pub use score::{
     RECURRENCE_KEY, REGRESSION_DATASET_KEY, RESERVED_TARGET_KEYS,
 };
 pub use trace::{
-    normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,
-    TraceTotals,
+    normalize_trace_ref, trace_ref_within_bound, Trace, TraceCoverage, TraceDrift, TraceShape,
+    TraceSpan, TraceSummary, TraceTotals, MAX_TRACE_REF_LEN,
 };
 pub use trace_ref::TraceRef;
 pub use unpriced::{UnpricedLedger, UnpricedRow, UNPRICED_NOTES};

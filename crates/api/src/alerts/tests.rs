@@ -342,3 +342,41 @@ async fn a_redirect_is_not_followed() {
          fetched the metadata service"
     );
 }
+
+fn margin_alert(identity_scoped: bool) -> crate::forecast_alerts::ForecastAlert {
+    crate::forecast_alerts::ForecastAlert {
+        kind: "margin_erosion",
+        severity: "high",
+        project_id: "p1".into(),
+        subject: "acme-corp".into(),
+        eta_days: 2.0,
+        message: "'acme-corp' is on track to turn unprofitable in ~2 days - revenue ~$40.00/day vs cost rising to ~$41.50/day".into(),
+        policy_applied: None,
+        identity_scoped,
+    }
+}
+
+#[test]
+fn a_customer_margin_alert_never_enumerates_the_customer_or_its_money() {
+    let sent = compose::forecast(&margin_alert(true)).payload.to_string();
+    for leak in ["acme-corp", "40.00", "41.50", "subject\":\"acme"] {
+        assert!(!sent.contains(leak), "broadcast leaked {leak}: {sent}");
+    }
+    assert!(
+        sent.contains("/v1/forecast?by=customer"),
+        "it must point somewhere: {sent}"
+    );
+    assert!(
+        sent.contains("p1"),
+        "the operator still learns which project: {sent}"
+    );
+}
+
+#[test]
+fn a_non_identity_forecast_alert_keeps_its_detail() {
+    let sent = compose::forecast(&margin_alert(false)).payload.to_string();
+    assert!(
+        sent.contains("acme-corp") && sent.contains("40.00"),
+        "{sent}"
+    );
+}

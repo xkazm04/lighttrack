@@ -26,13 +26,25 @@ pub(super) fn run_stat(
     if run.n_cases == 0 {
         return None;
     }
+    // A run that recorded no pass rate does not join a bucket. The wire row has no way to say
+    // "unknown" for it, and shipping 0.0 asserts that nothing passed, which the bucket would average
+    // in as evidence (aggregate-only-digests: when a measure cannot be computed, ship its absence;
+    // the row cannot, so the run stays home).
+    let pass_rate = run.pass_rate?;
     let cost_per_case_usd = run.cost_usd / run.n_cases as f64;
+    // A diverged run is excluded HERE, at the site, before it can join a bucket. A non-finite figure
+    // serialises as JSON `null`, which the hub cannot read back into a number, so one bad run would
+    // sink the whole push - healthy buckets included - as an opaque rejection. (The hub also refuses
+    // non-finite entries in `sanitize::implausible`, but only for a body it could parse at all.)
+    if !(quality.is_finite() && pass_rate.is_finite() && cost_per_case_usd.is_finite()) {
+        return None;
+    }
     Some(RunStat {
         provider,
         model,
         task_type: task_type_from(&bench.name, None),
         quality,
-        pass_rate: run.pass_rate.unwrap_or(0.0),
+        pass_rate,
         cost_per_case_usd,
         n_cases: run.n_cases,
         p50_latency_ms: run.p50_latency_ms,
@@ -241,6 +253,28 @@ mod tests {
         assert!((s.cost_per_case_usd - 0.02).abs() < 1e-9); // 0.4 / 20
     }
 
+    /// A run with no recorded pass rate must not enter a bucket as a pass rate of zero.
+    #[test]
+    fn a_run_with_no_pass_rate_does_not_enter_a_bucket_as_zero() {
+        let b = bench("QA bench", Value::Null);
+        let id = json!({ "provider": "anthropic", "model": "haiku" });
+        let mut unknown = run(id.clone(), Some(0.9), 10, 0.1);
+        unknown.pass_rate = None;
+        let mut known = run(id, Some(0.9), 10, 0.1);
+        known.pass_rate = Some(1.0);
+        let stats: Vec<_> = [&unknown, &known]
+            .iter()
+            .filter_map(|r| run_stat(&b, r, None))
+            .collect();
+        let (entries, _) = lighttrack_core::build_digest_counted(&stats, 1);
+        assert_eq!(entries.len(), 1);
+        assert!(
+            (entries[0].pass_rate - 1.0).abs() < 1e-9,
+            "got {}",
+            entries[0].pass_rate
+        );
+    }
+
     #[test]
     fn run_stat_falls_back_to_target_then_skips() {
         // No report identity, but the benchmark's single target carries it.
@@ -425,5 +459,39 @@ mod tests {
             Some("unknown")
         );
         assert_eq!(judge_provider_of("  "), None);
+    }
+
+    /// Finiteness at the site, before the digest exists (federated-client-contracts /
+    /// delta-or-absolute-exchange). A diverged run whose score is non-finite serialises as JSON
+    /// `null`, which the hub cannot read back into a number: one bad run would fail the WHOLE
+    /// push, healthy buckets included, as an opaque rejection rather than a typed site-side skip.
+    #[test]
+    fn a_non_finite_run_never_reaches_the_digest_and_cannot_sink_the_push() {
+        let b = bench("QA bench", Value::Null);
+        let id = json!({ "provider": "anthropic", "model": "haiku" });
+        let mut bad = run(id.clone(), Some(f64::NAN), 20, 0.4);
+        bad.id = "r-bad".into();
+        let mut bad_pass = run(id.clone(), Some(0.8), 20, 0.4);
+        bad_pass.pass_rate = Some(f64::INFINITY);
+        let good = run(id, Some(0.82), 20, 0.4);
+        let stats: Vec<_> = [&bad, &bad_pass, &good]
+            .iter()
+            .filter_map(|r| run_stat(&b, r, None))
+            .collect();
+        assert_eq!(stats.len(), 1, "only the finite run may be admitted");
+        let (entries, _) = lighttrack_core::build_digest_counted(&stats, 1);
+        let digest = lighttrack_core::CollectiveDigest {
+            schema_version: 3,
+            contributor_id: "x".into(),
+            generated_at: Utc::now(),
+            min_cases: 1,
+            projects_included: 1,
+            projects_excluded: 0,
+            buckets_withheld: 0,
+            entries,
+        };
+        let wire = serde_json::to_string(&digest).unwrap();
+        serde_json::from_str::<lighttrack_core::CollectiveDigest>(&wire)
+            .expect("the hub must be able to read back what the site sent");
     }
 }

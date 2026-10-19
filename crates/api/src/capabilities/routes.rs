@@ -136,7 +136,7 @@ mod tests {
         assert!(
             refused
                 .iter()
-                .any(|r| r.contains("/v1/projects/:id/use-cases")),
+                .any(|r| r.contains("/v1/projects/{id}/use-cases")),
             "the use-case registry 501s here: {refused:?}"
         );
         assert!(
@@ -161,8 +161,8 @@ mod tests {
         let refused = unsupported(&caps);
         for want in [
             "GET /v1/traces",
-            "GET /v1/traces/:id",
-            "GET /v1/projects/:id/redaction",
+            "GET /v1/traces/{id}",
+            "GET /v1/projects/{id}/redaction",
         ] {
             assert!(
                 refused.iter().any(|r| r == want),

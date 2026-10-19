@@ -80,7 +80,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "benchmark_regression",
         method: Method::Get,
-        path: "/v1/benchmarks/:id/regression",
+        path: "/v1/benchmarks/{id}/regression",
         // The same credential the gate is served to. A regression table is the gate's verdict with
         // its reasons attached; a key that may read one may read the other.
         access: Key(Read),

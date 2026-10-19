@@ -13,7 +13,7 @@ use crate::redact::Redactor;
 use crate::tests_access_probe::{scoped_key, send};
 use crate::tests_ingest::setup;
 
-const ROUTE: &str = "GET /v1/benchmarks/:id/regression";
+const ROUTE: &str = "GET /v1/benchmarks/{id}/regression";
 
 fn row() -> &'static lighttrack_contract::Endpoint {
     lighttrack_contract::endpoints()
@@ -89,7 +89,7 @@ fn fixture(
 #[test]
 fn the_route_is_declared_in_the_contract_with_its_credential() {
     let e = row();
-    assert_eq!(e.path, "/v1/benchmarks/:id/regression");
+    assert_eq!(e.path, "/v1/benchmarks/{id}/regression");
     assert_eq!(e.method, lighttrack_contract::Method::Get);
     assert_eq!(
         e.access,

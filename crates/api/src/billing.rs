@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 use crate::credential_boundary;
 use crate::error::ApiError;
+use crate::idempotency::Begin;
 use crate::state::{spawn_db, AppState};
 
 #[derive(Deserialize)]
@@ -87,12 +88,23 @@ pub(crate) async fn post_webhook(
     // without re-running the store writes. Providers that don't send a delivery id fall through to
     // the deterministic `revenue_events.id` upsert, which is idempotent on its own.
     let idem_key = lookup("webhook-id").map(|id| format!("{provider}:{id}"));
-    if let Some(key) = &idem_key {
-        if st.seen_webhooks.check_and_insert(key) {
-            tracing::info!(provider = %provider, delivery = %key, "billing webhook: duplicate delivery, already handled");
+    // The claim stays in flight until the batch commits; dropping it on any early exit forgets the
+    // key, so a failed delivery's retry is reprocessed rather than swallowed.
+    let claim = match idem_key.as_ref().map(|key| st.seen_webhooks.begin(key)) {
+        Some(Begin::Done) => {
+            tracing::info!(provider = %provider, "billing webhook: duplicate delivery, already handled");
             return Ok(StatusCode::OK);
         }
-    }
+        // Acknowledging now would tell the provider the delivery is done while the first attempt can
+        // still roll back; refuse, and let the provider's retry find the committed result.
+        Some(Begin::InFlight) => {
+            return Err(ApiError::conflict(
+                "this webhook delivery is still being processed; retry shortly",
+            ));
+        }
+        Some(Begin::New(c)) => Some(c),
+        None => None,
+    };
 
     let store = st.store.clone();
     let n = events.len();
@@ -111,9 +123,6 @@ pub(crate) async fn post_webhook(
         // retry is reprocessed rather than swallowed as a "duplicate", and dead-letter the rejected
         // delivery (provider ids + error) so the loss is loud and recoverable instead of surfacing at
         // month-end reconciliation.
-        if let Some(key) = &idem_key {
-            st.seen_webhooks.forget(key);
-        }
         tracing::error!(
             provider = %provider,
             project_id = %project,
@@ -124,6 +133,9 @@ pub(crate) async fn post_webhook(
         );
     }
     stored?;
+    if let Some(c) = claim {
+        c.commit();
+    }
 
     tracing::info!(provider = %provider, project_id = %project, records = n, "billing webhook: stored revenue records");
     Ok(StatusCode::OK)

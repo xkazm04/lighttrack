@@ -42,7 +42,7 @@ jobs:
     # runner — that is a separate 24h queue limit — so this is a backstop, not the fix for the above.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux build deps (sqlx native-tls + bundled sqlite)
         if: runner.os == 'Linux'
@@ -116,7 +116,7 @@ jobs:
       contents: write # attach the SBOM and the signature bundles to the release
       id-token: write # the OIDC token IS the signing identity
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: sigstore/cosign-installer@v3
       - uses: anchore/sbom-action/download-syft@v0
 

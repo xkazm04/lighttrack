@@ -61,7 +61,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_relay_task",
         method: Method::Get,
-        path: "/v1/relay/tasks/:id",
+        path: "/v1/relay/tasks/{id}",
         access: Key(Read),
         params: &[pm("id", "task", "relay task id")],
         response: TypeRef::Named("RelayTask"),
@@ -80,7 +80,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "post_relay_result",
         method: Method::Post,
-        path: "/v1/relay/tasks/:id/result",
+        path: "/v1/relay/tasks/{id}/result",
         access: Admin,
         mutating: true,
         machine: true,
@@ -111,7 +111,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "renew_relay_lease",
         method: Method::Post,
-        path: "/v1/relay/tasks/:id/renew",
+        path: "/v1/relay/tasks/{id}/renew",
         access: Admin,
         mutating: true,
         machine: true,
@@ -129,7 +129,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "post_relay_progress",
         method: Method::Post,
-        path: "/v1/relay/tasks/:id/progress",
+        path: "/v1/relay/tasks/{id}/progress",
         access: Admin,
         mutating: true,
         machine: true,
@@ -146,7 +146,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "cancel_relay_task",
         method: Method::Post,
-        path: "/v1/relay/tasks/:id/cancel",
+        path: "/v1/relay/tasks/{id}/cancel",
         // Paired with the enqueue door above, not with the config writes. `Key(Manage)` was the
         // declaration and "any project key of the owning tenant" was the enforcement, which only
         // stayed invisible while nothing resolved requests against this column: a client holding
@@ -232,7 +232,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "revoke_relay_device",
         method: Method::Delete,
-        path: "/v1/relay/devices/:id",
+        path: "/v1/relay/devices/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -265,7 +265,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "snapshot_relay_action_dataset",
         method: Method::Post,
-        path: "/v1/relay/actions/:action_type/dataset",
+        path: "/v1/relay/actions/{action_type}/dataset",
         access: Admin,
         mutating: true,
         params: &[

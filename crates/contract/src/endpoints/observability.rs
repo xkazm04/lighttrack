@@ -132,7 +132,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_event",
         method: Method::Get,
-        path: "/v1/events/:id",
+        path: "/v1/events/{id}",
         access: Key(Read),
         params: &[pm("id", "event", "event id")],
         response: TypeRef::Named("LlmEvent"),
@@ -194,7 +194,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_trace",
         method: Method::Get,
-        path: "/v1/traces/:id",
+        path: "/v1/traces/{id}",
         access: Key(Read),
         params: &[pm("id", "trace", "trace id")],
         response: TypeRef::Untyped(
@@ -216,7 +216,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "score_trace",
         method: Method::Post,
-        path: "/v1/traces/:id/score",
+        path: "/v1/traces/{id}/score",
         access: Key(Ingest),
         mutating: true,
         params: &[

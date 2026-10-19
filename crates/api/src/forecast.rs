@@ -299,6 +299,13 @@ pub(crate) async fn compute_forecast(
     }
 
     let mut alerts = build_alerts(&project, &budgets, &margins);
+    // A customer-axis margin alert names another party and quotes its revenue and cost; mark it so the
+    // broadcast composer refuses to enumerate it (identity-scope attribution refusal).
+    if dim == MarginDimension::Customer {
+        for a in alerts.iter_mut().filter(|a| a.kind == "margin_erosion") {
+            a.identity_scoped = true;
+        }
+    }
     // Stamp the guardrail already standing for each eroding customer here, on the shared path, so
     // `GET /v1/forecast` and the scheduled sweep cannot disagree about what is being done about a
     // margin alert. `until` — the instant the whole forecast was captured at — is what decides

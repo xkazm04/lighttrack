@@ -103,6 +103,7 @@ entry is written while the change is still fresh, not reconstructed at tag time.
   real in-family spend. Exact-value dimensions (provider / name / api_key / customer) are unchanged
   and keep exact semantics; unscoped rules are unchanged. A backend that cannot serve the grouped
   rollup answers 501 `unsupported` rather than a short count.
+- **A billing webhook duplicate that arrives while its first attempt is still persisting is refused with 409**, not acknowledged: a batch that then rolls back was reported done to the provider, which never resends. Only a committed delivery id short-circuits.
 
 <!--
 Template for the next release — copy, do not delete:
