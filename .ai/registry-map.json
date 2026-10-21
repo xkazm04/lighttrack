@@ -7787,7 +7787,11 @@
           "revision": 5,
           "changedAt": "2026-10-21",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "clients/typescript/src/journal.ts:255 Decoded journal records flow through unchecked types without the required type-aware census, leaving trust-base members outside the package's checks.",
+          "evaluatedAt": "2026-10-21",
+          "evaluatedAgainst": "sha256-b2:3ad9d5604e9627ce",
+          "evaluatedRevision": 5
         },
         {
           "subject": "module-design",
