@@ -1,0 +1,17 @@
+{
+ "schema": "conform-run/1",
+ "worker": "dc73c751-ef09-43c9-b89f-eb211b6a56b2",
+ "subject": "concurrent-vcs",
+ "evaluatedAt": "2026-10-21T22:08:50.292783+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "concurrent-vcs",
+   "context": "storage-and-jobs",
+   "reason": "Read all eight context files and searched them and the repository for VCS mechanisms. The context implements database job ownership (crates/api/src/jobs.rs:121: store.claim_job(stale_before, &kinds)) and database maintenance (crates/api/src/storage.rs:521), which do not establish how editing sessions coordinate claims, isolate checkouts, construct or verify commits, or integrate branches; no context-specific evidence supports the nine technique verdicts."
+  }
+ ],
+ "consults": []
+}
