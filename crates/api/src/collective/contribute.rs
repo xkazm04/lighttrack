@@ -328,13 +328,14 @@ mod tests {
     fn the_key_is_read_from_the_named_variable_never_from_the_request() {
         let name = format!("LT_TEST_HUB_KEY_{}", std::process::id());
         assert_eq!(resolve_hub_key(Some(&name)), None, "unset ⇒ keyless");
-        std::env::set_var(&name, "  secret-key  ");
+        let mut env = lighttrack_core::test_env::EnvGuard::lock();
+        env.set(&name, "  secret-key  ");
         assert_eq!(resolve_hub_key(Some(&name)).as_deref(), Some("secret-key"));
         // An empty variable is not a key — a keyless push and an empty bearer are different things
         // to a hub, and the second is always a 401.
-        std::env::set_var(&name, "   ");
+        env.set(&name, "   ");
         assert_eq!(resolve_hub_key(Some(&name)), None);
-        std::env::remove_var(&name);
+        env.remove(&name);
         // A blank ref falls back to the documented default rather than to the empty variable name.
         assert_eq!(resolve_hub_key(Some("  ")), resolve_hub_key(None));
     }

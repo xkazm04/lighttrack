@@ -20,6 +20,7 @@ mod collective;
 mod compare;
 mod costs;
 mod datasets;
+mod effort_curve;
 mod events;
 mod forecast;
 mod jobs;

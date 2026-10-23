@@ -205,7 +205,9 @@ pub fn input_fingerprint(s: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(normalize_input(s).as_bytes());
-    format!("{:x}", h.finalize())
+    // sha2 0.11's `finalize()` output no longer implements `LowerHex` directly (`format!("{:x}", ..)`
+    // stopped compiling on the bump) - format each byte instead of relying on that impl.
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]

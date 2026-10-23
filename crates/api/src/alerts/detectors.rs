@@ -40,19 +40,24 @@ pub(crate) struct ScoreDrop {
 }
 
 impl Alerter {
-    /// Push `now` into the project's rolling error window, evict entries older than the window, and
-    /// return the current count. Takes an explicit `now` so it is unit-testable.
+    /// Push `now`, drop instants older than the window, and forget a project whose deque is then
+    /// empty. The map is per replica; leaving quiet projects in it grows for the life of the
+    /// process. Takes an explicit `now` so it is unit-testable.
     pub(super) fn note_error(&self, project: &str, now: Instant) -> u32 {
         let mut map = self.error_windows.lock().unwrap_or_else(|p| p.into_inner());
+        let window = self.config.error_window;
+        map.retain(|_, dq| {
+            while let Some(front) = dq.front() {
+                if now.duration_since(*front) > window {
+                    dq.pop_front();
+                } else {
+                    break;
+                }
+            }
+            !dq.is_empty()
+        });
         let dq = map.entry(project.to_string()).or_default();
         dq.push_back(now);
-        while let Some(front) = dq.front() {
-            if now.duration_since(*front) > self.config.error_window {
-                dq.pop_front();
-            } else {
-                break;
-            }
-        }
         dq.len() as u32
     }
 
@@ -87,3 +92,46 @@ impl Alerter {
         }
     }
 }
+
+/// The window the spike actually used. Whole minutes stay `5m`; every other length is seconds.
+/// Integer minutes with a floor of one reported a 30s window as `1m`.
+pub(super) fn window_phrase(secs: u64) -> String {
+    if secs >= 60 && secs.is_multiple_of(60) {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
+/// A window under 6 never has a tail of 3 and a baseline of 3. A minimum above the window never
+/// fills. Both used to leave the startup banner claiming score-drop was on.
+const SCORE_SAMPLE_FLOOR: usize = 4;
+const SCORE_WINDOW_FLOOR: usize = 6;
+
+pub(super) fn score_limits_from(window_raw: u64, min_raw: u64) -> (usize, usize) {
+    let asked_window = (window_raw as usize).max(SCORE_SAMPLE_FLOOR);
+    let asked_min = (min_raw as usize).max(SCORE_SAMPLE_FLOOR);
+    let window = asked_window.max(SCORE_WINDOW_FLOOR);
+    let min_samples = asked_min.min(window);
+    if window != asked_window || min_samples != asked_min {
+        tracing::warn!(
+            window = window_raw,
+            min_samples = min_raw,
+            using_window = window,
+            using_min = min_samples,
+            "score-drop settings can never trip; using a window the detector can fire"
+        );
+    }
+    (window, min_samples)
+}
+
+pub(super) fn score_limits() -> (usize, usize) {
+    score_limits_from(
+        super::env_u64("LIGHTTRACK_ALERT_SCORE_WINDOW", 20),
+        super::env_u64("LIGHTTRACK_ALERT_SCORE_MIN_SAMPLES", 8),
+    )
+}
+
+#[cfg(test)]
+#[path = "detectors_tests.rs"]
+mod tests;

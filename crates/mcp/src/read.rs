@@ -28,6 +28,7 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         "list_limits" => bind(args, "project", |p| {
             c.get(&format!("/v1/projects/{p}/limits"))
         }),
+        "preview_limit" => preview_limit(c, args),
         "list_alerts" => c.get(&alerts_path(args)),
         "list_margin_policies" => bind(args, "project", |p| {
             c.get(&format!("/v1/projects/{p}/margin-policies"))
@@ -46,6 +47,16 @@ pub(crate) fn dispatch(c: &Client, name: &str, args: &Value) -> Option<Result<Va
         }),
         "check_benchmark_gate" => bind(args, "benchmark", |b| {
             c.get(&format!("/v1/benchmarks/{b}/gate"))
+        }),
+        "get_benchmark_regression" => bind(args, "benchmark", |b| {
+            // `run` is required by the HTTP row, so it is required here too rather than defaulted:
+            // a forwarder that invents a run id answers a question nobody asked.
+            let Some(run) = args.get("run").and_then(Value::as_str) else {
+                return Err("missing required argument: run".to_string());
+            };
+            let mut p = format!("/v1/benchmarks/{b}/regression?run={}", enc_q(run));
+            push_str_params(&mut p, args, &["against"]);
+            c.get(&p)
         }),
         "get_usecases" => c.get(&usecases_path(args)),
         "query_rollup" => c.get(&rollup_path(args)),
@@ -149,6 +160,32 @@ fn unpriced_path(args: &Value) -> String {
         }
     }
     p
+}
+
+/// `GET /v1/limits/preview`. `project` and `threshold` are required by the HTTP row, so they are
+/// required here too rather than defaulted: a forwarder that invents a threshold previews a cap
+/// nobody asked about. The optional set forwarded here is exactly the tool's declared `args` — an
+/// arg the forwarder drops is a filter the tool publishes and then silently ignores.
+fn preview_limit(c: &Client, args: &Value) -> Result<Value, String> {
+    let Some(project) = args.get("project").and_then(Value::as_str) else {
+        return Err("missing required argument: project".to_string());
+    };
+    let Some(threshold) = args.get("threshold").and_then(Value::as_f64) else {
+        return Err("missing required argument: threshold (the candidate cap)".to_string());
+    };
+    let mut p = format!(
+        "/v1/limits/preview?project={}&threshold={threshold}",
+        enc_q(project)
+    );
+    push_str_params(
+        &mut p,
+        args,
+        &["metric", "window", "action", "scope", "over"],
+    );
+    if let Some(w) = args.get("warn_at").and_then(Value::as_f64) {
+        p.push_str(&format!("&warn_at={w}"));
+    }
+    c.get(&p)
 }
 
 fn with_project(base: &str, args: &Value) -> String {

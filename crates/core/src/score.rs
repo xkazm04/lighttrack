@@ -75,6 +75,13 @@ pub struct ScoreDim {
     /// its reasoning tokens were paid for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning: Vec<String>,
+    /// The dimension was not measured for this verdict (an `exec` sandbox that could not run, a
+    /// `grounding` output with zero claims). `value` is a placeholder; it left the overall entirely.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub voided: bool,
+    /// `grounding` only: the per-claim verdicts and counters behind `value`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grounding: Option<crate::grounding::GroundingDetail>,
 }
 
 /// Structured provenance for a judged verdict: the per-dimension breakdown plus the reliability
@@ -124,10 +131,15 @@ pub struct ScoreDetail {
     /// carried no stamp at all, which is a weaker statement and kept distinct from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_redacted_spans: Option<u32>,
+    /// For a compare cell: what generating the judged candidates spent — tokens, the reasoning
+    /// share, latency, cost. Persisted here, per case, so a run's thinking can be read back case by
+    /// case past the report's bounded preview. `None` on every verdict that generated nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<crate::gen_spend::GenerationFacts>,
 }
 
 /// Truncate on a char boundary, marking that it happened.
-fn cap_str(s: &str) -> String {
+pub(crate) fn cap_str(s: &str) -> String {
     if s.chars().count() <= MAX_REASONING_CHARS {
         return s.to_string();
     }
@@ -146,6 +158,7 @@ impl ScoreDetail {
             for r in &mut d.reasoning {
                 *r = cap_str(r);
             }
+            d.grounding = d.grounding.take().map(|g| g.capped());
         }
         self.notes.truncate(MAX_NOTES);
         for n in &mut self.notes {
@@ -343,6 +356,20 @@ pub struct BenchmarkCase {
     pub expected: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
+    /// The rung this case was graded at (M27), carried over from the `DatasetItem` it came from so
+    /// a run's stored `dataset` still says which cases were the hard ones. `None` is ungraded, not
+    /// medium — see [`crate::dataset::Difficulty`].
+    ///
+    /// Tolerant on the way in from storage, strict on the way in from an operator: an inline case
+    /// posted to `create_benchmark` with a rung this ladder does not name refuses the whole request
+    /// (`lighttrack-api`'s `difficulty_input`), because that is where the 8-of-18 silently-ungraded
+    /// benchmark came from. Reading the stored `dataset` column back still degrades.
+    #[serde(
+        default,
+        deserialize_with = "crate::dataset::de_difficulty",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub difficulty: Option<crate::dataset::Difficulty>,
 }
 
 /// Reserved key under a benchmark's free-form `target` object carrying its opt-in recurrence
@@ -361,6 +388,32 @@ pub const RECURRENCE_KEY: &str = "schedule_interval_secs";
 /// name would. The value is a dataset **name**, not an id — the whole point is that it survives
 /// forking, and a fork mints a new id.
 pub const REGRESSION_DATASET_KEY: &str = "regression_dataset";
+
+/// Every key the product reserves inside a benchmark's otherwise free-form `target` object.
+///
+/// The list exists because the reservation has to be checkable at the door a caller posts through,
+/// not only at the readers. A reserved key whose meaning is host policy and whose value arrives
+/// from a caller is not reserved at all: whatever a caller wrote under the name is read as the
+/// policy, and the next key this product carves out of `target` captures whatever callers already
+/// keep under that name. Enumeration is the weaker of the two available reservations — it can only
+/// protect names already invented — so the door refuses the listed names with the repair spelled
+/// out, and each reserved key gets a request field of its own so the host stays the only writer.
+pub const RESERVED_TARGET_KEYS: &[&str] = &[RECURRENCE_KEY, REGRESSION_DATASET_KEY];
+
+/// The reserved keys a `target` value occupies, in [`RESERVED_TARGET_KEYS`] order.
+///
+/// Empty for a matrix target (a JSON array has no room for a sibling key), for a scalar and for an
+/// absent one — those shapes cannot carry a reservation, so there is nothing to refuse.
+pub fn reserved_target_keys_in(target: &Value) -> Vec<&'static str> {
+    let Some(map) = target.as_object() else {
+        return Vec::new();
+    };
+    RESERVED_TARGET_KEYS
+        .iter()
+        .copied()
+        .filter(|k| map.contains_key(*k))
+        .collect()
+}
 
 /// A benchmark definition: a dataset + rubric + judge run repeatedly to track quality over time.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -560,5 +613,80 @@ mod tests {
             );
             assert_eq!(k.is_run_case(), expect, "{k:?}");
         }
+    }
+
+    /// A benchmark stored before M27 has cases with no `difficulty` key, and a run that reads one
+    /// back and writes it again must not invent a grade for it.
+    #[test]
+    fn a_pre_m27_case_round_trips_byte_identically() {
+        let stored = r#"{"input":"2+2","expected":"4"}"#;
+        let case: BenchmarkCase = serde_json::from_str(stored).expect("parse");
+        assert_eq!(case.difficulty, None);
+        assert_eq!(serde_json::to_string(&case).expect("ser"), stored);
+    }
+
+    /// The grade a case carries is the one the dataset item was graded at, and an unreadable one
+    /// costs the field rather than the case.
+    #[test]
+    fn a_case_carries_its_rung_and_degrades_an_unknown_one() {
+        let graded: BenchmarkCase =
+            serde_json::from_value(json!({ "input": "i", "difficulty": "hard" })).expect("case");
+        assert_eq!(graded.difficulty, Some(crate::dataset::Difficulty::Hard));
+
+        let odd: BenchmarkCase =
+            serde_json::from_value(json!({ "input": "i", "difficulty": "brutal" }))
+                .expect("an unreadable grade must not take the case with it");
+        assert_eq!(odd.difficulty, None);
+        assert_eq!(odd.input, "i");
+    }
+
+    /// A reserved key inside a free-form object a caller writes is read as policy, whoever put it
+    /// there. The control is the neighbouring key: an unreserved name reads as nothing, so this
+    /// test can tell "the host claimed a name" apart from "the host reads any string".
+    #[test]
+    fn a_caller_written_reserved_key_reads_as_host_policy() {
+        let caller_authored = Benchmark {
+            id: "b".into(),
+            project_id: "p".into(),
+            name: "n".into(),
+            rubric: "r".into(),
+            judge_model: "m".into(),
+            target: json!({ "endpoint": "https://x", REGRESSION_DATASET_KEY: "my-own-note" }),
+            dataset_ref: None,
+            rubric_id: None,
+            dataset: vec![],
+            baseline_score: None,
+            created_at: Utc::now(),
+        };
+        assert_eq!(caller_authored.regression_dataset(), Some("my-own-note"));
+
+        let control = Benchmark {
+            target: json!({ "endpoint": "https://x", "regression_notes": "my-own-note" }),
+            ..caller_authored.clone()
+        };
+        assert_eq!(control.regression_dataset(), None);
+    }
+
+    #[test]
+    fn reserved_keys_are_reported_by_name_and_only_when_present() {
+        assert_eq!(
+            reserved_target_keys_in(&json!({ "endpoint": "https://x" })),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            reserved_target_keys_in(&json!({ RECURRENCE_KEY: 60, "endpoint": "https://x" })),
+            vec![RECURRENCE_KEY]
+        );
+        assert_eq!(
+            reserved_target_keys_in(&json!({ REGRESSION_DATASET_KEY: "d", RECURRENCE_KEY: 60 })),
+            vec![RECURRENCE_KEY, REGRESSION_DATASET_KEY]
+        );
+        // A matrix target has no room for a sibling key, and neither has a scalar: nothing to
+        // report rather than a panic on `as_object`.
+        assert_eq!(
+            reserved_target_keys_in(&json!([{ "provider": "openai" }])),
+            Vec::<&str>::new()
+        );
+        assert_eq!(reserved_target_keys_in(&json!(null)), Vec::<&str>::new());
     }
 }

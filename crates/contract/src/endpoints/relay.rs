@@ -29,6 +29,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["relay", "tasks", "enqueue"]),
         doc: "Enqueue a device task; routability and the project's usage limits are checked first.",
+        surface: "relay",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -54,12 +55,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["relay", "tasks", "list"]),
         doc: "Relay tasks, newest first, filtered by project and status.",
+        surface: "relay",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "get_relay_task",
         method: Method::Get,
-        path: "/v1/relay/tasks/:id",
+        path: "/v1/relay/tasks/{id}",
         access: Key(Read),
         params: &[pm("id", "task", "relay task id")],
         response: TypeRef::Named("RelayTask"),
@@ -70,6 +72,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             ..McpTool::DEFAULT
         }),
         doc: "One relay task by id — the shape the originating app polls.",
+        surface: "relay",
         ..Endpoint::DEFAULT
     },
     // The device agent's settle report, authenticated by its device key and fenced by the lease it
@@ -77,7 +80,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "post_relay_result",
         method: Method::Post,
-        path: "/v1/relay/tasks/:id/result",
+        path: "/v1/relay/tasks/{id}/result",
         access: Admin,
         mutating: true,
         machine: true,
@@ -101,13 +104,14 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ],
         response: TypeRef::Named("RelayTask"),
         doc: "A device reports a run's outcome; a landed report also writes the run's usage event.",
+        surface: "relay",
         ..Endpoint::DEFAULT
     },
     // The lease heartbeat: a device proving it still holds the task, fenced by `lease_fence`.
     Endpoint {
         id: "renew_relay_lease",
         method: Method::Post,
-        path: "/v1/relay/tasks/:id/renew",
+        path: "/v1/relay/tasks/{id}/renew",
         access: Admin,
         mutating: true,
         machine: true,
@@ -117,6 +121,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ],
         response: TypeRef::Named("LeaseHeld"),
         doc: "Extend a held lease; a 409 means the lease is gone and the device must stop.",
+        surface: "relay",
         ..Endpoint::DEFAULT
     },
     // Liveness detail from the running device, kept off the heartbeat so a stall computing progress
@@ -124,7 +129,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "post_relay_progress",
         method: Method::Post,
-        path: "/v1/relay/tasks/:id/progress",
+        path: "/v1/relay/tasks/{id}/progress",
         access: Admin,
         mutating: true,
         machine: true,
@@ -135,18 +140,26 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ],
         response: TypeRef::Named("LeaseHeld"),
         doc: "Record what a leased run is doing; fenced exactly like renew.",
+        surface: "relay",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "cancel_relay_task",
         method: Method::Post,
-        path: "/v1/relay/tasks/:id/cancel",
-        access: Key(Manage),
+        path: "/v1/relay/tasks/{id}/cancel",
+        // Paired with the enqueue door above, not with the config writes. `Key(Manage)` was the
+        // declaration and "any project key of the owning tenant" was the enforcement, which only
+        // stayed invisible while nothing resolved requests against this column: a client holding
+        // the default ingest+read pair could enqueue a task and not stop it. The owner who started
+        // the work may cancel it; which task is *theirs* is still the tenant scope's answer, and a
+        // foreign id is still 404 rather than 403 (M17).
+        access: Key(Ingest),
         mutating: true,
         params: &[p("id", "relay task id")],
         response: TypeRef::Named("RelayCancel"),
         cli: Some(&["relay", "tasks", "cancel"]),
         doc: "Stop a queued or leased task; a finished one is a 409, never a silent success.",
+        surface: "relay",
         ..Endpoint::DEFAULT
     },
     // The lease door itself: an enrolled device asking for due work over outbound HTTPS.
@@ -169,6 +182,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
              cadence and the TTL actually granted after clamping.",
         ),
         doc: "A device leases due tasks matching its capabilities, and is told how often to renew.",
+        surface: "relay",
         ..Endpoint::DEFAULT
     },
     // Never over MCP: this mints a device key shown exactly once, and a key in a tool result is a
@@ -191,6 +205,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         mcp: None,
         cli: Some(&["relay", "devices", "add"]),
         doc: "Enrol a device and mint its key, which is shown exactly once.",
+        surface: "devices",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -211,12 +226,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["relay", "devices", "list"]),
         doc: "The enrolled fleet: capabilities, liveness, agent version, revocation.",
+        surface: "devices",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "revoke_relay_device",
         method: Method::Delete,
-        path: "/v1/relay/devices/:id",
+        path: "/v1/relay/devices/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -224,6 +240,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("Device"),
         cli: Some(&["relay", "devices", "revoke"]),
         doc: "Revoke a device: a flag, not a delete, so tasks it ran keep naming a device that resolves.",
+        surface: "devices",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -242,12 +259,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["relay", "actions"]),
         doc: "The action fingerprint ledger: which prompt text each action has been running, and when.",
+        surface: "relay",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "snapshot_relay_action_dataset",
         method: Method::Post,
-        path: "/v1/relay/actions/:action_type/dataset",
+        path: "/v1/relay/actions/{action_type}/dataset",
         access: Admin,
         mutating: true,
         params: &[
@@ -262,6 +280,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["relay", "actions", "snapshot"]),
         doc: "Snapshot an action's succeeded runs into a dataset so a benchmark can gate its prompt.",
+        surface: "relay",
         ..Endpoint::DEFAULT
     },
 ];

@@ -153,8 +153,10 @@ export class SpanJournal {
 
   /**
    * Sweep the journal directory for OTHER processes' abandoned files and return their unsettled
-   * open records, removing each file so a record is reported once. Never rejects: an unreadable or
-   * half-written file yields whatever parsed.
+   * open records, removing each file so a record is reported once. An unreadable or half-written
+   * FILE yields whatever parsed; a directory that cannot even be LISTED rejects unless the reason is
+   * that it (or a segment above it) simply is not there — "could not look" must not read as "looked
+   * and found nothing", but "there was nothing to look in" is exactly that.
    */
   async recover(): Promise<JournalRecord[]> {
     if (!this.enabled) return [];
@@ -164,8 +166,19 @@ export class SpanJournal {
     let names: string[];
     try {
       names = fs.readdirSync(this.dir);
-    } catch {
-      return [];
+    } catch (err) {
+      // A directory that does not exist is genuinely empty. `ENOTDIR` is ambiguous by error code
+      // alone — it fires both when a segment ABOVE this.dir is a plain file (the path could never
+      // become a directory: also "not there", also empty) and when this.dir itself IS a plain file
+      // (a real failure — see "an unreadable journal directory warns..." below). `existsSync`
+      // resolves the ambiguity: the target existing (as anything) means the failure is about IT, not
+      // about a missing ancestor. Anything else (a file at the path, a permission wall) means
+      // recovery could not LOOK, and the caller spells that as a failure rather than as a clean zero
+      // — see recoverUnsettledSpans.
+      const code = (err as NodeJS.ErrnoException | null)?.code;
+      if (code === "ENOENT") return [];
+      if (code === "ENOTDIR" && !fs.existsSync(this.dir)) return [];
+      throw err;
     }
     const out: JournalRecord[] = [];
     const now = Date.now();

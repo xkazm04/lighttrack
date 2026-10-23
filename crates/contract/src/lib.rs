@@ -26,7 +26,7 @@ mod types;
 
 pub use types::{
     Access, Deprecation, DeprecationStage, Endpoint, JsonTy, KeyScope, McpTool, Method, Param,
-    ParamKind, TypeRef,
+    ParamKind, TypeRef, CORE_SURFACE,
 };
 
 /// Every endpoint in the contract, in router order.
@@ -39,12 +39,30 @@ pub fn endpoint(id: &str) -> Option<&'static Endpoint> {
     endpoints().find(|e| e.id == id)
 }
 
-/// Every distinct `/v1/...` route path the contract declares. This is the set the API's bijection
-/// test holds `build_router` to.
+/// Every distinct `/v1/...` route path the contract declares.
+///
+/// **Paths only — the methods are deduplicated away**, so this is a coverage denominator (see
+/// [`matrix`]) and a reachability check, never an authorization one. The API's access bijection is
+/// `crates/api/src/tests_access_matrix.rs`, which walks `endpoints()` and probes each (method, path)
+/// pair through the real router; holding a router to *this* set is how a declared `GET` served only
+/// as `POST` used to pass.
 pub fn route_paths() -> Vec<&'static str> {
     let mut v: Vec<&'static str> = endpoints()
         .map(|e| e.path)
         .filter(|p| p.starts_with("/v1"))
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// Every surface name the table claims — as a route-level refusal or as a degradation.
+///
+/// The denominator of the completeness check that runs in the API, where `Surface::ALL` is
+/// visible: a surface no row claims is a refusal with no published consequence.
+pub fn claimed_surfaces() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = endpoints()
+        .flat_map(|e| std::iter::once(e.surface).chain(e.degrades.iter().copied()))
         .collect();
     v.sort_unstable();
     v.dedup();
@@ -104,18 +122,22 @@ mod tests {
         }
     }
 
-    /// Every `:segment` of a path must be a declared `Path` parameter, or the generated OpenAPI
+    /// Every `{segment}` of a path must be a declared `Path` parameter, or the generated OpenAPI
     /// document is invalid and the MCP tool cannot bind the id it needs.
     #[test]
     fn every_path_segment_is_a_declared_parameter() {
         for e in endpoints() {
-            for seg in e.path.split('/').filter(|s| s.starts_with(':')) {
-                let name = &seg[1..];
+            for seg in e
+                .path
+                .split('/')
+                .filter(|s| s.starts_with('{') && s.ends_with('}'))
+            {
+                let name = &seg[1..seg.len() - 1];
                 assert!(
                     e.params
                         .iter()
                         .any(|p| p.kind == ParamKind::Path && p.name == name),
-                    "{}: path segment ':{name}' has no declared Path param",
+                    "{}: path segment '{{{name}}}' has no declared Path param",
                     e.id
                 );
             }
@@ -152,6 +174,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every row resolves to exactly one route-level surface, and the resolution is not empty —
+    /// a derived selection that selects nothing must fail rather than report nothing refused.
+    #[test]
+    fn every_row_resolves_to_exactly_one_surface() {
+        let mut resolved = 0usize;
+        for e in endpoints() {
+            let s = e.surface;
+            assert!(!s.is_empty(), "{}: empty surface name", e.id);
+            assert!(
+                !s.contains(' ') && s == s.to_lowercase(),
+                "{}: '{s}' is not a snake_case surface name",
+                e.id
+            );
+            for d in e.degrades {
+                assert_ne!(
+                    *d, s,
+                    "{}: '{d}' cannot both remove this route and merely narrow it",
+                    e.id
+                );
+            }
+            resolved += 1;
+        }
+        assert!(
+            resolved >= 130,
+            "only {resolved} rows resolved to a surface — the mapping is empty or the table shrank"
+        );
     }
 
     /// The coverage property the whole item exists to establish: no route is reachable from

@@ -33,6 +33,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["labels", "add"]),
         doc: "Record one human verdict; `labeler` is required so a calibration stays auditable.",
+        surface: "labels",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -62,6 +63,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["labels", "list"]),
         render_kind: Some("list_labels"),
         doc: "The human verdict ledger, newest first.",
+        surface: "labels",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -74,6 +76,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("CalibrationRecord"),
         cli: Some(&["judges", "calibrate"]),
         doc: "Record a completed judge-human calibration — the row a trust verdict is decided from.",
+        surface: "calibrations",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -100,6 +103,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["judges", "history"]),
         render_kind: Some("list_calibrations"),
         doc: "Judge-human calibration history, newest first.",
+        surface: "calibrations",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -125,6 +129,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["judges", "trust"]),
         render_kind: Some("get_judge_trust"),
         doc: "Whether one judge may be believed for one rubric, and the record that decided it.",
+        surface: "calibrations",
         ..Endpoint::DEFAULT
     },
 ];

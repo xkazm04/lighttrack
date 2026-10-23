@@ -1,0 +1,105 @@
+{
+ "schema": "conform-run/1",
+ "worker": "7d8a74aa-cea8-4563-894a-3049374174d3",
+ "subject": "cost-metering",
+ "evaluatedAt": "2026-10-15T23:57:15.887645+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "economics-margin-pricing",
+   "subject": "cost-metering",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/core/src/pricing.rs:330 An unknown model returns no price instead of the conservative default required by the standard, leaving its cost excluded from monetary totals.",
+   "techniques": [
+    {
+     "technique": "price-tables",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/pricing.rs:330 A lookup miss propagates None; the counted unpriced ledger does not supply the required conservative default price."
+    },
+    {
+     "technique": "spend-attribution",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/margin.rs:100 The customer/product rollup retains untagged cost in an explicit unattributed bucket instead of dropping it."
+    },
+    {
+     "technique": "spend-observability",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/margin.rs:102 compute_margin sums known costs but discards each input bucket's unpriced_calls; its returned margin rows carry no qualification for the incomplete cost."
+    },
+    {
+     "technique": "unit-classes-are-open",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/pricing.rs:339 Pricing returns a definite scalar from input, output and cache-read rates without a residual-unit qualification; cache writes have no separate rate."
+    },
+    {
+     "technique": "whole-prompt-denominator",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/pricing.rs:333 Whole-prompt subtraction is validated, but cache-write tokens remain billed at ordinary input rates, falling short of rule 4's separate write-rate requirement."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-rendering",
+   "subject": "cost-metering",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/render/src/unpriced.rs:45 The unpriced renderer reports window-scoped counts without printing the response's since boundary, so readers cannot identify the period those counts describe.",
+   "techniques": [
+    {
+     "technique": "spend-attribution",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/margin.rs:41 The API echoes below when totals cover a filtered at-risk cohort, but this renderer omits that predicate and presents them as an unqualified Total."
+    },
+    {
+     "technique": "spend-observability",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/unpriced.rs:46 The spend caveat refers to this window, but ledger() never renders its supplied since boundary."
+    },
+    {
+     "technique": "usage-ledgers",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/unpriced.rs:45 The consumer drops the ledger response's since boundary instead of rendering the window supplied with its counts."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-15T23:57:15.887645+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "cost-metering"
+   ],
+   "techniques": [
+    "price-tables",
+    "spend-attribution",
+    "spend-observability",
+    "unit-classes-are-open",
+    "whole-prompt-denominator"
+   ],
+   "deviations": 1,
+   "context": "economics-margin-pricing",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-15T23:57:15.887645+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "cost-metering"
+   ],
+   "techniques": [
+    "spend-attribution",
+    "spend-observability",
+    "usage-ledgers"
+   ],
+   "deviations": 1,
+   "context": "evaluation-rendering",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

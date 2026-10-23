@@ -10,7 +10,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_benchmark",
         method: Method::Post,
-        path: "/v1/projects/:id/benchmarks",
+        path: "/v1/projects/{id}/benchmarks",
         access: Admin,
         mutating: true,
         params: &[
@@ -43,7 +43,9 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
                 name: "dataset",
                 kind: ParamKind::Body,
                 ty: JsonTy::Array,
-                doc: "inline cases",
+                doc: "inline cases; a case's optional `difficulty` is easy|medium|hard, and any \
+                      other spelling refuses the whole request rather than storing that case \
+                      ungraded",
                 schema: Some(crate::nested::BENCHMARK_DATASET),
                 ..Param::DEFAULT
             },
@@ -58,6 +60,14 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
                 "schedule_interval_secs",
                 JsonTy::Integer,
                 "opt-in recurrence; rejected for a comparison-matrix target",
+            ),
+            b(
+                "regression_dataset",
+                JsonTy::String,
+                "opt-in failure mining: the dataset NAME each failing verdict appends to. The \
+                 service writes it into the reserved `target.regression_dataset` key; a caller \
+                 that sends that key inside `target` itself is refused, because the key is read \
+                 as policy and `target` is otherwise the caller's to fill",
             ),
         ],
         response: TypeRef::Named("Benchmark"),
@@ -77,7 +87,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_benchmarks",
         method: Method::Get,
-        path: "/v1/projects/:id/benchmarks",
+        path: "/v1/projects/{id}/benchmarks",
         access: Key(Read),
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("Benchmark"),
@@ -94,7 +104,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_benchmark",
         method: Method::Get,
-        path: "/v1/benchmarks/:id",
+        path: "/v1/benchmarks/{id}",
         access: Key(Read),
         params: &[pm("id", "benchmark", "benchmark id")],
         response: TypeRef::Named("Benchmark"),
@@ -111,7 +121,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_benchmark_runs",
         method: Method::Get,
-        path: "/v1/benchmarks/:id/runs",
+        path: "/v1/benchmarks/{id}/runs",
         access: Key(Read),
         params: &[pm("id", "benchmark", "benchmark id")],
         response: TypeRef::ArrayOf("BenchmarkRun"),
@@ -128,7 +138,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "benchmark_gate",
         method: Method::Get,
-        path: "/v1/benchmarks/:id/gate",
+        path: "/v1/benchmarks/{id}/gate",
         access: Key(Read),
         params: &[pm("id", "benchmark", "benchmark id")],
         response: TypeRef::Untyped(
@@ -163,7 +173,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "enqueue_benchmark",
         method: Method::Post,
-        path: "/v1/benchmarks/:id/enqueue",
+        path: "/v1/benchmarks/{id}/enqueue",
         access: Admin,
         mutating: true,
         params: &[

@@ -113,6 +113,7 @@ fn add_run(store: &SqliteStore, project: &str, model: &str, score: f64) {
             input: "2+2".into(),
             expected: None,
             output: None,
+            difficulty: None,
         }],
         baseline_score: None,
         created_at: Utc::now(),

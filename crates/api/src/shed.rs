@@ -89,6 +89,23 @@ impl IngestGuard {
         }
     }
 
+    /// The server deadline, for the one caller outside this module that must honour it.
+    ///
+    /// [`ingest_admission`] wraps the *handler* in it, which was the whole request until
+    /// `access_layer` moved authentication ahead of the route's own layers. An unbounded auth
+    /// lookup in front of a bounded handler is how a starved blocking pool stops answering at all
+    /// instead of answering 504, so the layer reads the same deadline from here.
+    pub(crate) fn deadline(&self) -> Option<Duration> {
+        self.timeout
+    }
+
+    /// Count a deadline cut that happened before [`ingest_admission`] could wrap the handler —
+    /// `access_layer`'s authentication. The counter is what an operator reads to tell a deadline
+    /// from a shed, so a cut that went uncounted would be a deadline nobody could see.
+    pub(crate) fn record_timeout(&self) {
+        self.timeout_total.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// A guard with an explicit cap and timeout, for tests.
     #[cfg(test)]
     pub(crate) fn with_limits(max_in_flight: usize, timeout: Option<Duration>) -> Self {

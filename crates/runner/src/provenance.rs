@@ -7,7 +7,7 @@
 //! unit-tested without a judge.
 
 use lighttrack_core::{ScoreDetail, ScoreDim};
-use lighttrack_engine::{JudgeOutcome, RubricOutcome};
+use lighttrack_engine::{FreeformOutcome, RubricOutcome};
 
 /// Structured provenance for one rubric verdict: every dimension, every sample's reasoning, and the
 /// reliability counters behind the scalar.
@@ -28,6 +28,8 @@ pub(crate) fn rubric_detail(o: &RubricOutcome) -> ScoreDetail {
                 floor_hits: d.floor.map(|_| u32::from(d.floor_hit)),
                 floor_of: d.floor.map(|_| 1),
                 reasoning: d.reasonings.clone(),
+                voided: d.voided,
+                grounding: d.grounding.clone(),
             })
             .collect(),
         agreement: Some(o.agreement),
@@ -43,22 +45,32 @@ pub(crate) fn rubric_detail(o: &RubricOutcome) -> ScoreDetail {
         // Filled by [`stamp_evidence`] once the caller knows which event was judged; a benchmark
         // case judges dataset text that never went through ingest, so it legitimately stays `None`.
         evidence_redacted_spans: None,
+        // Stamped by compare mode, which is the only caller that generated the candidate it judges.
+        generation: None,
     }
     .capped()
 }
 
-/// Provenance for a freeform (non-rubric) verdict: no dimensions, but the judge's own rationale and
-/// the injection signal are still worth keeping.
-pub(crate) fn freeform_detail(o: &JudgeOutcome) -> ScoreDetail {
+/// Provenance for a freeform verdict: no dimensions, but the judge's own rationale, the injection
+/// signal, and — since the freeform path became a contract — the **measured** reliability counters.
+///
+/// Those counters used to be the literals `samples_requested: Some(1), samples_parsed: Some(1),
+/// parse_failures: Some(0)` with `agreement` left `None`. The cost was paid at the operator surface:
+/// `crates/api/src/scores_review.rs` computes `low_agreement` (:47) and `parse_failures` (:56) as
+/// triage reasons, and neither could ever fire on a freeform verdict — not because those verdicts
+/// were stable, but because the row asserted they were. They are statements about the samples that
+/// actually ran now, and the triage reaches them with no change in that module.
+pub(crate) fn freeform_detail(o: &FreeformOutcome) -> ScoreDetail {
     let notes = if o.verdict.reasoning.is_empty() {
         Vec::new()
     } else {
         vec![o.verdict.reasoning.clone()]
     };
     ScoreDetail {
-        samples_requested: Some(1),
-        samples_parsed: Some(1),
-        parse_failures: Some(0),
+        agreement: Some(o.agreement),
+        samples_requested: Some(o.samples),
+        samples_parsed: Some(o.samples_parsed),
+        parse_failures: Some(o.parse_failures),
         injection_suspected: Some(o.injection_suspected),
         determinism: Some(o.determinism.as_str().to_string()),
         notes,
@@ -245,6 +257,7 @@ mod tests {
             floor_hits: Some(u32::from(hit)),
             floor_of: Some(1),
             reasoning: vec![],
+            ..Default::default()
         };
 
         // Always below the floor.
@@ -397,6 +410,63 @@ mod determinism_tests {
             merge_details(&[ScoreDetail::default(), ScoreDetail::default()])
                 .determinism
                 .is_none()
+        );
+    }
+
+    /// A freeform verdict's reliability counters used to be compile-time constants
+    /// (`samples_parsed: Some(1), parse_failures: Some(0)`) and its agreement was left `None`, so
+    /// `crates/api/src/scores_review.rs`'s `low_agreement` (:47) and `parse_failures` (:56) triage
+    /// reasons could never fire on one — the triage code existed and was unreachable. They are
+    /// measurements now.
+    #[test]
+    fn a_freeform_detail_reports_measured_counters_not_constants() {
+        let o = FreeformOutcome {
+            verdict: lighttrack_core::JudgeVerdict {
+                score: 0.9,
+                max: 1.0,
+                // The model's claim, deliberately the opposite of the contract's decision below.
+                pass: true,
+                reasoning: "it reads well".into(),
+            },
+            overall: 0.65,
+            pass: false,
+            threshold: 0.7,
+            contract_id: "freeform:0123456789abcdef".into(),
+            samples: 2,
+            samples_parsed: 1,
+            parse_failures: 1,
+            agreement: 0.5,
+            cost_usd: Some(0.01),
+            model: "judge-model".into(),
+            latency_ms: Some(12),
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            injection_suspected: false,
+            determinism: lighttrack_engine::Determinism::Sampled,
+        };
+        let d = freeform_detail(&o);
+        assert_eq!(d.samples_requested, Some(2));
+        assert_eq!(d.samples_parsed, Some(1), "the survivor count is measured");
+        assert_eq!(
+            d.parse_failures,
+            Some(1),
+            "the drop is counted, not asserted away"
+        );
+        assert_eq!(
+            d.agreement,
+            Some(0.5),
+            "agreement must be set at all — scores_review.rs:47 is gated on it being Some"
+        );
+        // 0.5 is at or under api::scores_review::LOW_AGREEMENT (0.7), so this row is now reachable
+        // by `GET /v1/scores?needs_review=1` with reason `low_agreement` — without a line changing
+        // in that module.
+        assert!(d.agreement.is_some_and(|a| a <= 0.7));
+        assert!(d.parse_failures.is_some_and(|n| n > 0));
+        assert_eq!(d.determinism.as_deref(), Some("sampled"));
+        assert_eq!(d.notes, vec!["it reads well".to_string()]);
+        assert!(
+            d.dimensions.is_empty(),
+            "a freeform verdict has no dimensions"
         );
     }
 }

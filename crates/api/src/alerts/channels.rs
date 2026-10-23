@@ -95,7 +95,7 @@ async fn post_resend(alerter: &Alerter, c: &AlertChannel, a: &Alert) -> Result<S
     let Some(r) = &alerter.config.resend else {
         return Err("email channel configured but LIGHTTRACK_ALERT_RESEND_KEY is not set".into());
     };
-    let to: Vec<&str> = c.target.split(',').map(str::trim).collect();
+    let to = recipients(&c.target);
     let body = json!({
         "from": r.from,
         "to": to,
@@ -110,11 +110,19 @@ async fn post_resend(alerter: &Alerter, c: &AlertChannel, a: &Alert) -> Result<S
     send(req).await
 }
 
+fn recipients(target: &str) -> Vec<&str> {
+    target
+        .split(',')
+        .map(str::trim)
+        .filter(|address| !address.is_empty())
+        .collect()
+}
+
 /// Send, and reduce the answer to a short status string. A non-2xx is a failure with the code and a
 /// capped snippet of the body — enough for an operator to see "401 invalid token" in the ledger,
 /// which is the detail that used to live only in stderr.
 async fn send(req: reqwest::RequestBuilder) -> Result<String, String> {
-    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let resp = req.send().await.map_err(|e| e.without_url().to_string())?;
     let code = resp.status();
     if code.is_success() {
         return Ok(code.as_u16().to_string());
@@ -133,10 +141,113 @@ async fn capped_body(mut resp: reqwest::Response) -> String {
     let mut buf: Vec<u8> = Vec::new();
     while buf.len() < MAX_RESPONSE_BYTES {
         match resp.chunk().await {
-            Ok(Some(c)) => buf.extend_from_slice(&c),
+            Ok(Some(c)) => {
+                let remaining = MAX_RESPONSE_BYTES - buf.len();
+                buf.extend_from_slice(&c[..c.len().min(remaining)]);
+            }
             _ => break,
         }
     }
-    buf.truncate(MAX_RESPONSE_BYTES);
-    String::from_utf8_lossy(&buf).trim().replace('\n', " ")
+    response_detail(&buf)
+}
+
+fn response_detail(buf: &[u8]) -> String {
+    let decoded = String::from_utf8_lossy(buf);
+    let mut out = String::with_capacity(decoded.len().min(MAX_RESPONSE_BYTES));
+    for ch in decoded.trim().chars() {
+        let ch = if ch.is_control() { ' ' } else { ch };
+        if out.len() + ch.len_utf8() > MAX_RESPONSE_BYTES {
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn transport_errors_do_not_expose_destination_secrets() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            drop(socket);
+        });
+
+        let secret = "query-secret-must-not-enter-the-ledger";
+        let request = reqwest::Client::new()
+            .post(format!("http://{addr}/hook?token={secret}"))
+            .body("alert");
+        let error = send(request).await.unwrap_err();
+
+        assert!(
+            !error.contains(secret),
+            "transport error leaked URL: {error}"
+        );
+    }
+
+    async fn failed_response(body: Vec<u8>) -> reqwest::Response {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 512];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut chunk).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..n]);
+            }
+            let head = format!(
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(head.as_bytes()).await.unwrap();
+            socket.write_all(&body).await.unwrap();
+        });
+        reqwest::Client::new()
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn receiver_detail_is_one_control_free_line() {
+        let response = failed_response(b"first\rsecond\t\x1b[31m\nthird".to_vec()).await;
+        let detail = capped_body(response).await;
+
+        assert!(
+            !detail.chars().any(char::is_control),
+            "receiver controls reached the delivery record: {detail:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn receiver_detail_stays_within_the_byte_cap_after_utf8_repair() {
+        let response = failed_response(vec![0xff; MAX_RESPONSE_BYTES]).await;
+        let detail = capped_body(response).await;
+
+        assert!(
+            detail.len() <= MAX_RESPONSE_BYTES,
+            "{}-byte detail exceeded the {MAX_RESPONSE_BYTES}-byte cap",
+            detail.len()
+        );
+    }
+
+    #[test]
+    fn stored_email_targets_drop_blank_entries_like_env_targets() {
+        assert_eq!(
+            recipients("one@example.com, , two@example.com,"),
+            ["one@example.com", "two@example.com"]
+        );
+    }
 }

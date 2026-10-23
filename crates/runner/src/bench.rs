@@ -11,8 +11,8 @@ use lighttrack_core::{
     ScoreDetail, ScoreKind, RESOLVED_PROMPT_VERSION,
 };
 use lighttrack_engine::{
-    build_eval_prompt, parse_judge_spec, run_judge, run_rubric_judge, Determinism, EngineConfig,
-    JudgeOutcome,
+    build_freeform_prompt, parse_judge_spec, run_freeform_judge, run_rubric_judge, Determinism,
+    EngineConfig, FreeformContract, FreeformOutcome, DEFAULT_FREEFORM_THRESHOLD,
 };
 
 use crate::cli::Cli;
@@ -87,8 +87,16 @@ pub(crate) fn dataset_pin(extra: Option<&Value>, ds: &Dataset) -> Value {
 pub(crate) fn stamp_pins(report: &mut Value, bench: &Benchmark, extra: Option<&Value>) {
     if let Value::Object(m) = report {
         m.insert("judge_model".into(), json!(bench.judge_model));
-        if let Some(r) = &bench.rubric_id {
-            m.insert("rubric_id".into(), json!(r));
+        // A benchmark with no stored rubric used to pin nothing about what judged it, so two runs
+        // under edited criteria text were indistinguishable in the report. The freeform contract's
+        // content digest is that pin — every mode, including compare.
+        match &bench.rubric_id {
+            Some(r) => {
+                m.insert("rubric_id".into(), json!(r));
+            }
+            None => {
+                m.insert("rubric_id".into(), json!(freeform_contract(bench).id()));
+            }
         }
         if let Some(d) = &bench.dataset_ref {
             m.insert("dataset_ref".into(), json!(d));
@@ -99,6 +107,24 @@ pub(crate) fn stamp_pins(report: &mut Value, bench: &Benchmark, extra: Option<&V
             }
         }
     }
+}
+
+/// `target.judge_threshold` — the pass bar a freeform benchmark gates at, when the operator set one.
+const FREEFORM_THRESHOLD_KEY: &str = "judge_threshold";
+
+/// The freeform contract a benchmark without a stored rubric judges under: its `rubric` text, with
+/// the pass bar read from `target.judge_threshold` (default [`DEFAULT_FREEFORM_THRESHOLD`], the same
+/// constant a structured rubric defaults to).
+///
+/// This is where `pass` comes from now. It used to be the judge model's own `"pass"` boolean copied
+/// off its JSON, so a candidate that talked the judge into `true` wrote the gate's answer.
+fn freeform_contract(bench: &Benchmark) -> FreeformContract {
+    let threshold = bench
+        .target
+        .get(FREEFORM_THRESHOLD_KEY)
+        .and_then(Value::as_f64)
+        .unwrap_or(DEFAULT_FREEFORM_THRESHOLD);
+    FreeformContract::with_threshold(&bench.rubric, threshold)
 }
 
 /// Resolve a benchmark's cases (inline dataset, or a referenced stored dataset) and dispatch to the
@@ -156,6 +182,9 @@ pub(crate) fn run_benchmark(
             input: it.input,
             expected: it.expected,
             output: it.output,
+            // The grade travels with the case into the run's stored dataset (M27). Dropping it here
+            // is how a corpus that knows which cases were hard produces a report that does not.
+            difficulty: it.difficulty,
         }));
     }
     let report_extra = extra_owned.as_ref().or(report_extra);
@@ -255,20 +284,21 @@ fn run_simple(
     // A cancelled run stops at a case boundary: cases not yet started are skipped (`None`, counted
     // below), never abandoned mid-call, and whatever was judged is kept and marked partial.
     let n_cases = cases.len();
-    let judged: Vec<Result<Option<JudgeOutcome>>> = parallel_map(n_cases, jobs, |i| {
+    let contract = freeform_contract(bench);
+    let judged: Vec<Result<Option<FreeformOutcome>>> = parallel_map(n_cases, jobs, |i| {
         if ctl.cancelled() {
             return Ok(None);
         }
         let out = match &cases[i].output {
             None => Ok(None),
             Some(output) => {
-                let prompt = build_eval_prompt(
-                    &bench.rubric,
+                let prompt = build_freeform_prompt(
+                    &contract,
                     &cases[i].input,
                     cases[i].expected.as_deref(),
                     output,
                 );
-                run_judge(engine, &jp, &jm, &prompt)
+                run_freeform_judge(engine, &jp, &jm, &contract, &prompt, 1, 1)
                     .context("judge failed")
                     .map(Some)
             }
@@ -307,18 +337,17 @@ fn run_simple(
                 continue;
             }
         };
-        let norm = if outcome.verdict.max > 0.0 {
-            outcome.verdict.score / outcome.verdict.max
-        } else {
-            outcome.verdict.score
-        };
+        // The contract normalized and folded this already — `overall` is the mean over the samples
+        // that parsed, not a re-derivation of one verdict's `score / max`.
+        let norm = outcome.overall;
         determinism = Some(determinism.map_or(outcome.determinism, |prev| {
             prev.weakest(outcome.determinism)
         }));
         sum += norm;
         scores.push(norm);
         n += 1;
-        if outcome.verdict.pass {
+        // The contract's decision, not the judge model's self-reported `pass`.
+        if outcome.pass {
             passes += 1;
         }
         let (jc, priced) = cost_or_book(
@@ -341,12 +370,12 @@ fn run_simple(
             "  case {}: score={:.2} pass={} {}ms :: {}",
             i + 1,
             norm,
-            outcome.verdict.pass,
+            outcome.pass,
             outcome.latency_ms.unwrap_or(0),
             outcome.verdict.reasoning
         );
         case_reports.push(json!({
-            "case": i + 1, "score": norm, "pass": outcome.verdict.pass,
+            "case": i + 1, "score": norm, "pass": outcome.pass,
             "latency_ms": outcome.latency_ms,
         }));
         let score = json!({
@@ -356,9 +385,11 @@ fn run_simple(
             // which rubric it cites. Without them the label is the only handle, and a label
             // is neither stable across a rename nor unique across two rubrics.
             "kind": ScoreKind::BenchCase.as_str(),
-            "rubric_id": bench.rubric_id,
+            // The benchmark's stored rubric when it has one, else the freeform contract's content
+            // digest — so a stored verdict always names what scored it.
+            "rubric_id": bench.rubric_id.clone().unwrap_or_else(|| outcome.contract_id.clone()),
             "run_id": run_id, "case_index": i as u32 + 1,
-            "value": outcome.verdict.score, "max": outcome.verdict.max, "pass": outcome.verdict.pass,
+            "value": outcome.verdict.score, "max": outcome.verdict.max, "pass": outcome.pass,
             "reasoning": outcome.verdict.reasoning, "scored_by": outcome.model, "cost_usd": outcome.cost_usd,
             "detail": freeform_detail(&outcome),
         });
@@ -531,14 +562,21 @@ pub(crate) fn judge_output(
             detail: rubric_detail(&o),
         })
     } else {
+        let contract = freeform_contract(bench);
         let prompt =
-            build_eval_prompt(&bench.rubric, &case.input, case.expected.as_deref(), output);
-        let v = run_judge(engine, judge_provider, judge_model, &prompt).context("judge failed")?;
-        let norm = if v.verdict.max > 0.0 {
-            v.verdict.score / v.verdict.max
-        } else {
-            v.verdict.score
-        };
+            build_freeform_prompt(&contract, &case.input, case.expected.as_deref(), output);
+        // jobs=1 for the same reason the rubric arm above uses it: compare parallelizes across
+        // (target, case) cells, so per-cell sample judging stays sequential.
+        let v = run_freeform_judge(
+            engine,
+            judge_provider,
+            judge_model,
+            &contract,
+            &prompt,
+            samples,
+            1,
+        )
+        .context("judge failed")?;
         let (jc, priced) = cost_or_book(
             v.cost_usd,
             prices,
@@ -548,11 +586,15 @@ pub(crate) fn judge_output(
             v.output_tokens,
         );
         Ok(JudgeResult {
-            overall: norm,
-            pass: v.verdict.pass,
+            overall: v.overall,
+            // The contract's decision. This arm used to post `v.verdict.pass` — the boolean the
+            // judge model emitted about the candidate it was evaluating.
+            pass: v.pass,
             cost: jc,
             tokens: v.input_tokens.unwrap_or(0) + v.output_tokens.unwrap_or(0),
-            agreement: 1.0,
+            // Measured over the samples that parsed. This arm used to write the literal `1.0`,
+            // which made every freeform cell look like a judge in perfect agreement with itself.
+            agreement: v.agreement,
             judge_priced: priced,
             detail: freeform_detail(&v),
             dimensions: Vec::new(),
@@ -562,7 +604,7 @@ pub(crate) fn judge_output(
 
 #[cfg(test)]
 mod tests {
-    use super::{dataset_pin, parse_targets, stamp_pins};
+    use super::{dataset_pin, freeform_contract, parse_targets, stamp_pins};
     use crate::util::{add_price_warnings, join_csv};
     use lighttrack_core::Dataset;
     use serde_json::json;
@@ -686,5 +728,60 @@ mod tests {
         add_price_warnings(&mut r, &w);
         assert_eq!(r["price_warnings"], json!(["openai/gpt-4o"]));
         assert_eq!(join_csv(&w), "openai/gpt-4o");
+    }
+
+    /// **The dictated verdict, at its source.** A freeform benchmark's pass bar is the contract's,
+    /// read from `target.judge_threshold` when the operator set one and otherwise the same default a
+    /// structured rubric gets. Before this it was the judge model's own `"pass"` boolean.
+    #[test]
+    fn a_freeform_benchmark_gates_at_its_own_threshold() {
+        let bench: lighttrack_core::Benchmark =
+            serde_json::from_value(json!({ "name": "b", "rubric": "be accurate" })).unwrap();
+        let c = freeform_contract(&bench);
+        assert_eq!(c.criteria(), "be accurate");
+        assert_eq!(
+            c.threshold(),
+            lighttrack_engine::DEFAULT_FREEFORM_THRESHOLD,
+            "the freeform default must be the rubric default — two contracts, one bar"
+        );
+
+        let strict: lighttrack_core::Benchmark = serde_json::from_value(json!({
+            "name": "b", "rubric": "be accurate", "target": { "judge_threshold": 0.95 }
+        }))
+        .unwrap();
+        assert_eq!(freeform_contract(&strict).threshold(), 0.95);
+        // The criteria are the instrument; the bar is policy, so moving it keeps the identity.
+        assert_eq!(freeform_contract(&strict).id(), c.id());
+    }
+
+    /// A run under freeform criteria used to pin nothing about what judged it, so two runs under
+    /// edited criteria text were indistinguishable in the report. It pins the contract digest now —
+    /// in every mode, compare included.
+    #[test]
+    fn a_freeform_run_pins_the_contract_that_judged_it() {
+        let bench: lighttrack_core::Benchmark =
+            serde_json::from_value(json!({ "name": "b", "rubric": "be accurate" })).unwrap();
+        let mut report = json!({ "mode": "simple" });
+        stamp_pins(&mut report, &bench, None);
+        let pinned = report["rubric_id"]
+            .as_str()
+            .expect("a run pins its instrument");
+        assert_eq!(pinned, freeform_contract(&bench).id());
+        assert!(pinned.starts_with("freeform:"));
+
+        let edited: lighttrack_core::Benchmark =
+            serde_json::from_value(json!({ "name": "b", "rubric": "be accurate and brief" }))
+                .unwrap();
+        let mut other = json!({});
+        stamp_pins(&mut other, &edited, None);
+        assert_ne!(other["rubric_id"], report["rubric_id"]);
+
+        // A stored rubric still pins its own row id, untouched.
+        let stored: lighttrack_core::Benchmark =
+            serde_json::from_value(json!({ "name": "b", "rubric": "r", "rubric_id": "rub-42" }))
+                .unwrap();
+        let mut third = json!({});
+        stamp_pins(&mut third, &stored, None);
+        assert_eq!(third["rubric_id"], json!("rub-42"));
     }
 }

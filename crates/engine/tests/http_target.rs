@@ -8,6 +8,7 @@ use std::net::SocketAddr;
 use std::sync::mpsc;
 
 use axum::{extract::Json, http::HeaderMap, routing::post, Router};
+use lighttrack_core::test_env::EnvGuard;
 use lighttrack_engine::http_target::{
     generate_http, sign, HttpTargetRequest, SECRET_ENV, SIGNATURE_HEADER,
 };
@@ -69,7 +70,8 @@ fn spawn_stub() -> (String, mpsc::Receiver<Seen>) {
 #[test]
 fn an_http_target_is_called_signed_and_its_answer_comes_back() {
     // Both halves of this test share one process-wide env var, so they share one test.
-    std::env::set_var(SECRET_ENV, "s3cret");
+    let mut env = EnvGuard::lock();
+    env.set(SECRET_ENV, "s3cret");
     let (base, seen) = spawn_stub();
     let url = format!("{base}/answer");
 
@@ -117,7 +119,7 @@ fn an_http_target_is_called_signed_and_its_answer_comes_back() {
     );
 
     // Without a secret the header is simply absent — never present-but-meaningless.
-    std::env::remove_var(SECRET_ENV);
+    env.remove(SECRET_ENV);
     generate_http(&url, None, "again", None).expect("still answers");
     let got = seen.recv().expect("second call");
     assert!(got.signature.is_none(), "no secret, no signature header");

@@ -1,0 +1,77 @@
+{
+ "schema": "conform-run/1",
+ "worker": "e34b4e06-db3c-4e18-85e2-551c49b7a0dd",
+ "subject": "trust-base",
+ "evaluatedAt": "2026-10-21T21:28:07.947215+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "typescript-sdk",
+   "subject": "trust-base",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "clients/typescript/src/journal.ts:255 Decoded journal records flow through unchecked types without the required type-aware census, leaving trust-base members outside the package's checks.",
+   "techniques": [
+    {
+     "technique": "assumptions-are-build-errors",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/admission.ts:80 The hash explicitly models 64-bit arithmetic using JavaScript BigInt; no proof or type-level argument depending on native platform width was found."
+    },
+    {
+     "technique": "census-counts-unmarked-members",
+     "verdict": "deviation",
+     "evidence": "clients/typescript/src/contract.test.ts:39 JSON.parse introduces inferred any subsequently accessed through manifest.capabilities; package scripts and repository searches reveal no type-aware unsafe-flow census or separate annotated-callback count."
+    },
+    {
+     "technique": "leaf-spec-states-what-callers-read",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/instrument.ts:21 This is an ordinary TypeScript function type; no prover-trusted body with a contract consumed by proofs was found."
+    },
+    {
+     "technique": "marker-impl-names-its-exclusion",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/instrument.ts:25 The context mechanism uses ordinary JavaScript state; searches found no hand-written assertion overriding compiler thread-transfer or shared-access inference."
+    },
+    {
+     "technique": "soundness-argument-names-its-dependencies",
+     "verdict": "deviation",
+     "evidence": "clients/typescript/src/journal.ts:262 The assertion accepts a decoded object as JournalRecord after checking only its object shape and discriminator; neither the assertion nor SpanJournal.begin names their dependency on the producer preserving JournalRecord field types."
+    },
+    {
+     "technique": "trusted-leaf-gets-an-outside-test",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/package.json:18 The package runs ordinary executable tests; no body marked trusted while its contract is consumed by proofs was found."
+    },
+    {
+     "technique": "verifier-footprint-stays-contained",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/package.json:25 The complete dependency declaration contains only TypeScript, tsx and Node typings as development dependencies; no prover or specification library is present."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-21T21:28:07.947215+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "trust-base"
+   ],
+   "techniques": [
+    "assumptions-are-build-errors",
+    "census-counts-unmarked-members",
+    "leaf-spec-states-what-callers-read",
+    "marker-impl-names-its-exclusion",
+    "soundness-argument-names-its-dependencies",
+    "trusted-leaf-gets-an-outside-test",
+    "verifier-footprint-stays-contained"
+   ],
+   "deviations": 1,
+   "context": "typescript-sdk",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

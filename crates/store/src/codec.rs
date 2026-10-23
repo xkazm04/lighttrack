@@ -73,6 +73,20 @@ pub fn parse_enum<T: DeserializeOwned>(column: &str, s: &str) -> Result<T> {
 /// Shared so every backend mints byte-identical cursors — a page started on one backend's encoding
 /// must decode on another after a migration.
 pub fn encode_event_cursor(ts: &str, id: &str) -> String {
+    // Before the write. Positive space: both components are present. Negative space:
+    // neither contains the separator. This is the documented invariant, asserted as
+    // the rule prescribes - and it is broader than what the decoder actually needs.
+    debug_assert!(
+        !ts.is_empty() && !id.is_empty(),
+        "cursor components must both be present"
+    );
+    // Only the FIRST component must be separator-free: the decoder splits once, at the
+    // first separator, so a composite second component round-trips exactly. Asserting
+    // both would assert the doc comment rather than the decoder.
+    debug_assert!(
+        !ts.contains('|'),
+        "the leading cursor component contains the separator: ts={ts:?}"
+    );
     let raw = format!("{ts}|{id}");
     raw.bytes().map(|b| format!("{b:02x}")).collect()
 }
@@ -88,7 +102,17 @@ pub fn decode_event_cursor(s: &str) -> Option<(String, String)> {
         .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
         .collect();
     let raw = String::from_utf8(bytes?).ok()?;
+    // After the read, paired with the write above. Re-derive the written form from the
+    // parsed parts and compare it to the bytes received; this is the only version that
+    // can disagree with the decoder. NOT build-gated: `debug_assert_eq!` compiles its
+    // arguments in every profile and gates only execution.
+    let received = raw.clone();
     let (ts, id) = raw.split_once('|')?;
+    debug_assert_eq!(
+        format!("{ts}|{id}"),
+        received,
+        "decoded cursor does not re-encode to the bytes received"
+    );
     Some((ts.to_string(), id.to_string()))
 }
 
@@ -202,6 +226,37 @@ mod tests {
         assert_eq!(decode_event_cursor(""), None);
         assert_eq!(decode_event_cursor("zz"), None);
         assert_eq!(decode_event_cursor("abc"), None); // odd length
+    }
+
+    // PROBE 1 - a real defect. `split_once` splits at the FIRST separator, so a
+    // separator in the timestamp truncates it and moves the remainder into the id.
+    // The page silently resumes at the wrong position.
+    // Liveness artifact for the write-side guard: a known-bad construction is refused,
+    // and the refusal names which component is guilty. Without this the guard could be
+    // deleted and every existing test would still pass.
+    #[test]
+    #[should_panic(expected = "the leading cursor component contains the separator")]
+    fn separator_in_the_timestamp_is_refused_at_the_writer() {
+        let _ = encode_event_cursor(
+            "2026|09-17T00:00:00.000000000Z",
+            "11111111-1111-1111-1111-111111111111",
+        );
+    }
+
+    // PROBE 2 - a LEGAL input. The doc comment claims both components are
+    // separator-free "by construction, so decoding is exact", but the decoder only
+    // needs the FIRST component to be separator-free. A composite id round-trips
+    // exactly. Any arm that refuses this input has asserted the prose, not the code.
+    #[test]
+    fn separator_in_the_id_is_harmless() {
+        let ts = "2026-09-17T00:00:00.000000000Z";
+        let id = "tenant-a|11111111-1111-1111-1111-111111111111";
+        let c = encode_event_cursor(ts, id);
+        assert_eq!(
+            decode_event_cursor(&c),
+            Some((ts.to_string(), id.to_string())),
+            "a composite id must still round-trip"
+        );
     }
 
     #[test]

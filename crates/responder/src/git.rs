@@ -5,13 +5,27 @@ use std::process::Output;
 
 use tokio::process::Command;
 
+/// Variables that locate a repository and silently override `-C`. Git exports `GIT_DIR` (and in a
+/// worktree `GIT_INDEX_FILE`'s neighbours) to hooks, so a process started from a hook inherits
+/// them: on 2026-09-19 the pre-push gate ran this module's tests from a worktree and `git -C
+/// <scratch> init` reinitialized the REAL repository (`core.bare = true`), committed the scratch
+/// "base" onto the pushed branch, and checked out `lt-fix/test` there.
+const REPO_ENV: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_PREFIX",
+];
+
 async fn git(repo: &str, args: &[&str]) -> std::io::Result<Output> {
-    Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .await
+    let mut cmd = Command::new("git");
+    for k in REPO_ENV {
+        cmd.env_remove(k);
+    }
+    cmd.arg("-C").arg(repo).args(args).output().await
 }
 
 fn ok(r: std::io::Result<Output>) -> bool {
@@ -72,7 +86,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir");
         let run = |args: &[&str]| {
-            let out = std::process::Command::new("git")
+            let mut cmd = std::process::Command::new("git");
+            for k in REPO_ENV {
+                cmd.env_remove(k);
+            }
+            let out = cmd
                 .arg("-C")
                 .arg(&dir)
                 .args(args)
@@ -108,11 +126,12 @@ mod tests {
         // No identity from any config level, and no fallback derived from the host.
         let empty = std::env::temp_dir().join(format!("lt-empty-gitconfig-{}", std::process::id()));
         std::fs::write(&empty, "").expect("empty config");
-        std::env::set_var("GIT_CONFIG_GLOBAL", &empty);
-        std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
-        std::env::set_var("GIT_CONFIG_COUNT", "1");
-        std::env::set_var("GIT_CONFIG_KEY_0", "user.useConfigOnly");
-        std::env::set_var("GIT_CONFIG_VALUE_0", "true");
+        let mut env = lighttrack_core::test_env::EnvGuard::lock();
+        env.set("GIT_CONFIG_GLOBAL", &empty)
+            .set("GIT_CONFIG_NOSYSTEM", "1")
+            .set("GIT_CONFIG_COUNT", "1")
+            .set("GIT_CONFIG_KEY_0", "user.useConfigOnly")
+            .set("GIT_CONFIG_VALUE_0", "true");
 
         assert!(checkout_new(&repo, "lt-fix/test").await);
         std::fs::write(std::path::Path::new(&repo).join("fix.txt"), "edited").unwrap();
@@ -127,16 +146,33 @@ mod tests {
         );
         assert_eq!(current_branch(&repo).await.as_deref(), Some("lt-fix/test"));
 
-        for k in [
-            "GIT_CONFIG_GLOBAL",
-            "GIT_CONFIG_NOSYSTEM",
-            "GIT_CONFIG_COUNT",
-            "GIT_CONFIG_KEY_0",
-            "GIT_CONFIG_VALUE_0",
-        ] {
-            std::env::remove_var(k);
-        }
+        drop(env);
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_file(&empty);
+    }
+
+    /// An inherited `GIT_DIR` (a hook's environment) must not redirect `-C <repo>` to another
+    /// repository. Set on the child only, never on this process, so no sibling test can see it.
+    #[test]
+    fn an_inherited_git_dir_does_not_redirect_the_target_repo() {
+        let target = scratch_repo("envtarget");
+        let decoy = scratch_repo("envdecoy");
+        let mut cmd = std::process::Command::new("git");
+        cmd.env("GIT_DIR", std::path::Path::new(&decoy).join(".git"));
+        for k in REPO_ENV {
+            cmd.env_remove(k);
+        }
+        let out = cmd
+            .arg("-C")
+            .arg(&target)
+            .args(["rev-parse", "--absolute-git-dir"])
+            .output()
+            .expect("git runs");
+        let got = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success());
+        assert!(got.contains("envtarget"), "resolved {got}");
+        assert!(!got.contains("envdecoy"), "resolved {got}");
+        let _ = std::fs::remove_dir_all(&target);
+        let _ = std::fs::remove_dir_all(&decoy);
     }
 }

@@ -10,7 +10,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "upsert_use_case",
         method: Method::Post,
-        path: "/v1/projects/:id/use-cases",
+        path: "/v1/projects/{id}/use-cases",
         access: Admin,
         mutating: true,
         params: &[
@@ -66,12 +66,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["use-cases", "register"]),
         doc: "Register a place this project calls an LLM, or correct one already registered. Idempotent on (project, key), so fixing a description never means deleting the row the events attribute to.",
+        surface: "use_cases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "list_use_cases",
         method: Method::Get,
-        path: "/v1/projects/:id/use-cases",
+        path: "/v1/projects/{id}/use-cases",
         access: Key(Read),
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("UseCase"),
@@ -83,12 +84,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["use-cases", "list"]),
         doc: "List the LLM call sites this project has declared.",
+        surface: "use_cases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "use_case_coverage",
         method: Method::Get,
-        path: "/v1/projects/:id/use-cases/coverage",
+        path: "/v1/projects/{id}/use-cases/coverage",
         access: Key(Read),
         params: &[
             pm("id", "project", "project id"),
@@ -108,12 +110,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["use-cases", "coverage"]),
         doc: "Declared against observed: which call sites have traffic, which are running a model they never declared, which traffic nobody declared at all, and how many calls carry no use case.",
+        surface: "use_cases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "get_use_case",
         method: Method::Get,
-        path: "/v1/projects/:id/use-cases/:key",
+        path: "/v1/projects/{id}/use-cases/{key}",
         access: Key(Read),
         params: &[
             pm("id", "project", "project id"),
@@ -128,12 +131,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["use-cases", "show"]),
         doc: "Read one declared LLM call site.",
+        surface: "use_cases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "delete_use_case",
         method: Method::Delete,
-        path: "/v1/projects/:id/use-cases/:key",
+        path: "/v1/projects/{id}/use-cases/{key}",
         access: Admin,
         mutating: true,
         params: &[
@@ -144,6 +148,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         mcp: None,
         cli: Some(&["use-cases", "delete"]),
         doc: "Remove a registration. The events that referenced it are untouched - they become undeclared traffic again, which is the honest state.",
+        surface: "use_cases",
         ..Endpoint::DEFAULT
     },
 ];

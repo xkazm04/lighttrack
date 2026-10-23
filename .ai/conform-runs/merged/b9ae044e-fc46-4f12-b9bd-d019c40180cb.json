@@ -1,0 +1,187 @@
+{
+ "schema": "conform-run/1",
+ "worker": "b9ae044e-fc46-4f12-b9bd-d019c40180cb",
+ "subject": "concurrency-guards",
+ "evaluatedAt": "2026-10-15T02:31:09.096461+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "api-platform",
+   "subject": "concurrency-guards",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/state.rs:193 A policy read started before an update can finish after cache invalidation and republish the old policy without checking a generation.",
+   "techniques": [
+    {
+     "technique": "attempt-attribution",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/state.rs:193 The awaited store read publishes unconditionally; invalidation neither advances a generation nor prevents an older read from restoring stale policy."
+    },
+    {
+     "technique": "critical-section-across-a-suspension",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/projects.rs:184 Project updates read the row, modify a local copy, and replace mutable fields without a transaction or version predicate covering the read; overlapping partial updates can erase each other's changes."
+    },
+    {
+     "technique": "guard-key-design",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/billing.rs:89 Webhook deduplication uses the provider and stable delivery identity rather than a per-attempt nonce."
+    },
+    {
+     "technique": "idempotency-by-design",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/idempotency.rs:7 Billing records receive deterministic provider-derived IDs and use an upsert backstop, so cache eviction or restart does not multiply revenue rows."
+    },
+    {
+     "technique": "release-guarantees",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/billing.rs:115 Failed-delivery cleanup runs only after the awaited insert returns; cancellation before that cleanup can leave an unsuccessful delivery marked seen until FIFO eviction."
+    },
+    {
+     "technique": "single-flight-primitives",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/billing.rs:93 The seen-set conflates in-flight and completed deliveries: a second delivery receives success before the first insert commits, even if that insert subsequently fails."
+    }
+   ]
+  },
+  {
+   "context": "pg-platform-operations",
+   "subject": "concurrency-guards",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store-pg/src/jobs.rs:125 Job progress updates check neither the lease identity nor lifecycle status, allowing an old worker to overwrite progress after reclamation or completion.",
+   "techniques": [
+    {
+     "technique": "attempt-attribution",
+     "verdict": "deviation",
+     "evidence": "crates/store-pg/src/jobs.rs:125 Unlike finish and renewal, worker progress carries no fence and does not reject stale attempts."
+    },
+    {
+     "technique": "critical-section-across-a-suspension",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/alerts.rs:95 Delivery appends retain the row lock across the awaited read and update until transaction commit, preventing concurrent channels from losing each other's outcomes."
+    },
+    {
+     "technique": "cross-process-exclusion",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/jobs.rs:69 Job acquisition uses an atomic database statement with row locking and stale-running-row reclamation, rather than process-local exclusion."
+    },
+    {
+     "technique": "guard-key-design",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/alerts.rs:38 Alert admission uses the same stable dedup key for its transaction-scoped advisory lock and existing-alert lookup."
+    },
+    {
+     "technique": "idempotency-by-design",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/revenue.rs:29 Revenue replay converges on the existing deterministic ID through absolute field assignments instead of additive revenue writes."
+    },
+    {
+     "technique": "preparation-is-the-staleness-window",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/price_fill.rs:105 Price filling repeats its eligibility predicate in the mutation, so preparation cannot overwrite a cost established concurrently."
+    },
+    {
+     "technique": "release-guarantees",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/relay_lease.rs:130 Relay settlement holds a scoped SQL transaction whose drop rolls back early exits and releases its row lock; successful settlement commits explicitly."
+    }
+   ]
+  },
+  {
+   "context": "typescript-sdk",
+   "subject": "concurrency-guards",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "clients/typescript/src/journal.ts:191 Two recovering processes can both read an orphan journal before either deletes it and independently emit duplicate telemetry.",
+   "techniques": [
+    {
+     "technique": "attempt-attribution",
+     "verdict": "deviation",
+     "evidence": "clients/typescript/src/admission.ts:131 Asynchronous observations overwrite each scope in arrival order without attempt attribution; an older accepted response arriving late can clear a newer refusal's retry deadline."
+    },
+    {
+     "technique": "critical-section-across-a-suspension",
+     "verdict": "deviation",
+     "evidence": "clients/typescript/src/instrument.ts:75 A module-global trace context is changed across an awaited callback and restored afterward without isolation, so overlapping traces can overwrite and restore each other's context."
+    },
+    {
+     "technique": "cross-process-exclusion",
+     "verdict": "deviation",
+     "evidence": "clients/typescript/src/journal.ts:191 Orphan recovery performs stat, read, and delete without an atomic claim; concurrent processes can both collect the same records."
+    },
+    {
+     "technique": "idempotency-by-design",
+     "verdict": "deviation",
+     "evidence": "clients/typescript/src/index.ts:418 Recovered breadcrumbs are emitted without a stable event ID, so two recoveries of the same breadcrumb cannot converge at the server's event-ID deduplication boundary."
+    },
+    {
+     "technique": "release-guarantees",
+     "verdict": "deviation",
+     "evidence": "clients/typescript/src/index.ts:621 The shared refresh promise is cleared only after this unbounded request settles; request() supplies no timeout or abort signal, so a hung fetch can prevent every later refresh."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-15T02:31:09.096461+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "concurrency-guards"
+   ],
+   "techniques": [
+    "attempt-attribution",
+    "critical-section-across-a-suspension",
+    "guard-key-design",
+    "idempotency-by-design",
+    "release-guarantees",
+    "single-flight-primitives"
+   ],
+   "deviations": 1,
+   "context": "api-platform",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-15T02:31:09.096461+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "concurrency-guards"
+   ],
+   "techniques": [
+    "attempt-attribution",
+    "critical-section-across-a-suspension",
+    "cross-process-exclusion",
+    "guard-key-design",
+    "idempotency-by-design",
+    "preparation-is-the-staleness-window",
+    "release-guarantees"
+   ],
+   "deviations": 1,
+   "context": "pg-platform-operations",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-15T02:31:09.096461+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "concurrency-guards"
+   ],
+   "techniques": [
+    "attempt-attribution",
+    "critical-section-across-a-suspension",
+    "cross-process-exclusion",
+    "idempotency-by-design",
+    "release-guarantees"
+   ],
+   "deviations": 1,
+   "context": "typescript-sdk",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

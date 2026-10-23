@@ -274,6 +274,7 @@ mod trait_signature {
         // The price book is the operator'+chr(39)+'s, shared by every project: see the dedicated test below.
         ("list_prices", "one rate card for the instance"),
         ("upsert_price", "one rate card for the instance"),
+        ("seed_prices", "one rate card for the instance"),
         // Whole-instance facts, not anyone'+chr(39)+'s rows.
         ("capabilities", "about the backend"),
         ("init_schema", "about the database"),
@@ -360,7 +361,12 @@ mod trait_signature {
     #[test]
     fn the_price_book_stays_operator_global() {
         let sigs = signatures(include_str!("lib.rs"));
-        for m in ["list_prices", "upsert_price", "list_price_history"] {
+        for m in [
+            "list_prices",
+            "upsert_price",
+            "seed_prices",
+            "list_price_history",
+        ] {
             let (_, sig) = sigs.iter().find(|(n, _)| *n == m).expect(m);
             assert!(
                 !sig.contains("Scope<'_>"),

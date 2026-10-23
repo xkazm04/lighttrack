@@ -4,15 +4,18 @@
 //! merge → **k-anonymity over sources** → user filters → counts over what survived. A filter that
 //! ran before the source floor could strip a row down to one contributor's private eval results.
 
+use std::collections::BTreeSet;
+
 use axum::{
     extract::{Query, State},
     http::HeaderMap,
     Json,
 };
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use lighttrack_core::{merge_leaderboard, LeaderboardRow};
+use lighttrack_core::collective::day_stamp;
+use lighttrack_core::{merge_leaderboard, CollectiveEntry, LeaderboardRow};
 use lighttrack_store::CollectiveFilter;
 
 use crate::error::ApiError;
@@ -36,6 +39,14 @@ pub(crate) struct LeaderboardParams {
     frozen_dataset: Option<bool>,
     /// Rigor filter — `true` keeps only rows whose every source carried a significance-tested verdict.
     significance_tested: Option<bool>,
+    /// Commensurability filter — keep only rows at least one of whose sources scored under this rubric
+    /// fingerprint. An **input only**: the response publishes the rubric *count*, never a fingerprint.
+    /// A caller supplies a fingerprint it already holds (its own digest's, typically) to ask for a
+    /// board it can compare itself against.
+    rubric: Option<String>,
+    /// Freshness filter — keep only rows with at least one source received within this many days. A
+    /// row that cannot prove its age is dropped rather than assumed current.
+    fresh_days: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -52,6 +63,11 @@ pub(crate) struct LeaderboardResponse {
     /// Rows withheld for having fewer than the hub's `min_contributors` distinct sources — disclosed
     /// rather than silently shrinking the board, so an empty/short board is legible.
     held_back: usize,
+    /// The board's own date: the newest evidence behind any **visible** row (day-coarsened,
+    /// fixed-width `RFC3339(Nanos, Z)`). An unfed board reads as what it is instead of as current.
+    /// `None` when nothing is visible — an empty board owns no date.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    as_of: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     task_type: Option<String>,
     rows: Vec<LeaderboardRow>,
@@ -76,14 +92,50 @@ pub(crate) async fn get_leaderboard(
     let store = st.store.clone();
     let entries = spawn_db(move || store.list_collective_entries_filtered(&filter)).await?;
 
-    let mut rows = merge_leaderboard(&entries, st.collective.display_floor);
+    let rows = merge_leaderboard(&entries, st.collective.display_floor);
+    let n = narrow(
+        rows,
+        &entries,
+        &q,
+        st.collective.min_contributors,
+        Utc::now(),
+    );
 
+    Ok(Json(LeaderboardResponse {
+        contributors: n.contributors,
+        n_models: n.n_models,
+        n_rows: n.rows.len(),
+        held_back: n.held_back,
+        as_of: n.as_of,
+        task_type: q.task_type,
+        rows: n.rows,
+    }))
+}
+
+/// The filtered board plus the counts computed over it.
+struct Narrowed {
+    rows: Vec<LeaderboardRow>,
+    held_back: usize,
+    contributors: usize,
+    n_models: usize,
+    as_of: Option<String>,
+}
+
+/// Everything after the merge: the source floor, then the user filters, then the counts over what
+/// survived. A pure function of `(rows, entries, params, k, now)` so the **order** — which is the
+/// privacy property, not a detail — is testable without an HTTP stack.
+fn narrow(
+    mut rows: Vec<LeaderboardRow>,
+    entries: &[CollectiveEntry],
+    q: &LeaderboardParams,
+    k: u32,
+    now: DateTime<Utc>,
+) -> Narrowed {
     // k-anonymity over SOURCES, applied before any filter: a row backed by fewer than
     // `min_contributors` distinct instances is not "the collective", it is that instance's private
     // eval results on a billboard — and a `?provider=` filter must never be able to strip a row down
     // to a lone source. (`min_cases` is a *case*-count floor within one contributor's bucket; it does
     // not anonymize across contributors. A 5000-case single-source row is still one source.)
-    let k = st.collective.min_contributors;
     let held_back = {
         let before = rows.len();
         rows.retain(|r| r.n_contributors >= k);
@@ -112,12 +164,31 @@ pub(crate) async fn get_leaderboard(
     if let Some(want) = q.significance_tested {
         rows.retain(|r| (r.rigor.significance_tested == lighttrack_core::Coverage::All) == want);
     }
+    // Commensurability filter, matched against the *stored entries* because the published row carries
+    // only the rubric COUNT: a fingerprint is a contributor-chosen high-cardinality hash, so it is an
+    // input here and never an output (see `lighttrack_core::collective::provenance`). A source tagged
+    // `mixed` already disagreed with itself and cannot vouch for one rubric, so it does not match.
+    if let Some(want) = q.rubric.as_deref() {
+        let keyed: BTreeSet<(&str, &str, &str)> = entries
+            .iter()
+            .filter(|e| e.rubric_fingerprint.as_deref() == Some(want))
+            .map(|e| (e.provider.as_str(), e.model.as_str(), e.task_type.as_str()))
+            .collect();
+        rows.retain(|r| {
+            keyed.contains(&(r.provider.as_str(), r.model.as_str(), r.task_type.as_str()))
+        });
+    }
+    // Freshness filter, same position and the same reason.
+    if let Some(days) = q.fresh_days {
+        let cutoff = day_stamp(now - Duration::days(i64::from(days.min(36_500))));
+        rows.retain(|r| r.newest_at.as_deref().is_some_and(|t| t >= cutoff.as_str()));
+    }
 
     // Header counts are computed over the FILTERED rows so they never disagree with what's shown.
     // Contributors backing the visible rows = distinct contributor ids of every stored entry whose
     // `(provider, model, task_type)` survived filtering (an entry's identity is normalized at ingest,
     // so its key matches the merged row's key exactly).
-    let surviving: std::collections::BTreeSet<(&str, &str, &str)> = rows
+    let surviving: BTreeSet<(&str, &str, &str)> = rows
         .iter()
         .map(|r| (r.provider.as_str(), r.model.as_str(), r.task_type.as_str()))
         .collect();
@@ -127,20 +198,23 @@ pub(crate) async fn get_leaderboard(
             surviving.contains(&(e.provider.as_str(), e.model.as_str(), e.task_type.as_str()))
         })
         .map(|e| e.contributor_id.as_str())
-        .collect::<std::collections::BTreeSet<_>>()
+        .collect::<BTreeSet<_>>()
         .len();
     let n_models = rows
         .iter()
         .map(|r| (r.provider.as_str(), r.model.as_str()))
-        .collect::<std::collections::BTreeSet<_>>()
+        .collect::<BTreeSet<_>>()
         .len();
+    let as_of = rows.iter().filter_map(|r| r.newest_at.clone()).max();
 
-    Ok(Json(LeaderboardResponse {
+    Narrowed {
+        rows,
+        held_back,
         contributors,
         n_models,
-        n_rows: rows.len(),
-        held_back,
-        task_type: q.task_type,
-        rows,
-    }))
+        as_of,
+    }
 }
+
+#[cfg(test)]
+mod tests;

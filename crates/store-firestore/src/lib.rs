@@ -225,6 +225,18 @@ impl Store for FirestoreStore {
         since: DateTime<Utc>,
         scope: &LimitScope,
     ) -> Result<Usage> {
+        // A `Model` scope's membership is the canonical family, wider than the client-side string
+        // compare below. One authority for the fold (`lighttrack_store::scope_usage`), so this
+        // backend's ledger and the gate cannot disagree about what is inside the scope.
+        if scope.folds_canonical_family() {
+            return lighttrack_store::scope_usage::usage_for_scope(
+                |q| self.rollup(q),
+                project,
+                since,
+                None,
+                scope,
+            );
+        }
         events::usage_since_scoped(&self.rest, project, since, scope)
     }
     fn usage_by_scope(

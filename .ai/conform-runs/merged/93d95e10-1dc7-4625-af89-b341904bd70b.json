@@ -1,0 +1,72 @@
+{
+ "schema": "conform-run/1",
+ "worker": "93d95e10-1dc7-4625-af89-b341904bd70b",
+ "subject": "guest-language-introspection",
+ "evaluatedAt": "2026-10-18T00:26:12.069674+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "typescript-sdk",
+   "subject": "guest-language-introspection",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "clients/typescript/package.json:4 This package implements telemetry ingestion rather than a guest-language engine, and searches of its directory and the repository found no bytecode, realm, disassemble, hiddenClass or debugGlobal constructs requiring this subject.",
+   "techniques": [
+    {
+     "technique": "flag-gated-debug-global",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/diagnostics.ts:68 Diagnostics report SDK failures through the host console; inspection and searches found no guest-visible engine-internal global to gate."
+    },
+    {
+     "technique": "guest-settable-limits-and-switches",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/limits.ts:2 These limits describe telemetry admission and spending, with no guest execution bounds or optimizer passes."
+    },
+    {
+     "technique": "per-function-trace-flag",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/instrument.ts:68 Tracing links provider-call telemetry; it does not trace an interpreter's instructions or mark compiled code."
+    },
+    {
+     "technique": "realm-factory-for-cross-realm-tests",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/contract.test.ts:2 The inspected tests check SDK behavior across implementations; searches found no realm factory or cross-realm specification tests."
+    },
+    {
+     "technique": "representation-probes",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/index.ts:116 Extraction reads observable provider-response fields; inspection and searches found no hidden-class, array-storage or string-representation assertions."
+    }
+   ],
+   "absenceTerms": [
+    "bytecode",
+    "realm",
+    "disassemble",
+    "hiddenClass",
+    "debugGlobal"
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-18T00:26:12.069674+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "guest-language-introspection"
+   ],
+   "techniques": [
+    "flag-gated-debug-global",
+    "guest-settable-limits-and-switches",
+    "per-function-trace-flag",
+    "realm-factory-for-cross-realm-tests",
+    "representation-probes"
+   ],
+   "deviations": 0,
+   "context": "typescript-sdk",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

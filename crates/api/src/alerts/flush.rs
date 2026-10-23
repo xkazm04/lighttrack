@@ -10,8 +10,8 @@
 //! records that a cap turned traffic away, which is a fact about the *limit*, not about a call that
 //! happened.
 //!
-//! Off by default (`LIGHTTRACK_ALERT_REJECTION_FLUSH_SECS=0`) so a deployment that does not want the
-//! extra rows does not get them.
+//! On by default, every 900s. Set `LIGHTTRACK_ALERT_REJECTION_FLUSH_SECS=0` to switch it off.
+//! A value that is not a number warns and keeps 900, the same rule as the other alert settings.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,10 +29,7 @@ const DEFAULT_INTERVAL_SECS: u64 = 900;
 
 /// The flush cadence, or `None` when it is switched off.
 pub(crate) fn interval() -> Option<Duration> {
-    let secs = std::env::var(ENV_INTERVAL)
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .unwrap_or(DEFAULT_INTERVAL_SECS);
+    let secs = super::env_u64(ENV_INTERVAL, DEFAULT_INTERVAL_SECS);
     (secs > 0).then(|| Duration::from_secs(secs))
 }
 
@@ -79,4 +76,96 @@ pub(crate) async fn flush_once(state: &AppState) {
         .map(|(p, buckets)| compose::ingest_rejected(p, buckets, now))
         .collect();
     Arc::clone(&state.alerts).fire(alerts).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    /// `AlertKind::IngestRejected` declares Info, and the operator doc says the same. A channel
+    /// whose floor is Warning is the on-call page; a periodic rejection tally must not cross it.
+    #[test]
+    fn a_rejection_flush_stays_informational() {
+        let buckets = HashMap::from([("rule".to_string(), (4u64, 1.25f64))]);
+        let alert = super::compose::ingest_rejected("p1", &buckets, chrono::Utc::now());
+        assert_eq!(
+            alert.severity,
+            lighttrack_core::Severity::Info,
+            "a rejection flush is a tally, not a page"
+        );
+        assert!(
+            !lighttrack_core::AlertChannel {
+                min_severity: lighttrack_core::Severity::Warning,
+                ..channel_floor()
+            }
+            .accepts(alert.kind, alert.severity),
+            "a warning floor must not receive an informational flush"
+        );
+    }
+
+    /// `LIGHTTRACK_ALERT_COOLDOWN_SECS=1h` warns and falls back. The flush cadence used to do
+    /// neither: `15m` became the default with no line in the log, which reads as "my setting works".
+    #[test]
+    fn a_malformed_flush_interval_warns_and_keeps_the_default() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let subscriber = WarnCapture(std::sync::Arc::clone(&seen));
+        let key = super::ENV_INTERVAL;
+        let mut env = lighttrack_core::test_env::EnvGuard::lock();
+        env.set(key, "15m");
+        tracing::subscriber::with_default(subscriber, || {
+            let got = super::interval();
+            assert_eq!(got, Some(std::time::Duration::from_secs(900)));
+        });
+        let logged = seen.lock().expect("warn lock").clone();
+        assert!(
+            logged.contains("15m"),
+            "a bad flush interval must be said out loud, not treated as unset: {logged}"
+        );
+
+        env.set(key, "0");
+        assert_eq!(super::interval(), None, "0 switches the flush off");
+        env.set(key, "120");
+        assert_eq!(super::interval(), Some(std::time::Duration::from_secs(120)));
+    }
+
+    struct WarnCapture(std::sync::Arc<std::sync::Mutex<String>>);
+    impl tracing::Subscriber for WarnCapture {
+        fn enabled(&self, meta: &tracing::Metadata<'_>) -> bool {
+            *meta.level() <= tracing::Level::WARN
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut FieldDump(&self.0));
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    struct FieldDump<'a>(&'a std::sync::Mutex<String>);
+    impl tracing::field::Visit for FieldDump<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            let mut buf = self.0.lock().expect("warn lock");
+            use std::fmt::Write as _;
+            let _ = write!(buf, "{}={value:?};", field.name());
+        }
+    }
+
+    fn channel_floor() -> lighttrack_core::AlertChannel {
+        lighttrack_core::AlertChannel {
+            id: "c".into(),
+            project_id: None,
+            kind: lighttrack_core::ChannelKind::Webhook,
+            target: "https://hook.test/x".into(),
+            secret_hash: None,
+            prev_secret_hash: None,
+            min_severity: lighttrack_core::Severity::Info,
+            kinds: Vec::new(),
+            enabled: true,
+            created_at: chrono::Utc::now(),
+        }
+    }
 }

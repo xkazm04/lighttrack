@@ -5,18 +5,26 @@
 //! - [`prompts`]  — judge/eval/rubric prompt + schema builders (re-exported).
 //! - [`invocation`] — the **one** headless-Claude seam: posture, spawn, envelope, probe, resolve.
 //! - `providers`  — [`generate`] across `anthropic` / `google` / `openai` (schema-enforced + retried).
+//! - [`chat`]     — a conversation (+ tools) as a generation input, and [`generate_chat`] over it.
 //! - `parse`      — JSON extraction + the one-shot repair re-ask around a single judge sample.
 //! - `fence`      — per-call nonce delimiters around untrusted content (judge-prompt injection defense).
 //! - `anthropic_api` — the bare Messages API judge path (used when `ANTHROPIC_API_KEY` is set).
+//! - [`codex`]    — the Codex CLI (`codex exec`): GPT models on a ChatGPT seat, isolated and read-only.
 //! - [`http_target`] — generation from an operator-owned HTTP endpoint (a RAG pipeline, an agent).
 //! - [`endpoint_probe`] — what is answering at a re-pointed OpenAI-compatible base, before a run
 //!   is attributed to a provider.
 //! - `family`     — coarse model families, for the self-preference bias control.
 //! - `retry`      — bounded exponential backoff for transient (429/5xx/timeout) provider failures.
 //! - `scorers`   — deterministic (non-LLM) rubric dimensions: exact/regex/numeric/json_valid/contains.
-//! - `judge`      — [`run_judge`], [`run_rubric_judge`], [`run_text`], [`parse_judge_spec`].
+//! - `judge`      — [`run_rubric_judge`], [`run_rubric_judge_with_evidence`] (the `grounding`
+//!   kind), [`run_text`], [`parse_judge_spec`].
+//! - `judge::freeform` — the **freeform** contract ([`FreeformContract`]): criteria text with an
+//!   identity and a locally-computed pass threshold, plus [`run_freeform_judge`]. The counterpart to
+//!   the structured rubric, and the path `score` / `bench` simple / `calibrate` take.
 
 mod anthropic_api;
+pub mod chat;
+pub mod codex;
 pub mod endpoint_probe;
 mod family;
 mod fence;
@@ -35,6 +43,7 @@ mod scorers;
 use lighttrack_core::JudgeVerdict;
 use thiserror::Error;
 
+pub use chat::{supports_tools, ChatOutcome, ChatRequest, ChatRole, ChatTurn};
 pub use endpoint_probe::{probe_openai_base, OPENAI_BASE_ENV};
 pub use family::{model_family, same_family};
 pub use http_target::{generate_http, HttpTargetRequest, HttpTargetResponse, HttpTargetUsage};
@@ -43,13 +52,16 @@ pub use invocation::{
     READONLY_BASE_TOOLS,
 };
 pub use judge::batch::{run_rubric_batch, BatchCase};
-pub use judge::{parse_judge_spec, run_judge, run_rubric_judge, run_text};
+pub use judge::freeform::{
+    run_freeform_judge, run_judge, FreeformContract, FreeformOutcome, DEFAULT_FREEFORM_THRESHOLD,
+};
+pub use judge::{parse_judge_spec, run_rubric_judge, run_rubric_judge_with_evidence, run_text};
 pub use pairwise::{run_pairwise, PairwiseOutcome, PairwiseVerdict, PairwiseWinner};
 pub use prompts::{
-    build_eval_prompt, build_judge_prompt, build_pairwise_prompt, build_rubric_prompt,
+    build_eval_prompt, build_freeform_prompt, build_pairwise_prompt, build_rubric_prompt,
     build_rubric_schema, Prompt,
 };
-pub use providers::{generate, generate_deterministic};
+pub use providers::{generate, generate_chat, generate_deterministic, wire_output_ceiling};
 pub use sandbox::{
     run_exec, ContreeCli, DockerCli, ExecOutcome, ExecVerdict, SandboxJob, SandboxRunner,
 };
@@ -297,6 +309,8 @@ pub struct DimScore {
     /// dimensions keep their relative weights instead of being silently re-based. `score` is 0.0 as
     /// a placeholder and means nothing; read this flag before reading it.
     pub voided: bool,
+    /// `grounding` only: the per-claim verdicts, counters and instrument pin behind `score`.
+    pub grounding: Option<lighttrack_core::GroundingDetail>,
 }
 
 impl DimScore {
@@ -348,6 +362,34 @@ pub struct RubricOutcome {
     pub batch_size: Option<u32>,
 }
 
+/// Whether the structured-output constraint the caller asked for actually reached the model.
+///
+/// A schema is a *guarantee about syntax*, and like [`Determinism`] it can silently degrade: a
+/// provider that rejects the schema is retried schema-less so a strict-schema model never hard-fails
+/// a run. Before this field existed that degradation was reported on stderr only, so a caller
+/// holding a [`GenOutcome`] could not tell an enforced result from a prose fallback and would parse
+/// the second believing the first. Report the weaker guarantee as a *value*, the way determinism is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaEnforcement {
+    /// A schema was sent and the provider accepted it — syntax is enforced by the provider.
+    Enforced,
+    /// A schema was requested but **shed**: the provider rejected it (4xx) and the call was retried
+    /// without it. The output is prose that merely *looks* structured; parse it defensively.
+    Shed,
+    /// No schema was requested by the caller. Not a degradation.
+    NotRequested,
+}
+
+impl SchemaEnforcement {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SchemaEnforcement::Enforced => "enforced",
+            SchemaEnforcement::Shed => "shed",
+            SchemaEnforcement::NotRequested => "not-requested",
+        }
+    }
+}
+
 /// The result of generating one candidate output from a target.
 #[derive(Debug, Clone)]
 pub struct GenOutcome {
@@ -357,9 +399,21 @@ pub struct GenOutcome {
     pub latency_ms: Option<u64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    /// Tokens spent on hidden reasoning, where the provider reports them apart from the answer
+    /// (OpenAI `completion_tokens_details.reasoning_tokens`, Gemini `thoughtsTokenCount`, OpenRouter's
+    /// normalized usage). Already **inside** `output_tokens` — informational, never added to it.
+    ///
+    /// `None` is an honest gap, not zero: the Anthropic Messages API and `claude -p` report no
+    /// split, and an HTTP target is a black box. A caller measuring how hard a model thought falls
+    /// back to `output_tokens` there and says that it did.
+    pub reasoning_tokens: Option<u64>,
     /// How reproducible this call was — see [`Determinism`]. Candidate *generation* is judged, so
     /// it is pinned like the judge is ([`generate_deterministic`]) whenever the caller wants one
     /// candidate per case; a plain [`generate`] reports `BestEffort` (or `Sampled`, when the caller
     /// is deliberately drawing several candidates).
     pub determinism: Determinism,
+    /// Whether the caller's structured-output constraint actually reached the model — see
+    /// [`SchemaEnforcement`]. `Shed` means a schema was asked for and dropped after a provider
+    /// rejection, so the output is unconstrained prose.
+    pub schema: SchemaEnforcement,
 }

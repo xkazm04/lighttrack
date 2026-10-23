@@ -193,13 +193,15 @@ fn compose(
                 .iter()
                 .filter(|rule| rule.is_active_at(now))
                 .filter(|rule| {
-                    rule.scope.as_ref().is_some_and(|s| {
-                        s.kind_str() == by && Some(s.value()) == r.value.as_deref()
-                    })
+                    rule.scope
+                        .as_ref()
+                        .is_some_and(|s| scope_binds_row(s, &by, r.value.as_deref()))
                 })
                 .map(|rule| {
                     let (threshold, basis) = resolve(rule);
-                    lighttrack_store::evaluate_rule_resolved(rule, &r.usage, threshold, basis)
+                    lighttrack_store::evaluate_rule_resolved_at(
+                        rule, &r.usage, threshold, basis, now,
+                    )
                 })
                 .collect();
             ScopeEntry {
@@ -224,6 +226,27 @@ fn compose(
         total,
         entries,
         truncated,
+    }
+}
+
+/// Does a rule's scope bind one row of the `by=<dimension>` breakdown?
+///
+/// The dimension has to match, and then the row's value has to be *inside* the scope — which is
+/// not the same question as string equality for a `Model` scope, whose membership is the canonical
+/// family (`LimitScope::matches`). Deciding it with `==` here is how the one surface built to
+/// answer "which caps bind this spend" came to say "none" for a `gpt-4o-2024-08-06` row under a
+/// `gpt-4o` cap, while the gate was rejecting exactly that traffic.
+///
+/// The breakdown row carries only its own dimension value, so the family fold is asked with no
+/// provider. `ModelId::family` does not depend on the provider (only `ModelId::provider` does), so
+/// both sides of the comparison are canonicalized identically and the answer is the gate's.
+fn scope_binds_row(scope: &LimitScope, by: &str, value: Option<&str>) -> bool {
+    if scope.kind_str() != by {
+        return false;
+    }
+    match (scope, value) {
+        (LimitScope::Model(_), Some(model)) => scope.matches_model_row("", model),
+        _ => Some(scope.value()) == value,
     }
 }
 

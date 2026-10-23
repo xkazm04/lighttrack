@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
 
-use lighttrack_core::LlmEvent;
+use lighttrack_core::{trace_ref_within_bound, LlmEvent, MAX_TRACE_REF_LEN};
 
 use crate::error::{ApiError, ErrorCode};
 
@@ -47,7 +47,7 @@ pub(crate) struct Rejection {
 }
 
 impl Rejection {
-    fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -114,16 +114,21 @@ pub(crate) struct IngestPolicy {
     max_future_secs: i64,
     /// `0` = this bound disabled. Otherwise the max seconds `ts` may lag server time.
     max_past_secs: i64,
+    /// Whether a usage record whose cached sub-count exceeds its total is refused. ON by default;
+    /// see [`crate::events_validate_usage`] for why turning it off still counts the violations.
+    check_usage_subcounts: bool,
 }
 
 impl IngestPolicy {
     fn from_env() -> Self {
         // The legacy symmetric knob wins when set (including `0`, which is the explicit "off" switch
         // an operator ingesting historical archives needs).
+        let check_usage_subcounts = crate::events_validate_usage::enabled_from_env();
         if let Some(sym) = env_i64(ENV_MAX_TS_SKEW) {
             return Self {
                 max_future_secs: sym.max(0),
                 max_past_secs: sym.max(0),
+                check_usage_subcounts,
             };
         }
         Self {
@@ -133,6 +138,7 @@ impl IngestPolicy {
             max_past_secs: env_i64(ENV_MAX_TS_SKEW_PAST)
                 .unwrap_or(DEFAULT_SKEW_PAST_SECS)
                 .max(0),
+            check_usage_subcounts,
         }
     }
 
@@ -144,6 +150,37 @@ impl IngestPolicy {
                 "`model` must not be empty",
             ));
         }
+        // Propagation metadata is the one part of an event that arrives from a sender we do not
+        // control — an SDK or OTLP caller writes `trace_id` / `span_id` / `parent_span_id` by hand —
+        // and it is written straight into the record an operator reads during an incident. Every
+        // other caller-supplied identifier in this service is already bounded (a project id at 64
+        // characters, a prompt name or label at 128); these three were not, so the only cap on them
+        // was the request body limit — megabytes of caller-chosen text per field. They are bounded
+        // here, and only bounded: a non-W3C id is somebody's legitimate opaque id and its alphabet
+        // and case stay untouched (see `normalize_trace_ref`).
+        //
+        // Over-long is REJECTED, never truncated. Truncating an identifier is silently lossy in the
+        // worst way available: two distinct traces whose ids share a 128-character prefix would
+        // collapse into one, and the corruption would be invisible in exactly the view built to
+        // explain it. Rejecting matches how the project and prompt doors treat an over-long
+        // identifier — the caller is told, in the same breath, which field and which limit.
+        for (field, value) in [
+            ("trace_id", ev.trace_id.as_deref()),
+            ("span_id", ev.span_id.as_deref()),
+            ("parent_span_id", ev.parent_span_id.as_deref()),
+        ] {
+            if let Some(v) = value {
+                if !trace_ref_within_bound(v) {
+                    return Err(Rejection::new(
+                        ErrorCode::BadRequest,
+                        format!(
+                            "`{field}` must be at most {MAX_TRACE_REF_LEN} characters (got {})",
+                            v.chars().count()
+                        ),
+                    ));
+                }
+            }
+        }
         // A `provider` outside the modeled variants deserializes to `Unknown` and is ACCEPTED:
         // observability must ingest traffic from providers we haven't modeled yet (mistral, bedrock,
         // ollama, …). Its cost simply stays unpriced (`cost_usd: null`, no `cost_source`), which is
@@ -154,6 +191,13 @@ impl IngestPolicy {
         // corrupts is every time-ordered read (traces, event listings, `since`/`until` windows), so
         // the two directions get distinct codes — a client can tell "your clock is ahead" from
         // "you're replaying something ancient" without parsing prose.
+        // `usage` is arithmetic, and the one thing arithmetic can be is impossible: `cached_input`
+        // is the part of `input` served from cache, so a sub-count larger than its total is a record
+        // the price book cannot bill honestly (it used to saturate the residual to zero and charge
+        // the whole prompt at the cached rate). Refused here, at the one door all three ingest
+        // surfaces share, and never repaired — see [`crate::events_validate_usage`].
+        crate::events_validate_usage::check(ev, self.check_usage_subcounts)?;
+
         let delta = (ev.ts - now).num_seconds();
         if self.max_future_secs > 0 && delta > self.max_future_secs {
             return Err(Rejection::new(
@@ -219,12 +263,56 @@ mod tests {
         IngestPolicy {
             max_future_secs: 0,
             max_past_secs: 0,
+            check_usage_subcounts: true,
         }
     }
 
     #[test]
     fn accepts_a_well_formed_event() {
         let now = Utc::now();
+        assert!(disabled_skew().validate(&ev(json!({})), now).is_ok());
+    }
+
+    #[test]
+    fn rejects_an_over_long_trace_ref_on_every_one_of_the_three_fields() {
+        let now = Utc::now();
+        let over = "a".repeat(MAX_TRACE_REF_LEN + 1);
+        for field in ["trace_id", "span_id", "parent_span_id"] {
+            let e = ev(json!({ field: over.clone() }));
+            let err = disabled_skew().validate(&e, now).unwrap_err();
+            assert_eq!(err.code, ErrorCode::BadRequest);
+            assert!(err.message.contains(field), "{}", err.message);
+            assert!(
+                err.message.contains(&MAX_TRACE_REF_LEN.to_string()),
+                "the message names the limit: {}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_ids_at_and_under_the_bound_whatever_they_look_like() {
+        let now = Utc::now();
+        // Exactly at the cap, an opaque id, a W3C trace id and a W3C span id all pass.
+        let at_cap = "a".repeat(MAX_TRACE_REF_LEN);
+        for id in [
+            at_cap.as_str(),
+            "req-1",
+            "Order-7",
+            "5b8efff798038103d269b633813fc60c",
+            "eee19b7ec3c1b174",
+        ] {
+            let e = ev(json!({
+                "trace_id": id,
+                "span_id": id,
+                "parent_span_id": id,
+            }));
+            assert!(
+                disabled_skew().validate(&e, now).is_ok(),
+                "id must be accepted: {id}"
+            );
+        }
+        // Absent ids are not a violation.
         assert!(disabled_skew().validate(&ev(json!({})), now).is_ok());
     }
 
@@ -266,6 +354,7 @@ mod tests {
         let pol = IngestPolicy {
             max_future_secs: 3600,
             max_past_secs: 3600,
+            check_usage_subcounts: true,
         };
         let now = Utc::now();
         // Within the window: accepted.
@@ -284,12 +373,38 @@ mod tests {
         );
     }
 
+    /// `validate` is the one door all three ingest surfaces share, so the usage invariant has to be
+    /// refused *here* rather than at each handler — and the policy flag has to reach it, or the knob
+    /// is decoration.
+    #[test]
+    fn the_usage_subcount_invariant_is_refused_through_validate_and_follows_its_flag() {
+        let now = Utc::now();
+        let violating = ev(json!({ "usage": { "input": 100, "output": 10, "cached_input": 400 } }));
+        assert_eq!(
+            disabled_skew().validate(&violating, now).unwrap_err().code,
+            ErrorCode::UsageSubcountExceedsTotal
+        );
+        let off = IngestPolicy {
+            max_future_secs: 0,
+            max_past_secs: 0,
+            check_usage_subcounts: false,
+        };
+        assert!(
+            off.validate(&violating, now).is_ok(),
+            "the knob admits the record again without a deploy"
+        );
+        // And the legal fully-cached shape was never the thing being refused.
+        let legal = ev(json!({ "usage": { "input": 500, "output": 10, "cached_input": 500 } }));
+        assert!(disabled_skew().validate(&legal, now).is_ok());
+    }
+
     #[test]
     fn skew_bounds_are_asymmetric_by_default() {
         // The shipped default tolerates real backfill but not a clock running ahead.
         let pol = IngestPolicy {
             max_future_secs: DEFAULT_SKEW_FUTURE_SECS,
             max_past_secs: DEFAULT_SKEW_PAST_SECS,
+            check_usage_subcounts: true,
         };
         let now = Utc::now();
         let day_old = ev(json!({ "ts": (now - chrono::Duration::days(1)).to_rfc3339() }));

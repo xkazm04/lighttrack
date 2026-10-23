@@ -2,8 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// How a dimension is evaluated. `Llm` (the default) asks the judge model; every other kind is a
-/// mechanical check scored into the same weighting / floor / aggregation pipeline at zero tokens —
+/// How a dimension is evaluated. `Llm` (the default) and `Grounding` ask the judge model; every other
+/// kind is a mechanical check scored into the same weighting / floor / aggregation pipeline at zero tokens —
 /// the five text kinds locally and for free, [`Exec`](DimensionKind::Exec) remotely and for wall
 /// clock. Additive and defaulted: a rubric written before kinds existed deserializes as all-`Llm`
 /// and re-serializes byte-identically.
@@ -34,6 +34,15 @@ pub enum DimensionKind {
     /// 0.0 — attributing our own outage to the model is the defect this kind exists to avoid.
     /// See `docs/BENCHMARK_FRAMEWORK.md` §3d.
     Exec,
+    /// Support by evidence, scored claim by claim: the judge model cuts the output into standalone
+    /// claims, gives each one a supported/unsupported verdict against the case's evidence passages,
+    /// and the dimension scores supported over claims **issued**.
+    ///
+    /// Model-judged and sampled like `llm` (two calls per sample), but not a mechanical check and
+    /// not narrated in the rubric prompt. Refused by name when the case carries no evidence; an
+    /// output with zero claims leaves the dimension **unscored** (voided), never 1.0 and never 0.0.
+    /// See `docs/BENCHMARK_FRAMEWORK.md` §3e.
+    Grounding,
 }
 
 impl DimensionKind {
@@ -46,6 +55,7 @@ impl DimensionKind {
             DimensionKind::JsonValid => "json_valid",
             DimensionKind::Contains => "contains",
             DimensionKind::Exec => "exec",
+            DimensionKind::Grounding => "grounding",
         }
     }
 
@@ -59,6 +69,18 @@ impl DimensionKind {
     /// validator, a dry run, an offline test) branch on this rather than on `!is_llm()`.
     pub fn is_exec(&self) -> bool {
         matches!(self, DimensionKind::Exec)
+    }
+
+    /// True for the claim-by-claim evidence kind: model-judged through its own decompose/verify
+    /// calls, never by a local check and never by the rubric prompt.
+    pub fn is_grounding(&self) -> bool {
+        matches!(self, DimensionKind::Grounding)
+    }
+
+    /// True for a kind scored locally or in a sandbox, once per case — neither sampled nor sent to
+    /// the judge model.
+    pub fn is_mechanical(&self) -> bool {
+        !self.is_llm() && !self.is_grounding()
     }
 }
 
@@ -388,6 +410,7 @@ mod tests {
             (DimensionKind::JsonValid, "json_valid"),
             (DimensionKind::Contains, "contains"),
             (DimensionKind::Exec, "exec"),
+            (DimensionKind::Grounding, "grounding"),
         ] {
             assert_eq!(k.as_str(), s);
             assert_eq!(serde_json::to_value(k).expect("kind"), json!(s));

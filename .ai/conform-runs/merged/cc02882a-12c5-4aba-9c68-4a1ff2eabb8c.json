@@ -1,0 +1,32 @@
+{
+ "schema": "conform-run/1",
+ "worker": "cc02882a-12c5-4aba-9c68-4a1ff2eabb8c",
+ "subject": "untrusted-extension-host",
+ "evaluatedAt": "2026-10-13T22:05:13.537636+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "untrusted-extension-host",
+   "context": "claude-invocation-and-execution",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "untrusted-extension-host",
+   "context": "api-integration-tests",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "untrusted-extension-host",
+   "context": "api-platform",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "untrusted-extension-host",
+   "context": "runner-worker-pipeline",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": []
+}

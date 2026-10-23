@@ -320,6 +320,7 @@ pub const SURFACE_METHODS: &[(Surface, &[&str])] = &[
             "list_benchmark_runs",
             "upsert_price",
             "list_prices",
+            "seed_prices",
             "create_dataset",
             "get_dataset",
             "list_datasets",

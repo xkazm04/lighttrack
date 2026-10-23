@@ -1,0 +1,197 @@
+//! Produce-path tests for one leased task. They live beside the code in a sibling file rather
+//! than inline so `exec.rs` stays under the module ceiling: the behaviour each one pins is the
+//! behaviour of `super`.
+
+use serde_json::json;
+
+use super::*;
+
+/// These tests are not about liveness publishing: an emitter attached to nothing.
+fn quiet() -> Emitter {
+    Emitter::detached()
+}
+
+fn task(action_type: &str) -> RelayTask {
+    serde_json::from_value(json!({
+        "id": "t-1", "project_id": "p1", "action_type": action_type,
+        "payload": { "who": "world" }
+    }))
+    .unwrap()
+}
+
+fn cfg(actions_dir: &str) -> AgentConfig {
+    cfg_with_root(actions_dir, None)
+}
+
+fn cfg_with_root(actions_dir: &str, workspaces_root: Option<&str>) -> AgentConfig {
+    // Parsed, not loaded: `AgentConfig::load` resolves the device key, `toml::from_str` does not,
+    // and nothing on the execute path reads it, so these tests set no environment.
+    let esc = |s: &str| s.replace('\\', "\\\\");
+    let root = workspaces_root
+        .map(|r| format!("workspaces_root = \"{}\"\n", esc(r)))
+        .unwrap_or_default();
+    let toml = format!(
+        "actions_dir = \"{}\"\n{root}[[sources]]\nname = \"x\"\nurl = \"http://x\"\ndevice_key_env = \"LT_TEST_DEVICE_KEY\"\n",
+        esc(actions_dir)
+    );
+    toml::from_str(&toml).unwrap()
+}
+
+/// Write a one-file action library entry with the given `action.toml` body.
+fn write_action(dir: &std::path::Path, spec: &str) {
+    let act = dir.join("ns").join("act");
+    std::fs::create_dir_all(&act).unwrap();
+    std::fs::write(act.join("prompt.md"), "Hello {{params.who}}").unwrap();
+    std::fs::write(act.join("action.toml"), spec).unwrap();
+}
+
+#[test]
+fn unknown_or_invalid_action_fails_without_invoking_claude() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = EngineConfig::default();
+    let cfg = cfg(dir.path().to_str().unwrap());
+
+    let r = execute(&cfg, &engine, &task("ns/missing"), &quiet()).report;
+    assert_eq!(r.status, "failed");
+    assert!(r.error.unwrap().contains("no action"));
+
+    let r = execute(&cfg, &engine, &task("../escape"), &quiet()).report;
+    assert_eq!(r.status, "failed");
+    assert!(r.error.unwrap().contains("invalid action_type"));
+}
+
+/// The posture an action declares is resolved before anything is spawned, so a library that
+/// over-claims costs nothing. `claude_bin` here cannot exist — reaching a spawn would be a
+/// different error than the one each case asserts.
+#[test]
+fn an_over_claiming_action_fails_before_any_spawn() {
+    let engine = EngineConfig {
+        claude_bin: "definitely-not-an-executable-lighttrack-test".into(),
+        ..EngineConfig::default()
+    };
+    let cases: [(&str, bool, &str); 5] = [
+        // (action.toml, configure a workspaces_root, expected substring)
+        ("mode = \"edit\"\n", true, "requires a workspace"),
+        (
+            "mode = \"readonly-scan\"\nworkspace = \"repo\"\n",
+            false,
+            "no workspaces_root",
+        ),
+        (
+            "mode = \"readonly-scan\"\nworkspace = \"../outside\"\n",
+            true,
+            "invalid workspace",
+        ),
+        (
+            "mode = \"generate\"\nworkspace = \"repo\"\n",
+            true,
+            "takes no workspace",
+        ),
+        (
+            // A repository-touching mode with a write tool: the seam refuses the posture.
+            "mode = \"readonly-scan\"\nworkspace = \"repo\"\nallowed_tools = [\"Write\"]\n",
+            true,
+            "it can write",
+        ),
+    ];
+    for (spec, with_root, expect) in cases {
+        let lib = tempfile::tempdir().unwrap();
+        let roots = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(roots.path().join("repo")).unwrap();
+        write_action(lib.path(), spec);
+        let cfg = cfg_with_root(
+            lib.path().to_str().unwrap(),
+            with_root.then(|| roots.path().to_str().unwrap()),
+        );
+        let r = execute(&cfg, &engine, &task("ns/act"), &quiet()).report;
+        assert_eq!(r.status, "failed", "{spec}");
+        let err = r.error.unwrap_or_default();
+        assert!(
+            err.contains(expect),
+            "{spec}\nexpected '{expect}' in: {err}"
+        );
+        assert!(
+            !err.contains("lighttrack-test"),
+            "{spec}: reached a spawn instead of failing on posture: {err}"
+        );
+    }
+}
+
+/// A well-formed edit action passes posture and only then fails on the missing binary — the
+/// proof that the posture gate is not simply rejecting everything.
+#[test]
+fn a_well_formed_edit_action_reaches_the_spawn() {
+    let lib = tempfile::tempdir().unwrap();
+    let roots = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(roots.path().join("repo")).unwrap();
+    write_action(
+        lib.path(),
+        "mode = \"edit\"\nworkspace = \"repo\"\npermission_mode = \"acceptEdits\"\nmax_budget_usd = 2.0\ntimeout_secs = 30\n",
+    );
+    let engine = EngineConfig {
+        claude_bin: "definitely-not-an-executable-lighttrack-test".into(),
+        ..EngineConfig::default()
+    };
+    let cfg = cfg_with_root(
+        lib.path().to_str().unwrap(),
+        Some(roots.path().to_str().unwrap()),
+    );
+    let r = execute(&cfg, &engine, &task("ns/act"), &quiet()).report;
+    assert_eq!(r.status, "failed");
+    assert!(
+        r.error.unwrap().contains("lighttrack-test"),
+        "a valid posture should get as far as the spawn"
+    );
+}
+
+/// The fingerprint is a property of the RUN, not of a successful one: a report that never
+/// reached the CLI still names the prompt it was about to send, and an action that has not
+/// opted in sends the fingerprint and nothing else. This is the privacy default, tested at the
+/// place it is actually decided.
+#[test]
+fn a_run_names_its_prompt_but_ships_its_text_only_on_request() {
+    let engine = EngineConfig {
+        claude_bin: "definitely-not-an-executable-lighttrack-test".into(),
+        ..EngineConfig::default()
+    };
+    // The default library entry declares nothing: fingerprint yes, text no, version none.
+    let lib = tempfile::tempdir().unwrap();
+    write_action(lib.path(), "");
+    let closed = cfg(lib.path().to_str().unwrap());
+    let r = execute(&closed, &engine, &task("ns/act"), &quiet()).report;
+    assert_eq!(r.status, "failed", "the fake binary cannot run");
+    assert_eq!(
+        r.prompt_sha256.as_deref(),
+        Some(crate::report::sha256_hex("Hello world").as_str()),
+        "the fingerprint is over the RENDERED prompt, not the template"
+    );
+    assert!(r.rendered_prompt.is_none(), "not opted in");
+    assert!(r.action_version.is_none());
+
+    // Opted in, and versioned.
+    let lib = tempfile::tempdir().unwrap();
+    write_action(lib.path(), "report_io = true\nversion = \"7\"\n");
+    let opted_in = cfg(lib.path().to_str().unwrap());
+    let r = execute(&opted_in, &engine, &task("ns/act"), &quiet()).report;
+    assert_eq!(r.rendered_prompt.as_deref(), Some("Hello world"));
+    assert_eq!(r.action_version.as_deref(), Some("7"));
+
+    // No action, no prompt, nothing to fingerprint — the one unstamped outcome.
+    let r = execute(&opted_in, &engine, &task("ns/missing"), &quiet()).report;
+    assert!(r.prompt_sha256.is_none());
+}
+
+#[test]
+fn rate_limit_stderr_classifies_as_deferred() {
+    let rl = EngineError::NonZero {
+        code: 1,
+        stderr: "Claude AI usage limit reached|123".into(),
+    };
+    assert!(rate_limited(&rl));
+    let other = EngineError::NonZero {
+        code: 1,
+        stderr: "boom".into(),
+    };
+    assert!(!rate_limited(&other));
+    assert!(!rate_limited(&EngineError::Parse("x".into())));
+}

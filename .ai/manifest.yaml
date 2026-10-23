@@ -64,20 +64,21 @@ capabilities:
 # other is a POINTER to it and restates nothing. Commands in particular are written down exactly once,
 # in `capabilities:` above — prose that repeats a command is prose that goes stale silently.
 #
-# KNOWN STALE, 2026-09-05: `.claude/CLAUDE.md` still holds the generator's npm scaffold (`npm run
-# build` / `npm run test` / "Add your project description here") for a workspace with no npm build.
-# It is listed here so a reader knows which document to disbelieve, which is the part that could be
-# fixed without editing it. Replacing its body with a stub that points at `canonical:` is the
-# outstanding work; do that and drop it from `staleProjections`. TWO AGENT SESSIONS HAVE NOW TRIED
-# AND FAILED: the harness classifies `.claude/**` as a sensitive path and refuses to write it, so
-# this one edit needs a human. Everything around it is done — `AGENTS.md` gives the other tool
-# ecosystems the same pointer, and `crates/core/tests/guidance_guard.rs` fails the build if a
-# projection that is NOT declared stale carries a command or stops naming the canonical file, so
-# the list below cannot grow a second contradiction quietly.
+# RESOLVED 2026-09-14: `.claude/CLAUDE.md` is a pointer now, and `staleProjections` is empty. Its
+# body — the generator's JavaScript-build scaffold, for a workspace that has none — was replaced with
+# a stub naming `canonical:`, so the quarantine that stood in for the fix is no longer needed. The
+# pointer rules in `crates/core/tests/guidance_guard.rs` apply to it from the same commit: a
+# projection that is NOT declared stale must name the canonical file and carry no command line, so
+# this list cannot grow a second contradiction quietly.
+#
+# The note here used to say the edit "needs a human" because the harness refuses writes under
+# `.claude/`. That was WRONG, and stating it turned two failed attempts into a documented reason not
+# to try again — the path is writable. It is recorded because an inherited claim about what cannot be
+# done is worth exactly as much as the last time someone checked.
 guidance:
   canonical: CLAUDE.md
   projections: [.claude/CLAUDE.md, AGENTS.md]
-  staleProjections: [.claude/CLAUDE.md]
+  staleProjections: []
   commandsFrom: .ai/manifest.yaml
 
 # Pointers — these subsystems can change format underneath without breaking this contract.

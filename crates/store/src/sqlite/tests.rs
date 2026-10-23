@@ -1841,6 +1841,74 @@ fn scoped_cap_rejects_only_matching_dimension() {
         scoped.calls, 1,
         "only the one admitted gpt-4o row counts toward the model scope"
     );
+
+    // The assertion above uses no family variant, so it reads the same under raw string equality
+    // and under the canonical-family fold — it pins the filter, not membership. A dated snapshot
+    // is inside the cap's scope (`LimitScope::matches` lets the cap reject it), so the ledger has
+    // to count it; otherwise the number the rule is evaluated against is not the traffic the gate
+    // turns away. The admission path already folds the family via `usage_cache`, which is why this
+    // event is REJECTED at 1 + 1 = 2 >= 2 even though it is not spelled `gpt-4o`.
+    let mut dated = ev("p1", "gpt-4o-2024-08-06", 1, 1, 0.0);
+    dated.provider = "openai".into();
+    let dated_adm = s.insert_event_checked(&dated).unwrap();
+    assert!(
+        !dated_adm.admitted,
+        "a `gpt-4o` cap rejects `gpt-4o-2024-08-06`: the gate folds the canonical family"
+    );
+    // ...and the ledger agrees: the rejected row was not stored, so the scoped total stays 1.
+    let after = s
+        .usage_since_scoped(
+            "p1",
+            LimitWindow::Hour.since(Utc::now()),
+            &LimitScope::Model("gpt-4o".into()),
+        )
+        .unwrap();
+    assert_eq!(after.calls, 1, "the refused event is not in the ledger");
+
+    // Now store one in-family dated row under a cap that observes rather than blocks, and read it
+    // back through the scoped query: this is the half raw equality gets wrong.
+    s.create_limit_rule(&LimitRule {
+        id: "r-model-observe".into(),
+        project_id: "p2".into(),
+        metric: LimitMetric::Calls,
+        window: LimitWindow::Hour,
+        threshold: Threshold::Fixed(99.0),
+        action: LimitAction::Alert,
+        enabled: true,
+        warn_at: None,
+        scope: Some(LimitScope::Model("gpt-4o".into())),
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
+    })
+    .unwrap();
+    for model in [
+        "gpt-4o",
+        "openai/gpt-4o",
+        "gpt-4o-2024-08-06",
+        "gpt-4o-mini",
+    ] {
+        let mut e = ev("p2", model, 1, 1, 1.0);
+        e.provider = "openai".into();
+        assert!(s.insert_event_checked(&e).unwrap().admitted);
+    }
+    let family = s
+        .usage_since_scoped(
+            "p2",
+            LimitWindow::Hour.since(Utc::now()),
+            &LimitScope::Model("gpt-4o".into()),
+        )
+        .unwrap();
+    assert_eq!(
+        family.calls, 3,
+        "gpt-4o + openai/gpt-4o + gpt-4o-2024-08-06 are one family; gpt-4o-mini is not          (raw equality counts 1)"
+    );
+    assert!(
+        (family.cost_usd - 3.0).abs() < 1e-9,
+        "the in-family cost total (got {})",
+        family.cost_usd
+    );
 }
 
 #[test]
@@ -2486,6 +2554,17 @@ fn score_detail_round_trips_multi_dimension_multi_sample() {
         coverage: None,
         // The judged evidence carried an ingest scrub stamp of 2 spans.
         evidence_redacted_spans: Some(2),
+        // What generating this case's candidates spent, and the limit it breached doing so — read
+        // back through the same whole-detail equality as everything else here.
+        generation: Some(lighttrack_core::GenerationFacts {
+            candidates: 2,
+            output_tokens: Some(812.5),
+            reasoning_tokens: Some(700.0),
+            latency_ms: Some(3000.0),
+            cost_usd: Some(0.004),
+            limit_breaches: vec!["cost".into()],
+            limits_unchecked: Vec::new(),
+        }),
     };
     let score = Score {
         id: new_id(),
@@ -2712,21 +2791,35 @@ fn cancel_is_race_safe_against_stale_reclaim() {
             .is_none(),
         "a cancelling job must never be reclaimed as stale"
     );
+    // Its worker never wound it down (the cutoff above made the lease stale), so the claim path
+    // settles it as `cancelled` with the orphan marker: never restarted, never left live forever.
     let after = s.get_job(Scope::Operator, "b").unwrap().unwrap();
-    assert_eq!(after.status, "cancelling");
+    assert_eq!(after.status, "cancelled");
+    assert_eq!(
+        after.error.as_deref(),
+        Some(lighttrack_core::JOB_ERROR_CANCEL_ORPHANED)
+    );
     assert_eq!(after.attempts, 1, "the reclaim never touched it");
     assert_eq!(after.stale_reclaims, 0);
 
-    // The worker notices and finishes it as cancelled — with no error, so no retry is consumed.
+    // Order C — a live worker winds a cancelling job down: it finishes as cancelled with no
+    // error, so no retry is consumed.
+    s.create_job(&mk("c")).unwrap();
+    s.claim_job(Utc::now(), &[]).unwrap().expect("claim c");
+    assert_eq!(
+        s.cancel_job(Scope::Operator, "c").unwrap(),
+        Some(JobCancel::Cancelling)
+    );
+    let held = s.get_job(Scope::Operator, "c").unwrap().unwrap();
     s.finish_job(
-        "b",
+        "c",
         "cancelled",
         &serde_json::json!({ "partial": true }),
         None,
-        after.claimed_at,
+        held.claimed_at,
     )
     .unwrap();
-    let done = s.get_job(Scope::Operator, "b").unwrap().unwrap();
+    let done = s.get_job(Scope::Operator, "c").unwrap().unwrap();
     assert_eq!((done.status.as_str(), done.failures), ("cancelled", 0));
     assert!(s
         .claim_job(Utc::now() + chrono::Duration::seconds(1), &[])
@@ -2904,5 +2997,66 @@ fn calls_and_tokens_caps_are_untouched_by_unpriced_traffic() {
             "the calls cap bites at 3, unaffected by pricing"
         );
         assert!(a.statuses.iter().all(|st| st.cost_evidence.is_none()));
+    }
+}
+
+/// The boot seeds the price book only when it is empty, so the seed has to be one unit: a row that
+/// fails part-way leaves nothing behind, and the next start seeds again. Row by row, the same
+/// failure left a non-empty partial book that no later start would ever finish.
+#[test]
+fn a_seed_that_fails_part_way_leaves_the_book_empty() {
+    let row = |model: &str, input: f64| lighttrack_core::ModelPriceRow {
+        provider: "seed".into(),
+        model: model.into(),
+        input_per_mtok: input,
+        output_per_mtok: 1.0,
+        cached_input_per_mtok: None,
+        effective_from: Utc::now(),
+        source_url: None,
+        verified_at: None,
+        note: None,
+    };
+    // A NaN rate binds as NULL, which the NOT NULL rate column refuses: a real store-side failure
+    // on the second row, after the first has been written.
+    let book = [row("a", 1.0), row("b", f64::NAN), row("c", 1.0)];
+
+    let atomic = SqliteStore::open_in_memory().unwrap();
+    assert!(atomic.seed_prices(&book).is_err());
+    assert!(
+        atomic.list_prices().unwrap().is_empty(),
+        "a failed seed must leave the book empty, so the next start's emptiness check seeds again"
+    );
+
+    // The row-by-row loop it replaced, on the same book: the first row survives the failure.
+    let by_row = SqliteStore::open_in_memory().unwrap();
+    assert!(book
+        .iter()
+        .try_for_each(|p| by_row.upsert_price(p))
+        .is_err());
+    assert_eq!(by_row.list_prices().unwrap().len(), 1);
+}
+
+#[test]
+fn metadata_filter_treats_the_key_as_one_literal_key() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    for (i, (k, v)) in [("a.b", "dot"), ("a\"b", "quote"), ("a", "plain")]
+        .into_iter()
+        .enumerate()
+    {
+        let mut e = ev("p1", "gpt-4o", 1, 1, 0.0);
+        e.id = format!("m{i}");
+        e.metadata = serde_json::json!({ k: v });
+        s.insert_event(&e).unwrap();
+    }
+    for (k, want) in [("a.b", 1usize), ("a\"b", 1), ("a", 1)] {
+        let r = s.list_events_filtered(
+            Scope::Project("p1"),
+            &crate::EventFilter {
+                metadata_key: Some(k.into()),
+                ..Default::default()
+            },
+            100,
+        );
+        assert_eq!(r.unwrap().events.len(), want, "key {k:?}");
     }
 }

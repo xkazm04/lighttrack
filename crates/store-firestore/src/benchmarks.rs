@@ -83,6 +83,12 @@ pub(crate) fn list_benchmark_runs(
         return Ok(Vec::new());
     }
     let filters: Vec<(&str, &str, Value)> = vec![("benchmark_id", "EQUAL", json!(benchmark_id))];
+    // Single-key ordering, and that is a stated residual rather than an oversight: the SQL backends
+    // break a `started_at` tie on `id` so a repeated read cannot reorder two simultaneous runs, and
+    // `Rest::query` takes one order key, so matching them here means a second order field plus the
+    // composite index Firestore would demand for it. Two runs sharing a start instant therefore
+    // come back in whatever order Firestore chooses. Same class of gap as any other backend skew —
+    // recorded here so a reader finds it in the code rather than by watching a gate change its mind.
     let docs = rest.query("benchmark_runs", &filters, Some(("started_at", true)), None)?;
     docs.iter().map(run_from).collect()
 }

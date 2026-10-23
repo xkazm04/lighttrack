@@ -499,3 +499,289 @@ three.
 `GET /v1/capabilities`. It is backend-agnostic on purpose — two deployments on different backends
 but the same build answer the same thing, so "is prod running the schema this SDK was written
 against" is one comparison rather than a version number somebody has to remember to bump.
+
+## D20 — A case's difficulty is an ordered enum, not a tag (2026-09-06)
+
+`DatasetItem` had `tags: Vec<String>` and nothing else categorical, so "hard" was expressible and
+`hard > medium` was not. That gap is the whole product question the benchmark layer exists to
+answer: *this model handles the easy and medium variants of my use case; only the hard ones need
+the expensive config* is a routing decision, and a routing decision needs an order. The second
+thing it buys is **discrimination** — a rung every target passes carries no information, and
+neither does one every target fails; a corpus that cannot rank its own rungs cannot see which of
+them is doing the separating, and is paying for cases that teach nothing.
+
+So `core::Difficulty` is a closed, totally-ordered ladder (`easy < medium < hard`), stored as its
+wire spelling in `dataset_items.difficulty` (M27) and carried onto `BenchmarkCase` so a run's stored
+corpus still says which cases were the hard ones.
+
+**Three rungs, not four.** A fourth rung is easy to add and hard to *use*: an operator who cannot
+tell two adjacent rungs apart consistently produces a grading that is noise on exactly the axis the
+routing decision reads. Add one when a corpus demonstrably saturates the top rung, not before.
+
+**`None` is ungraded, never medium.** This is the same law as `UseCase::declares` returning
+`Option<bool>` (D-nothing-imputed, `crates/core/src/use_case.rs`): an absent declaration and a
+neutral one are different states, and collapsing them makes a report cry wolf. Here it would be
+worse than a false alarm — the entire pre-M27 corpus would land in the middle tier, which is the
+tier the routing decision reads closest. Every layer keeps them apart: the column is nullable with
+no default, the filter excludes ungraded cases from *every* tier rather than putting them in the
+middle one, and the field is `skip_serializing_if = "Option::is_none"` so a pre-M27 case round-trips
+byte-identically.
+
+**An unknown wire value degrades to ungraded, not to a catch-all rung.** `UseCaseKind` degrades an
+unknown kind to `Other` rather than refusing the registration, and the same instinct applies — one
+unreadable field must not cost the corpus a case. The deliberate departure is the *target*:
+`Difficulty` has no `Other` variant and must never grow one, because a catch-all would have to sit
+somewhere on a total order and every placement is a claim nobody made. So it degrades to the
+absence the field already models.
+
+**Not yet done: per-tier reporting.** The tier exists, persists on all three backends, round-trips
+and is queryable (`GET /v1/datasets/:id/items?difficulty=hard`, `lt datasets items --difficulty`).
+`runner/compare.rs` does **not** stratify a report by it yet, so a benchmark still reports one mean
+over a mixed corpus. That is the payoff and it is a later change; this one is the axis it needs.
+
+## D21 — Reasoning effort is a target axis, and a level we cannot honour is an error (2026-09-06)
+
+`@effort` arrived as a suffix on a model spec, parsed by `split_effort` inside the `claude -p` argv
+builder. Grep found it exactly one caller. Every other generation path treated the suffix as part of
+the model id — so with `ANTHROPIC_API_KEY` set, the **default** judge spec `opus@xhigh` (D15) was
+POSTed to the Messages API as a model name, and any suffixed spec did the same to OpenAI's `model`
+field and Gemini's URL path. The declaration existed; the wire never saw it.
+
+The vocabulary is now `core::Effort`, a closed five-rung enum, and the split happens once at the
+provider boundary (`providers::generate_once`) above every adapter. `BenchTarget` carries an
+`effort` field, serde-defaulted so a stored matrix round-trips byte-identically, and the runner
+hands the engine `model_spec()` — `model@effort` — so the two halves travel through an API shape
+that predates the axis. Two targets differing only in effort get distinct labels, distinct
+run-report rows and their own leaderboard column.
+
+**An adapter that cannot express a level returns an error naming the adapter, the model, the level
+and the gap.** Two silent alternatives were available and both are worse. *Dropping* the level is
+the failure this decision exists to end — a column labelled `@xhigh` measuring default thinking.
+*Folding* it onto the nearest rung the provider does have (OpenAI's scale stops at `high`) is the
+same failure wearing a plausible face: two rows, one request, and a "4× the cost for +0.00" finding
+that is an artefact of our own mapping. So `openai` refuses `xhigh`/`max`, and **Gemini refuses every
+level**: its control is `thinkingConfig.thinkingBudget`, a token count with a per-model valid range,
+and a guessed number the API clamps or ignores yields a scorecard column that reads as measured and
+measures nothing. A stated gap is cheap to close; a fabricated measurement is not.
+
+**Anthropic is `output_config.effort`, not a thinking budget.** The obvious mapping —
+`thinking: {type: "enabled", budget_tokens: N}` — is rejected with a 400 by every model
+`resolve_model` produces, so it would have been plumbing for a request that never succeeds. The
+GA `output_config.effort` takes our five level names verbatim, which is why the mapping is the
+identity and nothing is invented. `xhigh`/`max` additionally raise `max_tokens` to 64000, per
+Anthropic's own guidance, or the model's thinking hits *our* 4096 ceiling and a cap of ours is
+reported as the model being cut off.
+
+**Determinism is not touched.** Effort changes what the model spends, not what we can pin: the
+Anthropic path stays `best-effort` (no `seed` exists), `temperature: 0` is still requested, and the
+existing detect-and-retry for models that reject sampling parameters still fires. No stamp is
+upgraded because a run thought harder.
+
+## D22 — The cost axis of a recommendation is generation cost per case, and an unpriced target is excluded by name (2026-09-06)
+
+Compare mode measured quality, cost and latency correctly — on the same calls, under the same
+pinning — and then printed them as three independent columns and left the trade-off to the
+operator's eye. The leaderboard's tested `best` claim (BENCHMARK_FRAMEWORK §2a) answers *which
+target is best*, and answers it honestly. Nothing answered
+the question the money is actually spent on: **which is the cheapest target I can get away with**.
+That has a different answer whenever the cheap model sits inside the noise of the expensive one,
+which is the most common real finding a benchmark produces.
+
+**The cost axis is GENERATION cost per judged case.** Not total spend: judge spend is benchmark
+overhead the operator never pays in production, and folding it into a target-selection decision
+would let a target that happens to be cheap to *grade* read as cheap to *run* — while being the
+same model on every row, so it only blurs the axis it is added to. Not per run: targets judge
+different case counts once errors and the health filter have had their say, so run totals are not
+comparable across rows. The surface is the non-dominated set over quality ↑, that cost ↓, **and both
+latency percentiles ↓** — a row with a good median and a terrible tail is exactly the trade-off a
+single-latency surface hides.
+
+**Sufficiency is the existing corrected superiority test read in reverse**, not a new statistic. A
+candidate is sufficient iff `superiority(best, candidate, m)` comes back *not significant*, at the
+same Bonferroni-corrected α. A recommendation is the strongest sentence this tool prints, so it is
+the last place to introduce a second, softer test — the repo's one statistics path is load-bearing
+precisely because a tool whose α is a knob invites tuning until the answer is the desired one.
+
+**An unpriced target is excluded by name, never priced at zero.** This is the decision that makes the
+feature safe rather than dangerous. Every HTTP provider adapter returns `cost_usd: None` and cost
+comes from the DB price book (D9), so an unpriced model is ordinary, not an edge case. A null cost
+read as `$0` **dominates the cost axis and becomes the recommendation precisely because nothing is
+known about it** — the exact inversion of what the number means. It is dropped from the surface with
+its label and the reason, and stays eligible to *be* the best, because its quality was measured even
+where its cost was not. Priced-ness is tracked for the **generation** call specifically: the run's
+`price_warnings` set also collects the judge's unpriced model, and an unpriced judge leaves a
+target's own run cost perfectly known.
+
+**A partial run recommends nothing, and power is always disclosed.** A budget halt, a cancellation
+or a health-filtered target leaves the *later* cases, not a random subset, and a recommendation is a
+stronger claim than a mean. "Not significantly worse" is an absence of evidence: with few cases
+everything is indistinguishable from everything, so the case count and surviving α travel with the
+claim, and a run in which *every* candidate passes loses the bold and says that it measured its own
+sample size rather than the models. A candidate that cannot be paired with the best is reported
+untested — neither sufficient nor insufficient — rather than silently skipped or silently accepted.
+
+**A target is never its own sufficiency candidate**, and the caveat above is exactly why. The first
+build let the walk test the best target against itself: all-zero deltas, p = 1, "not significant",
+counted as a test. That inverted the caveat's purpose. A best target that dominates every other row
+is the *only* row left on the frontier — the rows it obviously separated were removed by domination
+before the walk saw them — so the self-comparison was the only "test" that ran, and the tool told the
+operator that a run with ample power could distinguish nothing. `candidates_tested` now counts
+genuine candidates only, and with none of them `all_candidates_indistinguishable` is `null` (not
+applicable), never `true`. When the best target *is* the cheapest row on the surface it is still the
+recommendation, with its own note saying nothing is given up by choosing it and no `p_value`,
+because no test ran — a bare "nothing found" would read as a tool that learned nothing, when it
+learned the cleanest answer there is.
+
+**It is not persisted per run.** Compare mode posts one run report per target from *inside* the
+per-target loop, so a crash mid-matrix still records the targets that finished; the frontier is only
+knowable once every target is done. Stamping it on those reports would mean deferring the posts —
+trading a real durability property for a reporting nicety. So it lives in the printed/rendered
+summary only, and that limitation is stated in `BENCHMARK_FRAMEWORK.md` §2b rather than left for a
+reader to discover by querying for a key that is not there.
+
+## D23 — Paired tests align on case identity, and a differing case set is intersected, not ignored (2026-09-07)
+Every paired claim the runner made — the regression verdict, the leaderboard's `best`, and the
+frontier's cheapest-sufficient recommendation — paired two score vectors **by position**, having
+verified only that they were the same **length**. That is not the same check, and the difference is not
+theoretical: a compare run's per-case vector is compacted past errored cells, so a vector index is a
+position among *judged* cases rather than a case number, and the per-target circuit breaker makes
+differing case sets routine. Two targets that each failed a different case arrived with equal lengths
+and misaligned positions. Pairing the wrong cases is worse than not pairing: it **adds** between-case
+variance to the deltas while the paired stderr still claims it was removed, so the verdict is wrong
+*and* overconfident — the failure mode the paired design exists to prevent, arriving through the guard
+meant to prevent it. *Decision:* per-case scores carry the 1-based case index the run report already
+persisted (`{"case": i + 1, …}`, written since `962e04a`) and pairing aligns on it; where the two case
+sets differ the test runs over their **intersection**, because refusing on any single lost case would
+delete the tested `best` line from most real matrices and buy no correctness. *Implication:* the reduced
+n is the n disclosed beside every p (`paired_cases`, `best.n_cases`, `recommendation.n_cases`) and the
+dropped count travels with it; a subset pairing is caveated (an easier intersection generalises less);
+an unpairable pair names *which* refusal it is rather than returning an anonymous absence; a
+preview-limited baseline (`cases_truncated`) is now usable over its prefix and flagged as a systematic
+subset, where the old count match yielded no baseline at all; and a report predating per-case identity
+is refused as a baseline rather than paired by position. **Some runs that used to print a tested `best`
+will stop being able to** — that line was an artefact of the offset. `ALPHA`, the Bonferroni correction
+and the mode/target/`dataset_version` strictness are untouched. The position-pairing helper survives for
+`calibrate --compare-batch`, whose two vectors are built from one collection and are therefore aligned by
+construction, with a doc that now states it checks length only and names the hazard.
+
+## D24 — A difficulty tier is refused on write and degraded on read (2026-09-07)
+D20 made the tier a closed, totally ordered ladder and gave `Difficulty::ALL` the job of being "the list
+a CLI or API validates a spelling against". The listing filter did that; the write paths did not. `POST`
+a dataset item or an inline benchmark case whose `difficulty` was `expert` and the API answered **200**
+and stored `None` — the same closed vocabulary, enforced on the query string and unenforced on the body.
+Found by running, not by reading: a live model×effort benchmark on 2026-09-07 graded 8 of its 18 cases
+`expert`, all 8 were silently stored ungraded, and the per-tier analysis reported a phantom bucket —
+noticed only because a script divided by zero. Without that accident the run would have reported per-tier
+results over a corpus whose grading had been quietly discarded, which is worse than reporting nothing.
+The obvious fix — make `core::dataset::de_difficulty` strict — is wrong, and D20 already argued why:
+degrading an unknown rung to `None` is *correct for reading a stored row*, so a corpus exported from a
+system with a four-rung ladder imports rather than fails, and a case nobody can read back is a case that
+leaves the corpus. One function was doing two jobs. *Decision:* the jobs are split by **surface**, not by
+type. Reading a stored row stays tolerant, unchanged. Accepting an operator's grade is strict and lives
+at the API boundary (`crates/api/src/difficulty_input.rs`), beside `validate_target_matrix`, which
+already validates raw request JSON there for the same reason. The request shapes keep the tier as raw
+`serde_json::Value` and carry the core type through `#[serde(flatten)]`, so the refusal is an
+`ApiError::bad_request` (a 400 in the standard envelope) rather than axum's bare 422 from a failed
+deserializer, and no field is restated where it could drift. *Implication:* an unrecognised rung on
+`POST /v1/datasets/:id/items` or on any inline case of `POST /v1/projects/:id/benchmarks` is a 400 whose
+message names the three rungs from `Difficulty::ALL` — the same sentence the listing filter returns,
+because both now call `parse_stated_tier`. One bad case refuses the **whole** benchmark: dropping just
+that case would recreate the incident with a smaller blast radius. `null` and an absent key are both
+UNGRADED (`lt datasets add` already refused to let those two diverge); `"HARD"` and `" hard "` normalise,
+as the filter and the CLI already normalise them; an empty string, a number, a boolean, an array and an
+object are refused. The import and label-promotion paths accept no tier at all — mined traffic and a
+promoted verdict arrive ungraded by construction — so they needed no change. A single test pins the
+strict half and the tolerant half together, so a future change cannot collapse them into one behaviour
+without going red.
+
+## D25 — The per-tier verdict is descriptive, and there is no per-tier significance test (2026-09-07)
+D20 made a case's difficulty an ordered ladder and M27 carried it onto `BenchmarkCase`. Nothing then
+read it: `compare.rs` mentioned `difficulty` only inside a test fixture's comments. A live 6-target
+matrix on 2026-09-07 scored 1.00 on every `easy` and every `medium` case from all six targets — **36
+of its 54 generation calls bought no information at all**, two thirds of the run's wall-clock and
+spend — and the tool could not say so; the finding came from a hand-written script hitting the API
+afterwards. The operator's question ("is the cheap configuration sufficient for the easy majority of
+my traffic?") is the question the tiers exist for, and the scorecard answered it with six columns of
+aggregate means. *Decision:* the runner aggregates per tier and reports **two different things in two
+different places**. Per target — the mean and the **case count** per bucket, layered onto that
+target's run report, which is POSTed and therefore persisted for `get_benchmark_runs`, a CI gate and
+MCP. Across targets — the **discrimination verdict**: the spread of the per-target means on each
+bucket and a plain sentence saying whether it separated anything, on the printed matrix summary only.
+The split is not an oversight: the verdict is inherently cross-target, and compare mode posts one run
+per target from *inside* its loop so a crash mid-matrix still records what finished — deferring those
+posts to gain a persisted matrix artefact would trade a real durability property for a reporting
+nicety, exactly as D22's frontier decided. *The verdict is DESCRIPTIVE and must stay so.* "Every
+target scored 1.00 on this tier" is an observation about this run, not a statistical claim, and it
+carries no p, no α and no significance vocabulary; there is deliberately **no per-tier significance
+test and no per-tier recommendation**. This repo has one statistics path (D23, D22) and a second,
+softer statistic invented for a headline is where it would do the most damage — and per-tier power is
+dramatically worse than the run's: the tier that *did* discriminate in that live matrix had **three
+cases**, so a per-tier "cheapest sufficient" would be the confident-on-nothing failure D22's power
+disclosure exists to prevent. Lifting the non-goal needs many more cases per rung, not a softer test.
+*Implication:* `ungraded` is its own bucket, always shown when non-empty and never folded into a rung
+(D24's read-tolerance means ungraded cases are ordinary — the live run had 8 of 18), so the buckets
+sum to the judged count and a table can never imply coverage it lacks; a corpus with **no** grades
+produces no table at all rather than an empty one, and such a matrix renders byte-identically to
+before; rows are emitted in ascending ladder order with `ungraded` last, never hash order, so two
+runs of one matrix agree; a bucket only one target reached reports `separates: null`, not `false`; a
+tier every target *fails* is called out identically to one they all pass, because a spread of 0 at
+the bottom buys as little as one at the top; and the render layer prints the verdict object it is
+handed and derives nothing, so the runner's stdout and the CLI/MCP rendering of a stored summary can
+never disagree.
+
+## D26 — Thinking is measured, and what a rung of the effort ladder bought is descriptive (2026-09-14)
+D21 made reasoning effort a target axis, so a matrix could put `model@low` beside `model@high`. It
+could not say **why** their means differed, and the three explanations are three different decisions:
+the model thought much harder and the corpus could not tell; it thought harder and lost cases it had
+right (overthinking); or the dial did nothing and the two rows are one call at two prices. The live
+2026-09-07 run hit the first and the third and could not distinguish them — sonnet's ~10x thinking
+rise and haiku@low's 15k-token puzzle were both measured by hand, afterwards, because nothing in the
+framework recorded reasoning tokens: they were parsed in exactly one place, inside a truncation
+error, and discarded on every successful call. *Decision:* `GenOutcome` carries `reasoning_tokens`
+where the provider reports the split (informational, already inside `output_tokens`), compare mode
+persists per-case `GenerationFacts` on the verdict's `ScoreDetail` — so the record survives the run
+report's 200-case preview — and the matrix summary carries `effort_curve`: per adjacent pair of
+rungs, over the cases both judged, whether the dial is alive (ratio of median thinking tokens),
+which cases flipped wrong->right and right->wrong counted separately, the mean score delta, the extra
+$ per case, and the score per 1k extra thinking tokens, per difficulty tier where the corpus is
+graded. *Two rules that keep it honest.* **An unknown is never a zero**: one candidate without a
+reasoning split makes the cell's figure unknown rather than an average that counts it as a call that
+did not think, and an unpriced call is not a free one. And where no provider reports a split — the
+Anthropic Messages API and `claude -p`, i.e. most of this repo's own runs — the measure falls back to
+**output tokens** and every figure derived from it is labelled `output_tokens`, never "reasoning":
+on a short-answer task output tokens are nearly all thinking, which makes them a usable proxy and
+never a licence to mislabel one. *The verdict is DESCRIPTIVE*, for D25's reason and a second one: the
+steps are chosen after seeing which targets the matrix contained, and D23's claims are already
+corrected across a family of target pairs, so a second differently-shaped family with its own alpha
+would make the corrected claims in the same report incomparable with each other. No p, no alpha, no
+significance vocabulary; a single-draw run additionally says a flip may be sampling noise, because
+most generation paths expose no seed.
+
+## D27 — The collective leaderboard key keeps the reasoning effort (2026-09-14)
+The collective bucket is `(provider, model, task_type)`, and the model half went through
+`canonicalize`, which splits any `@lane` off. That is right for a **pricing** lane (`@batch`,
+`@flex`, `@in>200000`): one model billed differently, whose results belong in one row. It is wrong
+for a reasoning effort. *Decision:* an effort lane stays on the merge key (`claude-opus-5@xhigh`),
+contributed from the compare run report's own `effort` field or from a suffix already on the model
+spec (never doubled), and hub-side normalization preserves it while still folding pricing lanes away.
+*Why it matters:* `opus@low` and `opus@xhigh` are different amounts of thinking at different prices —
+the exact question D21's axis exists to ask — so pooling them published one quality number for a
+configuration nobody ran, averaging a cheap row's score into an expensive row's, in the one surface
+built to compare like with like. A target that declared no effort ran at the provider's default and
+keeps its bare identity: an absent level is never rendered as a named one, and a word off the ladder
+is not smuggled onto the key.
+
+## D28 — A per-case limit is a pass/fail assertion, and an unmeasurable one is not a pass (2026-09-14)
+A rubric grades the answer. Nothing graded the *configuration*: the same answer at 8s and 4c a case
+is not the same product as one at 1s and a tenth of a cent, and D22's frontier **ranks** that
+trade-off without gating on it — a target can sit on the frontier and still be unusable for the job.
+OpenRouter's Ori Eval spells the same idea `toCostAtMost` / `toFinishWithin` per test. *Decision:* a
+target may declare per-case `limits` (`max_cost_usd`, `max_latency_ms`, both per candidate so a
+`--gen-samples 3` run is held to the same per-call bar rather than three times it), and a case whose
+generation exceeds one **fails**, however well it scored. *Three consequences, each deliberate.* The
+**score is untouched** — only `pass` and therefore the pass rate carry the breach, so quality stays
+readable as quality in every report that reads the number. A limit that **could not be checked** (an
+unpriced model reports no cost) is counted and named as unchecked rather than admitted, because a
+gate that silently stopped gating is worth more to know about than one that passed. And a
+non-positive ceiling is a **400 at write time**, not a target that goes red forever: it fails every
+case by construction, so it is a typo, and this benchmark may be what gates a deploy.

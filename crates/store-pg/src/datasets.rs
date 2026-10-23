@@ -3,7 +3,7 @@
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::Row;
 
-use lighttrack_core::{Dataset, DatasetItem};
+use lighttrack_core::{Dataset, DatasetItem, Difficulty};
 use lighttrack_store::Result;
 
 use crate::util::{fmt_ts, json_or_null, parse_ts, pgerr, val_or_null};
@@ -12,7 +12,7 @@ pub(crate) const DATASET_COLS: &str =
     "id, project_id, name, version, frozen, source, created_at, parent_id";
 
 const ITEM_COLS: &str = "id, dataset_id, input, output, expected, context, tags, \
-    source_event_id, anonymization, input_hash";
+    source_event_id, anonymization, input_hash, difficulty";
 
 pub(crate) async fn create(pool: &PgPool, d: &Dataset) -> Result<()> {
     sqlx::query(
@@ -81,8 +81,8 @@ pub(crate) async fn create_item(pool: &PgPool, item: &DatasetItem) -> Result<()>
     let anon = json_or_null(&item.anonymization)?;
     sqlx::query(
         "INSERT INTO dataset_items (id, dataset_id, input, output, expected, context, \
-         tags, source_event_id, anonymization, input_hash) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+         tags, source_event_id, anonymization, input_hash, difficulty) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
     )
     .bind(item.id.clone())
     .bind(item.dataset_id.clone())
@@ -94,6 +94,9 @@ pub(crate) async fn create_item(pool: &PgPool, item: &DatasetItem) -> Result<()>
     .bind(item.source_event_id.clone())
     .bind(anon)
     .bind(item.input_hash.clone())
+    // The wire spelling, so the column reads the same on every backend. `None` binds NULL:
+    // ungraded stays ungraded rather than becoming a tier nobody chose.
+    .bind(item.difficulty.map(|d| d.as_str().to_string()))
     .execute(pool)
     .await
     .map_err(pgerr)?;
@@ -149,6 +152,13 @@ fn item_from_row(row: &PgRow) -> Result<DatasetItem> {
         source_event_id: row.try_get(7).map_err(pgerr)?,
         anonymization: val_or_null(anon)?,
         input_hash: row.try_get(9).map_err(pgerr)?,
+        // A spelling this build does not know is read as ungraded, not as a guess: the same
+        // degrade `core::dataset::de_difficulty` applies on the wire.
+        difficulty: row
+            .try_get::<Option<String>, _>(10)
+            .map_err(pgerr)?
+            .as_deref()
+            .and_then(Difficulty::parse),
     })
 }
 

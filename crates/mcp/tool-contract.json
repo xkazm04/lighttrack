@@ -13,6 +13,7 @@
     "properties": {
       "context": "string",
       "dataset": "string",
+      "difficulty": "string",
       "expected": "string",
       "input": "string",
       "output": "string",
@@ -190,6 +191,18 @@
     "readOnly": true,
     "required": [
       "benchmark"
+    ]
+  },
+  "get_benchmark_regression": {
+    "properties": {
+      "against": "string",
+      "benchmark": "string",
+      "run": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "benchmark",
+      "run"
     ]
   },
   "get_benchmark_runs": {
@@ -431,7 +444,8 @@
   },
   "list_dataset_items": {
     "properties": {
-      "dataset": "string"
+      "dataset": "string",
+      "difficulty": "string"
     },
     "readOnly": true,
     "required": [
@@ -584,6 +598,23 @@
     "readOnly": true,
     "required": [
       "project"
+    ]
+  },
+  "preview_limit": {
+    "properties": {
+      "action": "string",
+      "metric": "string",
+      "over": "string",
+      "project": "string",
+      "scope": "string",
+      "threshold": "number",
+      "warn_at": "number",
+      "window": "string"
+    },
+    "readOnly": true,
+    "required": [
+      "project",
+      "threshold"
     ]
   },
   "promote_prompt": {

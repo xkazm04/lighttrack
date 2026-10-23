@@ -1,0 +1,83 @@
+{
+ "schema": "conform-run/1",
+ "worker": "a51692ae-6301-4366-bb70-e8be8390be0e",
+ "subject": "model-call-outcome-integrity",
+ "evaluatedAt": "2026-10-18T01:13:49.140175+00:00",
+ "provider": "agy",
+ "model": "gemini-3.8-flash-high",
+ "pairs": [
+  {
+   "context": "provider-generation",
+   "subject": "model-call-outcome-integrity",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/engine/src/providers.rs:222 Candidate-output generation across providers lacks declared call-site purpose identity, infers credential posture from ambient environment variables, strips schema constraints without demoting enforcement levels, and raises errors without writing a preceding spend ledger.",
+   "techniques": [
+    {
+     "technique": "credential-posture-at-the-call-door",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/providers.rs:371 Routes between metered Messages API and flat-rate seat CLI based on ambient presence of ANTHROPIC_API_KEY rather than configuration, and the outcome does not record the posture."
+    },
+    {
+     "technique": "declared-call-site-identity",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/providers.rs:237 The provider generation seam functions do not require or accept a declared call-site purpose identifier token."
+    },
+    {
+     "technique": "elimination-reasons-are-a-closed-vocabulary",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/providers.rs:389 Unclassifiable provider elimination yields ad-hoc formatted error text inside EngineError::Other rather than a member of an owned enumeration, and fallbacks leave no structured trail."
+    },
+    {
+     "technique": "enforcement-demotion-on-translation-loss",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/providers/gemini.rs:78 Gemini silently drops additionalProperties from schema constraints without demoting SchemaEnforcement::Enforced or running local schema validation."
+    },
+    {
+     "technique": "one-deadline-across-attempts",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/retry.rs:19 Retries run under a hardcoded constant CALL_BUDGET rather than deriving the deadline from the caller's remaining wall-clock budget."
+    },
+    {
+     "technique": "spend-precedes-the-error",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/providers/openai.rs:109 Truncated calls that consumed tokens remotely return an error immediately without writing a ledger entry or recording spend before the raise."
+    },
+    {
+     "technique": "the-measurement-runs-the-served-configuration",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/providers.rs:305 When pinned deterministic generation is rejected, the seam retries schema-less and non-deterministic, returning the substituted candidate to be scored rather than marking the arm blocked."
+    },
+    {
+     "technique": "unattempted-is-not-failed",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/providers/gemini.rs:137 Reads the stop condition before payload interpretation, returning a distinct Truncated error carrying the ceiling and reasoning tokens rather than treating it as an empty answer."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-18T01:13:49.140175+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "model-call-outcome-integrity"
+   ],
+   "techniques": [
+    "credential-posture-at-the-call-door",
+    "declared-call-site-identity",
+    "elimination-reasons-are-a-closed-vocabulary",
+    "enforcement-demotion-on-translation-loss",
+    "one-deadline-across-attempts",
+    "spend-precedes-the-error",
+    "the-measurement-runs-the-served-configuration",
+    "unattempted-is-not-failed"
+   ],
+   "deviations": 1,
+   "context": "provider-generation",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  }
+ ]
+}

@@ -21,5 +21,7 @@ sha2 = "0.11"
 
 [dev-dependencies]
 # A local stub endpoint for the HTTP-target round-trip test - no live service, no model call.
-axum = "0.7"
+axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+# The one process-wide lock for tests that write the environment (lighttrack_core::test_env).
+lighttrack-core = { workspace = true, features = ["test-env"] }

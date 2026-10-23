@@ -99,6 +99,17 @@ fn run_scoped_cases(store: &dyn Store, pid: &str) -> Result<()> {
         // below: a backend that dropped it would answer "nothing was rewritten" about text the
         // ingest scrub had rewritten, which is the exact claim M9 exists to stop being free.
         evidence_redacted_spans: Some(2),
+        // What generating this case cost, asserted through the same whole-detail equality: a backend
+        // that dropped it would answer "we don't know what this case spent" about a run that did.
+        generation: Some(lighttrack_core::GenerationFacts {
+            candidates: 3,
+            output_tokens: Some(1200.0),
+            reasoning_tokens: Some(950.0),
+            latency_ms: Some(4200.0),
+            cost_usd: Some(0.0031),
+            limit_breaches: vec!["latency".into()],
+            limits_unchecked: Vec::new(),
+        }),
         ..Default::default()
     };
     let case = |run: &str, idx: Option<u32>, value: f64| Score {

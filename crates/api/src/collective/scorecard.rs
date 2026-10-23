@@ -9,7 +9,7 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use lighttrack_core::{task_type_from, Benchmark, BenchmarkRun, RunStat};
+use lighttrack_core::{split_effort, task_type_from, Benchmark, BenchmarkRun, Effort, RunStat};
 
 /// Reduce one `(Benchmark, run)` to a [`RunStat`], or `None` when it can't contribute (no known
 /// provider/model, no quality, or no cases).
@@ -26,13 +26,25 @@ pub(super) fn run_stat(
     if run.n_cases == 0 {
         return None;
     }
+    // A run that recorded no pass rate does not join a bucket. The wire row has no way to say
+    // "unknown" for it, and shipping 0.0 asserts that nothing passed, which the bucket would average
+    // in as evidence (aggregate-only-digests: when a measure cannot be computed, ship its absence;
+    // the row cannot, so the run stays home).
+    let pass_rate = run.pass_rate?;
     let cost_per_case_usd = run.cost_usd / run.n_cases as f64;
+    // A diverged run is excluded HERE, at the site, before it can join a bucket. A non-finite figure
+    // serialises as JSON `null`, which the hub cannot read back into a number, so one bad run would
+    // sink the whole push - healthy buckets included - as an opaque rejection. (The hub also refuses
+    // non-finite entries in `sanitize::implausible`, but only for a body it could parse at all.)
+    if !(quality.is_finite() && pass_rate.is_finite() && cost_per_case_usd.is_finite()) {
+        return None;
+    }
     Some(RunStat {
         provider,
         model,
         task_type: task_type_from(&bench.name, None),
         quality,
-        pass_rate: run.pass_rate.unwrap_or(0.0),
+        pass_rate,
         cost_per_case_usd,
         n_cases: run.n_cases,
         p50_latency_ms: run.p50_latency_ms,
@@ -145,10 +157,30 @@ fn provider_model(bench: &Benchmark, run: &BenchmarkRun) -> Option<(String, Stri
             .trim()
             .to_string();
         let m = v.get("model").and_then(Value::as_str)?.trim().to_string();
-        (!p.is_empty() && !m.is_empty()).then_some((p, m))
+        // The level this row generated at — compare mode writes `effort` on the run report, and the
+        // older spelling carries it as an `@effort` suffix on the model spec.
+        let e = v
+            .get("effort")
+            .and_then(Value::as_str)
+            .and_then(Effort::parse);
+        (!p.is_empty() && !m.is_empty()).then(|| (p, with_effort(m, e)))
     };
     let (provider, model) = from(&run.report).or_else(|| from(&bench.target))?;
     Some((endpoint_provider(&run.report).unwrap_or(provider), model))
+}
+
+/// The model identity a run contributes under, carrying the reasoning effort it ran at.
+///
+/// Two efforts of one model are two different products — different thinking, different price — and
+/// the matrix exists to compare them (D21). A digest that published both under one `model` would
+/// average a cheap configuration's quality into an expensive one's, and the merge key has no other
+/// field to tell them apart. A model spec that already carries the suffix is left alone rather than
+/// doubled.
+fn with_effort(model: String, effort: Option<Effort>) -> String {
+    match effort {
+        Some(e) if split_effort(&model).1.is_none() => format!("{model}@{}", e.as_str()),
+        _ => model,
+    }
 }
 
 /// The provider id a probed endpoint contributes under, read off the run report the runner stamped.
@@ -219,6 +251,28 @@ mod tests {
         );
         assert_eq!(s.task_type, "qa");
         assert!((s.cost_per_case_usd - 0.02).abs() < 1e-9); // 0.4 / 20
+    }
+
+    /// A run with no recorded pass rate must not enter a bucket as a pass rate of zero.
+    #[test]
+    fn a_run_with_no_pass_rate_does_not_enter_a_bucket_as_zero() {
+        let b = bench("QA bench", Value::Null);
+        let id = json!({ "provider": "anthropic", "model": "haiku" });
+        let mut unknown = run(id.clone(), Some(0.9), 10, 0.1);
+        unknown.pass_rate = None;
+        let mut known = run(id, Some(0.9), 10, 0.1);
+        known.pass_rate = Some(1.0);
+        let stats: Vec<_> = [&unknown, &known]
+            .iter()
+            .filter_map(|r| run_stat(&b, r, None))
+            .collect();
+        let (entries, _) = lighttrack_core::build_digest_counted(&stats, 1);
+        assert_eq!(entries.len(), 1);
+        assert!(
+            (entries[0].pass_rate - 1.0).abs() < 1e-9,
+            "got {}",
+            entries[0].pass_rate
+        );
     }
 
     #[test]
@@ -351,6 +405,39 @@ mod tests {
         assert_eq!(stamped(json!({ "garbage": true })), "openai");
     }
 
+    /// **The effort axis reaches the leaderboard.** A matrix's whole question is whether the
+    /// expensive level is worth it; before this, both rows contributed as the same `model` and the
+    /// hub averaged the answer away.
+    #[test]
+    fn two_efforts_of_one_model_contribute_as_two_rows() {
+        let b = bench("QA bench", Value::Null);
+        let stat = |effort: Value| {
+            let mut report = json!({ "provider": "anthropic", "model": "claude-opus-5" });
+            report["effort"] = effort;
+            run_stat(&b, &run(report, Some(0.8), 10, 0.1), None)
+                .unwrap()
+                .model
+        };
+        assert_eq!(stat(json!("low")), "claude-opus-5@low");
+        assert_eq!(stat(json!("xhigh")), "claude-opus-5@xhigh");
+        assert_ne!(stat(json!("low")), stat(json!("xhigh")));
+        // A target that declared no level ran at the provider's default — a different fact from any
+        // named level, and it keeps the bare model identity it always had.
+        assert_eq!(stat(Value::Null), "claude-opus-5");
+        // A level this ladder does not name is not smuggled onto the key.
+        assert_eq!(stat(json!("turbo")), "claude-opus-5");
+    }
+
+    /// The older spelling — the level suffixed onto the model spec — is already on the key and must
+    /// not be doubled.
+    #[test]
+    fn an_effort_already_on_the_model_spec_is_not_doubled() {
+        let b = bench("QA bench", Value::Null);
+        let report = json!({ "provider": "anthropic", "model": "opus@xhigh", "effort": "xhigh" });
+        let s = run_stat(&b, &run(report, Some(0.8), 10, 0.1), None).unwrap();
+        assert_eq!(s.model, "opus@xhigh");
+    }
+
     #[test]
     fn judge_provider_classification() {
         assert_eq!(
@@ -372,5 +459,39 @@ mod tests {
             Some("unknown")
         );
         assert_eq!(judge_provider_of("  "), None);
+    }
+
+    /// Finiteness at the site, before the digest exists (federated-client-contracts /
+    /// delta-or-absolute-exchange). A diverged run whose score is non-finite serialises as JSON
+    /// `null`, which the hub cannot read back into a number: one bad run would fail the WHOLE
+    /// push, healthy buckets included, as an opaque rejection rather than a typed site-side skip.
+    #[test]
+    fn a_non_finite_run_never_reaches_the_digest_and_cannot_sink_the_push() {
+        let b = bench("QA bench", Value::Null);
+        let id = json!({ "provider": "anthropic", "model": "haiku" });
+        let mut bad = run(id.clone(), Some(f64::NAN), 20, 0.4);
+        bad.id = "r-bad".into();
+        let mut bad_pass = run(id.clone(), Some(0.8), 20, 0.4);
+        bad_pass.pass_rate = Some(f64::INFINITY);
+        let good = run(id, Some(0.82), 20, 0.4);
+        let stats: Vec<_> = [&bad, &bad_pass, &good]
+            .iter()
+            .filter_map(|r| run_stat(&b, r, None))
+            .collect();
+        assert_eq!(stats.len(), 1, "only the finite run may be admitted");
+        let (entries, _) = lighttrack_core::build_digest_counted(&stats, 1);
+        let digest = lighttrack_core::CollectiveDigest {
+            schema_version: 3,
+            contributor_id: "x".into(),
+            generated_at: Utc::now(),
+            min_cases: 1,
+            projects_included: 1,
+            projects_excluded: 0,
+            buckets_withheld: 0,
+            entries,
+        };
+        let wire = serde_json::to_string(&digest).unwrap();
+        serde_json::from_str::<lighttrack_core::CollectiveDigest>(&wire)
+            .expect("the hub must be able to read back what the site sent");
     }
 }

@@ -99,6 +99,10 @@ pub(crate) async fn item_from_label(
         tags: vec!["from-label".to_string()],
         source_event_id: Some(event_id.clone()),
         anonymization: Value::Null,
+        // The labeler said whether the output was good, never how hard the case was. Promoting the
+        // one into the other would put a grade nobody gave on a case that is otherwise entirely
+        // human-vouched — so it arrives ungraded, like any other promoted case.
+        difficulty: None,
     };
     let store = st.store.clone();
     let item2 = item.clone();

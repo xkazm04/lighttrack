@@ -267,7 +267,6 @@ pub(super) fn parity_gap_methods(store: &dyn Store) -> Result<()> {
         "scoped usage counts only m-b (default would count both)"
     );
     assert!((scoped.cost_usd - 2.0).abs() < 1e-9);
-
     // usecase_costs: groups by (name, provider, model) within the window (the default returns empty).
     let uc = store.usecase_costs(Scope::Project(&pid), Some(since))?;
     let summarize = uc
@@ -330,5 +329,27 @@ pub(super) fn parity_gap_methods(store: &dyn Store) -> Result<()> {
         "model+name+since AND together (not OR / not ignored)"
     );
     assert_eq!(anded.events[0].model, "m-a");
+
+    // usage_since_scoped, the membership half. The `m-b` assertion above passes identically under
+    // raw string equality and under the canonical-family fold, because `m-b` carries no date
+    // suffix — it pins the *filter*, nothing about *membership*. A dated snapshot of the same
+    // family is inside an `m-b` cap's scope, because that is exactly what `LimitScope::matches`
+    // lets the cap reject: one rule, evaluated twice, must agree. Inserted last so the counts the
+    // paging and use-case assertions above depend on are untouched.
+    let mut dated = sample_event(&pid, "m-b-2024-08-06", 1, 1, 0.5);
+    dated.name = Some("summarize".into());
+    dated.ts = now;
+    dated.received_at = now;
+    store.insert_event(&dated)?;
+    let folded = store.usage_since_scoped(&pid, since, &LimitScope::Model("m-b".into()))?;
+    assert_eq!(
+        folded.calls, 2,
+        "an `m-b` cap counts `m-b-2024-08-06` (raw equality counts 1)"
+    );
+    assert!(
+        (folded.cost_usd - 2.5).abs() < 1e-9,
+        "the in-family total is 2.0 + 0.5 (got {})",
+        folded.cost_usd
+    );
     Ok(())
 }

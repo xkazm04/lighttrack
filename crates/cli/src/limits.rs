@@ -129,7 +129,67 @@ pub(crate) fn run(cli: &Cli, action: &LimitsCmd) -> Result<()> {
             None,
             "",
         ),
+        LimitsCmd::Preview {
+            project,
+            threshold,
+            metric,
+            window,
+            action,
+            warn_at,
+            scope_provider,
+            scope_model,
+            scope_name,
+            over,
+            steps,
+        } => call(
+            cli,
+            Method::GET,
+            &preview_path(
+                project,
+                *threshold,
+                metric,
+                window,
+                action,
+                warn_at,
+                scope_json(scope_provider, scope_model, scope_name),
+                over,
+                steps,
+            ),
+            None,
+            "",
+        ),
     }
+}
+
+/// `/v1/limits/preview`. The candidate's own fields are always sent (clap defaults them), so the
+/// CLI and the HTTP row describe the same rule; `project` is conditional for the same reason as on
+/// `usage`, and an unset scope is omitted rather than sent as the literal `null` the rule body uses
+/// — a query string has no null.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn preview_path(
+    project: &Option<String>,
+    threshold: f64,
+    metric: &str,
+    window: &str,
+    action: &str,
+    warn_at: &Option<f64>,
+    scope: Value,
+    over: &Option<String>,
+    steps: &Option<usize>,
+) -> String {
+    let mut q = Query::new("/v1/limits/preview");
+    q.push_raw("threshold", Some(threshold));
+    q.push("metric", Some(metric));
+    q.push("window", Some(window));
+    q.push("action", Some(action));
+    q.push_raw("warn_at", *warn_at);
+    if !scope.is_null() {
+        q.push("scope", Some(&scope.to_string()));
+    }
+    q.push("over", over.as_deref());
+    q.push_raw("steps", *steps);
+    q.push("project", project.as_deref());
+    q.finish()
 }
 
 /// `/v1/limits/usage`. `by`, `window` and `limit` are clap-defaulted so they are always sent; only

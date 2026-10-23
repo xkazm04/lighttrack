@@ -125,14 +125,25 @@ export function extractOpenAI(resp: any): [string | undefined, number, number, n
 /** Extract (model, input, output, cached) from an Anthropic messages object. */
 export function extractAnthropic(resp: any): [string | undefined, number, number, number | undefined] {
   const u = resp?.usage ?? {};
-  return [resp?.model, num(u.input_tokens) ?? 0, num(u.output_tokens) ?? 0, num(u.cache_read_input_tokens)];
+  // Anthropic's `input_tokens` is only the UNCACHED remainder: cache reads and cache writes are counted
+  // beside it. The event convention is the whole prompt with `cachedInput` a subset of it (the price
+  // book bills `input - cached_input`), so the two cache counters are added back in. Left as reported,
+  // the fresh tokens saturated away against a larger cache read and cache writes were never billed.
+  // Cache-write tokens then bill at the input rate: the price book has no write rate.
+  const read = num(u.cache_read_input_tokens);
+  const input = (num(u.input_tokens) ?? 0) + (read ?? 0) + (num(u.cache_creation_input_tokens) ?? 0);
+  return [resp?.model, input, num(u.output_tokens) ?? 0, read];
 }
 
 /** Extract (model, input, output, cached) from a Gemini generateContent object. */
 export function extractGemini(resp: any): [string | undefined, number, number, number | undefined] {
   const u = resp?.usageMetadata ?? resp?.usage_metadata ?? {};
   const input = num(u.promptTokenCount) ?? num(u.prompt_token_count) ?? 0;
-  const output = num(u.candidatesTokenCount) ?? num(u.candidates_token_count) ?? 0;
+  // Answer + thoughts: a thinking model's thoughts are billed as output, and the answer count alone
+  // priced a long-thinking call as a short one.
+  const output =
+    (num(u.candidatesTokenCount) ?? num(u.candidates_token_count) ?? 0) +
+    (num(u.thoughtsTokenCount) ?? num(u.thoughts_token_count) ?? 0);
   const cached = num(u.cachedContentTokenCount) ?? num(u.cached_content_token_count);
   return [resp?.modelVersion ?? resp?.model_version, input, output, cached];
 }
@@ -394,7 +405,13 @@ export class LightTrack {
     let records: Awaited<ReturnType<SpanJournal["recover"]>>;
     try {
       records = await this.journal.recover();
-    } catch {
+    } catch (err) {
+      // Recovery could not run at all. The count is honestly 0, but 0 must not read as "nothing was
+      // abandoned": one rate-limited line says the journal directory could not be read.
+      this.diag.warn(
+        "journal-recover",
+        `could not read the span journal directory, so abandoned calls from a crashed process (if any) were not recovered: ${truncate(String((err as Error)?.message ?? err))}`,
+      );
       return 0;
     }
     for (const rec of records) {

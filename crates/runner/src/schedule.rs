@@ -3,8 +3,9 @@
 //! Runs as a daemon (loop on `--interval`) or a single cycle (`--once`, for OS cron / Cloud
 //! Scheduler / a systemd timer). Each cycle names the dataset after the newest sampled event, so it
 //! is **idempotent**: if that window was already captured, the cycle is skipped — which means idle
-//! periods (no new traffic) cost nothing, even across separate `--once` processes. And
-//! `build_from_events` never creates an empty dataset.
+//! periods (no new traffic) cost nothing, even across separate `--once` processes. Only a frozen
+//! dataset counts as captured: `build_from_events` creates the dataset before its items and freezes
+//! it last, so a failed cycle can leave an unfrozen, partial or empty one behind under the name.
 
 use std::time::Duration;
 
@@ -75,9 +76,9 @@ pub(crate) fn run_cycle(
         None => return Ok(None),
     };
 
-    // Idempotent: if a dataset for this watermark already exists, this window is captured — skip.
+    // Idempotent: if a FROZEN dataset for this watermark exists, this window is captured — skip.
     let existing: Vec<Dataset> = get(cli, http, &format!("/v1/projects/{project}/datasets"))?;
-    if existing.iter().any(|d| d.name == name) {
+    if window_captured(&existing, &name) {
         return Ok(None);
     }
 
@@ -108,6 +109,18 @@ pub(crate) fn run_versioned_cycle(
     Ok((built > 0).then(|| name.to_string()))
 }
 
+/// Whether this cycle's window is already captured, so the cycle may skip.
+///
+/// The name alone is not the completion. `build_from_events` creates the dataset before it posts a
+/// single item and freezes it as its last act, so a cycle that failed part-way (an item post, or
+/// the LLM scrub on the first event) leaves a dataset carrying this window's name that is unfrozen
+/// and partial or empty. Skipping on the name would record that failure as "already captured" on
+/// every later cycle over the same window. Only a frozen dataset certifies the window; a leftover
+/// is rebuilt beside, and the error that left it already named it for the operator.
+fn window_captured(existing: &[Dataset], name: &str) -> bool {
+    existing.iter().any(|d| d.name == name && d.frozen)
+}
+
 /// The watermark dataset name for a cycle: `<prefix>-<short id>` of the newest sampled event that
 /// carries an input (events arrive newest-first), or `None` when nothing is samplable. Naming after
 /// the watermark is what makes a cycle idempotent — re-sampling the same window yields the same name.
@@ -120,8 +133,8 @@ fn cycle_name(name_prefix: &str, events: &[LlmEvent]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::cycle_name;
-    use lighttrack_core::LlmEvent;
+    use super::{cycle_name, window_captured};
+    use lighttrack_core::{Dataset, LlmEvent};
     use serde_json::json;
 
     fn event(id: &str, input: Option<&str>) -> LlmEvent {
@@ -160,5 +173,39 @@ mod tests {
             cycle_name("nightly", &events).as_deref(),
             Some("nightly-deadbeef")
         );
+    }
+    fn dataset(name: &str, frozen: bool) -> Dataset {
+        serde_json::from_value(json!({ "name": name, "frozen": frozen })).unwrap()
+    }
+
+    #[test]
+    fn frozen_dataset_captures_the_window() {
+        let existing = vec![dataset("online-abcdef01", true)];
+        assert!(window_captured(&existing, "online-abcdef01"));
+    }
+
+    #[test]
+    fn no_dataset_for_the_watermark_does_not_capture() {
+        let existing = vec![dataset("online-other000", true)];
+        assert!(!window_captured(&existing, "online-abcdef01"));
+        assert!(!window_captured(&[], "online-abcdef01"));
+    }
+
+    #[test]
+    fn unfrozen_leftover_does_not_capture_the_window() {
+        // `build_from_events` creates the dataset before posting items and freezes it last, so a
+        // failed cycle (an item post, or the LLM scrub on the first event) leaves this row behind:
+        // named after the window, unfrozen, partial or empty. Its name is not the completion.
+        let existing = vec![dataset("online-abcdef01", false)];
+        assert!(!window_captured(&existing, "online-abcdef01"));
+    }
+
+    #[test]
+    fn a_frozen_twin_beside_a_leftover_still_captures() {
+        let existing = vec![
+            dataset("online-abcdef01", false),
+            dataset("online-abcdef01", true),
+        ];
+        assert!(window_captured(&existing, "online-abcdef01"));
     }
 }

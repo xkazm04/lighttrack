@@ -48,6 +48,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         // Deliberately not exposed over MCP: this restates stored money in bulk.
         cli: Some(&["reprice"]),
         doc: "Restate revenue stored at the 1:1 FX fallback once a real rate exists; previews by default.",
+        surface: "revenue_reprice",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -102,12 +103,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["margin", "trend"]),
         render_kind: Some("get_margin_trend"),
         doc: "Per-day revenue/cost/margin series for the top keys of a dimension.",
+        degrades: &["forecast"],
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "get_customer_margin",
         method: Method::Get,
-        path: "/v1/margin/customer/:id",
+        path: "/v1/margin/customer/{id}",
         access: Admin,
         params: &[
             p("id", "customer id"),
@@ -123,6 +125,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["margin", "customer"]),
         render_kind: Some("get_margin_customer"),
         doc: "One customer's windowed revenue and cost, split by model and by use-case.",
+        surface: "margin_breakdowns",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -147,12 +150,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["margin", "simulate"]),
         render_kind: Some("get_margin_simulate"),
         doc: "Pricing what-if: margin recomputed under a hypothetical price model; nothing is stored.",
+        surface: "margin_breakdowns",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "billing_webhook",
         method: Method::Post,
-        path: "/v1/billing/:provider/webhook",
+        path: "/v1/billing/{provider}/webhook",
         // The provider's HMAC signature IS the credential here — verified by the configured
         // `BillingSource`, never by a LightTrack bearer key. `ROUTE_SCOPES` says `Admin` only
         // because its two-column shape cannot say "authenticated by someone else's secret".

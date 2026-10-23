@@ -30,6 +30,8 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
                     "score_drop",
                     "bench_run",
                     "ingest_rejected",
+                    "prompt_canary_regressed",
+                    "relay_task_unroutable",
                 ],
                 "only alerts of this kind",
             ),
@@ -48,19 +50,20 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         mcp: Some(McpTool {
             name: "list_alerts",
-            description: "The fired-alert ledger: what LightTrack has actually alerted on (limit breaches, spend forecasts, error spikes, quality regressions, dead relay tasks, finished benchmark runs, rejected ingest), whether each delivery LANDED, who acknowledged it, and what came of it. This is the durable record — an alert that fired while nobody was watching is here, and `delivered: []` means the alert reached no channel at all.",
+            description: "The fired-alert ledger: what LightTrack has actually alerted on (limit breaches, spend forecasts, error spikes, quality regressions, dead relay tasks, finished benchmark runs, rejected ingest, a regressed prompt canary, relay tasks whose action no device still advertises), whether each delivery LANDED, who acknowledged it, and what came of it. This is the durable record — an alert that fired while nobody was watching is here, and `delivered: []` means the alert reached no channel at all.",
             args: &["project", "kind", "since", "acked", "limit", "cursor"],
             ..McpTool::DEFAULT
         }),
         cli: Some(&["alerts", "list"]),
         render_kind: Some("list_alerts"),
         doc: "The fired-alert ledger, newest first: deliveries, acknowledgement and resolution.",
+        surface: "alerts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "ack_alert",
         method: Method::Post,
-        path: "/v1/alerts/:id/ack",
+        path: "/v1/alerts/{id}/ack",
         // Acknowledging is a state change on shared operational record, so it needs `manage`.
         access: Key(Manage),
         mutating: true,
@@ -84,6 +87,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["alerts", "ack"]),
         doc: "Acknowledge one alert: record that someone saw it.",
+        surface: "alerts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -91,7 +95,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         method: Method::Post,
         // A resolution is written by the responder (an admin-keyed service), not by an app.
         machine: true,
-        path: "/v1/alerts/:id/resolution",
+        path: "/v1/alerts/{id}/resolution",
         access: Admin,
         mutating: true,
         params: &[p("id", "the alert id being closed out")],
@@ -100,18 +104,20 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         )),
         response: TypeRef::Untyped("{ resolved } — the alert id the resolution was attached to."),
         doc: "Attach what came of an alert, turning a notification into a closed loop.",
+        surface: "alerts",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "list_alert_channels",
         method: Method::Get,
-        path: "/v1/projects/:id/alert-channels",
+        path: "/v1/projects/{id}/alert-channels",
         // Where a project's alerts go is instance configuration, not a tenant read.
         access: Admin,
         params: &[p("id", "project id")],
         response: TypeRef::ArrayOf("AlertChannel"),
         cli: Some(&["alerts", "channels", "list"]),
         doc: "The channels this project's alerts effectively reach: its own plus the inherited globals.",
+        surface: "alert_routing",
         ..Endpoint::DEFAULT
     },
     // No MCP tool, deliberately: this mints a webhook signing secret and returns it exactly once,
@@ -119,7 +125,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "put_alert_channel",
         method: Method::Put,
-        path: "/v1/projects/:id/alert-channels",
+        path: "/v1/projects/{id}/alert-channels",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -146,12 +152,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["alerts", "channels", "set"]),
         doc: "Add a routing destination for a project's alerts; a signed one is minted a secret once.",
+        surface: "alert_routing",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "delete_alert_channel",
         method: Method::Delete,
-        path: "/v1/projects/:id/alert-channels/:cid",
+        path: "/v1/projects/{id}/alert-channels/{cid}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -159,12 +166,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Untyped("{ deleted } — the channel id that was removed."),
         cli: Some(&["alerts", "channels", "delete"]),
         doc: "Remove one stored routing destination.",
+        surface: "alert_routing",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "test_alert_channel",
         method: Method::Post,
-        path: "/v1/alert-channels/:id/test",
+        path: "/v1/alert-channels/{id}/test",
         // Sending a real, signed test alert is a use of the deployment's own credentials.
         access: Admin,
         mutating: true,
@@ -175,6 +183,35 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["alerts", "channels", "test"]),
         doc: "Send a real, signed test alert down one channel and report whether it landed.",
+        surface: "alert_routing",
         ..Endpoint::DEFAULT
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The list door accepts every `AlertKind` and 400s on anything else, naming the enum. A kind
+    /// missing from this filter is a kind an agent is told does not exist.
+    #[test]
+    fn list_alerts_names_every_kind_the_door_accepts() {
+        let row = ENDPOINTS.iter().find(|e| e.id == "list_alerts").unwrap();
+        let kind = row.param("kind").expect("kind filter");
+        assert_eq!(
+            kind.enum_values,
+            &[
+                "limit_breach",
+                "limit_warning",
+                "forecast_alert",
+                "relay_task_dead",
+                "error_spike",
+                "score_drop",
+                "bench_run",
+                "ingest_rejected",
+                "prompt_canary_regressed",
+                "relay_task_unroutable",
+            ]
+        );
+    }
+}

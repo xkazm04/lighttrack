@@ -54,6 +54,10 @@ Ask these in order; skip ones already implied. Recommend a sensible default per 
    `enforced` for anything cloud-facing.
 5. **LLM providers to wire** — Anthropic via `claude -p` (judge, default) · OpenAI · Google Gemini
    (for multi-provider benchmark generation; needs each provider's API key).
+6. **Gateway for local apps?** — if the user's apps run locally on Claude / ChatGPT subscription
+   seats, offer `lt-gateway` (`docs/GATEWAY.md`) as the one wrapper for all of them, and hand the
+   per-use-case model choice + fallback to `/gateway-onboard <app> <use-case>` rather than doing it
+   here.
 
 Echo back the chosen stack as a one-line summary and confirm before proceeding.
 

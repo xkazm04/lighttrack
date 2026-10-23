@@ -1,0 +1,66 @@
+{
+ "schema": "conform-run/1",
+ "worker": "9cede9ae-7f96-43a3-9bef-5a9621b4e1e6",
+ "subject": "llm-price-book-operations",
+ "evaluatedAt": "2026-10-16T01:27:47.753528+00:00",
+ "provider": "agy",
+ "model": "gemini-3.8-flash-high",
+ "pairs": [
+  {
+   "context": "economics-margin-pricing",
+   "subject": "llm-price-book-operations",
+   "bundle": "llm-observability",
+   "state": "conformant",
+   "evidence": "crates/core/src/pricing.rs:85 PriceBook indexes variant-encoded model rates, resolves them in deterministic priority order, and builds as-of dated snapshots that protect past event costs from retroactive changes.",
+   "techniques": [
+    {
+     "technique": "price-row-variant-encoding",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/pricing.rs:99 Model key suffixes encode prompt-length tiers (@in>N) and discount lanes (@batch, @flex) in a closed grammar composing one level deep without schema churn."
+    },
+    {
+     "technique": "price-resolution-order",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/pricing.rs:371 Resolves row by strict precedence: lane variant first, then highest exceeded prompt tier threshold, then base rate, with narrow alias fallback and null miss."
+    },
+    {
+     "technique": "price-provenance-and-staleness",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/price_row.rs:71 Rows store effective_from, source_url, and verified_at; PriceBookPosture measures book age against the oldest verified row against a configurable staleness budget."
+    },
+    {
+     "technique": "no-retroactive-repricing",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/pricing.rs:209 Price book builds point-in-time snapshots selecting rates in force at event time; past costs are never restated, and unpriced events are ledgered separately."
+    }
+   ],
+   "registryProposal": "The application note in rust--price-resolution-order.md flagged a deviation where PriceBook::rows stamped Utc::now() instead of the seed's verification date. As of M26, PriceBook::rows preserves self.verified_at onto both effective_from and verified_at (pricing.rs:264-266), resolving the historical deviation."
+  }
+ ],
+ "declined": [
+  {
+   "subject": "llm-price-book-operations",
+   "context": "sqlite-governance-backend",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-16T01:27:47.753528+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "llm-price-book-operations"
+   ],
+   "techniques": [
+    "no-retroactive-repricing",
+    "price-provenance-and-staleness",
+    "price-resolution-order",
+    "price-row-variant-encoding"
+   ],
+   "deviations": 0,
+   "context": "economics-margin-pricing",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  }
+ ]
+}

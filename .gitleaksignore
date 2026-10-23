@@ -24,3 +24,12 @@
 # introduced the scanner — which is exactly the self-trip the note above now warns against. The
 # offending text lives only in that historical blob; the current rationale no longer reproduces it.
 dbd912d81b3ae6b48476c00474daaeba448ce65e:.gitleaksignore:generic-api-key:12
+
+# `stripe-access-token`, two lines in `credential_boundary.rs`'s own test module. The test proves the
+# emission allowlist redacts a field nobody enumerated: it builds a record from deliberately
+# fake-looking fixture values (a fabricated live-looking key, a fabricated bearer token, a fabricated
+# webhook secret) and asserts none of them survive rendering. The rule fired on the fixture literal
+# itself, not on anything live — this file has never talked to Stripe, and the string only exists to
+# be redacted. Two fingerprints, one per line, so the file stays fully scanned otherwise.
+47e4f66ed02f06ba19316b2c6c2abec93ec094cd:crates/api/src/credential_boundary.rs:stripe-access-token:164
+47e4f66ed02f06ba19316b2c6c2abec93ec094cd:crates/api/src/credential_boundary.rs:stripe-access-token:195

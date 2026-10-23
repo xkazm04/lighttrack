@@ -1,0 +1,71 @@
+{
+ "schema": "conform-run/1",
+ "worker": "889b9c97-9ccc-4f61-818e-8e5915da5123",
+ "subject": "judge-contract-design",
+ "evaluatedAt": "2026-10-15T03:18:32.301586+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "runner-scoring-engine",
+   "subject": "judge-contract-design",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/runner/src/judge_spec.rs:40 Trace scoring discards detailed judge provenance, so persisted trace verdicts lose floor explanations, agreement disclosures, and injection-suspected flags.",
+   "techniques": [
+    {
+     "technique": "bias-counterbalancing-instructions",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/pairwise.rs:274 Pairwise records preserve position-bias results but omit candidate lengths, and the runner computes no length-conditioned preference or length adjustment."
+    },
+    {
+     "technique": "gating-floors",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/score_traces.rs:173 The trace posting preserves the aggregate pass boolean but omits per-dimension floor hits, leaving a floor veto unexplained."
+    },
+    {
+     "technique": "mixed-rubric-honesty",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/judge_spec.rs:40 Trace scoring omits ScoreDetail, discarding dimension scores, weights, sample reasonings, agreement, and parse accounting."
+    },
+    {
+     "technique": "nonce-fenced-candidate-isolation",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/score_traces.rs:174 The trace request omits the detailed verdict containing injection_suspected, so the engine's boundary-forgery signal does not accompany the persisted score."
+    },
+    {
+     "technique": "weighted-anchored-dimensions",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/judge_spec.rs:55 Scoring commands accept criteria-only freeform contracts producing holistic scores without named, weighted, anchored dimensions."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "judge-contract-design",
+   "context": "judge-and-scoring",
+   "reason": "evidence leans on scorers/tests.rs, which is not a tracked file"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-15T03:18:32.301586+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "judge-contract-design"
+   ],
+   "techniques": [
+    "bias-counterbalancing-instructions",
+    "gating-floors",
+    "mixed-rubric-honesty",
+    "nonce-fenced-candidate-isolation",
+    "weighted-anchored-dimensions"
+   ],
+   "deviations": 1,
+   "context": "runner-scoring-engine",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

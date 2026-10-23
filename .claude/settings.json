@@ -2,5 +2,13 @@
   "projectName": "LightTrack",
   "createdAt": "2026-06-20T22:02:39.502Z",
   "updatedAt": "2026-06-20T22:02:39.502Z",
-  "customConfig": {}
+  "customConfig": {},
+  "permissions": {
+    "deny": [
+      "Bash(*--no-verify*)",
+      "Bash(git push*--force*)",
+      "Bash(git push* -f *)",
+      "Bash(*LIGHTTRACK_SKIP_GATES=1*)"
+    ]
+  }
 }

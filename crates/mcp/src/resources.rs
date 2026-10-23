@@ -89,6 +89,17 @@ pub(crate) fn read(c: &Client, params: &Value) -> Result<Value, String> {
 /// span-scoring harness does) is the separate change that would make this a true ceiling.
 const MAX_RESOURCE_JSON: usize = 24 * 1024;
 
+/// The smallest payload worth replacing with a pointer.
+///
+/// The marker is `<elided: {n} bytes — fetch via get_event>` — 42 bytes plus the digits of
+/// `n`, and two more once JSON-quoted — so a field serializing to fewer bytes than that is
+/// made *bigger* by being elided. Measured: a 400-span trace of 4-byte payloads renders at
+/// 85,828 bytes against 56,228 for the un-elided compact form, a 52.6% increase, because the
+/// trigger fires on span count while the saving is per payload. The floor is set above the
+/// marker's own width with headroom rather than exactly at it, so a body sitting on the
+/// boundary is not churned for a saving of single bytes.
+const MIN_ELIDABLE: usize = 64;
+
 /// Serialize the body for the raw-JSON content item, eliding payload-bearing fields when the
 /// compact form is over budget.
 ///
@@ -127,6 +138,15 @@ fn elide_payloads(node: &mut Value) {
                     if let Some(v) = event.get_mut(field) {
                         if !v.is_null() {
                             let bytes = serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
+                            // A field smaller than the marker costs more to point at than to
+                            // carry. A body goes over budget on span COUNT as readily as on
+                            // payload size, so this is reachable rather than theoretical:
+                            // without the floor, a wide trace of small payloads is rendered
+                            // LARGER than the un-elided compact form it replaces, and still
+                            // reports the content as gone.
+                            if bytes < MIN_ELIDABLE {
+                                continue;
+                            }
                             *v = Value::String(format!(
                                 "<elided: {bytes} bytes — fetch via get_event>"
                             ));
@@ -275,6 +295,41 @@ mod tests {
             arm_b.len() > MAX_RESOURCE_JSON,
             "arm B {} unexpectedly fits the threshold - if spans are now capped, tighten this              test to assert the ceiling instead",
             arm_b.len()
+        );
+    }
+
+    /// The elision marker is ~44 bytes; a payload field smaller than that costs MORE to
+    /// point at than to carry. A body goes over budget on span COUNT as readily as on
+    /// payload size, so this case is reachable: eliding then grows the very output it was
+    /// invoked to shrink, and still reports the content as gone.
+    ///
+    /// The pairing is against the un-elided COMPACT form, not the pretty one. That is the
+    /// honest control here - `render_raw_json` already serializes compact on this branch, so
+    /// pretty-printing arm A would credit elision with the indentation saving it did not make.
+    #[test]
+    fn elision_never_grows_a_body_of_small_payloads() {
+        let body = trace_with_spans(400, 4);
+
+        let compact_unelided = serde_json::to_string(&body).unwrap();
+        let rendered = render_raw_json(&body);
+
+        assert!(
+            compact_unelided.len() > MAX_RESOURCE_JSON,
+            "fixture must be over budget for the elision branch to run - it is {} bytes",
+            compact_unelided.len()
+        );
+        eprintln!(
+            "small-payload pairing: un-elided compact {} bytes -> rendered {} bytes ({:+} bytes)",
+            compact_unelided.len(),
+            rendered.len(),
+            rendered.len() as i64 - compact_unelided.len() as i64
+        );
+        assert!(
+            rendered.len() <= compact_unelided.len(),
+            "elision grew the body by {} bytes: rendered {} vs un-elided compact {}",
+            rendered.len() as i64 - compact_unelided.len() as i64,
+            rendered.len(),
+            compact_unelided.len()
         );
     }
 

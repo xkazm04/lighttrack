@@ -1,0 +1,223 @@
+{
+  "schema": "conform-run/1",
+  "worker": "e82d979b-1566-4af3-9eb9-857bb13099ea",
+  "subject": "voice-io",
+  "evaluatedAt": "2026-10-13T09:40:47.954741+00:00",
+  "provider": "agy",
+  "model": "gemini-3.8-flash-high",
+  "pairs": [
+    {
+      "context": "claude-invocation-and-execution",
+      "subject": "voice-io",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evidence": "crates/engine/src/invocation/mode.rs:45 Searched crates/engine/src/invocation, codex, and sandbox for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; invocation modes are strictly limited to generate, readonly-scan, and edit without voice input or output pipelines.",
+      "techniques": [
+        {
+          "technique": "duplex-agent-sessions",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/run.rs:37 Subprocess execution runs single bounded commands via stdin/stdout pipes rather than duplex audio streaming sessions."
+        },
+        {
+          "technique": "stt-pipeline",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/tools.rs:12 Execution tools are constrained to filesystem and code exploration tools with no microphone capture or speech-to-text pipeline."
+        },
+        {
+          "technique": "tts-pipeline",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/invocation/posture.rs:47 Subprocess output formats are text JSON streams rather than synthesized audio utterance queues."
+        }
+      ],
+      "absenceTerms": [
+        "speech",
+        "microphone",
+        "transcription",
+        "synthesizer"
+      ],
+      "registryProposal": "Clarify in the standard's scope boundaries that voice-io specifically governs audio capture/transcription and speech synthesis/playback, and does not apply to text-based LLM subprocess spawning or CLI posture enforcement."
+    },
+    {
+      "context": "device-relay-agent",
+      "subject": "voice-io",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evidence": "crates/agent/src/main.rs:29 Searched crates/agent for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; lt-agent is a daemon that leases relay tasks and executes them with the local Claude Code CLI without audio or voice interfaces.",
+      "techniques": [
+        {
+          "technique": "unattended-caller-attribution",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/run.rs:69 Leased tasks run unattended as background agent jobs over JSON payloads without producing audible speech or requiring voice attribution surfaces."
+        },
+        {
+          "technique": "caller-scoped-voice-binding",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/actions.rs:36 Action specifications bind execution modes and workspaces to relay action types rather than binding voices to unhosted speech callers."
+        },
+        {
+          "technique": "transcript-handoff-receipts",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/exec.rs:53 Relay task execution produces structured run reports and HTTP deliveries rather than typing or pasting dictation transcripts into target desktop applications."
+        }
+      ],
+      "absenceTerms": [
+        "speech",
+        "microphone",
+        "transcription",
+        "synthesizer"
+      ],
+      "registryProposal": "Clarify in the standard's scope boundaries that device-side relay workers executing tasks via local CLI tools are outside voice-io."
+    },
+    {
+      "context": "provider-generation",
+      "subject": "voice-io",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evidence": "crates/engine/src/providers.rs:230 Searched crates/engine/src/providers for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; generation dispatches text and chat requests to LLM APIs with schema enforcement and lacks speech synthesis or audio input pipelines.",
+      "techniques": [
+        {
+          "technique": "engine-abstraction",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:207 Abstracted providers are text LLM completion and chat endpoints rather than speech synthesis or transcription engines."
+        },
+        {
+          "technique": "on-device-vs-cloud",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:71 HTTP provider calls communicate outbound via HTTPS with cloud LLM vendor endpoints over text APIs without microphone privacy or local audio processing boundaries."
+        },
+        {
+          "technique": "real-time-synthesis-budget",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/providers.rs:42 Timeouts bound HTTP text generation roundtrips for LLM reasoning rather than measuring real-time factors or time-to-first-audio for live speech synthesis."
+        }
+      ],
+      "absenceTerms": [
+        "speech",
+        "microphone",
+        "transcription",
+        "synthesizer"
+      ],
+      "registryProposal": "Clarify in the standard's scope boundaries that multi-provider text and chat LLM inference routers are governed by provider abstraction subjects rather than voice-io."
+    },
+    {
+      "context": "judge-and-scoring",
+      "subject": "voice-io",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evidence": "crates/engine/src/judge.rs:28 Searched crates/engine/src/judge, prompts, and scorers for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; judging evaluates textual prompts against structured rubrics and deterministic rules with no audio processing or speech recognition.",
+      "techniques": [
+        {
+          "technique": "spoken-intent-parsing",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/scorers.rs:53 Rubric dimensions evaluate model candidate text using LLM queries and deterministic pattern matchers rather than parsing spoken intents from transcribed audio."
+        },
+        {
+          "technique": "render-acceptance",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/parse.rs:23 Acceptance validation checks JSON syntax of model response strings instead of detecting degenerate audio waveforms or internal silence signatures."
+        },
+        {
+          "technique": "transcript-normalization",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/prompts.rs:33 Text preparation wraps untrusted model candidates inside nonce fences to defend against prompt injection rather than cleaning disfluencies or normalizing speech transcripts."
+        }
+      ],
+      "absenceTerms": [
+        "speech",
+        "microphone",
+        "transcription",
+        "synthesizer"
+      ],
+      "registryProposal": "Clarify in the standard's scope boundaries that LLM-as-judge scoring pipelines are outside voice-io."
+    }
+  ],
+  "declined": [
+    {
+      "subject": "voice-io",
+      "context": "evaluation-rendering",
+      "reason": "withdrawn after review: reviewer (sonnet): The anchor crates/render/src/lib.rs:49 is the start of the RENDERERS table (`get_capabilities`, `list_projects`, …). It doesn't show that the crate emits only Markdown text, so it doesn't show that voice I/O is absent. The technique anchors don't fix this: prompts.rs:59 is a code fence and benchmark"
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-10-13T09:40:47.954741+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "voice-io"
+      ],
+      "techniques": [
+        "duplex-agent-sessions",
+        "stt-pipeline",
+        "tts-pipeline"
+      ],
+      "deviations": 0,
+      "context": "claude-invocation-and-execution",
+      "via": "curator-multi:agy",
+      "model": "gemini-3.8-flash-high"
+    },
+    {
+      "ts": "2026-10-13T09:40:47.954741+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "voice-io"
+      ],
+      "techniques": [
+        "speech-ready-text",
+        "tts-pipeline",
+        "voice-ux-integration"
+      ],
+      "deviations": 0,
+      "context": "evaluation-rendering",
+      "via": "curator-multi:agy",
+      "model": "gemini-3.8-flash-high"
+    },
+    {
+      "ts": "2026-10-13T09:40:47.954741+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "voice-io"
+      ],
+      "techniques": [
+        "caller-scoped-voice-binding",
+        "transcript-handoff-receipts",
+        "unattended-caller-attribution"
+      ],
+      "deviations": 0,
+      "context": "device-relay-agent",
+      "via": "curator-multi:agy",
+      "model": "gemini-3.8-flash-high"
+    },
+    {
+      "ts": "2026-10-13T09:40:47.954741+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "voice-io"
+      ],
+      "techniques": [
+        "engine-abstraction",
+        "on-device-vs-cloud",
+        "real-time-synthesis-budget"
+      ],
+      "deviations": 0,
+      "context": "provider-generation",
+      "via": "curator-multi:agy",
+      "model": "gemini-3.8-flash-high"
+    },
+    {
+      "ts": "2026-10-13T09:40:47.954741+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "voice-io"
+      ],
+      "techniques": [
+        "render-acceptance",
+        "spoken-intent-parsing",
+        "transcript-normalization"
+      ],
+      "deviations": 0,
+      "context": "judge-and-scoring",
+      "via": "curator-multi:agy",
+      "model": "gemini-3.8-flash-high"
+    }
+  ]
+}

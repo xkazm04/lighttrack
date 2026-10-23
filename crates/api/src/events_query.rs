@@ -10,7 +10,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use lighttrack_core::LlmEvent;
+use lighttrack_core::{LlmEvent, ProviderId, TraceRef};
 use lighttrack_store::{CostRow, EventFilter, UseCaseCostRow};
 
 use crate::error::ApiError;
@@ -24,9 +24,15 @@ pub(crate) struct EventsParams {
     /// RFC3339 lower/upper bounds on event time (`since` inclusive, `until` exclusive).
     since: Option<String>,
     until: Option<String>,
-    provider: Option<String>,
+    /// Canonicalized on parse, exactly as the ingest door canonicalizes it, so `?provider=OpenAI`
+    /// finds the rows stored as `openai`.
+    provider: Option<ProviderId>,
+    /// **Exact.** Model identity is the pricing/limits merge key; folding it here is a different
+    /// question with a different owner, so `?model=gpt-4o` must not start matching
+    /// `gpt-4o-2024-08-06`.
     model: Option<String>,
-    trace_id: Option<String>,
+    /// Canonicalized on parse: a W3C hex id is case-insensitive, an opaque id is verbatim.
+    trace_id: Option<TraceRef>,
     name: Option<String>,
     /// Call outcome: `success` | `error` | `timeout`.
     status: Option<String>,
@@ -152,9 +158,9 @@ pub(crate) async fn get_events(
     let filter = EventFilter {
         since,
         until,
-        provider: q.provider.clone(),
+        provider: q.provider.as_ref().map(ProviderId::to_string),
         model: q.model.clone(),
-        trace_id: q.trace_id.clone(),
+        trace_id: q.trace_id.as_ref().map(TraceRef::to_string),
         name: q.name.clone(),
         status: q.status.clone(),
         tag: q.tag.clone(),

@@ -65,6 +65,18 @@ pub(super) fn job_cancellation(store: &dyn Store) -> Result<()> {
             .status,
         "cancelling"
     );
+    // A cancel whose worker is still alive (fresh lease) is left alone: it is winding down.
+    assert!(store
+        .claim_job(Utc::now() - chrono::Duration::hours(1), &[])?
+        .is_none());
+    assert_eq!(
+        store
+            .get_job(Scope::Operator, &running.id)?
+            .expect("get")
+            .status,
+        "cancelling",
+        "a fresh-lease cancelling job must not be settled"
+    );
     // `Utc::now()` as the staleness cutoff makes every claim in existence stale. The cancelled job
     // must STILL not come back — this is the race the reclaim path used to lose.
     for id in drain_jobs(store)? {
@@ -73,13 +85,20 @@ pub(super) fn job_cancellation(store: &dyn Store) -> Result<()> {
             "a cancelled run must never be reclaimed as stale"
         );
     }
+    // …and a cancel whose worker died must not read as live forever either: the claim path settles
+    // it as `cancelled`, carrying the marker that says the stop was finished for the worker.
+    let settled = store.get_job(Scope::Operator, &running.id)?.expect("get");
     assert_eq!(
-        store
-            .get_job(Scope::Operator, &running.id)?
-            .expect("get")
-            .status,
-        "cancelling",
-        "reclaim must not have touched the cancelled job"
+        settled.status, "cancelled",
+        "a cancelling job whose lease went stale must be settled, not left live"
+    );
+    assert_eq!(
+        settled.error.as_deref(),
+        Some(lighttrack_core::JOB_ERROR_CANCEL_ORPHANED)
+    );
+    assert_eq!(
+        settled.stale_reclaims, 0,
+        "an orphaned cancel is not a worker-death reclaim"
     );
     Ok(())
 }

@@ -10,7 +10,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_dataset",
         method: Method::Post,
-        path: "/v1/projects/:id/datasets",
+        path: "/v1/projects/{id}/datasets",
         access: Admin,
         mutating: true,
         params: &[
@@ -32,7 +32,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_datasets",
         method: Method::Get,
-        path: "/v1/projects/:id/datasets",
+        path: "/v1/projects/{id}/datasets",
         access: Key(Read),
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("Dataset"),
@@ -49,7 +49,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_dataset",
         method: Method::Get,
-        path: "/v1/datasets/:id",
+        path: "/v1/datasets/{id}",
         access: Key(Read),
         params: &[pm("id", "dataset", "dataset id")],
         response: TypeRef::Named("Dataset"),
@@ -66,7 +66,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "add_dataset_item",
         method: Method::Post,
-        path: "/v1/datasets/:id/items",
+        path: "/v1/datasets/{id}/items",
         access: Admin,
         mutating: true,
         params: &[
@@ -76,13 +76,14 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             b("expected", JsonTy::String, "golden reference answer"),
             b("context", JsonTy::String, ""),
             b("tags", JsonTy::Array, ""),
+            be("difficulty", &["easy", "medium", "hard"], "the ordered tier this case sits at; omit for UNGRADED, which is not the same as medium. Any other spelling is a 400, never a silently ungraded case."),
         ],
         response: TypeRef::Named("DatasetItem"),
         mcp: Some(McpTool {
             name: "add_dataset_item",
-            description: "Append a case to a (non-frozen) dataset.",
+            description: "Append a case to a (non-frozen) dataset. `difficulty` grades it on an ORDERED ladder (easy < medium < hard) so a corpus can answer which rungs a target actually clears — a tag could group cases and never rank them. Omitting it leaves the case UNGRADED, which is a distinct state from medium and is never filled in. A fourth rung is not invented for you: an unrecognised spelling is refused with a 400 rather than stored as ungraded.",
             read_only: false,
-            args: &["id", "input", "output", "expected", "context", "tags"],
+            args: &["id", "input", "output", "expected", "context", "tags", "difficulty"],
             ..McpTool::DEFAULT
         }),
         doc: "Append one case; 409 if the dataset is frozen.",
@@ -91,24 +92,27 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_dataset_items",
         method: Method::Get,
-        path: "/v1/datasets/:id/items",
+        path: "/v1/datasets/{id}/items",
         access: Key(Read),
-        params: &[pm("id", "dataset", "dataset id")],
+        params: &[
+            pm("id", "dataset", "dataset id"),
+            qe("difficulty", &["easy", "medium", "hard"], "only cases graded at this tier; UNGRADED cases are in no tier, so they are excluded from every one. An unknown spelling is a 400, never a silent full listing."),
+        ],
         response: TypeRef::ArrayOf("DatasetItem"),
         mcp: Some(McpTool {
             name: "list_dataset_items",
-            description: "List the cases in a dataset.",
-            args: &["id"],
+            description: "List the cases in a dataset, optionally only those graded at one difficulty tier. Ungraded cases belong to no tier and are excluded from every one.",
+            args: &["id", "difficulty"],
             ..McpTool::DEFAULT
         }),
         render_kind: Some("list_dataset_items"),
-        doc: "The cases in one dataset.",
+        doc: "The cases in one dataset, optionally narrowed to one difficulty tier.",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "freeze_dataset",
         method: Method::Post,
-        path: "/v1/datasets/:id/freeze",
+        path: "/v1/datasets/{id}/freeze",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -127,7 +131,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "dataset_item_from_label",
         method: Method::Post,
-        path: "/v1/datasets/:id/items/from-label",
+        path: "/v1/datasets/{id}/items/from-label",
         access: Admin,
         mutating: true,
         params: &[
@@ -137,23 +141,25 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("DatasetItem"),
         cli: Some(&["datasets", "promote"]),
         doc: "Promote a labelled production event into a golden case, copying the human verdict onto it.",
+        surface: "labels",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "list_dataset_labels",
         method: Method::Get,
-        path: "/v1/datasets/:id/labels",
+        path: "/v1/datasets/{id}/labels",
         access: Key(Read),
         params: &[p("id", "dataset id")],
         response: TypeRef::ArrayOf("Label"),
         cli: Some(&["datasets", "labels"]),
         doc: "Every human verdict on this set's items — the join `lt-runner calibrate --dataset` reads.",
+        surface: "labels",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "fork_dataset",
         method: Method::Post,
-        path: "/v1/datasets/:id/fork",
+        path: "/v1/datasets/{id}/fork",
         access: Admin,
         mutating: true,
         params: &[pm("id", "dataset", "id of the dataset to fork")],
@@ -167,12 +173,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["datasets", "fork"]),
         doc: "Fork a frozen dataset into the next version of its name, labels and all.",
+        surface: "dataset_lineage",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "import_dataset_items",
         method: Method::Post,
-        path: "/v1/datasets/:id/items/import",
+        path: "/v1/datasets/{id}/items/import",
         access: Admin,
         mutating: true,
         params: &[
@@ -200,12 +207,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["datasets", "import"]),
         doc: "Mine stored events or verdicts into an unfrozen dataset; 409 if it is frozen.",
+        surface: "dataset_lineage",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "list_dataset_versions",
         method: Method::Get,
-        path: "/v1/projects/:id/datasets/versions",
+        path: "/v1/projects/{id}/datasets/versions",
         access: Key(Read),
         params: &[
             p("id", "project id"),
@@ -214,6 +222,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::ArrayOf("Dataset"),
         cli: Some(&["datasets", "versions"]),
         doc: "Every version of one dataset name, newest first — what a run's dataset_pin resolves to.",
+        surface: "dataset_lineage",
         ..Endpoint::DEFAULT
     },
 ];

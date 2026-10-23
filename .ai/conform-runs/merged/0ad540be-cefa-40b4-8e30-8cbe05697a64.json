@@ -1,0 +1,245 @@
+{
+ "schema": "conform-run/1",
+ "worker": "0ad540be-cefa-40b4-8e30-8cbe05697a64",
+ "subject": "agent-runtime-assembly",
+ "evaluatedAt": "2026-10-13T04:09:27.257513+00:00",
+ "provider": "agy",
+ "model": "gemini-3.8-flash-high",
+ "pairs": [
+  {
+   "context": "mcp-server",
+   "subject": "agent-runtime-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/mcp/src/main.rs:77 The `lt-mcp` binary operates strictly as a Model Context Protocol tool server over stdio JSON-RPC 2.0; grepping `crates/mcp` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero occurrences of agent runtime assembly mechanisms, confirming its precondition is not met.",
+   "techniques": [
+    {
+     "technique": "host-routes-win",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/main.rs:75 The MCP server uses a hardcoded match statement over stdio JSON-RPC method names rather than mounting contributed HTTP routes onto a service."
+    },
+    {
+     "technique": "operator-tier-code-loading",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/main.rs:34 The MCP server is a fixed standalone binary communicating with the LightTrack API via HTTP and does not load third-party extensions or code at any configuration tier."
+    },
+    {
+     "technique": "session-scoped-capability",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/tools.rs:26 Tools are statically derived from the API contract table and filtered by a binary write flag rather than dynamically resolved client-surface capabilities on an agent session."
+    },
+    {
+     "technique": "bounded-projection-of-external-work",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/relay_tools.rs:19 The MCP server provides read-only inspection queries of remote relay tasks over HTTP and does not manage an in-turn task submission or projection lifecycle."
+    }
+   ],
+   "registryProposal": "Clarify in the standard's scope boundaries that external MCP tool servers dispatching tools across stdio or HTTP wire protocols are governed by `mcp-tools` rather than `agent-runtime-assembly`."
+  },
+  {
+   "context": "claude-invocation-and-execution",
+   "subject": "agent-runtime-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/engine/src/invocation/run.rs:23 The invocation module is a subprocess spawner configuring CLI arguments and environment variables for external `claude` and `codex` binaries; grepping `crates/engine/src/invocation` and `codex` for `checkpoint`, `assembly`, `subagent`, `contributed`, `mutator`, and `observer` yields zero matches, proving the absence of an in-process agent runtime pipeline.",
+   "techniques": [
+    {
+     "technique": "guard-input-custody",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/invocation/tools.rs:12 Tool allowlists are compiled directly into binary code constants rather than loaded from files writable by the constrained subprocess."
+    },
+    {
+     "technique": "nested-run-is-not-its-parent",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/invocation/posture.rs:169 Postures isolate single-turn generation subprocesses by executing within a neutral temp directory, but do not spawn or manage nested agent runs or child sessions."
+    },
+    {
+     "technique": "operator-tier-code-loading",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/codex/posture.rs:49 The Codex posture explicitly passes CLI flags disabling hooks, plugins, and multi-agent features on the subprocess rather than assembling an operator code-loading ladder."
+    },
+    {
+     "technique": "assembly-identity",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/invocation/posture.rs:55 Subprocess command plans format argv flags directly from the invocation struct without compiling an assembly identity digest over hook chains or rosters."
+    }
+   ],
+   "registryProposal": "Clarify in the standard's scope boundary section that CLI subprocess wrappers executing headless agent processes belong to subprocess-lifecycle rather than agent-runtime-assembly."
+  },
+  {
+   "context": "pg-platform-operations",
+   "subject": "agent-runtime-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store-pg/src/lib.rs:123 The `SURFACES` constant enumerates the database storage domains implemented by `PgStore` (telemetry events, pricing, job leases, and relay queues); grepping `crates/store-pg` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero agent assembly mechanisms, confirming its role is purely storage under `job-coordination` rather than `agent-runtime-assembly`.",
+   "techniques": [
+    {
+     "technique": "checkpoint-mode-custody",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/lib.rs:83 The Postgres schema manages relational tables for events, traces, and jobs rather than graph engine full or delta conversation checkpoints."
+    },
+    {
+     "technique": "bounded-projection-of-external-work",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/relay_lease.rs:19 Relay leases are managed as durable SQL rows with lease fences, which the standard defines as part of job-coordination rather than the in-turn agent projection loop."
+    },
+    {
+     "technique": "indeterminate-closure-on-interruption",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/jobs.rs:59 Background jobs track worker deaths in stale_reclaims rather than synthesizing indeterminate tool-call transcript entries for an agent model."
+    },
+    {
+     "technique": "guard-input-custody",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/margin_policies.rs:25 Margin policies are platform budget caps stored in PostgreSQL for API billing governance rather than agent containment policies."
+    }
+   ]
+  },
+  {
+   "context": "python-sdk",
+   "subject": "agent-runtime-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "clients/python/lighttrack/client.py:274 The Python SDK is an asynchronous telemetry ingestion client that dispatches LLM event records via an internal queue and background worker thread; grepping `clients/python` for `assembly`, `checkpoint`, `subagent`, `mutator`, and `observer` confirms the absence of an agent runtime assembly.",
+   "techniques": [
+    {
+     "technique": "indeterminate-closure-on-interruption",
+     "verdict": "not-applicable",
+     "evidence": "clients/python/lighttrack/journal.py:60 The local span journal tags orphaned in-flight provider calls as unsettled telemetry spans, but does not construct an agent model transcript or tool call synthetic result."
+    },
+    {
+     "technique": "rewrite-before-the-gate",
+     "verdict": "not-applicable",
+     "evidence": "clients/python/lighttrack/instrument.py:236 The instrumentation wrapper checks pre-spend admission limits before calling the provider SDK, but does not perform tool argument rewriting or mutator frame wrapping."
+    },
+    {
+     "technique": "guard-input-custody",
+     "verdict": "not-applicable",
+     "evidence": "clients/python/lighttrack/client.py:116 Output guardrail regex patterns are statically compiled module-level constants in Python memory rather than containment rules fetched from a writable workspace."
+    },
+    {
+     "technique": "session-scoped-capability",
+     "verdict": "not-applicable",
+     "evidence": "clients/python/lighttrack/client.py:263 The client configuration initializes connection endpoints from process environment variables for telemetry reporting without maintaining dynamic session capability rosters."
+    }
+   ]
+  },
+  {
+   "context": "device-relay-agent",
+   "subject": "agent-runtime-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/agent/src/run.rs:57 The `lt-agent` binary runs a polling loop that leases tasks from cloud LightTrack instances over HTTPS and executes them via the Claude Code CLI; grepping `crates/agent` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero matches, demonstrating that it is an edge task executor rather than an agent runtime assembling an in-process hook chain.",
+   "techniques": [
+    {
+     "technique": "bounded-projection-of-external-work",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/run.rs:69 The device runner executes leased external tasks from the relay queue as an edge worker, rather than an agent conversation loop submitting external operations."
+    },
+    {
+     "technique": "assembly-identity",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/exec.rs:48 The runner computes a PromptIdentity over the rendered action prompt text, which the standard defines as prompt-assembly rather than assembly-identity."
+    },
+    {
+     "technique": "operator-tier-code-loading",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/main.rs:43 Configuration loads device polling parameters and cloud endpoints from an operator TOML file without dynamically importing or executing contributed extension code."
+    },
+    {
+     "technique": "session-scoped-capability",
+     "verdict": "not-applicable",
+     "evidence": "crates/agent/src/inventory.rs:36 The local action inventory enumerates executable disk directories to filter cloud task leasing rather than determining session-scoped tool capabilities."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-13T04:09:27.257513+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-runtime-assembly"
+   ],
+   "techniques": [
+    "bounded-projection-of-external-work",
+    "host-routes-win",
+    "operator-tier-code-loading",
+    "session-scoped-capability"
+   ],
+   "deviations": 0,
+   "context": "mcp-server",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-13T04:09:27.257513+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-runtime-assembly"
+   ],
+   "techniques": [
+    "assembly-identity",
+    "guard-input-custody",
+    "nested-run-is-not-its-parent",
+    "operator-tier-code-loading"
+   ],
+   "deviations": 0,
+   "context": "claude-invocation-and-execution",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-13T04:09:27.257513+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-runtime-assembly"
+   ],
+   "techniques": [
+    "bounded-projection-of-external-work",
+    "checkpoint-mode-custody",
+    "guard-input-custody",
+    "indeterminate-closure-on-interruption"
+   ],
+   "deviations": 0,
+   "context": "pg-platform-operations",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-13T04:09:27.257513+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-runtime-assembly"
+   ],
+   "techniques": [
+    "guard-input-custody",
+    "indeterminate-closure-on-interruption",
+    "rewrite-before-the-gate",
+    "session-scoped-capability"
+   ],
+   "deviations": 0,
+   "context": "python-sdk",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-13T04:09:27.257513+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-runtime-assembly"
+   ],
+   "techniques": [
+    "assembly-identity",
+    "bounded-projection-of-external-work",
+    "operator-tier-code-loading",
+    "session-scoped-capability"
+   ],
+   "deviations": 0,
+   "context": "device-relay-agent",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  }
+ ]
+}

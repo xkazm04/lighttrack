@@ -1,0 +1,179 @@
+{
+ "schema": "conform-run/1",
+ "worker": "b06dbc63-c845-4175-afb7-673b19f79826",
+ "subject": "embedded-db",
+ "evaluatedAt": "2026-10-13T12:23:47.275982+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "sqlite-platform-backend",
+   "subject": "embedded-db",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store/src/sqlite/pool.rs:96 Reader checkout waits indefinitely when the pool is exhausted, violating the required bounded acquisition timeout.",
+   "techniques": [
+    {
+     "technique": "connection-pooling",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/sqlite/pool.rs:96 The condition-variable wait has no deadline; busy_timeout bounds SQLite lock waits, not pool checkout."
+    },
+    {
+     "technique": "corruption-class-response",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/sqlite/mod.rs:256 The complete write wrapper invokes each closure and returns its result without inspecting corruption or quarantining the shared connection against subsequent writes."
+    },
+    {
+     "technique": "journal-and-durability-modes",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/sqlite/schema.rs:39 WAL is explicitly requested and its effective mode is checked later, but inspected writer/reader construction neither selects nor asserts synchronous; searches found no synchronous configuration."
+    }
+   ]
+  },
+  {
+   "context": "sqlite-observability-backend",
+   "subject": "embedded-db",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store/src/sqlite/collective.rs:71 The retention pruner immediately deletes matching entries without a dry-run mode, contrary to the standard's default candidate-reporting requirement.",
+   "techniques": [
+    {
+     "technique": "storage-accounting-and-pruning",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/sqlite/collective.rs:71 purge_before accepts only a connection and cutoff and executes DELETE immediately; neither it nor its inspected replacement path provides dry-run candidate reporting."
+    }
+   ]
+  },
+  {
+   "context": "typescript-sdk",
+   "subject": "embedded-db",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "clients/typescript/src/journal.ts:231 Context searches found no duckdb, indexedDB, or rusqlite integration, and the inspected SDK uses HTTP plus JSONL filesystem breadcrumbs rather than an embedded database engine.",
+   "techniques": [
+    {
+     "technique": "analytical-reads-off-the-serving-store",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/index.ts:651 Functional requests go to the remote API; this context has no embedded serving database to offload."
+    },
+    {
+     "technique": "connection-pooling",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/index.ts:688 Telemetry transport uses fetch; no embedded-engine connection pool was found."
+    },
+    {
+     "technique": "corruption-class-response",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/journal.ts:233 This is filesystem-journal failure handling, not corruption of canonical or derived database structures."
+    },
+    {
+     "technique": "db-self-instrumentation",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/journal.ts:255 Local recovery parses JSONL records; no embedded database operations exist to instrument."
+    },
+    {
+     "technique": "derived-capacity-limits",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/index.ts:621 The SDK observes remote admission limits; these are not embedded-store entry, transaction, or cache capacities."
+    },
+    {
+     "technique": "extension-lifecycle",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/journal.ts:70 The local persistence capability is Node filesystem access, with no embedded-engine extension registration."
+    },
+    {
+     "technique": "journal-and-durability-modes",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/journal.ts:231 An append-only JSONL breadcrumb file has no database journal-mode/synchronization matrix."
+    },
+    {
+     "technique": "quiet-window-maintenance",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/journal.ts:139 Cleanup concerns the SDK's breadcrumb file, not database checkpointing or compaction."
+    },
+    {
+     "technique": "single-writer-holder-discipline",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/journal.ts:229 Each journal instance creates a process-specific randomized file; no shared single-writer database directory was found."
+    },
+    {
+     "technique": "storage-accounting-and-pruning",
+     "verdict": "not-applicable",
+     "evidence": "clients/typescript/src/journal.ts:186 Recovery selects owned JSONL files, rather than accounting for or pruning embedded-database tables."
+    }
+   ],
+   "absenceTerms": [
+    "duckdb",
+    "indexedDB",
+    "rusqlite"
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "embedded-db",
+   "context": "storage-and-jobs",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "embedded-db",
+   "context": "store-conformance-governance",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-13T12:23:47.275982+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "embedded-db"
+   ],
+   "techniques": [
+    "connection-pooling",
+    "corruption-class-response",
+    "journal-and-durability-modes"
+   ],
+   "deviations": 1,
+   "context": "sqlite-platform-backend",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-13T12:23:47.275982+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "embedded-db"
+   ],
+   "techniques": [
+    "storage-accounting-and-pruning"
+   ],
+   "deviations": 1,
+   "context": "sqlite-observability-backend",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-13T12:23:47.275982+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "embedded-db"
+   ],
+   "techniques": [
+    "analytical-reads-off-the-serving-store",
+    "connection-pooling",
+    "corruption-class-response",
+    "db-self-instrumentation",
+    "derived-capacity-limits",
+    "extension-lifecycle",
+    "journal-and-durability-modes",
+    "quiet-window-maintenance",
+    "single-writer-holder-discipline",
+    "storage-accounting-and-pruning"
+   ],
+   "deviations": 0,
+   "context": "typescript-sdk",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

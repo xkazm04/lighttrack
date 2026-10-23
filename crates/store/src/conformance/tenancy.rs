@@ -233,6 +233,7 @@ fn datasets(store: &dyn Store, t: &Tenants) -> Result<()> {
             source_event_id: None,
             anonymization: json!({}),
             input_hash: None,
+            difficulty: None,
         })?;
     }
     let (a, b) = (mine.id.clone(), theirs.id.clone());
@@ -559,6 +560,7 @@ fn labels(store: &dyn Store, t: &Tenants) -> Result<()> {
             source_event_id: None,
             anonymization: json!({}),
             input_hash: None,
+            difficulty: None,
         };
         store.create_dataset_item(&item)?;
         store.insert_label(&sample_label(

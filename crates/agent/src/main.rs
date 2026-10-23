@@ -5,16 +5,20 @@
 //! into the originating apps via per-action connectors, and settles every task back to its cloud.
 //!
 //! This file is wiring only: parse args, load config, run the loop. Logic lives in the sibling
-//! modules (`config`, `actions`, `inventory`, `exec`, `connect`, `cloud`, `report`, `run`).
+//! modules (`config`, `actions`, `inventory`, `exec`, `deliver`, `connect`, `cloud`, `verdict`,
+//! `report`, `run`).
 
 mod actions;
 mod cloud;
 mod config;
 mod connect;
+mod deliver;
 mod exec;
 mod inventory;
+mod progress;
 mod report;
 mod run;
+mod verdict;
 
 use anyhow::Result;
 use clap::Parser;

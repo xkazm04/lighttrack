@@ -19,19 +19,11 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use lighttrack_core::test_env::EnvGuard;
 use lighttrack_engine::{generate, EngineConfig, EngineError};
-
-/// `generate` reads its origin and key from the process environment, which every test in this
-/// binary shares. Held for the length of a test so two of them cannot re-point each other's stub.
-fn env_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-}
 
 /// A loopback endpoint that answers every request with one canned response and records when each
 /// request arrived. `Connection: close` makes the count exact: one connection per attempt, no
@@ -95,10 +87,12 @@ fn stub(status: u16, headers: &'static [(&'static str, &'static str)]) -> Stub {
     Stub { base, hits }
 }
 
-/// Drive the real `generate` path at the stub.
-fn call_openai(stub: &Stub) -> EngineError {
-    std::env::set_var("OPENAI_API_KEY", "test-key-not-a-secret");
-    std::env::set_var("LIGHTTRACK_OPENAI_BASE", &stub.base);
+/// Drive the real `generate` path at the stub. `generate` reads its origin and key from the process
+/// environment, so the caller holds the guard for the whole test: two tests cannot re-point each
+/// other's stub.
+fn call_openai(env: &mut EnvGuard, stub: &Stub) -> EngineError {
+    env.set("OPENAI_API_KEY", "test-key-not-a-secret")
+        .set("LIGHTTRACK_OPENAI_BASE", &stub.base);
     let cfg = EngineConfig::default();
     generate(&cfg, "openai", "stub-model", None, "hello", None)
         .expect_err("the stub never returns a completion")
@@ -109,9 +103,9 @@ fn call_openai(stub: &Stub) -> EngineError {
 /// against, and it must not regress.
 #[test]
 fn a_bare_429_spends_the_computed_ladder() {
-    let _guard = env_lock();
+    let mut env = EnvGuard::lock();
     let s = stub(429, &[]);
-    let err = call_openai(&s);
+    let err = call_openai(&mut env, &s);
     assert!(
         matches!(
             err,
@@ -135,9 +129,9 @@ fn a_bare_429_spends_the_computed_ladder() {
 /// what the provider asked for (`retry-after-ms: 120`), not by the ladder's own 200/400.
 #[test]
 fn a_stated_delay_reaches_the_scheduler_and_spaces_the_attempts() {
-    let _guard = env_lock();
+    let mut env = EnvGuard::lock();
     let s = stub(429, &[("retry-after-ms", "120")]);
-    let err = call_openai(&s);
+    let err = call_openai(&mut env, &s);
     match err {
         EngineError::RateLimited { retry_after, .. } => assert_eq!(
             retry_after,
@@ -161,10 +155,10 @@ fn a_stated_delay_reaches_the_scheduler_and_spaces_the_attempts() {
 /// a shortened wait.
 #[test]
 fn a_stated_wait_beyond_the_budget_ends_the_ladder() {
-    let _guard = env_lock();
+    let mut env = EnvGuard::lock();
     let s = stub(429, &[("retry-after", "900")]);
     let started = Instant::now();
-    let err = call_openai(&s);
+    let err = call_openai(&mut env, &s);
     match err {
         EngineError::OverBudgetWait {
             who,

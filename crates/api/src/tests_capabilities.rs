@@ -51,8 +51,89 @@ async fn any_authenticated_principal_can_read_the_manifest() {
         "SQLite is the reference backend: nothing is refused"
     );
 
+    assert!(
+        body["unsupported_routes"]
+            .as_array()
+            .expect("unsupported_routes array")
+            .is_empty(),
+        "nothing is refused here, so no route can be published as refused"
+    );
+    assert!(
+        body["degraded_routes"]
+            .as_array()
+            .expect("degraded_routes array")
+            .is_empty(),
+        "and nothing is narrowed either"
+    );
+
     let (status, _) = get(&app, Some("admin-secret"), "/v1/capabilities").await;
     assert_eq!(status, StatusCode::OK, "admin reads it too");
+}
+
+/// The route-level consequence of a refusal, on the backends that actually have one.
+///
+/// The suite's only backend is SQLite, which refuses nothing — so this is the one API-level
+/// assertion about a deployment other than the reference one. It needs no database: each backend's
+/// manifest is a pure associated function of its type, which is what `crates/store/tests/
+/// parity_doc.rs` already relies on.
+#[test]
+fn the_served_body_names_the_routes_each_backend_refuses() {
+    use crate::capabilities::CapabilitiesBody;
+
+    let pg = CapabilitiesBody::from(lighttrack_store_pg::PgStore::manifest());
+    assert!(
+        pg.unsupported.contains(&"use_cases")
+            && pg.unsupported.contains(&"maintenance")
+            && pg.unsupported.contains(&"metrics"),
+        "Postgres refuses exactly these three: {:?}",
+        pg.unsupported
+    );
+    assert!(
+        pg.unsupported_routes
+            .iter()
+            .any(|r| r == "GET /v1/projects/{id}/use-cases"),
+        "the use-case registry 501s on the backend carrying production traffic: {:?}",
+        pg.unsupported_routes
+    );
+    // The finding this field exists to publish: two of those three refusals remove no route, so a
+    // body that listed them as 501s would be telling the operator to expect a status code that
+    // never arrives.
+    assert!(
+        !pg.unsupported_routes
+            .iter()
+            .any(|r| r.contains("/v1/storage/status")),
+        "maintenance/metrics null two fields; they do not take the route out"
+    );
+    assert!(
+        pg.degraded_routes
+            .iter()
+            .any(|d| d.route == "GET /v1/storage/status"),
+        "and the narrowing is published rather than dropped"
+    );
+
+    let fs = CapabilitiesBody::from(lighttrack_store_firestore::FirestoreStore::manifest());
+    for want in [
+        "GET /v1/traces",
+        "GET /v1/traces/{id}",
+        "GET /v1/projects/{id}/redaction",
+    ] {
+        assert!(
+            fs.unsupported_routes.iter().any(|r| r == want),
+            "{want} must be published as refused on firestore: {:?}",
+            fs.unsupported_routes
+        );
+    }
+    let served: Vec<&str> = fs.surfaces.clone();
+    for e in lighttrack_contract::endpoints() {
+        if served.contains(&e.surface) {
+            let n = format!("{} {}", e.method.as_str().to_uppercase(), e.path);
+            assert!(
+                !fs.unsupported_routes.contains(&n),
+                "{} is on a served surface but was published as refused",
+                e.id
+            );
+        }
+    }
 }
 
 #[tokio::test]

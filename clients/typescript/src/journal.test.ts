@@ -196,3 +196,30 @@ test("the unsettled reason names what is known and what is not", () => {
   assert.match(msg, /2023-11-14/);
   assert.match(msg, /exited or stalled/);
 });
+
+/**
+ * Recovery that could not RUN must not read as "nothing to recover". A journal directory that
+ * exists but cannot be listed (here: the path is a file) is a failure of the instrument, and the
+ * client already has a channel for spelling those — the rate-limited diagnostics — so the count
+ * stays 0 but one warning is emitted. A directory that simply does not exist is genuinely empty
+ * and stays silent: the boundary is "could not look" versus "looked and found nothing".
+ */
+test("an unreadable journal directory warns once instead of reading as empty", async () => {
+  const realWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const parent = newDir();
+    const asFile = `${parent}/not-a-dir`;
+    writeFileSync(asFile, "");
+    const blocked = new LightTrack({ baseUrl: "http://127.0.0.1:1", project: "p", journalDir: asFile });
+    assert.equal(await blocked.recovered, 0);
+    assert.equal(blocked.diag.emitted, 1, "an unreadable directory is a failure, and it is spelled");
+
+    const missing = new LightTrack({ baseUrl: "http://127.0.0.1:1", project: "p", journalDir: `${parent}/never-made` });
+    assert.equal(await missing.recovered, 0);
+    assert.equal(missing.diag.emitted, 0, "a directory that does not exist is genuinely empty");
+    rmSync(parent, { recursive: true, force: true });
+  } finally {
+    console.warn = realWarn;
+  }
+});

@@ -1,0 +1,179 @@
+{
+ "schema": "conform-run/1",
+ "worker": "021113af-c543-448c-b39d-6d749628db22",
+ "subject": "agent-memory",
+ "evaluatedAt": "2026-10-12T19:27:35.191925+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "pg-platform-operations",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store-pg/src/projects.rs:1 The inspected platform modules persist administrative and operational records rather than information carried forward through an agent-memory pipeline.",
+   "techniques": [
+    {
+     "technique": "consolidation",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/prices.rs:3 Price corrections version billing rates; they do not distill episodes into agent beliefs."
+    },
+    {
+     "technique": "cross-context-promotion",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/collective.rs:3 The shared surface contains leaderboard aggregates, not lessons promoted from per-context memory stores."
+    },
+    {
+     "technique": "procedure-promotion",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/schedules.rs:1 Stored recurring-workload configuration is not a promotion path from observed procedures into capabilities."
+    }
+   ]
+  },
+  {
+   "context": "pg-event-telemetry",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store-pg/src/events/mod.rs:1 This context stores and queries monitored LLM telemetry rather than implementing an agent's working, episodic, or consolidated memory.",
+   "techniques": [
+    {
+     "technique": "episodic-capture",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/events/write.rs:22 The write path persists supplied LlmEvent telemetry; it does not capture distilled agent episodes."
+    },
+    {
+     "technique": "observation-clock",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/events/cols.rs:22 This is an accounting timestamp choice, explicitly outside the technique's language-grounding obligation."
+    },
+    {
+     "technique": "rollup-compaction",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/rollup.rs:75 The rollup computes numeric event aggregates; it does not merge redundant memory items into superseding summaries."
+    }
+   ]
+  },
+  {
+   "context": "pg-evaluation-store",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store-pg/src/scores.rs:1 The inspected modules persist evaluation evidence and versioned evaluation assets rather than an agent's remembered beliefs or learned procedures.",
+   "techniques": [
+    {
+     "technique": "pending-beliefs-live-apart",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/labels.rs:1 Human evaluation labels are verdict records, not unconfirmed agent beliefs awaiting adoption."
+    },
+    {
+     "technique": "procedure-promotion",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-pg/src/prompts.rs:1 This registry versions prompt assets; it does not promote procedures distilled from repeated agent episodes."
+    }
+   ]
+  },
+  {
+   "context": "store-trait-and-types",
+   "subject": "agent-memory",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/store/src/lib.rs:3 The inspected contract describes application persistence and backend capabilities without defining an agent-memory lifecycle.",
+   "techniques": [
+    {
+     "technique": "observation-clock",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/codec.rs:16 The codec encodes timestamps; it does not ground relative language during memory distillation."
+    },
+    {
+     "technique": "owner-and-counterpart-scope",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/scope.rs:9 Scope represents application tenant access, not ownership and counterpart views over agent memories."
+    },
+    {
+     "technique": "procedure-promotion",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/capabilities/mod.rs:1 Capabilities declare implemented persistence surfaces rather than procedures learned and promoted by an agent."
+    },
+    {
+     "technique": "rollup-compaction",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/rollup_compat/mod.rs:1 These adapters implement grouped accounting queries, not compaction of redundant memory claims."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "agent-memory",
+   "context": "reactive-alert-responder",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-12T19:27:35.191925+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [
+    "consolidation",
+    "cross-context-promotion",
+    "procedure-promotion"
+   ],
+   "deviations": 0,
+   "context": "pg-platform-operations",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-12T19:27:35.191925+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [
+    "episodic-capture",
+    "observation-clock",
+    "rollup-compaction"
+   ],
+   "deviations": 0,
+   "context": "pg-event-telemetry",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-12T19:27:35.191925+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [
+    "pending-beliefs-live-apart",
+    "procedure-promotion"
+   ],
+   "deviations": 0,
+   "context": "pg-evaluation-store",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-12T19:27:35.191925+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-memory"
+   ],
+   "techniques": [
+    "observation-clock",
+    "owner-and-counterpart-scope",
+    "procedure-promotion",
+    "rollup-compaction"
+   ],
+   "deviations": 0,
+   "context": "store-trait-and-types",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

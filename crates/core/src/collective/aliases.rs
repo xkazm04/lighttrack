@@ -17,7 +17,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::alias_table::AliasTable;
-use crate::model_id::canonicalize_with;
+use crate::effort::Effort;
+use crate::model_id::{canonicalize_with, ModelId};
 
 /// The declared identity table, loaded from `config/pricing.json` (or any file of that shape).
 #[derive(Debug, Clone, Default)]
@@ -81,7 +82,22 @@ impl ModelAliases {
     /// Canonicalize a `(provider, model)` pair for the leaderboard. Pure and total.
     pub fn normalize(&self, provider: &str, model: &str) -> (String, String) {
         let id = canonicalize_with(provider, model, &self.table);
-        (id.provider.as_str().to_string(), id.family)
+        (id.provider.as_str().to_string(), with_effort(&id))
+    }
+}
+
+/// The merge key's model half: the canonical family, **keeping a reasoning-effort lane on it**.
+///
+/// `canonicalize` splits any `@lane` off the model, which is right for a *pricing* lane (`@batch`,
+/// `@flex`, `@in>200000`): those are one model billed differently, and a leaderboard row about the
+/// model should pool them. A reasoning effort is not that. `opus@low` and `opus@xhigh` are different
+/// amounts of thinking at different prices — which is exactly why the benchmark matrix treats effort
+/// as an axis (D21) — so pooling them publishes one quality number for a configuration nobody ran,
+/// and a cheap row's score would be averaged into an expensive row's.
+fn with_effort(id: &ModelId) -> String {
+    match id.lane.as_deref().and_then(Effort::parse) {
+        Some(e) => format!("{}@{}", id.family, e.as_str()),
+        None => id.family.clone(),
     }
 }
 
@@ -165,6 +181,41 @@ mod tests {
         assert_eq!(
             empty.normalize("x", "y-2024-01-01"),
             ("x".into(), "y".into())
+        );
+    }
+
+    /// **Two efforts are two rows.** The matrix exists to ask whether the expensive level is worth
+    /// it; a leaderboard that merged the answers would publish a number for neither configuration.
+    #[test]
+    fn a_reasoning_effort_stays_on_the_merge_key() {
+        let a = table();
+        assert_eq!(
+            a.normalize("anthropic", "claude-opus-5@xhigh"),
+            ("anthropic".into(), "claude-opus-5@xhigh".into())
+        );
+        assert_ne!(
+            a.normalize("anthropic", "claude-opus-5@low"),
+            a.normalize("anthropic", "claude-opus-5@xhigh")
+        );
+        // …and an effort still normalizes everything else about the identity: prefix, date, alias.
+        assert_eq!(
+            a.normalize("google-vertex", "google/gemini-2.5-pro-002@high"),
+            ("google".into(), "gemini-2.5-pro@high".into())
+        );
+    }
+
+    /// A **pricing** lane is not an effort and still folds away: `@batch` is the same model billed
+    /// differently, so its results belong in the model's row.
+    #[test]
+    fn a_pricing_lane_is_still_dropped() {
+        let a = table();
+        assert_eq!(
+            a.normalize("openai", "gpt-4o@batch"),
+            ("openai".into(), "gpt-4o".into())
+        );
+        assert_eq!(
+            a.normalize("openai", "gpt-4o@flex"),
+            a.normalize("openai", "gpt-4o")
         );
     }
 

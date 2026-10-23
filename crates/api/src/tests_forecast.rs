@@ -14,8 +14,8 @@ use serde_json::{json, Value};
 use tower::ServiceExt; // oneshot
 
 use lighttrack_core::{
-    new_id, LimitAction, LimitMetric, LimitRule, LimitWindow, RevenueEvent, RevenueKind, Threshold,
-    ThresholdDimension,
+    new_id, LimitAction, LimitMetric, LimitRule, LimitScope, LimitWindow, RevenueEvent,
+    RevenueKind, Threshold, ThresholdDimension,
 };
 use lighttrack_store::Store;
 
@@ -46,23 +46,41 @@ async fn forecast_projects_budget_breach_and_margin_erosion() {
     let key = make_key(&store, "proj-a");
 
     // A daily cost budget of $15 — Alert-only so ingest is never blocked while we backfill history.
-    store
-        .create_limit_rule(&LimitRule {
-            id: new_id(),
-            project_id: "proj-a".into(),
-            metric: LimitMetric::CostUsd,
-            window: LimitWindow::Day,
-            threshold: Threshold::Fixed(15.0),
-            action: LimitAction::Alert,
-            enabled: true,
-            warn_at: None,
-            scope: None,
-            escalation: None,
-            escalated_until: None,
-            origin: None,
-            expires_at: None,
-        })
-        .unwrap();
+    let live_budget_id = new_id();
+    let live_budget = LimitRule {
+        id: live_budget_id.clone(),
+        project_id: "proj-a".into(),
+        metric: LimitMetric::CostUsd,
+        window: LimitWindow::Day,
+        threshold: Threshold::Fixed(15.0),
+        action: LimitAction::Alert,
+        enabled: true,
+        warn_at: None,
+        scope: None,
+        escalation: None,
+        escalated_until: None,
+        origin: None,
+        expires_at: None,
+    };
+    store.create_limit_rule(&live_budget).unwrap();
+
+    // The same cap, still `enabled`, but past its policy-set expiry: admission already treats it as
+    // inert, so the forecast must not project it or page anybody about it.
+    let expired_budget_id = new_id();
+    let mut expired_budget = live_budget.clone();
+    expired_budget.id = expired_budget_id.clone();
+    expired_budget.expires_at = Some(Utc::now() - Duration::hours(1));
+    store.create_limit_rule(&expired_budget).unwrap();
+
+    // A guardrail a margin policy raised for acme, expiring well after this forecast: it is what is
+    // already being done about the erosion below, and the request path must say so.
+    let guardrail_id = new_id();
+    let mut guardrail = live_budget.clone();
+    guardrail.id = guardrail_id.clone();
+    guardrail.threshold = Threshold::Fixed(1_000.0);
+    guardrail.origin = Some("margin_policy:pol-1:acme".into());
+    guardrail.expires_at = Some(Utc::now() + Duration::days(30));
+    store.create_limit_rule(&guardrail).unwrap();
 
     // Revenue that currently covers acme ($120 one-time, recognized in-window) → ~$12/day.
     store
@@ -134,12 +152,25 @@ async fn forecast_projects_budget_breach_and_margin_erosion() {
     let budgets = f["budgets"].as_array().unwrap();
     let budget = budgets
         .iter()
-        .find(|b| b["metric"] == "cost_usd")
+        .find(|b| b["rule_id"] == live_budget_id.as_str())
         .expect("a cost budget forecast");
     let eta = budget["eta_days"].as_f64().expect("a future breach ETA");
     assert!(
         eta > 0.0 && eta <= 14.0,
         "budget eta out of range: {budget}"
+    );
+    // The expired twin is gone from the projection; the unexpired guardrail is still projected.
+    assert!(
+        budgets
+            .iter()
+            .all(|b| b["rule_id"] != expired_budget_id.as_str()),
+        "an expired cap is inert, not a forecast budget: {f}"
+    );
+    assert!(
+        budgets
+            .iter()
+            .any(|b| b["rule_id"] == guardrail_id.as_str()),
+        "a rule expiring in the future is still a budget: {f}"
     );
 
     // (c) acme is currently profitable but on track to turn unprofitable.
@@ -170,11 +201,23 @@ async fn forecast_projects_budget_breach_and_margin_erosion() {
         alerts.iter().any(|a| a["kind"] == "budget_breach"),
         "missing budget_breach alert: {f}"
     );
+    let margin_alert = alerts
+        .iter()
+        .find(|a| a["kind"] == "margin_erosion" && a["subject"] == "acme")
+        .unwrap_or_else(|| panic!("missing margin_erosion alert for acme: {f}"));
+    // The request path stamps the standing guardrail, exactly as the scheduled sweep does — the two
+    // surfaces cannot disagree about what is already being done.
+    assert_eq!(
+        margin_alert["policy_applied"].as_str(),
+        Some(guardrail_id.as_str()),
+        "the request path reports the guardrail in force: {margin_alert}"
+    );
+    // Nothing pages about a cap that stopped enforcing.
     assert!(
         alerts
             .iter()
-            .any(|a| a["kind"] == "margin_erosion" && a["subject"] == "acme"),
-        "missing margin_erosion alert for acme: {f}"
+            .all(|a| a["subject"] != expired_budget_id.as_str()),
+        "an expired cap raised a pre-emptive alert: {f}"
     );
     // The message carries the confidence it was allowed to publish.
     let budget_alert = alerts
@@ -332,6 +375,67 @@ async fn a_revenue_share_budget_is_refused_by_name_not_forecast_against_infinity
         r["reason"].as_str().unwrap().contains("revenue-share"),
         "{r}"
     );
+}
+
+#[tokio::test]
+async fn a_scoped_budget_is_refused_not_forecast_from_the_project_series() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let rule_id = new_id();
+    store
+        .create_limit_rule(&LimitRule {
+            id: rule_id.clone(),
+            project_id: "proj-a".into(),
+            metric: LimitMetric::CostUsd,
+            window: LimitWindow::Day,
+            threshold: Threshold::Fixed(15.0),
+            action: LimitAction::Alert,
+            enabled: true,
+            warn_at: None,
+            scope: Some(LimitScope::Model("gpt-4o".into())),
+            escalation: None,
+            escalated_until: None,
+            origin: None,
+            expires_at: None,
+        })
+        .unwrap();
+
+    let now = Utc::now();
+    for i in 0..10u32 {
+        let day = now - Duration::days((9 - i) as i64);
+        let mut e: lighttrack_core::LlmEvent = serde_json::from_value(json!({
+            "id": new_id(),
+            "project_id": "proj-a",
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5",
+            "usage": { "input": 10, "output": 5 },
+            "cost_usd": (i + 1) as f64,
+            "ts": day.to_rfc3339(),
+            "metadata": { "customer_id": "acme" }
+        }))
+        .unwrap();
+        e.received_at = day;
+        store.insert_event(&e).unwrap();
+    }
+
+    let app = crate::build_router(state);
+    let (status, f) = get(
+        &app,
+        &key,
+        "/v1/forecast?project=proj-a&lookback=10&horizon=14",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{f}");
+    assert!(
+        f["budgets"].as_array().unwrap().is_empty(),
+        "the model-scoped rule must not be forecast from project-wide spend: {f}"
+    );
+    let refused = f["refused"].as_array().unwrap();
+    let r = refused
+        .iter()
+        .find(|r| r["subject"] == rule_id.as_str())
+        .expect("the scoped rule names itself in refused[]");
+    assert!(r["reason"].as_str().unwrap().contains("scoped rule"), "{r}");
 }
 
 #[tokio::test]

@@ -4,7 +4,9 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::Value;
 
-use lighttrack_core::{Job, JobCancel, JobFinish, JOB_ERROR_WORKER_LOST};
+use lighttrack_core::{
+    Job, JobCancel, JobFinish, JOB_ERROR_CANCEL_ORPHANED, JOB_ERROR_WORKER_LOST,
+};
 
 use crate::codec::{fmt_ts, json_or_null, parse_ts, val_or_null};
 use crate::Result;
@@ -104,6 +106,14 @@ pub(super) fn claim(
     } else {
         Some(serde_json::to_string(kinds)?)
     };
+    // A `cancelling` job whose lease has gone stale lost its worker mid-cancel. It is not claimable
+    // (a cancelled run must never restart), so nothing else would ever end it: it would read as live
+    // forever. Settle it as `cancelled` here, in the same path that reclaims dead workers' jobs.
+    // Renewal keeps a live worker's lease fresh while it winds down, so stale means dead.
+    conn.execute(
+        "UPDATE jobs SET status='cancelled', updated_at=?1, error=?3          WHERE status='cancelling' AND claimed_at < ?2",
+        params![now, stale, JOB_ERROR_CANCEL_ORPHANED],
+    )?;
     // Atomic: pick the oldest queued (or stale-running) job and flip it to running. Still ONE
     // statement — the load-bearing property of this queue.
     //

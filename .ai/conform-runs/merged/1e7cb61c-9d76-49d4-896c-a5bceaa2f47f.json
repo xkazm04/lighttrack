@@ -1,0 +1,131 @@
+{
+ "schema": "conform-run/1",
+ "worker": "1e7cb61c-9d76-49d4-896c-a5bceaa2f47f",
+ "subject": "status-vocabulary",
+ "evaluatedAt": "2026-10-16T04:22:57.952924+00:00",
+ "provider": "agy",
+ "model": "gemini-3.8-flash-high",
+ "pairs": [
+  {
+   "context": "observability-rendering",
+   "subject": "status-vocabulary",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/render/src/alerts.rs:98 The alert severity mapping falls back to the calmest value ('\u00b7 info') for unknown severities instead of degrading toward the most severe member, masking unhandled alert severities behind an informational badge.",
+   "techniques": [
+    {
+     "technique": "status-color-mapping",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/alerts.rs:98 Unknown severities degrade to the calmest member ('\u00b7 info') rather than the most severe member ('critical'), which is asserted as expected behavior in test at alerts.rs:225."
+    },
+    {
+     "technique": "vocabulary-chain-integrity",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/md.rs:143 Status glyph presentation accepts a bare string slice rather than a closed wire union, bypassing compile-time exhaustiveness and silently degrading unhandled members to a neutral dot."
+    },
+    {
+     "technique": "timestamp-display",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/md.rs:214 short_ts performs naive byte-range string slicing of RFC3339 timestamps without timezone conversion, locale resolution, or relative/elapsed time formatting."
+    },
+    {
+     "technique": "untrusted-label-rendering",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/md.rs:40 Table::row enforces escaping at the primitive boundary by mapping each cell through cell() to escape pipe delimiters and collapse newlines."
+    },
+    {
+     "technique": "number-formatting",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/traces.rs:195 The latency unit and plus prefix are bound strictly inside the value-present branch so that absent measurements render the clean unornamented sentinel '\u2014'."
+    },
+    {
+     "technique": "vocabulary-evolution-checklist",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/lib.rs:133 While endpoint kinds are tested against the contract, display status vocabularies lack a compile-time checklist or gate ensuring new variants update wire types, catalogs, and presentation tables together."
+    }
+   ],
+   "registryProposal": "In developer-facing CLI and MCP surfaces that emit Markdown or plaintext tables without CSS design tokens, status glyphs (e.g., Unicode symbols like \u2705, \u274c, \u26a0\ufe0f, \u23f3, \u2022, \u00b7) serve the exact role of status color badges; the standard could explicitly formalize glyph mappings and fallback directions for text-only rendering layers."
+  },
+  {
+   "context": "evaluation-rendering",
+   "subject": "status-vocabulary",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/render/src/benchmarks.rs:25 The benchmark CI-gate verdict falls back to a neutral dot and echoes the raw token for unknown statuses rather than failing closed to the least-approved member.",
+   "techniques": [
+    {
+     "technique": "status-color-mapping",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:25 Benchmark gate verdicts are approval decisions, but unknown status tokens degrade to a neutral dot and leak the raw token string instead of degrading toward the least approved member."
+    },
+    {
+     "technique": "vocabulary-chain-integrity",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/jobs.rs:29 Job statuses are handled as raw strings and rendered by interpolating the unvalidated wire token directly beside an ungated glyph lookup."
+    },
+    {
+     "technique": "timestamp-display",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/schedules.rs:34 Schedule due times are formatted through short_ts with static trimming rather than relative duration formatting, timezone adjustment, or clock-skew clamping."
+    },
+    {
+     "technique": "untrusted-label-rendering",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/prompts.rs:57 Prompt content is enclosed in a dynamically sized backtick fence exceeding any backtick sequence in the text, preventing untrusted content from breaking out into markdown markup."
+    },
+    {
+     "technique": "number-formatting",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/benchmarks.rs:78 The latency unit is concatenated strictly within the value-present map closure, preventing the placeholder from being corrupted into an ornamented sentinel like '\u2014ms'."
+    },
+    {
+     "technique": "vocabulary-evolution-checklist",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:17 Coverage of gate status variants relies on manual assertions and code comments rather than a four-layer compile-time evolution checklist."
+    }
+   ],
+   "registryProposal": "In developer-facing CLI and MCP surfaces that emit Markdown or plaintext tables without CSS design tokens, status glyphs (e.g., Unicode symbols like \u2705, \u274c, \u26a0\ufe0f, \u23f3, \u2022, \u00b7) serve the exact role of status color badges; the standard could explicitly formalize glyph mappings and fallback directions for text-only rendering layers."
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-16T04:22:57.952924+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "status-vocabulary"
+   ],
+   "techniques": [
+    "number-formatting",
+    "status-color-mapping",
+    "timestamp-display",
+    "untrusted-label-rendering",
+    "vocabulary-chain-integrity",
+    "vocabulary-evolution-checklist"
+   ],
+   "deviations": 1,
+   "context": "observability-rendering",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-16T04:22:57.952924+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "status-vocabulary"
+   ],
+   "techniques": [
+    "number-formatting",
+    "status-color-mapping",
+    "timestamp-display",
+    "untrusted-label-rendering",
+    "vocabulary-chain-integrity",
+    "vocabulary-evolution-checklist"
+   ],
+   "deviations": 1,
+   "context": "evaluation-rendering",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  }
+ ]
+}

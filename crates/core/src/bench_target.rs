@@ -9,6 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::effort::{split_effort, Effort};
+
 /// Report key carrying the prompt version a run **actually generated with** — written by the runner
 /// after it resolved the registry, read by the promotion gate.
 ///
@@ -99,8 +101,32 @@ pub struct BenchTarget {
     /// `system_prompt`. This is what makes a promotion gate run the version it certifies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_ref: Option<PromptRef>,
+    /// Reasoning effort to run this target at — the axis that makes "is `gpt-5@high` worth 4×
+    /// `gpt-5@low` on MY cases?" a question a matrix can ask. Serde-defaulted, so a stored matrix
+    /// without it deserializes and re-serializes byte-identically.
+    ///
+    /// Redundant with an `@effort` suffix on [`model`](Self::model), which is the older spelling and
+    /// still works; when both are present this field wins, because it is the more specific
+    /// declaration. [`resolved_effort`](Self::resolved_effort) is the one place that rule lives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
     #[serde(default, skip_serializing_if = "TargetKind::is_model")]
     pub kind: TargetKind,
+    /// Per-case cost/latency ceilings this target must hold to, beside the rubric's quality bar. A
+    /// case that breaches one **fails**, however well it scored — see [`crate::case_limits`].
+    /// Compare mode only; serde-defaulted, so a stored matrix without it is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<crate::case_limits::CaseLimits>,
+    /// A JSON schema the target's answer must satisfy, sent through the engine's structured-output
+    /// path (`--json-schema` on the Claude CLI, `--output-schema` on Codex, `response_format` /
+    /// `responseSchema` / forced tool use on the HTTP providers). This is the shape an app's call
+    /// site sends through the gateway, so a benchmark without it measures a different transport
+    /// than the one shipped: a schema pasted into the system prompt is a request, this is an
+    /// enforcement, and a model that answers the first with fenced prose (haiku did, 21/21) can
+    /// answer the second cleanly. Serde-defaulted; ignored by an `http` target, whose endpoint
+    /// owns its own shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<serde_json::Value>,
 }
 
 impl BenchTarget {
@@ -125,11 +151,44 @@ impl BenchTarget {
         }
     }
 
-    /// Display label, falling back to `provider/model`.
+    /// The effort this target actually runs at: the declared [`effort`](Self::effort) if set, else
+    /// an `@effort` suffix carried on the model spec. `None` means "the provider's default", which
+    /// is a *different* thing from any named level and is never inferred as one.
+    pub fn resolved_effort(&self) -> Option<Effort> {
+        self.effort.or_else(|| split_effort(&self.model).1)
+    }
+
+    /// The model id with no effort attached — what a provider's `model` field wants.
+    pub fn bare_model(&self) -> &str {
+        split_effort(&self.model).0
+    }
+
+    /// The spec to hand the generation engine: `model@effort` when an effort applies, else the bare
+    /// model. The engine splits this again at the provider boundary, so this is the one string that
+    /// carries both halves through an API whose shape predates the effort axis — the same spelling
+    /// the use-case registry already writes (`expected_models: ["opus@xhigh"]`).
+    pub fn model_spec(&self) -> String {
+        match self.resolved_effort() {
+            Some(e) => format!("{}@{}", self.bare_model(), e.as_str()),
+            None => self.bare_model().to_string(),
+        }
+    }
+
+    /// Display label, falling back to `provider/model` — or `provider/model@effort` when the target
+    /// declares an effort, because two rows of one model at two efforts are the whole point of the
+    /// axis and a leaderboard that printed them identically would be unreadable. A matrix with no
+    /// effort keeps the exact string it had.
     pub fn display_label(&self) -> String {
-        self.label
-            .clone()
-            .unwrap_or_else(|| format!("{}/{}", self.provider, self.model))
+        self.label.clone().unwrap_or_else(|| {
+            format!(
+                "{}/{}",
+                self.provider,
+                match self.resolved_effort() {
+                    Some(e) => format!("{}@{}", self.bare_model(), e.as_str()),
+                    None => self.model.clone(),
+                }
+            )
+        })
     }
 }
 
@@ -164,6 +223,64 @@ mod tests {
         // …and round-trips without inventing the new keys, so a stored matrix is unchanged.
         let back = serde_json::to_value(&t).unwrap();
         assert_eq!(back, json!({ "provider": "openai", "model": "gpt-4o" }));
+    }
+
+    /// **The axis's reason to exist.** The same model twice at two efforts must be two
+    /// distinguishable rows — otherwise "is xhigh worth 4× low on my cases?" has no answer, because
+    /// the scorecard prints one label twice.
+    #[test]
+    fn two_efforts_of_one_model_are_distinguishable() {
+        let low: BenchTarget = serde_json::from_value(
+            json!({ "provider": "openai", "model": "gpt-5", "effort": "low" }),
+        )
+        .unwrap();
+        let high: BenchTarget = serde_json::from_value(
+            json!({ "provider": "openai", "model": "gpt-5", "effort": "xhigh" }),
+        )
+        .unwrap();
+        assert_eq!(low.display_label(), "openai/gpt-5@low");
+        assert_eq!(high.display_label(), "openai/gpt-5@xhigh");
+        assert_ne!(low.display_label(), high.display_label());
+        assert_eq!(low.model_spec(), "gpt-5@low");
+        assert_eq!(high.model_spec(), "gpt-5@xhigh");
+        assert_eq!(low.bare_model(), "gpt-5");
+    }
+
+    /// The older spelling — the level suffixed onto the model, which is what the use-case registry
+    /// writes — resolves the same way, and an explicit `effort` field beats it because it is the
+    /// more specific declaration. Neither may ever produce `model@a@b`.
+    #[test]
+    fn the_declared_effort_wins_over_a_suffix_and_never_doubles_it() {
+        let suffixed: BenchTarget =
+            serde_json::from_value(json!({ "provider": "anthropic", "model": "opus@xhigh" }))
+                .unwrap();
+        assert_eq!(suffixed.resolved_effort(), Some(Effort::XHigh));
+        assert_eq!(suffixed.model_spec(), "opus@xhigh");
+        assert_eq!(suffixed.display_label(), "anthropic/opus@xhigh");
+
+        let mut both = suffixed.clone();
+        both.effort = Some(Effort::Low);
+        assert_eq!(both.resolved_effort(), Some(Effort::Low));
+        assert_eq!(both.model_spec(), "opus@low", "no double suffix");
+    }
+
+    /// **The stored-matrix guarantee.** A benchmark saved before this axis existed must come back
+    /// out of serde byte-identical — no invented `effort` key, and the label it always printed.
+    #[test]
+    fn a_matrix_without_an_effort_key_round_trips_unchanged() {
+        let stored = json!({
+            "provider": "openai", "model": "gpt-4o", "system_prompt": "be terse",
+            "label": "baseline"
+        });
+        let t: BenchTarget = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(t.resolved_effort(), None, "absence is not a level");
+        assert_eq!(serde_json::to_value(&t).unwrap(), stored);
+        assert_eq!(t.display_label(), "baseline");
+        // …and with no explicit label, the pre-effort default string is untouched.
+        let mut unlabelled = t.clone();
+        unlabelled.label = None;
+        assert_eq!(unlabelled.display_label(), "openai/gpt-4o");
+        assert_eq!(unlabelled.model_spec(), "gpt-4o");
     }
 
     #[test]

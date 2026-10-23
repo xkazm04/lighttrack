@@ -224,3 +224,71 @@ async fn the_version_walk_is_scoped_and_empty_for_an_unknown_name() {
         "the name is what is being walked; without it there is nothing to answer"
     );
 }
+
+/// M27 over the wire: a tier is settable on create, survives the read back, and narrows a listing.
+///
+/// The ungraded case is the load-bearing half. `difficulty` is `Option`, and every way this feature
+/// can quietly go wrong ends with an ungraded case appearing under `medium`.
+#[tokio::test]
+async fn a_case_is_graded_on_create_and_a_listing_narrows_to_one_tier() {
+    let app = app();
+    let ds = ok(
+        &app,
+        "POST",
+        "/v1/projects/p1/datasets",
+        json!({ "name": "tiers" }),
+    )
+    .await;
+    let id = ds["id"].as_str().expect("id").to_string();
+
+    for (input, difficulty) in [
+        ("1+1", json!("easy")),
+        ("2+2", json!("hard")),
+        ("integrate it", json!("hard")),
+        ("unexamined", Value::Null),
+    ] {
+        let mut body = json!({ "input": input });
+        if !difficulty.is_null() {
+            body["difficulty"] = difficulty.clone();
+        }
+        let item = ok(&app, "POST", &format!("/v1/datasets/{id}/items"), body).await;
+        assert_eq!(item["difficulty"], difficulty, "echoed back on create");
+    }
+
+    let all = ok(&app, "GET", &format!("/v1/datasets/{id}/items"), json!({})).await;
+    assert_eq!(all.as_array().expect("array").len(), 4);
+
+    let hard = ok(
+        &app,
+        "GET",
+        &format!("/v1/datasets/{id}/items?difficulty=hard"),
+        json!({}),
+    )
+    .await;
+    let hard = hard.as_array().expect("array");
+    assert_eq!(hard.len(), 2, "only the two hard cases: {hard:?}");
+    assert!(hard.iter().all(|i| i["difficulty"] == "hard"));
+
+    // The ungraded case belongs to no tier. If it ever shows up here, absence has been imputed.
+    let medium = ok(
+        &app,
+        "GET",
+        &format!("/v1/datasets/{id}/items?difficulty=medium"),
+        json!({}),
+    )
+    .await;
+    assert!(
+        medium.as_array().expect("array").is_empty(),
+        "an ungraded case must not be filed under the middle tier: {medium}"
+    );
+
+    // And an unreadable tier is refused rather than answered with the whole corpus.
+    let (status, body) = send(
+        &app,
+        "GET",
+        &format!("/v1/datasets/{id}/items?difficulty=hardd"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}

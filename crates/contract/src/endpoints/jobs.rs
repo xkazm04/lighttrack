@@ -41,7 +41,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         params: &[
             ber(
                 "type",
-                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate"],
+                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate", "contribute"],
                 "the job kind",
             ),
             b("payload", JsonTy::Object, "kind-specific fields, validated against `type` at the door"),
@@ -49,7 +49,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("Job"),
         mcp: Some(McpTool {
             name: "enqueue_job",
-            description: "Queue one unit of background work of any kind (bench_run | score_events | score_traces | dataset_sample | calibrate). Non-blocking; a worker executes it — poll with get_job. The payload is validated against the kind, so a malformed one is refused here rather than dead-lettering three attempts later.",
+            description: "Queue one unit of background work of any kind (bench_run | score_events | score_traces | dataset_sample | calibrate | contribute). Non-blocking; a worker executes it — poll with get_job. The payload is validated against the kind, so a malformed one is refused here rather than dead-lettering three attempts later.",
             read_only: false,
             args: &["type", "payload"],
             ..McpTool::DEFAULT
@@ -84,7 +84,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "get_job",
         method: Method::Get,
-        path: "/v1/jobs/:id",
+        path: "/v1/jobs/{id}",
         access: Admin,
         params: &[pm("id", "job", "job id")],
         response: TypeRef::Named("Job"),
@@ -102,7 +102,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "cancel_job",
         method: Method::Post,
-        path: "/v1/jobs/:id/cancel",
+        path: "/v1/jobs/{id}/cancel",
         access: Admin,
         mutating: true,
         params: &[p("id", "job id")],
@@ -113,12 +113,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["jobs", "cancel"]),
         doc: "Ask a queued or running job to stop; cancelling a finished job is a 409.",
+        surface: "job_leases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "job_progress",
         method: Method::Post,
-        path: "/v1/jobs/:id/progress",
+        path: "/v1/jobs/{id}/progress",
         access: Admin,
         mutating: true,
         machine: true,
@@ -133,7 +134,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "job_renew",
         method: Method::Post,
-        path: "/v1/jobs/:id/renew",
+        path: "/v1/jobs/{id}/renew",
         access: Admin,
         mutating: true,
         machine: true,
@@ -146,12 +147,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
              worker's (reaped, requeued or reclaimed) and the run must stop.",
         ),
         doc: "Heartbeat: extend this worker's lease, or learn by 409 that it lost the job.",
+        surface: "job_leases",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "job_finish",
         method: Method::Post,
-        path: "/v1/jobs/:id/finish",
+        path: "/v1/jobs/{id}/finish",
         access: Admin,
         mutating: true,
         machine: true,
@@ -172,14 +174,14 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_schedule",
         method: Method::Post,
-        path: "/v1/projects/:id/schedules",
+        path: "/v1/projects/{id}/schedules",
         access: Admin,
         mutating: true,
         params: &[
             pm("id", "project", "the project this workload recurs for"),
             ber(
                 "type",
-                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate"],
+                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate", "contribute"],
                 "the job kind enqueued each time it fires",
             ),
             b("payload", JsonTy::Object, "the job payload enqueued each time it fires"),
@@ -197,18 +199,20 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["schedules", "create"]),
         doc: "Store a recurring workload; its payload is validated against its kind at creation.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "list_project_schedules",
         method: Method::Get,
-        path: "/v1/projects/:id/schedules",
+        path: "/v1/projects/{id}/schedules",
         access: Key(Read),
         params: &[pm("id", "project", "the project whose schedules to list")],
         response: TypeRef::ArrayOf("Schedule"),
         cli: Some(&["schedules", "list"]),
         render_kind: Some("list_schedules"),
         doc: "One project's schedules; a project key reads its own, a mismatch is a 403.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -230,12 +234,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["schedules", "list"]),
         render_kind: Some("list_schedules"),
         doc: "Every recurring workload in this deployment, across projects.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "update_schedule",
         method: Method::Put,
-        path: "/v1/schedules/:id",
+        path: "/v1/schedules/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -243,7 +248,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             p("id", "schedule id"),
             be(
                 "type",
-                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate"],
+                &["bench_run", "score_events", "score_traces", "dataset_sample", "calibrate", "contribute"],
                 "change the job kind it enqueues",
             ),
             b("payload", JsonTy::Object, "replace the payload"),
@@ -253,12 +258,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("Schedule"),
         cli: Some(&["schedules", "set"]),
         doc: "Patch a schedule; an omitted field is left alone, so pausing cannot rewrite a payload.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "delete_schedule",
         method: Method::Delete,
-        path: "/v1/schedules/:id",
+        path: "/v1/schedules/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -266,18 +272,24 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Untyped("{ deleted: id } — the jobs it already produced are kept."),
         cli: Some(&["schedules", "delete"]),
         doc: "Remove a schedule; the history of what it enqueued survives it.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "schedule_runs",
         method: Method::Get,
-        path: "/v1/schedules/:id/runs",
+        path: "/v1/schedules/{id}/runs",
         access: Admin,
         params: &[p("id", "schedule id")],
         response: TypeRef::ArrayOf("Job"),
         cli: Some(&["schedules", "runs"]),
         render_kind: Some("list_jobs"),
         doc: "The jobs one schedule has produced, matched by the `schedule_id` its sweep stamps.",
+        surface: "schedules",
         ..Endpoint::DEFAULT
     },
 ];
+
+#[cfg(test)]
+#[path = "jobs_tests.rs"]
+mod tests;

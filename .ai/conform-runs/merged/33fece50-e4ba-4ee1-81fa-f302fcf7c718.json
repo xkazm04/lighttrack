@@ -1,0 +1,17 @@
+{
+ "schema": "conform-run/1",
+ "worker": "33fece50-e4ba-4ee1-81fa-f302fcf7c718",
+ "subject": "agent-browser-control",
+ "evaluatedAt": "2026-10-17T22:11:48.957413+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "agent-browser-control",
+   "context": "device-relay-agent",
+   "reason": "pair anchor refused: crates/agent/Cargo.toml:6 does not contain the quoted text"
+  }
+ ],
+ "consults": []
+}

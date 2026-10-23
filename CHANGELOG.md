@@ -30,6 +30,29 @@ entry is written while the change is still fresh, not reconstructed at tag time.
 
 ### Added
 
+- Rubric dimension kind **`grounding`** (`docs/BENCHMARK_FRAMEWORK.md` §3e): claims cut from the
+  output, each verified against the case's evidence passages, scored supported over claims issued;
+  zero claims leaves the dimension unscored. Engine entry point `run_rubric_judge_with_evidence`;
+  any path without evidence refuses it by name. `ScoreDetail.dimensions[]` gains `voided` and
+  `grounding` (per-claim verdicts, `missing_verdicts`, `stray_verdicts`, instrument `version`).
+- **`lt-gateway`** (`crates/gateway`, `docs/GATEWAY.md`): an OpenAI-compatible
+  `POST /v1/chat/completions` on loopback for local apps, routing a use case (from `gateway.toml`)
+  or a literal `provider/model[@effort]` through the engine's provider dispatch — `claude -p` and
+  `codex exec` on subscription seats, or the HTTP providers. Fails over to the next seat on a usage
+  limit and holds the exhausted seat out for `cooldown_secs`; records every attempt as an event on
+  one `trace_id` (failed primary = `error` + `provider_failed`, the answer = `fell_back`); refuses
+  with 429 before any spend when `/v1/limits/status` says the project is enforcing. Responses carry
+  `lighttrack.attempts`, `x-lighttrack-served-by` and `x-lighttrack-fell-back`. Message arrays
+  reach OpenAI-shaped providers natively and the CLIs as one rendered prompt
+  (`lighttrack.transcript`); `tools` pass through `openai`/`openrouter` verbatim (answer:
+  `tool_calls`) and are refused up front, naming the target, on any route with a target that
+  cannot run them; `stream: true` delivers the finished answer as SSE chunks.
+- `lighttrack-engine`: `ChatRequest` / `ChatOutcome` / `generate_chat` — a conversation (+ tools) as
+  the generation input. `generate` / `generate_deterministic` keep their signatures and are
+  single-turn wrappers over it; every adapter's request body now reads a `ChatRequest`.
+- `/gateway-onboard` skill: benchmark both seats on a difficulty-graded corpus for one use case and
+  write the route (and its fallback, when measured fit) from the scorecard.
+
 - **Judge eval corpus.** `crates/engine/evals/judge/corpus.json` records whole verdicts — overall,
   pass, per-dimension scores and floor hits, agreement, parse accounting — for known cases, replayed
   through the real prompt/scorer/aggregate path with the provider call canned. It runs inside
@@ -63,6 +86,24 @@ entry is written while the change is still fresh, not reconstructed at tag time.
 - **`.ai/manifest.yaml` declares `guidance.canonical`.** The root `CLAUDE.md` is the authoritative
   agent guidance; `.claude/CLAUDE.md` is a projection of it and is currently listed under
   `guidance.staleProjections` because it still carries generator scaffold that contradicts it.
+
+### Fixed
+
+- **A model-scoped usage cap now counts the traffic it would reject.** `LimitScope::matches` decides
+  a `{"model": "gpt-4o"}` rule *applies* by canonical family (so it catches `gpt-4o-2024-08-06` and
+  `openai/gpt-4o`), but `usage_since_scoped` computed the number that rule is *evaluated against*
+  with raw string equality — in all three store backends — and `GET /v1/limits/usage?by=model`
+  attached rules to rows the same way. On a provider that ships dated snapshots, such a cap reported
+  `current ≈ 0` on `GET /v1/limits/status` forever: `warn_at` never fired, `breached` was never true,
+  and the rule still read as configured and enforcing. Membership is now decided once
+  (`lighttrack_store::scope_usage`, folding the grouped rollup through `LimitScope::matches`), so the
+  gate, `/v1/limits/status`, `/v1/limits/usage` and the alert attribution report the same scope.
+  **Operator note:** a deployment that has been living under a silently inert model cap starts being
+  enforced on upgrade — `current`, `ratio` and `breached` on those rules will jump from ~0 to the
+  real in-family spend. Exact-value dimensions (provider / name / api_key / customer) are unchanged
+  and keep exact semantics; unscoped rules are unchanged. A backend that cannot serve the grouped
+  rollup answers 501 `unsupported` rather than a short count.
+- **A billing webhook duplicate that arrives while its first attempt is still persisting is refused with 409**, not acknowledged: a batch that then rolls back was reported done to the provider, which never resends. Only a committed delivery id short-circuits.
 
 <!--
 Template for the next release — copy, do not delete:

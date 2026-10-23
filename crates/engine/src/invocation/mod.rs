@@ -46,6 +46,7 @@ pub fn validate(inv: &Invocation<'_>) -> crate::Result<()> {
 }
 
 pub(crate) use envelope::{completion_text, model_of, token_counts};
+pub(crate) use run::spawn_bounded;
 
 /// Wall-clock ceiling for a single `claude -p` subprocess when the caller names none.
 ///

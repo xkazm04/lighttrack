@@ -13,8 +13,11 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         path: "/v1/capabilities",
         access: Key(Read),
         response: TypeRef::Untyped(
-            "{ backend, surfaces: {name: bool}, refuses: [name], atomic_limits: bool } — what this \
-             deployment's store backend implements and what it answers 501 `unsupported` for.",
+            "{ backend, surfaces: [name], unsupported: [name], unsupported_routes: \
+             [\"METHOD /path\"], degraded_routes: [{route, surfaces}], atomic_admission, \
+             schema_fingerprint, deprecations } — what this deployment's store backend implements, \
+             and the ROUTE-level consequence of what it does not: `unsupported_routes` answer 501 \
+             `unsupported`, `degraded_routes` still answer with less in them.",
         ),
         mcp: Some(McpTool {
             name: "get_capabilities",
@@ -56,12 +59,16 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             q("model", "exact model match"),
             q("trace_id", "only events in this trace"),
             q("name", "use-case name filter (a call's `name`)"),
-            qe("status", &["success", "error"], "keep only events of this status"),
+            qe("status", &["success", "error", "timeout"], "keep only events of this status"),
             q("tag", "only events carrying this tag"),
             q("meta", "a metadata predicate: `key` or `key=value`"),
             qt("min_cost", JsonTy::Number, "minimum event cost (USD)"),
+            q("redaction_rules", "only events the scrub stamped with this rule-set fingerprint"),
+            qt("min_redacted_spans", JsonTy::Integer, "minimum spans the scrub replaced; 1 is everything it rewrote"),
             qt("count", JsonTy::Integer, "1 also returns X-Total-Count over the whole match set"),
             q("cursor", "keyset cursor from a prior call's next_cursor"),
+            q("unscored", "1, true, or yes: only events with no score yet. Ignores the other filters and returns no cursor"),
+            q("prompt", "with unscored, keep only events of this metadata.prompt tag"),
         ],
         response: TypeRef::ArrayOf("LlmEvent"),
         mcp: Some(McpTool {
@@ -76,6 +83,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["events"]),
         render_kind: Some("query_events"),
         doc: "Recent events, newest first; keyset pagination through `X-Next-Cursor`.",
+        degrades: &["event_filters"],
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -118,12 +126,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["storage", "status"]),
         doc: "Disk accounting per table and index, per-family latency, and the maintenance ledger.",
+        degrades: &["maintenance", "metrics"],
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "get_event",
         method: Method::Get,
-        path: "/v1/events/:id",
+        path: "/v1/events/{id}",
         access: Key(Read),
         params: &[pm("id", "event", "event id")],
         response: TypeRef::Named("LlmEvent"),
@@ -179,12 +188,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["traces"]),
         render_kind: Some("list_traces"),
         doc: "Traces (events grouped by trace_id), newest first.",
+        surface: "traces",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "get_trace",
         method: Method::Get,
-        path: "/v1/traces/:id",
+        path: "/v1/traces/{id}",
         access: Key(Read),
         params: &[pm("id", "trace", "trace id")],
         response: TypeRef::Untyped(
@@ -200,12 +210,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["trace"]),
         render_kind: Some("get_trace"),
         doc: "One trace: totals, span tree, and scores within it.",
+        surface: "traces",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "score_trace",
         method: Method::Post,
-        path: "/v1/traces/:id/score",
+        path: "/v1/traces/{id}/score",
         access: Key(Ingest),
         mutating: true,
         params: &[
@@ -237,6 +248,49 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
             ..McpTool::DEFAULT
         }),
         doc: "Score a whole trace, anchored to its root span.",
+        surface: "traces",
         ..Endpoint::DEFAULT
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `/v1/events` accepts `timeout` because that is a `Status`. `/v1/traces` does not: its door
+    /// 400s on anything but success or error, and the trace enum must stay that narrower set.
+    #[test]
+    fn list_events_names_timeout_and_list_traces_does_not() {
+        let events = ENDPOINTS.iter().find(|e| e.id == "list_events").unwrap();
+        assert_eq!(
+            events.param("status").expect("status").enum_values,
+            &["success", "error", "timeout"]
+        );
+        let traces = ENDPOINTS.iter().find(|e| e.id == "list_traces").unwrap();
+        assert_eq!(
+            traces.param("status").expect("status").enum_values,
+            &["success", "error"]
+        );
+    }
+
+    /// The events door filters on redaction and on the unscored work list. A filter absent from
+    /// the row is a filter no generated client can send.
+    #[test]
+    fn list_events_names_the_redaction_and_unscored_filters() {
+        use crate::types::JsonTy;
+        let row = ENDPOINTS.iter().find(|e| e.id == "list_events").unwrap();
+        let param = |n: &str| row.param(n).unwrap_or_else(|| panic!("missing {n}"));
+        assert_eq!(param("redaction_rules").ty, JsonTy::String);
+        assert_eq!(param("min_redacted_spans").ty, JsonTy::Integer);
+        assert_eq!(param("unscored").ty, JsonTy::String);
+        assert_eq!(param("prompt").ty, JsonTy::String);
+        for name in [
+            "redaction_rules",
+            "min_redacted_spans",
+            "unscored",
+            "prompt",
+        ] {
+            assert!(!param(name).required, "{name} stays optional");
+        }
+    }
+}

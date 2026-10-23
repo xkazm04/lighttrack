@@ -2,7 +2,7 @@
 
 use serde_json::{json, Value};
 
-use lighttrack_core::{Dataset, DatasetItem};
+use lighttrack_core::{Dataset, DatasetItem, Difficulty};
 use lighttrack_store::Result;
 
 use crate::codec::*;
@@ -67,6 +67,12 @@ pub(crate) fn create_dataset_item(rest: &Rest, item: &DatasetItem) -> Result<()>
     m.insert("tags".into(), json!(serde_json::to_string(&item.tags)?));
     m.insert("source_event_id".into(), json!(item.source_event_id));
     m.insert("input_hash".into(), json!(item.input_hash));
+    // M27 rides along like the M24 columns above: the wire spelling, or a null for ungraded.
+    // Dropping it on write would be data loss, not a capability gap.
+    m.insert(
+        "difficulty".into(),
+        json!(item.difficulty.map(|d| d.as_str())),
+    );
     m.insert(
         "anonymization".into(),
         json!(json_or_null_str(&item.anonymization)?),
@@ -117,5 +123,8 @@ fn item_from(m: &Fields) -> Result<DatasetItem> {
         source_event_id: fstr(m, "source_event_id"),
         anonymization: fjson(m, "anonymization")?,
         input_hash: fstr(m, "input_hash"),
+        // A spelling this build does not know is read as ungraded, not as a guess: the same
+        // degrade `core::dataset::de_difficulty` applies on the wire.
+        difficulty: fstr(m, "difficulty").as_deref().and_then(Difficulty::parse),
     })
 }

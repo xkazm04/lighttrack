@@ -20,7 +20,7 @@ const CONNECTOR_TIMEOUT: Duration = Duration::from_secs(60);
 /// Upper bound on stderr we retain for the error message — a chatty script must not grow our RSS.
 const MAX_STDERR: u64 = 8192;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub(crate) enum ConnectorSpec {
     /// POST the result envelope as JSON. Header values may reference `${ENV_VAR}`s.

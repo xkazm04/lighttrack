@@ -352,7 +352,11 @@ async fn saturated_ingest_sheds_with_503_and_retry_after_never_a_budget_429() {
             .len(),
         1
     );
-    let (s, st) = get_json(&app, &key, "/v1/ingest/status").await;
+    // The admin key, not the project key: `/v1/ingest/status` reports GLOBAL depth, and the
+    // contract has always declared it `access: Admin`. Nothing enforced that until the access layer
+    // resolved every request against the table, so a project key used to read another tenant's
+    // in-flight and shed counters off this door. The operator read it was always meant to be.
+    let (s, st) = get_json(&app, "admin-secret", "/v1/ingest/status").await;
     assert_eq!(s, StatusCode::OK, "{st}");
     assert_eq!(st["max_in_flight"], 1, "{st}");
     assert_eq!(
@@ -440,7 +444,7 @@ fn ingest_past_its_deadline_is_cut_with_504_not_left_hanging() {
             .is_empty());
 
         // A timeout is a distinct condition from shedding, and counted as one.
-        let (_, st) = get_json(&app, &key, "/v1/ingest/status").await;
+        let (_, st) = get_json(&app, "admin-secret", "/v1/ingest/status").await;
         assert_eq!(st["timeout_total"], 1, "{st}");
         assert_eq!(st["shed_total"], 0, "a deadline is not a shed: {st}");
         assert!(guard.describe().contains("max_inflight=8"));

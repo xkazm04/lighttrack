@@ -3,9 +3,15 @@
 //! Every entry [`super::ingest`] receives passes through [`sanitize_entry`], which is the whole of
 //! the hub's trust policy in one place: identity normalization, closed vocabularies, `[0,1]` clamps,
 //! and the plausibility rules that reject a count rather than clamping it.
+//!
+//! The closed vocabularies themselves are **not** here. Every categorical field a contributor can put
+//! on the wire is clamped by `lighttrack_core::collective::vocab`, which is the single place that list
+//! lives and the single place a build notices a new wire enum arriving without a clamp. This module
+//! decides *which* fields to run it over and what to disclose; it does not own the vocabularies.
 
 use chrono::Utc;
 
+use lighttrack_core::collective::vocab;
 use lighttrack_core::{CollectiveEntry, ModelAliases};
 
 /// Why a contributed entry was refused. Kept apart in the ack so a contributor can tell "you sent
@@ -16,6 +22,18 @@ pub(super) enum Reject {
     Malformed,
     /// Structurally fine but not a believable benchmark result — see [`implausible`].
     Implausible,
+}
+
+/// One accepted entry, plus what the hub had to *change* about it. The clamp count is separated from
+/// the entry so the ingest ack can disclose it: a vocabulary the hub quietly narrowed is a leaderboard
+/// the contributor cannot reconcile with its own numbers.
+#[derive(Debug)]
+pub(super) struct Sanitized {
+    pub(super) entry: CollectiveEntry,
+    /// The contributed `task_type` was outside [`TASK_TYPES`](lighttrack_core::collective::TASK_TYPES)
+    /// and was clamped to `general`. A member spelled in another case is *folded*, not clamped, so it
+    /// does not count here.
+    pub(super) task_type_clamped: bool,
 }
 
 /// The largest per-bucket case count a hub will believe from one contributor. A single
@@ -52,18 +70,25 @@ pub(super) fn sanitize_entry(
     e: lighttrack_core::ModelDigestEntry,
     now: chrono::DateTime<Utc>,
     aliases: &ModelAliases,
-) -> Result<CollectiveEntry, Reject> {
+) -> Result<Sanitized, Reject> {
     let provider = e.provider.trim();
     let model = e.model.trim();
-    let task_type = e.task_type.trim().to_string();
-    if provider.is_empty() || model.is_empty() || task_type.is_empty() || e.n_cases == 0 {
+    let raw_task_type = e.task_type.trim();
+    if provider.is_empty() || model.is_empty() || raw_task_type.is_empty() || e.n_cases == 0 {
         return Err(Reject::Malformed);
     }
     if implausible(&e) {
         return Err(Reject::Implausible);
     }
+    // The clamp `task_type` did not used to get. A contributed label outside the published vocabulary
+    // becomes `general` rather than a new member: a raw benchmark name is a confession of product line
+    // and internal roadmap, it is a reader-visible `?task_type=` key, and splitting one bucket across
+    // invented labels is how a contributor would otherwise slip a sub-floor bucket onto the board.
+    // (Collisions this creates are folded in [`super::fold`] before the single store write.)
+    let task_type_clamped = vocab::task_type_is_clamped(raw_task_type);
+    let task_type = vocab::canon_task_type(raw_task_type);
     let (provider, model) = aliases.normalize(provider, model);
-    Ok(CollectiveEntry {
+    let entry = CollectiveEntry {
         contributor_id: contributor.to_string(),
         provider,
         model,
@@ -85,7 +110,7 @@ pub(super) fn sanitize_entry(
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(canon_judge),
+            .map(vocab::canon_judge_provider),
         rubric_fingerprint: e
             .rubric_fingerprint
             .map(|r| r.trim().chars().take(32).collect::<String>())
@@ -93,24 +118,15 @@ pub(super) fn sanitize_entry(
         // v3 rigor: closed vocabularies, clamped hub-side. An unrecognized determinism label becomes
         // "not recorded" rather than a fourth level — a poster must not be able to widen the rigor
         // vocabulary, which is exactly what would turn it into a fingerprinting channel.
-        determinism: e
-            .determinism
-            .as_deref()
-            .and_then(lighttrack_core::canon_determinism),
+        determinism: e.determinism.as_deref().and_then(vocab::canon_determinism),
         frozen_dataset: e.frozen_dataset,
         significance_tested: e.significance_tested,
         received_at: now,
+    };
+    Ok(Sanitized {
+        entry,
+        task_type_clamped,
     })
-}
-
-/// Clamp a contributed judge tag to the known vocabulary, so a poster can't inject arbitrary judge
-/// labels. The vocabulary is `ProviderFamily` plus `mixed` — the one value a *merge* produces and no
-/// single judge ever is (see `merge::collapse`), which is why it cannot come from `judge_family`.
-fn canon_judge(j: &str) -> String {
-    if j.trim().eq_ignore_ascii_case("mixed") {
-        return "mixed".to_string();
-    }
-    lighttrack_core::judge_family(j).as_str().to_string()
 }
 
 #[cfg(test)]
@@ -140,7 +156,7 @@ mod tests {
             frozen_dataset: lighttrack_core::Coverage::All,
             significance_tested: lighttrack_core::Coverage::Mixed,
         };
-        let s = sanitize_entry("c-abc", good, now, &a).unwrap();
+        let s = sanitize_entry("c-abc", good, now, &a).unwrap().entry;
         assert_eq!(s.quality, 1.0);
         assert_eq!(s.pass_rate, 0.0);
         assert_eq!(s.avg_cost_usd, 0.0);
@@ -229,6 +245,46 @@ mod tests {
     }
 
     #[test]
+    fn an_off_vocabulary_task_type_is_clamped_and_the_clamp_is_reported() {
+        let now = Utc::now();
+        let a = ModelAliases::default();
+        let e = |task_type: &str| lighttrack_core::ModelDigestEntry {
+            provider: "anthropic".into(),
+            model: "haiku".into(),
+            task_type: task_type.into(),
+            quality: 0.8,
+            pass_rate: 0.8,
+            avg_cost_usd: 0.01,
+            p50_latency_ms: None,
+            p95_latency_ms: None,
+            n_runs: 1,
+            n_cases: 10,
+            quality_variance: None,
+            judge_provider: None,
+            rubric_fingerprint: None,
+            determinism: None,
+            frozen_dataset: Default::default(),
+            significance_tested: Default::default(),
+        };
+        let s = sanitize_entry("c", e("claims-triage-v3"), now, &a).unwrap();
+        assert_eq!(s.entry.task_type, "general");
+        assert!(s.task_type_clamped, "the clamp is reported, not silent");
+        // A member in the wrong case is folded in, not clamped and not rejected.
+        let s = sanitize_entry("c", e(" QA "), now, &a).unwrap();
+        assert_eq!(s.entry.task_type, "qa");
+        assert!(!s.task_type_clamped);
+        // A member passes through untouched.
+        let s = sanitize_entry("c", e("summarization"), now, &a).unwrap();
+        assert_eq!(s.entry.task_type, "summarization");
+        assert!(!s.task_type_clamped);
+        // An empty label is still identity-less: the clamp does not rescue it into `general`.
+        assert_eq!(
+            sanitize_entry("c", e("   "), now, &a).unwrap_err(),
+            Reject::Malformed
+        );
+    }
+
+    #[test]
     fn ingest_normalizes_model_identity() {
         let now = Utc::now();
         let a = ModelAliases::from_json_str(
@@ -254,12 +310,16 @@ mod tests {
             significance_tested: Default::default(),
         };
         // provider/ prefix stripped + dated variant collapsed + provider synonym mapped.
-        let s = sanitize_entry("c", e("openai", "openai/gpt-4o-2024-08-06"), now, &a).unwrap();
+        let s = sanitize_entry("c", e("openai", "openai/gpt-4o-2024-08-06"), now, &a)
+            .unwrap()
+            .entry;
         assert_eq!(
             (s.provider.as_str(), s.model.as_str()),
             ("openai", "gpt-4o")
         );
-        let s = sanitize_entry("c", e("azure-openai", "gpt-4o"), now, &a).unwrap();
+        let s = sanitize_entry("c", e("azure-openai", "gpt-4o"), now, &a)
+            .unwrap()
+            .entry;
         assert_eq!(s.provider, "openai");
     }
 }

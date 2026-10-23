@@ -229,6 +229,38 @@ pub(crate) struct RotateKeyResp {
     predecessor: KeyInfo,
 }
 
+/// What a rotation does to the predecessor. Two mechanisms, and they are not interchangeable: a
+/// stamped deadline is re-evaluated against the clock on every later request, a revocation is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Retirement {
+    /// Irreversible: the row is disowned and no later clock reading can undo it.
+    Revoke,
+    /// A stamped absolute deadline. `guards::resolve_principal` compares it against `Utc::now()`
+    /// per request, so its meaning is only as true as the clock at both ends.
+    ExpireAt(DateTime<Utc>),
+}
+
+/// The predecessor's new deadline never *extends* an expiry it already had: rotating a key must
+/// only ever shorten its life.
+///
+/// A window that is already closed is not a bound, and an instant is the wrong instrument for
+/// one. `expires_at = now` is re-read against `Utc::now()` on every later request, so a clock
+/// that steps backwards — an NTP correction, a host migration, a box that boots without a
+/// real-time clock — brings the predecessor back to life; a revocation cannot be undone by any
+/// later reading of any clock. So a zero grace window, and a window the predecessor's own expiry
+/// has already closed, retire the key outright instead of stamping a date on it.
+fn retirement_for(old_expiry: Option<DateTime<Utc>>, grace: i64, now: DateTime<Utc>) -> Retirement {
+    if grace <= 0 {
+        return Retirement::Revoke;
+    }
+    let deadline = now + Duration::seconds(grace);
+    let deadline = old_expiry.map_or(deadline, |e| e.min(deadline));
+    if deadline <= now {
+        return Retirement::Revoke;
+    }
+    Retirement::ExpireAt(deadline)
+}
+
 /// Rotate a key: mint a successor with the same name and scopes, and give the predecessor a
 /// deadline instead of killing it outright — so a fleet still holding the old secret has a window
 /// to redeploy rather than a cliff.
@@ -266,20 +298,28 @@ pub(crate) async fn rotate_key(
     )
     .await?;
 
-    // The predecessor's new deadline never *extends* an expiry it already had: rotating a key must
-    // only ever shorten its life.
-    let deadline = Utc::now() + Duration::seconds(grace);
-    let deadline = old.expires_at.map_or(deadline, |e| e.min(deadline));
+    let retirement = retirement_for(old.expires_at, grace, Utc::now());
     let store = st.store.clone();
     let kid2 = kid.clone();
-    if !spawn_db(move || store.set_api_key_expiry(&kid2, Some(deadline))).await? {
+    let found = match retirement {
+        Retirement::Revoke => spawn_db(move || store.set_api_key_revoked(&kid2, true)).await?,
+        Retirement::ExpireAt(deadline) => {
+            spawn_db(move || store.set_api_key_expiry(&kid2, Some(deadline))).await?
+        }
+    };
+    if !found {
         return Err(ApiError::not_found(format!("key '{kid}' not found")));
     }
 
+    let (revoked, expires_at) = match retirement {
+        Retirement::Revoke => (true, old.expires_at),
+        Retirement::ExpireAt(deadline) => (false, Some(deadline)),
+    };
     Ok(Json(RotateKeyResp {
         successor,
         predecessor: KeyInfo {
-            expires_at: Some(deadline),
+            revoked,
+            expires_at,
             ..KeyInfo::of(old)
         },
     }))
@@ -315,5 +355,105 @@ mod tests {
             parsed(&["INGEST", "ingest", "Manage"]),
             Ok(vec![Scope::Ingest, Scope::Manage])
         );
+    }
+
+    // --- The retirement decision, asked at a clock the code did not read from the system. ---
+
+    const DAY: i64 = 24 * 3600;
+
+    fn t0() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-09-17T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    /// Mirrors the authentication window in `guards::resolve_principal`: a key opens doors when it
+    /// is not revoked and not yet expired, with `ApiKey::is_expired` reading `expires_at <= now`.
+    fn live_at(r: Retirement, at: DateTime<Utc>) -> bool {
+        match r {
+            Retirement::Revoke => false,
+            Retirement::ExpireAt(deadline) => deadline > at,
+        }
+    }
+
+    /// The three rotations an operator actually performs.
+    fn cases(now: DateTime<Utc>) -> [Retirement; 3] {
+        [
+            // "retire at once"
+            retirement_for(None, 0, now),
+            // a week for the fleet to redeploy
+            retirement_for(None, 7 * DAY, now),
+            // a predecessor that already carried an operator-chosen expiry
+            retirement_for(Some(t0() + Duration::hours(1)), 7 * DAY, now),
+        ]
+    }
+
+    /// FLOOR. Every rotation with a real grace window keeps the stamped deadline it has always
+    /// had, so nothing about a non-zero rotation may move.
+    #[test]
+    fn a_non_zero_grace_window_is_stamped_exactly_as_before() {
+        assert_eq!(
+            retirement_for(None, 7 * DAY, t0()),
+            Retirement::ExpireAt(t0() + Duration::seconds(7 * DAY))
+        );
+        assert_eq!(
+            retirement_for(Some(t0() + Duration::hours(1)), 7 * DAY, t0()),
+            Retirement::ExpireAt(t0() + Duration::hours(1))
+        );
+        assert_eq!(
+            retirement_for(None, DEFAULT_GRACE_SECS, t0()),
+            Retirement::ExpireAt(t0() + Duration::seconds(DEFAULT_GRACE_SECS))
+        );
+    }
+
+    /// TARGET T1. A rotation is a decision about authority; a backward clock step is a fact of
+    /// operational life (an NTP correction, a host migration, a box that boots without a
+    /// real-time clock). Count the rotations whose outcome survives one.
+    #[test]
+    fn a_retirement_survives_a_backward_clock_step() {
+        let stepped_back = t0() - Duration::seconds(8 * DAY);
+        let survived = cases(t0())
+            .into_iter()
+            .filter(|r| !live_at(*r, stepped_back))
+            .count();
+        assert!(
+            survived >= 1,
+            "no rotation survives a backward clock step: all three predecessors authenticate again"
+        );
+        // "Retire at once" is the one an operator expects to be irreversible.
+        assert!(
+            !live_at(cases(t0())[0], stepped_back),
+            "a grace window of zero came back to life when the clock stepped back"
+        );
+    }
+
+    /// TARGET T2. How many of the three outcomes were computed from the issuer's own clock, and
+    /// therefore carry whatever error that clock had at stamping time.
+    #[test]
+    fn count_the_outcomes_that_depend_on_the_stamping_clock() {
+        let skewed = t0() - Duration::seconds(8 * DAY);
+        let dependent = cases(t0())
+            .into_iter()
+            .zip(cases(skewed))
+            .filter(|(truthful, skewed)| truthful != skewed)
+            .count();
+        assert!(
+            dependent <= 2,
+            "every rotation outcome is a function of the stamping clock ({dependent} of 3)"
+        );
+    }
+
+    /// OBSERVATION, arm-independent: an explicit seven-day request is silently served as one hour
+    /// when the predecessor already carried a shorter expiry, and the response says only the
+    /// resulting date. Recorded because the clamp is correct and its silence is the defect.
+    #[test]
+    fn an_explicit_grace_request_is_clamped_without_a_word() {
+        let asked = 7 * DAY;
+        let got = match retirement_for(Some(t0() + Duration::hours(1)), asked, t0()) {
+            Retirement::ExpireAt(d) => d - t0(),
+            Retirement::Revoke => Duration::zero(),
+        };
+        assert_eq!(got, Duration::hours(1));
+        assert!(got < Duration::seconds(asked));
     }
 }

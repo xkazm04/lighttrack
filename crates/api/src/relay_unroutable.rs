@@ -118,18 +118,18 @@ mod tests {
 
     #[test]
     fn the_grace_window_defaults_on_and_can_be_switched_off() {
-        std::env::remove_var(ENV_SECS);
+        let mut env = lighttrack_core::test_env::EnvGuard::lock();
+        env.remove(ENV_SECS);
         assert_eq!(grace_secs(), Some(DEFAULT_SECS));
         // On by default and well inside the five-hour retry interval, so the alert lands long
         // before the task's first retry, let alone its dead-letter.
         assert!(DEFAULT_SECS < lighttrack_core::RELAY_DEFAULT_RETRY_INTERVAL_SECS as i64);
-        std::env::set_var(ENV_SECS, "0");
+        env.set(ENV_SECS, "0");
         assert_eq!(grace_secs(), None, "explicit zero is the off switch");
-        std::env::set_var(ENV_SECS, "60");
+        env.set(ENV_SECS, "60");
         assert_eq!(grace_secs(), Some(60));
         // Junk falls back to the default rather than silently disabling the alert.
-        std::env::set_var(ENV_SECS, "soon");
+        env.set(ENV_SECS, "soon");
         assert_eq!(grace_secs(), Some(DEFAULT_SECS));
-        std::env::remove_var(ENV_SECS);
     }
 }

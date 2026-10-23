@@ -1,0 +1,146 @@
+{
+ "schema": "conform-run/1",
+ "worker": "3af5e668-29b0-411f-b83e-ef871cbffd20",
+ "subject": "usage-limit-governance",
+ "evaluatedAt": "2026-10-15T01:29:34.218341+00:00",
+ "provider": "grok",
+ "model": "grok-4.7",
+ "pairs": [
+  {
+   "context": "cost-and-revenue-governance",
+   "subject": "usage-limit-governance",
+   "bundle": "llm-observability",
+   "state": "conformant",
+   "evidence": "crates/api/src/limits.rs:159 Creating a limit rejects a non-positive or non-finite threshold through LimitRule::validate, and update_limit calls that same function, so the two write doors share one check.",
+   "techniques": [
+    {
+     "technique": "metric-window-threshold-action-model",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/limits.rs:159 update_limit calls the same validate at limits.rs:189. evaluate_project_limits builds each status with evaluate_rule_resolved_at (limits.rs:69). The status payload says the rejection ledger is in-memory and resets on restart (limits.rs:241)."
+    },
+    {
+     "technique": "dimension-scoped-caps",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/limits_usage.rs:61 GET usage-by-scope returns the untagged bucket and evaluates each value with the same resolved-threshold helper as the status page. scope_binds_row uses LimitScope::matches for model families."
+    },
+    {
+     "technique": "cost-evidence-and-imputation",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/limits.rs:266 cost_basis reports imputed dollars, the client-reported share, and unpriceable separately, and the notes say the estimate is not written onto the event."
+    },
+    {
+     "technique": "graduated-throttle-with-deterministic-shed",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/limits.rs:338 This flag is the shared hard-refuse predicate. Searched shed_ticket and shed_fraction in the listed API files and found no second lottery; shed_fraction travels inside the LimitStatus the store already built."
+    },
+    {
+     "technique": "incremental-window-accounting",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/limits.rs:59 Status and forecast read store aggregates. Searched rowid, seen_rowid, and usage_cache in these handlers and found no hot-path cache."
+    },
+    {
+     "technique": "concurrent-admission-integrity",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/limits.rs:47 This is the read-only status view. Searched advisory lock and insert_events_checked in the listed handlers and found no admission critical section."
+    }
+   ]
+  },
+  {
+   "context": "event-ingest",
+   "subject": "usage-limit-governance",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/otlp/semconv.rs:198 A GenAI span with no input-token attribute is stored as zero input tokens, so an enforcing token cap treats that call as no usage.",
+   "techniques": [
+    {
+     "technique": "cost-evidence-and-imputation",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/otlp/semconv.rs:198 This is TokenUsage.input when none of INPUT_TOKEN_KEYS is present; output does the same at semconv.rs:202. Cost stays null when the book cannot price it (events.rs:131-132). The evaluator then has no presence bit left."
+    },
+    {
+     "technique": "concurrent-admission-integrity",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/events_batch.rs:192 post_batch prepares every item, then calls insert_events_checked once (events_batch.rs:200). The single-event door calls insert_event_checked once (events.rs:269)."
+    },
+    {
+     "technique": "incremental-window-accounting",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/events.rs:25 prepare_event overwrites received_at from the server clock before admission. The delta cache that evicts on that stamp lives in the SQLite usage cache, which this door does not reimplement."
+    },
+    {
+     "technique": "dimension-scoped-caps",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/events.rs:99 stamp_api_key writes the authenticated key id and strips a client-supplied api_key_id when no key is present, so a caller cannot move spend onto another key's cap."
+    },
+    {
+     "technique": "graduated-throttle-with-deterministic-shed",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/events.rs:204 Accepted and 429 responses carry usage_ratio and shed_fraction from the shared statuses, including the binding rule id. shed.rs is a separate in-flight semaphore for process load and says so in its first line."
+    },
+    {
+     "technique": "metric-window-threshold-action-model",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/events_admission.rs:38 record_rejection counts hard stops and sheds under the status alert key, which includes scope, and does not insert the event. Alert-only breaches stay on the admitted response."
+    },
+    {
+     "technique": "enforcement-placement-and-reconciliation",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/events.rs:265 This door refuses the record and returns 429 with the admission retry hint. It publishes proximity so a client can decide before the next call. The inline gateway check is outside this context."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "usage-limit-governance",
+   "context": "sqlite-governance-backend",
+   "reason": "evidence leans on store/src/lib.rs, which is not a tracked file"
+  },
+  {
+   "subject": "usage-limit-governance",
+   "context": "usage-governance-limits",
+   "reason": "evidence leans on store/src/lib.rs, which is not a tracked file"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-15T01:29:34.218341+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "usage-limit-governance"
+   ],
+   "techniques": [
+    "concurrent-admission-integrity",
+    "cost-evidence-and-imputation",
+    "dimension-scoped-caps",
+    "graduated-throttle-with-deterministic-shed",
+    "incremental-window-accounting",
+    "metric-window-threshold-action-model"
+   ],
+   "deviations": 0,
+   "context": "cost-and-revenue-governance",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  },
+  {
+   "ts": "2026-10-15T01:29:34.218341+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "usage-limit-governance"
+   ],
+   "techniques": [
+    "concurrent-admission-integrity",
+    "cost-evidence-and-imputation",
+    "dimension-scoped-caps",
+    "enforcement-placement-and-reconciliation",
+    "graduated-throttle-with-deterministic-shed",
+    "incremental-window-accounting",
+    "metric-window-threshold-action-model"
+   ],
+   "deviations": 1,
+   "context": "event-ingest",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  }
+ ]
+}

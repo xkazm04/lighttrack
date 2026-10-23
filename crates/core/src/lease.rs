@@ -59,6 +59,20 @@ pub enum LeaseHeld {
     Held {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         deadline: Option<DateTime<Utc>>,
+        /// The holder has been asked to **stop**: an operator cancelled this work while it was
+        /// running, so the record is `cancelling` and this write still landed.
+        ///
+        /// This rides the renewal rather than getting a channel of its own because the renewal is
+        /// the *only* channel that reaches a live holder — and a cancelled holder must keep its
+        /// lease until it reports, so answering `NotHeld` would be a lie that also hands the task
+        /// to a second device. Requirement (3) above is "an answer the holder can act on"; a bare
+        /// `Held` is not one when the thing the holder must do is stop.
+        ///
+        /// `default` + `skip_serializing_if` on purpose: an uncancelled answer is byte-identical to
+        /// what shipped before the flag existed, so an un-upgraded holder reads today's bytes and
+        /// behaves exactly as today.
+        #[serde(default, skip_serializing_if = "is_false")]
+        cancel_requested: bool,
     },
     /// Refused: the caller does not hold this record any more.
     NotHeld {
@@ -70,9 +84,41 @@ pub enum LeaseHeld {
     NoSuchRecord,
 }
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 impl LeaseHeld {
+    /// The ordinary landed write: still the holder's, nobody has asked it to stop.
+    pub fn held(deadline: Option<DateTime<Utc>>) -> Self {
+        LeaseHeld::Held {
+            deadline,
+            cancel_requested: false,
+        }
+    }
+
+    /// A landed write on a record somebody has asked to stop.
+    pub fn held_cancelling(deadline: Option<DateTime<Utc>>) -> Self {
+        LeaseHeld::Held {
+            deadline,
+            cancel_requested: true,
+        }
+    }
+
     pub fn is_held(&self) -> bool {
         matches!(self, LeaseHeld::Held { .. })
+    }
+
+    /// Whether the holder has been asked to stop. False for every answer that is not `Held`: a
+    /// holder that no longer owns the record has a stronger reason to stop than a cancellation.
+    pub fn cancel_requested(&self) -> bool {
+        matches!(
+            self,
+            LeaseHeld::Held {
+                cancel_requested: true,
+                ..
+            }
+        )
     }
 }
 
@@ -100,10 +146,47 @@ mod tests {
             fence: Some(LeaseFence::new(Utc::now())),
         };
         assert!(!v.is_held());
-        assert!(LeaseHeld::Held { deadline: None }.is_held());
+        assert!(LeaseHeld::held(None).is_held());
         // Tagged, so a client branches on `outcome` instead of guessing from shape.
         let j = serde_json::to_value(&v).expect("serialize verdict");
         assert_eq!(j["outcome"], "not_held");
         assert_eq!(j["status"], "queued");
+    }
+
+    /// The stop request rides the one channel that reaches a live holder, and does so **additively**:
+    /// an uncancelled answer is the exact bytes that shipped before the flag existed, and today's
+    /// bytes still decode (to "not cancelled"), so neither side of the upgrade can misread the other.
+    #[test]
+    fn a_held_answer_can_carry_a_stop_request_without_changing_the_quiet_case() {
+        let plain = LeaseHeld::held(None);
+        assert_eq!(
+            serde_json::to_value(&plain).expect("serialize held"),
+            serde_json::json!({ "outcome": "held" }),
+            "an uncancelled renewal must be byte-identical to the pre-flag answer"
+        );
+        assert!(!plain.cancel_requested());
+
+        let at = Utc::now();
+        let stopping = LeaseHeld::held_cancelling(Some(at));
+        let j = serde_json::to_value(&stopping).expect("serialize cancelling");
+        assert_eq!(j["outcome"], "held");
+        assert_eq!(j["cancel_requested"], true);
+        assert!(stopping.cancel_requested());
+        assert!(
+            stopping.is_held(),
+            "a cancelled holder keeps its lease until it reports"
+        );
+
+        // Today's wire bytes, read by the upgraded holder: held, and nobody asked it to stop.
+        let old: LeaseHeld = serde_json::from_str(r#"{"outcome":"held"}"#).expect("decode old");
+        assert_eq!(old, plain);
+        assert!(!old.cancel_requested());
+        // And the answers that are not `Held` never claim a cancellation.
+        assert!(!LeaseHeld::NoSuchRecord.cancel_requested());
+        assert!(!LeaseHeld::NotHeld {
+            status: "queued".into(),
+            fence: None
+        }
+        .cancel_requested());
     }
 }

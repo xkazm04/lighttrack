@@ -1,5 +1,5 @@
-//! The two doors that describe the deployment rather than its data, and the only two outside
-//! `/v1`: liveness, and the generated OpenAPI document.
+//! The doors that describe the deployment rather than its data, and the only ones outside `/v1`:
+//! the operator's health rollup, the two orchestrator probes, and the generated OpenAPI document.
 
 use crate::types::*;
 use Access::*;
@@ -18,6 +18,30 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["health"]),
         doc: "Liveness, and the store backend's declared surfaces.",
+        ..Endpoint::DEFAULT
+    },
+    Endpoint {
+        id: "health_live",
+        method: Method::Get,
+        path: "/health/live",
+        // Declared, not merely routed. The router has always served this; the contract had not
+        // heard of it, which was survivable while authorization was a string comparison over
+        // `main.rs` and became an outage the moment one layer resolved every request against this
+        // table: an undeclared pair is a 500, and a 500 on a liveness probe is a restart loop.
+        access: Unauthenticated,
+        response: TypeRef::Untyped("{ status: \"ok\" } — the process answered, nothing else."),
+        machine: true,
+        doc: "Liveness: is this process wedged. Observes nothing outside itself.",
+        ..Endpoint::DEFAULT
+    },
+    Endpoint {
+        id: "health_ready",
+        method: Method::Get,
+        path: "/health/ready",
+        access: Unauthenticated,
+        response: TypeRef::Untyped("{ status, checks } — 200 when this pod should serve."),
+        machine: true,
+        doc: "Readiness: should traffic arrive. Observes the real store.",
         ..Endpoint::DEFAULT
     },
     Endpoint {

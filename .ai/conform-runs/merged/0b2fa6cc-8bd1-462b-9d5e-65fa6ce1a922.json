@@ -1,0 +1,211 @@
+{
+ "schema": "conform-run/1",
+ "worker": "0b2fa6cc-8bd1-462b-9d5e-65fa6ce1a922",
+ "subject": "federated-benchmark-sharing",
+ "evaluatedAt": "2026-10-13T11:34:18.881919+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "collective-leaderboard",
+   "subject": "federated-benchmark-sharing",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/collective/fold.rs:147 Duplicate buckets are summed after individual plausibility checks without rechecking the combined count, allowing a stored bucket to exceed the million-case ceiling.",
+   "techniques": [
+    {
+     "technique": "aggregate-only-digests",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/collective/scorecard.rs:41 Inputs are run aggregates, but publication also carries a stable hash of internal rubric text or identity/version; this remains a cross-digest correlation key rather than publishing only a coarse consequence."
+    },
+    {
+     "technique": "bounded-contributor-influence",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/collective/leaderboard.rs:95 The handler invokes the inspected core merger, which caps the largest source's effective share at 0.8, uses those weights for between-source spread, and publishes the realized share."
+    },
+    {
+     "technique": "content-addressed-contribution",
+     "verdict": "not-applicable",
+     "evidence": "crates/api/src/collective/contribute.rs:133 Contributions use an HTTP endpoint and replace a credential-derived source's snapshot; publication through proposed file changes is not this transport."
+    },
+    {
+     "technique": "fixed-task-vocabulary",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/collective/sanitize.rs:116 Task, judge, and determinism labels are canon-clamped, but rubric_fingerprint accepts arbitrary strings subject only to length truncation, leaving a categorical channel outside the required small closed vocabularies."
+    },
+    {
+     "technique": "hub-ingest-plausibility-gates",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/collective/ingest.rs:116 The million-case check runs before same-key entries are summed, and folded buckets receive no subsequent plausibility check; generated_at also receives neither the required feature-launch floor nor a hub-clock skew ceiling."
+    },
+    {
+     "technique": "k-anonymity-cases-and-sources",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/collective/leaderboard.rs:141 Contributor construction and hub ingestion suppress under-case-floor buckets; the leaderboard suppresses under-source-floor rows before reader filters, discloses held_back, and computes counts over surviving rows."
+    }
+   ]
+  },
+  {
+   "context": "collective-intelligence-types",
+   "subject": "federated-benchmark-sharing",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/core/src/collective/types.rs:77 The serialized digest includes an unrestricted rubric fingerprint, allowing an internal-derived correlation key to cross the organizational boundary despite the standard's closed-channel requirement.",
+   "techniques": [
+    {
+     "technique": "aggregate-only-digests",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/collective/merge.rs:339 The builder uses text-free RunStat inputs and preserves unknown variance, but emits a stable internal-derived fingerprint whenever the bucket's rubrics agree; identifying inputs are not reduced solely to coarse consequences."
+    },
+    {
+     "technique": "bounded-contributor-influence",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/collective/merge.rs:364 Multi-source weights are winsorized to the 0.8 share ceiling; singleton rows and local run weights remain untouched, between-source spread uses the bounded weights, and raw counts plus realized share are disclosed."
+    },
+    {
+     "technique": "capture-locally-publish-separately",
+     "verdict": "not-applicable",
+     "evidence": "crates/core/src/collective/merge.rs:286 This context transforms supplied aggregate values and defines ledger types; it does not execute measurements, persist their capture, or ask an operator for publication consent."
+    },
+    {
+     "technique": "content-addressed-contribution",
+     "verdict": "not-applicable",
+     "evidence": "crates/core/src/collective/contribution.rs:123 This hash supports unchanged HTTP snapshot detection; the context does not publish contribution files or extend proposed changes."
+    },
+    {
+     "technique": "cost-bucketing-side-channels",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/collective/merge.rs:450 Contributor digests use two significant figures, but published merged costs use six decimal places instead of reapplying the significant-figure bands required for every published cost."
+    },
+    {
+     "technique": "fixed-task-vocabulary",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/collective/vocab.rs:94 Length bounding replaces vocabulary closure for a wire categorical field; additionally, task_type_from concatenates name and hint, so a conflicting explicit hint does not reliably override name inference."
+    },
+    {
+     "technique": "hub-ingest-plausibility-gates",
+     "verdict": "not-applicable",
+     "evidence": "crates/core/src/collective/merge.rs:378 The pure merger consumes already stored entries; credential resolution, receipt stamping, and admission plausibility decisions belong to the API ingest context."
+    },
+    {
+     "technique": "k-anonymity-cases-and-sources",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/collective/merge.rs:323 The contributor-side builder suppresses thin buckets and returns their withheld count; the merger counts distinct contributor identities and flags display-floor rows, while source-floor publication policy is enforced by its API caller."
+    }
+   ]
+  },
+  {
+   "context": "firestore-eval-collective",
+   "subject": "federated-benchmark-sharing",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/store-firestore/src/collective.rs:97 Consumption invents a zero quality for missing or mistyped stored data, while other decoding failures abort the listing instead of skipping and reporting the defective entry.",
+   "techniques": [
+    {
+     "technique": "aggregate-only-digests",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/collective.rs:115 This backend persists a supplied hub-side entry; it neither defines the contribution wire format nor constructs digests from internal measurement tables."
+    },
+    {
+     "technique": "bounded-contributor-influence",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/collective.rs:119 The backend retrieves individual entries and performs no cross-contributor statistical weighting or ranking."
+    },
+    {
+     "technique": "content-addressed-contribution",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/collective.rs:116 Entries are database documents updated under stable source/model/task keys, not contribution files published through proposed changes."
+    },
+    {
+     "technique": "cost-bucketing-side-channels",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/collective.rs:60 Persistence copies already supplied hub-side costs; this context does not construct or publish a cross-organization digest, and exact internal benchmark costs should remain precise."
+    },
+    {
+     "technique": "fixed-task-vocabulary",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/collective.rs:57 Storage round-trips supplied labels; internal benchmark names remain internal, and outbound classification plus untrusted-wire clamping are not performed by this persistence layer."
+    },
+    {
+     "technique": "hub-ingest-plausibility-gates",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/collective.rs:204 Replacement accepts typed entries from its caller rather than contributor credentials or raw wire payloads; admission policy is not owned here."
+    },
+    {
+     "technique": "k-anonymity-cases-and-sources",
+     "verdict": "not-applicable",
+     "evidence": "crates/store-firestore/src/collective.rs:133 The backend narrows stored entries by retention time; it does not select anonymity policy, merge sources, or publish filtered leaderboard rows."
+    },
+    {
+     "technique": "strict-ingestion-lenient-consumption",
+     "verdict": "deviation",
+     "evidence": "crates/store-firestore/src/collective.rs:111 A malformed required receipt timestamp propagates through Result collection and fails the whole leaderboard read without per-entry warnings or skipped counts; missing quality, pass rate, and cost are instead repaired to zero."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-13T11:34:18.881919+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "federated-benchmark-sharing"
+   ],
+   "techniques": [
+    "aggregate-only-digests",
+    "bounded-contributor-influence",
+    "content-addressed-contribution",
+    "fixed-task-vocabulary",
+    "hub-ingest-plausibility-gates",
+    "k-anonymity-cases-and-sources"
+   ],
+   "deviations": 1,
+   "context": "collective-leaderboard",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-13T11:34:18.881919+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "federated-benchmark-sharing"
+   ],
+   "techniques": [
+    "aggregate-only-digests",
+    "bounded-contributor-influence",
+    "capture-locally-publish-separately",
+    "content-addressed-contribution",
+    "cost-bucketing-side-channels",
+    "fixed-task-vocabulary",
+    "hub-ingest-plausibility-gates",
+    "k-anonymity-cases-and-sources"
+   ],
+   "deviations": 1,
+   "context": "collective-intelligence-types",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-13T11:34:18.881919+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "federated-benchmark-sharing"
+   ],
+   "techniques": [
+    "aggregate-only-digests",
+    "bounded-contributor-influence",
+    "content-addressed-contribution",
+    "cost-bucketing-side-channels",
+    "fixed-task-vocabulary",
+    "hub-ingest-plausibility-gates",
+    "k-anonymity-cases-and-sources",
+    "strict-ingestion-lenient-consumption"
+   ],
+   "deviations": 1,
+   "context": "firestore-eval-collective",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

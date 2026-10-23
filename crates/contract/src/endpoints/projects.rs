@@ -51,7 +51,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "update_project",
         method: Method::Put,
-        path: "/v1/projects/:id",
+        path: "/v1/projects/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -70,12 +70,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("Project"),
         cli: Some(&["projects", "update"]),
         doc: "Update a project; an omitted field is left as-is and the policy cache is invalidated.",
+        surface: "project_admin",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "archive_project",
         method: Method::Delete,
-        path: "/v1/projects/:id",
+        path: "/v1/projects/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -83,12 +84,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("Project"),
         cli: Some(&["projects", "archive"]),
         doc: "Archive a project: disabled and stamped `archived_at`, with every row kept.",
+        surface: "project_admin",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "get_redaction_posture",
         method: Method::Get,
-        path: "/v1/projects/:id/redaction",
+        path: "/v1/projects/{id}/redaction",
         access: Key(Read),
         params: &[
             p("id", "project id"),
@@ -101,6 +103,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["projects", "redaction"]),
         doc: "What the ingest boundary actually did to this project's stored rows.",
+        surface: "redaction_posture",
         ..Endpoint::DEFAULT
     },
     // Secret-minting: the response carries the full key exactly once, so this must never be
@@ -108,7 +111,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_key",
         method: Method::Post,
-        path: "/v1/projects/:id/keys",
+        path: "/v1/projects/{id}/keys",
         access: Admin,
         mutating: true,
         params: &[
@@ -128,7 +131,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_keys",
         method: Method::Get,
-        path: "/v1/projects/:id/keys",
+        path: "/v1/projects/{id}/keys",
         access: Admin,
         params: &[p("id", "project id")],
         response: TypeRef::Untyped(
@@ -137,12 +140,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["keys", "list"]),
         doc: "A project's keys with their scopes, expiry, last use and revocation state.",
+        surface: "key_admin",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "revoke_key",
         method: Method::Delete,
-        path: "/v1/projects/:id/keys/:kid",
+        path: "/v1/projects/{id}/keys/{kid}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -150,13 +154,14 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Untyped("The revoked key's non-secret metadata, with `revoked: true`."),
         cli: Some(&["keys", "revoke"]),
         doc: "Revoke a key immediately; the row is kept for audit.",
+        surface: "key_admin",
         ..Endpoint::DEFAULT
     },
     // Secret-minting too: the successor's full key is in the response, so no MCP tool reaches it.
     Endpoint {
         id: "rotate_key",
         method: Method::Post,
-        path: "/v1/projects/:id/keys/:kid/rotate",
+        path: "/v1/projects/{id}/keys/{kid}/rotate",
         access: Admin,
         mutating: true,
         params: &[
@@ -174,6 +179,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["keys", "rotate"]),
         doc: "Rotate a key: mint a successor and give the predecessor a deadline, not a cliff.",
+        surface: "key_admin",
         ..Endpoint::DEFAULT
     },
 ];

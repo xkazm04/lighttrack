@@ -7,11 +7,13 @@ those for *what* and *why*; this file is *how we write the code*.
 
 **This file is the canonical agent guidance** — declared as `guidance.canonical` in
 `.ai/manifest.yaml`. If any other guidance document disagrees with it, this one wins and the other is
-the bug. `.claude/CLAUDE.md` is currently exactly that bug: it still carries the generator's npm
-scaffold for a workspace with no npm build, and is listed under `guidance.staleProjections` until
-someone replaces its body with a pointer here. **Ignore it — and note that fixing it needs a human**:
-two agent sessions have tried, and the agent harness refuses to write anything under `.claude/`
-(sensitive path). `AGENTS.md` at the root is the same pointer for the other tool ecosystems, and
+the bug. `.claude/CLAUDE.md` used to be exactly that bug — the generator's JavaScript-build scaffold
+for a workspace that has none — and was quarantined under `guidance.staleProjections` with a warning
+here telling readers to disbelieve it. Fixed on 2026-09-14: its body is a pointer to this file,
+`staleProjections` is empty, and the note claiming the edit "needs a human because the harness
+refuses writes under `.claude/`" was simply wrong — the path is writable, and repeating that claim
+had turned two failed attempts into a reason not to try.
+`AGENTS.md` at the root is the same pointer for the other tool ecosystems, and
 `crates/core/tests/guidance_guard.rs` fails the build if a projection that is *not* declared stale
 carries a command or stops naming this file — so the list cannot grow a second contradiction quietly.
 
@@ -83,7 +85,9 @@ which directory to run from, which Windows gotcha bites — not a competing list
   it, or returning `StoreError::Unsupported` (→ 501), over a quiet default.
 
 ## Key invariants (don't regress)
-- The judge/scoring engine is **unbudgeted**; limits apply only to monitored ingest traffic.
+- The judge/scoring engine is **unbudgeted**; limits apply only to monitored ingest traffic. Do not
+  route judge calls through `lt-gateway`, which can apply the application's admission policy and
+  records configured application telemetry.
 - Judge is **provider-configurable** (`judge_model = "[provider/]model"`); judging is a structured
   generation parsed from the model's JSON text. Prefer a judge family different from the generator
   (self-preference bias).
@@ -95,24 +99,40 @@ which directory to run from, which Windows gotcha bites — not a competing list
   `LIGHTTRACK_MCP_ALLOW_WRITES` (default off)** on top of the API's admin-key checks. Don't expose
   secret-minting (API keys) over MCP — it would leak into agent context. The server is a thin HTTP
   client only: never give it direct DB access.
+- Gateway (`lt-gateway`) is an unauthenticated local-app boundary: keep its bind address loopback
+  unless an external authentication layer is deliberately added. It must record every attempted
+  seat, not only the successful fallback, and must reject a tool request before dispatch if any
+  target in the failover chain cannot preserve the tool contract. See `docs/GATEWAY.md`.
+
+## Context-map freshness
+
+`context-map.json` is a generated scoping aid, not authority over the checkout. Its current
+provenance predates `crates/gateway/`, so use `docs/GATEWAY.md` and that crate's modules when scoping
+gateway work. TODO: run the Personas context scan to add the gateway on the next authorized rescan;
+do not hand-edit the generated map or the generated block below.
+
+## A good change looks like
+
+- Use conventional `type(scope): concise summary` commit subjects; recent history consistently uses
+  `feat`, `fix`, `docs`, and `test` scopes.
+- `c359bdf` is a useful vertical-slice example: implementation, focused tests, operator docs, and
+  changelog moved together while `main.rs` stayed wiring-only and domain logic stayed modular.
 
 <!-- personas:context-map:start -->
 ## Project Context Map
 
-This project is organized into **34 contexts** across **8 groups**. The full machine-readable map lives in `context-map.json` at the project root — read it at task start to scope your edits to the relevant context's files.
+This project is organized into **48 contexts** across **6 groups**. The full machine-readable map lives in `context-map.json` at the project root — read it at task start to scope your edits to the relevant context's files.
 
 Taxonomy: each context has a `category` (ui · api · lib · data · test · config); each group has a `domain` (feature · infrastructure · shared · integration · data).
 
 ### Groups
 
-- **LLM Observability** _(domain: feature · 4 contexts)_
+- **LLM Observability** _(domain: feature · 7 contexts)_
 - **Evaluation & Benchmarking** _(domain: feature · 7 contexts)_
-- **Usage Governance** _(domain: feature · 3 contexts)_
-- **Revenue & Profit** _(domain: feature · 2 contexts)_
-- **Collective Intelligence** _(domain: feature · 1 contexts)_
+- **Usage Governance** _(domain: feature · 4 contexts)_
+- **Collective Intelligence** _(domain: feature · 2 contexts)_
 - **Device Relay** _(domain: feature · 2 contexts)_
-- **Data & Persistence** _(domain: data · 7 contexts)_
-- **Platform Infrastructure** _(domain: infrastructure · 8 contexts)_
+- **Platform Infrastructure** _(domain: infrastructure · 26 contexts)_
 
 > Auto-generated by Personas on each context scan. Edits between the markers are overwritten on the next scan; edit `context-map.json` or rescan instead.
 <!-- personas:context-map:end -->

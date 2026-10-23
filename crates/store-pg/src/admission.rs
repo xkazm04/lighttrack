@@ -26,7 +26,7 @@ use sqlx::{Connection, PgConnection, Postgres, Transaction};
 
 use lighttrack_core::{scope_matches, LimitRule, LimitScope, LimitWindow, LlmEvent};
 use lighttrack_store::{
-    evaluate_admission, event_contribution, Admission, Result, StoreError, Usage,
+    evaluate_admission_at, event_contribution, Admission, Result, StoreError, Usage,
 };
 
 use crate::events::{insert_err, insert_query, map_usage, RECEIVED, USAGE_COLS};
@@ -133,10 +133,11 @@ async fn admit_one(
     // helper short-circuits when no rule needs revenue, so a fixed-cap deployment pays nothing.
     let resolved = resolve_revenue_thresholds(&mut *conn, ev, rules, now).await?;
     let resolve = lighttrack_store::resolver(&resolved);
-    let admission = evaluate_admission(
+    let admission = evaluate_admission_at(
         rules,
         ev,
         event_contribution(ev),
+        now,
         |w, scope| {
             usages.get(&(w, scope.cloned())).copied().ok_or_else(|| {
                 StoreError::Other(

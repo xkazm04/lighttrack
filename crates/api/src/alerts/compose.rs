@@ -80,17 +80,40 @@ pub(crate) fn warning(w: &LimitStatus, dedup_key: String) -> Alert {
     )
 }
 
+/// The delivered text for a forecast alert. A customer-scoped one is refused enumeration, exactly as an
+/// identity-scoped limit breach is in `attribution`: the channel fans out to whoever holds the webhook,
+/// so the payload states the scope and points at the authenticated surface that answers it.
+fn forecast_body(a: &ForecastAlert) -> Value {
+    if !a.identity_scoped {
+        return body(
+            AlertKind::ForecastAlert,
+            &a.message,
+            "LightTrack: spend forecast alert",
+            json!({ "forecast": a }),
+        );
+    }
+    let msg = format!(
+        "project '{}' has a customer whose margin is eroding (severity {}, ~{:.1} days): \n         per-customer detail at GET /v1/forecast?by=customer",
+        a.project_id, a.severity, a.eta_days,
+    );
+    let extra = json!({ "forecast": {
+        "kind": a.kind, "severity": a.severity, "project_id": a.project_id,
+        "eta_days": a.eta_days, "scope_note": "customer",
+    }});
+    body(
+        AlertKind::ForecastAlert,
+        &msg,
+        "LightTrack: customer margin forecast alert",
+        extra,
+    )
+}
+
 pub(crate) fn forecast(a: &ForecastAlert) -> Alert {
     Alert::new(
         AlertKind::ForecastAlert,
         Some(a.project_id.clone()),
         a.dedup_key(),
-        body(
-            AlertKind::ForecastAlert,
-            &a.message,
-            "LightTrack: spend forecast alert",
-            json!({ "forecast": a }),
-        ),
+        forecast_body(a),
     )
     // The forecast's own `severity` is what decides whether a channel's floor lets it through: an
     // event three days out is not the same page as one three weeks out.
@@ -125,12 +148,12 @@ pub(crate) fn relay_dead(t: &RelayTask) -> Alert {
 }
 
 pub(crate) fn error_spike(s: &ErrorSpike) -> Alert {
-    let mins = (s.window_secs / 60).max(1);
+    let window = super::detectors::window_phrase(s.window_secs);
     let sample = s.error.as_deref().unwrap_or("(no error message)");
     let msg = format!(
-        "LightTrack alert: project '{}' logged {} failed call(s) within {}m. \
+        "LightTrack alert: project '{}' logged {} failed call(s) within {window}. \
          Latest: {} on model '{}'. Sample error: {}",
-        s.project_id, s.count, mins, s.status, s.model, sample
+        s.project_id, s.count, s.status, s.model, sample
     );
     let subject = format!("LightTrack: error spike in '{}'", s.project_id);
     let extra = json!({ "spike": {
@@ -246,7 +269,6 @@ pub(crate) fn ingest_rejected(
             extra,
         ),
     )
-    .with_severity(Severity::Warning)
 }
 
 fn warning_message(w: &LimitStatus) -> String {

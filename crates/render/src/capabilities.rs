@@ -21,8 +21,7 @@ pub(crate) fn manifest(v: &Value) -> Option<String> {
         out.push_str("Every surface is implemented — no route answers 501 here.\n\n");
     } else {
         out.push_str(&format!(
-            "⚠️ **Refused on this backend ({}):** {}\n\n_These routes answer HTTP 501 \
-             `unsupported`. That is a permanent gap on this backend, never \"you have no data\"._\n\n",
+            "⚠️ **Refused on this backend ({}):** {}\n\n",
             refused.len(),
             refused
                 .iter()
@@ -30,6 +29,27 @@ pub(crate) fn manifest(v: &Value) -> Option<String> {
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+        // The sentence used to sit over the surface list and call it routes. Now it sits over the
+        // routes, because that is the form the reader can act on — and a refused surface that takes
+        // out no route at all says so, instead of promising a 501 nobody will ever see.
+        let routes: Vec<&str> = list(v, "unsupported_routes");
+        if routes.is_empty() {
+            out.push_str(
+                "_No route answers HTTP 501 here: these surfaces narrow what some routes return \
+                 rather than removing any._\n\n",
+            );
+        } else {
+            out.push_str(&format!(
+                "_These routes answer HTTP 501 `unsupported`. That is a permanent gap on this \
+                 backend, never \"you have no data\"._\n\n{}\n\n",
+                routes
+                    .iter()
+                    .map(|r| format!("- `{r}`"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+        out.push_str(&degraded(v));
     }
 
     let surfaces = list(v, "surfaces");
@@ -54,6 +74,30 @@ pub(crate) fn manifest(v: &Value) -> Option<String> {
     Some(out)
 }
 
+/// Routes that still answer with less in them — the other half of a refusal, and the half an
+/// operator cannot discover by reading a status code.
+fn degraded(v: &Value) -> String {
+    let rows = match v.get("degraded_routes").and_then(Value::as_array) {
+        Some(r) if !r.is_empty() => r,
+        _ => return String::new(),
+    };
+    let mut out = String::from(
+        "_These routes still answer, with less in them — a filter that 501s, a field that comes \
+         back `null`, a list that comes back empty._\n\n",
+    );
+    for row in rows {
+        let route = s(row, "route");
+        let narrowed = list(row, "surfaces")
+            .iter()
+            .map(|x| format!("`{x}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("- `{route}` — narrowed by {narrowed}\n"));
+    }
+    out.push('\n');
+    out
+}
+
 fn list<'a>(v: &'a Value, key: &str) -> Vec<&'a str> {
     v.get(key)
         .and_then(Value::as_array)
@@ -72,9 +116,14 @@ mod tests {
             "backend": "firestore",
             "surfaces": ["events", "scores"],
             "unsupported": ["rollup", "limits_usage"],
+            "unsupported_routes": ["GET /v1/rollup", "GET /v1/limits/usage"],
             "atomic_admission": false
         }))
         .expect("renders");
+        assert!(
+            md.contains("- `GET /v1/rollup`"),
+            "the sentence that says 'these routes' must stand over routes: {md}"
+        );
         let refused_at = md.find("Refused").expect("names the refused set");
         let surface_at = md.find("Surface").expect("lists the surfaces");
         assert!(
@@ -98,6 +147,30 @@ mod tests {
         .expect("renders");
         assert!(md.contains("no route answers 501"));
         assert!(md.contains("enforced atomically"));
+    }
+
+    /// A refusal that removes no route must not be rendered as a promise of a 501: this is the
+    /// Postgres case (`maintenance`, `metrics`), where the old copy claimed a status code that no
+    /// route on that deployment has ever returned.
+    #[test]
+    fn a_refusal_with_no_route_says_so_and_names_what_it_narrows() {
+        let md = manifest(&json!({
+            "backend": "postgres",
+            "surfaces": ["events_core"],
+            "unsupported": ["maintenance", "metrics"],
+            "unsupported_routes": [],
+            "degraded_routes": [
+                {"route": "GET /v1/storage/status", "surfaces": ["maintenance", "metrics"]}
+            ],
+            "atomic_admission": true
+        }))
+        .expect("renders");
+        assert!(
+            !md.contains("answer HTTP 501"),
+            "no route 501s here, so nothing may say one does: {md}"
+        );
+        assert!(md.contains("No route answers HTTP 501 here"));
+        assert!(md.contains("- `GET /v1/storage/status` — narrowed by `maintenance`, `metrics`"));
     }
 
     #[test]

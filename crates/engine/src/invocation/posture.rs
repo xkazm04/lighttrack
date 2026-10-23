@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Once;
 
-use super::envelope::split_effort;
+use lighttrack_core::{split_effort, Effort};
+
 use super::tools::{allowlist, is_readonly_tool};
 use super::{Invocation, Mode};
 use crate::{EngineError, Result};
@@ -32,8 +33,11 @@ pub(crate) fn plan(inv: &Invocation<'_>) -> Result<Plan> {
     let cwd = check(inv)?;
     let tools = allowlist(inv);
 
+    // The suffix parser is shared with the provider adapters (`lighttrack_core::split_effort`), so
+    // `opus@xhigh` means the same thing whichever path a judge call takes — the divergence that let
+    // the bare Messages API post the whole spec as a model id.
     let (model, suffix_effort) = split_effort(inv.model);
-    let effort = inv.effort.or(suffix_effort);
+    let effort: Option<&str> = inv.effort.or_else(|| suffix_effort.map(|e| e.as_str()));
 
     let mut args = vec![
         // No prompt argument: it travels over stdin. Windows caps a command line at ~32k chars and
@@ -83,9 +87,10 @@ pub(crate) fn plan(inv: &Invocation<'_>) -> Result<Plan> {
 /// Enforce the mode's contract and resolve the working directory.
 fn check(inv: &Invocation<'_>) -> Result<PathBuf> {
     if let Some(effort) = inv.effort {
-        if !matches!(effort, "low" | "medium" | "high" | "xhigh" | "max") {
+        if Effort::parse(effort).is_none() {
             return Err(EngineError::Posture(format!(
-                "unknown effort '{effort}' (expected low|medium|high|xhigh|max)"
+                "unknown effort '{effort}' (expected {})",
+                Effort::EXPECTED
             )));
         }
     }

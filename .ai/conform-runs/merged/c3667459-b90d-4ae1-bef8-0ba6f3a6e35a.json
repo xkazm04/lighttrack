@@ -1,0 +1,221 @@
+{
+ "schema": "conform-run/1",
+ "worker": "c3667459-b90d-4ae1-bef8-0ba6f3a6e35a",
+ "subject": "job-coordination",
+ "evaluatedAt": "2026-10-14T23:56:48.743181+00:00",
+ "provider": "agy",
+ "model": "gemini-3.8-flash-high",
+ "pairs": [
+  {
+   "context": "storage-and-jobs",
+   "subject": "job-coordination",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/jobs.rs:39 The operator jobs endpoint returns raw database rows without computing lease age, next action, or sorting anomalies first.",
+   "techniques": [
+    {
+     "technique": "job-observability",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/jobs.rs:39 Job listing returns raw store rows without sorting anomalies first, computing lease deadlines, or rendering transition history."
+    },
+    {
+     "technique": "lease-renewal",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/jobs.rs:192 Lease renewal is a conditioned write checking claimed_at that returns 409 Conflict when the lease is no longer held."
+    },
+    {
+     "technique": "step-position-and-resumability",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/jobs.rs:165 Progress is updated as unstructured text rather than persisting stable step positions, plan versions, or step outcomes."
+    },
+    {
+     "technique": "terminal-state-recovery",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/schedule_sweep.rs:89 The periodic sweep reaps dead relay tasks and fires due schedules, but has no recovery sweep for orphaned background jobs."
+    },
+    {
+     "technique": "no-unrestorable-state-at-a-suspension-point",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/storage.rs:548 Maintenance execution yields safely between discrete chunks after releasing write locks to avoid unrestorable intermediate states."
+    },
+    {
+     "technique": "terms-travel-permission-does-not",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/jobs_enqueue.rs:89 Job payloads and kinds are validated and frozen at enqueue time rather than being re-derived during execution."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-scoring-types",
+   "subject": "job-coordination",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/core/src/job.rs:22 Background job status is defined as an unvalidated raw String rather than a single authoritative closed enum with an explicit transition relation.",
+   "techniques": [
+    {
+     "technique": "job-state-machines",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/job.rs:22 Status is typed as an open String without an authoritative enum or transition validation relation."
+    },
+    {
+     "technique": "step-position-and-resumability",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/job.rs:47 Progress is modeled as an optional free-form string rather than a structured step position, plan version, and step outcome."
+    },
+    {
+     "technique": "terminal-state-recovery",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/job.rs:214 The terminal state classifier only recognizes done, failed, and cancelled, omitting the required expired terminal verdict."
+    },
+    {
+     "technique": "lease-renewal",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/lease.rs:30 LeaseFence newtype wraps timestamp identity to enforce exact equality fencing on all lease-guarded writes."
+    },
+    {
+     "technique": "terms-travel-permission-does-not",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/job_kinds.rs:48 Prompt provenance fields (prompt_id, version, prompt_name) are explicitly typed on the payload to travel with the job record."
+    }
+   ]
+  },
+  {
+   "context": "runner-worker-pipeline",
+   "subject": "job-coordination",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/runner/src/runctl.rs:95 The worker publishes progress as an informational ETA string without checkpointing durable step positions, causing reclaimed jobs to restart from case zero.",
+   "techniques": [
+    {
+     "technique": "step-position-and-resumability",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/runctl.rs:95 Progress reporting publishes an ETA string without persisting step position, resulting in restart from zero on reclaim."
+    },
+    {
+     "technique": "lease-renewal",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/serve_job.rs:67 The heartbeat thread runs on a timer and acts on renewal refusal by immediately stopping work to prevent zombie execution."
+    },
+    {
+     "technique": "no-unrestorable-state-at-a-suspension-point",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/serve_job.rs:50 Cancellation is polled concurrently and handled exclusively at case boundaries so that work is never torn down mid-call."
+    },
+    {
+     "technique": "terms-travel-permission-does-not",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/dispatch.rs:74 The worker extracts frozen prompt provenance directly from the payload without re-deriving terms against the current registry."
+    }
+   ]
+  },
+  {
+   "context": "sqlite-platform-backend",
+   "subject": "job-coordination",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store/src/sqlite/jobs.rs:119 Stale running jobs are only recovered as an opportunistic side effect of worker claims rather than through an active sweep or boot recovery mechanism.",
+   "techniques": [
+    {
+     "technique": "terminal-state-recovery",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/sqlite/jobs.rs:119 Recovery of stale running jobs only occurs passively on claim, lacking an active sweep or reaper for orphaned jobs."
+    },
+    {
+     "technique": "job-observability",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/sqlite/jobs.rs:238 The backend lists jobs ordered by creation timestamp without prioritizing anomalies or querying lease deadline and transition history."
+    },
+    {
+     "technique": "step-position-and-resumability",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/sqlite/jobs.rs:136 Progress updates modify a single raw string column with no support for step position, step checkpoints, or resumability."
+    },
+    {
+     "technique": "lease-renewal",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/jobs.rs:157 Lease renewal performs an atomic conditional update checking claimed_at to reject expired or usurped lease holders."
+    },
+    {
+     "technique": "no-unrestorable-state-at-a-suspension-point",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/jobs.rs:61 Cancellation updates are executed in a single atomic SQL statement preventing intermediate unrestorable states."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-14T23:56:48.743181+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "job-coordination"
+   ],
+   "techniques": [
+    "job-observability",
+    "lease-renewal",
+    "no-unrestorable-state-at-a-suspension-point",
+    "step-position-and-resumability",
+    "terminal-state-recovery",
+    "terms-travel-permission-does-not"
+   ],
+   "deviations": 1,
+   "context": "storage-and-jobs",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-14T23:56:48.743181+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "job-coordination"
+   ],
+   "techniques": [
+    "job-state-machines",
+    "lease-renewal",
+    "step-position-and-resumability",
+    "terminal-state-recovery",
+    "terms-travel-permission-does-not"
+   ],
+   "deviations": 1,
+   "context": "evaluation-scoring-types",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-14T23:56:48.743181+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "job-coordination"
+   ],
+   "techniques": [
+    "lease-renewal",
+    "no-unrestorable-state-at-a-suspension-point",
+    "step-position-and-resumability",
+    "terms-travel-permission-does-not"
+   ],
+   "deviations": 1,
+   "context": "runner-worker-pipeline",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  },
+  {
+   "ts": "2026-10-14T23:56:48.743181+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "job-coordination"
+   ],
+   "techniques": [
+    "job-observability",
+    "lease-renewal",
+    "no-unrestorable-state-at-a-suspension-point",
+    "step-position-and-resumability",
+    "terminal-state-recovery"
+   ],
+   "deviations": 1,
+   "context": "sqlite-platform-backend",
+   "via": "curator-multi:agy",
+   "model": "gemini-3.8-flash-high"
+  }
+ ]
+}

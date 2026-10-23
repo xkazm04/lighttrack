@@ -1,0 +1,364 @@
+{
+ "schema": "conform-run/1",
+ "worker": "9300e34e-9ddd-4e94-8f02-e7e31d27dced",
+ "subject": "cross-provider-benchmark-operations",
+ "evaluatedAt": "2026-10-13T02:05:21.316648+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [
+  {
+   "context": "runner-benchmark-calibration",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/runner/src/compare.rs:183 Generation failures reach the breaker as booleans, preventing entitlement exhaustion from being distinguished from provider ill health.",
+   "techniques": [
+    {
+     "technique": "async-run-queue-with-cancel",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/compare.rs:1230 The optional paid pairwise phase starts without checking the cancellation already observed by this function."
+    },
+    {
+     "technique": "axes-and-caveats-live-at-the-surface",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/compare.rs:1118 The shared leaderboard payload converts unknown latency to zero and omits measured p95, tokens and determinism."
+    },
+    {
+     "technique": "budget-preflight-and-ceiling",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/compare.rs:1232 The pairwise phase receives neither the accumulated Budget nor its halt state, so compare's live ceiling does not govern this additional paid work."
+    },
+    {
+     "technique": "dataset-sampling-anonymize-freeze",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/bench.rs:78 The runner's corpus-consumption path records frozen state and version at run time and warns when the referenced dataset is mutable."
+    },
+    {
+     "technique": "determinism-stamping",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/compare.rs:792 Stored cell detail receives generation spend but no generation determinism; its determinism field remains judge-only even when candidates were sampled."
+    },
+    {
+     "technique": "entitlement-exhaustion-is-not-ill-health",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/compare.rs:183 Typed refusal causes are discarded before breaker classification, making the required exhaustion distinction unrepresentable."
+    },
+    {
+     "technique": "failure-clustering-recommendations",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/compare.rs:999 Compare reports dimension means and case results without constructing auditable failing-case clusters by dimension and pattern."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/compare.rs:1051 Case grades reach persisted per-tier reports; the matrix also computes descriptive discrimination and thinking diagnostics."
+    },
+    {
+     "technique": "handicap-disclosure-in-the-result-row",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/compare.rs:777 The complete case-result constructor stores spend facts without a typed concession, although generation can shed schema enforcement or fold system instructions."
+    },
+    {
+     "technique": "sampling-knobs-are-axes-not-strings",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/targets.rs:95 Generation uses the target's resolved typed effort, which the engine splits at its shared provider boundary; reports and default labels retain the level."
+    },
+    {
+     "technique": "target-matrix-runs",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/compare.rs:612 A separate run identifier is minted inside each target's fold, while the cross-target summary has no persisted common matrix-run identifier."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-scoring-types",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/core/src/score.rs:115 The serialized verdict type accepts arbitrary determinism strings without normalizing unknown values to not recorded.",
+   "techniques": [
+    {
+     "technique": "async-run-queue-with-cancel",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/job.rs:38 The job type contract separates claims, actual failures and stale reclaims, and models cancelling, terminal-cancel outcomes and lease fencing."
+    },
+    {
+     "technique": "dataset-sampling-anonymize-freeze",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/dataset.rs:164 The corpus model carries anonymization audit, source-event identity, frozen/version metadata, lineage and explicit sampling strategies."
+    },
+    {
+     "technique": "determinism-stamping",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/score.rs:115 Plain String deserialization accepts an open vocabulary, and ScoreDetail::capped does not clamp unsupported stamps."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/dataset.rs:158 Difficulty is an ordered easy/medium/hard ladder with distinct absence, tolerant stored reads and carriage into BenchmarkCase."
+    },
+    {
+     "technique": "handicap-disclosure-in-the-result-row",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/score.rs:138 The inspected ScoreDetail and GenerationFacts schemas carry generation spend without a typed concession or not-expressible result."
+    },
+    {
+     "technique": "sampling-knobs-are-axes-not-strings",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/bench_target.rs:112 Effort is a typed optional target axis with conservative suffix parsing, explicit default semantics and distinguishable default labels."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-rendering",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/render/src/benchmarks.rs:38 The gate renderer prints the verdict and numbers without the API's comparability caveat, hiding why the baseline cannot support a claim.",
+   "techniques": [
+    {
+     "technique": "async-run-queue-with-cancel",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/jobs.rs:30 The queue table presents claim attempts against the retry maximum and omits actual failures and stale-reclaim counters, conflating worker deaths with retry consumption."
+    },
+    {
+     "technique": "axes-and-caveats-live-at-the-surface",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:38 The complete gate renderer never consumes the response's caveat field."
+    },
+    {
+     "technique": "budget-preflight-and-ceiling",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/benchmarks.rs:22 The rendering-side gate contract preserves partial as an explicit warning; compare rendering also announces budget halts and unpriced lower bounds."
+    },
+    {
+     "technique": "determinism-stamping",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:49 The fully inspected run-history table displays status and measurements but never reads or renders the run report's determinism stamp."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/datasets.rs:73 The complete dataset-item table carries tags but drops each item's difficulty, leaving graded and ungraded cases indistinguishable on this case surface."
+    },
+    {
+     "technique": "sampling-knobs-are-axes-not-strings",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/compare.rs:203 Matrices with declared effort gain a separate column, and unset rows receive an explicit absence marker rather than a guessed level."
+    },
+    {
+     "technique": "target-matrix-runs",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/compare.rs:211 The fully inspected comparison table reports median latency but has no tail-latency or token columns, so its three-axis scorecard is incomplete."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-pipeline",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/labels_promote.rs:93 Label promotion copies production text directly into a permanent dataset case without dataset-entry scrubbing or an anonymization audit.",
+   "techniques": [
+    {
+     "technique": "axes-and-caveats-live-at-the-surface",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks.rs:447 The API downgrades a noncomparable baseline and carries its reason in the response rather than emitting an unqualified verdict."
+    },
+    {
+     "technique": "budget-preflight-and-ceiling",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks.rs:434 The API's consumption contract keeps budget-halted, preflight-aborted and cancelled runs unverified instead of scalar-comparing them into pass."
+    },
+    {
+     "technique": "dataset-sampling-anonymize-freeze",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/labels_promote.rs:93 This production-event promotion path copies input/output directly, sets anonymization to null and inserts the item; ingest redaction can be disabled."
+    },
+    {
+     "technique": "determinism-stamping",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/scores.rs:43 The external score boundary only caps provenance sizes; validation and capping leave arbitrary determinism strings intact instead of clamping them to not recorded."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/difficulty_input.rs:42 Stated writes reject unknown grades by name, preserve absence as ungraded and remain separate from tolerant stored reads."
+    },
+    {
+     "technique": "sampling-knobs-are-axes-not-strings",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks_target.rs:126 Matrix declarations deserialize through the typed target contract, including its optional enumerated effort, before storage."
+    },
+    {
+     "technique": "target-matrix-runs",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks.rs:180 The API declares, validates and stores the target matrix in the benchmark definition, including registry prompt references."
+    }
+   ]
+  },
+  {
+   "context": "runner-scoring-engine",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/runner/src/pairwise.rs:139 The paid pairwise matrix guards game count but has no dollar-ceiling enforcement during generation or judging.",
+   "techniques": [
+    {
+     "technique": "async-run-queue-with-cancel",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/pairwise.rs:152 Pairwise generation and judging eagerly dispatch bounded work without RunControl cancellation checks or progress updates."
+    },
+    {
+     "technique": "axes-and-caveats-live-at-the-surface",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/stats/paired.rs:243 Statistical report construction exports the retained paired count, dropped count and subset caveats rather than substituting the run's larger count."
+    },
+    {
+     "technique": "budget-preflight-and-ceiling",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/pairwise.rs:139 Preflight estimates judge calls and limits games; it does not enforce max_cost, include generation in that dollar hint or maintain a live spend ceiling."
+    },
+    {
+     "technique": "cheapest-sufficient-configuration",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/stats/frontier.rs:255 When multiple targets leave only the best on the frontier, IsBest is selected as a recommendation; the standard requires reporting a singleton frontier without recommending it."
+    },
+    {
+     "technique": "determinism-stamping",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/pairwise.rs:296 Stored game detail is built solely from the judge outcome and omits both candidates' generation stamps, although the run-level report stamps generation and judging separately."
+    },
+    {
+     "technique": "entitlement-exhaustion-is-not-ill-health",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/pairwise.rs:180 A typed generation refusal becomes a stderr message and an output-less GenCell, losing exhaustion cause and its distinct exclusion diagnosis."
+    },
+    {
+     "technique": "failure-clustering-recommendations",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/rubric.rs:364 The healing prompt recommends changes from aggregate dimension means and failure counts, without case-pattern clusters or member-case evidence."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/stats/tiers.rs:241 Tier statistics remain descriptive, preserve ungraded separately, disclose uneven coverage and return no separation answer when only one target reached a tier."
+    },
+    {
+     "technique": "handicap-disclosure-in-the-result-row",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/pairwise.rs:177 Successful generation is reduced to output, cost, tokens and determinism; effective schema shedding and instruction-folding concessions do not reach the stored game result."
+    }
+   ],
+   "registryProposal": "Resolve the conflict between cheapest-sufficient-configuration's instruction to recommend per difficulty tier and graded-case-difficulty's explicit prohibition on per-tier recommendations; specify whether sufficiently powered tier-specific tests are an exception."
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-13T02:05:21.316648+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "async-run-queue-with-cancel",
+    "axes-and-caveats-live-at-the-surface",
+    "budget-preflight-and-ceiling",
+    "dataset-sampling-anonymize-freeze",
+    "determinism-stamping",
+    "entitlement-exhaustion-is-not-ill-health",
+    "failure-clustering-recommendations",
+    "graded-case-difficulty",
+    "handicap-disclosure-in-the-result-row",
+    "sampling-knobs-are-axes-not-strings",
+    "target-matrix-runs"
+   ],
+   "deviations": 1,
+   "context": "runner-benchmark-calibration",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-13T02:05:21.316648+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "async-run-queue-with-cancel",
+    "dataset-sampling-anonymize-freeze",
+    "determinism-stamping",
+    "graded-case-difficulty",
+    "handicap-disclosure-in-the-result-row",
+    "sampling-knobs-are-axes-not-strings"
+   ],
+   "deviations": 1,
+   "context": "evaluation-scoring-types",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-13T02:05:21.316648+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "async-run-queue-with-cancel",
+    "axes-and-caveats-live-at-the-surface",
+    "budget-preflight-and-ceiling",
+    "determinism-stamping",
+    "graded-case-difficulty",
+    "sampling-knobs-are-axes-not-strings",
+    "target-matrix-runs"
+   ],
+   "deviations": 1,
+   "context": "evaluation-rendering",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-13T02:05:21.316648+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "axes-and-caveats-live-at-the-surface",
+    "budget-preflight-and-ceiling",
+    "dataset-sampling-anonymize-freeze",
+    "determinism-stamping",
+    "graded-case-difficulty",
+    "sampling-knobs-are-axes-not-strings",
+    "target-matrix-runs"
+   ],
+   "deviations": 1,
+   "context": "evaluation-pipeline",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  },
+  {
+   "ts": "2026-10-13T02:05:21.316648+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "async-run-queue-with-cancel",
+    "axes-and-caveats-live-at-the-surface",
+    "budget-preflight-and-ceiling",
+    "cheapest-sufficient-configuration",
+    "determinism-stamping",
+    "entitlement-exhaustion-is-not-ill-health",
+    "failure-clustering-recommendations",
+    "graded-case-difficulty",
+    "handicap-disclosure-in-the-result-row"
+   ],
+   "deviations": 1,
+   "context": "runner-scoring-engine",
+   "via": "curator-multi:codex",
+   "model": "gpt-6.1-sol"
+  }
+ ]
+}

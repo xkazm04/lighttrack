@@ -42,17 +42,6 @@ pub(crate) fn model_of(envelope: &Value, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-/// Split a trailing `@<effort>` (low|medium|high|xhigh|max) off a model spec, e.g.
-/// "opus@xhigh" → ("opus", Some("xhigh")). Any other string → (model, None).
-pub(crate) fn split_effort(model: &str) -> (&str, Option<&str>) {
-    if let Some((m, e)) = model.rsplit_once('@') {
-        if matches!(e, "low" | "medium" | "high" | "xhigh" | "max") {
-            return (m, Some(e));
-        }
-    }
-    (model, None)
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -90,12 +79,5 @@ mod tests {
             "claude-x"
         );
         assert_eq!(model_of(&json!({}), "haiku"), "haiku");
-    }
-
-    #[test]
-    fn split_effort_only_splits_known_levels() {
-        assert_eq!(split_effort("opus@xhigh"), ("opus", Some("xhigh")));
-        assert_eq!(split_effort("sonnet"), ("sonnet", None));
-        assert_eq!(split_effort("weird@thing"), ("weird@thing", None));
     }
 }

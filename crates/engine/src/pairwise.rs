@@ -175,6 +175,7 @@ pub fn run_pairwise(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SchemaEnforcement;
 
     #[test]
     fn unswap_inverts_a_and_b_keeps_tie() {
@@ -227,7 +228,9 @@ mod tests {
                 latency_ms: Some(1),
                 input_tokens: Some(3),
                 output_tokens: Some(2),
+                reasoning_tokens: None,
                 determinism: Determinism::Exact,
+                schema: SchemaEnforcement::NotRequested,
             })
         }
     }

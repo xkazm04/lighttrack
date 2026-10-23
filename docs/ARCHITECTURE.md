@@ -57,9 +57,13 @@ Provider SDKs already return token usage; the client just forwards it. Prompts/o
 and **redactable** per project (store nothing, hashes, or full text).
 
 > Limits are enforced at **ingest admission**: a breaching event is rejected with HTTP 429 and not
-> recorded, so cooperating clients back off. A future **gateway/proxy mode** (apps route calls *through*
-> LightTrack) would additionally block the provider call *inline*, before the spend. Deferred — it adds
-> latency and a critical-path dependency.
+> recorded, so cooperating clients back off. **Gateway mode** exists since 2026-09-15 for *local*
+> apps: `lt-gateway` (`docs/GATEWAY.md`) is an OpenAI-compatible endpoint on loopback that routes a
+> use case to a seat-metered CLI (`claude -p`, `codex exec`) or an HTTP provider, asks
+> `/v1/limits/status` *before* the spend, fails over to the other seat on a usage limit, and records
+> every attempt itself. It is a third front door, not a replacement for the two above: an app that
+> keeps its own provider calls still reports through (1) or (2). The latency/critical-path concern
+> that deferred it is answered by scope — loopback only, and fail-open on the API.
 
 ## 5. Storage — local→cloud parity
 A `Store` trait abstracts persistence. Two backends:
@@ -118,7 +122,7 @@ tiers: **Alert** (notify only — the event is still recorded), **Throttle** (gr
 **Block** (an unambiguous hard stop at the threshold). Both enforcing tiers reject with **429
 `rate_limited`** and do *not* record the event, so a cooperating client backs off; the breach is also
 readable via `GET /v1/limits/status` and MCP. Inline *pre-call* blocking (before the provider spend)
-still requires gateway mode. The scoring/benchmark engine is **not** subject to limits.
+is what `lt-gateway` adds for apps that call through it (`docs/GATEWAY.md`). The scoring/benchmark engine is **not** subject to limits.
 
 ### 7a1. A threshold can be derived, and a rule can be written by the system
 A `threshold` is a number **or** `{"pct": N, "dimension": "customer"}` — a share of the subject's

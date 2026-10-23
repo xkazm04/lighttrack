@@ -92,6 +92,10 @@ pub(crate) async fn create_run(pool: &PgPool, r: &BenchmarkRun) -> Result<()> {
     Ok(())
 }
 
+/// `id` breaks the `started_at` tie, for the reason spelled out on the SQLite twin: two runs of one
+/// benchmark can share a start instant, this table has no insertion column, and leaving their order
+/// to the query plan let an index change move a promotion gate's verdict. Deterministic, not
+/// authoritative — it makes the answer stable, it does not decide which simultaneous run was later.
 pub(crate) async fn list_runs(
     pool: &PgPool,
     project: Option<&str>,
@@ -101,7 +105,7 @@ pub(crate) async fn list_runs(
         "SELECT {RUN_COLS} FROM benchmark_runs WHERE benchmark_id = $1 \
            AND ($2::text IS NULL OR EXISTS \
                 (SELECT 1 FROM benchmarks b WHERE b.id = benchmark_id AND b.project_id = $2)) \
-         ORDER BY started_at DESC"
+         ORDER BY started_at DESC, id DESC"
     ))
     .bind(benchmark_id.to_string())
     .bind(project.map(str::to_string))

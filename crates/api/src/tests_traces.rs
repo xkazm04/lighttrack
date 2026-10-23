@@ -553,3 +553,25 @@ async fn a_trace_verdict_that_is_not_a_score_is_refused() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body} -> {v}");
     }
 }
+
+/// GUARD: an opaque, non-W3C trace id keeps its case on READS exactly as it does on writes.
+/// Folding it would merge distinct traces and mangle an id the operator reads back — the rule the
+/// write door already pins. Only W3C-shaped hex ids (16/32 chars) are case-insensitive.
+#[tokio::test]
+async fn guard_an_opaque_trace_id_keeps_its_case_on_reads() {
+    let (state, store) = setup(Redactor::off());
+    let key = make_key(&store, "proj-a");
+    let app = crate::build_router(state);
+    ingest_span(&app, &key, "Order-7", "s1", None, 0.001).await;
+
+    let (status, body) = get(&app, &key, "/v1/traces/Order-7").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["trace_id"], "Order-7");
+
+    let (status, body) = get(&app, &key, "/v1/traces/order-7").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "case is meaningful in an opaque id: {body}"
+    );
+}

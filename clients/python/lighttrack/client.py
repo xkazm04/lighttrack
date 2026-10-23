@@ -86,16 +86,26 @@ def _extract_openai(resp: Any):
 
 def _extract_anthropic(resp: Any):
     usage = _get(resp, "usage")
-    inp = _get(usage, "input_tokens") or 0
+    # Anthropic's `input_tokens` is only the UNCACHED remainder: cache reads and cache writes are
+    # counted beside it. The event convention is the whole prompt with `cached_input` a subset of it
+    # (the price book bills `input - cached_input`), so the two cache counters are added back in. Left
+    # as reported, the fresh tokens saturated away against a larger cache read and cache writes were
+    # never billed. Cache-write tokens then bill at the input rate: the price book has no write rate.
+    read = _get(usage, "cache_read_input_tokens")
+    write = _get(usage, "cache_creation_input_tokens")
+    inp = (_get(usage, "input_tokens") or 0) + (read or 0) + (write or 0)
     out = _get(usage, "output_tokens") or 0
-    cached = _get(usage, "cache_read_input_tokens")
-    return (_get(resp, "model"), int(inp), int(out), cached)
+    return (_get(resp, "model"), int(inp), int(out), read)
 
 
 def _extract_gemini(resp: Any):
     um = _get(resp, "usage_metadata", "usageMetadata")
     inp = _get(um, "prompt_token_count", "promptTokenCount") or 0
-    out = _get(um, "candidates_token_count", "candidatesTokenCount") or 0
+    # Answer + thoughts: a thinking model's thoughts are billed as output, and the answer count alone
+    # priced a long-thinking call as a short one.
+    out = (_get(um, "candidates_token_count", "candidatesTokenCount") or 0) + (
+        _get(um, "thoughts_token_count", "thoughtsTokenCount") or 0
+    )
     cached = _get(um, "cached_content_token_count", "cachedContentTokenCount")
     return (_get(resp, "model_version", "modelVersion"), int(inp), int(out), cached)
 

@@ -32,15 +32,22 @@ pub(super) fn renew(
 ) -> Result<LeaseHeld> {
     let now = Utc::now();
     let deadline = now + Duration::seconds(lease_secs.max(0));
-    let n = conn.execute(
+    // `RETURNING status` rather than a row count, because the one thing the renewal must carry back
+    // is which of the two live states the row is in: `cancelling` means an operator asked this
+    // holder to stop, and the renewal is the only channel that reaches it.
+    let mut stmt = conn.prepare(
         "UPDATE relay_tasks SET lease_deadline = ?3, updated_at = ?4 \
-         WHERE id = ?1 AND lease_fence = ?2 AND status IN ('leased','cancelling')",
-        params![id, fmt_ts(fence), fmt_ts(deadline), fmt_ts(now)],
+         WHERE id = ?1 AND lease_fence = ?2 AND status IN ('leased','cancelling') \
+         RETURNING status",
     )?;
-    if n > 0 {
-        return Ok(LeaseHeld::Held {
-            deadline: Some(deadline),
-        });
+    let status: Option<String> = stmt
+        .query_row(
+            params![id, fmt_ts(fence), fmt_ts(deadline), fmt_ts(now)],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(status) = status {
+        return Ok(held(Some(deadline), &status));
     }
     not_held(conn, id)
 }
@@ -54,13 +61,22 @@ pub(super) fn update_progress(
     fence: DateTime<Utc>,
     progress: &str,
 ) -> Result<LeaseHeld> {
-    let n = conn.execute(
+    let mut stmt = conn.prepare(
         "UPDATE relay_tasks SET progress = ?3, updated_at = ?4 \
-         WHERE id = ?1 AND lease_fence = ?2 AND status IN ('leased','cancelling')",
-        params![id, fmt_ts(fence), progress, fmt_ts(Utc::now())],
+         WHERE id = ?1 AND lease_fence = ?2 AND status IN ('leased','cancelling') \
+         RETURNING status",
     )?;
-    if n > 0 {
-        return Ok(LeaseHeld::Held { deadline: None });
+    let status: Option<String> = stmt
+        .query_row(
+            params![id, fmt_ts(fence), progress, fmt_ts(Utc::now())],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(status) = status {
+        // The stop request rides every conditioned write a holder makes, not only the renewal: a
+        // device that publishes progress more often than it renews learns sooner, and one that
+        // publishes none is no worse off than before.
+        return Ok(held(None, &status));
     }
     not_held(conn, id)
 }
@@ -189,6 +205,15 @@ pub(super) fn settle(
         Some(t) => RelaySettle::Settled(Box::new(t)),
         None => RelaySettle::NoSuchTask,
     })
+}
+
+/// The landed-write answer, told apart by the live state the row is in.
+fn held(deadline: Option<DateTime<Utc>>, status: &str) -> LeaseHeld {
+    if status == RelayStatus::Cancelling.as_str() {
+        LeaseHeld::held_cancelling(deadline)
+    } else {
+        LeaseHeld::held(deadline)
+    }
 }
 
 /// Say what the record actually holds now, so a refused holder can name what beat it.

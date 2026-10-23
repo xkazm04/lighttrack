@@ -96,7 +96,18 @@ async fn prompt_id(app: &axum::Router) -> String {
 
 /// Record a finished, green run of `bench` tagged as having scored v2 of `pid`, merging `extra`
 /// into its report.
+///
+/// Every call gets its own minute. The gate picks "the latest run that scored this version", so a
+/// test asserting *which* run it picked has to give the runs an order — and this helper used to
+/// stamp every run with the same hardcoded instant, which meant the only test that records two of
+/// them was asserting an order the data never established. It passed on whatever sequence the
+/// storage engine happened to return, and stopped passing the day `benchmark_runs` grew an index.
+/// A monotonic stamp says what the scenario always meant: the second run happened afterwards.
 async fn record_run(app: &axum::Router, bench: &str, pid: &str, extra: Value) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NTH: AtomicU32 = AtomicU32::new(0);
+    let n = NTH.fetch_add(1, Ordering::Relaxed);
+
     let mut report = json!({ "prompt_id": pid, "prompt_version": 2 });
     for (k, v) in extra.as_object().cloned().unwrap_or_default() {
         report[k] = v;
@@ -107,8 +118,8 @@ async fn record_run(app: &axum::Router, bench: &str, pid: &str, extra: Value) {
         "/v1/benchmark-runs",
         json!({
             "benchmark_id": bench,
-            "started_at": "2026-01-01T00:00:00.000000000Z",
-            "finished_at": "2026-01-01T00:05:00.000000000Z",
+            "started_at": format!("2026-01-01T00:{n:02}:00.000000000Z"),
+            "finished_at": format!("2026-01-01T00:{:02}:00.000000000Z", n + 1),
             "n_cases": 20, "mean_score": 0.95, "status": "passed",
             "report": report
         }),
@@ -301,4 +312,78 @@ async fn a_target_naming_a_prompt_this_project_does_not_have_is_refused() {
     )
     .await;
     assert_eq!(st, StatusCode::BAD_REQUEST, "{body}");
+}
+
+/// `target` is documented free-form, and the product has taken two names out of it. A name a
+/// caller may still write is not reserved: the value is read as policy whoever wrote it, and the
+/// next name the product takes captures whatever callers were keeping under it. The door refuses
+/// the taken names and the request field writes them, so the capability stays reachable.
+#[tokio::test]
+async fn the_reserved_keys_inside_a_free_form_target_are_the_hosts_to_write() {
+    let (state, _store) = setup(Redactor::off());
+    let app = crate::build_router(state);
+
+    // Failure mining, requested the way the product owns it.
+    let stored = ok(
+        &app,
+        "POST",
+        "/v1/projects/p1/benchmarks",
+        json!({
+            "name": "mined", "rubric": "x",
+            "target": { "endpoint": "https://rag.acme.com/answer" },
+            "regression_dataset": "support-failures"
+        }),
+    )
+    .await;
+    assert_eq!(stored["target"]["regression_dataset"], "support-failures");
+    assert_eq!(stored["target"]["endpoint"], "https://rag.acme.com/answer");
+
+    // The same key, sent by the caller: refused, with the field to send instead named. Before this
+    // door a caller's own note under that name silently became the dataset every failing verdict
+    // in the project was appended to.
+    let (st, body) = send(
+        &app,
+        "POST",
+        "/v1/projects/p1/benchmarks",
+        json!({
+            "name": "smuggled", "rubric": "x",
+            "target": { "endpoint": "https://x", "regression_dataset": "my-own-note" }
+        }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{body}");
+    assert!(err_message(&body).contains("regression_dataset"), "{body}");
+
+    // Recurrence is the older reservation and the more expensive capture: a number under that name
+    // becomes a schedule row on the next boot, and paid runs follow.
+    let (st, body) = send(
+        &app,
+        "POST",
+        "/v1/projects/p1/benchmarks",
+        json!({
+            "name": "smuggled-2", "rubric": "x",
+            "target": { "endpoint": "https://x", "schedule_interval_secs": 60 }
+        }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        err_message(&body).contains("schedule_interval_secs"),
+        "{body}"
+    );
+
+    // The floor: every other name in `target` is still the caller's, and a matrix target is
+    // untouched by the check.
+    let free = ok(
+        &app,
+        "POST",
+        "/v1/projects/p1/benchmarks",
+        json!({
+            "name": "free-form", "rubric": "x",
+            "target": { "endpoint": "https://x", "regression_notes": "mine", "retries": 3 }
+        }),
+    )
+    .await;
+    assert_eq!(free["target"]["regression_notes"], "mine");
+    assert_eq!(free["target"]["retries"], 3);
 }

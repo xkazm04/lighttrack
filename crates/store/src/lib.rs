@@ -16,6 +16,7 @@ pub mod pricing;
 mod rollup_compat;
 pub mod schema;
 pub mod scope;
+pub mod scope_usage;
 pub mod sqlite;
 pub mod threshold;
 
@@ -463,8 +464,27 @@ pub fn evaluate_rule_resolved(
     threshold: f64,
     basis: ThresholdBasis,
 ) -> LimitStatus {
+    evaluate_rule_resolved_at(rule, usage, threshold, basis, Utc::now())
+}
+
+/// [`evaluate_rule_resolved`] at a caller-supplied instant. This keeps rule expiry, escalation,
+/// usage windows, and derived-threshold resolution on one clock tick when the caller has already
+/// captured `now`.
+pub fn evaluate_rule_resolved_at(
+    rule: &LimitRule,
+    usage: &Usage,
+    threshold: f64,
+    basis: ThresholdBasis,
+    now: DateTime<Utc>,
+) -> LimitStatus {
     let evidence = matches!(rule.metric, LimitMetric::CostUsd).then(|| usage.cost_evidence());
-    rule.evaluate_resolved(usage.metric_value(rule.metric), threshold, basis, evidence)
+    rule.evaluate_resolved_at(
+        usage.metric_value(rule.metric),
+        threshold,
+        basis,
+        evidence,
+        now,
+    )
 }
 
 /// Outcome of an admission-controlled ingest ([`Store::insert_event_checked`]).
@@ -555,7 +575,7 @@ pub fn evaluate_admission<F, R>(
     rules: &[LimitRule],
     ev: &LlmEvent,
     contribution: Usage,
-    mut current_usage: F,
+    current_usage: F,
     resolve_threshold: R,
 ) -> Result<Admission>
 where
@@ -563,6 +583,31 @@ where
     R: Fn(&LimitRule) -> (f64, ThresholdBasis),
 {
     let now = Utc::now();
+    evaluate_admission_at(
+        rules,
+        ev,
+        contribution,
+        now,
+        current_usage,
+        resolve_threshold,
+    )
+}
+
+/// [`evaluate_admission`] at a caller-supplied instant. Backends use this after they have already
+/// read usage windows and derived-threshold inputs at `now`, so the final rule action is evaluated
+/// against the same clock.
+pub fn evaluate_admission_at<F, R>(
+    rules: &[LimitRule],
+    ev: &LlmEvent,
+    contribution: Usage,
+    now: DateTime<Utc>,
+    mut current_usage: F,
+    resolve_threshold: R,
+) -> Result<Admission>
+where
+    F: FnMut(LimitWindow, Option<&LimitScope>) -> Result<Usage>,
+    R: Fn(&LimitRule) -> (f64, ThresholdBasis),
+{
     let dims = ev.scope_dims();
     // Usage cache now keys by (window, scope): a scoped cap and a project-wide cap over the same
     // window read different rolling totals.
@@ -586,7 +631,7 @@ where
             }
         };
         let (threshold, basis) = resolve_threshold(r);
-        let mut st = evaluate_rule_resolved(r, &usage, threshold, basis);
+        let mut st = evaluate_rule_resolved_at(r, &usage, threshold, basis, now);
         // Graduated throttling is decided here, where the candidate event is known: a `Throttle`
         // rule past its ramp start sheds a proportional, deterministic share of traffic. Recorded on
         // the status so the rejection ledger and the alerts attribute the shed to the right rule.
@@ -622,10 +667,11 @@ pub fn insert_event_checked_nonatomic<S: Store + ?Sized>(
         }
     })?;
     let resolve = threshold::resolver(&resolved);
-    let admission = evaluate_admission(
+    let admission = evaluate_admission_at(
         &rules,
         ev,
         event_contribution(ev),
+        now,
         |w, scope| match scope {
             None => store.usage_since(&ev.project_id, w.since(now)),
             Some(s) => store.usage_since_scoped(&ev.project_id, w.since(now), s),
@@ -1356,6 +1402,17 @@ pub trait Store: Send + Sync {
     // --- model prices (Phase 3.6a) ---
     fn upsert_price(&self, p: &ModelPriceRow) -> Result<()>;
     fn list_prices(&self) -> Result<Vec<ModelPriceRow>>;
+    /// Write a whole seed book as ONE unit: every row lands or none does. The boot seeds only when
+    /// the book is empty, so a seed that stopped halfway used to leave a non-empty book that no
+    /// later start would ever finish — the node then priced 5 of 18 models and said nothing. The
+    /// default writes row by row; a backend that can commit atomically overrides it, and one that
+    /// cannot keeps that half-seed hazard.
+    fn seed_prices(&self, rows: &[ModelPriceRow]) -> Result<()> {
+        for p in rows {
+            self.upsert_price(p)?;
+        }
+        Ok(())
+    }
 
     // --- datasets (Phase 3.6b) ---
     fn create_dataset(&self, d: &Dataset) -> Result<()>;

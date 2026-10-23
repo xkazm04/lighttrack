@@ -12,6 +12,7 @@ use lighttrack_core::RelayTask;
 
 use crate::config::Source;
 use crate::report::RunReport;
+use crate::verdict::{self, Verdict};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -37,7 +38,10 @@ impl Client {
         })
     }
 
-    fn post(&self, path: &str, body: &Value) -> Result<Value> {
+    /// One HTTP answer, uninterpreted. An `Err` here is a transport failure and nothing else: a
+    /// refusal is a status code, and folding it into an error string is how the status got lost and
+    /// had to be guessed back out of prose (see `crate::verdict`).
+    fn post_raw(&self, path: &str, body: &Value) -> Result<Answer> {
         let url = format!("{}{}", self.base, path);
         let resp = self
             .http
@@ -46,12 +50,20 @@ impl Client {
             .json(body)
             .send()
             .with_context(|| format!("POST {url}"))?;
-        let status = resp.status();
-        let text = resp.text().unwrap_or_default();
-        if !status.is_success() {
-            bail!("POST {path} -> HTTP {}: {text}", status.as_u16());
+        Ok(Answer {
+            status: resp.status().as_u16(),
+            body: resp.text().unwrap_or_default(),
+        })
+    }
+
+    /// For the doors whose only two outcomes are "it worked" and "give up this round" — the lease
+    /// itself. Every door that carries an ownership decision goes through `post_raw`.
+    fn post(&self, path: &str, body: &Value) -> Result<Value> {
+        let a = self.post_raw(path, body)?;
+        if !(200..300).contains(&a.status) {
+            bail!("POST {path} -> HTTP {}: {}", a.status, a.body);
         }
-        Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+        Ok(serde_json::from_str(&a.body).unwrap_or(Value::Null))
     }
 
     /// Lease up to `max` due tasks this device can run, held for `lease_secs`; the server
@@ -94,30 +106,54 @@ impl Client {
         })
     }
 
-    /// Prove this device is still running `task_id`. `Ok(false)` means the lease is no longer ours
-    /// (HTTP 409) — affirmative evidence of a takeover, and a DIFFERENT answer from `Err`, which
-    /// only means "I could not tell". A blip must not abandon a healthy run; a takeover must stop
-    /// one.
-    pub(crate) fn renew(&self, task_id: &str, fence: DateTime<Utc>) -> Result<bool> {
-        match self.post(
+    /// Prove this device is still running `task_id`, and read the answer. The renewal is the only
+    /// channel that reaches a live device, so it carries three different facts — still yours, stop,
+    /// not yours any more — which `crate::verdict` tells apart from the status and the typed body.
+    /// A blip must not abandon a healthy run; a takeover must stop one; a cancel must stop one
+    /// without abandoning its report.
+    pub(crate) fn renew(&self, task_id: &str, fence: DateTime<Utc>) -> Verdict {
+        verdict::classify(self.post_raw(
             &format!("/v1/relay/tasks/{task_id}/renew"),
             &json!({ "fence": fence }),
-        ) {
-            Ok(_) => Ok(true),
-            Err(e) if is_conflict(&e) => Ok(false),
-            Err(e) => Err(e),
+        ))
+    }
+
+    /// Publish liveness detail for a task this device is running, carrying the lease fence.
+    ///
+    /// Its own door, never the heartbeat's: liveness must not wait on the work having something to
+    /// say, or a device that is alive but stuck computing a line reads as a dead one. And unlike
+    /// every other call in this module the answer is **not** classified into a `Verdict` — progress
+    /// is a read model, so a refusal here is a log line and nothing else. Giving it an ownership
+    /// opinion would let a telemetry channel stop the work it reports on.
+    pub(crate) fn progress(
+        &self,
+        task_id: &str,
+        fence: DateTime<Utc>,
+        progress: &str,
+    ) -> Result<()> {
+        let a = self.post_raw(
+            &format!("/v1/relay/tasks/{task_id}/progress"),
+            &json!({ "fence": fence, "progress": progress }),
+        )?;
+        if !(200..300).contains(&a.status) {
+            bail!("HTTP {}: {}", a.status, a.body);
         }
+        Ok(())
     }
 
     /// Settle one task with the run's outcome + usage accounting, carrying the lease fence. A 409
     /// here means the report was NOT recorded — this device no longer owns the task.
+    ///
+    /// Classified through the same authority as the renewal: one taxonomy, used by every door that
+    /// decides ownership. The alternative is what was here — a second substring test, in a second
+    /// module, free to drift from the first.
     pub(crate) fn settle(
         &self,
         task_id: &str,
         fence: Option<DateTime<Utc>>,
         report: &RunReport,
-    ) -> Result<()> {
-        self.post(
+    ) -> Verdict {
+        verdict::classify(self.post_raw(
             &format!("/v1/relay/tasks/{task_id}/result"),
             &json!({
                 "status": report.status,
@@ -139,9 +175,14 @@ impl Client {
                 "output": report.result_text,
                 "fence": fence,
             }),
-        )?;
-        Ok(())
+        ))
     }
+}
+
+/// One HTTP answer before anything interprets it: the status code and the body text, both intact.
+pub(crate) struct Answer {
+    pub status: u16,
+    pub body: String,
 }
 
 /// What a lease hands back: the tasks, and the renewal contract that comes with them. The cadence
@@ -150,9 +191,4 @@ impl Client {
 pub(crate) struct Lease {
     pub tasks: Vec<RelayTask>,
     pub renew_secs: u64,
-}
-
-/// Whether an error is the 409 that means "you do not hold this any more".
-pub(crate) fn is_conflict(e: &anyhow::Error) -> bool {
-    e.to_string().contains("HTTP 409")
 }

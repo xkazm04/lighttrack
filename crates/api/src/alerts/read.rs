@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use lighttrack_core::{AlertKind, Scope};
+use lighttrack_core::{Alert, AlertKind, Scope};
 use lighttrack_store::AlertFilter;
 
 use crate::auth::Principal;
@@ -68,15 +68,26 @@ pub(crate) async fn list_alerts(
         limit: q.limit.unwrap_or(0),
         cursor: q.cursor,
     };
+    let page_limit = filter.effective_limit();
     let store = st.store.clone();
     let rows = spawn_db(move || store.list_alerts(&filter)).await?;
-    let next = rows.last().map(|a| {
+    let next = next_page_cursor(&rows, page_limit);
+    Ok(Json(json!({ "alerts": rows, "next_cursor": next })))
+}
+
+/// A cursor is the last row's keyset position, and only when this page filled the limit. A shorter
+/// page is the last page: handing back a cursor makes the client fetch one empty page. The cursor
+/// is exclusive, so that extra fetch is empty rather than a loop.
+fn next_page_cursor(rows: &[Alert], page_limit: usize) -> Option<String> {
+    if rows.len() != page_limit {
+        return None;
+    }
+    rows.last().map(|a| {
         lighttrack_store::codec::encode_event_cursor(
             &lighttrack_store::codec::fmt_ts(a.fired_at),
             &a.id,
         )
-    });
-    Ok(Json(json!({ "alerts": rows, "next_cursor": next })))
+    })
 }
 
 #[derive(Deserialize)]
@@ -158,4 +169,40 @@ fn parse_since(s: &str) -> Result<DateTime<Utc>, ApiError> {
         }
     };
     Ok(Utc::now() - d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn row(id: &str) -> Alert {
+        let mut alert = Alert::new(
+            AlertKind::LimitBreach,
+            Some("p".into()),
+            "k".into(),
+            json!({}),
+        );
+        alert.id = id.into();
+        alert
+    }
+
+    #[test]
+    fn a_short_page_has_no_next_cursor() {
+        let rows = vec![row("a"), row("b")];
+        assert!(
+            next_page_cursor(&rows, 100).is_none(),
+            "a short page has no following page; a cursor would fetch an empty one"
+        );
+        let full = next_page_cursor(&rows, rows.len()).expect("a full page still continues");
+        let last = rows.last().expect("row");
+        assert_eq!(
+            full,
+            lighttrack_store::codec::encode_event_cursor(
+                &lighttrack_store::codec::fmt_ts(last.fired_at),
+                &last.id,
+            )
+        );
+        assert!(next_page_cursor(&[], 100).is_none());
+    }
 }

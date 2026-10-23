@@ -11,7 +11,8 @@ use anyhow::{bail, Context, Result};
 
 use lighttrack_core::{Rubric, ScoreDetail, ScoreKind};
 use lighttrack_engine::{
-    build_judge_prompt, parse_judge_spec, run_judge, run_rubric_judge, EngineConfig,
+    build_freeform_prompt, parse_judge_spec, run_freeform_judge, run_rubric_judge, EngineConfig,
+    FreeformContract,
 };
 
 use crate::cli::Cli;
@@ -21,7 +22,9 @@ use crate::provenance::{freeform_detail, rubric_detail, weakest_reasoning};
 /// The judging contract for one run. The `label` is the `rubric` field written on every posted
 /// score — and, for `score-traces`, the key its idempotency check matches on.
 pub(crate) enum Judge {
-    Freeform(String),
+    /// Criteria text promoted to a contract: an identity for the criteria plus the threshold the
+    /// pass/fail is computed against **here**, rather than read off the judge model's own boolean.
+    Freeform(FreeformContract),
     Structured(Box<Rubric>),
 }
 
@@ -49,7 +52,7 @@ impl Judge {
         rubric_id: Option<&str>,
     ) -> Result<Judge> {
         match (rubric_text, rubric_id) {
-            (Some(t), None) => Ok(Judge::Freeform(t.to_string())),
+            (Some(t), None) => Ok(Judge::Freeform(FreeformContract::new(t))),
             (None, Some(id)) => {
                 let r: Rubric = get(cli, http, &format!("/v1/rubrics/{id}"))
                     .with_context(|| format!("fetching rubric '{id}'"))?;
@@ -63,19 +66,24 @@ impl Judge {
     /// What the posted score's `rubric` field says: the criteria text, or the rubric's name.
     pub(crate) fn label(&self) -> &str {
         match self {
-            Judge::Freeform(text) => text,
+            Judge::Freeform(c) => c.criteria(),
             Judge::Structured(r) => &r.name,
         }
     }
 
-    /// The stored rubric this contract judges against, when there is one.
+    /// The identity of the contract this verdict was judged under.
     ///
     /// Stamped onto every verdict beside the label. The label is what a human reads; this is what a
     /// query joins on — it survives a rename and separates two rubrics that share a name, neither of
     /// which the label can do.
+    ///
+    /// A freeform contract used to return `None` here, so no query could tell two runs under edited
+    /// criteria apart: the criteria arrive as a string on every request and there is no stored row to
+    /// cite. [`FreeformContract::id`] is a content digest of that string, which answers the same
+    /// question and changes the moment anybody edits a word.
     pub(crate) fn rubric_id(&self) -> Option<&str> {
         match self {
-            Judge::Freeform(_) => None,
+            Judge::Freeform(c) => Some(c.id()),
             Judge::Structured(r) => Some(&r.id),
         }
     }
@@ -97,13 +105,19 @@ impl Judge {
     ) -> Result<Verdict> {
         let (jp, jm) = parse_judge_spec(&engine.model);
         match self {
-            Judge::Freeform(text) => {
-                let prompt = build_judge_prompt(text, input, output);
-                let o = run_judge(engine, &jp, &jm, &prompt).context("judge failed")?;
+            Judge::Freeform(c) => {
+                // No reference answer: a production trace carries the exchange, not a golden output.
+                // The *builder* is the one the benchmark uses, so a judge calibrated on labelled
+                // cases and a judge scoring production read the same instruction text.
+                let prompt = build_freeform_prompt(c, input, None, output);
+                let o = run_freeform_judge(engine, &jp, &jm, c, &prompt, 1, 1)
+                    .context("judge failed")?;
                 Ok(Verdict {
                     value: o.verdict.score,
                     max: o.verdict.max,
-                    pass: o.verdict.pass,
+                    // The contract's decision, not `o.verdict.pass` — the judge model does not get
+                    // to write the gate's answer for the candidate it is evaluating.
+                    pass: o.pass,
                     reasoning: o.verdict.reasoning.clone(),
                     scored_by: o.model.clone(),
                     cost_usd: o.cost_usd,
@@ -163,10 +177,49 @@ mod tests {
     /// rubric's *name* — never by its dimensions or its id.
     #[test]
     fn label_is_the_criteria_text_or_the_rubric_name() {
-        assert_eq!(Judge::Freeform("be helpful".into()).label(), "be helpful");
+        assert_eq!(
+            Judge::Freeform(FreeformContract::new("be helpful")).label(),
+            "be helpful"
+        );
         assert_eq!(
             Judge::Structured(Box::new(rubric("support-quality"))).label(),
             "support-quality"
+        );
+    }
+
+    /// A freeform verdict used to carry no contract identity at all (`rubric_id: None`), so two runs
+    /// under edited criteria were indistinguishable by query. The digest is that identity.
+    #[test]
+    fn a_freeform_contract_is_identified_by_its_criteria() {
+        let a = Judge::Freeform(FreeformContract::new("be helpful"));
+        let same = Judge::Freeform(FreeformContract::new("be helpful"));
+        let edited = Judge::Freeform(FreeformContract::new("be helpful and brief"));
+
+        let id = a.rubric_id().expect("a freeform contract has an identity");
+        assert_eq!(Some(id), same.rubric_id());
+        assert_ne!(Some(id), edited.rubric_id());
+        assert!(
+            id.starts_with("freeform:"),
+            "distinguishable from a stored rubric id: {id}"
+        );
+        // A stored rubric still answers with its own row id, untouched.
+        assert_eq!(
+            Judge::Structured(Box::new(rubric("support-quality"))).rubric_id(),
+            Some("r1")
+        );
+    }
+
+    /// The contract kind is unchanged by gaining an identity: a freeform verdict is still
+    /// `ScoreKind::Freeform`, which is what the API's typed reads filter on.
+    #[test]
+    fn the_contract_kind_is_unchanged() {
+        assert_eq!(
+            Judge::Freeform(FreeformContract::new("x")).kind(),
+            ScoreKind::Freeform
+        );
+        assert_eq!(
+            Judge::Structured(Box::new(rubric("r"))).kind(),
+            ScoreKind::Rubric
         );
     }
 }

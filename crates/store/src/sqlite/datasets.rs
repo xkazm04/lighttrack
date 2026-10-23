@@ -3,7 +3,7 @@
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::Value;
 
-use lighttrack_core::{Dataset, DatasetItem};
+use lighttrack_core::{Dataset, DatasetItem, Difficulty};
 
 use crate::codec::{fmt_ts, parse_ts};
 use crate::Result;
@@ -12,7 +12,7 @@ pub(super) const DATASET_COLS: &str =
     "id, project_id, name, version, frozen, source, created_at, parent_id";
 pub(super) const ITEM_COLS: &str =
     "id, dataset_id, input, output, expected, context, tags, source_event_id, anonymization, \
-     input_hash";
+     input_hash, difficulty";
 
 pub(super) fn create(conn: &Connection, d: &Dataset) -> Result<()> {
     conn.execute(
@@ -81,8 +81,8 @@ pub(super) fn create_item(conn: &Connection, item: &DatasetItem) -> Result<()> {
     conn.execute(
         "INSERT INTO dataset_items \
          (id, dataset_id, input, output, expected, context, tags, source_event_id, \
-          anonymization, input_hash) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+          anonymization, input_hash, difficulty) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         params![
             item.id,
             item.dataset_id,
@@ -94,6 +94,9 @@ pub(super) fn create_item(conn: &Connection, item: &DatasetItem) -> Result<()> {
             item.source_event_id,
             anon,
             item.input_hash,
+            // The wire spelling, so the column reads the same on every backend. `None` binds NULL:
+            // ungraded stays ungraded rather than becoming a tier nobody chose.
+            item.difficulty.map(|d| d.as_str()),
         ],
     )?;
     Ok(())
@@ -166,6 +169,7 @@ type ItemRaw = (
     Option<String>,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 
 fn map_item(row: &Row) -> rusqlite::Result<ItemRaw> {
@@ -180,6 +184,7 @@ fn map_item(row: &Row) -> rusqlite::Result<ItemRaw> {
         row.get(7)?,
         row.get(8)?,
         row.get(9)?,
+        row.get(10)?,
     ))
 }
 
@@ -203,6 +208,9 @@ fn item_from_raw(r: ItemRaw) -> Result<DatasetItem> {
         source_event_id: r.7,
         anonymization,
         input_hash: r.9,
+        // A spelling this build does not know is read as ungraded, not as a guess: the same
+        // degrade `core::dataset::de_difficulty` applies on the wire.
+        difficulty: r.10.as_deref().and_then(Difficulty::parse),
     })
 }
 

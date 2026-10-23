@@ -1,0 +1,137 @@
+{
+ "schema": "conform-run/1",
+ "worker": "ce4bf078-74d0-41df-a3c6-2c181dcf3c1a",
+ "subject": "migrations",
+ "evaluatedAt": "2026-10-15T03:48:04.257586+00:00",
+ "provider": "grok",
+ "model": "grok-4.7",
+ "pairs": [
+  {
+   "context": "store-schema-definition",
+   "subject": "migrations",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store/src/schema/migrations.rs:11 The plan's own contract treats a missing table as a successful add, so a widening that runs before its table exists is indistinguishable from a column that was added.",
+   "techniques": [
+    {
+     "technique": "data-migrations",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/schema/migrations.rs:65 This UPDATE sits in the same raw step as the effective_date rename and the SET NOT NULL; nothing counts nulls before and non-nulls after."
+    },
+    {
+     "technique": "dynamic-table-set-migrations",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/schema/tables/mod.rs:1 The table set is a compile-time const list, not a set the operator defines at runtime."
+    },
+    {
+     "technique": "idempotent-steps",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/schema/migrations.rs:11 A guard may treat the expected prior or completed shape as done. A missing table is neither, and this contract calls it success."
+    },
+    {
+     "technique": "migrate-from-data-shape",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/schema/render_pg.rs:5 Steps probe the catalog and replay. That is ledger-less replay, which this technique distinguishes from per-record shape classification, on engines that can store a marker."
+    },
+    {
+     "technique": "schema-drift-detection",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/schema/model.rs:76 added_in renders post-ship columns as ALTER and original columns as CREATE from one list. The fingerprint in mod.rs hashes that model; it does not read a live database, so class 3 is not claimed on this line."
+    },
+    {
+     "technique": "transactional-ddl",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/schema/render_pg.rs:53 One script, no per-step COMMIT and no schema-version write as the last act of a step, so a crash cannot leave a ledger at the last finished step."
+    }
+   ],
+   "registryProposal": "transactional-ddl defines the atomic unit as one step plus its ledger bump, while the golden path also licenses a ledger-less replay chain. A chain with no version counter fails this technique by construction; the technique should say when that choice is out of scope, or the golden path should not call it valid."
+  },
+  {
+   "context": "store-integration-tests",
+   "subject": "migrations",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store/tests/schema_equivalence.rs:4 The equivalence check applies a full script to two empty databases, so a fresh install can match the frozen script while a file that actually upgraded still diverges.",
+   "techniques": [
+    {
+     "technique": "data-migrations",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/tests/schema_equivalence.rs:10 The assertions compare column shape on empty databases. They do not backfill or count stored rows."
+    },
+    {
+     "technique": "dynamic-table-set-migrations",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/tests/schema_equivalence.rs:68 Tables added after the freeze are a fixed name list, not an operator-defined set discovered at runtime."
+    },
+    {
+     "technique": "error-propagation",
+     "verdict": "deviation",
+     "evidence": "crates/store/tests/schema_equivalence.rs:252 The re-apply test discards every error, then passes if the schema snapshot is unchanged, so a failed second pass looks like nothing to do."
+    },
+    {
+     "technique": "expand-deploy-contract",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/tests/schema_equivalence.rs:197 Each check opens one in-memory database in one process. Nothing here runs two code versions against one store."
+    },
+    {
+     "technique": "idempotent-steps",
+     "verdict": "deviation",
+     "evidence": "crates/store/tests/schema_equivalence.rs:202 Applying the current plan accepts 'no such table' as a non-error, which is the skip the technique says must halt."
+    },
+    {
+     "technique": "migrate-from-data-shape",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/tests/schema_equivalence.rs:159 The suite replays an ordered statement list and then reads PRAGMA table_info. It does not classify stored records."
+    },
+    {
+     "technique": "schema-drift-detection",
+     "verdict": "deviation",
+     "evidence": "crates/store/tests/schema_equivalence.rs:4 The checked-in legacy SQL is a real older artifact, but both sides are created empty. There is no migrate-the-oldest-file versus fresh-install diff, and no prepare-every-query or foreign-key sweep."
+    }
+   ],
+   "registryProposal": "schema-drift-detection should say that applying two full scripts to two empty databases is not the fresh-versus-upgraded convergence diff, even when one script is a frozen older file."
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-15T03:48:04.257586+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "migrations"
+   ],
+   "techniques": [
+    "data-migrations",
+    "dynamic-table-set-migrations",
+    "idempotent-steps",
+    "migrate-from-data-shape",
+    "schema-drift-detection",
+    "transactional-ddl"
+   ],
+   "deviations": 1,
+   "context": "store-schema-definition",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  },
+  {
+   "ts": "2026-10-15T03:48:04.257586+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "migrations"
+   ],
+   "techniques": [
+    "data-migrations",
+    "dynamic-table-set-migrations",
+    "error-propagation",
+    "expand-deploy-contract",
+    "idempotent-steps",
+    "migrate-from-data-shape",
+    "schema-drift-detection"
+   ],
+   "deviations": 1,
+   "context": "store-integration-tests",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  }
+ ]
+}

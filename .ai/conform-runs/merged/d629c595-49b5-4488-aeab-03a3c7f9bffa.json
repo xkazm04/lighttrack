@@ -1,0 +1,250 @@
+{
+ "schema": "conform-run/1",
+ "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+ "subject": "prompt-assembly",
+ "evaluatedAt": "2026-10-12T23:56:33.821469+00:00",
+ "provider": "grok",
+ "model": "grok-4.7",
+ "pairs": [
+  {
+   "context": "evaluation-rendering",
+   "subject": "prompt-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/render/src/lib.rs:6 Searched crates/render for system-prompt assembly, token budgets, cache breakpoints, compaction, and template interpolation and found none; this crate only turns API JSON into Markdown, including a verbatim dump of stored prompt text.",
+   "techniques": [
+    {
+     "technique": "layered-composition",
+     "verdict": "not-applicable",
+     "evidence": "crates/render/src/prompts.rs:59 Resolved prompt text is copied into a display fence, not composed as model-facing layers."
+    },
+    {
+     "technique": "variable-interpolation",
+     "verdict": "not-applicable",
+     "evidence": "crates/render/src/prompts.rs:41 The renderer reads a finished string and does not fill template holes."
+    }
+   ]
+  },
+  {
+   "context": "mcp-server",
+   "subject": "prompt-assembly",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/mcp/src/prompts.rs:74 MCP prompt text teaches tool names by hand, so a renamed tool stays in the instruction after the generated tools/list roster moves.",
+   "techniques": [
+    {
+     "technique": "capability-documentation",
+     "verdict": "deviation",
+     "evidence": "crates/mcp/src/prompts.rs:74 tools/list is generated from lighttrack-contract (tools.rs:26); these prompt strings name tools by hand, and the test only checks the substring is present."
+    },
+    {
+     "technique": "variable-interpolation",
+     "verdict": "deviation",
+     "evidence": "crates/mcp/src/prompts.rs:73 Empty arguments are dropped and a missing project selects another instruction, but the argument has no declared type or trust class and is interpolated into the instruction."
+    },
+    {
+     "technique": "context-budgeting",
+     "verdict": "deviation",
+     "evidence": "crates/mcp/src/resources.rs:84 Elision does not enforce a total: the wide-trace test expects the elided JSON to stay over MAX_RESOURCE_JSON, and the markdown item is rendered from the unelided body."
+    },
+    {
+     "technique": "recovery-path-as-loss-signal",
+     "verdict": "deviation",
+     "evidence": "crates/mcp/src/resources.rs:110 The get_event pointer is the recovery path; a search of crates/mcp/src found no counter of how often that path is taken, only the marker and tests that it is present."
+    },
+    {
+     "technique": "layered-composition",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/prompts.rs:58 prompts/get is the only door and returns the finished user message; callers do not append prompt text."
+    },
+    {
+     "technique": "task-envelope",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/prompts.rs:76 The task opens with the work and a concrete close, not an expertise claim."
+    },
+    {
+     "technique": "context-reachability",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/prompts.rs:6 The prompt names the tool and leaves the table for the agent to fetch rather than inlining the data."
+    },
+    {
+     "technique": "elision-to-a-refetch-pointer",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/resources.rs:151 Over-budget event input/output is replaced with a byte count and a get_event pointer; the API record is not rewritten, and fields under 64 bytes stay."
+    },
+    {
+     "technique": "consumer-coupled-decoration",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/resources.rs:114 The elision marker's byte count has a named consumer: the caller deciding whether to fetch."
+    },
+    {
+     "technique": "contributed-document-admission",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/prompts.rs:3 These prompts are authored in this repo, not a registry of documents the team did not write."
+    },
+    {
+     "technique": "history-compaction",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/prompts.rs:4 There is no multi-turn transcript here to cut; resource elision is a payload pointer, not history compaction."
+    },
+    {
+     "technique": "fold-only-acknowledged-evidence",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/resources.rs:103 The marker is written into the resource before any model call in this process; it is not a fold of evidence a completed call already carried."
+    }
+   ]
+  },
+  {
+   "context": "provider-generation",
+   "subject": "prompt-assembly",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/engine/src/anthropic_api.rs:44 The Anthropic output ceiling is the vendor's published floor, and a max_tokens stop is returned as truncation with no higher-ceiling retry.",
+   "techniques": [
+    {
+     "technique": "response-reservation-sizing",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/anthropic_api.rs:44 4096 and 64000 are constants, not a percentile of observed lengths; truncation returns EngineError::Truncated. providers.rs:197-198 sends no ceiling for OpenAI, Gemini, OpenRouter, and the CLIs."
+    },
+    {
+     "technique": "layered-composition",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/chat.rs:121 One ChatRequest is projected per provider, system ahead of turns; a single user turn renders verbatim."
+    },
+    {
+     "technique": "context-ownership-regimes",
+     "verdict": "not-applicable",
+     "evidence": "crates/engine/src/providers.rs:236 The conversation arrives on the call. This context does not hold or compact it between turns. No cache_control or continuation-signature field was found under crates/engine."
+    }
+   ]
+  },
+  {
+   "context": "core-observability-types",
+   "subject": "prompt-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/core/src/prompt.rs:88 Searched the listed core files for interpolation, token budgets, cache breakpoints, and compaction and found none; prompt text is stored on an immutable version row, and the only {{input}} replace in the repo is crates/runner/src/targets.rs:64, outside this context.",
+   "techniques": [
+    {
+     "technique": "variable-interpolation",
+     "verdict": "not-applicable",
+     "evidence": "crates/core/src/prompt.rs:90 This file stores a free-form config blob and does not render holes; the substitute lives in the runner."
+    },
+    {
+     "technique": "layered-composition",
+     "verdict": "not-applicable",
+     "evidence": "crates/core/src/prompt.rs:12 The context versions stored prompt text. It does not assemble the bytes sent to a model."
+    }
+   ]
+  },
+  {
+   "context": "gateway-proxy",
+   "subject": "prompt-assembly",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/gateway/src/wire.rs:136 Every system and developer message is lifted out of the turn list and joined into one system field, so a system message that arrived mid-conversation moves to the front.",
+   "techniques": [
+    {
+     "technique": "layered-composition",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/wire.rs:136 prepare() pushes every system and developer role into system_parts and continues, then joins them. A json_object request also appends an instruction onto that system field (wire.rs:149)."
+    },
+    {
+     "technique": "response-reservation-sizing",
+     "verdict": "deviation",
+     "evidence": "crates/gateway/src/wire.rs:28 The caller's max_tokens is dropped before ChatRequest is built, so HTTP seats that could honor it still get no caller ceiling."
+    }
+   ],
+   "registryProposal": "layered-composition already treats a gateway as a last writer and requires a position-preserving hoist, but the golden path's scope sentence (systems that own their assembler) makes a proxy look out of scope. Say a last-hop rewrite is in scope even when the proxy authors no layer."
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-12T23:56:33.821469+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "prompt-assembly"
+   ],
+   "techniques": [
+    "layered-composition",
+    "variable-interpolation"
+   ],
+   "deviations": 0,
+   "context": "evaluation-rendering",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  },
+  {
+   "ts": "2026-10-12T23:56:33.821469+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "prompt-assembly"
+   ],
+   "techniques": [
+    "capability-documentation",
+    "consumer-coupled-decoration",
+    "context-budgeting",
+    "context-reachability",
+    "contributed-document-admission",
+    "elision-to-a-refetch-pointer",
+    "fold-only-acknowledged-evidence",
+    "history-compaction",
+    "layered-composition",
+    "recovery-path-as-loss-signal",
+    "task-envelope",
+    "variable-interpolation"
+   ],
+   "deviations": 1,
+   "context": "mcp-server",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  },
+  {
+   "ts": "2026-10-12T23:56:33.821469+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "prompt-assembly"
+   ],
+   "techniques": [
+    "context-ownership-regimes",
+    "layered-composition",
+    "response-reservation-sizing"
+   ],
+   "deviations": 1,
+   "context": "provider-generation",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  },
+  {
+   "ts": "2026-10-12T23:56:33.821469+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "prompt-assembly"
+   ],
+   "techniques": [
+    "layered-composition",
+    "variable-interpolation"
+   ],
+   "deviations": 0,
+   "context": "core-observability-types",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  },
+  {
+   "ts": "2026-10-12T23:56:33.821469+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "prompt-assembly"
+   ],
+   "techniques": [
+    "layered-composition",
+    "response-reservation-sizing"
+   ],
+   "deviations": 1,
+   "context": "gateway-proxy",
+   "via": "curator-multi:grok",
+   "model": "grok-4.7"
+  }
+ ]
+}

@@ -10,6 +10,7 @@ use serde_json::{json, Map, Value};
 use lighttrack_core::Rubric;
 
 use crate::fence::Fence;
+use crate::judge::freeform::FreeformContract;
 
 /// A built judge prompt. Derefs to `str`, so it passes anywhere the raw prompt text is wanted.
 #[derive(Debug, Clone)]
@@ -50,25 +51,20 @@ impl std::fmt::Display for Prompt {
     }
 }
 
-/// Build a judging prompt for an input/output pair against a freeform rubric.
-pub fn build_judge_prompt(rubric: &str, input: &str, output: &str) -> Prompt {
-    let mut fence = Fence::new();
-    let blocks = format!(
-        "{}{}",
-        fence.wrap("USER INPUT", input),
-        fence.wrap("ASSISTANT OUTPUT", output)
-    );
-    let text = format!(
-        "You are a strict evaluation judge. Evaluate the ASSISTANT OUTPUT for the given USER INPUT \
-against the rubric below.\n\
-{preamble}\n\
-Rubric: {rubric}\n\n\
-Respond with ONLY a JSON object (no prose, no code fences) of the form:\n\
-{{\"score\": <number 0.0-1.0>, \"max\": 1.0, \"pass\": <true|false>, \"reasoning\": \"<one sentence>\"}}\n\n\
-{blocks}",
-        preamble = fence.preamble()
-    );
-    Prompt::fenced(text, &fence)
+/// Build the judging prompt for one case under a [`FreeformContract`].
+///
+/// **One builder, one instrument.** There used to be two: `build_judge_prompt` (no reference answer
+/// at all), used by production trace scoring and by calibration, and [`build_eval_prompt`] (with a
+/// fenced `REFERENCE / EXPECTED ANSWER` block), used by the benchmark — so the kappa that mints a
+/// judge-trust verdict was measured on a prompt production never sent. The reference block is
+/// present iff `expected` is `Some`, and every freeform caller now builds through here.
+pub fn build_freeform_prompt(
+    contract: &FreeformContract,
+    input: &str,
+    expected: Option<&str>,
+    output: &str,
+) -> Prompt {
+    build_eval_prompt(contract.criteria(), input, expected, output)
 }
 
 /// Build a benchmark eval prompt for an input/output pair, with an optional reference answer.
@@ -345,6 +341,8 @@ fn narrate_dims(rubric: &Rubric) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+pub(crate) mod grounding;
 
 #[cfg(test)]
 mod tests;

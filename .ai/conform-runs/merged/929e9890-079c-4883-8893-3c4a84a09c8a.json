@@ -1,0 +1,17 @@
+{
+ "schema": "conform-run/1",
+ "worker": "929e9890-079c-4883-8893-3c4a84a09c8a",
+ "subject": "dynamic-secret-lifecycle",
+ "evaluatedAt": "2026-10-17T23:56:18.491775+00:00",
+ "provider": "codex",
+ "model": "gpt-6.1-sol",
+ "pairs": [],
+ "declined": [
+  {
+   "subject": "dynamic-secret-lifecycle",
+   "context": "sqlite-platform-backend",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": []
+}

@@ -136,6 +136,10 @@ pub(crate) fn validate_target_matrix(
         if let TargetKind::Http { url } = &t.kind {
             vet_target_url(url)?;
         }
+        // A ceiling no run could pass is a typo, and this benchmark may be what gates a deploy.
+        if let Some(l) = &t.limits {
+            l.validate()?;
+        }
     }
     Ok(targets)
 }
@@ -201,6 +205,24 @@ mod tests {
         // Missing required `provider` → rejected (would otherwise silently degrade to simple mode).
         assert!(validate_target_matrix(&json!([{ "model": "x" }])).is_err());
         assert!(validate_target_matrix(&json!(["nope"])).is_err());
+    }
+
+    /// A per-case ceiling that no run could ever pass is a typo, and this benchmark may be what
+    /// gates a deploy — so it is a 400 at write time rather than a target that goes red forever.
+    #[test]
+    fn an_impossible_case_limit_is_refused_at_the_door() {
+        let with = |limits: serde_json::Value| {
+            validate_target_matrix(&json!([{
+                "provider": "openai", "model": "gpt-4o", "limits": limits
+            }]))
+        };
+        assert!(with(json!({ "max_cost_usd": 0.01, "max_latency_ms": 2000 })).is_ok());
+        assert!(with(json!({ "max_cost_usd": 0 })).is_err());
+        assert!(with(json!({ "max_latency_ms": 0 })).is_err());
+        // …and a matrix that sets none keeps working exactly as it did.
+        assert!(
+            validate_target_matrix(&json!([{ "provider": "openai", "model": "gpt-4o" }])).is_ok()
+        );
     }
 
     #[test]

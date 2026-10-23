@@ -33,7 +33,8 @@ pub fn run(cfg: &ClaudeBin, inv: &Invocation<'_>) -> Result<RawOutcome> {
     apply_auth(&mut cmd, inv.bare)?;
 
     let started = Instant::now();
-    let (status, stdout, stderr) = spawn_bounded(cmd, inv.prompt, inv.timeout, &cfg.bin)?;
+    let (status, stdout, stderr) =
+        spawn_bounded(cmd, inv.prompt, inv.timeout, &cfg.bin, "claude -p")?;
     let latency_ms = Some(started.elapsed().as_millis() as u64);
     let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
     let exit_ok = status.success();
@@ -109,11 +110,15 @@ pub fn run(cfg: &ClaudeBin, inv: &Invocation<'_>) -> Result<RawOutcome> {
 /// reading the output pipes only after the wait deadlocks the instant either fills its ~64KB OS
 /// buffer, and writing a large prompt inline deadlocks symmetrically once the child's stdin buffer
 /// fills while it is busy writing output nobody is reading yet.
-fn spawn_bounded(
+///
+/// Shared with the Codex CLI path, which has exactly the same three hazards; `who` is the label its
+/// errors carry, so a timed-out `codex exec` is not reported as a timed-out `claude -p`.
+pub(crate) fn spawn_bounded(
     mut cmd: Command,
     prompt: &str,
     timeout: Duration,
     bin: &str,
+    who: &str,
 ) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
     let mut child = cmd.spawn().map_err(|source| EngineError::Spawn {
         bin: bin.to_string(),
@@ -125,14 +130,14 @@ fn spawn_bounded(
             // A child that exits before reading the whole prompt (bad flag, instant refusal) breaks
             // the pipe; that is the child's exit status to report, not an error of its own.
             let _ = pipe.write_all(body.as_bytes());
-            drop(pipe); // EOF — otherwise `claude -p` waits for more prompt forever
+            drop(pipe); // EOF — otherwise the CLI waits for more prompt forever
         })
     });
     let mut out_pipe = child.stdout.take().ok_or_else(|| {
-        EngineError::Other("claude child was spawned without a stdout pipe".to_string())
+        EngineError::Other(format!("{who} child was spawned without a stdout pipe"))
     })?;
     let mut err_pipe = child.stderr.take().ok_or_else(|| {
-        EngineError::Other("claude child was spawned without a stderr pipe".to_string())
+        EngineError::Other(format!("{who} child was spawned without a stderr pipe"))
     })?;
     let out_reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -161,7 +166,7 @@ fn spawn_bounded(
                     let _ = w.join();
                 }
                 return Err(EngineError::Timeout {
-                    who: format!("claude -p (>{}s)", timeout.as_secs()),
+                    who: format!("{who} (>{}s)", timeout.as_secs()),
                 });
             }
             None => std::thread::sleep(Duration::from_millis(25)),
@@ -197,7 +202,7 @@ mod tests {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let started = Instant::now();
-        let res = spawn_bounded(cmd, "", Duration::from_millis(200), "sleeper");
+        let res = spawn_bounded(cmd, "", Duration::from_millis(200), "sleeper", "claude -p");
         let elapsed = started.elapsed();
         match res {
             Err(EngineError::Timeout { who }) => assert!(who.contains("claude -p")),
@@ -225,7 +230,7 @@ mod tests {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let (status, stdout, _) =
-            spawn_bounded(cmd, &prompt, Duration::from_secs(30), "echoer").unwrap();
+            spawn_bounded(cmd, &prompt, Duration::from_secs(30), "echoer", "echo").unwrap();
         assert!(status.success());
         let echoed = String::from_utf8_lossy(&stdout);
         assert!(echoed.contains("\"quoted\" & <angled>"), "quotes mangled");

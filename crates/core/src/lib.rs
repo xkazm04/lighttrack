@@ -14,16 +14,20 @@ pub mod alias_table;
 pub mod bench_target;
 pub mod calibration;
 pub mod calibration_record;
+pub mod case_limits;
 pub mod collective;
 pub mod customer;
 pub mod dataset;
 pub mod dataset_lineage;
 pub mod device;
+pub mod effort;
 pub mod endpoint_identity;
 pub mod error;
 pub mod event;
 pub mod forecast;
 pub mod forecast_gate;
+pub mod gen_spend;
+pub mod grounding;
 pub mod job;
 pub mod job_kinds;
 pub mod label;
@@ -48,8 +52,13 @@ pub mod rubric;
 pub mod schedule;
 pub mod score;
 pub mod trace;
+pub mod trace_ref;
 pub mod unpriced;
+pub mod usage_split;
 pub mod use_case;
+
+#[cfg(any(test, feature = "test-env"))]
+pub mod test_env;
 
 pub use alert::{Alert, AlertKind, Delivery, Severity};
 pub use alert_channel::{AlertChannel, ChannelKind};
@@ -63,6 +72,7 @@ pub use bench_target::{
 };
 pub use calibration::{agreement, Agreement, CalibrationItem};
 pub use calibration_record::{CalibrationRecord, JudgeTrust, JudgeTrustVerdict};
+pub use case_limits::{CaseLimits, LimitCheck};
 pub use collective::{
     bucket_cost, build_digest, build_digest_counted, canon_determinism, digest_sha256,
     hub_url_hash, merge_leaderboard, normalize_hub_url, task_type_from, CollectiveDigest,
@@ -71,12 +81,13 @@ pub use collective::{
     DEFAULT_MIN_CASES, DETERMINISM_LEVELS, DIGEST_SCHEMA_VERSION, MIN_SCHEMA_VERSION,
 };
 pub use customer::{BillingProduct, Customer};
-pub use dataset::{Dataset, DatasetItem};
+pub use dataset::{Dataset, DatasetItem, Difficulty};
 pub use dataset_lineage::{
     input_fingerprint, normalize_input, ImportFilter, ImportSource, ImportSpec, SamplingStrategy,
     MAX_IMPORT_N,
 };
 pub use device::{capability_matches, Device, DeviceEligibility, RelayAdmission};
+pub use effort::{split_effort, Effort};
 pub use endpoint_identity::{
     native_routes, resolve as resolve_endpoint, Endpoint, EndpointIdentity, Evidence, Observations,
     SELF_HOSTED_PREFIX,
@@ -87,9 +98,11 @@ pub use event::{
 };
 pub use forecast::{forecast_budget, forecast_margin, BudgetForecast, MarginForecast, Trend};
 pub use forecast_gate::{Refusal, FLAT_BAND, MIN_OBSERVED_DAYS, MIN_SPAN_DAYS};
+pub use gen_spend::GenerationFacts;
+pub use grounding::{ClaimVerdict, GroundingDetail, MAX_CLAIMS_PER_DIM};
 pub use job::{
-    job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_PREFIX_FAILURE,
-    JOB_ERROR_WORKER_LOST,
+    job_is_terminal, Job, JobCancel, JobFinish, JobKind, JOB_ERROR_CANCEL_ORPHANED,
+    JOB_ERROR_PREFIX_FAILURE, JOB_ERROR_WORKER_LOST,
 };
 pub use job_kinds::{
     validate_payload, BenchRunPayload, CalibratePayload, ContributePayload, DatasetSamplePayload,
@@ -135,16 +148,19 @@ pub use rubric::{
     DimensionCheck, DimensionKind, Rubric, RubricDimension, DEFAULT_RUBRIC_THRESHOLD,
 };
 pub use schedule::{Schedule, MIN_INTERVAL_SECS as SCHEDULE_MIN_INTERVAL_SECS};
+pub use score::reserved_target_keys_in;
 pub use score::{
     judge_verdict_schema, Benchmark, BenchmarkCase, BenchmarkRun, JudgeVerdict, Score, ScoreDetail,
     ScoreDim, ScoreKind, MAX_DIMENSIONS, MAX_NOTES, MAX_REASONINGS_PER_DIM, MAX_REASONING_CHARS,
-    RECURRENCE_KEY, REGRESSION_DATASET_KEY,
+    RECURRENCE_KEY, REGRESSION_DATASET_KEY, RESERVED_TARGET_KEYS,
 };
 pub use trace::{
-    normalize_trace_ref, Trace, TraceCoverage, TraceDrift, TraceShape, TraceSpan, TraceSummary,
-    TraceTotals,
+    normalize_trace_ref, trace_ref_within_bound, Trace, TraceCoverage, TraceDrift, TraceShape,
+    TraceSpan, TraceSummary, TraceTotals, MAX_TRACE_REF_LEN,
 };
+pub use trace_ref::TraceRef;
 pub use unpriced::{UnpricedLedger, UnpricedRow, UNPRICED_NOTES};
+pub use usage_split::SubcountOverflow;
 pub use use_case::{UseCase, UseCaseKind, UseCaseStatus};
 
 /// Convenience: a fresh UUIDv4 as a `String` (our canonical id form).

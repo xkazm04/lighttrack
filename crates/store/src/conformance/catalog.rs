@@ -4,8 +4,8 @@ use chrono::Utc;
 use serde_json::json;
 
 use lighttrack_core::{
-    new_id, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem, DimensionCheck,
-    DimensionKind, ModelPriceRow, Rubric, RubricDimension,
+    new_id, Benchmark, BenchmarkCase, BenchmarkRun, Dataset, DatasetItem, Difficulty,
+    DimensionCheck, DimensionKind, ModelPriceRow, Rubric, RubricDimension,
 };
 
 use crate::Scope;
@@ -60,11 +60,22 @@ pub(super) fn benchmarks(store: &dyn Store, pid: &str) -> Result<()> {
         target: target.clone(),
         dataset_ref: None,
         rubric_id: None,
-        dataset: vec![BenchmarkCase {
-            input: "2+2".into(),
-            expected: Some("4".into()),
-            output: Some("4".into()),
-        }],
+        dataset: vec![
+            BenchmarkCase {
+                input: "2+2".into(),
+                expected: Some("4".into()),
+                output: Some("4".into()),
+                difficulty: Some(Difficulty::Easy),
+            },
+            // Ungraded, beside a graded one: `benchmarks.dataset` is stored as one JSON blob, so
+            // the way this regresses is a serializer that fills the absent tier in.
+            BenchmarkCase {
+                input: "prove it".into(),
+                expected: None,
+                output: Some("no".into()),
+                difficulty: None,
+            },
+        ],
         baseline_score: Some(0.8),
         created_at: Utc::now(),
     };
@@ -73,8 +84,17 @@ pub(super) fn benchmarks(store: &dyn Store, pid: &str) -> Result<()> {
         .get_benchmark(Scope::Operator, &b.id)?
         .expect("get_benchmark Some");
     assert_eq!(got.name, "bench");
-    assert_eq!(got.dataset.len(), 1);
+    assert_eq!(got.dataset.len(), 2);
     assert_eq!(got.target, target, "benchmark target round-trip");
+    assert_eq!(
+        got.dataset[0].difficulty,
+        Some(Difficulty::Easy),
+        "a case's graded tier must survive the round trip"
+    );
+    assert_eq!(
+        got.dataset[1].difficulty, None,
+        "an ungraded case must read back UNGRADED, never as a middle tier"
+    );
     assert!(store.list_benchmarks(pid)?.iter().any(|x| x.id == b.id));
 
     let run = BenchmarkRun {
@@ -102,6 +122,22 @@ pub(super) fn benchmarks(store: &dyn Store, pid: &str) -> Result<()> {
         json!({ "note": "ok" }),
         "run report round-trip"
     );
+
+    // Two runs sharing a start instant must both be listed. `benchmark_runs` has no insertion
+    // column, so `started_at` alone cannot order them — how each backend BREAKS that tie is a
+    // per-backend contract pinned where that backend's SQL lives (`sqlite::benchmarks`), because
+    // the tie-break is `id DESC` on the SQL backends and Firestore's single-key ordering cannot
+    // offer it. What every backend owes here is only that a tie loses neither row.
+    let tied_at = run.started_at;
+    for _ in 0..2 {
+        store.create_benchmark_run(&BenchmarkRun {
+            id: new_id(),
+            started_at: tied_at,
+            ..run.clone()
+        })?;
+    }
+    let runs = store.list_benchmark_runs(Scope::Operator, &b.id)?;
+    assert_eq!(runs.len(), 3, "a started_at tie drops no run");
     Ok(())
 }
 
@@ -134,14 +170,40 @@ pub(super) fn datasets(store: &dyn Store, pid: &str) -> Result<()> {
         source_event_id: None,
         anonymization: json!({ "method": "regex", "redactions": 0 }),
         input_hash: None,
+        difficulty: Some(Difficulty::Hard),
     };
     store.create_dataset_item(&item)?;
+    // The ungraded twin. It is written in the same breath as the graded one because the failure
+    // worth catching is not "the tier does not persist" — it is a backend that persists a tier and
+    // reads an absent one back as the middle rung, which no single-item test can see.
+    let ungraded = DatasetItem {
+        id: new_id(),
+        input: "1+1".into(),
+        difficulty: None,
+        ..item.clone()
+    };
+    store.create_dataset_item(&ungraded)?;
+
     let items = store.list_dataset_items(Scope::Operator, &d.id)?;
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].expected, Some("4".to_string()));
+    assert_eq!(items.len(), 2);
+    let graded = items.iter().find(|i| i.id == item.id).expect("graded item");
+    assert_eq!(graded.expected, Some("4".to_string()));
     assert_eq!(
-        items[0].anonymization,
+        graded.anonymization,
         json!({ "method": "regex", "redactions": 0 })
+    );
+    assert_eq!(
+        graded.difficulty,
+        Some(Difficulty::Hard),
+        "the graded tier must survive the round trip"
+    );
+    let back = items
+        .iter()
+        .find(|i| i.id == ungraded.id)
+        .expect("ungraded item");
+    assert_eq!(
+        back.difficulty, None,
+        "an ungraded case must read back UNGRADED, never as a middle tier"
     );
 
     store.set_dataset_frozen(Scope::Operator, &d.id, true)?;

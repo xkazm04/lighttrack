@@ -30,9 +30,11 @@ mod classify;
 mod contribution;
 mod merge;
 mod privacy;
+pub mod provenance;
 pub mod rigor;
 mod spread;
 mod types;
+pub mod vocab;
 
 /// Current digest wire-format version. Bump when [`ModelDigestEntry`] changes shape. v2 added
 /// `quality_variance` (and, in the same release, judge/rubric tags); v3 added the **rigor** block
@@ -76,5 +78,7 @@ pub use contribution::{
 };
 pub use merge::{build_digest, build_digest_counted, merge_leaderboard, MAX_SOURCE_WEIGHT_SHARE};
 pub use privacy::bucket_cost;
+pub use provenance::{day_stamp, evidence_window, rubric_agreement};
 pub use rigor::{canon_determinism, Coverage, RowRigor, DETERMINISM_LEVELS};
 pub use types::{CollectiveDigest, CollectiveEntry, LeaderboardRow, ModelDigestEntry, RunStat};
+pub use vocab::{canon_judge_provider, canon_task_type, Clamp, WIRE_CATEGORICALS};

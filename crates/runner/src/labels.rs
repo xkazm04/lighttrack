@@ -168,6 +168,7 @@ mod tests {
             source_event_id: None,
             anonymization: serde_json::Value::Null,
             input_hash: None,
+            difficulty: None,
         }
     }
 

@@ -1,0 +1,47 @@
+{
+  "schema": "conform-run/1",
+  "worker": "1778f204-1355-4dac-be9c-3cc9d731f0c2",
+  "subject": "test-input-generation",
+  "evaluatedAt": "2026-10-16T21:33:14.791870+00:00",
+  "provider": "agy",
+  "model": "gemini-3.8-flash-high",
+  "pairs": [],
+  "declined": [
+    {
+      "subject": "test-input-generation",
+      "context": "provider-generation",
+      "reason": "Precondition does not hold: test-input-generation governs test input generators, fuzzers, and verification oracles for automated test suites ('where a case comes from, how much of the system's behaviour the supply of cases can actually reach, and what decides whether the answer was right'). provider-generation is production runtime infrastructure routing candidate LLM output generation across external provider APIs (Anthropic, Gemini, OpenAI, OpenRouter) and managing wire retry schedules, matching this subject only through keyword homonyms ('generation', 'generate', 'target'). Per instructions, not-applicable is not accepted from this seat, so this context is declined."
+    },
+    {
+      "subject": "test-input-generation",
+      "context": "api-integration-tests",
+      "reason": "withdrawn after review: reviewer (sonnet): tests_ingest.rs:35 only shows setup() returning the SqliteStore handle next to AppState so a test can read persisted rows after a request, and requests still go through the real axum router (`ingest` in tests_ingest.rs). Nothing in it shows invariant-checking entry points being bypassed. The support"
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-10-16T21:33:14.791870+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "test-input-generation"
+      ],
+      "techniques": [
+        "exhaustive-when-bounded",
+        "field-captured-operation-traces",
+        "generator-bounds-the-space",
+        "inside-out-invariants",
+        "liveness-needs-a-quiet-period",
+        "model-based-oracle",
+        "negative-space-generation",
+        "proof-cost-follows-the-circuit",
+        "seed-is-not-a-reproduction",
+        "stage-ordered-fuzz-targets",
+        "swarm-feature-sampling"
+      ],
+      "deviations": 1,
+      "context": "api-integration-tests",
+      "via": "curator-multi:agy",
+      "model": "gemini-3.8-flash-high"
+    }
+  ]
+}

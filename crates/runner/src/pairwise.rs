@@ -20,6 +20,15 @@ struct Standing {
     wins: u32,
     losses: u32,
     ties: u32,
+    /// How many of `ties` were forced by the order swap disagreeing, not agreed by the judge. They
+    /// stay inside `ties` (a flip is honestly a tie), but a standing made mostly of them rests on
+    /// far fewer decisive observations than its win rate suggests, so the split travels with it.
+    positional_ties: u32,
+    /// Scheduled games this target never played: a candidate on either side failed to generate, or
+    /// the judge failed an order. Outside the win rate by construction, and counted per target here
+    /// because they are not spread evenly - a target that fails its hard cases is ranked on its
+    /// easy ones, and the win rate renders identically to one earned over the full round-robin.
+    excluded: u32,
 }
 
 impl Standing {
@@ -190,17 +199,22 @@ pub(crate) fn run_pairwise_matrix(
     }
     let output = |ti: usize, ci: usize| cells[ti * n_c + ci].output.as_deref();
 
-    // 2. Enumerate games (case, i, j) for each unordered pair with both candidates present.
+    // 2. Enumerate games (case, i, j) for each unordered pair with both candidates present. A game
+    // with a candidate missing cannot be played, and is kept as `excluded` rather than vanishing.
     let mut games: Vec<(usize, usize, usize)> = Vec::new();
+    let mut excluded: Vec<(usize, usize, usize)> = Vec::new();
     for ci in 0..n_c {
         for i in 0..n_t {
             for j in (i + 1)..n_t {
                 if output(i, ci).is_some() && output(j, ci).is_some() {
                     games.push((ci, i, j));
+                } else {
+                    excluded.push((ci, i, j));
                 }
             }
         }
     }
+    let unplayed_games = excluded.len();
 
     // 3. Judge every game with the order-debiased engine judge, in parallel.
     let outcomes: Vec<Result<lighttrack_engine::PairwiseOutcome>> =
@@ -303,15 +317,16 @@ pub(crate) fn run_pairwise_matrix(
                     labels[j]
                 );
                 judge_errors += 1;
+                excluded.push(g);
             }
         }
     }
-    let (standings, beats, bias_count) = tally(n_t, &played, &winners);
+    let (standings, beats, bias_count) = tally(n_t, &played, &winners, &excluded);
 
     print_ranking(&labels, &standings);
     print_matrix(&labels, &beats);
     println!(
-        "  games={}  judge_errors={judge_errors}  positional_ties(bias)={bias_count}  injection_attempts={injected}  gen_cost=${gen_cost:.5}  judge_cost=${judge_cost:.5}  total=${:.5}",
+        "  games={}  unplayed={unplayed_games}  judge_errors={judge_errors}  positional_ties(bias)={bias_count}  injection_attempts={injected}  gen_cost=${gen_cost:.5}  judge_cost=${judge_cost:.5}  total=${:.5}",
         played.len(),
         gen_cost + judge_cost,
     );
@@ -325,6 +340,7 @@ pub(crate) fn run_pairwise_matrix(
         &standings,
         &beats,
         played.len(),
+        unplayed_games,
         judge_errors,
         bias_count,
         injected,
@@ -358,18 +374,27 @@ fn round_robin_games(n_t: usize, n_c: usize) -> usize {
 }
 
 /// Roll per-game winners (aligned with `games`) into standings + a head-to-head matrix + a count of
-/// games decided a tie by position bias. Pure, so the aggregation is unit-tested without live calls.
+/// games decided a tie by position bias. `excluded` are scheduled games that were never judged; they
+/// are charged to both participants' `excluded` and never enter a win rate. Pure, so the aggregation
+/// is unit-tested without live calls.
 fn tally(
     n_t: usize,
     games: &[(usize, usize, usize)],
     winners: &[(PairwiseWinner, bool)],
+    excluded: &[(usize, usize, usize)],
 ) -> (Vec<Standing>, Vec<Vec<u32>>, u32) {
     let mut standings = vec![Standing::default(); n_t];
     let mut beats = vec![vec![0u32; n_t]; n_t]; // beats[i][j] = times i beat j
     let mut bias_count = 0u32;
+    for &(_, i, j) in excluded {
+        standings[i].excluded += 1;
+        standings[j].excluded += 1;
+    }
     for (&(_, i, j), &(winner, bias)) in games.iter().zip(winners) {
         if bias {
             bias_count += 1;
+            standings[i].positional_ties += 1;
+            standings[j].positional_ties += 1;
         }
         match winner {
             PairwiseWinner::A => {
@@ -404,13 +429,15 @@ fn print_ranking(labels: &[String], standings: &[Standing]) {
     for (rank, &i) in order.iter().enumerate() {
         let s = &standings[i];
         println!(
-            "    {}. {:<20} win_rate={:.3}  W-L-T={}-{}-{}",
+            "    {}. {:<20} win_rate={:.3}  W-L-T={}-{}-{}  positional_ties={}  excluded={}",
             rank + 1,
             trunc(&labels[i], 20),
             s.win_rate(),
             s.wins,
             s.losses,
-            s.ties
+            s.ties,
+            s.positional_ties,
+            s.excluded
         );
     }
 }
@@ -456,6 +483,7 @@ fn post_run(
     standings: &[Standing],
     beats: &[Vec<u32>],
     n_games: usize,
+    unplayed_games: usize,
     judge_errors: u32,
     bias_count: u32,
     injected: u32,
@@ -475,12 +503,14 @@ fn post_run(
             json!({
                 "target": l, "win_rate": standings[i].win_rate(),
                 "wins": standings[i].wins, "losses": standings[i].losses, "ties": standings[i].ties,
+                "positional_ties": standings[i].positional_ties, "excluded": standings[i].excluded,
             })
         })
         .collect();
     let mut report = json!({
         "mode": "pairwise", "targets": labels, "ranking": ranking,
-        "beats_matrix": beats, "n_games": n_games, "judge_errors": judge_errors,
+        "beats_matrix": beats, "n_games": n_games, "unplayed_games": unplayed_games,
+        "judge_errors": judge_errors,
         "positional_bias_ties": bias_count, "injection_suspected_games": injected,
         "self_preference_targets": self_preference,
         // `games` is a bounded preview of `n_games`; `games_truncated` says so outright, so a reader
@@ -522,7 +552,7 @@ mod tests {
             (PairwiseWinner::B, true),
             (PairwiseWinner::Tie, false),
         ];
-        let (standings, beats, bias) = tally(3, &games, &winners);
+        let (standings, beats, bias) = tally(3, &games, &winners, &[]);
         assert_eq!(bias, 1, "one game was a positional tie");
         // Target 0: beat 1, lost to 2 → 1W-1L-0T.
         assert_eq!(
@@ -564,6 +594,7 @@ mod tests {
             wins: 2,
             losses: 1,
             ties: 1,
+            ..Default::default()
         };
         // (2 + 0.5) / 4 = 0.625
         assert!(approx(s.win_rate(), 0.625));
@@ -579,16 +610,19 @@ mod tests {
                 wins: 1,
                 losses: 1,
                 ties: 0,
+                ..Default::default()
             }, // 0.5
             Standing {
                 wins: 2,
                 losses: 0,
                 ties: 0,
+                ..Default::default()
             }, // 1.0
             Standing {
                 wins: 1,
                 losses: 1,
                 ties: 0,
+                ..Default::default()
             }, // 0.5
         ];
         let mut order: Vec<usize> = (0..3).collect();
@@ -603,5 +637,59 @@ mod tests {
             vec![1, 0, 2],
             "highest win-rate first, ties keep index order"
         );
+    }
+
+    /// The case the per-target split exists for: a target whose candidates failed on most cases is
+    /// ranked on the games it did play, and its win rate renders like one earned over every case.
+    /// The split must disclose that without moving any win rate or the ranking order.
+    #[test]
+    fn excluded_and_positional_ties_are_counted_per_target_beside_an_unchanged_win_rate() {
+        // 3 targets x 4 cases = 12 scheduled games. Target 2 generated only on case 3.
+        let games = vec![
+            (0, 0, 1),
+            (1, 0, 1),
+            (2, 0, 1),
+            (3, 0, 1),
+            (3, 0, 2),
+            (3, 1, 2),
+        ];
+        let winners = vec![
+            (PairwiseWinner::A, false),   // 0 beats 1
+            (PairwiseWinner::Tie, true),  // orders disagreed
+            (PairwiseWinner::Tie, false), // agreed tie
+            (PairwiseWinner::Tie, true),  // orders disagreed
+            (PairwiseWinner::B, false),   // 2 beats 0
+            (PairwiseWinner::B, false),   // 2 beats 1
+        ];
+        let excluded = vec![
+            (0, 0, 2),
+            (0, 1, 2),
+            (1, 0, 2),
+            (1, 1, 2),
+            (2, 0, 2),
+            (2, 1, 2),
+        ];
+        assert_eq!(games.len() + excluded.len(), round_robin_games(3, 4));
+        let (s, _beats, bias) = tally(3, &games, &winners, &excluded);
+        assert_eq!(bias, 2);
+        // Floor: the win rates and W-L-T the ranking printed before the split, unchanged.
+        let wr: Vec<f64> = s.iter().map(Standing::win_rate).collect();
+        assert!(
+            approx(wr[0], 0.5) && approx(wr[1], 0.3) && approx(wr[2], 1.0),
+            "{wr:?}"
+        );
+        assert_eq!((s[2].wins, s[2].losses, s[2].ties), (2, 0, 0));
+        // Target: the per-target disclosure.
+        assert_eq!((s[0].excluded, s[1].excluded, s[2].excluded), (3, 3, 6));
+        assert_eq!(
+            (
+                s[0].positional_ties,
+                s[1].positional_ties,
+                s[2].positional_ties
+            ),
+            (2, 2, 0)
+        );
+        // Target 2 tops the ranking on 2 of its 8 scheduled games; the split is what says so.
+        assert_eq!(s[2].games() + s[2].excluded, 8);
     }
 }

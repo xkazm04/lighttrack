@@ -34,6 +34,17 @@ pub(crate) enum ErrorCode {
     /// An ingested event's client `ts` is further in the **future** than the configured skew window
     /// allows — nearly always a wrong client clock. HTTP 400.
     TsTooNew,
+    /// An ingested event's `usage` reports a sub-count larger than the total it is a sub-count of —
+    /// `cached_input > input`. HTTP 400.
+    ///
+    /// Split out of `bad_request` because the fix is specific and mechanical, and because the volume
+    /// has to be countable as *this*: `cached_input` is the part of the prompt served from cache, so
+    /// a sender reporting it *beside* `input` rather than *within* it (Anthropic's
+    /// `cache_read_input_tokens` is the exclusive counter that invites this) under-bills every cache
+    /// hit — the residual saturates to zero and the whole prompt prices at the cached rate. The
+    /// record is refused rather than repaired: which of the two counts is wrong is not knowable from
+    /// the record, only from the provider's own convention.
+    UsageSubcountExceedsTotal,
     /// Missing or invalid credentials. HTTP 401.
     Unauthorized,
     /// Authenticated, but not permitted to act on the resource. HTTP 403.
@@ -102,10 +113,11 @@ impl ErrorCode {
     /// Every code, for the test that holds the frozen wire table to the enum (a variant added here
     /// and not there fails the build - five codes had shipped unpinned before it existed).
     #[cfg(test)]
-    pub(crate) const ALL: [ErrorCode; 15] = [
+    pub(crate) const ALL: [ErrorCode; 16] = [
         ErrorCode::BadRequest,
         ErrorCode::TsTooOld,
         ErrorCode::TsTooNew,
+        ErrorCode::UsageSubcountExceedsTotal,
         ErrorCode::Unauthorized,
         ErrorCode::Forbidden,
         ErrorCode::ProjectDisabled,
@@ -123,9 +135,10 @@ impl ErrorCode {
     /// The canonical HTTP status for this code.
     pub(crate) fn status(self) -> StatusCode {
         match self {
-            ErrorCode::BadRequest | ErrorCode::TsTooOld | ErrorCode::TsTooNew => {
-                StatusCode::BAD_REQUEST
-            }
+            ErrorCode::BadRequest
+            | ErrorCode::TsTooOld
+            | ErrorCode::TsTooNew
+            | ErrorCode::UsageSubcountExceedsTotal => StatusCode::BAD_REQUEST,
             ErrorCode::Unauthorized | ErrorCode::KeyExpired => StatusCode::UNAUTHORIZED,
             ErrorCode::Forbidden | ErrorCode::ProjectDisabled => StatusCode::FORBIDDEN,
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
@@ -145,6 +158,7 @@ impl ErrorCode {
             ErrorCode::BadRequest => "bad_request",
             ErrorCode::TsTooOld => "ts_too_old",
             ErrorCode::TsTooNew => "ts_too_new",
+            ErrorCode::UsageSubcountExceedsTotal => "usage_subcount_exceeds_total",
             ErrorCode::Unauthorized => "unauthorized",
             ErrorCode::Forbidden => "forbidden",
             ErrorCode::ProjectDisabled => "project_disabled",
@@ -320,6 +334,11 @@ mod tests {
             (BadRequest, "bad_request", S::BAD_REQUEST),
             (TsTooOld, "ts_too_old", S::BAD_REQUEST),
             (TsTooNew, "ts_too_new", S::BAD_REQUEST),
+            (
+                UsageSubcountExceedsTotal,
+                "usage_subcount_exceeds_total",
+                S::BAD_REQUEST,
+            ),
             (Unauthorized, "unauthorized", S::UNAUTHORIZED),
             (Forbidden, "forbidden", S::FORBIDDEN),
             (ProjectDisabled, "project_disabled", S::FORBIDDEN),

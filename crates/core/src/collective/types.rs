@@ -209,6 +209,30 @@ pub struct LeaderboardRow {
     /// `true` when the row's sources disagree on any rigor facet. A convenience mirror of
     /// [`RowRigor::is_mixed`] so a renderer/filter doesn't have to re-derive it.
     pub mixed_rigor: bool,
+    /// How many distinct rubrics scored this row, when any source recorded one. `None` means *not
+    /// recorded* (every source predates rubric fingerprinting) — never imputed as agreement.
+    ///
+    /// The **count**, deliberately not the fingerprints: a rubric fingerprint is a high-cardinality
+    /// contributor-chosen hash, so publishing the set on every row would let an anonymous reader link
+    /// one contributor's rows across the whole board. See
+    /// [`provenance`](super::provenance) for the argument.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n_rubrics: Option<u32>,
+    /// `Some(n)` when more than one rubric stands behind the row — two rubrics can disagree about what
+    /// the scale *means*, so this is a stronger incommensurability than `mixed_judges`. A source
+    /// already tagged `mixed` counts as two, exactly as for judges. `None` when a single rubric (or
+    /// none recorded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mixed_rubrics: Option<u32>,
+    /// Day of the **newest** evidence behind this row, fixed-width `RFC3339(Nanos, Z)`. Coarsened to
+    /// the UTC day on purpose (see [`provenance::day_stamp`](super::provenance::day_stamp)): a
+    /// nanosecond receipt time would join a contributor's rows to each other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub newest_at: Option<String>,
+    /// Day of the **oldest** evidence behind this row, same encoding. A wide window means the row
+    /// mixes a stale measurement with a fresh one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oldest_at: Option<String>,
 }
 
 fn default_schema_version() -> u32 {

@@ -10,7 +10,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "create_limit",
         method: Method::Post,
-        path: "/v1/projects/:id/limits",
+        path: "/v1/projects/{id}/limits",
         access: Admin,
         mutating: true,
         params: &[
@@ -39,7 +39,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "list_limits",
         method: Method::Get,
-        path: "/v1/projects/:id/limits",
+        path: "/v1/projects/{id}/limits",
         access: Key(Read),
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("LimitRule"),
@@ -57,7 +57,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
     Endpoint {
         id: "update_limit",
         method: Method::Put,
-        path: "/v1/limits/:id",
+        path: "/v1/limits/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -85,12 +85,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["limits", "update"]),
         doc: "Replace a limit rule wholesale; the sweep-owned fields are carried over, not cleared.",
+        surface: "limit_lifecycle",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "delete_limit",
         method: Method::Delete,
-        path: "/v1/limits/:id",
+        path: "/v1/limits/{id}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -105,12 +106,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         }),
         cli: Some(&["limits", "delete"]),
         doc: "Remove a limit rule by id.",
+        surface: "limit_lifecycle",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "create_margin_policy",
         method: Method::Post,
-        path: "/v1/projects/:id/margin-policies",
+        path: "/v1/projects/{id}/margin-policies",
         access: Admin,
         mutating: true,
         params: &[
@@ -125,12 +127,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Named("MarginPolicy"),
         cli: Some(&["margin-policies", "create"]),
         doc: "Store a standing margin guardrail; the forecast sweep is what turns it into rules.",
+        surface: "margin_policies",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "list_margin_policies",
         method: Method::Get,
-        path: "/v1/projects/:id/margin-policies",
+        path: "/v1/projects/{id}/margin-policies",
         access: Admin,
         params: &[pm("id", "project", "project id")],
         response: TypeRef::ArrayOf("MarginPolicy"),
@@ -143,12 +146,13 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         cli: Some(&["margin-policies", "list"]),
         render_kind: Some("list_margin_policies"),
         doc: "A project's standing margin guardrails.",
+        surface: "margin_policies",
         ..Endpoint::DEFAULT
     },
     Endpoint {
         id: "delete_margin_policy",
         method: Method::Delete,
-        path: "/v1/projects/:id/margin-policies/:pid",
+        path: "/v1/projects/{id}/margin-policies/{pid}",
         access: Admin,
         mutating: true,
         idempotent: true,
@@ -156,6 +160,7 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         response: TypeRef::Untyped("{ deleted: id } — the policy that was removed."),
         cli: Some(&["margin-policies", "delete"]),
         doc: "Remove a margin policy; the rules it created are reaped by the sweep, not here.",
+        surface: "margin_policies",
         ..Endpoint::DEFAULT
     },
     Endpoint {
@@ -209,6 +214,61 @@ pub(crate) const ENDPOINTS: &[Endpoint] = &[
         ),
         cli: Some(&["limits", "usage"]),
         doc: "Rolling usage broken down by one scope dimension — the 'who is spending' view.",
+        ..Endpoint::DEFAULT
+    },
+    // A read-only replay, so a GET and never a write: nothing is stored, no rule is created and no
+    // rejection is counted. That is what lets its MCP tool be `readOnlyHint` rather than gated
+    // behind LIGHTTRACK_MCP_ALLOW_WRITES. `surface: "rollup"` because the replay is a fan of
+    // `Store::rollup` windows — a backend without it answers 501, never an empty timeline.
+    Endpoint {
+        id: "limits_preview",
+        method: Method::Get,
+        path: "/v1/limits/preview",
+        access: Key(Read),
+        params: &[
+            Param {
+                name: "project",
+                doc: "project id; required unless the key already names one",
+                mcp_required: Some(true),
+                ..Param::DEFAULT
+            },
+            Param {
+                name: "threshold",
+                ty: JsonTy::Number,
+                required: true,
+                doc: "the candidate cap; validated by the same door a create goes through",
+                ..Param::DEFAULT
+            },
+            qe("metric", &["cost_usd", "calls", "tokens"], "what the candidate caps (default cost_usd)"),
+            qe("window", &["hour", "day", "month"], "the candidate rolling window (default day)"),
+            qe(
+                "action",
+                &["alert", "throttle", "block"],
+                "the candidate reaction; `throttle` also returns the shed ramp (default alert)",
+            ),
+            qt("warn_at", JsonTy::Number, "soft-warning fraction in (0,1); also the throttle ramp's start"),
+            q("scope", "candidate dimension scope as JSON, e.g. {\"model\":\"gpt-4o\"}"),
+            q("over", "how far back to replay: 7d | 48h | 90m (default seven windows, capped at 90d)"),
+            qt("steps", JsonTy::Integer, "sampled instants across the span (default 48, max 200)"),
+        ],
+        response: TypeRef::Untyped(
+            "{ project_id, metric, window, action, threshold, warn_at?, scope?, over: {from, to, \
+             steps, step_secs, window_secs}, would_breach, peak_ratio, breached_steps, episodes: \
+             [{first_at, last_at, peak_ratio, steps, calls, cost_usd}], timeline: [{at, current, \
+             ratio, shed_fraction, warning, breached, calls, cost_usd}], simulated, notes } — when \
+             the candidate would have fired, how hard, and how much it would have shed.",
+        ),
+        mcp: Some(McpTool {
+            name: "preview_limit",
+            description: "Backtest a candidate usage cap against this project's stored traffic WITHOUT creating it: the breach episodes it would have caused, the peak ratio, and (for `throttle`) the shed ramp. Read-only — nothing is stored, no rule exists afterwards. Use it to pick a threshold before calling `create_limit`. Monitored ingest only; the judge is unbudgeted.",
+            args: &[
+                "project", "threshold", "metric", "window", "action", "warn_at", "scope", "over",
+            ],
+            ..McpTool::DEFAULT
+        }),
+        cli: Some(&["limits", "preview"]),
+        doc: "Replay a candidate cap over stored traffic — the pre-breach answer, before any 429.",
+        surface: "rollup",
         ..Endpoint::DEFAULT
     },
 ];

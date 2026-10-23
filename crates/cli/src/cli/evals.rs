@@ -97,6 +97,37 @@ pub(crate) enum DatasetsCmd {
     },
     /// Every human verdict on this set's items — the join `lt-runner calibrate --dataset` reads.
     Labels { id: String },
+    /// The cases in a dataset, optionally only those graded at one difficulty tier.
+    Items {
+        /// Dataset id.
+        id: String,
+        /// Only cases at this tier: `easy` | `medium` | `hard`.
+        ///
+        /// UNGRADED cases belong to no tier and appear under none of them — an absent grade is not
+        /// a middling grade, so `--difficulty medium` does not quietly pick them up.
+        #[arg(long)]
+        difficulty: Option<String>,
+    },
+    /// Append one case to an unfrozen dataset, optionally graded.
+    Add {
+        /// Dataset id (409 if it is frozen — fork it first).
+        id: String,
+        /// The prompt / case input.
+        #[arg(long)]
+        input: String,
+        /// Golden reference answer.
+        #[arg(long)]
+        expected: Option<String>,
+        /// A captured/candidate response.
+        #[arg(long)]
+        output: Option<String>,
+        /// Grade it on the ordered ladder: `easy` | `medium` | `hard`.
+        ///
+        /// Omit to leave the case UNGRADED. That is a real state, not a missing one: nothing later
+        /// fills it in, and it is never read as `medium`.
+        #[arg(long)]
+        difficulty: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

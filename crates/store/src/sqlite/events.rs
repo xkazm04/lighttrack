@@ -14,7 +14,7 @@ use lighttrack_core::{
 use super::usage_cache::UsageCache;
 use crate::codec::{decode_event_cursor, encode_event_cursor, fmt_ts, parse_enum, parse_ts};
 use crate::{
-    evaluate_admission, event_contribution, Admission, CostRow, EventFilter, EventPage, Result,
+    evaluate_admission_at, event_contribution, Admission, CostRow, EventFilter, EventPage, Result,
     ScopeUsage, StoreError, TraceEvents, TraceFilter, TracePage, Usage, UseCaseCostRow,
 };
 
@@ -132,10 +132,11 @@ pub(super) fn insert_checked_with_rules(
         super::revenue::list(conn, Some(&ev.project_id), since, until)
     })?;
     let resolve = crate::threshold::resolver(&resolved);
-    let admission = evaluate_admission(
+    let admission = evaluate_admission_at(
         rules,
         ev,
         event_contribution(ev),
+        now,
         |w, scope| cache.usage(conn, &ev.project_id, w, scope, now),
         resolve,
     )?;
@@ -241,17 +242,26 @@ fn build_predicates(project: Option<&str>, filter: &EventFilter) -> Predicates {
         args.push(Box::new(n as i64));
     }
     if let Some(k) = &filter.metadata_key {
-        // The path is a *bound parameter*, so an arbitrary key can't escape into the SQL text.
-        let path = format!("$.\"{}\"", k.replace('"', "\"\""));
+        // The key is matched as ONE literal top-level key through `json_each`, as a bound parameter.
+        // A `json_extract(metadata, '$."k"')` path cannot carry a key containing `"`: SQLite has no
+        // escape inside a quoted path label, so such a key raised "bad JSON path" and failed the
+        // whole listing instead of answering "no such key". `type != 'null'` keeps the old
+        // `IS NOT NULL` meaning for a key present with a JSON null.
         match &filter.metadata_value {
             Some(v) => {
-                conds.push("json_extract(metadata, ?) = ?".into());
-                args.push(Box::new(path));
+                conds.push(
+                    "EXISTS (SELECT 1 FROM json_each(events.metadata)                      WHERE json_each.key = ? AND json_each.value = ?)"
+                        .into(),
+                );
+                args.push(Box::new(k.clone()));
                 args.push(Box::new(v.clone()));
             }
             None => {
-                conds.push("json_extract(metadata, ?) IS NOT NULL".into());
-                args.push(Box::new(path));
+                conds.push(
+                    "EXISTS (SELECT 1 FROM json_each(events.metadata)                      WHERE json_each.key = ? AND json_each.type != 'null')"
+                        .into(),
+                );
+                args.push(Box::new(k.clone()));
             }
         }
     }
