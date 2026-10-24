@@ -2112,34 +2112,53 @@
       "subject": "breach-alerting-and-attribution",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T07:58:24.927Z",
-      "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:24:45.438Z",
+      "worker": "d178d9e2-d4c6-45f0-a518-7badf7407773",
       "techniques": [
-        {
-          "technique": "identity-scope-attribution-refusal",
-          "verdict": "conformant",
-          "evidence": "crates/api/src/alerts/attribution.rs:159 The API-key/customer branch emits no contributors and supplies this pointer; the referenced endpoint authenticates callers and resolves their project scope."
-        },
         {
           "technique": "notification-channel-security",
           "verdict": "deviation",
-          "evidence": "crates/api/src/alerts/channels.rs:68 The signature header is conditional, while sending proceeds without it; channel creation also defaults signing off."
+          "evidence": "crates/api/src/alerts/routing.rs:155 Vetting is strong: https only, private/link-local/NAT64 refusal at configure and delivery time, Policy::none() redirects, 5s timeout, 2 KiB control-stripped response cap. But signing is opt-in and off by default, there is no channel-secret rotation route (prev_secret_hash is always None at create), and there is no destination allowlist setting."
         },
         {
           "technique": "off-request-path-delivery",
-          "verdict": "deviation",
-          "evidence": "crates/api/src/alerts/ledger.rs:76 notify_warnings composes the message and payload synchronously before spawn_fire; ingest calls this method directly, violating the requirement to move formatting downstream of detection into the spawned task."
+          "verdict": "conformant",
+          "evidence": "crates/api/src/alerts/ledger.rs:50 Attribution, durable admission and per-channel HTTP all run in a spawned task. Each sink failure is logged and recorded as a Delivery row, never sent back to ingest."
+        },
+        {
+          "technique": "scoped-dedup-keys",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/alerts/mod.rs:234 Breach key is project:metric:window:scope and the warn tier has its own key space. Ledger outage degrades to delivering anyway (ledger.rs:241-245), and rejection-flush keys carry the flush instant (compose.rs:514-517)."
+        },
+        {
+          "technique": "top-contributor-attribution",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/alerts/attribution.rs:230 Top 3 sorted by cost, zero-spend rows dropped, share computed against the window total, with share and $ shown. Built from existing cost/use-case rollups inside the spawned task, pure compose split from fetch, store errors degrade to empty, and text and JSON come from one Attribution."
         },
         {
           "technique": "scope-inverted-attribution",
           "verdict": "conformant",
-          "evidence": "crates/api/src/alerts/attribution.rs:147 Use-case caps group their filtered rows by model; the other branches invert model caps into workloads and provider caps into models, using within-scope totals and explicit empty-scope notes."
+          "evidence": "crates/api/src/alerts/attribution.rs:122 A model cap breaks down by use-case, a use-case cap by model, a provider cap by its models. Scoped rows are filtered first and shares use the within-scope total. An empty scope states 'no attributable spend in window'."
         },
         {
-          "technique": "top-contributor-attribution",
-          "verdict": "deviation",
-          "evidence": "crates/api/src/alerts/attribution.rs:96 fetch converts failed reads into empty vectors and still composes attribution, so a failed provider-scope read can produce 'no attributable spend in window' instead of omitting enrichment; ranking, shares and dual rendering otherwise exist."
+          "technique": "identity-scope-attribution-refusal",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/alerts/attribution.rs:150 Key/customer scopes get no contributors, just a scope note pointing at GET /v1/limits/usage. Customer-axis forecast alerts are also stripped in compose::forecast_body."
+        },
+        {
+          "technique": "pre-breach-forecasting",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/alerts/ledger.rs:89 Forecast alerts go through the same cooldown and durable gate using the methodology-free ForecastAlert key, and channel severity is tiered from the forecast. Only delivery is judged here; the forecast-driven enforcement is judged on its own contexts."
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/api/src/alerts/channels.rs:47 Webhook delivery permits unsigned payloads, leaving receivers without the authentication the standard requires.",
+          "evaluatedAt": "2026-10-13T07:58:24.927Z",
+          "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+          "reason": "replaced by d178d9e2-d4c6-45f0-a518-7badf7407773"
         }
       ]
     },
@@ -2148,19 +2167,34 @@
       "subject": "breach-alerting-and-attribution",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T07:58:24.927Z",
-      "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:24:45.438Z",
+      "worker": "d178d9e2-d4c6-45f0-a518-7badf7407773",
       "techniques": [
         {
           "technique": "pre-breach-forecasting",
           "verdict": "deviation",
-          "evidence": "crates/core/src/limits/rule.rs:234 Forecast-driven escalation can replace Alert with Throttle or Block; the tests explicitly exercise Block, so the forecast mechanism is capable of changing enforcement even though evaluation still reads measured usage."
+          "evidence": "crates/core/src/limits/rule.rs:234 Escalation is opt-in per rule, reversible and self-expiring (max 720h), but it is still forecast-triggered enforcement."
         },
         {
           "technique": "scoped-dedup-keys",
           "verdict": "conformant",
-          "evidence": "crates/core/src/limits/status.rs:199 alert_key supplies project_id, metric, window and scope_tag to this format; the key excludes current usage and detection methodology, and the scoped-key test checks the model suffix."
+          "evidence": "crates/core/src/limits/status.rs:195 alert_key = project:metric:window:scope_tag. It does not include value, ratio or how the breach was detected."
+        },
+        {
+          "technique": "notification-channel-security",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/alert_sign.rs:88 The shared primitive signs the exact body bytes with a server-time t, rejects stale timestamps on verify, emits one v1 per key during rotation, and compares in constant time. The opt-in signing policy lives in the api routing and is judged there. Note: alert_channel.rs:18 calls webhooks 'signed', which is only true when a key exists."
+        }
+      ],
+      "registryProposal": "pre-breach-forecasting says 'do not let forecast alerts trigger enforcement' without separating that from an operator-authored, opt-in, time-boxed, self-reverting escalation that shadows (never overwrites) the configured action. If the corpus means to allow that bounded case, the technique should say so and set its guardrails; if not, it should name this pattern as the failure explicitly.",
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/core/src/limits/rule.rs:234 The rule evaluator supports forecast-driven replacement of the effective enforcement action, contrary to the standard's advisory-only forecast requirement.",
+          "evaluatedAt": "2026-10-13T07:58:24.927Z",
+          "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+          "reason": "replaced by d178d9e2-d4c6-45f0-a518-7badf7407773"
         }
       ]
     },
@@ -2169,14 +2203,28 @@
       "subject": "breach-alerting-and-attribution",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T07:58:24.927Z",
-      "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:24:45.438Z",
+      "worker": "d178d9e2-d4c6-45f0-a518-7badf7407773",
       "techniques": [
         {
           "technique": "notification-channel-security",
           "verdict": "deviation",
-          "evidence": "crates/responder/src/webhook.rs:88 Verification and freshness checks run only with a configured secret; main merely warns when an unsigned receiver binds beyond loopback and continues serving."
+          "evidence": "crates/responder/src/webhook.rs:88 When a secret is configured, verification is correct: raw body bytes, the shared core verify, 300s tolerance, 401 on failure. The skip-when-unconfigured default is the 'URL secrecy instead of signing' posture the technique refuses."
+        },
+        {
+          "technique": "top-contributor-attribution",
+          "verdict": "not-applicable",
+          "evidence": "crates/responder/src/webhook.rs:133 The responder ignores breach and forecast payloads, so the attribution, dedup and forecasting techniques have nothing to apply to here."
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/responder/src/webhook.rs:88 The receiver bypasses signature verification when no secret is configured, allowing unverified alerts to trigger investigation.",
+          "evaluatedAt": "2026-10-13T07:58:24.927Z",
+          "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+          "reason": "replaced by d178d9e2-d4c6-45f0-a518-7badf7407773"
         }
       ]
     },
@@ -2185,19 +2233,38 @@
       "subject": "breach-alerting-and-attribution",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T07:58:24.927Z",
-      "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:24:45.438Z",
+      "worker": "d178d9e2-d4c6-45f0-a518-7badf7407773",
       "techniques": [
         {
           "technique": "pre-breach-forecasting",
           "verdict": "deviation",
-          "evidence": "crates/api/src/margin_guardrails.rs:100 This forecast-alert predicate raises escalated_until and writes the updated rule; explainable advisory messages and shared mapping exist, but forecasts can change enforcement."
+          "evidence": "crates/api/src/margin_guardrails.rs:100 The forecast alerts themselves conform: advisory 'on track to … in about N days' wording (forecast_alerts.rs:94), an evidence floor plus burn-rate corroboration gate, and one shared build_alerts used by both sweep and handler. The forecast-to-enforcement escalation is the deviation."
         },
         {
           "technique": "scoped-dedup-keys",
           "verdict": "conformant",
-          "evidence": "crates/api/src/forecast_alerts.rs:42 The forecast key contains project, kind, subject and severity, excludes production methodology and ETA, and both sweep and query obtain alerts from the shared mapping."
+          "evidence": "crates/api/src/forecast_alerts.rs:49 Key is project, kind, subject (rule or customer) and tier. It has nothing about sweep vs on-demand, so the two paths share one cooldown."
+        },
+        {
+          "technique": "identity-scope-attribution-refusal",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/forecast.rs:306 Customer-axis margin alerts are marked identity-scoped where the axis is known. The pointed-at authenticated surface exists and is principal-scoped (limits_usage.rs:99)."
+        },
+        {
+          "technique": "off-request-path-delivery",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/forecast.rs:135 The forecast handler hands alerts to notify_forecast, which spawns delivery, and returns the response without waiting on any sink."
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/api/src/margin_guardrails.rs:100 Predicted breach ETAs drive persisted enforcement-action escalations, violating the standard's requirement that forecasts remain advisory.",
+          "evaluatedAt": "2026-10-13T07:58:24.927Z",
+          "worker": "9e50bf62-6ee6-415d-aa1c-a9c7f7841693",
+          "reason": "replaced by d178d9e2-d4c6-45f0-a518-7badf7407773"
         }
       ]
     },

@@ -626,12 +626,11 @@
           "changedAt": "2026-10-14",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/api/src/alerts/channels.rs:47 Webhook delivery permits unsigned payloads, leaving receivers without the authentication the standard requires.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:a6170b7423099d53",
-          "evaluatedRevision": 3,
-          "revisionsBehind": 2,
-          "stale": true
+          "evidence": "crates/api/src/alerts/routing.rs:155 Webhook signing is opt-in per channel (`#[serde(default)] signed: bool`, so it defaults to false), and the env bench webhook and ntfy channels are never signed, so by default a receiver cannot tell a platform breach alert from a forged POST; the standard requires every delivered payload to carry a signature.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:183ec8b74ed943d6",
+          "evaluatedRevision": 5,
+          "revisionsBehind": 2
         },
         {
           "subject": "alerting",
@@ -2304,12 +2303,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/api/src/margin_guardrails.rs:100 Predicted breach ETAs drive persisted enforcement-action escalations, violating the standard's requirement that forecasts remain advisory.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:a6170b7423099d53",
-          "evaluatedRevision": 3,
-          "revisionsBehind": 2,
-          "stale": true
+          "evidence": "crates/api/src/margin_guardrails.rs:100 The forecast sweep's escalation pass stamps `escalated_until` on a limit rule whenever a budget_breach forecast's ETA reaches the rule's `on_eta_days`, turning a projection into an enforcement change, which pre-breach-forecasting forbids.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:183ec8b74ed943d6",
+          "evaluatedRevision": 5,
+          "revisionsBehind": 2
         },
         {
           "subject": "agent-memory",
@@ -5967,12 +5965,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/responder/src/webhook.rs:88 The receiver bypasses signature verification when no secret is configured, allowing unverified alerts to trigger investigation.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:a6170b7423099d53",
-          "evaluatedRevision": 3,
-          "revisionsBehind": 2,
-          "stale": true
+          "evidence": "crates/responder/src/webhook.rs:88 Signature and freshness checks run only when LIGHTTRACK_RESPONDER_WEBHOOK_SECRET is set; without it the receiver acts on any POST (spending a Claude run, possibly editing a repo), and on a non-loopback bind it only prints a startup warning.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:183ec8b74ed943d6",
+          "evaluatedRevision": 5,
+          "revisionsBehind": 2
         }
       ],
       "governance": "governed"
@@ -7914,12 +7911,11 @@
           "changedAt": "2026-10-14",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/core/src/limits/rule.rs:234 The rule evaluator supports forecast-driven replacement of the effective enforcement action, contrary to the standard's advisory-only forecast requirement.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:a6170b7423099d53",
-          "evaluatedRevision": 3,
-          "revisionsBehind": 2,
-          "stale": true
+          "evidence": "crates/core/src/limits/rule.rs:234 While a forecast-stamped escalation is live, `effective_action_at` replaces the rule's configured action with `Escalation::to`, so a projection changes how traffic is enforced (e.g. starting to shed under Throttle before any measured breach); the technique says forecasts stay advisory and must not trigger enforcement.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:183ec8b74ed943d6",
+          "evaluatedRevision": 5,
+          "revisionsBehind": 2
         },
         {
           "subject": "alerting",
