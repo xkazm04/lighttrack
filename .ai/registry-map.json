@@ -2988,7 +2988,11 @@
           "revision": 3,
           "changedAt": "2026-10-05",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/api/src/scores.rs:1 The evaluation API ingests, reviews and gates on judge verdicts. Its only agreement signal is judge-vs-itself (scores_review low_agreement), and its only confidence bound is the run's CI on the judged mean (prompts_gate). A search of crates/api/src found no logprob, token-probability, generator self-consistency or gen_samples construct, so no judge-free generator-uncertainty score enters this context.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:a449ca2b8da79c6e",
+          "evaluatedRevision": 3
         },
         {
           "subject": "hitl-approval",
@@ -4735,7 +4739,11 @@
           "revision": 3,
           "changedAt": "2026-10-05",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/scores.rs:12 The Postgres evaluation store keeps judge verdicts (rubric, value, max, pass, reasoning, detail) and judge-vs-human calibration history. A search of crates/store-pg/src found no logprob, token-probability, self-consistency or generator-agreement construct, so no generator-uncertainty score is persisted, typed or interpreted here and the subject's precondition does not hold.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:a449ca2b8da79c6e",
+          "evaluatedRevision": 3
         },
         {
           "subject": "prompt-assembly",
@@ -6218,7 +6226,11 @@
           "revision": 3,
           "changedAt": "2026-10-05",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/runner/src/stats.rs:118 stability() returns a perfect 1.0 when fewer than two samples exist. compare.rs:736/775 applies it to the generator's candidate scores and writes gen_agreement unconditionally, so every single-draw case (or a cell left with one surviving candidate) records a confident zero-variance generator agreement where the technique requires an absence.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:a449ca2b8da79c6e",
+          "evaluatedRevision": 3
         },
         {
           "subject": "cross-provider-benchmark-operations",

@@ -3519,42 +3519,47 @@
       "context": "runner-scoring-engine",
       "subject": "generator-uncertainty-scoring",
       "bundle": "llm-observability",
-      "state": "unknown",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T21:07:26.875Z",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T05:10:05.153Z",
+      "worker": "f41d749c-32df-4f19-bcc4-53dd680e0d0a",
       "techniques": [
-        {
-          "technique": "compare-gates-at-matched-coverage",
-          "verdict": "not-applicable",
-          "evidence": "crates/runner/src/stats/paired.rs:175 This tests paired quality regression using statistical significance, not errors admitted by alternative model-confidence gates."
-        },
         {
           "technique": "generator-vs-itself",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/stats.rs:118 The fewer-than-two-samples branch returns perfect stability; compare.rs calls it for candidate scores and publishes gen_agreement even when n_candidates is one."
+          "evidence": "crates/runner/src/stats.rs:118 N<2 gives 1.0 instead of an absence. This value becomes per-case gen_agreement at compare.rs:775 even when n_candidates is 1. A second frame issue: compare.rs:739 switches the run-level 'agreement' field between generator stability (ng>1) and judge agreement (ng==1), so one field name carries two quantities. On the plus side, cli.rs:173-174 does declare the gate frame (draws are averaged 'to average out generation variance')."
+        },
+        {
+          "technique": "scorer-cost-class",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/score_traces.rs:5 The metered tier-2 judge scores production traces asynchronously: only settled traces, on a stable 1/N sample, never in the serving path. That matches the invariant binding absolutely at tier 2. No tier-0 or tier-1 production scorer is offered, and no logprob is read anywhere in the repo."
+        },
+        {
+          "technique": "compare-gates-at-matched-coverage",
+          "verdict": "not-applicable",
+          "evidence": "crates/runner/src/stats/paired.rs:175 This tests paired quality regression using statistical significance, not errors admitted by alternative model-confidence gates.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "score-source-ensembling",
           "verdict": "not-applicable",
-          "evidence": "crates/runner/src/compare.rs:702 This averages quality scores across candidate draws; it does not combine judge scores with judge-free confidence using fitted source weights."
+          "evidence": "crates/runner/src/compare.rs:702 This averages quality scores across candidate draws; it does not combine judge scores with judge-free confidence using fitted source weights.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "score-source-kinds",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/rubric.rs:60 The runner counts every non-llm kind as deterministic, including model-judged grounding, so its source classification does not reliably distinguish who decides the score."
+          "evidence": "crates/runner/src/rubric.rs:60 The runner counts every non-llm kind as deterministic, including model-judged grounding, so its source classification does not reliably distinguish who decides the score.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "stated-distribution-over-closed-labels",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/pairwise.rs:283 The runner converts the model's discrete A/B/Tie winner into scores and pass flags without a stated label distribution or confidence."
+          "evidence": "crates/runner/src/pairwise.rs:283 The runner converts the model's discrete A/B/Tie winner into scores and pass flags without a stated label distribution or confidence.",
+          "carriedFrom": "2026-10-13"
         }
       ],
-      "withdrawn": {
-        "worker": "6b0bb68b-54c7-4619-bdbd-5f35b72f85b3",
-        "state": "deviation",
-        "at": "2026-10-13T21:08:01.014598+00:00",
-        "reason": "reviewer (sonnet): The claim is real: crates/runner/src/compare.rs:736 and :775 publish gen_agreement from stability(), which returns 1.0 for fewer than two samples. But compare.rs is not among the context's listed files, and it calls stats.rs rather than the other way round, so the verdict is not about this context's"
-      }
+      "registryProposal": "Consider naming a failure mode beside 'the frame collision': a single headline field whose source switches on a run parameter (generator spread when N>1, judge self-agreement when N=1). It is a frame swap driven by configuration rather than by an unlabelled number, and the techniques do not currently describe it."
     },
     "e2e94385-c146-47f1-8018-92afdf565ab7/margin-and-unit-economics": {
       "context": "economics-margin-pricing",
@@ -7561,6 +7566,26 @@
       "evaluatedAt": "2026-10-24",
       "evaluatedTs": "2026-10-24T04:56:27.974Z",
       "worker": "46bc8331-3b83-4941-8d6f-cfb7a6cac3ec",
+      "techniques": []
+    },
+    "bcb4d3f6-3950-42fa-a00e-12126bf4794d/generator-uncertainty-scoring": {
+      "context": "pg-evaluation-store",
+      "subject": "generator-uncertainty-scoring",
+      "bundle": "llm-observability",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T05:10:05.153Z",
+      "worker": "f41d749c-32df-4f19-bcc4-53dd680e0d0a",
+      "techniques": []
+    },
+    "430d498e-2077-4dde-b0c6-2735cb9ddfc4/generator-uncertainty-scoring": {
+      "context": "evaluation-pipeline",
+      "subject": "generator-uncertainty-scoring",
+      "bundle": "llm-observability",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T05:10:05.153Z",
+      "worker": "f41d749c-32df-4f19-bcc4-53dd680e0d0a",
       "techniques": []
     }
   }
