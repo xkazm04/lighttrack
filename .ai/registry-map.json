@@ -2043,12 +2043,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "not-applicable",
-          "evidence": "crates/core/src/prompt.rs:88 Searched the listed core files for interpolation, token budgets, cache breakpoints, and compaction and found none; prompt text is stored on an immutable version row, and the only {{input}} replace in the repo is crates/runner/src/targets.rs:64, outside this context.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:7436fd55a7cb2500",
-          "evaluatedRevision": 43,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/core/src/prompt.rs:89 Core stores prompt text as an opaque string on an immutable version row and never renders, budgets, compacts or sends a prompt. A search of crates/core found no compaction, cache breakpoints, max_tokens or template rendering, so assembly happens outside this context.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44,
+          "revisionsBehind": 1
         },
         {
           "subject": "agent-memory",
@@ -3985,12 +3984,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/gateway/src/wire.rs:136 Every system and developer message is lifted out of the turn list and joined into one system field, so a system message that arrived mid-conversation moves to the front.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:7436fd55a7cb2500",
-          "evaluatedRevision": 43,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/gateway/src/wire.rs:111 Every system/developer message, wherever it sits in the conversation, is lifted out of the turn list and joined into the leading system field (line 136). A mid-conversation system message therefore moves to byte zero, which is the meaning-preserving but position-destroying proxy rewrite that the technique says breaks prefix stability.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44,
+          "revisionsBehind": 1
         },
         {
           "subject": "agent-runtime-assembly",
@@ -4303,12 +4301,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/mcp/src/prompts.rs:74 MCP prompt text teaches tool names by hand, so a renamed tool stays in the instruction after the generated tools/list roster moves.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:7436fd55a7cb2500",
-          "evaluatedRevision": 43,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/mcp/src/prompts.rs:74 The MCP prompt journeys name tools in hand-written prose, and no test or load-time check confirms that each name exists in the generated tools/list roster, so renaming a tool would leave these instructions pointing at a tool the dispatcher rejects.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44,
+          "revisionsBehind": 1
         },
         {
           "subject": "agent-memory",
@@ -5375,12 +5372,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/engine/src/anthropic_api.rs:44 The Anthropic output ceiling is the vendor's published floor, and a max_tokens stop is returned as truncation with no higher-ceiling retry.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:7436fd55a7cb2500",
-          "evaluatedRevision": 43,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/engine/src/anthropic_api.rs:42 The Anthropic API output ceiling is a constant sized for a judge verdict (per the comment above it), yet every Anthropic-API generation uses it, including candidate generation and the gateway's generate_chat. A max_tokens stop comes back as EngineError::Truncated with no retry at a higher ceiling, and the output_tokens recorded on every success never feed the number.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:ad13b2ee69c25e8d",
+          "evaluatedRevision": 44,
+          "revisionsBehind": 1
         },
         {
           "subject": "voice-io",

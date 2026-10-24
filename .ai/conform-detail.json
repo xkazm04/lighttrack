@@ -800,69 +800,84 @@
       "subject": "prompt-assembly",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-12",
-      "evaluatedTs": "2026-10-12T23:56:33.821Z",
-      "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T01:30:02.473Z",
+      "worker": "4a7f4f91-fa42-453d-8212-8360f1929068",
       "techniques": [
         {
           "technique": "capability-documentation",
           "verdict": "deviation",
-          "evidence": "crates/mcp/src/prompts.rs:74 tools/list is generated from lighttrack-contract (tools.rs:26); these prompt strings name tools by hand, and the test only checks the substring is present."
-        },
-        {
-          "technique": "variable-interpolation",
-          "verdict": "deviation",
-          "evidence": "crates/mcp/src/prompts.rs:73 Empty arguments are dropped and a missing project selects another instruction, but the argument has no declared type or trust class and is interpolated into the instruction."
-        },
-        {
-          "technique": "context-budgeting",
-          "verdict": "deviation",
-          "evidence": "crates/mcp/src/resources.rs:84 Elision does not enforce a total: the wide-trace test expects the elided JSON to stay over MAX_RESOURCE_JSON, and the markdown item is rendered from the unelided body."
-        },
-        {
-          "technique": "recovery-path-as-loss-signal",
-          "verdict": "deviation",
-          "evidence": "crates/mcp/src/resources.rs:110 The get_event pointer is the recovery path; a search of crates/mcp/src found no counter of how often that path is taken, only the marker and tests that it is present."
-        },
-        {
-          "technique": "layered-composition",
-          "verdict": "conformant",
-          "evidence": "crates/mcp/src/prompts.rs:58 prompts/get is the only door and returns the finished user message; callers do not append prompt text."
+          "evidence": "crates/mcp/src/prompts.rs:74 tools/list itself is generated from lighttrack-contract and filtered to the active set (tools.rs:26), but the tool names in the prompt text are hand-kept and have no sync check against that registry. The only test (get_weaves_in_arguments) asserts the same hard-coded string."
         },
         {
           "technique": "task-envelope",
           "verdict": "conformant",
-          "evidence": "crates/mcp/src/prompts.rs:76 The task opens with the work and a concrete close, not an expertise claim."
+          "evidence": "crates/mcp/src/prompts.rs:73 Each prompt opens with the ask itself, not a role or expertise claim. Numbered steps follow, and a closing step defines when the task is done."
         },
         {
-          "technique": "context-reachability",
+          "technique": "variable-interpolation",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/prompts.rs:148 Missing arguments get a declared default or a fallback branch, which is right. But `by` is declared as the enum customer|product and is never checked, so any string the caller passes is written into the prompt text."
+        },
+        {
+          "technique": "layered-composition",
           "verdict": "conformant",
-          "evidence": "crates/mcp/src/prompts.rs:6 The prompt names the tool and leaves the table for the agent to fetch rather than inlining the data."
+          "evidence": "crates/mcp/src/prompts.rs:58 One assembler (`get`) builds the single task-layer message for each prompt family from typed args. No call site appends text afterwards."
         },
         {
           "technique": "elision-to-a-refetch-pointer",
           "verdict": "conformant",
-          "evidence": "crates/mcp/src/resources.rs:151 Over-budget event input/output is replaced with a byte count and a get_event pointer; the API record is not rewritten, and fields under 64 bytes stay."
+          "evidence": "crates/mcp/src/resources.rs:151 An oversized resource body replaces recoverable span payloads with a pointer that names the way back and the byte count. The structural view is kept, and a floor (MIN_ELIDABLE) stops elision from making small fields bigger."
+        },
+        {
+          "technique": "recovery-path-as-loss-signal",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/resources.rs:125 The elision shipped without any counter of how often a consumer follows the get_event pointer back, so nothing can tell whether the 24 KiB trigger is too aggressive or too timid."
+        },
+        {
+          "technique": "context-budgeting",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/resources.rs:84 Elision does not enforce a total: the wide-trace test expects the elided JSON to stay over MAX_RESOURCE_JSON, and the markdown item is rendered from the unelided body.",
+          "carriedFrom": "2026-10-12"
+        },
+        {
+          "technique": "context-reachability",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/prompts.rs:6 The prompt names the tool and leaves the table for the agent to fetch rather than inlining the data.",
+          "carriedFrom": "2026-10-12"
         },
         {
           "technique": "consumer-coupled-decoration",
           "verdict": "conformant",
-          "evidence": "crates/mcp/src/resources.rs:114 The elision marker's byte count has a named consumer: the caller deciding whether to fetch."
+          "evidence": "crates/mcp/src/resources.rs:114 The elision marker's byte count has a named consumer: the caller deciding whether to fetch.",
+          "carriedFrom": "2026-10-12"
         },
         {
           "technique": "contributed-document-admission",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/prompts.rs:3 These prompts are authored in this repo, not a registry of documents the team did not write."
+          "evidence": "crates/mcp/src/prompts.rs:3 These prompts are authored in this repo, not a registry of documents the team did not write.",
+          "carriedFrom": "2026-10-12"
         },
         {
           "technique": "history-compaction",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/prompts.rs:4 There is no multi-turn transcript here to cut; resource elision is a payload pointer, not history compaction."
+          "evidence": "crates/mcp/src/prompts.rs:4 There is no multi-turn transcript here to cut; resource elision is a payload pointer, not history compaction.",
+          "carriedFrom": "2026-10-12"
         },
         {
           "technique": "fold-only-acknowledged-evidence",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/resources.rs:103 The marker is written into the resource before any model call in this process; it is not a fold of evidence a completed call already carried."
+          "evidence": "crates/mcp/src/resources.rs:103 The marker is written into the resource before any model call in this process; it is not a fold of evidence a completed call already carried.",
+          "carriedFrom": "2026-10-12"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/mcp/src/prompts.rs:74 MCP prompt text teaches tool names by hand, so a renamed tool stays in the instruction after the generated tools/list roster moves.",
+          "evaluatedAt": "2026-10-12T23:56:33.821Z",
+          "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+          "reason": "replaced by 4a7f4f91-fa42-453d-8212-8360f1929068"
         }
       ]
     },
@@ -871,24 +886,38 @@
       "subject": "prompt-assembly",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-12",
-      "evaluatedTs": "2026-10-12T23:56:33.821Z",
-      "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T01:30:02.473Z",
+      "worker": "4a7f4f91-fa42-453d-8212-8360f1929068",
       "techniques": [
         {
           "technique": "response-reservation-sizing",
           "verdict": "deviation",
-          "evidence": "crates/engine/src/anthropic_api.rs:44 4096 and 64000 are constants, not a percentile of observed lengths; truncation returns EngineError::Truncated. providers.rs:197-198 sends no ceiling for OpenAI, Gemini, OpenRouter, and the CLIs."
+          "evidence": "crates/engine/src/anthropic_api.rs:42 The ceiling is a stated preference ('generous headroom'), not derived from a percentile of observed lengths. Truncation is not escalated per call. The 64k high-effort ceiling is correctly scoped to the effort levels that need it, but its basis is a vendor floor, which the technique says is not a derivation."
         },
         {
           "technique": "layered-composition",
           "verdict": "conformant",
-          "evidence": "crates/engine/src/chat.rs:121 One ChatRequest is projected per provider, system ahead of turns; a single user turn renders verbatim."
+          "evidence": "crates/engine/src/chat.rs:125 One ChatRequest vocabulary gives each adapter its own wire view. The system prompt stays a dedicated leading field (and a `system` body field on Anthropic) instead of being concatenated into the turns."
+        },
+        {
+          "technique": "endpoint-sealed-continuation-metadata",
+          "verdict": "not-applicable",
+          "evidence": "crates/engine/src/chat.rs:29 Turns carry only text plus OpenAI tool_calls and ids. No provider-sealed reasoning or signature metadata is stored or replayed, so there is nothing to seal per endpoint."
         },
         {
           "technique": "context-ownership-regimes",
           "verdict": "not-applicable",
-          "evidence": "crates/engine/src/providers.rs:236 The conversation arrives on the call. This context does not hold or compact it between turns. No cache_control or continuation-signature field was found under crates/engine."
+          "evidence": "crates/engine/src/anthropic_api.rs:131 Every adapter re-sends the caller's full turn list statelessly. Neither client-side nor provider-side compaction or context editing is used, so there are no competing owners."
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/engine/src/anthropic_api.rs:44 The Anthropic output ceiling is the vendor's published floor, and a max_tokens stop is returned as truncation with no higher-ceiling retry.",
+          "evaluatedAt": "2026-10-12T23:56:33.821Z",
+          "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+          "reason": "replaced by 4a7f4f91-fa42-453d-8212-8360f1929068"
         }
       ]
     },
@@ -897,19 +926,30 @@
       "subject": "prompt-assembly",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-12",
-      "evaluatedTs": "2026-10-12T23:56:33.821Z",
-      "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T01:30:02.473Z",
+      "worker": "4a7f4f91-fa42-453d-8212-8360f1929068",
       "techniques": [
         {
           "technique": "variable-interpolation",
           "verdict": "not-applicable",
-          "evidence": "crates/core/src/prompt.rs:90 This file stores a free-form config blob and does not render holes; the substitute lives in the runner."
+          "evidence": "crates/core/src/prompt.rs:90 This file stores a free-form config blob and does not render holes; the substitute lives in the runner.",
+          "carriedFrom": "2026-10-12"
         },
         {
           "technique": "layered-composition",
           "verdict": "not-applicable",
-          "evidence": "crates/core/src/prompt.rs:12 The context versions stored prompt text. It does not assemble the bytes sent to a model."
+          "evidence": "crates/core/src/prompt.rs:12 The context versions stored prompt text. It does not assemble the bytes sent to a model.",
+          "carriedFrom": "2026-10-12"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "not-applicable",
+          "evidence": "crates/core/src/prompt.rs:88 Searched the listed core files for interpolation, token budgets, cache breakpoints, and compaction and found none; prompt text is stored on an immutable version row, and the only {{input}} replace in the repo is crates/runner/src/targets.rs:64, outside this context.",
+          "evaluatedAt": "2026-10-12T23:56:33.821Z",
+          "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+          "reason": "replaced by 4a7f4f91-fa42-453d-8212-8360f1929068"
         }
       ]
     },
@@ -918,22 +958,35 @@
       "subject": "prompt-assembly",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-12",
-      "evaluatedTs": "2026-10-12T23:56:33.821Z",
-      "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T01:30:02.473Z",
+      "worker": "4a7f4f91-fa42-453d-8212-8360f1929068",
       "techniques": [
         {
           "technique": "layered-composition",
           "verdict": "deviation",
-          "evidence": "crates/gateway/src/wire.rs:136 prepare() pushes every system and developer role into system_parts and continues, then joins them. A json_object request also appends an instruction onto that system field (wire.rs:149)."
+          "evidence": "crates/gateway/src/wire.rs:111 The technique's 'last writer is not always yours' section asks to hoist only the leading run of system content and demote later system messages in place. Here every one is hoisted."
         },
         {
           "technique": "response-reservation-sizing",
           "verdict": "deviation",
-          "evidence": "crates/gateway/src/wire.rs:28 The caller's max_tokens is dropped before ChatRequest is built, so HTTP seats that could honor it still get no caller ceiling."
+          "evidence": "crates/gateway/src/wire.rs:28 The caller's chosen max_tokens is thrown away, so HTTP targets fall back to the engine default (4096 on the Anthropic API). A Truncated result is then classed Terminal (failover.rs:76), with neither escalation nor failover."
+        },
+        {
+          "technique": "endpoint-sealed-continuation-metadata",
+          "verdict": "not-applicable",
+          "evidence": "crates/gateway/src/wire.rs:39 Inbound messages keep only role, text content (non-text parts are refused) and tool_calls/tool_call_id. No sealed provider metadata survives intake to be replayed on another seat after failover."
         }
       ],
-      "registryProposal": "layered-composition already treats a gateway as a last writer and requires a position-preserving hoist, but the golden path's scope sentence (systems that own their assembler) makes a proxy look out of scope. Say a last-hop rewrite is in scope even when the proxy authors no layer."
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/gateway/src/wire.rs:136 Every system and developer message is lifted out of the turn list and joined into one system field, so a system message that arrived mid-conversation moves to the front.",
+          "evaluatedAt": "2026-10-12T23:56:33.821Z",
+          "worker": "d629c595-49b5-4488-aeab-03a3c7f9bffa",
+          "reason": "replaced by 4a7f4f91-fa42-453d-8212-8360f1929068"
+        }
+      ]
     },
     "569c353a-2570-4ea6-9da3-f0fed1bfa1a7/mcp-tools": {
       "context": "mcp-server",
