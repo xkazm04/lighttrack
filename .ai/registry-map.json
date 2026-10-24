@@ -4388,7 +4388,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/mcp/src/prompts.rs:105 The benchmark-leaderboard MCP prompt tells the agent to call a regression by comparing the latest run's mean with the prior run's — one sample each, with no interval. It does not route through the regression/gate tools the server already exposes (check_benchmark_gate, get_benchmark_regression), so a second sample gets read as a correction or regression.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:7ccead00b7f92aba",
+          "evaluatedRevision": 37
         },
         {
           "subject": "operator-surfaces-for-llm-spend",
@@ -4699,7 +4703,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-pg/src/score_summary.rs:65 The Postgres score summary groups only by the event dimension and filters optionally by rubric_id. It never filters or groups by scored_by (the judge model), so verdicts from different judges, and from different rubric versions when rubric_id is omitted, are pooled into one mean and one CI — splicing different instruments into one series.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:7ccead00b7f92aba",
+          "evaluatedRevision": 37
         },
         {
           "subject": "generator-uncertainty-scoring",
@@ -5871,7 +5879,11 @@
           "revision": 37,
           "changedAt": "2026-09-29",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/responder/src/investigate.rs:82 When judge scores drop, the investigation prompt sends the investigator only to system-side owners (prompt, model or parameters, retrieval, code). It never lists the upstream owners failure-attribution requires checking first — the label, the dataset or scored-traffic mix, the input construction — or the instrument itself, so a dataset, label or judge change gets diagnosed as a product defect.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:7ccead00b7f92aba",
+          "evaluatedRevision": 37
         },
         {
           "subject": "agent-instruction-files",

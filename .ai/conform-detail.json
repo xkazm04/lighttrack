@@ -7130,6 +7130,74 @@
       "evaluatedTs": "2026-10-24T01:47:58.579Z",
       "worker": "964b23bd-b15e-499d-bfd3-b4559524a5fa",
       "techniques": []
+    },
+    "45ec4c09-1cbf-41a9-8662-ffa6ca212289/eval-harness": {
+      "context": "reactive-alert-responder",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T03:13:34.869Z",
+      "worker": "47b2ac9b-632d-444e-a951-4a4f9dabb1bd",
+      "techniques": [
+        {
+          "technique": "failure-attribution",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/investigate.rs:82 The owner list leaves out label, dataset and input layers (most upstream first) and the judge, and the investigation works on one alert at a time instead of classes."
+        },
+        {
+          "technique": "failure-signatures-beside-the-pass-rate",
+          "verdict": "not-applicable",
+          "evidence": "crates/responder/src/classify.rs:14 Classification here is operational triage (transient vs code), not a benchmark pass rate; the fallback detector does count its own use, which is in the spirit of the technique."
+        }
+      ]
+    },
+    "569c353a-2570-4ea6-9da3-f0fed1bfa1a7/eval-harness": {
+      "context": "mcp-server",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T03:13:34.869Z",
+      "worker": "47b2ac9b-632d-444e-a951-4a4f9dabb1bd",
+      "techniques": [
+        {
+          "technique": "measurement-revision",
+          "verdict": "deviation",
+          "evidence": "crates/mcp/src/prompts.rs:105 Run-vs-prior on point means: a re-run at the same n is a second sample, not evidence of regression."
+        },
+        {
+          "technique": "judge-stability",
+          "verdict": "conformant",
+          "evidence": "crates/mcp/src/schemas.rs:186 Judge trust comes from calibration and is three-valued; calibrations carry agreement plus n."
+        }
+      ]
+    },
+    "bcb4d3f6-3950-42fa-a00e-12126bf4794d/eval-harness": {
+      "context": "pg-evaluation-store",
+      "subject": "eval-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T03:13:34.869Z",
+      "worker": "47b2ac9b-632d-444e-a951-4a4f9dabb1bd",
+      "techniques": [
+        {
+          "technique": "judge-stability",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/src/score_summary.rs:65 Each score carries scored_by and rubric_id, but the summary aggregates across judges; the standard says scores from different judge packets must not be spliced."
+        },
+        {
+          "technique": "scenario-design",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/dataset_lineage.rs:136 Frozen datasets refuse edits; a fork mints the next version past the highest version the name carries (line 46), so scenario sets are versioned fixtures."
+        },
+        {
+          "technique": "measurement-revision",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/calibrations.rs:3 A re-calibration adds a row instead of overwriting the earlier measurement, so disagreeing measurements stay visible side by side."
+        }
+      ]
     }
   }
 }
