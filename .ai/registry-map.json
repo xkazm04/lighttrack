@@ -1313,12 +1313,11 @@
           "changedAt": "2026-10-14",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/billing/src/stripe.rs:168 The adapter stamps the operator-maintained FX book version onto normalized revenue events but omits the provider's API contract version, leaving field semantic changes unverifiable across provider contract rotations.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:6c728b0d6ba9bcf6",
-          "evaluatedRevision": 3,
-          "revisionsBehind": 2,
-          "stale": true
+          "evidence": "crates/billing/src/polar.rs:268 Polar's cumulative `order.refunded` total and its per-refund `refund.created` delta are keyed to one shared id, and the store upsert overwrites `amount_minor` with whichever arrives last (it is not monotone), so a second partial refund, or a late delta redelivery, leaves the ledger holding one delta instead of the cumulative refund; the adapters also stamp the FX book version but never the provider's contract version.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:5016479d8228da36",
+          "evaluatedRevision": 5,
+          "revisionsBehind": 2
         },
         {
           "subject": "multi-provider-gateway-plane",
@@ -2233,12 +2232,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "conformant",
-          "evidence": "crates/api/src/billing.rs:107 Webhook deliveries are persisted in a single atomic transaction before acknowledging with HTTP 200, rolling back and unmarking idempotency on failure.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:6c728b0d6ba9bcf6",
-          "evaluatedRevision": 3,
-          "revisionsBehind": 2,
-          "stale": true
+          "evidence": "crates/api/src/billing.rs:119 The webhook handler verifies the signature first, persists the delivery's records in one batch call, and commits the in-flight idempotency claim and returns 200 only after the store returns; a failure drops the claim so the provider's retry is reprocessed, and the margin surface reads caveats and sign from the stored rows.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:5016479d8228da36",
+          "evaluatedRevision": 5,
+          "revisionsBehind": 2
         },
         {
           "subject": "usage-limit-governance",

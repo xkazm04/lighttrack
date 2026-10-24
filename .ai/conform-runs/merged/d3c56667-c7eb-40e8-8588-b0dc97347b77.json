@@ -1,0 +1,129 @@
+{
+ "schema": "conform-run/1",
+ "worker": "d3c56667-c7eb-40e8-8588-b0dc97347b77",
+ "subject": "billing-revenue-normalization",
+ "evaluatedAt": "2026-10-24T04:03:59.121622+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "billing-provider-adapters",
+   "subject": "billing-revenue-normalization",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/billing/src/polar.rs:268 Polar's cumulative `order.refunded` total and its per-refund `refund.created` delta are keyed to one shared id, and the store upsert overwrites `amount_minor` with whichever arrives last (it is not monotone), so a second partial refund, or a late delta redelivery, leaves the ledger holding one delta instead of the cumulative refund; the adapters also stamp the FX book version but never the provider's contract version.",
+   "techniques": [
+    {
+     "technique": "signature-is-the-auth",
+     "verdict": "conformant",
+     "evidence": "crates/billing/src/stripe.rs:59 HMAC over raw bytes before JSON parse; constant-time verify_slice; 300s abs tolerance; now passed in; any of several v1 accepted for rotation; missing/malformed header = Signature error. Polar does the same with id.ts.body binding."
+    },
+    {
+     "technique": "deterministic-external-ids",
+     "verdict": "deviation",
+     "evidence": "crates/billing/src/polar.rs:268 Stripe ids are provider-prefixed and namespaced (stripe:in_x, stripe:refund:ch_x), which is fine. Polar puts a cumulative grain (order.refunded refunded_amount) and a delta grain (refund.created amount) under one key with a last-write-wins upsert, which is the failure the technique names. The collapse test (both_refund_events_for_one_refund_collapse_to_one_id) only uses equal amounts, so it cannot catch this."
+    },
+    {
+     "technique": "idempotent-revenue-upsert",
+     "verdict": "not-applicable",
+     "evidence": "crates/billing/src/lib.rs:38 Adapters only return the full record set for one delivery; persistence and acknowledgement live in crates/api/src/billing.rs and the store, judged under cost-and-revenue-governance."
+    },
+    {
+     "technique": "minor-unit-currency-handling",
+     "verdict": "conformant",
+     "evidence": "crates/billing/src/fx.rs:241 Per-currency lookup with explicit 0-decimal and 3-decimal lists and a 2-decimal default; codes uppercased; original currency and amount_minor kept on the record; JPY and KWD class tests exist. Small gap: a missing currency field silently defaults to \"usd\" (stripe.rs:137), and unknown codes are not logged."
+    },
+    {
+     "technique": "static-auditable-fx-book",
+     "verdict": "conformant",
+     "evidence": "crates/billing/src/fx.rs:92 Static JSON book loaded once (shared_fx OnceLock); convention and sources in _meta; base entry and non-positive rates dropped; a missing book falls back to USD-only, loudly; a missing rate is stored 1:1 with converted=false and rate=None; version stamped on each row."
+    },
+    {
+     "technique": "revenue-kind-taxonomy",
+     "verdict": "deviation",
+     "evidence": "crates/billing/src/stripe.rs:143 Mostly realized: closed 4-kind set, non-negative magnitudes, refunds as separate namespaced records, zero refunds yield no record, kind inferred from the subscription link. But Subscription is assigned even when period_start/period_end resolved to None (Stripe lines[0].period or Polar subscription object absent), which is the recurring-with-nulls case the technique says should be ingested as point-in-time."
+    },
+    {
+     "technique": "contract-version-is-provenance",
+     "verdict": "deviation",
+     "evidence": "crates/billing/src/stripe.rs:168 The rate-book version is stamped but the provider contract version is not: no read of Stripe's envelope api_version or Polar's version, no assertion against an expected version, no version config at registration (BillingRegistry::from_env reads only secrets). A repo-wide grep for api_version/contract_version/Stripe-Version finds only the Anthropic engine client."
+    }
+   ]
+  },
+  {
+   "context": "cost-and-revenue-governance",
+   "subject": "billing-revenue-normalization",
+   "bundle": "llm-observability",
+   "state": "conformant",
+   "evidence": "crates/api/src/billing.rs:119 The webhook handler verifies the signature first, persists the delivery's records in one batch call, and commits the in-flight idempotency claim and returns 200 only after the store returns; a failure drops the claim so the provider's retry is reprocessed, and the margin surface reads caveats and sign from the stored rows.",
+   "techniques": [
+    {
+     "technique": "signature-is-the-auth",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/billing.rs:50 Raw Bytes body and header lookup go to the adapter before anything is parsed; a failure is a 401, logged at warn as a security signal with header values redacted; an authentic untracked event gives an empty vec and is still a 200."
+    },
+    {
+     "technique": "idempotent-revenue-upsert",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/billing.rs:119 Acknowledged after persist. The delivery-id claim is held in flight, a concurrent repeat gets 409, the claim is marked done only after the store write, and it is released on early exit. Atomicity across records depends on the backend (see notes)."
+    },
+    {
+     "technique": "revenue-kind-taxonomy",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:48 Manual revenue posts are refused unless amount_usd is a finite, non-negative magnitude ('the sign comes from `kind`'); an inverted period is rejected too."
+    },
+    {
+     "technique": "static-auditable-fx-book",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/revenue.rs:139 The unconverted-currency caveat is read from each row's own converted flag, not from today's book, and is returned in the margin payload as currency_note. revenue_reprice is admin-only, dry-run by default, and stamps a book version, so restatement is a deliberate act."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "billing-revenue-normalization",
+   "context": "api-endpoint-table",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-24T04:03:59.121622+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "billing-revenue-normalization"
+   ],
+   "techniques": [
+    "contract-version-is-provenance",
+    "deterministic-external-ids",
+    "idempotent-revenue-upsert",
+    "minor-unit-currency-handling",
+    "revenue-kind-taxonomy",
+    "signature-is-the-auth",
+    "static-auditable-fx-book"
+   ],
+   "deviations": 1,
+   "context": "billing-provider-adapters",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T04:03:59.121622+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "billing-revenue-normalization"
+   ],
+   "techniques": [
+    "idempotent-revenue-upsert",
+    "revenue-kind-taxonomy",
+    "signature-is-the-auth",
+    "static-auditable-fx-book"
+   ],
+   "deviations": 0,
+   "context": "cost-and-revenue-governance",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
