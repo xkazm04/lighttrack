@@ -1,0 +1,91 @@
+{
+ "schema": "conform-run/1",
+ "worker": "46bc8331-3b83-4941-8d6f-cfb7a6cac3ec",
+ "subject": "agent-instruction-files",
+ "evaluatedAt": "2026-10-24T04:56:27.974950+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "device-relay-agent",
+   "subject": "agent-instruction-files",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/agent/src/report.rs:8 Each relay run is an unattended Claude Code session (bare: false, so project and user instruction files load). Its identity is a sha256 of the rendered prompt alone, described as 'the text the model actually read'. A scan or edit run inside a workspace also reads that workspace's CLAUDE.md, its ancestors' files and any files below it, and none of that loaded set is captured or asserted, so one fingerprint can stand for different briefs.",
+   "techniques": [
+    {
+     "technique": "workspace-ancestry-isolation",
+     "verdict": "deviation",
+     "evidence": "crates/agent/src/report.rs:8 The positional half is realized: generate runs take no workspace (actions.rs:122), and the engine sends them to a neutral temp cwd. The 'make the loaded set an artifact' half is missing: the report never records which instruction files a run resolved, so an automated run that is judged later (report_io) has an uncontrolled input."
+    },
+    {
+     "technique": "enforcement-demotion",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/exec.rs:85 Whether a run may touch a repository is a code-checked posture (workspace and mode validated before spawn), not a sentence in prompt.md the model might skip."
+    },
+    {
+     "technique": "inherited-default-ownership",
+     "verdict": "conformant",
+     "evidence": "crates/agent/src/exec.rs:100 Every action passes its own permission mode and allowed tools into argv. Unattended edit and scan behaviour is decided per action instead of left to the harness default; the engine posture refuses an edit run that has no mode."
+    }
+   ],
+   "registryProposal": "workspace-ancestry-isolation could say outright that a run fingerprint covering only the rendered prompt is incomplete whenever the harness also auto-loads instruction files. That is the common case for a device-side relay running in operator-chosen repositories, which sit outside the technique's 'tool-created directory' trigger but still have the uncontrolled-input problem."
+  },
+  {
+   "context": "pii-scrubbing",
+   "subject": "agent-instruction-files",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/anon/Cargo.toml:6 The crate is a regex PII scrubber whose only dependencies are regex and sha2. A case-insensitive search of crates/anon for CLAUDE.md, AGENTS.md, instruction and harness found nothing, so it writes, loads and launches no agent instruction file and the subject's precondition does not hold (the registry match came from the tokens 'rule', 'set' and 'text').",
+   "techniques": [],
+   "absenceTerms": [
+    "CLAUDE.md",
+    "AGENTS.md",
+    "instruction",
+    "harness"
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "agent-instruction-files",
+   "context": "mcp-server",
+   "reason": "the seat returned unknown"
+  },
+  {
+   "subject": "agent-instruction-files",
+   "context": "api-endpoint-table",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-24T04:56:27.974950+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-instruction-files"
+   ],
+   "techniques": [
+    "enforcement-demotion",
+    "inherited-default-ownership",
+    "workspace-ancestry-isolation"
+   ],
+   "deviations": 1,
+   "context": "device-relay-agent",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T04:56:27.974950+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-instruction-files"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "pii-scrubbing",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

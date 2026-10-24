@@ -7525,6 +7525,43 @@
       "evaluatedTs": "2026-10-24T04:37:17.797Z",
       "worker": "7c80bb1e-f211-4d30-892a-86b300cdca03",
       "techniques": []
+    },
+    "66f623cb-5fd8-4622-b63e-6ff7313706dd/agent-instruction-files": {
+      "context": "device-relay-agent",
+      "subject": "agent-instruction-files",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T04:56:27.974Z",
+      "worker": "46bc8331-3b83-4941-8d6f-cfb7a6cac3ec",
+      "techniques": [
+        {
+          "technique": "workspace-ancestry-isolation",
+          "verdict": "deviation",
+          "evidence": "crates/agent/src/report.rs:8 The positional half is realized: generate runs take no workspace (actions.rs:122), and the engine sends them to a neutral temp cwd. The 'make the loaded set an artifact' half is missing: the report never records which instruction files a run resolved, so an automated run that is judged later (report_io) has an uncontrolled input."
+        },
+        {
+          "technique": "enforcement-demotion",
+          "verdict": "conformant",
+          "evidence": "crates/agent/src/exec.rs:85 Whether a run may touch a repository is a code-checked posture (workspace and mode validated before spawn), not a sentence in prompt.md the model might skip."
+        },
+        {
+          "technique": "inherited-default-ownership",
+          "verdict": "conformant",
+          "evidence": "crates/agent/src/exec.rs:100 Every action passes its own permission mode and allowed tools into argv. Unattended edit and scan behaviour is decided per action instead of left to the harness default; the engine posture refuses an edit run that has no mode."
+        }
+      ],
+      "registryProposal": "workspace-ancestry-isolation could say outright that a run fingerprint covering only the rendered prompt is incomplete whenever the harness also auto-loads instruction files. That is the common case for a device-side relay running in operator-chosen repositories, which sit outside the technique's 'tool-created directory' trigger but still have the uncontrolled-input problem."
+    },
+    "3df8f303-0005-4d18-8f39-d97cfc5fd20c/agent-instruction-files": {
+      "context": "pii-scrubbing",
+      "subject": "agent-instruction-files",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T04:56:27.974Z",
+      "worker": "46bc8331-3b83-4941-8d6f-cfb7a6cac3ec",
+      "techniques": []
     }
   }
 }
