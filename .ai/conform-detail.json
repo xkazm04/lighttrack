@@ -7774,6 +7774,47 @@
           "evidence": "crates/core/src/limits/status.rs:136 Core holds only the pure per-status verdict. The critical section and batch admission live in the store backends."
         }
       ]
+    },
+    "66f623cb-5fd8-4622-b63e-6ff7313706dd/agent-browser-control": {
+      "context": "device-relay-agent",
+      "subject": "agent-browser-control",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T22:17:24.473Z",
+      "techniques": [
+        {
+          "technique": "persistent-browser-daemon",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/Cargo.toml:18 The only network dependency is a blocking HTTP client used for the cloud and connector calls. No browser process is started or kept alive."
+        },
+        {
+          "technique": "references-over-selectors",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/main.rs:3 Nothing here acts on page elements. The search found no snapshot, selector or accessibility-tree code."
+        },
+        {
+          "technique": "effect-classed-commands",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/actions.rs:44 Actions pass Claude CLI tool allowlists through (e.g. Bash(git log:*)). They are not a registry of browser commands sorted by effect."
+        },
+        {
+          "technique": "agent-actionable-errors",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/exec.rs:126 These errors are CLI-run outcomes that go into a relay report. No browser-driver error ever reaches a model."
+        },
+        {
+          "technique": "socket-scoped-surface",
+          "verdict": "not-applicable",
+          "evidence": "crates/agent/src/main.rs:3 The agent only makes outbound connections. It opens no listener, so there is no local or remote browser surface to scope."
+        }
+      ],
+      "withdrawn": {
+        "worker": "aaceb179-c50b-41b9-9647-a2c943b62ee4",
+        "state": "not-applicable",
+        "at": "2026-10-24T22:18:10.844504+00:00",
+        "reason": "reviewer (sonnet): The absence is real for crates/agent (no browser dependency, and the search returned 0 hits even with extra terms like mcp and chrome). But the technique anchors are incidental, and the agent has an open tool seam. main.rs:3 is only a doc comment. actions.rs:44 is the free-form `allowed_tools: Vec<S"
+      }
     }
   }
 }

@@ -1,0 +1,36 @@
+{
+  "schema": "conform-run/1",
+  "worker": "aaceb179-c50b-41b9-9647-a2c943b62ee4",
+  "subject": "agent-browser-control",
+  "evaluatedAt": "2026-10-24T22:17:24.473029+00:00",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "pairs": [],
+  "declined": [
+    {
+      "subject": "agent-browser-control",
+      "context": "device-relay-agent",
+      "reason": "withdrawn after review: reviewer (sonnet): The absence is real for crates/agent (no browser dependency, and the search returned 0 hits even with extra terms like mcp and chrome). But the technique anchors are incidental, and the agent has an open tool seam. main.rs:3 is only a doc comment. actions.rs:44 is the free-form `allowed_tools: Vec<S"
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-10-24T22:17:24.473029+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "agent-browser-control"
+      ],
+      "techniques": [
+        "agent-actionable-errors",
+        "effect-classed-commands",
+        "persistent-browser-daemon",
+        "references-over-selectors",
+        "socket-scoped-surface"
+      ],
+      "deviations": 0,
+      "context": "device-relay-agent",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    }
+  ]
+}
