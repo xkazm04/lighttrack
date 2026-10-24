@@ -7655,6 +7655,43 @@
           "evidence": "crates/engine/tests/provider_boundary.rs:163 Inputs are not generated, so no model is needed. Each case states its expected typed reason and fields, which is the reason-not-verdict comparison the technique asks for."
         }
       ]
+    },
+    "ae7d2e99-8b0f-49f5-83c9-138d65df5241/usage-event-ingestion": {
+      "context": "event-ingest",
+      "subject": "usage-event-ingestion",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T21:45:42.992Z",
+      "worker": "6a3f8e2e-6014-43eb-84ab-1ec220fdcf85",
+      "techniques": [
+        {
+          "technique": "dedupe-key-survives-soft-delete",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/events.rs:43 The key is optional with a server-minted default, which the technique names as the failure. Duplicate handling is otherwise good: a replay with the same payload gets 200 duplicate:true, a different payload gets a terminal 409 (first write wins), and batch items are reported per item. But the replay read-back is project-scoped (events.rs:284) while the key is global, so a cross-project id collision is wrongly reported as 'already exists with a different payload'."
+        },
+        {
+          "technique": "thin-ingest-deferred-validation",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/events_validate.rs:184 The door refuses only payload-intrinsic or machinery-corrupting values: empty model, oversized trace ids, a usage sub-count above its total, and implausible ts skew. Configuration-dependent facts (unmodeled provider, unpriced model, unregistered use case) are admitted and surfaced later in bulk via GET /v1/costs/unpriced (costs_unpriced.rs)."
+        },
+        {
+          "technique": "ingestion-contract-parity",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/otlp/mod.rs:160 The OTLP door only maps spans and hands them to the native batch handler, and single and batch share prepare_event. There is one implementation of the admission contract, not two."
+        },
+        {
+          "technique": "running-total-or-increment",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/otlp/mod.rs:7 Only per-call trace spans and events are ingested. There are no interval counter reports (OTLP metrics) and so no temporality to decode; grepping temporality/cumulative found nothing."
+        },
+        {
+          "technique": "late-event-subscription-resolution",
+          "verdict": "not-applicable",
+          "evidence": "crates/api/src/events.rs:257 Events resolve to a project, not to a windowed subscription. Grepping 'subscription' over the ingest files found nothing."
+        }
+      ],
+      "registryProposal": "thin-ingest-deferred-validation does not cover synchronous budget/limit admission, which by nature reads per-tenant rules and rolling usage at the door. It should say whether cap enforcement is an accepted exception to 'door cost must not scale with configuration'."
     }
   }
 }

@@ -3614,7 +3614,11 @@
           "revision": 3,
           "changedAt": "2026-09-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/api/src/events.rs:43 The transmission id is optional: it is server-minted when absent (LlmEvent `#[serde(default = \"crate::new_id\")]`) or blank, so an emitter that leaves it out has no idempotence and a retried POST double-counts cost and cap usage. The technique explicitly refuses this.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:74ce470dc4579c08",
+          "evaluatedRevision": 3
         },
         {
           "subject": "admission-queue",
