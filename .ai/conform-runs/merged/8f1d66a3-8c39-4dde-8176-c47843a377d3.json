@@ -1,0 +1,269 @@
+{
+ "schema": "conform-run/1",
+ "worker": "8f1d66a3-8c39-4dde-8176-c47843a377d3",
+ "subject": "cross-provider-benchmark-operations",
+ "evaluatedAt": "2026-10-24T00:45:25.776401+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "evaluation-rendering",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/render/src/benchmarks.rs:38 The API's GateResponse carries a `caveat` explaining why the baseline is not comparable (unfrozen dataset, judge or rubric change), but the shared gate renderer used by the CLI and MCP never reads it, so it prints NO BASELINE right beside a baseline number with no reason given.",
+   "techniques": [
+    {
+     "technique": "axes-and-caveats-live-at-the-surface",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:38 The caveat (and judge_trust) from crates/api/src/benchmarks.rs:323 is dropped by the shared render layer."
+    },
+    {
+     "technique": "async-run-queue-with-cancel",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/compare.rs:272 Only a budget halt gets the PARTIAL banner. The runner's summary has a `cancelled` key, but render never reads it; the runner prints CANCELLED to its own stdout only, so CLI and MCP renders of a cancelled run show no banner."
+    },
+    {
+     "technique": "budget-preflight-and-ceiling",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/compare.rs:279 Loud partial banner for a budget halt, and the gate maps partial to PARTIAL."
+    },
+    {
+     "technique": "cheapest-sufficient-configuration",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/compare.rs:160 Prints the case count and corrected alpha with the recommendation. Exclusions are named, and the refusal is printed."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/compare.rs:177 Per-tier verdict printed verbatim from the runner, with no derivation at render."
+    },
+    {
+     "technique": "sampling-knobs-are-axes-not-strings",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/compare.rs:238 Effort column appears when declared, and an unset cell is marked explicitly."
+    },
+    {
+     "technique": "target-matrix-runs",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/compare.rs:44 Render does not write 'best' unless handed a tested claim."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-pipeline",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/labels_promote.rs:93 Promoting a label copies the event's stored text straight into a dataset case and stamps anonymization: Null, while the import path (crates/store/src/dataset_import.rs:33) runs lighttrack_anon::scrub and records an audit, so promoted cases skip the dataset-entry scrub and carry no anonymization record.",
+   "techniques": [
+    {
+     "technique": "dataset-sampling-anonymize-freeze",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/labels_promote.rs:101 No scrub and no audit on this entry path. The import path does both."
+    },
+    {
+     "technique": "budget-preflight-and-ceiling",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks.rs:434 The gate treats a partial, aborted or cancelled run as unverified, never pass."
+    },
+    {
+     "technique": "axes-and-caveats-live-at-the-surface",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks.rs:447 The API attaches the comparability caveat to the verdict it downgrades. Render drops it (other context)."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/difficulty_input.rs:54 A stated tier is refused by name on write, while reads degrade."
+    },
+    {
+     "technique": "target-matrix-runs",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks_target.rs:126 The matrix is declared on the benchmark and validated at write time, rather than degrading at run time."
+    }
+   ]
+  },
+  {
+   "context": "runner-benchmark-calibration",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/runner/src/compare.rs:183 Each cell's generation error is reduced to a string plus a boolean before the per-target breaker sees it, so an exhausted subscription seat (claude -p / Codex targets) cannot be told apart from provider ill health and shows up as health_filtered.",
+   "techniques": [
+    {
+     "technique": "entitlement-exhaustion-is-not-ill-health",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/compare.rs:183 Typed cause is lost before the breaker sees it. Searched runner, core and render for entitlement, exhaust, retry-after, plan and allowance terms and found no exhaustion class."
+    },
+    {
+     "technique": "determinism-stamping",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/provenance.rs:200 merge_details lets an unrecorded candidate stamp fold to its recorded neighbour instead of voiding the claim, and it maps any non-exact pair, including sampled+sampled, to best-effort. Latent: every current detail builder stamps Some. compare.rs does stamp generation and judging separately."
+    },
+    {
+     "technique": "budget-preflight-and-ceiling",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/compare.rs:499 Pre-flight estimate names unpriced models as a lower bound, aborts with the exact value to pass, enforces an atomic micro-dollar ceiling at case boundaries, and marks the run partial."
+    },
+    {
+     "technique": "async-run-queue-with-cancel",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/compare.rs:241 Cancel is observed at a case boundary, never mid-call, and live progress ticks per cell."
+    },
+    {
+     "technique": "dataset-sampling-anonymize-freeze",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/bench.rs:165 Records dataset_frozen and dataset_version at run time and warns, without refusing, when the dataset is unfrozen."
+    },
+    {
+     "technique": "target-matrix-runs",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/compare.rs:648 Mechanical judge/target family check, warned and recorded on the run."
+    },
+    {
+     "technique": "sampling-knobs-are-axes-not-strings",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/targets.rs:73 Effort travels from the target and is split at the provider boundary."
+    },
+    {
+     "technique": "cheapest-sufficient-configuration",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/compare.rs:1183 A partial run, including a health-filtered one, refuses the recommendation."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/compare.rs:1051 Per-tier report beside the aggregate."
+    }
+   ]
+  },
+  {
+   "context": "runner-scoring-engine",
+   "subject": "cross-provider-benchmark-operations",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/runner/src/pairwise.rs:139 The paid pairwise round-robin is gated on game count only. Its dollar hint leaves out generation calls and silently disappears when the judge is unpriced, and no live dollar ceiling runs during generation or judging.",
+   "techniques": [
+    {
+     "technique": "budget-preflight-and-ceiling",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/pairwise.rs:139 Ceiling counts games, not dollars. The estimate covers judge calls only, and an unpriced judge yields an empty hint (line 134) instead of a named lower bound."
+    },
+    {
+     "technique": "determinism-stamping",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/pairwise.rs:524 Generation and judging stamped separately, and the headline is the weaker of the two."
+    },
+    {
+     "technique": "target-matrix-runs",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/pairwise.rs:105 Same-family pairing recorded as a named warning."
+    },
+    {
+     "technique": "cheapest-sufficient-configuration",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/stats/frontier.rs:135 Unpriced targets are excluded by name, never priced at $0. A partial run refuses at line 198, and alpha and n are disclosed."
+    },
+    {
+     "technique": "graded-case-difficulty",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/stats/tiers.rs:241 Descriptive verdict. A single-target tier has no answer rather than 'no'."
+    },
+    {
+     "technique": "async-run-queue-with-cancel",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/gate.rs:19 The gate exit code treats cancelled and partial runs as unverified, never green."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "cross-provider-benchmark-operations",
+   "context": "evaluation-scoring-types",
+   "reason": "evidence leans on collective/rigor.rs, which is not a tracked file"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-24T00:45:25.776401+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "async-run-queue-with-cancel",
+    "axes-and-caveats-live-at-the-surface",
+    "budget-preflight-and-ceiling",
+    "cheapest-sufficient-configuration",
+    "graded-case-difficulty",
+    "sampling-knobs-are-axes-not-strings",
+    "target-matrix-runs"
+   ],
+   "deviations": 1,
+   "context": "evaluation-rendering",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T00:45:25.776401+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "axes-and-caveats-live-at-the-surface",
+    "budget-preflight-and-ceiling",
+    "dataset-sampling-anonymize-freeze",
+    "graded-case-difficulty",
+    "target-matrix-runs"
+   ],
+   "deviations": 1,
+   "context": "evaluation-pipeline",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T00:45:25.776401+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "async-run-queue-with-cancel",
+    "budget-preflight-and-ceiling",
+    "cheapest-sufficient-configuration",
+    "dataset-sampling-anonymize-freeze",
+    "determinism-stamping",
+    "entitlement-exhaustion-is-not-ill-health",
+    "graded-case-difficulty",
+    "sampling-knobs-are-axes-not-strings",
+    "target-matrix-runs"
+   ],
+   "deviations": 1,
+   "context": "runner-benchmark-calibration",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T00:45:25.776401+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "cross-provider-benchmark-operations"
+   ],
+   "techniques": [
+    "async-run-queue-with-cancel",
+    "budget-preflight-and-ceiling",
+    "cheapest-sufficient-configuration",
+    "determinism-stamping",
+    "graded-case-difficulty",
+    "target-matrix-runs"
+   ],
+   "deviations": 1,
+   "context": "runner-scoring-engine",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}
