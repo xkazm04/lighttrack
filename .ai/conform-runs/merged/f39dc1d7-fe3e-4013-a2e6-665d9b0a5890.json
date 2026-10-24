@@ -1,0 +1,268 @@
+{
+ "schema": "conform-run/1",
+ "worker": "f39dc1d7-fe3e-4013-a2e6-665d9b0a5890",
+ "subject": "mcp-tools",
+ "evaluatedAt": "2026-10-24T00:04:44.661219+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "mcp-server",
+   "subject": "mcp-tools",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/mcp/src/tools.rs:115 An unknown tool name falls through every hand-written dispatcher and comes back as an in-band isError tool result (tools.rs:120) instead of a JSON-RPC protocol error, so a failure only re-listing can fix is addressed to the model as if a different argument could fix it.",
+   "techniques": [
+    {
+     "technique": "tool-schema-design",
+     "verdict": "deviation",
+     "evidence": "crates/mcp/src/tools.rs:115 Unknown tool \u2192 in-band result rather than protocol error. The module comment (tools.rs:37-39) states the split but the code puts unknown-tool on the wrong side of it. Arguments are also never validated against the published inputSchema: wrong types fall back to defaults and unrecognised keys are dropped."
+    },
+    {
+     "technique": "server-composition",
+     "verdict": "deviation",
+     "evidence": "crates/mcp/src/read.rs:12 The listing is a projection of the contract table, but dispatch is a hand-written match over names in read/prompts_tools/relay_tools/write. No test proves every listed tool routes, and no door-level argument validation exists. The door does catch panics (tools.rs:52), and the client timeout acts as a uniform door budget."
+    },
+    {
+     "technique": "caller-differentiated-capability",
+     "verdict": "deviation",
+     "evidence": "crates/mcp/src/read.rs:241 query_events forwards only this subset of /v1/events filters. A caller passing status/tag/min_cost is silently ignored and gets unfiltered rows rather than a refusal naming the MCP surface. In contrast, the write-gate refusal at tools.rs:111 does name the surface and the remedy."
+    },
+    {
+     "technique": "tool-identity-vs-tool-name",
+     "verdict": "deviation",
+     "evidence": "crates/mcp/src/tool_contract.rs:3 The name is pinned as the only identity, so renames are forbidden (VANISHED) rather than survivable. No rename-stable identifier is published on the definition or on results, although host standing grants and agent configs store these names."
+    },
+    {
+     "technique": "transport-selection",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/main.rs:3 Local tool on stdio with identity by parenthood. All diagnostics go to eprintln, and panic text is routed to stderr (tools.rs:56-58)."
+    },
+    {
+     "technique": "authentication-and-scoping",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/client.rs:112 Reuses the API's existing key/scope registry on every call through its own configured key. No parallel scope vocabulary, no inbound-token passthrough (stdio has none), and key minting stays off the surface."
+    },
+    {
+     "technique": "budgeted-partial-response",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/client.rs:24 Every upstream call has one wall-clock budget. Expiry becomes Err \u2192 map_error \u2192 isError, never an empty success. Calls are single bounded lookups, so no section-shedding envelope is needed."
+    },
+    {
+     "technique": "enumeration-without-a-scope",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/errors.rs:32 Every list call is scoped by the API key's tenant, so the precondition (a listing with no natural scope) does not hold."
+    },
+    {
+     "technique": "ambient-selection-is-not-an-argument",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/main.rs:4 Fronts a service, not a single-seat interactive app. Arguments name explicit ids, not a current selection."
+    },
+    {
+     "technique": "suspendable-request-classes",
+     "verdict": "conformant",
+     "evidence": "crates/mcp/src/main.rs:77 Discovery/listing is answered from the static contract by machine alone. Nothing on the surface can pause for a person."
+    }
+   ]
+  },
+  {
+   "context": "api-contract-core",
+   "subject": "mcp-tools",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/contract/src/types.rs:220 McpTool carries only name/description/read_only/idempotent/args, so the addressable name is also the only identity a downstream can store. The table's stable Endpoint.id never reaches the wire, so a rename would read as a death plus a birth.",
+   "techniques": [
+    {
+     "technique": "tool-identity-vs-tool-name",
+     "verdict": "deviation",
+     "evidence": "crates/contract/src/types.rs:220 No rename-stable identifier on the tool definition or results. Endpoint.id (types.rs:249) exists but is used only as the OpenAPI operationId."
+    },
+    {
+     "technique": "tool-schema-design",
+     "verdict": "deviation",
+     "evidence": "crates/contract/src/types.rs:235 McpTool::DEFAULT publishes a read-only verdict for any tool whose author never decided, and Endpoint::DEFAULT has mutating:false (types.rs:311). The lib.rs:150 test only binds the two declarations together, and no read-only handler is driven against a recording stand-in. A write row that omits both flags would advertise readOnlyHint:true, the one dangerous direction. Positives: enums are emitted into the schema (mcp.rs:113), and requiredness is tested against the schema (mcp.rs:186)."
+    },
+    {
+     "technique": "server-composition",
+     "verdict": "conformant",
+     "evidence": "crates/contract/src/mcp.rs:1 One table is the single authority. tools/list, the write gate (is_write_tool) and endpoint_for_tool are projections of it, and no_two_tools_share_a_name is a build test."
+    }
+   ]
+  },
+  {
+   "context": "api-endpoint-table",
+   "subject": "mcp-tools",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/contract/src/endpoints/observability.rs:78 query_events exposes 9 of list_events' 18 parameters (status, tag, meta, min_cost, unscored\u2026 are dropped), and neither the tool description nor any refusal says the agent surface is a subset or why. The subtraction is not chosen by any stated invariant, and the agent cannot see it.",
+   "techniques": [
+    {
+     "technique": "caller-differentiated-capability",
+     "verdict": "deviation",
+     "evidence": "crates/contract/src/endpoints/observability.rs:78 The subset is undocumented and not justified by an invariant. The omitted filters (status, min_cost) are harmless reads, so the narrowing is by feel and unannounced."
+    },
+    {
+     "technique": "tool-schema-design",
+     "verdict": "conformant",
+     "evidence": "crates/contract/src/endpoints/benchmarks.rs:56 The bound is demoted into the description with its reason (fraction, not percentage), so the registry's audited 0\u20131 example is fixed here. Descriptions also say when to use a tool (observability.rs:24). Tool names are verb-object but carry no server namespace and rely on host prefixing."
+    },
+    {
+     "technique": "authentication-and-scoping",
+     "verdict": "conformant",
+     "evidence": "crates/contract/src/endpoints/relay.rs:188 Credential minting is kept off the agent surface entirely. Every row's access reuses the API's existing KeyScope vocabulary."
+    },
+    {
+     "technique": "enumeration-without-a-scope",
+     "verdict": "not-applicable",
+     "evidence": "crates/contract/src/endpoints/observability.rs:51 List rows require a tenant-scoped read key, so a durable verified caller identity exists."
+    }
+   ]
+  },
+  {
+   "context": "claude-invocation-and-execution",
+   "subject": "mcp-tools",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/engine/src/invocation/tools.rs:48 The read-only-scan posture admits any Bash permission spec whose command starts with an allowed program name, with no per-program flag table. So `Bash(find:*)` (find -delete / -exec), `Bash(rg:*)` (rg --pre <cmd>) and `Bash(git log:*)` (--output=<file>) pass as read-only although those programs write or execute through flags in code-string/value positions.",
+   "techniques": [
+    {
+     "technique": "command-audit-by-position",
+     "verdict": "deviation",
+     "evidence": "crates/engine/src/invocation/tools.rs:48 A leading-characters prefix stands in for a positional parse. There are no per-program flag/verb tables and no opposing must-refuse/must-admit corpus. The unknown-spec default is right (tools.rs:4: unrecognised \u2192 write-capable)."
+    },
+    {
+     "technique": "transport-selection",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/invocation/run.rs:161 The spawner owns custody: a child that outlives the wall-clock deadline is killed and reaped, and pipes are drained on their own threads."
+    },
+    {
+     "technique": "caller-differentiated-capability",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/codex/audit.rs:5 Codex's surface is narrowed by subtraction (DISABLED_FEATURES), and a second fail-closed audit covers a tool a new release adds that the subtraction does not name (audit.rs:8)."
+    },
+    {
+     "technique": "client-integration",
+     "verdict": "conformant",
+     "evidence": "crates/engine/src/invocation/posture.rs:132 Contradictory postures (a readonly scan with acceptEdits, an edit without an explicit mode/cwd) are refused before any spawn."
+    }
+   ],
+   "registryProposal": "command-audit-by-position's use_when names 'a command string the host itself will execute'. It should also name the adjacent case of a host classifying a delegated permission rule (e.g. Bash(prefix:*)) that a child agent will expand into commands, which fails the same way."
+  },
+  {
+   "context": "observability-rendering",
+   "subject": "mcp-tools",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/render/src/events.rs:112 Ingested strings (error, source, tags) are interpolated unfenced into the tool's own bullet list in get_event, while only input/output payloads are fenced (events.rs:130). Upstream-controlled text therefore reads in the server's voice inside an agent's context.",
+   "techniques": [
+    {
+     "technique": "untrusted-result-handling",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/events.rs:112 Partial realization: md.rs:223 fenced() keeps payloads in a block they cannot close. But error/source/tag strings from any ingest-key holder are inlined, and no block is attributed as captured data rather than instructions."
+    },
+    {
+     "technique": "tool-schema-design",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/events.rs:12 An empty result is a successful result that says so. Results are rendered as answers rather than payload dumps, and payloads are truncated with a visible marker (md.rs:245)."
+    },
+    {
+     "technique": "server-composition",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/lib.rs:133 The renderer table is held to the contract's render_kind in both directions, so outputSchema/structuredContent cannot drift from the listing."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-24T00:04:44.661219+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "mcp-tools"
+   ],
+   "techniques": [
+    "ambient-selection-is-not-an-argument",
+    "authentication-and-scoping",
+    "budgeted-partial-response",
+    "caller-differentiated-capability",
+    "enumeration-without-a-scope",
+    "server-composition",
+    "suspendable-request-classes",
+    "tool-identity-vs-tool-name",
+    "tool-schema-design",
+    "transport-selection"
+   ],
+   "deviations": 1,
+   "context": "mcp-server",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T00:04:44.661219+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "mcp-tools"
+   ],
+   "techniques": [
+    "server-composition",
+    "tool-identity-vs-tool-name",
+    "tool-schema-design"
+   ],
+   "deviations": 1,
+   "context": "api-contract-core",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T00:04:44.661219+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "mcp-tools"
+   ],
+   "techniques": [
+    "authentication-and-scoping",
+    "caller-differentiated-capability",
+    "enumeration-without-a-scope",
+    "tool-schema-design"
+   ],
+   "deviations": 1,
+   "context": "api-endpoint-table",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T00:04:44.661219+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "mcp-tools"
+   ],
+   "techniques": [
+    "caller-differentiated-capability",
+    "client-integration",
+    "command-audit-by-position",
+    "transport-selection"
+   ],
+   "deviations": 1,
+   "context": "claude-invocation-and-execution",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T00:04:44.661219+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "mcp-tools"
+   ],
+   "techniques": [
+    "server-composition",
+    "tool-schema-design",
+    "untrusted-result-handling"
+   ],
+   "deviations": 1,
+   "context": "observability-rendering",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

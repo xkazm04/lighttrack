@@ -703,12 +703,11 @@
           "changedAt": "2026-10-15",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/contract/src/types.rs:222 The McpTool type definition in the contract core defines only name, description, read_only, idempotent, and args, completely omitting any rename-stable identifier field as required by tool-identity-vs-tool-name.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:afba7a2b8c938ae1",
-          "evaluatedRevision": 31,
-          "revisionsBehind": 3,
-          "stale": true
+          "evidence": "crates/contract/src/types.rs:220 McpTool carries only name/description/read_only/idempotent/args, so the addressable name is also the only identity a downstream can store. The table's stable Endpoint.id never reaches the wire, so a rename would read as a death plus a birth.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34,
+          "revisionsBehind": 3
         },
         {
           "subject": "agent-runtime-assembly",
@@ -780,12 +779,11 @@
           "changedAt": "2026-10-15",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/contract/src/endpoints/observability.rs:77 The query_events tool definition narrows the list_events parameter set to a subset without providing an error channel or documentation explaining the subtracted options, violating caller-differentiated-capability.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:afba7a2b8c938ae1",
-          "evaluatedRevision": 31,
-          "revisionsBehind": 3,
-          "stale": true
+          "evidence": "crates/contract/src/endpoints/observability.rs:78 query_events exposes 9 of list_events' 18 parameters (status, tag, meta, min_cost, unscored… are dropped), and neither the tool description nor any refusal says the agent surface is a subset or why. The subtraction is not chosen by any stated invariant, and the agent cannot see it.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34,
+          "revisionsBehind": 3
         },
         {
           "subject": "multi-provider-gateway-plane",
@@ -1396,7 +1394,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/engine/src/invocation/tools.rs:48 The read-only-scan posture admits any Bash permission spec whose command starts with an allowed program name, with no per-program flag table. So `Bash(find:*)` (find -delete / -exec), `Bash(rg:*)` (rg --pre <cmd>) and `Bash(git log:*)` (--output=<file>) pass as read-only although those programs write or execute through flags in code-string/value positions.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         },
         {
           "subject": "agent-cli-transport",
@@ -4284,12 +4286,11 @@
           "changedAt": "2026-10-15",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/mcp/src/tools.rs:115 The MCP server dispatch loop routes unknown tools to an in-band isError tool result instead of returning a protocol-level JSON-RPC error, collapsing the two error channels required by server-composition and tool-schema-design.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:afba7a2b8c938ae1",
-          "evaluatedRevision": 31,
-          "revisionsBehind": 3,
-          "stale": true
+          "evidence": "crates/mcp/src/tools.rs:115 An unknown tool name falls through every hand-written dispatcher and comes back as an in-band isError tool result (tools.rs:120) instead of a JSON-RPC protocol error, so a failure only re-listing can fix is addressed to the model as if a different argument could fix it.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34,
+          "revisionsBehind": 3
         },
         {
           "subject": "prompt-assembly",
@@ -4499,7 +4500,11 @@
           "revision": 34,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/render/src/events.rs:112 Ingested strings (error, source, tags) are interpolated unfenced into the tool's own bullet list in get_event, while only input/output payloads are fenced (events.rs:130). Upstream-controlled text therefore reads in the server's voice inside an agent's context.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:ed8e615f51454325",
+          "evaluatedRevision": 34
         },
         {
           "subject": "status-vocabulary",
