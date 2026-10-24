@@ -1937,12 +1937,11 @@
           "changedAt": "2026-10-14",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/core/src/collective/types.rs:77 The serialized digest includes an unrestricted rubric fingerprint, allowing an internal-derived correlation key to cross the organizational boundary despite the standard's closed-channel requirement.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:9b1c943f13921ab0",
-          "evaluatedRevision": 10,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/core/src/collective/types.rs:77 The wire digest carries a contributor-chosen, high-cardinality rubric hash. provenance.rs:9-16 calls this hash a linkage key and refuses to publish it, yet it still crosses to the hub, where it is stored per contributor and backs the `?rubric=` membership filter. The hub ends up holding a correlation channel finer than anything it publishes.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:1bb6a4d8f620f867",
+          "evaluatedRevision": 11,
+          "revisionsBehind": 1
         }
       ],
       "governance": "governed"
@@ -1982,11 +1981,7 @@
           "confidence": "strong",
           "state": "deviation",
           "evidence": "crates/api/src/collective/fold.rs:147 Duplicate buckets are summed after individual plausibility checks without rechecking the combined count, allowing a stored bucket to exceed the million-case ceiling.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:9b1c943f13921ab0",
-          "evaluatedRevision": 10,
-          "revisionsBehind": 1,
-          "stale": true
+          "evaluatedAt": "2026-10-13"
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -3852,13 +3847,12 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/store-firestore/src/collective.rs:97 Consumption invents a zero quality for missing or mistyped stored data, while other decoding failures abort the listing instead of skipping and reporting the defective entry.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:9b1c943f13921ab0",
-          "evaluatedRevision": 10,
+          "evidence": "crates/store-firestore/src/collective.rs:97 When a stored quality, pass_rate, cost or count is missing or mistyped, the Firestore decoder substitutes 0 instead of skipping the entry with a warning. A zero-case phantom still counts toward n_contributors in the merge. Meanwhile a missing string or timestamp makes list() abort through collect::<Result>, so one bad document takes down the whole leaderboard read for every reader.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:1bb6a4d8f620f867",
+          "evaluatedRevision": 11,
           "source": "retained",
-          "revisionsBehind": 1,
-          "stale": true
+          "revisionsBehind": 1
         },
         {
           "subject": "alerting",

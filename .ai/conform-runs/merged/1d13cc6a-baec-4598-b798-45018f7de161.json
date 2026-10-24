@@ -1,0 +1,138 @@
+{
+  "schema": "conform-run/1",
+  "worker": "1d13cc6a-baec-4598-b798-45018f7de161",
+  "subject": "federated-benchmark-sharing",
+  "evaluatedAt": "2026-10-24T03:31:10.720349+00:00",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "pairs": [
+    {
+      "context": "collective-intelligence-types",
+      "subject": "federated-benchmark-sharing",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evidence": "crates/core/src/collective/types.rs:77 The wire digest carries a contributor-chosen, high-cardinality rubric hash. provenance.rs:9-16 calls this hash a linkage key and refuses to publish it, yet it still crosses to the hub, where it is stored per contributor and backs the `?rubric=` membership filter. The hub ends up holding a correlation channel finer than anything it publishes.",
+      "techniques": [
+        {
+          "technique": "aggregate-only-digests",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/collective/types.rs:77 Everything else conforms: RunStat is aggregate-only, variance is None for a single-run bucket (merge.rs:221), the schema is additive with MIN_SCHEMA_VERSION, and dataset_version is consumed locally. The rubric fingerprint fails the 'could a reader correlate two digests' test."
+        },
+        {
+          "technique": "cost-bucketing-side-channels",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/collective/merge.rs:334 bucket_cost gives 2 significant figures and is applied in the digest (merge.rs:332). Latency percentiles ship at exact ms, though, and the leaderboard publishes one source's exact max p95 (types.rs:182). The merged avg_cost_usd is published at r6 rather than the 2-significant-figure schema resolution."
+        },
+        {
+          "technique": "k-anonymity-cases-and-sources",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/collective/merge.rs:323 Under-floor buckets are dropped, not flagged, and their count is returned for disclosure as buckets_withheld. low_confidence is a separate display floor."
+        },
+        {
+          "technique": "fixed-task-vocabulary",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/collective/vocab.rs:47 A 10-member closed list. The classifier is total, matches most-specific-first and falls back to `general`. A hub clamp exists, and tests assert membership for garbage input."
+        },
+        {
+          "technique": "bounded-contributor-influence",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/collective/merge.rs:364 The top source is winsorized to 0.8 only when a row has 2 or more sources, and the spread/CI use the same weights (merge.rs:400). max_source_share and the raw n_cases are disclosed."
+        },
+        {
+          "technique": "hub-ingest-plausibility-gates",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/collective/vocab.rs:89 A schema-derived test forces every categorical wire field to name its clamp ('every field, every version'). The arithmetic gate itself is in the API and is judged there."
+        },
+        {
+          "technique": "capture-locally-publish-separately",
+          "verdict": "conformant",
+          "evidence": "crates/core/src/collective/contribution.rs:72 ContributionRecord records what was already published, with the consent envelope and content hash, so a later push can be gated as unchanged."
+        }
+      ],
+      "registryProposal": "aggregate-only-digests says identifying inputs are consumed locally and only consequences ship. A cross-contributor commensurability fact (do two sources share a rubric?) cannot be computed locally, so the technique should say how to ship such a field: e.g. derive it only from shared/public rubric definitions, never from instance-local ids, or bucket it into a small vocabulary."
+    },
+    {
+      "context": "firestore-eval-collective",
+      "subject": "federated-benchmark-sharing",
+      "bundle": "llm-observability",
+      "state": "deviation",
+      "evidence": "crates/store-firestore/src/collective.rs:97 When a stored quality, pass_rate, cost or count is missing or mistyped, the Firestore decoder substitutes 0 instead of skipping the entry with a warning. A zero-case phantom still counts toward n_contributors in the merge. Meanwhile a missing string or timestamp makes list() abort through collect::<Result>, so one bad document takes down the whole leaderboard read for every reader.",
+      "techniques": [
+        {
+          "technique": "strict-ingestion-lenient-consumption",
+          "verdict": "deviation",
+          "evidence": "crates/store-firestore/src/collective.rs:97 Consumption repairs the entry (the default substitution forbidden by nullable-never-zero) or fails hard (collective.rs:123). It never skips, warns and counts."
+        },
+        {
+          "technique": "capture-locally-publish-separately",
+          "verdict": "conformant",
+          "evidence": "crates/store-firestore/src/contributions.rs:3 Firestore backs the contribution ledger, the record of what was already published. An unknown status is surfaced, not coerced (contributions.rs:55-60)."
+        }
+      ]
+    }
+  ],
+  "declined": [
+    {
+      "subject": "federated-benchmark-sharing",
+      "context": "collective-leaderboard",
+      "reason": "withdrawn after review: reviewer (sonnet): The anchor fold.rs:147 is a saturating_add (with a comment saying so), which contradicts the wrap claim. The 'u64 sum cast to u32' I found is in core merge.rs (a.cases as u32), a different context, and I found no such cast on the published row in the api collective files."
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-10-24T03:31:10.720349+00:00",
+      "bundle": "llm-observability",
+      "subjects": [
+        "federated-benchmark-sharing"
+      ],
+      "techniques": [
+        "aggregate-only-digests",
+        "capture-locally-publish-separately",
+        "content-addressed-contribution",
+        "cost-bucketing-side-channels",
+        "fixed-task-vocabulary",
+        "hub-ingest-plausibility-gates",
+        "k-anonymity-cases-and-sources"
+      ],
+      "deviations": 1,
+      "context": "collective-leaderboard",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-10-24T03:31:10.720349+00:00",
+      "bundle": "llm-observability",
+      "subjects": [
+        "federated-benchmark-sharing"
+      ],
+      "techniques": [
+        "aggregate-only-digests",
+        "bounded-contributor-influence",
+        "capture-locally-publish-separately",
+        "cost-bucketing-side-channels",
+        "fixed-task-vocabulary",
+        "hub-ingest-plausibility-gates",
+        "k-anonymity-cases-and-sources"
+      ],
+      "deviations": 1,
+      "context": "collective-intelligence-types",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-10-24T03:31:10.720349+00:00",
+      "bundle": "llm-observability",
+      "subjects": [
+        "federated-benchmark-sharing"
+      ],
+      "techniques": [
+        "capture-locally-publish-separately",
+        "strict-ingestion-lenient-consumption"
+      ],
+      "deviations": 1,
+      "context": "firestore-eval-collective",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    }
+  ]
+}
