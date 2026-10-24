@@ -7587,6 +7587,37 @@
       "evaluatedTs": "2026-10-24T05:10:05.153Z",
       "worker": "f41d749c-32df-4f19-bcc4-53dd680e0d0a",
       "techniques": []
+    },
+    "691eec3b-d884-4c85-9aa5-fa419b6b8457/embedded-db": {
+      "context": "store-conformance-governance",
+      "subject": "embedded-db",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T05:29:56.471Z",
+      "techniques": [
+        {
+          "technique": "storage-accounting-and-pruning",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/maintenance.rs:23 The accounting half is held to account: objects must be non-empty (line 14), db_bytes > 0, and a backend that measures nothing must refuse (refusals.rs:529) rather than report zeros. The pruning half is codified as absent."
+        },
+        {
+          "technique": "db-self-instrumentation",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/maintenance.rs:50 Requires a declared ring bound, a non-empty op profile after the run, and only families that actually ran (lines 54-59). An empty profile is not allowed to read as 'everything is fast'."
+        },
+        {
+          "technique": "quiet-window-maintenance",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/maintenance.rs:33 Holds every backend to the outcome vocabulary that separates 'ran' from 'nothing to do' and to a lossless routine pass. The activity gating itself is in crates/api/src/storage.rs, not here."
+        }
+      ],
+      "withdrawn": {
+        "worker": "e0f92acb-0074-4c46-8088-d2be459fb3dd",
+        "state": "deviation",
+        "at": "2026-10-24T05:30:14.311774+00:00",
+        "reason": "reviewer (sonnet): The line 23 comment only says maintenance_pass has no pruning parameter, but the Store trait does have an age-floor prune, purge_collective_entries_before (lib.rs:1822, sqlite/collective.rs:71). The retention policy is also a dated operator decision (sqlite/maintenance.rs:54-60), so 'the absence of "
+      }
     }
   }
 }

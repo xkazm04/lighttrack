@@ -1,0 +1,39 @@
+{
+  "schema": "conform-run/1",
+  "worker": "e0f92acb-0074-4c46-8088-d2be459fb3dd",
+  "subject": "embedded-db",
+  "evaluatedAt": "2026-10-24T05:29:56.471587+00:00",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "pairs": [],
+  "declined": [
+    {
+      "subject": "embedded-db",
+      "context": "storage-and-jobs",
+      "reason": "evidence leans on sqlite/metrics.rs, which is not a tracked file"
+    },
+    {
+      "subject": "embedded-db",
+      "context": "store-conformance-governance",
+      "reason": "withdrawn after review: reviewer (sonnet): The line 23 comment only says maintenance_pass has no pruning parameter, but the Store trait does have an age-floor prune, purge_collective_entries_before (lib.rs:1822, sqlite/collective.rs:71). The retention policy is also a dated operator decision (sqlite/maintenance.rs:54-60), so 'the absence of "
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-10-24T05:29:56.471587+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "embedded-db"
+      ],
+      "techniques": [
+        "db-self-instrumentation",
+        "quiet-window-maintenance",
+        "storage-accounting-and-pruning"
+      ],
+      "deviations": 1,
+      "context": "store-conformance-governance",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    }
+  ]
+}
