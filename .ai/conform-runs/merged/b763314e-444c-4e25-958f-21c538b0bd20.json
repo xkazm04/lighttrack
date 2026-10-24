@@ -1,0 +1,129 @@
+{
+ "schema": "conform-run/1",
+ "worker": "b763314e-444c-4e25-958f-21c538b0bd20",
+ "subject": "usage-limit-governance",
+ "evaluatedAt": "2026-10-24T22:02:54.741237+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "sqlite-governance-backend",
+   "subject": "usage-limit-governance",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/store/src/sqlite/usage_cache.rs:113 The rolling token ledger adds input+output tokens with no presence flag (TokenUsage.input/output are serde-defaulted u64), so on an enforcing token cap an event that reported no usage counts as zero tokens and is admitted free. The technique says that unmeasurable state must refuse, not read as headroom.",
+   "techniques": [
+    {
+     "technique": "cost-evidence-and-imputation",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/sqlite/usage_cache.rs:113 Cost imputation is realized: unpriced calls are counted (line 146) and lib.rs:397 flags unpriceable. But missing token usage is not kept distinct from zero, so enforcing token caps go free on events without usage."
+    },
+    {
+     "technique": "incremental-window-accounting",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/usage_cache.rs:115 Folds only rows past a rowid cursor and evicts on COALESCE(received_at, ts). mod.rs:411 resets the cache when a batch commit fails. A property test checks the cache against the full-scan reference (tests.rs:999). The module docs state the single-process and monotonic-clock assumptions."
+    },
+    {
+     "technique": "concurrent-admission-integrity",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/mod.rs:353 The cache lock and the connection lock are taken in a fixed order and held across read, decide and insert. The batch runs in one transaction, so later items see earlier inserts. The candidate is added to usage before comparing (lib.rs:628)."
+    },
+    {
+     "technique": "dimension-scoped-caps",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/usage_cache.rs:49 Each (project, window, scope) has its own ledger. Rows are matched through LimitScope::matches over named ScopeDims, using the server-stamped api_key_id and customer_id."
+    },
+    {
+     "technique": "graduated-throttle-with-deterministic-shed",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/lib.rs:638 The SQLite admission calls the shared evaluate_admission_at (events.rs:135), which decides the shed with the deterministic (rule, event) ticket. The anchor is in the store crate's shared evaluator, not in a sqlite/ file."
+    },
+    {
+     "technique": "metric-window-threshold-action-model",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/limits.rs:198 Rule rows decode metric, window and action as closed enums and fail on out-of-vocabulary values rather than coercing them. Scope and threshold are kept as separate columns."
+    }
+   ]
+  },
+  {
+   "context": "usage-governance-limits",
+   "subject": "usage-limit-governance",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/core/src/limits/status.rs:111 The status model treats token caps like call caps, with no evidence and no unmeasurable state. rejects_ingest (status.rs:136) can only refuse for an unpriceable cost cap, so an enforcing token cap has no way to represent missing usage, let alone refuse on it.",
+   "techniques": [
+    {
+     "technique": "cost-evidence-and-imputation",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/limits/status.rs:111 Cost imputation, disclosure and the unpriceable refusal are realized (CostEvidence, rejects_ingest at status.rs:136). The technique explicitly denies token caps the call-cap exemption, but here they get it."
+    },
+    {
+     "technique": "metric-window-threshold-action-model",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/limits/rule.rs:185 Enum metric, rolling window with per-window retry hint, and one validate() shared by create and update. It rejects non-positive and non-finite thresholds, warn_at outside (0,1) and blank scopes. enforces() and sheds() are explicit predicates (rule.rs:110). The alert key includes scope."
+    },
+    {
+     "technique": "graduated-throttle-with-deterministic-shed",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/limits/status.rs:22 Pinned FNV-1a with a SplitMix64 avalanche onto the 53-bit grid. The ramp start reuses warn_at and defaults to 0.8. The shed fraction saturates at 1.0 on breach (rule.rs:304). Retry hints are short and pressure-scaled for a shed, window-scaled for a breach. Tests cover determinism and monotonicity."
+    },
+    {
+     "technique": "dimension-scoped-caps",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/limits/scope.rs:120 An absent dimension (None) never matches. Dimensions are passed as a named ScopeDims struct. API keys are scoped by opaque row id, and customer scope uses the margin linkage."
+    },
+    {
+     "technique": "enforcement-placement-and-reconciliation",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/limits/rule.rs:91 The action docs name the record-side seat and point to SDK pre-spend gate() as the prevention seat. The rule model does not overclaim prevention."
+    },
+    {
+     "technique": "concurrent-admission-integrity",
+     "verdict": "not-applicable",
+     "evidence": "crates/core/src/limits/status.rs:136 Core holds only the pure per-status verdict. The critical section and batch admission live in the store backends."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-24T22:02:54.741237+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "usage-limit-governance"
+   ],
+   "techniques": [
+    "concurrent-admission-integrity",
+    "cost-evidence-and-imputation",
+    "dimension-scoped-caps",
+    "graduated-throttle-with-deterministic-shed",
+    "incremental-window-accounting",
+    "metric-window-threshold-action-model"
+   ],
+   "deviations": 1,
+   "context": "sqlite-governance-backend",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T22:02:54.741237+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "usage-limit-governance"
+   ],
+   "techniques": [
+    "concurrent-admission-integrity",
+    "cost-evidence-and-imputation",
+    "dimension-scoped-caps",
+    "enforcement-placement-and-reconciliation",
+    "graduated-throttle-with-deterministic-shed",
+    "metric-window-threshold-action-model"
+   ],
+   "deviations": 1,
+   "context": "usage-governance-limits",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

@@ -6756,7 +6756,11 @@
           "revision": 5,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/sqlite/usage_cache.rs:113 The rolling token ledger adds input+output tokens with no presence flag (TokenUsage.input/output are serde-defaulted u64), so on an enforcing token cap an event that reported no usage counts as zero tokens and is admitted free. The technique says that unmeasurable state must refuse, not read as headroom.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:a784035133baaaba",
+          "evaluatedRevision": 5
         },
         {
           "subject": "agent-memory",
@@ -8056,7 +8060,11 @@
           "revision": 5,
           "changedAt": "2026-09-20",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/src/limits/status.rs:111 The status model treats token caps like call caps, with no evidence and no unmeasurable state. rejects_ingest (status.rs:136) can only refuse for an unpriceable cost cap, so an enforcing token cap has no way to represent missing usage, let alone refuse on it.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:a784035133baaaba",
+          "evaluatedRevision": 5
         },
         {
           "subject": "agent-memory",
