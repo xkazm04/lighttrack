@@ -1,0 +1,333 @@
+{
+ "schema": "conform-run/1",
+ "worker": "59ad8b32-349a-4308-bf9f-6a580f9a120f",
+ "subject": "quality-gates",
+ "evaluatedAt": "2026-10-24T00:29:38.724993+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "reactive-alert-responder",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/responder/src/act.rs:171 The auto-fix run gets edit and test tools under acceptEdits with no tool allowlist (act.rs:83-90), so a prompt sentence is the only thing keeping the fixer from editing the tests it is judged by; nothing checks afterwards whether the fix commit touched test, fixture or snapshot paths.",
+   "techniques": [
+    {
+     "technique": "oracle-frozen-during-repair",
+     "verdict": "deviation",
+     "evidence": "crates/responder/src/act.rs:171 This freeze exists only as an instruction. There is no pre-write refusal on oracle paths, and no review-time check of the lt-fix diff against test paths."
+    },
+    {
+     "technique": "self-reported-gate-inputs",
+     "verdict": "conformant",
+     "evidence": "crates/responder/src/act.rs:107 The responder runs the test command itself after committing, so the verdict comes from the toolchain and not from the fixer's own report."
+    },
+    {
+     "technique": "gate-liveness",
+     "verdict": "deviation",
+     "evidence": "crates/responder/src/act.rs:159 A spawn failure or timeout of the test command is folded into `false`, which the report renders as 'tests: FAILED'. Could-not-run is not a separate outcome. This is not a false green, but the operator cannot tell a broken test command from a failing fix."
+    },
+    {
+     "technique": "false-positive-economics",
+     "verdict": "conformant",
+     "evidence": "crates/responder/src/classify.rs:327 The phrase-list detector's error rate is measured over a labelled corpus and pinned with its predicate, so any change to the list has to move a number a reviewer can see."
+    },
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "conformant",
+     "evidence": "crates/responder/src/classify.rs:55 An absent or unknown carried class goes to the fallback path and is tagged Source::Fallback. It is then counted (fallback_rate in pipeline.rs), so the skip is loud rather than silent."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/responder/src/act.rs:129 When the commit fails, the message names a remedy built at emit time from the configured repo path."
+    },
+    {
+     "technique": "severity-by-construction",
+     "verdict": "conformant",
+     "evidence": "crates/responder/src/webhook.rs:104 When a secret is configured, a signature failure returns 401 rather than a 200 with a log line, so the refusal reaches the sender's exit path."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-pipeline",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/api/src/benchmarks.rs:380 instrument_moved and baseline_not_comparable treat a run with no judge_model/rubric_id pin and no dataset_frozen flag as comparable. A legacy run whose instrument is unknown therefore still gets a floor verdict, including `pass` through the scalar compare at line 438, when it should be refused as unmeasurable.",
+   "techniques": [
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/benchmarks.rs:380 This predicate trusts the flag and does not derive the unmeasurable state, so a missing pin (a hole in what the gate can see) reads as compliance."
+    },
+    {
+     "technique": "waiver-names-its-finding",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/prompts_gate.rs:106 `force` is a blanket waiver: it clears the resolution refusal and the regression refusal together without naming either. The label ledger then records the forced promotion with the same REASON_PROMOTE as a gated one (prompts.rs:451)."
+    },
+    {
+     "technique": "self-reported-gate-inputs",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/prompts_gate.rs:10 The gate now demands evidence written by the code that actually resolved the prompt, not provenance copied from the enqueue payload."
+    },
+    {
+     "technique": "blocking-by-input-determinism",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/prompts_gate.rs:73 The advisory status is debt-shaped and carries a stated promotion trigger (one release, documented in docs/CI_GATE.md)."
+    },
+    {
+     "technique": "false-positive-economics",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/prompts_gate.rs:82 The detector was narrowed to whole-CI-below-baseline after it blocked a deploy on a 0.001 dip inside the noise."
+    },
+    {
+     "technique": "severity-by-construction",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/prompts_gate.rs:89 An admin-set policy cannot be neutralised by a flag set by the requester."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/prompts_gate.rs:136 The refusal names an action available to the caller on the same API."
+    },
+    {
+     "technique": "gate-liveness",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks.rs:631 A seeded would-pass run on an unfrozen dataset is asserted to be refused, in both directions."
+    },
+    {
+     "technique": "policy-projection",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks.rs:447 At the API surface, the verdict carries the condition that refused the floor (caveat) together with judge_trust."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-rendering",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/render/src/benchmarks.rs:38 The CLI/MCP gate badge drops `caveat` and `judge_trust` from the API's GateResponse. A floor the API refused (NO BASELINE shown beside a printed baseline) or a pass from an uncalibrated judge reaches agents and pipeline logs as a subset of what the gate actually decided.",
+   "techniques": [
+    {
+     "technique": "policy-projection",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:38 This projection understates the verdict. compare.rs:26 caveat_txt shows the house pattern this badge does not follow."
+    },
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "deviation",
+     "evidence": "crates/render/src/benchmarks.rs:23 The skip is rendered without its reason. A baseline refused as not comparable looks the same as a missing baseline, even though the API returns the reason."
+    },
+    {
+     "technique": "gate-liveness",
+     "verdict": "conformant",
+     "evidence": "crates/render/src/benchmarks.rs:178 Every documented verdict is pinned to its own headline, so a new status cannot fall through to the anonymous arm unnoticed."
+    }
+   ]
+  },
+  {
+   "context": "pii-scrubbing",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/anon/src/export.rs:62 With LIGHTTRACK_UPDATE_FIXTURES present, the fixture-freshness gate rewrites the SDK fixture and returns green without comparing anything. Any environment that sets the variable gets a gate that can no longer go red, and nothing reports that the check ran in rewrite mode.",
+   "techniques": [
+    {
+     "technique": "gate-liveness",
+     "verdict": "deviation",
+     "evidence": "crates/anon/src/export.rs:62 Regeneration mode reports a pass, so 'regenerated' and 'checked, current' look identical."
+    },
+    {
+     "technique": "self-reported-gate-inputs",
+     "verdict": "deviation",
+     "evidence": "crates/anon/src/export.rs:58 The override uses `is_ok()`, so any value disarms the gate, including '', '0' and 'false'. It does not fail closed on everything but the exact value."
+    },
+    {
+     "technique": "policy-projection",
+     "verdict": "conformant",
+     "evidence": "crates/anon/src/export.rs:40 The SDK fixture is generated from the one authoritative rule set, and drift fails the test."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/anon/src/export.rs:79 The drift refusal names the in-tree regeneration command and the follow-up SDK suites."
+    },
+    {
+     "technique": "false-positive-economics",
+     "verdict": "conformant",
+     "evidence": "crates/anon/src/tests.rs:375 Precision is pinned with benign corpora (versions, ISO dates), which followed the D14 phone-rule narrowing."
+    },
+    {
+     "technique": "match-the-resolved-artifact",
+     "verdict": "conformant",
+     "evidence": "crates/anon/src/tests.rs:293 The no-leak absence assertion has a positive control for every generated token, so it cannot pass vacuously."
+    }
+   ]
+  },
+  {
+   "context": "usage-governance-limits",
+   "subject": "quality-gates",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/core/tests/blocking_gate_guard.rs:127 The guard decides whether a CI job blocks from the literal text of a job-level `continue-on-error:` at indent 4. It ignores step-level `continue-on-error: true` (indent 8) and treats an expression value such as `${{ ... }}` as blocking. A hard-pass job neutralised either way would still pass this guard: the error is in the permissive direction, latent today.",
+   "techniques": [
+    {
+     "technique": "match-the-resolved-artifact",
+     "verdict": "deviation",
+     "evidence": "crates/core/tests/blocking_gate_guard.rs:127 This reads the workflow's source text rather than what the runner resolves. gate_table_guard repeats the same parse, so both guards share the blind spot."
+    },
+    {
+     "technique": "gate-liveness",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/blocking_gate_guard.rs:230 There is a population floor on the parsed jobs and hard gates, plus a seeded-red test (the_guard_can_go_red at line 290)."
+    },
+    {
+     "technique": "severity-by-construction",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/blocking_gate_guard.rs:251 The manifest's 'hard pass' label is traced to the workflow's exit-code plumbing, and the guard checks that the job runs the declared command verbatim."
+    },
+    {
+     "technique": "blocking-by-input-determinism",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/blocking_gate_guard.rs:268 The two advisory lanes are justified by their external inputs (RUSTSEC, upstream gitleaks rules) and pinned non-blocking; the deterministic half of cargo-deny is a separate blocking job."
+    },
+    {
+     "technique": "refusal-names-a-reachable-remedy",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/blocking_gate_guard.rs:252 The refusal names both in-tree remedies."
+    },
+    {
+     "technique": "enforcement-binding",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/blocking_gate_guard.rs:36 This is the weaker counter: the expected required-check names are committed as text and held to ci.yml by gate_table_guard. The binding itself is not read back from branch protection, and job-level `if:` skips are not checked."
+    },
+    {
+     "technique": "prose-rule-drift",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/manifest_guard.rs:227 The manifest's prose claim about blocking gates is mechanised against scripts/gates.sh."
+    },
+    {
+     "technique": "policy-projection",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/gate_table_guard.rs:9 The CONTRIBUTING gate table is held to the workflow in both directions, and a missing file is a build error."
+    },
+    {
+     "technique": "unmeasurable-criteria",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/limits/status.rs:56 A cost window the gate cannot price fails closed (tests.rs:191). Unknown revenue resolves to an announced inert threshold ('inert until it can be', threshold.rs:199). This splits correctly between the gate's own blind spot and missing data about the subject."
+    },
+    {
+     "technique": "vacuous-by-evaluation",
+     "verdict": "conformant",
+     "evidence": "crates/core/tests/chart_policy_guard.rs:506 There is a must-fail fixture per policy over the shipped chart, so liveness is shown rule by rule rather than for the set."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-24T00:29:38.724993+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "false-positive-economics",
+    "gate-liveness",
+    "oracle-frozen-during-repair",
+    "refusal-names-a-reachable-remedy",
+    "self-reported-gate-inputs",
+    "severity-by-construction",
+    "unmeasurable-criteria"
+   ],
+   "deviations": 1,
+   "context": "reactive-alert-responder",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T00:29:38.724993+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "blocking-by-input-determinism",
+    "false-positive-economics",
+    "gate-liveness",
+    "policy-projection",
+    "refusal-names-a-reachable-remedy",
+    "self-reported-gate-inputs",
+    "severity-by-construction",
+    "unmeasurable-criteria",
+    "waiver-names-its-finding"
+   ],
+   "deviations": 1,
+   "context": "evaluation-pipeline",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T00:29:38.724993+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "gate-liveness",
+    "policy-projection",
+    "unmeasurable-criteria"
+   ],
+   "deviations": 1,
+   "context": "evaluation-rendering",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T00:29:38.724993+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "false-positive-economics",
+    "gate-liveness",
+    "match-the-resolved-artifact",
+    "policy-projection",
+    "refusal-names-a-reachable-remedy",
+    "self-reported-gate-inputs"
+   ],
+   "deviations": 1,
+   "context": "pii-scrubbing",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T00:29:38.724993+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "quality-gates"
+   ],
+   "techniques": [
+    "blocking-by-input-determinism",
+    "enforcement-binding",
+    "gate-liveness",
+    "match-the-resolved-artifact",
+    "policy-projection",
+    "prose-rule-drift",
+    "refusal-names-a-reachable-remedy",
+    "severity-by-construction",
+    "unmeasurable-criteria",
+    "vacuous-by-evaluation"
+   ],
+   "deviations": 1,
+   "context": "usage-governance-limits",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

@@ -2903,12 +2903,11 @@
           "changedAt": "2026-10-14",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/api/src/benchmarks.rs:380 A finished run with no judge pin and no frozen flag still receives a floor verdict, including pass.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:6e635d76a310aa4b",
-          "evaluatedRevision": 53,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/api/src/benchmarks.rs:380 instrument_moved and baseline_not_comparable treat a run with no judge_model/rubric_id pin and no dataset_frozen flag as comparable. A legacy run whose instrument is unknown therefore still gets a floor verdict, including `pass` through the scalar compare at line 438, when it should be refused as unmeasurable.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54,
+          "revisionsBehind": 1
         },
         {
           "subject": "eval-harness",
@@ -3080,12 +3079,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/render/src/benchmarks.rs:38 The CI-gate badge prints status, mean, baseline, n, and run id, and does not print caveat or judge_trust.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:6e635d76a310aa4b",
-          "evaluatedRevision": 53,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/render/src/benchmarks.rs:38 The CLI/MCP gate badge drops `caveat` and `judge_trust` from the API's GateResponse. A floor the API refused (NO BASELINE shown beside a printed baseline) or a pass from an uncalibrated judge reaches agents and pipeline logs as a subset of what the gate actually decided.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54,
+          "revisionsBehind": 1
         },
         {
           "subject": "prompt-assembly",
@@ -5193,12 +5191,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/anon/src/export.rs:62 When LIGHTTRACK_UPDATE_FIXTURES is set, the freshness test overwrites the fixture and returns without comparing it.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:6e635d76a310aa4b",
-          "evaluatedRevision": 53,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/anon/src/export.rs:62 With LIGHTTRACK_UPDATE_FIXTURES present, the fixture-freshness gate rewrites the SDK fixture and returns green without comparing anything. Any environment that sets the variable gets a gate that can no longer go red, and nothing reports that the check ran in rewrite mode.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54,
+          "revisionsBehind": 1
         },
         {
           "subject": "telemetry-pii-redaction",
@@ -5800,12 +5797,11 @@
           "changedAt": "2026-10-14",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/responder/src/act.rs:83 The auto-fix agent is given edit and test tools, so the only bar against weakening tests is a sentence in the prompt.",
-          "evaluatedAt": "2026-10-12",
-          "evaluatedAgainst": "sha256-b2:6e635d76a310aa4b",
-          "evaluatedRevision": 53,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/responder/src/act.rs:171 The auto-fix run gets edit and test tools under acceptEdits with no tool allowlist (act.rs:83-90), so a prompt sentence is the only thing keeping the fixer from editing the tests it is judged by; nothing checks afterwards whether the fix commit touched test, fixture or snapshot paths.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54,
+          "revisionsBehind": 1
         },
         {
           "subject": "agent-memory",
@@ -7894,7 +7890,11 @@
           "revision": 54,
           "changedAt": "2026-10-14",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/core/tests/blocking_gate_guard.rs:127 The guard decides whether a CI job blocks from the literal text of a job-level `continue-on-error:` at indent 4. It ignores step-level `continue-on-error: true` (indent 8) and treats an expression value such as `${{ ... }}` as blocking. A hard-pass job neutralised either way would still pass this guard: the error is in the permissive direction, latent today.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:0d8378dd13155e59",
+          "evaluatedRevision": 54
         },
         {
           "subject": "breach-alerting-and-attribution",
