@@ -1451,12 +1451,11 @@
           "changedAt": "2026-10-18",
           "confidence": "strong",
           "state": "not-applicable",
-          "evidence": "crates/engine/src/invocation/mode.rs:45 Searched crates/engine/src/invocation, codex, and sandbox for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; invocation modes are strictly limited to generate, readonly-scan, and edit without voice input or output pipelines.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:fa1c8ca716f872dc",
-          "evaluatedRevision": 20,
-          "revisionsBehind": 3,
-          "stale": true
+          "evidence": "crates/engine/src/invocation/mode.rs:43 Invocation modes are only generate, readonly-scan and edit for headless CLI subprocesses; I searched crates/engine (case-insensitive) for speech, microphone, transcription, synthesizer, audio and voice and found 0 hits, so there is no voice capture or synthesis pipeline to judge.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:29f8b158c4d44054",
+          "evaluatedRevision": 23,
+          "revisionsBehind": 3
         },
         {
           "subject": "quality-gates",
@@ -2589,12 +2588,11 @@
           "changedAt": "2026-10-18",
           "confidence": "probable",
           "state": "not-applicable",
-          "evidence": "crates/agent/src/main.rs:29 Searched crates/agent for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; lt-agent is a daemon that leases relay tasks and executes them with the local Claude Code CLI without audio or voice interfaces.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:fa1c8ca716f872dc",
-          "evaluatedRevision": 20,
-          "revisionsBehind": 3,
-          "stale": true
+          "evidence": "crates/agent/src/main.rs:29 lt-agent is a daemon that leases relay tasks and runs them with the Claude Code CLI, and its Cargo.toml lists no audio dependencies; I searched crates/agent for speech, microphone, transcription, synthesizer, audio and voice and found 0 hits.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:29f8b158c4d44054",
+          "evaluatedRevision": 23,
+          "revisionsBehind": 3
         },
         {
           "subject": "agent-cli-transport",
@@ -3207,8 +3205,12 @@
           "revision": 23,
           "changedAt": "2026-10-18",
           "confidence": "probable",
-          "state": "unknown",
-          "priorNotApplicable": 4
+          "state": "not-applicable",
+          "priorNotApplicable": 4,
+          "evidence": "crates/render/src/lib.rs:1 The render crate only turns API JSON into Markdown tables for the CLI and MCP and never speaks or listens; I searched crates/render for speech, microphone, transcription, synthesizer, audio and voice and found 0 hits.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:29f8b158c4d44054",
+          "evaluatedRevision": 23
         },
         {
           "subject": "status-vocabulary",
@@ -4200,12 +4202,11 @@
           "changedAt": "2026-10-18",
           "confidence": "probable",
           "state": "not-applicable",
-          "evidence": "crates/engine/src/judge.rs:28 Searched crates/engine/src/judge, prompts, and scorers for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; judging evaluates textual prompts against structured rubrics and deterministic rules with no audio processing or speech recognition.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:fa1c8ca716f872dc",
-          "evaluatedRevision": 20,
-          "revisionsBehind": 3,
-          "stale": true
+          "evidence": "crates/engine/src/judge.rs:28 The judge's generator seam takes a text prompt and returns a text outcome; I searched crates/engine (which covers judge, prompts and scorers) for speech, microphone, transcription, synthesizer, audio and voice and found 0 hits.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:29f8b158c4d44054",
+          "evaluatedRevision": 23,
+          "revisionsBehind": 3
         },
         {
           "subject": "quality-gates",
@@ -5383,12 +5384,11 @@
           "changedAt": "2026-10-18",
           "confidence": "probable",
           "state": "not-applicable",
-          "evidence": "crates/engine/src/providers.rs:230 Searched crates/engine/src/providers for 'speech', 'microphone', 'transcription', and 'synthesizer' and found 0 hits; generation dispatches text and chat requests to LLM APIs with schema enforcement and lacks speech synthesis or audio input pipelines.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:fa1c8ca716f872dc",
-          "evaluatedRevision": 20,
-          "revisionsBehind": 3,
-          "stale": true
+          "evidence": "crates/engine/src/providers.rs:1 Provider generation sends text and chat requests to LLM HTTPS APIs with schema enforcement; I searched crates/engine for speech, microphone, transcription, synthesizer, audio and voice and found 0 hits, so there is no STT or TTS path here.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:29f8b158c4d44054",
+          "evaluatedRevision": 23,
+          "revisionsBehind": 3
         },
         {
           "subject": "multi-provider-gateway-plane",
