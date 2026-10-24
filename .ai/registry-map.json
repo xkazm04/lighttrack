@@ -5018,7 +5018,11 @@
           "revision": 26,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store-pg/tests/metadata_guard.rs:70 Without the env var, all three Postgres integration tests return early and report ok. CI sets the var only for `--test conformance`, so metadata_guard and received_at never execute against a database, yet they show green in `cargo test --workspace`.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "breach-alerting-and-attribution",
@@ -5247,7 +5251,11 @@
           "revision": 26,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/anon/src/export.rs:58 The approval fixture's record switch is a runtime env var. With it set, the drift test writes the file and returns green, and no integrity test asserts the switch is off, so a pipeline with the var set rewrites the SDK fixture instead of verifying it.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "eval-harness",
@@ -5832,7 +5840,11 @@
           "revision": 26,
           "changedAt": "2026-10-06",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/responder/src/act.rs:123 No test ever runs the ACT stage's branch-restore decision, which the comment above it calls 'the one state this stage promises never to produce'; the git.rs test only shows add_commit reports false, and the Resend and Claude boundaries are not exercised at all.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "fleet-orchestration",
@@ -7260,7 +7272,11 @@
           "revision": 26,
           "changedAt": "2026-10-06",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/conformance/jobs.rs:46 The whole suite shares one mutable store and one project across sections, which couples sections to each other's writes and weakens the job-claim assertion to 'some job was claimed' (driver.rs:20 states the ordering dependence).",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:c96e1ee699a88119",
+          "evaluatedRevision": 27
         },
         {
           "subject": "agent-memory",

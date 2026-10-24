@@ -558,22 +558,48 @@
       "context": "reactive-alert-responder",
       "subject": "test-harness",
       "bundle": "software-engineering",
-      "state": "unknown",
-      "evaluatedAt": "2026-10-12",
-      "evaluatedTs": "2026-10-12T21:56:36.825Z",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T01:12:36.592Z",
+      "worker": "c500c7a4-3173-4122-91df-4550c299fbfc",
       "techniques": [
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/act.rs:123 run_act has no test (grep: only called from pipeline.rs:152). The git.rs test motivated by this decision (git.rs:120) drives add_commit only, so changing this condition to `true` would leave every test green."
+        },
+        {
+          "technique": "recorded-interaction-fixtures",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/email.rs:51 The third-party Resend call has no recording, fake or live lane. Skipping the interaction entirely is one of the bad options the technique names, and the URL is hard-coded, so there is no seam to put a fixture behind."
+        },
+        {
+          "technique": "platform-quirk-absorption",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/git.rs:10 An environment quirk (GIT_DIR inherited from a hook) is absorbed once, in the single git() wrapper, and the comment keeps the incident story."
+        },
+        {
+          "technique": "isolation-lanes",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/git.rs:81 Each test builds its own scratch repo, removes stale leftovers before use (line 86), strips REPO_ENV and pins GIT_CONFIG_* under an EnvGuard, so nothing is inherited from the invoker."
+        },
+        {
+          "technique": "assert-through-the-reader",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/git.rs:168 The test asks git itself which repository it will act on, rather than reconstructing the path."
+        },
+        {
+          "technique": "assert-the-schedule-not-the-stopwatch",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/breaker.rs:251 Caps and cooldowns are asserted through permit and slot availability (0s or 1h cooldowns); no test sleeps or measures elapsed time."
+        },
         {
           "technique": "suite-partitioning",
           "verdict": "not-applicable",
-          "evidence": "crates/responder/Cargo.toml:6 Grep search across crates/responder/ for harness, partition, verifier, oracle, mutation, or flake machinery confirmed absence of test harness constructs; the crate is a webhook receiver binary."
+          "evidence": "crates/responder/Cargo.toml:6 Grep search across crates/responder/ for harness, partition, verifier, oracle, mutation, or flake machinery confirmed absence of test harness constructs; the crate is a webhook receiver binary.",
+          "carriedFrom": "2026-10-12"
         }
-      ],
-      "withdrawn": {
-        "worker": "fcbc9663-345d-42cf-8662-04bd9d55a0fa",
-        "state": "not-applicable",
-        "at": "2026-10-12T21:57:27.422309+00:00",
-        "reason": "reviewer (sonnet): The anchor, Cargo.toml:6, is only the crate description line and doesn't show that no test harness exists. The crate has #[cfg(test)] test code in breaker.rs, classify.rs, enrich.rs, investigate.rs and webhook.rs, so the not-applicable claim is contradicted."
-      }
+      ]
     },
     "386d105a-9806-445c-a1d6-c6a2e02082c7/test-harness": {
       "context": "store-integration-tests",
@@ -6650,6 +6676,135 @@
           "technique": "server-composition",
           "verdict": "conformant",
           "evidence": "crates/render/src/lib.rs:133 The renderer table is held to the contract's render_kind in both directions, so outputSchema/structuredContent cannot drift from the listing."
+        }
+      ]
+    },
+    "ae45e444-9735-4d0d-a66c-a946ba4d5e88/test-harness": {
+      "context": "pg-platform-operations",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T01:12:36.592Z",
+      "worker": "c500c7a4-3173-4122-91df-4550c299fbfc",
+      "techniques": [
+        {
+          "technique": "derived-selection-must-be-measured",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/tests/metadata_guard.rs:70 A test that executed nothing is reported as a pass, and no floor makes the lane fail when the database is absent."
+        },
+        {
+          "technique": "suite-partitioning",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/tests/received_at.rs:54 Whether the test belongs to the Postgres tier is decided by an env var read inside the test, not by its location or its own suite config. The workspace badge therefore hides a tier that never ran."
+        },
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/tests/received_at.rs:77 The fixtures separate the two possible producers (a backdated ts versus an old received_at), so the count identifies which clock answered."
+        },
+        {
+          "technique": "fixture-economics",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/tests/metadata_guard.rs:48 Rows are seeded through insert_event, the product's own write path. The one raw-SQL bypass is declared and justified as the state the write path cannot produce."
+        },
+        {
+          "technique": "pin-the-call-not-the-name",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/util.rs:17 The structural check reads a SQL constant (program data with no prose in the haystack) and, in jobs.rs:310, compares it with the schema model instead of matching names."
+        }
+      ]
+    },
+    "9dc97639-bd28-43ef-bb53-96fb8ef10967/test-harness": {
+      "context": "evaluation-rendering",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "unknown",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T01:12:36.592Z",
+      "techniques": [
+        {
+          "technique": "approval-snapshots-with-guarded-update",
+          "verdict": "deviation",
+          "evidence": "crates/render/tests/render.rs:1 The output is a rich structure with more fields than anyone asserts by hand, yet there is no recorded oracle: a partial substring check plus eyeballing."
+        },
+        {
+          "technique": "assert-through-the-reader",
+          "verdict": "deviation",
+          "evidence": "crates/render/tests/render.rs:122 GFM is emitted for foreign Markdown renderers in the CLI and MCP clients, but no test parses it. A substring like this is shared by well-formed and broken tables."
+        },
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "conformant",
+          "evidence": "crates/render/tests/render.rs:168 The compare test separates the two producers of the headline (sample fact versus tested claim) and checks that the untested path never crowns a winner (line 192)."
+        }
+      ],
+      "withdrawn": {
+        "worker": "c500c7a4-3173-4122-91df-4550c299fbfc",
+        "state": "deviation",
+        "at": "2026-10-24T01:13:26.327633+00:00",
+        "reason": "reviewer (sonnet): The claim that a broken column, row or escape still passes is contradicted by structural unit tests in crates/render/src/md.rs (a_cell_cannot_break_out_of_its_column_or_row asserts exact line and pipe counts, table_has_header_separator_and_rows) and the 17 tests in compare.rs, so the verdict reads r"
+      }
+    },
+    "691eec3b-d884-4c85-9aa5-fa419b6b8457/test-harness": {
+      "context": "store-conformance-governance",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T01:12:36.592Z",
+      "worker": "c500c7a4-3173-4122-91df-4550c299fbfc",
+      "techniques": [
+        {
+          "technique": "fixture-economics",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/jobs.rs:46 This is the shared-mutable-fixture shape: there is no per-test copy, so a test's assertions bend to other tests' state, and section order is an input (driver.rs:20)."
+        },
+        {
+          "technique": "negative-control-tests",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/admission.rs:271 The race probe is run against the known non-atomic default and must go red, so it is a validated instrument."
+        },
+        {
+          "technique": "assert-the-schedule-not-the-stopwatch",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/admission.rs:205 Concurrency is forced with a barrier and the claim is asserted as an admitted count; no wall-clock bound is used."
+        },
+        {
+          "technique": "derived-selection-must-be-measured",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/refusals.rs:89 Refusal coverage is checked against Surface::methods(), so a method added to a surface without a check fails instead of being silently unselected."
+        },
+        {
+          "technique": "configuration-axes-cross-the-ladder",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/driver.rs:26 The backend capability axis decides each surface cell: either the full semantics run or every method must refuse. Every cell gets an answer."
+        }
+      ]
+    },
+    "3df8f303-0005-4d18-8f39-d97cfc5fd20c/test-harness": {
+      "context": "pii-scrubbing",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T01:12:36.592Z",
+      "worker": "c500c7a4-3173-4122-91df-4550c299fbfc",
+      "techniques": [
+        {
+          "technique": "approval-snapshots-with-guarded-update",
+          "verdict": "deviation",
+          "evidence": "crates/anon/src/export.rs:58 An env-var record switch is the invisible shape the technique rejects: in record mode 'pass' means 'written', and no test checks the switch is off."
+        },
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "deviation",
+          "evidence": "crates/anon/src/stamp.rs:91 The test hashes a local copy of the algorithm (fp_of) and never calls rules_fingerprint() on another rule set. Changing the production hash's order or input keeps the named test green."
+        },
+        {
+          "technique": "derived-selection-must-be-measured",
+          "verdict": "conformant",
+          "evidence": "crates/anon/src/tests.rs:265 The property suite's population is checked in both directions against the rule table, so a new rule cannot silently fall outside the lane. The generator teeth check at tests.rs:297 also stops vacuous passes."
         }
       ]
     }

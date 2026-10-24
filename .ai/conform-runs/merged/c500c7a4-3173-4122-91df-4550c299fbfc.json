@@ -1,0 +1,237 @@
+{
+  "schema": "conform-run/1",
+  "worker": "c500c7a4-3173-4122-91df-4550c299fbfc",
+  "subject": "test-harness",
+  "evaluatedAt": "2026-10-24T01:12:36.592218+00:00",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "pairs": [
+    {
+      "context": "reactive-alert-responder",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/responder/src/act.rs:123 No test ever runs the ACT stage's branch-restore decision, which the comment above it calls 'the one state this stage promises never to produce'; the git.rs test only shows add_commit reports false, and the Resend and Claude boundaries are not exercised at all.",
+      "techniques": [
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/act.rs:123 run_act has no test (grep: only called from pipeline.rs:152). The git.rs test motivated by this decision (git.rs:120) drives add_commit only, so changing this condition to `true` would leave every test green."
+        },
+        {
+          "technique": "recorded-interaction-fixtures",
+          "verdict": "deviation",
+          "evidence": "crates/responder/src/email.rs:51 The third-party Resend call has no recording, fake or live lane. Skipping the interaction entirely is one of the bad options the technique names, and the URL is hard-coded, so there is no seam to put a fixture behind."
+        },
+        {
+          "technique": "platform-quirk-absorption",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/git.rs:10 An environment quirk (GIT_DIR inherited from a hook) is absorbed once, in the single git() wrapper, and the comment keeps the incident story."
+        },
+        {
+          "technique": "isolation-lanes",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/git.rs:81 Each test builds its own scratch repo, removes stale leftovers before use (line 86), strips REPO_ENV and pins GIT_CONFIG_* under an EnvGuard, so nothing is inherited from the invoker."
+        },
+        {
+          "technique": "assert-through-the-reader",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/git.rs:168 The test asks git itself which repository it will act on, rather than reconstructing the path."
+        },
+        {
+          "technique": "assert-the-schedule-not-the-stopwatch",
+          "verdict": "conformant",
+          "evidence": "crates/responder/src/breaker.rs:251 Caps and cooldowns are asserted through permit and slot availability (0s or 1h cooldowns); no test sleeps or measures elapsed time."
+        }
+      ]
+    },
+    {
+      "context": "pg-platform-operations",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/store-pg/tests/metadata_guard.rs:70 Without the env var, all three Postgres integration tests return early and report ok. CI sets the var only for `--test conformance`, so metadata_guard and received_at never execute against a database, yet they show green in `cargo test --workspace`.",
+      "techniques": [
+        {
+          "technique": "derived-selection-must-be-measured",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/tests/metadata_guard.rs:70 A test that executed nothing is reported as a pass, and no floor makes the lane fail when the database is absent."
+        },
+        {
+          "technique": "suite-partitioning",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/tests/received_at.rs:54 Whether the test belongs to the Postgres tier is decided by an env var read inside the test, not by its location or its own suite config. The workspace badge therefore hides a tier that never ran."
+        },
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/tests/received_at.rs:77 The fixtures separate the two possible producers (a backdated ts versus an old received_at), so the count identifies which clock answered."
+        },
+        {
+          "technique": "fixture-economics",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/tests/metadata_guard.rs:48 Rows are seeded through insert_event, the product's own write path. The one raw-SQL bypass is declared and justified as the state the write path cannot produce."
+        },
+        {
+          "technique": "pin-the-call-not-the-name",
+          "verdict": "conformant",
+          "evidence": "crates/store-pg/src/util.rs:17 The structural check reads a SQL constant (program data with no prose in the haystack) and, in jobs.rs:310, compares it with the schema model instead of matching names."
+        }
+      ]
+    },
+    {
+      "context": "store-conformance-governance",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/store/src/conformance/jobs.rs:46 The whole suite shares one mutable store and one project across sections, which couples sections to each other's writes and weakens the job-claim assertion to 'some job was claimed' (driver.rs:20 states the ordering dependence).",
+      "techniques": [
+        {
+          "technique": "fixture-economics",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/conformance/jobs.rs:46 This is the shared-mutable-fixture shape: there is no per-test copy, so a test's assertions bend to other tests' state, and section order is an input (driver.rs:20)."
+        },
+        {
+          "technique": "negative-control-tests",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/admission.rs:271 The race probe is run against the known non-atomic default and must go red, so it is a validated instrument."
+        },
+        {
+          "technique": "assert-the-schedule-not-the-stopwatch",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/admission.rs:205 Concurrency is forced with a barrier and the claim is asserted as an admitted count; no wall-clock bound is used."
+        },
+        {
+          "technique": "derived-selection-must-be-measured",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/refusals.rs:89 Refusal coverage is checked against Surface::methods(), so a method added to a surface without a check fails instead of being silently unselected."
+        },
+        {
+          "technique": "configuration-axes-cross-the-ladder",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/conformance/driver.rs:26 The backend capability axis decides each surface cell: either the full semantics run or every method must refuse. Every cell gets an answer."
+        }
+      ]
+    },
+    {
+      "context": "pii-scrubbing",
+      "subject": "test-harness",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evidence": "crates/anon/src/export.rs:58 The approval fixture's record switch is a runtime env var. With it set, the drift test writes the file and returns green, and no integrity test asserts the switch is off, so a pipeline with the var set rewrites the SDK fixture instead of verifying it.",
+      "techniques": [
+        {
+          "technique": "approval-snapshots-with-guarded-update",
+          "verdict": "deviation",
+          "evidence": "crates/anon/src/export.rs:58 An env-var record switch is the invisible shape the technique rejects: in record mode 'pass' means 'written', and no test checks the switch is off."
+        },
+        {
+          "technique": "unreached-decisions-pin-nothing",
+          "verdict": "deviation",
+          "evidence": "crates/anon/src/stamp.rs:91 The test hashes a local copy of the algorithm (fp_of) and never calls rules_fingerprint() on another rule set. Changing the production hash's order or input keeps the named test green."
+        },
+        {
+          "technique": "derived-selection-must-be-measured",
+          "verdict": "conformant",
+          "evidence": "crates/anon/src/tests.rs:265 The property suite's population is checked in both directions against the rule table, so a new rule cannot silently fall outside the lane. The generator teeth check at tests.rs:297 also stops vacuous passes."
+        }
+      ]
+    }
+  ],
+  "declined": [
+    {
+      "subject": "test-harness",
+      "context": "evaluation-rendering",
+      "reason": "withdrawn after review: reviewer (sonnet): The claim that a broken column, row or escape still passes is contradicted by structural unit tests in crates/render/src/md.rs (a_cell_cannot_break_out_of_its_column_or_row asserts exact line and pipe counts, table_has_header_separator_and_rows) and the 17 tests in compare.rs, so the verdict reads r"
+    }
+  ],
+  "consults": [
+    {
+      "ts": "2026-10-24T01:12:36.592218+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "test-harness"
+      ],
+      "techniques": [
+        "assert-the-schedule-not-the-stopwatch",
+        "assert-through-the-reader",
+        "isolation-lanes",
+        "platform-quirk-absorption",
+        "recorded-interaction-fixtures",
+        "unreached-decisions-pin-nothing"
+      ],
+      "deviations": 1,
+      "context": "reactive-alert-responder",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-10-24T01:12:36.592218+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "test-harness"
+      ],
+      "techniques": [
+        "derived-selection-must-be-measured",
+        "fixture-economics",
+        "pin-the-call-not-the-name",
+        "suite-partitioning",
+        "unreached-decisions-pin-nothing"
+      ],
+      "deviations": 1,
+      "context": "pg-platform-operations",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-10-24T01:12:36.592218+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "test-harness"
+      ],
+      "techniques": [
+        "approval-snapshots-with-guarded-update",
+        "assert-through-the-reader",
+        "unreached-decisions-pin-nothing"
+      ],
+      "deviations": 1,
+      "context": "evaluation-rendering",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-10-24T01:12:36.592218+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "test-harness"
+      ],
+      "techniques": [
+        "assert-the-schedule-not-the-stopwatch",
+        "configuration-axes-cross-the-ladder",
+        "derived-selection-must-be-measured",
+        "fixture-economics",
+        "negative-control-tests"
+      ],
+      "deviations": 1,
+      "context": "store-conformance-governance",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    },
+    {
+      "ts": "2026-10-24T01:12:36.592218+00:00",
+      "bundle": "software-engineering",
+      "subjects": [
+        "test-harness"
+      ],
+      "techniques": [
+        "approval-snapshots-with-guarded-update",
+        "derived-selection-must-be-measured",
+        "unreached-decisions-pin-nothing"
+      ],
+      "deviations": 1,
+      "context": "pii-scrubbing",
+      "via": "curator-multi:claude",
+      "model": "claude-opus-5-5"
+    }
+  ]
+}
