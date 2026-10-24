@@ -3782,77 +3782,90 @@
       "subject": "data-access",
       "bundle": "software-engineering",
       "state": "deviation",
-      "evaluatedAt": "2026-10-14",
-      "evaluatedTs": "2026-10-14T23:24:04.861Z",
-      "worker": "1d59cba8-b5ed-44b1-be52-80c15b0cca3a",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T04:25:11.224Z",
+      "worker": "67be874f-8393-45b0-aabd-94950b1528dc",
       "techniques": [
         {
-          "technique": "batching-and-n-plus-one",
-          "verdict": "conformant",
-          "evidence": "crates/store/src/sqlite/jobs.rs:100 Batch membership checks serialize variable-length id slices into a single bound JSON parameter with json_each instead of interpolating dynamic IN lists."
+          "technique": "row-mapping",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/sqlite/projects.rs:53 Hand-written column list plus positional decode (map_project row.get(0..7)), not derived from or checked against tables::PROJECTS; the same holds for schedules/devices/contributions COLS. Separately, devices.rs:171 turns a malformed capabilities blob into an empty list with .ok(), silently and without any record, and the lease filter reads that as 'everything'. That is the silent third option the corrupt-row policy bans."
         },
         {
-          "technique": "capability-declared-in-the-type",
+          "technique": "query-construction",
           "verdict": "conformant",
-          "evidence": "crates/store/src/sqlite/mod.rs:328 SqliteStore declares supported surfaces via a static Capabilities manifest and implements Store::capabilities, avoiding silent partial failures."
-        },
-        {
-          "technique": "cross-driver-invariant-parity",
-          "verdict": "conformant",
-          "evidence": "crates/store/src/sqlite/mod.rs:324 SqliteStore acts as the reference backend whose behavior the shared cross-driver conformance suite holds other backends to."
-        },
-        {
-          "technique": "existence-authority-written-last",
-          "verdict": "not-applicable",
-          "evidence": "crates/store/src/sqlite/mod.rs:1 SqliteStore is a self-contained local backend with no secondary uncoordinated external store or blob store."
+          "evidence": "crates/store/src/sqlite/devices.rs:213 CapabilityFilter appends each predicate and its bound value together and derives the placeholder index from its own state; capability text never reaches SQL (asserted in its test); prefix match uses substr rather than LIKE to avoid wildcard escaping."
         },
         {
           "technique": "layering-rules",
           "verdict": "conformant",
-          "evidence": "crates/store/src/sqlite/mod.rs:102 Mandatory project scoping is structurally applied by the data layer helper rather than left to caller conventions."
-        },
-        {
-          "technique": "localized-record-identity",
-          "verdict": "not-applicable",
-          "evidence": "crates/store/src/sqlite/projects.rs:17 Platform records have no multi-language translation rows or localized group identities."
-        },
-        {
-          "technique": "operator-defined-tables",
-          "verdict": "not-applicable",
-          "evidence": "crates/store/src/sqlite/schema.rs:47 The schema is defined in compile-time code and applied as fixed static DDL; no runtime operator-defined table creation exists."
-        },
-        {
-          "technique": "query-construction",
-          "verdict": "deviation",
-          "evidence": "crates/store/src/sqlite/relay.rs:173 Queries lack a builder that derives placeholder indexes automatically, forcing callers to hand-number parameter offset 7 against a manual args vector."
-        },
-        {
-          "technique": "read-models-and-projections",
-          "verdict": "conformant",
-          "evidence": "crates/store/src/sqlite/metrics.rs:405 The diagnostic reporting projection computes summary metrics with an explicitly declared recomputation contract rather than returning raw event records."
-        },
-        {
-          "technique": "repo-testing",
-          "verdict": "conformant",
-          "evidence": "crates/store/src/sqlite/mod.rs:210 Test store spins up a real in-memory SQLite engine and executes the production schema migration chain on open rather than mocking."
-        },
-        {
-          "technique": "row-mapping",
-          "verdict": "deviation",
-          "evidence": "crates/store/src/sqlite/projects.rs:84 Hand-written positional decoding is hand-synchronized with raw SELECT column lists rather than derived from a single schema declaration."
-        },
-        {
-          "technique": "sequence-token-write-ordering",
-          "verdict": "not-applicable",
-          "evidence": "crates/store/src/sqlite/mod.rs:8 Writes serialize through a single mutex-guarded SQLite connection, so no multi-store stream with mismatched durability guarantees exists."
+          "evidence": "crates/store/src/sqlite/projects.rs:13 Per-domain free functions over &Connection are pub(super), and the connection stays private behind with()/read(); the query language does not leave the sqlite module. Minor: relay.rs list_where hand-copies the tenant predicate instead of composing super::scope_and."
         },
         {
           "technique": "transactions-and-units-of-work",
           "verdict": "conformant",
-          "evidence": "crates/store/src/sqlite/jobs.rs:193 Single conditional update with fencing inspects rows-affected to return a typed race outcome instead of holding an explicit transaction."
+          "evidence": "crates/store/src/sqlite/jobs.rs:125 Claim, cancel, renew and finish are single conditional (compare-and-set) statements with a fence predicate, so no read-check-write spans separate statements."
+        },
+        {
+          "technique": "capability-declared-in-the-type",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/mod.rs:334 The backend declares its surfaces as data in a manifest that can be built without a connection (the parity doc renders it)."
+        },
+        {
+          "technique": "cross-driver-invariant-parity",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/mod.rs:323 SQLite is the reference backend for one shared conformance suite run against each backend, rather than a separate test file per driver."
+        },
+        {
+          "technique": "repo-testing",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/mod.rs:211 open_in_memory builds each test store through the production schema road (schema::apply over plan()); tests open a fresh in-memory instance each time."
+        },
+        {
+          "technique": "batching-and-n-plus-one",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/mod.rs:372 The batch ingest path fetches limit rules once per project instead of once per item; relay lease claims up to max tasks in one statement."
+        },
+        {
+          "technique": "existence-authority-written-last",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/sqlite/mod.rs:1 SqliteStore is a self-contained local backend with no secondary uncoordinated external store or blob store.",
+          "carriedFrom": "2026-10-14"
+        },
+        {
+          "technique": "localized-record-identity",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/sqlite/projects.rs:17 Platform records have no multi-language translation rows or localized group identities.",
+          "carriedFrom": "2026-10-14"
+        },
+        {
+          "technique": "operator-defined-tables",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/sqlite/schema.rs:47 The schema is defined in compile-time code and applied as fixed static DDL; no runtime operator-defined table creation exists.",
+          "carriedFrom": "2026-10-14"
+        },
+        {
+          "technique": "read-models-and-projections",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/sqlite/metrics.rs:405 The diagnostic reporting projection computes summary metrics with an explicitly declared recomputation contract rather than returning raw event records.",
+          "carriedFrom": "2026-10-14"
+        },
+        {
+          "technique": "sequence-token-write-ordering",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/sqlite/mod.rs:8 Writes serialize through a single mutex-guarded SQLite connection, so no multi-store stream with mismatched durability guarantees exists.",
+          "carriedFrom": "2026-10-14"
         }
       ],
-      "registryProposal": "The standard's row-mapping technique treats model-derived select lists and positional decoding as a binary choice, but tracklight demonstrates an intermediate state where SelectList derives column order from schema for statement generation while row decoding remains manual positional decoding (e.g. in jobs.rs). Explicit guidance on migrating from manual positional decoding to fully derived mappers without regressions would improve actionable adoption."
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/store/src/sqlite/projects.rs:84 Row mappers hand-write positional field decoders that must stay synchronized with hand-written SELECT column lists across multiple modules rather than deriving them from the single schema model.",
+          "evaluatedAt": "2026-10-14T23:24:04.861Z",
+          "worker": "1d59cba8-b5ed-44b1-be52-80c15b0cca3a",
+          "reason": "replaced by 67be874f-8393-45b0-aabd-94950b1528dc"
+        }
+      ]
     },
     "8b5cad82-800d-4c90-90ea-f8a443723c81/job-coordination": {
       "context": "storage-and-jobs",
@@ -7435,6 +7448,53 @@
           "evidence": "crates/agent/src/exec.rs:126 Deferred, failed and succeeded are distinct settled accounts. Rate-limit detection does rely on stderr substrings (exec.rs:200)."
         }
       ]
+    },
+    "2fc2870e-4595-4639-950a-590b19787216/data-access": {
+      "context": "store-schema-definition",
+      "subject": "data-access",
+      "bundle": "software-engineering",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T04:25:11.224Z",
+      "worker": "67be874f-8393-45b0-aabd-94950b1528dc",
+      "techniques": [
+        {
+          "technique": "cross-driver-invariant-parity",
+          "verdict": "deviation",
+          "evidence": "crates/store/src/schema/model.rs:88 render.rs:71 includes REFERENCES for Postgres only when refs_pg, and only prompt_versions.prompt_id sets it (refs_both). A grep for foreign_keys/PRAGMA found nothing, and libsqlite3-sys build.rs sets -DSQLITE_DEFAULT_FOREIGN_KEYS=1, so the invariant is enforced on one engine only, with no substitution or parity entry."
+        },
+        {
+          "technique": "row-mapping",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/schema/model.rs:286 Each column is declared once; select_list and insert_stmt (model.rs:304) derive the column and placeholder sets per dialect in a stable wire order, which makes positional mappers safe when they use these lists."
+        },
+        {
+          "technique": "query-construction",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/schema/model.rs:91 Identifiers come from a closed, compile-time model, and reserved-word quoting is done in one place (pg_name) rather than at each call site."
+        },
+        {
+          "technique": "repo-testing",
+          "verdict": "conformant",
+          "evidence": "crates/store/src/schema/migrations.rs:141 plan() is the single schema road that production opens and the in-memory test stores both apply, so there is no separate hand-kept test schema; migration ordering is checked by every_widening_precedes_every_index."
+        },
+        {
+          "technique": "operator-defined-tables",
+          "verdict": "not-applicable",
+          "evidence": "crates/store/src/schema/tables/mod.rs:4 The schema is defined in code by developers and changes when they ship; operators do not define record types at runtime."
+        }
+      ],
+      "registryProposal": "cross-driver-invariant-parity should state that for an embedded engine, whether a declared constraint is enforced can be set by a build-time default of the engine library (here the bundled SQLite turns foreign keys on), not by the DDL or a session pragma. A parity list built only from the DDL text cannot see which side actually enforces."
+    },
+    "664d493f-717e-4161-8f17-f667cc0cfdb9/data-access": {
+      "context": "api-contract-core",
+      "subject": "data-access",
+      "bundle": "software-engineering",
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T04:25:11.224Z",
+      "worker": "67be874f-8393-45b0-aabd-94950b1528dc",
+      "techniques": []
     }
   }
 }

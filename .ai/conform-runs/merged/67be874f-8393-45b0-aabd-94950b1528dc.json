@@ -1,0 +1,162 @@
+{
+ "schema": "conform-run/1",
+ "worker": "67be874f-8393-45b0-aabd-94950b1528dc",
+ "subject": "data-access",
+ "evaluatedAt": "2026-10-24T04:25:11.224756+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "sqlite-platform-backend",
+   "subject": "data-access",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store/src/sqlite/projects.rs:53 projects.rs (and schedules.rs, devices.rs, contributions.rs) still hand-write a select list that a positional row.get(0..n) mapper must match by hand, with no test tying it to the schema model, whereas jobs.rs derives its list from the model and relay.rs pins its list with a test; a column added to the model can therefore drift past these mappers unnoticed, which is the parallel-copy defect row-mapping names.",
+   "techniques": [
+    {
+     "technique": "row-mapping",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/sqlite/projects.rs:53 Hand-written column list plus positional decode (map_project row.get(0..7)), not derived from or checked against tables::PROJECTS; the same holds for schedules/devices/contributions COLS. Separately, devices.rs:171 turns a malformed capabilities blob into an empty list with .ok(), silently and without any record, and the lease filter reads that as 'everything'. That is the silent third option the corrupt-row policy bans."
+    },
+    {
+     "technique": "query-construction",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/devices.rs:213 CapabilityFilter appends each predicate and its bound value together and derives the placeholder index from its own state; capability text never reaches SQL (asserted in its test); prefix match uses substr rather than LIKE to avoid wildcard escaping."
+    },
+    {
+     "technique": "layering-rules",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/projects.rs:13 Per-domain free functions over &Connection are pub(super), and the connection stays private behind with()/read(); the query language does not leave the sqlite module. Minor: relay.rs list_where hand-copies the tenant predicate instead of composing super::scope_and."
+    },
+    {
+     "technique": "transactions-and-units-of-work",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/jobs.rs:125 Claim, cancel, renew and finish are single conditional (compare-and-set) statements with a fence predicate, so no read-check-write spans separate statements."
+    },
+    {
+     "technique": "capability-declared-in-the-type",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/mod.rs:334 The backend declares its surfaces as data in a manifest that can be built without a connection (the parity doc renders it)."
+    },
+    {
+     "technique": "cross-driver-invariant-parity",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/mod.rs:323 SQLite is the reference backend for one shared conformance suite run against each backend, rather than a separate test file per driver."
+    },
+    {
+     "technique": "repo-testing",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/mod.rs:211 open_in_memory builds each test store through the production schema road (schema::apply over plan()); tests open a fresh in-memory instance each time."
+    },
+    {
+     "technique": "batching-and-n-plus-one",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/sqlite/mod.rs:372 The batch ingest path fetches limit rules once per project instead of once per item; relay lease claims up to max tasks in one statement."
+    }
+   ]
+  },
+  {
+   "context": "store-schema-definition",
+   "subject": "data-access",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store/src/schema/model.rs:88 Foreign keys declared with .refs() (api_keys.project_id, benchmark_runs.benchmark_id, dataset_items.dataset_id) render only into SQLite. The bundled libsqlite3-sys build sets SQLITE_DEFAULT_FOREIGN_KEYS=1, so SQLite enforces them, but Postgres (the production backend) does not and no substitute guard is named. Referential integrity therefore holds in development and is only likely in production, with no recorded reason.",
+   "techniques": [
+    {
+     "technique": "cross-driver-invariant-parity",
+     "verdict": "deviation",
+     "evidence": "crates/store/src/schema/model.rs:88 render.rs:71 includes REFERENCES for Postgres only when refs_pg, and only prompt_versions.prompt_id sets it (refs_both). A grep for foreign_keys/PRAGMA found nothing, and libsqlite3-sys build.rs sets -DSQLITE_DEFAULT_FOREIGN_KEYS=1, so the invariant is enforced on one engine only, with no substitution or parity entry."
+    },
+    {
+     "technique": "row-mapping",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/schema/model.rs:286 Each column is declared once; select_list and insert_stmt (model.rs:304) derive the column and placeholder sets per dialect in a stable wire order, which makes positional mappers safe when they use these lists."
+    },
+    {
+     "technique": "query-construction",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/schema/model.rs:91 Identifiers come from a closed, compile-time model, and reserved-word quoting is done in one place (pg_name) rather than at each call site."
+    },
+    {
+     "technique": "repo-testing",
+     "verdict": "conformant",
+     "evidence": "crates/store/src/schema/migrations.rs:141 plan() is the single schema road that production opens and the in-memory test stores both apply, so there is no separate hand-kept test schema; migration ordering is checked by every_widening_precedes_every_index."
+    },
+    {
+     "technique": "operator-defined-tables",
+     "verdict": "not-applicable",
+     "evidence": "crates/store/src/schema/tables/mod.rs:4 The schema is defined in code by developers and changes when they ship; operators do not define record types at runtime."
+    }
+   ],
+   "registryProposal": "cross-driver-invariant-parity should state that for an embedded engine, whether a declared constraint is enforced can be set by a build-time default of the engine library (here the bundled SQLite turns foreign keys on), not by the DDL or a session pragma. A parity list built only from the DDL text cannot see which side actually enforces."
+  },
+  {
+   "context": "api-contract-core",
+   "subject": "data-access",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/contract/Cargo.toml:14 The contract crate's only dependency is serde_json (Cargo.toml says so deliberately), and a search of crates/contract for rusqlite, sqlx, query_row, INSERT INTO and transaction found no hits, so it issues no queries and holds no store. The data-access precondition (a layer that owns a store) does not hold here.",
+   "techniques": [],
+   "absenceTerms": [
+    "rusqlite",
+    "sqlx",
+    "INSERT INTO",
+    "transaction"
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-24T04:25:11.224756+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "data-access"
+   ],
+   "techniques": [
+    "batching-and-n-plus-one",
+    "capability-declared-in-the-type",
+    "cross-driver-invariant-parity",
+    "layering-rules",
+    "query-construction",
+    "repo-testing",
+    "row-mapping",
+    "transactions-and-units-of-work"
+   ],
+   "deviations": 1,
+   "context": "sqlite-platform-backend",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T04:25:11.224756+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "data-access"
+   ],
+   "techniques": [
+    "cross-driver-invariant-parity",
+    "operator-defined-tables",
+    "query-construction",
+    "repo-testing",
+    "row-mapping"
+   ],
+   "deviations": 1,
+   "context": "store-schema-definition",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T04:25:11.224756+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "data-access"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "api-contract-core",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

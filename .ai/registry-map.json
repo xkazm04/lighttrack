@@ -739,7 +739,11 @@
           "revision": 19,
           "changedAt": "2026-10-15",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/contract/Cargo.toml:14 The contract crate's only dependency is serde_json (Cargo.toml says so deliberately), and a search of crates/contract for rusqlite, sqlx, query_row, INSERT INTO and transaction found no hits, so it issues no queries and holds no store. The data-access precondition (a layer that owns a store) does not hold here.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:2dba94be6400dea1",
+          "evaluatedRevision": 19
         }
       ],
       "governance": "governed"
@@ -6972,12 +6976,11 @@
           "changedAt": "2026-10-15",
           "confidence": "probable",
           "state": "deviation",
-          "evidence": "crates/store/src/sqlite/projects.rs:84 Row mappers hand-write positional field decoders that must stay synchronized with hand-written SELECT column lists across multiple modules rather than deriving them from the single schema model.",
-          "evaluatedAt": "2026-10-14",
-          "evaluatedAgainst": "sha256-b2:b67182492821d592",
-          "evaluatedRevision": 18,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/store/src/sqlite/projects.rs:53 projects.rs (and schedules.rs, devices.rs, contributions.rs) still hand-write a select list that a positional row.get(0..n) mapper must match by hand, with no test tying it to the schema model, whereas jobs.rs derives its list from the model and relay.rs pins its list with a test; a column added to the model can therefore drift past these mappers unnoticed, which is the parallel-copy defect row-mapping names.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:2dba94be6400dea1",
+          "evaluatedRevision": 19,
+          "revisionsBehind": 1
         },
         {
           "subject": "dynamic-secret-lifecycle",
@@ -7558,7 +7561,11 @@
           "revision": 19,
           "changedAt": "2026-10-15",
           "confidence": "strong",
-          "state": "unknown"
+          "state": "deviation",
+          "evidence": "crates/store/src/schema/model.rs:88 Foreign keys declared with .refs() (api_keys.project_id, benchmark_runs.benchmark_id, dataset_items.dataset_id) render only into SQLite. The bundled libsqlite3-sys build sets SQLITE_DEFAULT_FOREIGN_KEYS=1, so SQLite enforces them, but Postgres (the production backend) does not and no substitute guard is named. Referential integrity therefore holds in development and is only likely in production, with no recorded reason.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:2dba94be6400dea1",
+          "evaluatedRevision": 19
         },
         {
           "subject": "agent-memory",
