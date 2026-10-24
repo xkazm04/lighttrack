@@ -1955,32 +1955,41 @@
       "subject": "agent-runtime-assembly",
       "bundle": "software-engineering",
       "state": "not-applicable",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T04:09:27.257Z",
-      "worker": "0ad540be-cefa-40b4-8e30-8cbe05697a64",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:41:48.052Z",
+      "worker": "4db8c629-e8a7-4ef8-ad84-cfee9efb2054",
       "techniques": [
-        {
-          "technique": "host-routes-win",
-          "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/main.rs:75 The MCP server uses a hardcoded match statement over stdio JSON-RPC method names rather than mounting contributed HTTP routes onto a service."
-        },
-        {
-          "technique": "operator-tier-code-loading",
-          "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/main.rs:34 The MCP server is a fixed standalone binary communicating with the LightTrack API via HTTP and does not load third-party extensions or code at any configuration tier."
-        },
         {
           "technique": "session-scoped-capability",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/tools.rs:26 Tools are statically derived from the API contract table and filtered by a binary write flag rather than dynamically resolved client-surface capabilities on an agent session."
+          "evidence": "crates/mcp/src/main.rs:35 The write gate is an operator/runtime capability, not a client-surface one. stdio runs one session per process. tools/list (tools.rs:26) and tools/call (tools.rs:104) both derive from this one flag plus the contract's mutating bit."
         },
         {
           "technique": "bounded-projection-of-external-work",
           "verdict": "not-applicable",
-          "evidence": "crates/mcp/src/relay_tools.rs:19 The MCP server provides read-only inspection queries of remote relay tasks over HTTP and does not manage an in-turn task submission or projection lifecycle."
+          "evidence": "crates/mcp/src/read.rs:90 Exposing job status is the tool server's wire surface. Custody of long-running work belongs to the host agent runtime, which the golden path assigns to this subject, while the server side belongs to mcp-tools."
+        },
+        {
+          "technique": "operator-tier-code-loading",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/tools.rs:26 The roster is compiled from a static contract table. No configuration tier can name code to load."
+        },
+        {
+          "technique": "host-routes-win",
+          "verdict": "not-applicable",
+          "evidence": "crates/mcp/src/main.rs:75 The MCP server uses a hardcoded match statement over stdio JSON-RPC method names rather than mounting contributed HTTP routes onto a service.",
+          "carriedFrom": "2026-10-13"
         }
       ],
-      "registryProposal": "Clarify in the standard's scope boundaries that external MCP tool servers dispatching tools across stdio or HTTP wire protocols are governed by `mcp-tools` rather than `agent-runtime-assembly`."
+      "superseded": [
+        {
+          "state": "not-applicable",
+          "evidence": "crates/mcp/src/main.rs:77 The `lt-mcp` binary operates strictly as a Model Context Protocol tool server over stdio JSON-RPC 2.0; grepping `crates/mcp` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero occurrences of agent runtime assembly mechanisms, confirming its precondition is not met.",
+          "evaluatedAt": "2026-10-13T04:09:27.257Z",
+          "worker": "0ad540be-cefa-40b4-8e30-8cbe05697a64",
+          "reason": "replaced by 4db8c629-e8a7-4ef8-ad84-cfee9efb2054"
+        }
+      ]
     },
     "1c799276-3129-490e-b740-b5c16c49e59f/agent-runtime-assembly": {
       "context": "claude-invocation-and-execution",
@@ -2018,30 +2027,43 @@
       "context": "pg-platform-operations",
       "subject": "agent-runtime-assembly",
       "bundle": "software-engineering",
-      "state": "not-applicable",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T04:09:27.257Z",
-      "worker": "0ad540be-cefa-40b4-8e30-8cbe05697a64",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:41:48.052Z",
+      "worker": "4db8c629-e8a7-4ef8-ad84-cfee9efb2054",
       "techniques": [
+        {
+          "technique": "indeterminate-closure-on-interruption",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/src/relay.rs:140 The device-death outcome has no first-class indeterminate status: the error column carries a marker string (bound at relay.rs:147). The partial conformance is that restarts are counted on their own key (stale_reclaims, relay.rs:173; jobs.rs:77), separate from failures."
+        },
         {
           "technique": "checkpoint-mode-custody",
           "verdict": "not-applicable",
-          "evidence": "crates/store-pg/src/lib.rs:83 The Postgres schema manages relational tables for events, traces, and jobs rather than graph engine full or delta conversation checkpoints."
+          "evidence": "crates/store-pg/src/lib.rs:83 The Postgres schema manages relational tables for events, traces, and jobs rather than graph engine full or delta conversation checkpoints.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "bounded-projection-of-external-work",
           "verdict": "not-applicable",
-          "evidence": "crates/store-pg/src/relay_lease.rs:19 Relay leases are managed as durable SQL rows with lease fences, which the standard defines as part of job-coordination rather than the in-turn agent projection loop."
-        },
-        {
-          "technique": "indeterminate-closure-on-interruption",
-          "verdict": "not-applicable",
-          "evidence": "crates/store-pg/src/jobs.rs:59 Background jobs track worker deaths in stale_reclaims rather than synthesizing indeterminate tool-call transcript entries for an agent model."
+          "evidence": "crates/store-pg/src/relay_lease.rs:19 Relay leases are managed as durable SQL rows with lease fences, which the standard defines as part of job-coordination rather than the in-turn agent projection loop.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "guard-input-custody",
           "verdict": "not-applicable",
-          "evidence": "crates/store-pg/src/margin_policies.rs:25 Margin policies are platform budget caps stored in PostgreSQL for API billing governance rather than agent containment policies."
+          "evidence": "crates/store-pg/src/margin_policies.rs:25 Margin policies are platform budget caps stored in PostgreSQL for API billing governance rather than agent containment policies.",
+          "carriedFrom": "2026-10-13"
+        }
+      ],
+      "registryProposal": "The golden path says 'the closed status vocabulary, the lease whose expiry is evidence of a dead executor' belong to job-coordination. But indeterminate-closure-on-interruption's own decision rules govern exactly that store-level reclaim: 'count restarts on a key of their own', 'classify against the liveness threshold', and 'what status a killed run is given'. The seam between the two subjects needs stating, so that storage contexts reclaiming agent runs know which standard binds.",
+      "superseded": [
+        {
+          "state": "not-applicable",
+          "evidence": "crates/store-pg/src/lib.rs:123 The `SURFACES` constant enumerates the database storage domains implemented by `PgStore` (telemetry events, pricing, job leases, and relay queues); grepping `crates/store-pg` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero agent assembly mechanisms, confirming its role is purely storage under `job-coordination` rather than `agent-runtime-assembly`.",
+          "evaluatedAt": "2026-10-13T04:09:27.257Z",
+          "worker": "0ad540be-cefa-40b4-8e30-8cbe05697a64",
+          "reason": "replaced by 4db8c629-e8a7-4ef8-ad84-cfee9efb2054"
         }
       ]
     },
@@ -2049,30 +2071,52 @@
       "context": "python-sdk",
       "subject": "agent-runtime-assembly",
       "bundle": "software-engineering",
-      "state": "not-applicable",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T04:09:27.257Z",
-      "worker": "0ad540be-cefa-40b4-8e30-8cbe05697a64",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:41:48.052Z",
+      "worker": "4db8c629-e8a7-4ef8-ad84-cfee9efb2054",
       "techniques": [
         {
+          "technique": "semantic-hook-placement",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/instrument.py:236 The receipt stamper sits inside the gate. Recording blocked calls is opt-in (client.py:246, record_blocked: bool = False), which is the gapped-ledger failure mode."
+        },
+        {
           "technique": "indeterminate-closure-on-interruption",
+          "verdict": "deviation",
+          "evidence": "clients/python/lighttrack/client.py:442 Calls recovered after a crash are closed with the failure status. Unknown is carried only by an error string and the RECOVERED_TAG tag, not by a first-class indeterminate status."
+        },
+        {
+          "technique": "observer-and-mutator-surfaces",
           "verdict": "not-applicable",
-          "evidence": "clients/python/lighttrack/journal.py:60 The local span journal tags orphaned in-flight provider calls as unsettled telemetry spans, but does not construct an agent model transcript or tool call synthetic result."
+          "evidence": "clients/python/lighttrack/client.py:505 There is no contributed-extension registration surface. The refusal is a typed exception surfaced to the host app, a deliberate choice documented at instrument.py:232-235."
         },
         {
           "technique": "rewrite-before-the-gate",
           "verdict": "not-applicable",
-          "evidence": "clients/python/lighttrack/instrument.py:236 The instrumentation wrapper checks pre-spend admission limits before calling the provider SDK, but does not perform tool argument rewriting or mutator frame wrapping."
+          "evidence": "clients/python/lighttrack/instrument.py:236 The instrumentation wrapper checks pre-spend admission limits before calling the provider SDK, but does not perform tool argument rewriting or mutator frame wrapping.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "guard-input-custody",
           "verdict": "not-applicable",
-          "evidence": "clients/python/lighttrack/client.py:116 Output guardrail regex patterns are statically compiled module-level constants in Python memory rather than containment rules fetched from a writable workspace."
+          "evidence": "clients/python/lighttrack/client.py:116 Output guardrail regex patterns are statically compiled module-level constants in Python memory rather than containment rules fetched from a writable workspace.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "session-scoped-capability",
           "verdict": "not-applicable",
-          "evidence": "clients/python/lighttrack/client.py:263 The client configuration initializes connection endpoints from process environment variables for telemetry reporting without maintaining dynamic session capability rosters."
+          "evidence": "clients/python/lighttrack/client.py:263 The client configuration initializes connection endpoints from process environment variables for telemetry reporting without maintaining dynamic session capability rosters.",
+          "carriedFrom": "2026-10-13"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "not-applicable",
+          "evidence": "clients/python/lighttrack/client.py:274 The Python SDK is an asynchronous telemetry ingestion client that dispatches LLM event records via an internal queue and background worker thread; grepping `clients/python` for `assembly`, `checkpoint`, `subagent`, `mutator`, and `observer` confirms the absence of an agent runtime assembly.",
+          "evaluatedAt": "2026-10-13T04:09:27.257Z",
+          "worker": "0ad540be-cefa-40b4-8e30-8cbe05697a64",
+          "reason": "replaced by 4db8c629-e8a7-4ef8-ad84-cfee9efb2054"
         }
       ]
     },

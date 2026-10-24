@@ -1,0 +1,140 @@
+{
+ "schema": "conform-run/1",
+ "worker": "4db8c629-e8a7-4ef8-ad84-cfee9efb2054",
+ "subject": "agent-runtime-assembly",
+ "evaluatedAt": "2026-10-24T02:41:48.052777+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "mcp-server",
+   "subject": "agent-runtime-assembly",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/mcp/src/main.rs:4 lt-mcp is a stateless stdio tool server that forwards calls to the API. It assembles no hook chain, loads no contributed code, holds no agent loop and stores no checkpoints. A case-insensitive search of crates/mcp found no hits for checkpoint, subagent, plugin, middleware or compaction; the only 'hook' hit is 'webhook' in write.rs.",
+   "techniques": [
+    {
+     "technique": "session-scoped-capability",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/main.rs:35 The write gate is an operator/runtime capability, not a client-surface one. stdio runs one session per process. tools/list (tools.rs:26) and tools/call (tools.rs:104) both derive from this one flag plus the contract's mutating bit."
+    },
+    {
+     "technique": "bounded-projection-of-external-work",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/read.rs:90 Exposing job status is the tool server's wire surface. Custody of long-running work belongs to the host agent runtime, which the golden path assigns to this subject, while the server side belongs to mcp-tools."
+    },
+    {
+     "technique": "operator-tier-code-loading",
+     "verdict": "not-applicable",
+     "evidence": "crates/mcp/src/tools.rs:26 The roster is compiled from a static contract table. No configuration tier can name code to load."
+    }
+   ],
+   "absenceTerms": [
+    "checkpoint",
+    "subagent",
+    "plugin",
+    "middleware",
+    "compaction"
+   ]
+  },
+  {
+   "context": "pg-platform-operations",
+   "subject": "agent-runtime-assembly",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "crates/store-pg/src/relay.rs:140 When a device dies mid-run on a relay task (a Claude Code run, possibly edit-mode with an irreversible connector), the task is either leased out again or dead-lettered. The dead-letter status is the same 'dead' a failure-exhausted task gets, distinguished only by the RELAY_ERROR_DEVICE_LOST prefix string in error. The unknown outcome is therefore encoded as a message string inside a failure-class status, and side-effecting work is re-issued.",
+   "techniques": [
+    {
+     "technique": "indeterminate-closure-on-interruption",
+     "verdict": "deviation",
+     "evidence": "crates/store-pg/src/relay.rs:140 The device-death outcome has no first-class indeterminate status: the error column carries a marker string (bound at relay.rs:147). The partial conformance is that restarts are counted on their own key (stale_reclaims, relay.rs:173; jobs.rs:77), separate from failures."
+    }
+   ],
+   "registryProposal": "The golden path says 'the closed status vocabulary, the lease whose expiry is evidence of a dead executor' belong to job-coordination. But indeterminate-closure-on-interruption's own decision rules govern exactly that store-level reclaim: 'count restarts on a key of their own', 'classify against the liveness threshold', and 'what status a killed run is given'. The seam between the two subjects needs stating, so that storage contexts reclaiming agent runs know which standard binds."
+  },
+  {
+   "context": "python-sdk",
+   "subject": "agent-runtime-assembly",
+   "bundle": "software-engineering",
+   "state": "deviation",
+   "evidence": "clients/python/lighttrack/instrument.py:236 The auto-instrument wrapper runs the refusing admission gate before the journal breadcrumb (line 238) and the span recorder. With enforce='block' and the default record_blocked=False, every refused call raises with no event recorded, so the ledger is blind on exactly the refused calls.",
+   "techniques": [
+    {
+     "technique": "semantic-hook-placement",
+     "verdict": "deviation",
+     "evidence": "clients/python/lighttrack/instrument.py:236 The receipt stamper sits inside the gate. Recording blocked calls is opt-in (client.py:246, record_blocked: bool = False), which is the gapped-ledger failure mode."
+    },
+    {
+     "technique": "indeterminate-closure-on-interruption",
+     "verdict": "deviation",
+     "evidence": "clients/python/lighttrack/client.py:442 Calls recovered after a crash are closed with the failure status. Unknown is carried only by an error string and the RECOVERED_TAG tag, not by a first-class indeterminate status."
+    },
+    {
+     "technique": "observer-and-mutator-surfaces",
+     "verdict": "not-applicable",
+     "evidence": "clients/python/lighttrack/client.py:505 There is no contributed-extension registration surface. The refusal is a typed exception surfaced to the host app, a deliberate choice documented at instrument.py:232-235."
+    }
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "agent-runtime-assembly",
+   "context": "claude-invocation-and-execution",
+   "reason": "evidence leans on codex/mod.rs, which is not a tracked file"
+  },
+  {
+   "subject": "agent-runtime-assembly",
+   "context": "device-relay-agent",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-24T02:41:48.052777+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-runtime-assembly"
+   ],
+   "techniques": [
+    "bounded-projection-of-external-work",
+    "operator-tier-code-loading",
+    "session-scoped-capability"
+   ],
+   "deviations": 0,
+   "context": "mcp-server",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T02:41:48.052777+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-runtime-assembly"
+   ],
+   "techniques": [
+    "indeterminate-closure-on-interruption"
+   ],
+   "deviations": 1,
+   "context": "pg-platform-operations",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T02:41:48.052777+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "agent-runtime-assembly"
+   ],
+   "techniques": [
+    "indeterminate-closure-on-interruption",
+    "observer-and-mutator-surfaces",
+    "semantic-hook-placement"
+   ],
+   "deviations": 1,
+   "context": "python-sdk",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

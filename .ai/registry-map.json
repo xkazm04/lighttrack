@@ -4351,12 +4351,11 @@
           "changedAt": "2026-10-14",
           "confidence": "probable",
           "state": "not-applicable",
-          "evidence": "crates/mcp/src/main.rs:77 The `lt-mcp` binary operates strictly as a Model Context Protocol tool server over stdio JSON-RPC 2.0; grepping `crates/mcp` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero occurrences of agent runtime assembly mechanisms, confirming its precondition is not met.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:9036e979656a8dc5",
-          "evaluatedRevision": 27,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/mcp/src/main.rs:4 lt-mcp is a stateless stdio tool server that forwards calls to the API. It assembles no hook chain, loads no contributed code, holds no agent loop and stores no checkpoints. A case-insensitive search of crates/mcp found no hits for checkpoint, subagent, plugin, middleware or compaction; the only 'hook' hit is 'webhook' in write.rs.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:45b3f952560a4cbc",
+          "evaluatedRevision": 28,
+          "revisionsBehind": 1
         },
         {
           "subject": "quality-gates",
@@ -5043,13 +5042,12 @@
           "revision": 28,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "not-applicable",
-          "evidence": "crates/store-pg/src/lib.rs:123 The `SURFACES` constant enumerates the database storage domains implemented by `PgStore` (telemetry events, pricing, job leases, and relay queues); grepping `crates/store-pg` for `hook`, `assembly`, `checkpoint`, `subagent`, `contributed`, `mutator`, and `observer` yields zero agent assembly mechanisms, confirming its role is purely storage under `job-coordination` rather than `agent-runtime-assembly`.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:9036e979656a8dc5",
-          "evaluatedRevision": 27,
-          "revisionsBehind": 1,
-          "stale": true
+          "state": "deviation",
+          "evidence": "crates/store-pg/src/relay.rs:140 When a device dies mid-run on a relay task (a Claude Code run, possibly edit-mode with an irreversible connector), the task is either leased out again or dead-lettered. The dead-letter status is the same 'dead' a failure-exhausted task gets, distinguished only by the RELAY_ERROR_DEVICE_LOST prefix string in error. The unknown outcome is therefore encoded as a message string inside a failure-class status, and side-effecting work is re-issued.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:45b3f952560a4cbc",
+          "evaluatedRevision": 28,
+          "revisionsBehind": 1
         },
         {
           "subject": "concurrency-guards",
@@ -5576,13 +5574,12 @@
           "revision": 28,
           "changedAt": "2026-10-14",
           "confidence": "probable",
-          "state": "not-applicable",
-          "evidence": "clients/python/lighttrack/client.py:274 The Python SDK is an asynchronous telemetry ingestion client that dispatches LLM event records via an internal queue and background worker thread; grepping `clients/python` for `assembly`, `checkpoint`, `subagent`, `mutator`, and `observer` confirms the absence of an agent runtime assembly.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:9036e979656a8dc5",
-          "evaluatedRevision": 27,
-          "revisionsBehind": 1,
-          "stale": true
+          "state": "deviation",
+          "evidence": "clients/python/lighttrack/instrument.py:236 The auto-instrument wrapper runs the refusing admission gate before the journal breadcrumb (line 238) and the span recorder. With enforce='block' and the default record_blocked=False, every refused call raises with no event recorded, so the ledger is blind on exactly the refused calls.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:45b3f952560a4cbc",
+          "evaluatedRevision": 28,
+          "revisionsBehind": 1
         },
         {
           "subject": "test-harness",
