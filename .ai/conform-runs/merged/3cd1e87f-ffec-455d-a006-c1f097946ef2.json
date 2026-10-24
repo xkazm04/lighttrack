@@ -1,0 +1,45 @@
+{
+ "schema": "conform-run/1",
+ "worker": "3cd1e87f-ffec-455d-a006-c1f097946ef2",
+ "subject": "multi-provider-gateway-plane",
+ "evaluatedAt": "2026-10-24T21:10:47.295064+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "api-endpoint-table",
+   "subject": "multi-provider-gateway-plane",
+   "bundle": "software-engineering",
+   "state": "not-applicable",
+   "evidence": "crates/contract/src/endpoints/mod.rs:3 This context is the static contract table for LightTrack's own HTTP router: rows of method, path, params and access rule, kept in build_router order. It does not front several upstreams or route requests among candidates. Searching crates/contract/src/endpoints case-insensitively for gateway, failover, upstream and framing found zero hits. The words 'candidate', 'fallback' and 'probe' do appear, but only in unrelated senses: a benchmark target, a candidate usage cap, an FX fallback rate, liveness probes.",
+   "techniques": [],
+   "absenceTerms": [
+    "gateway",
+    "failover",
+    "upstream",
+    "framing"
+   ]
+  }
+ ],
+ "declined": [
+  {
+   "subject": "multi-provider-gateway-plane",
+   "context": "core-observability-types",
+   "reason": "the seat returned unknown"
+  }
+ ],
+ "consults": [
+  {
+   "ts": "2026-10-24T21:10:47.295064+00:00",
+   "bundle": "software-engineering",
+   "subjects": [
+    "multi-provider-gateway-plane"
+   ],
+   "techniques": [],
+   "deviations": 0,
+   "context": "api-endpoint-table",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

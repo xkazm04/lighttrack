@@ -2729,16 +2729,11 @@
       "context": "api-endpoint-table",
       "subject": "multi-provider-gateway-plane",
       "bundle": "software-engineering",
-      "state": "unknown",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T09:07:38.802Z",
-      "techniques": [],
-      "withdrawn": {
-        "worker": "afb0c268-cb08-474a-a965-394e1062dd8e",
-        "state": "not-applicable",
-        "at": "2026-10-13T09:08:10.330194+00:00",
-        "reason": "reviewer (sonnet): The anchor (benchmarks.rs:192) is the doc line of one enqueue_benchmark endpoint; it does not show that no inference-gateway endpoint exists in the table, so the not-applicable rests on an incidental line."
-      }
+      "state": "not-applicable",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T21:10:47.295Z",
+      "worker": "3cd1e87f-ffec-455d-a006-c1f097946ef2",
+      "techniques": []
     },
     "1c799276-3129-490e-b740-b5c16c49e59f/voice-io": {
       "context": "claude-invocation-and-execution",

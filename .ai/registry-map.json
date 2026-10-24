@@ -802,7 +802,11 @@
           "revision": 9,
           "changedAt": "2026-09-09",
           "confidence": "probable",
-          "state": "unknown"
+          "state": "not-applicable",
+          "evidence": "crates/contract/src/endpoints/mod.rs:3 This context is the static contract table for LightTrack's own HTTP router: rows of method, path, params and access rule, kept in build_router order. It does not front several upstreams or route requests among candidates. Searching crates/contract/src/endpoints case-insensitively for gateway, failover, upstream and framing found zero hits. The words 'candidate', 'fallback' and 'probe' do appear, but only in unrelated senses: a benchmark target, a candidate usage cap, an FX fallback rate, liveness probes.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:f268193750c0a517",
+          "evaluatedRevision": 9
         },
         {
           "subject": "billing-revenue-normalization",
