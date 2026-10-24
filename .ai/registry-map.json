@@ -2863,12 +2863,11 @@
           "changedAt": "2026-10-13",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/api/src/judges.rs:89 Benchmark and prompt gates block on an untrusted or never-calibrated judge only when the project has turned require_trusted_judge on, so the default path still lets those scores fail a release or promote a prompt.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:d0f0d4aa66f81402",
-          "evaluatedRevision": 5,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/api/src/judges.rs:88 policy_block returns None unless the project opted into require_trusted_judge, so by default benchmark_gate (benchmarks.rs:488) and prompt promotion still let an untrusted or never-calibrated judge's scores fail a release or clear a promote; the trust verdict is only attached as an annotation.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:80bd8653a6d797f2",
+          "evaluatedRevision": 6,
+          "revisionsBehind": 1
         },
         {
           "subject": "agent-memory",
@@ -3292,12 +3291,11 @@
           "changedAt": "2026-10-13",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/core/src/score.rs:346 When a calibration score also carries a product rubric_id, the alert series key is that rubric_id, so the reserved lt:calibration label is not the window.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:d0f0d4aa66f81402",
-          "evaluatedRevision": 5,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/core/src/score.rs:346 For a Calibration-kind score that also carries a rubric_id, alert_key returns the rubric_id, and the reserved lt:calibration:<judge> label is only a fallback. Kappa then rides the product rubric's score_drop window, and different judges share one series.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:80bd8653a6d797f2",
+          "evaluatedRevision": 6,
+          "revisionsBehind": 1
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -4661,13 +4659,12 @@
           "revision": 6,
           "changedAt": "2026-10-13",
           "confidence": "strong",
-          "state": "conformant",
-          "evidence": "crates/store-pg/src/calibrations.rs:3 These files append per-judge calibration rows and ordinary score rows, and they do not measure agreement, schedule a cycle, choose a judge, or run a rolling score-drop detector.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:d0f0d4aa66f81402",
-          "evaluatedRevision": 5,
-          "revisionsBehind": 1,
-          "stale": true
+          "state": "deviation",
+          "evidence": "crates/store-pg/src/calibrations.rs:64 The trust lookup that gates read returns the newest record for (project, judge, rubric) whatever the golden-set version or pass threshold, and the table stores no threshold at all. A verdict earned at one threshold or set version therefore carries over to another.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:80bd8653a6d797f2",
+          "evaluatedRevision": 6,
+          "revisionsBehind": 1
         },
         {
           "subject": "agent-memory",
@@ -6013,14 +6010,13 @@
           "changedAt": "2026-10-13",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/runner/src/calibrate_watch.rs:81 The watch sentinel pages on a kappa drop larger than a configured drift_threshold, and that comparison has no measured per-dimension repeatability floor under it.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:d0f0d4aa66f81402",
-          "evaluatedRevision": 5,
+          "evidence": "crates/runner/src/calibrate_watch.rs:81 The sentinel warns on any per-cycle kappa drop larger than a fixed drift_threshold (default 0.15), and nothing measures the judge's per-dimension repeatability floor beneath it. Re-score noise can therefore page on a cadence.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:80bd8653a6d797f2",
+          "evaluatedRevision": 6,
           "source": "conform",
           "adoptedFrom": "8702fe0e-f66b-4541-9dcc-514a41033990",
-          "revisionsBehind": 1,
-          "stale": true
+          "revisionsBehind": 1
         },
         {
           "subject": "cross-provider-benchmark-operations",
@@ -6114,12 +6110,11 @@
           "changedAt": "2026-10-13",
           "confidence": "strong",
           "state": "deviation",
-          "evidence": "crates/runner/src/gate.rs:18 bench --gate fails the build from the run status alone, and these files never read a trusted, untrusted, or uncalibrated state.",
-          "evaluatedAt": "2026-10-13",
-          "evaluatedAgainst": "sha256-b2:d0f0d4aa66f81402",
-          "evaluatedRevision": 5,
-          "revisionsBehind": 1,
-          "stale": true
+          "evidence": "crates/runner/src/gate.rs:18 bench --gate (main.rs:211) fails the build from the run status alone and never reads the judge's trusted/untrusted/unknown state, so an uncalibrated judge can fail a release.",
+          "evaluatedAt": "2026-10-24",
+          "evaluatedAgainst": "sha256-b2:80bd8653a6d797f2",
+          "evaluatedRevision": 6,
+          "revisionsBehind": 1
         },
         {
           "subject": "eval-harness",

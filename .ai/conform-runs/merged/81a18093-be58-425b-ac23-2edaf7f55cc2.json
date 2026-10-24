@@ -1,0 +1,232 @@
+{
+ "schema": "conform-run/1",
+ "worker": "81a18093-be58-425b-ac23-2edaf7f55cc2",
+ "subject": "judge-calibration-and-drift",
+ "evaluatedAt": "2026-10-24T02:07:28.291932+00:00",
+ "provider": "claude",
+ "model": "claude-opus-5-5",
+ "pairs": [
+  {
+   "context": "evaluation-pipeline",
+   "subject": "judge-calibration-and-drift",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/api/src/judges.rs:88 policy_block returns None unless the project opted into require_trusted_judge, so by default benchmark_gate (benchmarks.rs:488) and prompt promotion still let an untrusted or never-calibrated judge's scores fail a release or clear a promote; the trust verdict is only attached as an annotation.",
+   "techniques": [
+    {
+     "technique": "trust-bar-verdict",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/judges.rs:88 The three-state verdict is computed and attached, but untrusted/unknown only blocks when the project opts in. The standard says these states never fail a release, so this should be the default and not an opt-in."
+    },
+    {
+     "technique": "golden-set-agreement-measurement",
+     "verdict": "deviation",
+     "evidence": "crates/api/src/labels.rs:80 create_label accepts a dataset_item subject with no frozen-dataset check (neither store's insert_label checks either). The human ground truth of a frozen golden set can therefore change without a version bump, although item writes are refused (datasets.rs:102)."
+    },
+    {
+     "technique": "judge-replacement-bridge",
+     "verdict": "conformant",
+     "evidence": "crates/api/src/benchmarks.rs:387 Covers the 'no merged series / identity on every verdict' rule only: a run pinned to a different judge is refused comparison against the stored baseline. No published-benchmark replay exists, and none is needed here."
+    }
+   ]
+  },
+  {
+   "context": "runner-benchmark-calibration",
+   "subject": "judge-calibration-and-drift",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/runner/src/calibrate_watch.rs:81 The sentinel warns on any per-cycle kappa drop larger than a fixed drift_threshold (default 0.15), and nothing measures the judge's per-dimension repeatability floor beneath it. Re-score noise can therefore page on a cadence.",
+   "techniques": [
+    {
+     "technique": "repeatability-floor",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/calibrate_watch.rs:81 Drift is a configured delta with no measured floor. A repo grep for repeatab/flip_rate found only the batch-method flip count, and no N-times identical re-score exists."
+    },
+    {
+     "technique": "scheduled-recalibration",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/calibrate_watch.rs:30 Realized: daemon and --once modes, the previous kappa read before re-judging, persistence, a below-bar alert plus a sharp-drop warning on stderr, and a reserved exit code. Edge case: a cycle where every item fails to parse yields n=0, kappa 0, and exits 5, so a pipeline fault reads as untrusted."
+    },
+    {
+     "technique": "golden-set-agreement-measurement",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/calibration_post.rs:41 The record names the dataset but never sets dataset_version, and load_set (calibrate.rs:54) does not require a frozen set, so kappa history cannot tell a judge change from a golden-set change. The metric family, the judge-only design and skipped-item handling are realized."
+    },
+    {
+     "technique": "reserved-rubric-persistence",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/calibration_post.rs:82 The derived lt:calibration score carries the product rubric_id. Score::alert_key keys on that id, so the kappa series shares a score_drop window with that rubric's product scores and with every other judge calibrated on it."
+    },
+    {
+     "technique": "trust-bar-verdict",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/calibrate.rs:276 Within this context: a pre-set kappa bar (CLI default 0.6), an explicit verdict, and the verdict persisted on the record and score. How the gates consume it is judged under evaluation-pipeline."
+    },
+    {
+     "technique": "judge-selection-by-spread",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/calibrate.rs:248 Calibration folds into kappa, pearson, MAE, RMSE and bias, with no known-good vs known-bad spread column and no multi-judge bake-off. The method-change re-verification half is realized: calibrate_batch.rs:299 does a paired batch-vs-single comparison with pass/fail flips."
+    }
+   ],
+   "registryProposal": "reserved-rubric-persistence assumes the reserved rubric NAME is the alert series key. In a store that types scores and keys windows on a rubric id, attaching the product rubric id to a calibration probe silently merges the kappa series with product quality. The technique should state that the reserved namespace must be the series key, not just the label."
+  },
+  {
+   "context": "pg-evaluation-store",
+   "subject": "judge-calibration-and-drift",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/store-pg/src/calibrations.rs:64 The trust lookup that gates read returns the newest record for (project, judge, rubric) whatever the golden-set version or pass threshold, and the table stores no threshold at all. A verdict earned at one threshold or set version therefore carries over to another.",
+   "techniques": [
+    {
+     "technique": "trust-bar-verdict",
+     "verdict": "deviation",
+     "evidence": "crates/store-pg/src/calibrations.rs:64 Scope is judge+rubric only. dataset_version is stored but ignored by latest(), and the threshold is not persisted (COLS has kappa_bar only)."
+    },
+    {
+     "technique": "reserved-rubric-persistence",
+     "verdict": "conformant",
+     "evidence": "crates/store-pg/src/calibrations.rs:22 Calibration history is append-only (insert/latest/list, no update or delete), so a recalibration never restates an earlier cycle. The alert-series keying problem lives in core and the runner, not here."
+    }
+   ]
+  },
+  {
+   "context": "runner-scoring-engine",
+   "subject": "judge-calibration-and-drift",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/runner/src/gate.rs:18 bench --gate (main.rs:211) fails the build from the run status alone and never reads the judge's trusted/untrusted/unknown state, so an uncalibrated judge can fail a release.",
+   "techniques": [
+    {
+     "technique": "trust-bar-verdict",
+     "verdict": "deviation",
+     "evidence": "crates/runner/src/gate.rs:18 No trust lookup in gate.rs or its caller. A grep for trust/calibrat over the scoring-engine files found only comments."
+    },
+    {
+     "technique": "judge-replacement-bridge",
+     "verdict": "conformant",
+     "evidence": "crates/runner/src/pairwise.rs:297 Identity rule only: stored verdicts carry the judge identity in scored_by. Note that rubric.rs:235 writes o.model, which may lack the provider prefix."
+    }
+   ]
+  },
+  {
+   "context": "evaluation-scoring-types",
+   "subject": "judge-calibration-and-drift",
+   "bundle": "llm-observability",
+   "state": "deviation",
+   "evidence": "crates/core/src/score.rs:346 For a Calibration-kind score that also carries a rubric_id, alert_key returns the rubric_id, and the reserved lt:calibration:<judge> label is only a fallback. Kappa then rides the product rubric's score_drop window, and different judges share one series.",
+   "techniques": [
+    {
+     "technique": "reserved-rubric-persistence",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/score.rs:346 There is a ScoreKind::Calibration type, but alert_key does not special-case it, so per-judge series independence is lost whenever rubric_id is set (which the runner sets)."
+    },
+    {
+     "technique": "trust-bar-verdict",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/calibration_record.rs:52 The three-state JudgeTrust with Unknown != Untrusted is realized (line 107). The record keeps the bar but not the binarization threshold, which the standard says must be recorded inside the verdict."
+    },
+    {
+     "technique": "golden-set-agreement-measurement",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/calibration.rs:21 CalibrationItem's only per-item label is a free-text note, with no stratum, and agreement() is computed over the pooled set only (no per-stratum reading). The degenerate-kappa case is handled correctly at line 107."
+    },
+    {
+     "technique": "scheduled-recalibration",
+     "verdict": "conformant",
+     "evidence": "crates/core/src/job_kinds.rs:103 Calibrate is a schedulable job kind carrying threshold, kappa_bar and drift_threshold."
+    },
+    {
+     "technique": "repeatability-floor",
+     "verdict": "deviation",
+     "evidence": "crates/core/src/job_kinds.rs:124 The scheduled payload carries a bare drift delta (default 0.15) and no measured repeatability floor for it to sit above."
+    }
+   ]
+  }
+ ],
+ "declined": [],
+ "consults": [
+  {
+   "ts": "2026-10-24T02:07:28.291932+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "judge-calibration-and-drift"
+   ],
+   "techniques": [
+    "golden-set-agreement-measurement",
+    "judge-replacement-bridge",
+    "trust-bar-verdict"
+   ],
+   "deviations": 1,
+   "context": "evaluation-pipeline",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T02:07:28.291932+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "judge-calibration-and-drift"
+   ],
+   "techniques": [
+    "golden-set-agreement-measurement",
+    "judge-selection-by-spread",
+    "repeatability-floor",
+    "reserved-rubric-persistence",
+    "scheduled-recalibration",
+    "trust-bar-verdict"
+   ],
+   "deviations": 1,
+   "context": "runner-benchmark-calibration",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T02:07:28.291932+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "judge-calibration-and-drift"
+   ],
+   "techniques": [
+    "reserved-rubric-persistence",
+    "trust-bar-verdict"
+   ],
+   "deviations": 1,
+   "context": "pg-evaluation-store",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T02:07:28.291932+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "judge-calibration-and-drift"
+   ],
+   "techniques": [
+    "judge-replacement-bridge",
+    "trust-bar-verdict"
+   ],
+   "deviations": 1,
+   "context": "runner-scoring-engine",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  },
+  {
+   "ts": "2026-10-24T02:07:28.291932+00:00",
+   "bundle": "llm-observability",
+   "subjects": [
+    "judge-calibration-and-drift"
+   ],
+   "techniques": [
+    "golden-set-agreement-measurement",
+    "repeatability-floor",
+    "reserved-rubric-persistence",
+    "scheduled-recalibration",
+    "trust-bar-verdict"
+   ],
+   "deviations": 1,
+   "context": "evaluation-scoring-types",
+   "via": "curator-multi:claude",
+   "model": "claude-opus-5-5"
+  }
+ ]
+}

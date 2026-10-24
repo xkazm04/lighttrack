@@ -1649,57 +1649,60 @@
       "subject": "judge-calibration-and-drift",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T03:06:36.982Z",
-      "worker": "da2d972d-fa67-4153-9bf6-7a197ee40efd",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:07:28.291Z",
+      "worker": "81a18093-be58-425b-ac23-2edaf7f55cc2",
       "techniques": [
         {
           "technique": "repeatability-floor",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/calibrate_watch.rs:81 assess_drift takes only kappa, previous kappa, the bar, and drift_threshold. bench.rs records overall cross-sample agreement on benchmark cells and the watch cycle never reads it."
-        },
-        {
-          "technique": "golden-set-agreement-measurement",
-          "verdict": "deviation",
-          "evidence": "crates/runner/src/calibrate.rs:321 The printed family (kappa, pearson, MAE, RMSE, bias) is real, and core agreement() defines the degenerate kappa case. judge_item keeps only the mean and the cost, so samples requested, samples parsed, distinct draws, and the determinism stamp never sit beside that kappa. CalibrationItem also has no stratum, so the trust number is one pooled coefficient."
-        },
-        {
-          "technique": "trust-bar-verdict",
-          "verdict": "conformant",
-          "evidence": "crates/runner/src/calibrate_watch.rs:79 Trusted is kappa at or above the precommitted bar. A --once cycle that ends untrusted exits 5; a daemon exits 0. Persist failure is printed as unknown rather than as trusted."
+          "evidence": "crates/runner/src/calibrate_watch.rs:81 Drift is a configured delta with no measured floor. A repo grep for repeatab/flip_rate found only the batch-method flip count, and no N-times identical re-score exists."
         },
         {
           "technique": "scheduled-recalibration",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/calibrate_watch.rs:147 Each cycle reads the previous kappa, re-judges the same items, persists, then classifies below-bar versus a sharp drop. Warnings go to stderr. The judge path does not use the compare-run budget. A cycle error would also exit 0 in --once, but run_cycle as written does not return Err."
+          "evidence": "crates/runner/src/calibrate_watch.rs:30 Realized: daemon and --once modes, the previous kappa read before re-judging, persistence, a below-bar alert plus a sharp-drop warning on stderr, and a reserved exit code. Edge case: a cycle where every item fails to parse yields n=0, kappa 0, and exits 5, so a pipeline fault reads as untrusted."
+        },
+        {
+          "technique": "golden-set-agreement-measurement",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/calibration_post.rs:41 The record names the dataset but never sets dataset_version, and load_set (calibrate.rs:54) does not require a frozen set, so kappa history cannot tell a judge change from a golden-set change. The metric family, the judge-only design and skipped-item handling are realized."
         },
         {
           "technique": "reserved-rubric-persistence",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/calibration_post.rs:9 The reserved name lt:calibration:provider/model and the metric blob are still posted, but the writer makes the calibrations table the durable fact and treats a failed score post as a missed alert tick."
+          "evidence": "crates/runner/src/calibration_post.rs:82 The derived lt:calibration score carries the product rubric_id. Score::alert_key keys on that id, so the kappa series shares a score_drop window with that rubric's product scores and with every other judge calibrated on it."
+        },
+        {
+          "technique": "trust-bar-verdict",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/calibrate.rs:276 Within this context: a pre-set kappa bar (CLI default 0.6), an explicit verdict, and the verdict persisted on the record and score. How the gates consume it is judged under evaluation-pipeline."
+        },
+        {
+          "technique": "judge-selection-by-spread",
+          "verdict": "deviation",
+          "evidence": "crates/runner/src/calibrate.rs:248 Calibration folds into kappa, pearson, MAE, RMSE and bias, with no known-good vs known-bad spread column and no multi-judge bake-off. The method-change re-verification half is realized: calibrate_batch.rs:299 does a paired batch-vs-single comparison with pass/fail flips."
         },
         {
           "technique": "windowed-score-drop-alerting",
           "verdict": "conformant",
-          "evidence": "crates/runner/src/calibrate_watch.rs:8 The runner keeps the memoryless per-cycle check and posts kappa so the server window can see the slow slide. The window algorithm itself is not in these files."
-        },
-        {
-          "technique": "judge-selection-by-spread",
-          "verdict": "conformant",
-          "evidence": "crates/runner/src/calibrate_batch.rs:313 compare-batch judges the same items both ways, prints per-item deltas and pass/fail flips, and leads with effect size plus a low-power caveat when n < 30. There is no good-versus-bad bake-off that picks the judge model; the operator passes the model."
+          "evidence": "crates/runner/src/calibrate_watch.rs:8 The runner keeps the memoryless per-cycle check and posts kappa so the server window can see the slow slide. The window algorithm itself is not in these files.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "fit-and-report-on-disjoint-labels",
           "verdict": "not-applicable",
-          "evidence": "crates/runner/src/calibrate_batch.rs:7 Search of calibrate.rs, calibrate_batch.rs, calibrate_watch.rs, and calibration_post.rs found no instruction search, holdout, or judge choice whose agreement is then stored as the trust record. The paired method delta is not adopted here."
+          "evidence": "crates/runner/src/calibrate_batch.rs:7 Search of calibrate.rs, calibrate_batch.rs, calibrate_watch.rs, and calibration_post.rs found no instruction search, holdout, or judge choice whose agreement is then stored as the trust record. The paired method delta is not adopted here.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "judge-replacement-bridge",
           "verdict": "not-applicable",
-          "evidence": "crates/runner/src/calibrate.rs:2 This path measures a human-labeled set the operator owns. Search of these files found no replay of a retired judge's published aggregates."
+          "evidence": "crates/runner/src/calibrate.rs:2 This path measures a human-labeled set the operator owns. Search of these files found no replay of a retired judge's published aggregates.",
+          "carriedFrom": "2026-10-13"
         }
       ],
-      "registryProposal": "The reserved-rubric technique forbids a second table, but a gate cannot query kappa, n, and the bar out of a reasoning blob. It could allow a typed append-only row when a reserved-rubric score is still posted and a failed score post is its own alarm.",
+      "registryProposal": "reserved-rubric-persistence assumes the reserved rubric NAME is the alert series key. In a store that types scores and keys windows on a rubric id, attaching the product rubric id to a calibration probe silently merges the kappa series with product quality. The technique should state that the reserved namespace must be the series key, not just the label.",
       "superseded": [
         {
           "state": "deviation",
@@ -1707,6 +1710,13 @@
           "evaluatedAt": "2026-09-22",
           "worker": null,
           "reason": "replaced by da2d972d-fa67-4153-9bf6-7a197ee40efd"
+        },
+        {
+          "state": "deviation",
+          "evidence": "crates/runner/src/calibrate_watch.rs:81 The watch sentinel pages on a kappa drop larger than a configured drift_threshold, and that comparison has no measured per-dimension repeatability floor under it.",
+          "evaluatedAt": "2026-10-13T03:06:36.982Z",
+          "worker": "da2d972d-fa67-4153-9bf6-7a197ee40efd",
+          "reason": "replaced by 81a18093-be58-425b-ac23-2edaf7f55cc2"
         }
       ]
     },
@@ -1715,91 +1725,117 @@
       "subject": "judge-calibration-and-drift",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T03:06:36.982Z",
-      "worker": "da2d972d-fa67-4153-9bf6-7a197ee40efd",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:07:28.291Z",
+      "worker": "81a18093-be58-425b-ac23-2edaf7f55cc2",
       "techniques": [
         {
           "technique": "trust-bar-verdict",
           "verdict": "deviation",
-          "evidence": "crates/api/src/judges.rs:89 Unknown and untrusted are distinct messages, and force does not override a block once the flag is on. The flag defaults off. RubricView.active is true for any calibration, including an untrusted one (rubrics.rs:138)."
+          "evidence": "crates/api/src/judges.rs:88 The three-state verdict is computed and attached, but untrusted/unknown only blocks when the project opts in. The standard says these states never fail a release, so this should be the default and not an opt-in."
+        },
+        {
+          "technique": "golden-set-agreement-measurement",
+          "verdict": "deviation",
+          "evidence": "crates/api/src/labels.rs:80 create_label accepts a dataset_item subject with no frozen-dataset check (neither store's insert_label checks either). The human ground truth of a frozen golden set can therefore change without a version bump, although item writes are refused (datasets.rs:102)."
+        },
+        {
+          "technique": "judge-replacement-bridge",
+          "verdict": "conformant",
+          "evidence": "crates/api/src/benchmarks.rs:387 Covers the 'no merged series / identity on every verdict' rule only: a run pinned to a different judge is refused comparison against the stored baseline. No published-benchmark replay exists, and none is needed here."
         },
         {
           "technique": "repeatability-floor",
           "verdict": "deviation",
-          "evidence": "crates/api/src/scores_review.rs:17 A fixed 0.05 band and a fixed 0.7 overall self-agreement only add review-queue reasons. decide_gate still returns pass or regressed from the run status."
-        },
-        {
-          "technique": "golden-set-agreement-measurement",
-          "verdict": "not-applicable",
-          "evidence": "crates/api/src/judges.rs:70 Trust is a lookup of a stored row. Search of this context's files found no pearson, MAE, or kappa computation."
+          "evidence": "crates/api/src/scores_review.rs:17 A fixed 0.05 band and a fixed 0.7 overall self-agreement only add review-queue reasons. decide_gate still returns pass or regressed from the run status.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "scheduled-recalibration",
           "verdict": "not-applicable",
-          "evidence": "crates/api/src/labels.rs:180 These handlers store a measurement the runner already made. Benchmark schedule_interval_secs is benchmark recurrence, not a calibration cycle. Search found no calibrate watch or drift delta here."
-        },
-        {
-          "technique": "judge-replacement-bridge",
-          "verdict": "not-applicable",
-          "evidence": "crates/api/src/benchmarks.rs:389 A judge or rubric change refuses the baseline comparison instead of replaying a published anchor. Search found no published-aggregate bridge."
+          "evidence": "crates/api/src/labels.rs:180 These handlers store a measurement the runner already made. Benchmark schedule_interval_secs is benchmark recurrence, not a calibration cycle. Search found no calibrate watch or drift delta here.",
+          "carriedFrom": "2026-10-13"
         }
       ],
-      "registryProposal": "The trust-bar technique does not say whether a default-off project flag is the firewall or the uncalibrated gate. This verdict treats the default-off flag as the gate."
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/api/src/judges.rs:89 Benchmark and prompt gates block on an untrusted or never-calibrated judge only when the project has turned require_trusted_judge on, so the default path still lets those scores fail a release or promote a prompt.",
+          "evaluatedAt": "2026-10-13T03:06:36.982Z",
+          "worker": "da2d972d-fa67-4153-9bf6-7a197ee40efd",
+          "reason": "replaced by 81a18093-be58-425b-ac23-2edaf7f55cc2"
+        }
+      ]
     },
     "bcb4d3f6-3950-42fa-a00e-12126bf4794d/judge-calibration-and-drift": {
       "context": "pg-evaluation-store",
       "subject": "judge-calibration-and-drift",
       "bundle": "llm-observability",
-      "state": "conformant",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T03:06:36.982Z",
-      "worker": "da2d972d-fa67-4153-9bf6-7a197ee40efd",
+      "state": "deviation",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:07:28.291Z",
+      "worker": "81a18093-be58-425b-ac23-2edaf7f55cc2",
       "techniques": [
+        {
+          "technique": "trust-bar-verdict",
+          "verdict": "deviation",
+          "evidence": "crates/store-pg/src/calibrations.rs:64 Scope is judge+rubric only. dataset_version is stored but ignored by latest(), and the threshold is not persisted (COLS has kappa_bar only)."
+        },
         {
           "technique": "reserved-rubric-persistence",
           "verdict": "conformant",
-          "evidence": "crates/store-pg/src/calibrations.rs:64 latest is exact on project, judge, and rubric, with IS NULL for a freeform rubric. insert, latest, and list are the only operations; a re-measurement is a new row."
-        },
-        {
-          "technique": "trust-bar-verdict",
-          "verdict": "conformant",
-          "evidence": "crates/store-pg/src/calibrations.rs:5 A missing row is no measurement. The trusted flag is stored beside kappa and kappa_bar and is not rewritten in place."
+          "evidence": "crates/store-pg/src/calibrations.rs:22 Calibration history is append-only (insert/latest/list, no update or delete), so a recalibration never restates an earlier cycle. The alert-series keying problem lives in core and the runner, not here."
         },
         {
           "technique": "golden-set-agreement-measurement",
           "verdict": "not-applicable",
-          "evidence": "crates/store-pg/src/calibrations.rs:128 Kappa is loaded from a column. Search of these nine files found no agreement formula, only binds and reads."
+          "evidence": "crates/store-pg/src/calibrations.rs:128 Kappa is loaded from a column. Search of these nine files found no agreement formula, only binds and reads.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "windowed-score-drop-alerting",
           "verdict": "not-applicable",
-          "evidence": "crates/store-pg/src/score_summary.rs:64 The only window here is a caller-bounded GROUP BY of event-joined scores. Search found no rolling recent-versus-baseline score_drop detector."
+          "evidence": "crates/store-pg/src/score_summary.rs:64 The only window here is a caller-bounded GROUP BY of event-joined scores. Search found no rolling recent-versus-baseline score_drop detector.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "scheduled-recalibration",
           "verdict": "not-applicable",
-          "evidence": "crates/store-pg/src/calibrations.rs:20 Calibration is inserted when a caller finishes a row. Search of the nine files found no cron, watch, or drift_threshold. The only interval is a confidence interval in score_summary.rs."
+          "evidence": "crates/store-pg/src/calibrations.rs:20 Calibration is inserted when a caller finishes a row. Search of the nine files found no cron, watch, or drift_threshold. The only interval is a confidence interval in score_summary.rs.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "repeatability-floor",
           "verdict": "not-applicable",
-          "evidence": "crates/store-pg/src/calibrations.rs:17 Stored calibration columns are kappa, pearson, mae, rmse, n, kappa_bar, and trusted. Search found no repeatability or re-score column, and this store does not alarm."
+          "evidence": "crates/store-pg/src/calibrations.rs:17 Stored calibration columns are kappa, pearson, mae, rmse, n, kappa_bar, and trusted. Search found no repeatability or re-score column, and this store does not alarm.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "judge-selection-by-spread",
           "verdict": "not-applicable",
-          "evidence": "crates/store-pg/src/score_summary.rs:59 This query averages event-joined verdicts. Search of the nine files for spread, known-good, and discrimination found nothing about choosing a judge."
+          "evidence": "crates/store-pg/src/score_summary.rs:59 This query averages event-joined verdicts. Search of the nine files for spread, known-good, and discrimination found nothing about choosing a judge.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "fit-and-report-on-disjoint-labels",
           "verdict": "not-applicable",
-          "evidence": "crates/store-pg/src/labels.rs:17 A label row is subject, value, pass, and labeler. Search of labels.rs and calibrations.rs found no fit-set or report-set column and no judge rewrite."
+          "evidence": "crates/store-pg/src/labels.rs:17 A label row is subject, value, pass, and labeler. Search of labels.rs and calibrations.rs found no fit-set or report-set column and no judge rewrite.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "judge-replacement-bridge",
           "verdict": "not-applicable",
-          "evidence": "crates/store-pg/src/scores.rs:13 Every score row has scored_by and every calibration row has judge. Search found no published-aggregate replay."
+          "evidence": "crates/store-pg/src/scores.rs:13 Every score row has scored_by and every calibration row has judge. Search found no published-aggregate replay.",
+          "carriedFrom": "2026-10-13"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "conformant",
+          "evidence": "crates/store-pg/src/calibrations.rs:3 These files append per-judge calibration rows and ordinary score rows, and they do not measure agreement, schedule a cycle, choose a judge, or run a rolling score-drop detector.",
+          "evaluatedAt": "2026-10-13T03:06:36.982Z",
+          "worker": "da2d972d-fa67-4153-9bf6-7a197ee40efd",
+          "reason": "replaced by 81a18093-be58-425b-ac23-2edaf7f55cc2"
         }
       ]
     },
@@ -1808,39 +1844,52 @@
       "subject": "judge-calibration-and-drift",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T03:06:36.982Z",
-      "worker": "da2d972d-fa67-4153-9bf6-7a197ee40efd",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:07:28.291Z",
+      "worker": "81a18093-be58-425b-ac23-2edaf7f55cc2",
       "techniques": [
         {
           "technique": "trust-bar-verdict",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/gate.rs:18 Search of score.rs, rubric.rs, gate.rs, batch.rs, and judge_spec.rs found no JudgeTrust or kappa. Exit 3 is the judge's regression status."
+          "evidence": "crates/runner/src/gate.rs:18 No trust lookup in gate.rs or its caller. A grep for trust/calibrat over the scoring-engine files found only comments."
+        },
+        {
+          "technique": "judge-replacement-bridge",
+          "verdict": "conformant",
+          "evidence": "crates/runner/src/pairwise.rs:297 Identity rule only: stored verdicts carry the judge identity in scored_by. Note that rubric.rs:235 writes o.model, which may lack the provider prefix."
         },
         {
           "technique": "repeatability-floor",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/rubric.rs:382 The ship verdict is one mean against the baseline. Online scoring draws a single sample (judge_spec.rs:128). Nothing here is a per-dimension self-agreement floor."
+          "evidence": "crates/runner/src/rubric.rs:382 The ship verdict is one mean against the baseline. Online scoring draws a single sample (judge_spec.rs:128). Nothing here is a per-dimension self-agreement floor.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "judge-selection-by-spread",
           "verdict": "deviation",
-          "evidence": "crates/runner/src/rubric.rs:391 The run report records samples and not batch size, then the mean is compared to the stored baseline. Search of rubric.rs found no batch field, so a batched run and an unbatched baseline are one series. The paired check lives in calibrate_batch.rs, outside this file list."
+          "evidence": "crates/runner/src/rubric.rs:391 The run report records samples and not batch size, then the mean is compared to the stored baseline. Search of rubric.rs found no batch field, so a batched run and an unbatched baseline are one series. The paired check lives in calibrate_batch.rs, outside this file list.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "golden-set-agreement-measurement",
           "verdict": "not-applicable",
-          "evidence": "crates/runner/src/judge_spec.rs:109 This path scores live exchanges. Search for kappa and cohen in these files found only comments pointing at the calibrate command."
+          "evidence": "crates/runner/src/judge_spec.rs:109 This path scores live exchanges. Search for kappa and cohen in these files found only comments pointing at the calibrate command.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "reserved-rubric-persistence",
           "verdict": "not-applicable",
-          "evidence": "crates/runner/src/score.rs:234 Posted scores use the product judge label and kind rubric or freeform. Search found no lt:calibration write in these files."
-        },
+          "evidence": "crates/runner/src/score.rs:234 Posted scores use the product judge label and kind rubric or freeform. Search found no lt:calibration write in these files.",
+          "carriedFrom": "2026-10-13"
+        }
+      ],
+      "superseded": [
         {
-          "technique": "judge-replacement-bridge",
-          "verdict": "not-applicable",
-          "evidence": "crates/runner/src/judge_spec.rs:141 The model that judged is stored. Search found no replay against a published aggregate and no fallback ladder that drops the model."
+          "state": "deviation",
+          "evidence": "crates/runner/src/gate.rs:18 bench --gate fails the build from the run status alone, and these files never read a trusted, untrusted, or uncalibrated state.",
+          "evaluatedAt": "2026-10-13T03:06:36.982Z",
+          "worker": "da2d972d-fa67-4153-9bf6-7a197ee40efd",
+          "reason": "replaced by 81a18093-be58-425b-ac23-2edaf7f55cc2"
         }
       ]
     },
@@ -1849,44 +1898,55 @@
       "subject": "judge-calibration-and-drift",
       "bundle": "llm-observability",
       "state": "deviation",
-      "evaluatedAt": "2026-10-13",
-      "evaluatedTs": "2026-10-13T03:06:36.982Z",
-      "worker": "da2d972d-fa67-4153-9bf6-7a197ee40efd",
+      "evaluatedAt": "2026-10-24",
+      "evaluatedTs": "2026-10-24T02:07:28.291Z",
+      "worker": "81a18093-be58-425b-ac23-2edaf7f55cc2",
       "techniques": [
         {
           "technique": "reserved-rubric-persistence",
           "verdict": "deviation",
-          "evidence": "crates/core/src/score.rs:346 alert_key prefers rubric_id for every non-run-case score. ScoreKind::Calibration exists, but it does not keep the reserved rubric name as the series key."
+          "evidence": "crates/core/src/score.rs:346 There is a ScoreKind::Calibration type, but alert_key does not special-case it, so per-judge series independence is lost whenever rubric_id is set (which the runner sets)."
+        },
+        {
+          "technique": "trust-bar-verdict",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/calibration_record.rs:52 The three-state JudgeTrust with Unknown != Untrusted is realized (line 107). The record keeps the bar but not the binarization threshold, which the standard says must be recorded inside the verdict."
         },
         {
           "technique": "golden-set-agreement-measurement",
           "verdict": "deviation",
-          "evidence": "crates/core/src/calibration_record.rs:80 agreement() computes pearson, MAE, RMSE, bias, raw agreement, and defines kappa as 1 or 0 when both raters use one class (calibration.rs:107). from_agreement copies the bar and drops Agreement.threshold and Agreement.bias, so a stored kappa has no binarization cutoff."
-        },
-        {
-          "technique": "repeatability-floor",
-          "verdict": "deviation",
-          "evidence": "crates/core/src/score.rs:94 Self-agreement is one optional overall number. ScoreDim has a gating floor, not a per-dimension flip rate, and neither Agreement nor CalibratePayload has a repeatability field beside drift_threshold."
-        },
-        {
-          "technique": "trust-bar-verdict",
-          "verdict": "conformant",
-          "evidence": "crates/core/src/calibration_record.rs:122 Trusted, untrusted, and unknown are separate. Unknown is the default. Under the policy both non-trusted states block. The bar is stored on the record. The default-off switch is not in these files."
+          "evidence": "crates/core/src/calibration.rs:21 CalibrationItem's only per-item label is a free-text note, with no stratum, and agreement() is computed over the pooled set only (no per-stratum reading). The degenerate-kappa case is handled correctly at line 107."
         },
         {
           "technique": "scheduled-recalibration",
           "verdict": "conformant",
-          "evidence": "crates/core/src/job.rs:100 Calibrate is a job kind a schedule can enqueue. CalibratePayload carries threshold, kappa_bar, drift_threshold, and exactly one golden-set source. The exit contract is the runner's."
+          "evidence": "crates/core/src/job_kinds.rs:103 Calibrate is a schedulable job kind carrying threshold, kappa_bar and drift_threshold."
+        },
+        {
+          "technique": "repeatability-floor",
+          "verdict": "deviation",
+          "evidence": "crates/core/src/job_kinds.rs:124 The scheduled payload carries a bare drift delta (default 0.15) and no measured repeatability floor for it to sit above."
         },
         {
           "technique": "fit-and-report-on-disjoint-labels",
           "verdict": "not-applicable",
-          "evidence": "crates/core/src/calibration.rs:18 A calibration item is one labeled case. Search of calibration.rs and calibration_record.rs found no fit/report partition and no selection record."
+          "evidence": "crates/core/src/calibration.rs:18 A calibration item is one labeled case. Search of calibration.rs and calibration_record.rs found no fit/report partition and no selection record.",
+          "carriedFrom": "2026-10-13"
         },
         {
           "technique": "judge-replacement-bridge",
           "verdict": "not-applicable",
-          "evidence": "crates/core/src/score.rs:311 Score.scored_by and CalibrationRecord.judge name the instrument. Search of these files found no published-aggregate or replacement-replay type."
+          "evidence": "crates/core/src/score.rs:311 Score.scored_by and CalibrationRecord.judge name the instrument. Search of these files found no published-aggregate or replacement-replay type.",
+          "carriedFrom": "2026-10-13"
+        }
+      ],
+      "superseded": [
+        {
+          "state": "deviation",
+          "evidence": "crates/core/src/score.rs:346 When a calibration score also carries a product rubric_id, the alert series key is that rubric_id, so the reserved lt:calibration label is not the window.",
+          "evaluatedAt": "2026-10-13T03:06:36.982Z",
+          "worker": "da2d972d-fa67-4153-9bf6-7a197ee40efd",
+          "reason": "replaced by 81a18093-be58-425b-ac23-2edaf7f55cc2"
         }
       ]
     },
